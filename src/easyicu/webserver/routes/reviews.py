@@ -49,6 +49,15 @@ def patient_review_table_preview(body: Dict[str, Any]) -> dict:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
 
+@router.post("/api/patient-review/feature")
+def patient_review_feature(body: Dict[str, Any]) -> dict:
+    """Return one lazy feature for one verified pseudonymous entity."""
+    try:
+        return patient_drilldown.patient_review_feature(body)
+    except patient_drilldown.PatientReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
 @router.post("/api/patient-review/sources")
 def patient_review_sources(body: Dict[str, Any] | None = None) -> dict:
     """Return metadata-only local export candidates for Patient Review."""

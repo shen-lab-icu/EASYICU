@@ -107,6 +107,24 @@ def test_step_scoped_context_does_not_pad_unused_capacity(ra):
     }
 
 
+def test_step_scoped_context_does_not_promote_semantic_only_companions(ra):
+    context = _context(ra)
+    step = ra.AnalysisStep(
+        step_id="cohort",
+        intent="Apply the separately bound cohort predicates.",
+        inputs=[],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        method="cohort_definition_and_attrition",
+    )
+
+    scoped = scoped_coder_context(context, step)
+
+    assert {variable.name for variable in scoped.variables} == {
+        "selected_first",
+        "outcome",
+    }
+
+
 def test_step_scoped_context_keeps_all_declared_source_concept_companions(ra):
     variables = [
         ra.ConceptDescriptor(name=f"filler_{index}", dtype="float64")
@@ -375,6 +393,40 @@ def test_coder_repair_requests_full_rewrite_only_after_patch_failure(ra):
     assert budget.used == 2
     assert budget.categories == ("repair_patch", "repair_full_rewrite")
     assert "FULL-REWRITE FALLBACK" in llm.calls[1][0][-1].content
+
+
+def test_coder_repair_rewrites_when_patch_introduces_mechanical_error(ra):
+    patch = json.dumps(
+        {
+            "format": "easyicu.code_patch/1",
+            "edits": [
+                {
+                    "old": "from sklearn.impute import SimpleImputer\n",
+                    "new": "",
+                    "expected_count": 1,
+                }
+            ],
+        }
+    )
+    full_rewrite = "import os\nvalue = object()\n"
+    llm = _SequenceLLM([patch, full_rewrite])
+    budget = StepProviderCallBudget(2, step_id="render")
+
+    repaired = CoderAgent(llm).repair(
+        context=_context(ra),
+        step=_figure_step(ra),
+        code=(
+            "from sklearn.impute import SimpleImputer\n"
+            "value = SimpleImputer(strategy='median')\n"
+        ),
+        run_log="ERROR: remove the unauthorized preprocessing operation",
+        provider_budget=budget,
+    )
+
+    assert repaired == full_rewrite.rstrip()
+    assert len(llm.calls) == 2
+    assert budget.categories == ("repair_patch", "repair_full_rewrite")
+    assert "mechanical preflight" in llm.calls[1][0][-1].content
 
 
 def test_coder_repair_budget_exhaustion_prevents_full_rewrite(ra):
@@ -795,6 +847,54 @@ groups.loc[exposure > 0] = "Exposure"
     )
 
     assert repaired == code
+
+
+def test_binary_primary_exposure_guard_repairs_wrapped_runtime_predicate(ra):
+    context = _context(ra)
+    context = context.model_copy(
+        update={
+            "variables": [
+                (
+                    variable.model_copy(
+                        update={
+                            "observed_domain": {
+                                "is_binary": True,
+                                "n_unique": 2,
+                                "levels": [0.0, 1.0],
+                            }
+                        }
+                    )
+                    if variable.name == context.primary_exposure
+                    else variable
+                )
+                for variable in context.variables
+            ]
+        }
+    )
+    code = """
+numeric = pd.to_numeric(frame["selected_first"], errors="coerce")
+retained = numeric.notna() & (numeric >= 0)
+"""
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="The binary domain is not enforced before eligibility.",
+        detail={
+            "issue_code": "other",
+            "variable": "selected_first",
+            "required_domain": [0, 1],
+        },
+    )
+
+    repaired = patch_observed_binary_primary_exposure_guard(
+        code,
+        context=context,
+        repair_findings=[finding],
+    )
+
+    assert repaired != code
+    assert "if not bool(numeric.dropna().isin([0, 1]).all()):" in repaired
+    assert "retained = numeric.notna() & (numeric >= 0)" in repaired
 
 
 def test_local_read_before_assignment_repair_moves_existing_call(ra):
@@ -6572,7 +6672,14 @@ def test_outbound_opaque_levels_bind_to_digest_verified_local_context(ra):
         expected_outputs=["table:cohort_summary"],
         method="descriptive_summary",
     )
+    # The two prologue lines are part of the fixture, not decoration: the gate
+    # runs on the assembled script, and a module-level read of a name nothing
+    # binds -- `context` here -- is itself a blocking finding.
     code = """\
+import json
+import pathlib
+
+context = json.loads(pathlib.Path("research_context.json").read_text())
 sex_metadata = next(
     variable for variable in context["variables"] if variable["name"] == "sex"
 )

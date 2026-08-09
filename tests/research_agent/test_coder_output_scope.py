@@ -426,6 +426,38 @@ def test_coder_repair_separates_provenance_audit_from_value_selection(ra):
     assert "fail the entire completed step" in prompt
 
 
+def test_coder_repair_removes_undeclared_provenance_scope(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="cohort",
+        intent="Apply the host-bound cohort predicates.",
+        inputs=[],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        method="cohort_definition_and_attrition",
+    )
+    code = (
+        "receipt = measurement_provenance_receipt("
+        "frame, measured_column='signal_measured', count_column='signal_n')\n"
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=code,
+        run_log=(
+            'DETAIL: {"reason":"measurement_provenance_pair_undeclared",'
+            '"helper_name":"measurement_provenance_receipt","line":1,'
+            '"declared_pairs":[]}'
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED UNDECLARED PROVENANCE-SCOPE REPAIR" in prompt
+    assert "remove every reported `measurement_provenance_receipt` call" in prompt
+    assert "Do not add raw inputs" in prompt
+    assert "only those exact predicate coordinates" in prompt
+
+
 def test_coder_repair_fail_closes_nonterminating_provenance_audit(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(
@@ -1325,6 +1357,8 @@ def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
         assert "Do not glob EASYICU_EVIDENCE_DIR" in prompt
         assert "reconstruct a declared upstream product" in prompt
         assert "one input_bindings row per typed input" in prompt
+        assert "never invent a `raw:<column>` input_key" in prompt
+        assert "omit input_bindings or write an empty list" in prompt
         assert "for each loaded tabular input, its row_count" in prompt
         assert "every shared non-key column" in prompt
         assert "The host repeats that key-and-value comparison" in prompt
@@ -1378,8 +1412,13 @@ def test_coder_prompts_bind_untyped_only_inputs_to_planner_scope(ra):
         assert "manifest['raw_input_contracts']['contracts']" in prompt
         assert "allowed_values" in prompt
         assert "analysis_plausibility_range + plausibility_policy" in prompt
+        assert "`minimum` and `maximum` keys" in prompt
+        assert "never index it as a list" in prompt
+        assert "never count NaN introduced or retained for missingness" in prompt
         assert "['selected_first', 'selected_measured']" in prompt
         assert "Exact typed inputs for this step: []" in prompt
+        assert "never invent a `raw:<column>` input_key" in prompt
+        assert "omit input_bindings or write an empty list" in prompt
 
 
 def test_runtime_only_builds_visualization_request_for_figure_step(ra):

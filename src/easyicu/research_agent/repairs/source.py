@@ -29,7 +29,7 @@ import math
 from pathlib import Path
 import re
 import textwrap
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set
 
 import numpy as np
 import pandas as pd
@@ -39,6 +39,7 @@ _TRY_STAR_NODE_TYPES = (
 )
 _TRY_NODE_TYPES = (ast.Try, *_TRY_STAR_NODE_TYPES)
 
+
 from ..scalar_utils import (
     _coerce_scalar,
     _first_numeric_effect_from_text,
@@ -46,9 +47,9 @@ from ..scalar_utils import (
     _first_present_scalar,
     _flatten_scalar_dict,
 )
+from .availability_fraction import patch_availability_fraction_component_denominator
 from .attrition import patch_attrition_rule_id_canonicalization
 from .categorical import patch_categorical_declared_order_check
-from .concept_preflight import patch_concept_preflight_repairs
 from .figure_distribution import (
     patch_categorical_distribution_clinical_bin_role,
     patch_text_distribution_denominator_from_counts,
@@ -58,9 +59,11 @@ from .lossy_coercion import (
     patch_returned_coercion_loss_guard as _patch_returned_coercion_loss_guard,
 )
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
+from .cluster_summary import patch_cluster_count_summary_alias
 from .model_contract import patch_penalized_convergence_contract
 from .name_alias import patch_undefined_mapping_near_match_alias
 from .nonfinite_audit import (
+    patch_nonfinite_missing_mask_conflation,
     patch_nonfinite_audit_host_strict_boundary,
     patch_strict_numeric_nonfinite_audit_conflict,
     patch_strict_numeric_helper_nonfinite_guard,
@@ -68,9 +71,15 @@ from .nonfinite_audit import (
 from .nullable_validation import patch_unused_nullable_numeric_validation
 from .rendering_role import patch_structured_analysis_role_selection
 from .rendering_summary import patch_render_only_effect_echo
-from .plausibility import patch_flag_only_plausibility_range_rejection
+from .strict_numeric_result import patch_strict_numeric_input_result_projection
+from .plausibility import (
+    patch_flag_only_plausibility_range_rejection,
+    patch_plausibility_range_schema_keys,
+)
+from .profile_roles import patch_all_rows_profile_roles_display
 from .provenance_summary import (
     patch_audit_only_companion_value_selector,
+    patch_closed_provenance_envelope_alias,
     patch_custom_measurement_provenance_receipts,
     patch_direct_host_receipt_source_guard,
     patch_late_measurement_provenance_receipt,
@@ -101,11 +110,24 @@ from .import_repair import (
     insert_after_imports,
     patch_known_host_helper_import,
 )
-from .input_scope import patch_raw_input_physical_superset_guard
+from .input_scope import (
+    patch_raw_contract_document_fallback,
+    patch_raw_contract_list_type_assertion,
+    patch_raw_contract_mapping_iteration,
+    patch_raw_input_physical_superset_guard,
+)
+from .preflight import patch_preflight_repairs
+from .semantic_boundary import (
+    SemanticRepairEscalation,
+    mechanical_repair_batch_or_escalate,
+    mechanical_repair_or_escalate,
+)
 from .reasons import RepairReason
 from .typed_input import (
     patch_all_rows_outcome_coordinate_filter,
+    patch_bound_panel_measurement_status_alias,
     patch_resolved_input_cohort_env_shadow,
+    patch_resolved_input_consumption_contract_owner,
     patch_resolved_input_manifest_env,
     patch_resolved_input_relative_path_root,
 )
@@ -136,6 +158,26 @@ _NULL_PRIMARY_EFFECT_MARKERS = (
     '"association_estimate": null',
     '"statistic:association_estimate": null',
 )
+
+
+def _structured_primary_singular_failure(step_summary: Dict[str, Any]) -> bool:
+    """Return whether the declared primary model failed from singularity."""
+
+    contracts = step_summary.get("model_contracts")
+    if isinstance(contracts, dict):
+        candidates = [contracts]
+    elif isinstance(contracts, list):
+        candidates = [item for item in contracts if isinstance(item, dict)]
+    else:
+        candidates = []
+    for contract in candidates:
+        if str(contract.get("analysis_role") or "").strip().lower() != "primary":
+            continue
+        fit_status = str(contract.get("fit_status") or "").strip().lower()
+        failure_reason = str(contract.get("fit_failure_reason") or "").strip().lower()
+        if fit_status != "fitted" and "singular matrix" in failure_reason:
+            return True
+    return False
 
 
 def _patch_rank_safe_statsmodels_design(code: str) -> Optional[str]:
@@ -234,30 +276,80 @@ def _patch_rank_safe_statsmodels_design(code: str) -> Optional[str]:
         r"(?P<y>[^,\n)]+?)\s*,\s*(?P<X>[A-Za-z_]\w*)"
         r"(?P<kwargs>,\s*[^)\n]+)?\)\s*$"
     )
+    direct_fit_call = re.compile(
+        r"(?m)^(?P<indent>\s*)(?P<lhs>[A-Za-z_]\w*)\s*=\s*sm\.Logit\("
+        r"(?P<y>[^,\n)]+?)\s*,\s*(?P<X>[A-Za-z_]\w*)"
+        r"(?P<kwargs>,\s*[^)\n]+)?\)\.fit\((?P<fit_args>[^)\n]*)\)\s*$"
+    )
 
-    def _rewrite(match: re.Match[str]) -> str:
+    def _keep_expression(x_expr: str) -> str:
+        return (
+            "[c for c in ["
+            "'const', "
+            "locals().get('exposure_col'), "
+            "locals().get('predictor_col'), "
+            "locals().get('primary_predictor'), "
+            "locals().get('PRIMARY_EXPOSURE'), "
+            "globals().get('PRIMARY_EXPOSURE')"
+            f"] if c is not None and hasattr({x_expr}, 'columns') and c in {x_expr}.columns]"
+        )
+
+    def _rank_reduction_line(match: re.Match[str]) -> str:
+        x_expr = match.group("X").strip()
+        return (
+            f"{match.group('indent')}{x_expr}, _easyicu_dropped_rank_cols_v1 = "
+            f"_easyicu_rank_safe_design_v1({x_expr}, "
+            f"keep={_keep_expression(x_expr)})"
+        )
+
+    def _rewrite_model(match: re.Match[str]) -> str:
         indent = match.group("indent")
         x_expr = match.group("X").strip()
         y_expr = match.group("y").strip()
         kwargs = match.group("kwargs") or ""
         lhs = match.group("lhs")
-        keep_expr = (
-            "[c for c in ["
-            "'const', "
-            "locals().get('exposure_col'), "
-            "locals().get('predictor_col'), "
-            "locals().get('primary_predictor')"
-            f"] if c is not None and hasattr({x_expr}, 'columns') and c in {x_expr}.columns]"
-        )
         return (
-            f"{indent}{x_expr}, _easyicu_dropped_rank_cols_v1 = "
-            f"_easyicu_rank_safe_design_v1({x_expr}, keep={keep_expr})\n"
+            f"{_rank_reduction_line(match)}\n"
             f"{indent}{lhs} = sm.GLM({y_expr}, {x_expr}, family=sm.families.Binomial(){kwargs})"
         )
 
-    repaired = model_call.sub(_rewrite, code, count=1)
+    def _rewrite_direct_fit(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        x_expr = match.group("X").strip()
+        y_expr = match.group("y").strip()
+        kwargs = match.group("kwargs") or ""
+        fit_args = match.group("fit_args")
+        lhs = match.group("lhs")
+        return (
+            f"{_rank_reduction_line(match)}\n"
+            f"{indent}{lhs} = sm.GLM("
+            f"{y_expr}, {x_expr}, family=sm.families.Binomial(){kwargs}"
+            f").fit({fit_args})"
+        )
+
+    repaired = direct_fit_call.sub(_rewrite_direct_fit, code, count=1)
+    if repaired == code:
+        repaired = model_call.sub(_rewrite_model, code, count=1)
     if repaired == code:
         return None
+    repaired = re.sub(
+        r"(?P<quote>['\"])statsmodels_logit_mle(?P=quote)",
+        lambda match: (
+            f"{match.group('quote')}statsmodels_glm_binomial_irls_rank_safe"
+            f"{match.group('quote')}"
+        ),
+        repaired,
+        count=1,
+    )
+    if "wald_95_percent" in repaired and re.search(r"\b1\.96\s*\*", repaired):
+        repaired = re.sub(
+            r"(?P<quote>['\"])profile_normal(?P=quote)",
+            lambda match: (
+                f"{match.group('quote')}wald_95_percent{match.group('quote')}"
+            ),
+            repaired,
+            count=1,
+        )
     repaired = re.sub(
         r"float\(math\.exp\((?P<expr>[^()\n]+)\)\)",
         lambda match: f"_easyicu_safe_exp_v1({match.group('expr').strip()})",
@@ -363,6 +455,162 @@ def _host_helper_signature_repair_lines(
         and not isinstance(detail.get("line"), bool)
         and int(detail["line"]) > 0
     )
+
+
+def _patch_measurement_receipt_stable_binding(
+    code: str,
+    *,
+    findings: Sequence[ValidationFinding],
+) -> str:
+    """Normalize one exact host receipt call without changing its data source."""
+
+    safe_violations = {
+        "unknown_keyword_argument",
+        "measured_column_role_invalid",
+        "count_column_role_invalid",
+        "measurement_companion_columns_mismatch",
+    }
+    details_by_line: dict[int, dict[str, object]] = {}
+    for finding in findings:
+        detail = dict(finding.detail or {})
+        violations = detail.get("violations")
+        if not (
+            finding.validator == "mechanical_code_preflight"
+            and finding.severity == "error"
+            and detail.get("reason") == "host_helper_call_signature_invalid"
+            and detail.get("helper_name") == "measurement_provenance_receipt"
+            and isinstance(detail.get("line"), int)
+            and not isinstance(detail.get("line"), bool)
+            and isinstance(violations, list)
+            and violations
+            and set(violations) <= safe_violations
+        ):
+            continue
+        details_by_line[int(detail["line"])] = detail
+    if not details_by_line:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    direct_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+        and any(
+            alias.name == "measurement_provenance_receipt" and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    shadowing_bindings = [
+        node
+        for node in ast.walk(tree)
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == "measurement_provenance_receipt"
+        )
+        or (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            and node.id == "measurement_provenance_receipt"
+        )
+    ]
+    if len(direct_imports) != 1 or shadowing_bindings:
+        return code
+
+    candidates_by_line: dict[int, list[ast.Call]] = {
+        line: [] for line in details_by_line
+    }
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and int(getattr(node, "lineno", 0)) in candidates_by_line
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "measurement_provenance_receipt"
+        ):
+            candidates_by_line[int(node.lineno)].append(node)
+    if any(len(candidates) != 1 for candidates in candidates_by_line.values()):
+        return code
+
+    replacements: list[tuple[str, str]] = []
+    for line, detail in sorted(details_by_line.items()):
+        call = candidates_by_line[line][0]
+        if any(keyword.arg is None for keyword in call.keywords):
+            return code
+        keyword_map = {str(keyword.arg): keyword.value for keyword in call.keywords}
+        if len(keyword_map) != len(call.keywords):
+            return code
+        if len(call.args) == 1 and "frame" not in keyword_map:
+            frame_node = call.args[0]
+        elif not call.args and "frame" in keyword_map:
+            frame_node = keyword_map["frame"]
+        else:
+            return code
+        measured_node = keyword_map.get("measured_column")
+        count_node = keyword_map.get("count_column")
+        if measured_node is None or count_node is None:
+            return code
+
+        expected_measured = detail.get("expected_measured_column")
+        expected_count = detail.get("expected_count_column")
+        if expected_measured is not None and expected_count is not None:
+            # Two valid but crossed declared pairs do not identify which
+            # scientific pair the author intended.
+            return code
+        measured_source = ast.get_source_segment(code, measured_node)
+        count_source = ast.get_source_segment(code, count_node)
+        if expected_measured is not None:
+            if not (
+                isinstance(expected_measured, str)
+                and isinstance(measured_node, ast.Constant)
+                and measured_node.value == detail.get("observed_measured_column")
+            ):
+                return code
+            measured_source = repr(expected_measured)
+        if expected_count is not None:
+            if not (
+                isinstance(expected_count, str)
+                and isinstance(count_node, ast.Constant)
+                and count_node.value == detail.get("observed_count_column")
+            ):
+                return code
+            count_source = repr(expected_count)
+
+        call_source = ast.get_source_segment(code, call)
+        function_source = ast.get_source_segment(code, call.func)
+        frame_source = ast.get_source_segment(code, frame_node)
+        if (
+            not all(
+                (
+                    call_source,
+                    function_source,
+                    frame_source,
+                    measured_source,
+                    count_source,
+                )
+            )
+            or code.count(str(call_source)) != 1
+        ):
+            return code
+        replacement = (
+            f"{function_source}({frame_source}, "
+            f"measured_column={measured_source}, count_column={count_source})"
+        )
+        if replacement == call_source:
+            return code
+        replacements.append((str(call_source), replacement))
+
+    repaired = code
+    for call_source, replacement in replacements:
+        repaired = repaired.replace(call_source, replacement, 1)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
 
 
 def _closed_counts_signature_repair_lines(
@@ -521,11 +769,11 @@ def _patch_closed_counts_stable_keywords(
     """Remove a diagnostic label or rename an authored levels keyword.
 
     The host helper accepts one series plus ``declared_levels=``. Generated
-    adapters sometimes add ``variable=`` for error-label prose or spell the
-    already-authored level expression as ``levels=``. Both forms currently
-    fail before execution. This repair changes no level value, category,
-    denominator, row, or scientific choice and applies every exact structured
-    occurrence atomically.
+    adapters sometimes add ``variable=``/``variable_name=`` for error-label
+    prose or spell the already-authored level expression as ``levels=`` or
+    ``allowed_values=``. These forms currently fail before execution. This
+    repair changes no level value, category, denominator, row, or scientific
+    choice and applies every exact structured occurrence atomically.
     """
 
     if not finding_lines:
@@ -562,15 +810,20 @@ def _patch_closed_counts_stable_keywords(
         keyword_map = {str(keyword.arg): keyword.value for keyword in call.keywords}
         if len(keyword_map) != len(call.keywords) or not set(keyword_map) <= {
             "variable",
+            "variable_name",
             "levels",
+            "allowed_values",
             "declared_levels",
         }:
             return code
-        if "levels" in keyword_map and "declared_levels" in keyword_map:
+        level_keywords = [
+            name
+            for name in ("declared_levels", "levels", "allowed_values")
+            if name in keyword_map
+        ]
+        if len(level_keywords) > 1:
             return code
-        level_expression = keyword_map.get("declared_levels") or keyword_map.get(
-            "levels"
-        )
+        level_expression = keyword_map[level_keywords[0]] if level_keywords else None
         if level_expression is None:
             function: ast.AST | None = call
             while function is not None and not isinstance(
@@ -813,8 +1066,9 @@ def _patch_host_helper_keyword_only_call(
                     import_node = inspect_imports[0]
                     repaired_lines = repaired.splitlines(keepends=True)
                     del repaired_lines[
-                        int(import_node.lineno)
-                        - 1 : int(import_node.end_lineno or import_node.lineno)
+                        int(import_node.lineno) - 1 : int(
+                            import_node.end_lineno or import_node.lineno
+                        )
                     ]
                     repaired = "".join(repaired_lines)
                     try:
@@ -2390,12 +2644,13 @@ def _patch_pre312_fstring_subscript_quotes(
     return repaired
 
 
-def deterministic_concept_audit_repair(
+def _deterministic_concept_audit_repair_candidate(
     code: str,
     audit_messages: Sequence[str],
     *,
     repair_reasons: Sequence[RepairReason] = (),
     repair_findings: Sequence[ValidationFinding] = (),
+    step: Any = None,
 ) -> tuple[str, List[str]]:
     """Apply narrow, science-neutral repairs named by concept-audit errors.
 
@@ -2419,7 +2674,30 @@ def deterministic_concept_audit_repair(
     repaired = code
     repair_names: List[str] = []
 
-    repaired, preflight_repair_names = patch_concept_preflight_repairs(
+    repaired_profile_roles, profile_roles_repair_name = (
+        patch_all_rows_profile_roles_display(
+            repaired,
+            step=step,
+            audit_messages=audit_messages,
+            repair_findings=repair_findings,
+        )
+    )
+    if profile_roles_repair_name is not None and repaired_profile_roles != repaired:
+        repaired = repaired_profile_roles
+        repair_names.append(profile_roles_repair_name)
+
+    repaired_availability, availability_repair_name = (
+        patch_availability_fraction_component_denominator(
+            repaired,
+            audit_messages=audit_messages,
+            repair_findings=repair_findings,
+        )
+    )
+    if availability_repair_name is not None and repaired_availability != repaired:
+        repaired = repaired_availability
+        repair_names.append(availability_repair_name)
+
+    repaired, preflight_repair_names = patch_preflight_repairs(
         repaired,
         findings=repair_findings,
     )
@@ -2555,6 +2833,15 @@ def deterministic_concept_audit_repair(
         if publication_audit != repaired:
             repair_name = "publication_export_audit_paths_v1"
             repaired = publication_audit
+            repair_names.append(repair_name)
+
+        receipt_bound = _patch_measurement_receipt_stable_binding(
+            repaired,
+            findings=repair_findings,
+        )
+        if receipt_bound != repaired:
+            repair_name = "measurement_receipt_stable_binding_v1"
+            repaired = receipt_bound
             repair_names.append(repair_name)
 
         keyword_bound = _patch_host_helper_keyword_only_call(
@@ -2750,6 +3037,39 @@ def deterministic_concept_audit_repair(
     return repaired, repair_names
 
 
+def deterministic_concept_audit_repair(
+    code: str,
+    audit_messages: Sequence[str],
+    *,
+    repair_reasons: Sequence[RepairReason] = (),
+    repair_findings: Sequence[ValidationFinding] = (),
+    step: Any = None,
+    on_semantic_escalation: Optional[Callable[[SemanticRepairEscalation], None]] = None,
+) -> tuple[str, List[str]]:
+    """Expose only science-neutral concept repairs at the generic boundary.
+
+    Concept preflight is an all-or-nothing source transformation.  If any
+    candidate would change estimator, predictors, coding, missingness, or the
+    analysis population, keep the original script byte-for-byte and surface a
+    typed replan/human-review escalation instead.
+    """
+
+    candidate_code, repair_names = _deterministic_concept_audit_repair_candidate(
+        code,
+        audit_messages,
+        repair_reasons=repair_reasons,
+        repair_findings=repair_findings,
+        step=step,
+    )
+    return mechanical_repair_batch_or_escalate(
+        original_code=code,
+        candidate_code=candidate_code,
+        repair_ids=repair_names,
+        source="deterministic_concept_audit_repair",
+        callback=on_semantic_escalation,
+    )
+
+
 _PROVENANCE_FAILURE_KEYS = frozenset({"invalid_pair_n", "discordant_n"})
 _PROVENANCE_DECISION_KEYS = (
     "fail_closed",
@@ -2801,6 +3121,31 @@ def _provenance_count_key(node: ast.AST) -> Optional[str]:
     ):
         return key_node.value
     return None
+
+
+def _deterministic_runner_repair(
+    *,
+    code: str,
+    run_log: str,
+    previous_repair: Optional[str] = None,
+    analysis_family: Optional[str] = None,
+    resolved_input_bindings: Mapping[str, Any] | None = None,
+    on_semantic_escalation: Optional[Callable[[SemanticRepairEscalation], None]] = None,
+) -> Optional[tuple[str, str]]:
+    """Return a runtime repair only when it cannot change scientific design."""
+
+    candidate = _deterministic_runner_repair_candidate(
+        code=code,
+        run_log=run_log,
+        previous_repair=previous_repair,
+        analysis_family=analysis_family,
+        resolved_input_bindings=resolved_input_bindings,
+    )
+    return mechanical_repair_or_escalate(
+        candidate,
+        source="deterministic_runner_repair",
+        callback=on_semantic_escalation,
+    )
 
 
 def _is_literal_numeric_zero(node: ast.AST) -> bool:
@@ -4110,7 +4455,7 @@ def _patch_overadjustment_covariate_filter(
     return dedupe_re.sub(_rewrite, code, count=1)
 
 
-def _deterministic_summary_repair(
+def _deterministic_summary_repair_candidate(
     *,
     code: str,
     step_summary: Dict[str, Any],
@@ -4175,11 +4520,12 @@ def _deterministic_summary_repair(
         or (predictor_match.group(1) if predictor_match else "")
         or ""
     ).strip()
+    structured_primary_singular = _structured_primary_singular_failure(step_summary)
     estimate = _first_present_scalar(
         step_summary,
         ("estimate", "primary_or", "odds_ratio", "adjusted_or", "or"),
     )
-    if estimate is not None:
+    if estimate is not None and not structured_primary_singular:
         return None
     error_text = str(
         step_summary.get("error")
@@ -4282,7 +4628,7 @@ def _deterministic_summary_repair(
         if dtype_summary_failure and _statsmodels_repair_allowed_for_family(
             code, analysis_family
         ):
-            repaired = _deterministic_runner_repair(
+            repaired = _deterministic_runner_repair_candidate(
                 code=code,
                 run_log=summary_text,
                 previous_repair=previous_repair,
@@ -4293,7 +4639,7 @@ def _deterministic_summary_repair(
         if index_alignment_summary_failure and _statsmodels_repair_allowed_for_family(
             code, analysis_family
         ):
-            repaired = _deterministic_runner_repair(
+            repaired = _deterministic_runner_repair_candidate(
                 code=code,
                 run_log=summary_text,
                 previous_repair=previous_repair,
@@ -4319,10 +4665,11 @@ def _deterministic_summary_repair(
                 if repaired != code:
                     return repair_name, repaired
         nested_primary_singular = (
-            null_model_summary
+            (null_model_summary or structured_primary_singular)
             and "singular matrix" in summary_text
             and (
-                '"primary_model"' in summary_text
+                structured_primary_singular
+                or '"primary_model"' in summary_text
                 or "primary association" in summary_text
                 or "primary estimand" in summary_text
                 or "primary_exposure" in summary_text
@@ -4393,8 +4740,10 @@ def _deterministic_summary_repair(
                 """).strip("\n")
             repaired = re.sub(
                 r"^(?P<indent>\s*)model_df = model_df\.apply\(pd\.to_numeric, errors=\"coerce\"\)",
-                lambda match: match.group("indent")
-                + replacement.replace("\n", "\n" + match.group("indent")),
+                lambda match: (
+                    match.group("indent")
+                    + replacement.replace("\n", "\n" + match.group("indent"))
+                ),
                 code,
                 count=1,
                 flags=re.MULTILINE,
@@ -4503,328 +4852,116 @@ def _deterministic_summary_repair(
     return None
 
 
-def _patch_unavailable_figure_full_source_projection(code: str) -> str:
-    """Keep the complete bound table behind an unavailable-result notice.
+def _deterministic_summary_repair(
+    *,
+    code: str,
+    step_summary: Dict[str, Any],
+    previous_repair: Optional[str] = None,
+    analysis_family: Optional[str] = None,
+    on_semantic_escalation: Optional[Callable[[SemanticRepairEscalation], None]] = None,
+) -> Optional[tuple[str, str]]:
+    """Return a summary repair only when it cannot change scientific design."""
 
-    A rendering-only step may honestly report that its typed parent lacks the
-    columns needed for the planned chart.  Its source-data file must still
-    preserve the complete bound parent rather than emit identifiers alone;
-    otherwise the host cannot independently verify the claimed absence.  This
-    rewrite is limited to the generated key-only ``pd.DataFrame(rows, ...)``
-    shape and retains the existing path and CSV write.
+    candidate = _deterministic_summary_repair_candidate(
+        code=code,
+        step_summary=step_summary,
+        previous_repair=previous_repair,
+        analysis_family=analysis_family,
+    )
+    return mechanical_repair_or_escalate(
+        candidate,
+        source="deterministic_summary_repair",
+        callback=on_semantic_escalation,
+    )
+
+
+def _patch_unresolved_input_binding_receipts(
+    code: str,
+    *,
+    findings: Sequence[Any],
+) -> str:
+    """Empty a literal typed-input receipt list when the host bound no typed inputs.
+
+    Raw Planner columns are authorized through the execution cohort and
+    ``raw_input_contracts``. They are deliberately absent from the typed
+    ``manifest['inputs']`` namespace, so generated ``raw:<column>`` receipts are
+    both unverifiable and unnecessary. This repair is intentionally narrow: it
+    runs only when every reported unresolved key came from a validator receipt
+    proving that the exact host-resolved key set was empty, and only when one
+    literal ``input_bindings`` list contains exactly those keys.
     """
 
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return code
-    string_literals = {
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-    }
-    if not {"not_estimable_notice", "unsupported"} <= string_literals:
-        return code
-
-    candidates: List[tuple[ast.Assign, str, str, str]] = []
-    for function in (
-        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
-    ):
-        frame_names = {
-            node.func.value.id
-            for node in ast.walk(function)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "iterrows"
-            and isinstance(node.func.value, ast.Name)
-        }
-        source_table_names = {
-            value.id
-            for node in ast.walk(function)
-            if isinstance(node, ast.Dict)
-            for key, value in zip(node.keys, node.values)
-            if isinstance(key, ast.Constant)
-            and key.value == "source_table"
-            and isinstance(value, ast.Name)
-        }
-        for node in ast.walk(function):
-            if not (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Attribute)
-                and isinstance(node.value.func.value, ast.Name)
-                and node.value.func.value.id == "pd"
-                and node.value.func.attr == "DataFrame"
-                and node.value.args
-                and isinstance(node.value.args[0], ast.Name)
-            ):
-                continue
-            declared_columns = {
-                item.value
-                for keyword in node.value.keywords
-                if keyword.arg == "columns" and isinstance(keyword.value, ast.List)
-                for item in keyword.value.elts
-                if isinstance(item, ast.Constant) and isinstance(item.value, str)
-            }
-            target_name = node.targets[0].id
-            writes_csv = any(
-                isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Attribute)
-                and call.func.attr == "to_csv"
-                and isinstance(call.func.value, ast.Name)
-                and call.func.value.id == target_name
-                for call in ast.walk(function)
-            )
-            if not (
-                {"source_row_index", "source_table"} <= declared_columns
-                and len(frame_names) == 1
-                and len(source_table_names) == 1
-                and writes_csv
-            ):
-                continue
-            candidates.append(
-                (
-                    node,
-                    target_name,
-                    next(iter(frame_names)),
-                    next(iter(source_table_names)),
-                )
-            )
-    if len(candidates) != 1:
-        return code
-
-    node, target_name, frame_name, source_table_name = candidates[0]
-    lines = code.splitlines(keepends=True)
-    line_starts: List[int] = []
-    offset = 0
-    for line in lines:
-        line_starts.append(offset)
-        offset += len(line)
-
-    def _absolute_offset(lineno: int, utf8_col: int) -> int:
-        line = lines[lineno - 1]
-        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
-        return line_starts[lineno - 1] + char_col
-
-    indent = " " * int(node.col_offset)
-    replacement = (
-        f'{target_name} = {frame_name}.drop(columns=["source_row_index", '
-        f'"source_table"], errors="ignore").copy(deep=True).reset_index(drop=True)\n'
-        f'{indent}{target_name}.insert(0, "source_table", {source_table_name})\n'
-        f'{indent}{target_name}.insert(0, "source_row_index", '
-        f"range(len({target_name})))"
-    )
-    repaired = (
-        code[: _absolute_offset(node.lineno, node.col_offset)]
-        + replacement
-        + code[_absolute_offset(node.end_lineno, node.end_col_offset) :]
-    )
-    try:
-        ast.parse(repaired)
-    except SyntaxError:
-        return code
-    return repaired
-
-
-def _patch_bound_figure_source_projection(code: str) -> str:
-    """Declare exact, per-parent source-data projections for a figure bundle.
-
-    Generated renderers sometimes combine several bound parent tables into one
-    reader-facing long table.  Renaming upstream value columns to generic
-    ``value``/``numerator`` fields makes that combined table impossible to
-    authenticate without trusting the renderer.  When the script already loads
-    every Planner-declared table into one mapping, this repair writes each
-    loaded frame unchanged to a separate local CSV and declares those exact
-    projections in both the FigureContract and ``step_summary.json``.
-
-    The rewrite is deliberately structural: it neither selects rows nor
-    changes the plotted data.  It requires one unambiguous table-loading loop,
-    one FigureContract call, one publication-save call, and one summary source
-    declaration.  Any other shape fails closed to the normal repair path.
-    """
-
-    marker = "_easyicu_bound_source_files"
-    provenance_marker = "_easyicu_bound_source_table_name"
-    if provenance_marker in code:
-        return code
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return code
-
-    table_loads: List[tuple[str, str, str, str]] = []
-    for loop in (node for node in ast.walk(tree) if isinstance(node, ast.For)):
-        if not (isinstance(loop.target, ast.Name) and isinstance(loop.iter, ast.Name)):
-            continue
-        loop_key = loop.target.id
-        loaded_tuples = [
-            target
-            for assignment in loop.body
-            if isinstance(assignment, ast.Assign)
-            and len(assignment.targets) == 1
-            and isinstance((target := assignment.targets[0]), ast.Tuple)
-            and len(target.elts) >= 3
-            and isinstance(target.elts[0], ast.Name)
-            and isinstance(target.elts[2], ast.Name)
-            and isinstance(assignment.value, ast.Call)
-            and (
-                (
-                    isinstance(assignment.value.func, ast.Name)
-                    and assignment.value.func.id == "load_bound_table"
-                )
-                or (
-                    isinstance(assignment.value.func, ast.Attribute)
-                    and assignment.value.func.attr == "load_bound_table"
-                )
-            )
-        ]
-        if len(loaded_tuples) != 1:
-            continue
-        loaded_frame_name = loaded_tuples[0].elts[0].id
-        loaded_record_name = loaded_tuples[0].elts[2].id
-        frame_map_names: List[str] = []
-        record_map_names: List[str] = []
-        for node in ast.walk(loop):
-            if not (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Subscript)
-                and isinstance(node.targets[0].value, ast.Name)
-                and isinstance(node.targets[0].slice, ast.Name)
-                and node.targets[0].slice.id == loop_key
-                and isinstance(node.value, ast.Name)
-            ):
-                continue
-            if node.value.id == loaded_frame_name:
-                frame_map_names.append(node.targets[0].value.id)
-            elif node.value.id == loaded_record_name:
-                record_map_names.append(node.targets[0].value.id)
-        if len(frame_map_names) == 1 and len(record_map_names) == 1:
-            table_loads.append(
-                (
-                    frame_map_names[0],
-                    record_map_names[0],
-                    loop.iter.id,
-                    loop_key,
-                )
-            )
-    table_loads = list(dict.fromkeys(table_loads))
-    if len(table_loads) != 1:
-        return code
-    table_map_name, record_map_name, input_iterable_name, _ = table_loads[0]
-
-    provenance_lines = (
-        "_easyicu_bound_record = "
-        f"{record_map_name}[_easyicu_bound_key]\n"
-        "_easyicu_bound_relative_path = "
-        '_easyicu_bound_record.get("relative_path")\n'
-        "if not isinstance(_easyicu_bound_relative_path, str) "
-        "or not _easyicu_bound_relative_path.strip():\n"
-        '    raise RuntimeError("Missing bound source-table path for figure provenance")\n'
-        f"{provenance_marker} = "
-        '_easyicu_bound_relative_path.replace(chr(92), "/").rsplit("/", 1)[-1]\n'
-        f"if not {provenance_marker}:\n"
-        '    raise RuntimeError("Invalid bound source-table path for figure provenance")\n'
-        'if {"source_row_index", "source_table"} '
-        "& set(_easyicu_bound_frame.columns):\n"
-        "    raise RuntimeError("
-        '"Bound parent already uses reserved figure provenance columns")\n'
-        "_easyicu_bound_frame.insert(\n"
-        f'    0, "source_table", {provenance_marker}\n'
-        ")\n"
-        "_easyicu_bound_frame.insert(\n"
-        '    0, "source_row_index", range(len(_easyicu_bound_frame))\n'
-        ")\n"
-    )
-    if marker in code:
-        bound_frame_assignments = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id == "_easyicu_bound_frame"
-        ]
-        if len(bound_frame_assignments) != 1:
-            return code
-        assignment = bound_frame_assignments[0]
-        if assignment.end_lineno is None:
-            return code
-        lines = code.splitlines(keepends=True)
-        insert_at = sum(len(line) for line in lines[: assignment.end_lineno])
-        repaired = (
-            code[:insert_at]
-            + textwrap.indent(provenance_lines, " " * 8)
-            + code[insert_at:]
-        )
-        try:
-            ast.parse(repaired)
-        except SyntaxError:
-            return code
-        return repaired
-
-    contract_assignments: List[tuple[ast.Assign, ast.keyword]] = []
-    for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Assign)
-            and isinstance(node.value, ast.Call)
-            and (
-                (
-                    isinstance(node.value.func, ast.Name)
-                    and node.value.func.id == "make_figure_contract"
-                )
-                or (
-                    isinstance(node.value.func, ast.Attribute)
-                    and node.value.func.attr == "make_figure_contract"
-                )
-            )
+    unresolved_details: list[Mapping[str, Any]] = []
+    for finding in findings:
+        validator = getattr(finding, "validator", None)
+        detail = getattr(finding, "detail", None)
+        if isinstance(finding, dict):
+            validator = finding.get("validator")
+            detail = finding.get("detail")
+        if (
+            validator == "step_summary_integrity"
+            and isinstance(detail, dict)
+            and detail.get("issue") == "input_binding_key_unresolved"
         ):
-            continue
-        source_keywords = [
-            keyword for keyword in node.value.keywords if keyword.arg == "source_data"
-        ]
-        if len(source_keywords) == 1:
-            contract_assignments.append((node, source_keywords[0]))
-    if len(contract_assignments) != 1:
+            unresolved_details.append(detail)
+    if not unresolved_details or any(
+        detail.get("resolved_input_keys") != []
+        or not isinstance(detail.get("input_key"), str)
+        for detail in unresolved_details
+    ):
         return code
-    contract_statement, source_keyword = contract_assignments[0]
+    unresolved_keys = [str(detail["input_key"]) for detail in unresolved_details]
 
-    output_dir_names = {
-        keyword.value.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and (
-            (
-                isinstance(node.func, ast.Name)
-                and node.func.id == "save_publication_figure"
-            )
-            or (
-                isinstance(node.func, ast.Attribute)
-                and node.func.attr == "save_publication_figure"
-            )
-        )
-        for keyword in node.keywords
-        if keyword.arg == "out_dir" and isinstance(keyword.value, ast.Name)
-    }
-    if len(output_dir_names) != 1:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
         return code
-    output_dir_name = next(iter(output_dir_names))
 
-    summary_source_values: List[ast.AST] = []
+    expected_keys = sorted(unresolved_keys)
+    candidates: list[ast.List] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Dict):
             continue
-        for key, value in zip(node.keys, node.values):
-            if isinstance(key, ast.Constant) and key.value == "source_data_files":
-                summary_source_values.append(value)
-    if len(summary_source_values) != 1:
+        for key, value in zip(node.keys, node.values, strict=True):
+            if not (
+                isinstance(key, ast.Constant)
+                and key.value == "input_bindings"
+                and isinstance(value, ast.List)
+                and value.elts
+            ):
+                continue
+            literal_keys: list[str] = []
+            valid_literal = True
+            for item in value.elts:
+                if not isinstance(item, ast.Dict):
+                    valid_literal = False
+                    break
+                item_key: Optional[str] = None
+                for item_field, item_value in zip(item.keys, item.values, strict=True):
+                    if (
+                        isinstance(item_field, ast.Constant)
+                        and item_field.value == "input_key"
+                        and isinstance(item_value, ast.Constant)
+                        and isinstance(item_value.value, str)
+                    ):
+                        item_key = item_value.value
+                        break
+                if item_key is None:
+                    valid_literal = False
+                    break
+                literal_keys.append(item_key)
+            if valid_literal and sorted(literal_keys) == expected_keys:
+                candidates.append(value)
+    if len(candidates) != 1:
         return code
-    summary_source_value = summary_source_values[0]
 
+    candidate = candidates[0]
+    if candidate.end_lineno is None or candidate.end_col_offset is None:
+        return code
     lines = code.splitlines(keepends=True)
-    line_starts: List[int] = []
+    if not lines:
+        return code
+    line_starts: list[int] = []
     offset = 0
     for line in lines:
         line_starts.append(offset)
@@ -4835,45 +4972,11 @@ def _patch_bound_figure_source_projection(code: str) -> str:
         char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
         return line_starts[lineno - 1] + char_col
 
-    def _span(node: ast.AST) -> tuple[int, int]:
-        return (
-            _absolute_offset(node.lineno, node.col_offset),
-            _absolute_offset(node.end_lineno, node.end_col_offset),
-        )
-
-    indent = " " * int(contract_statement.col_offset)
-    projection = (
-        f"{indent}{marker} = []\n"
-        f"{indent}for _easyicu_bound_index, _easyicu_bound_key in "
-        f"enumerate({input_iterable_name}):\n"
-        f"{indent}    _easyicu_bound_frame = "
-        f"{table_map_name}[_easyicu_bound_key].copy(deep=True)\n"
-        + textwrap.indent(provenance_lines, indent + " " * 4)
-        + f'{indent}    _easyicu_bound_token = "".join(\n'
-        f'{indent}        character if character.isalnum() else "_"\n'
-        f"{indent}        for character in str(_easyicu_bound_key)\n"
-        f'{indent}    ).strip("_")\n'
-        f"{indent}    _easyicu_bound_source_name = (\n"
-        f'{indent}        f"bound_{{_easyicu_bound_index:03d}}_'
-        f'{{_easyicu_bound_token}}_source_data.csv"\n'
-        f"{indent}    )\n"
-        f"{indent}    _easyicu_bound_frame.to_csv(\n"
-        f"{indent}        {output_dir_name} / _easyicu_bound_source_name,\n"
-        f"{indent}        index=False,\n"
-        f"{indent}    )\n"
-        f"{indent}    {marker}.append(_easyicu_bound_source_name)\n\n"
+    repaired = (
+        code[: _absolute_offset(candidate.lineno, candidate.col_offset)]
+        + "[]"
+        + code[_absolute_offset(candidate.end_lineno, candidate.end_col_offset) :]
     )
-    insert_at = line_starts[contract_statement.lineno - 1]
-    replacements = [
-        (*_span(source_keyword.value), marker),
-        (*_span(summary_source_value), marker),
-        (insert_at, insert_at, projection),
-    ]
-    repaired = code
-    for start, end, replacement in sorted(
-        replacements, key=lambda item: item[0], reverse=True
-    ):
-        repaired = repaired[:start] + replacement + repaired[end:]
     try:
         ast.parse(repaired)
     except SyntaxError:
@@ -4881,298 +4984,25 @@ def _patch_bound_figure_source_projection(code: str) -> str:
     return repaired
 
 
-def _materialize_direct_bound_source_frames(
-    code: str,
-    *,
-    tree: ast.AST,
-    contract_statement: ast.Assign,
-    source_keyword: ast.keyword,
-    entries: Sequence[tuple[str, str, str]],
-) -> str:
-    """Write exact parent frames and bind their local CSV basenames."""
-
-    marker = "_easyicu_direct_bound_source_files"
-    if marker in code or not entries:
-        return code
-    if any(
-        re.fullmatch(r"[A-Za-z0-9_]+", product) is None
-        or Path(source_name).name != source_name
-        or Path(source_name).suffix.lower() != ".csv"
-        for product, _frame_name, source_name in entries
-    ):
-        return code
-    output_dir_names = {
-        keyword.value.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and (
-            (
-                isinstance(node.func, ast.Name)
-                and node.func.id == "save_publication_figure"
-            )
-            or (
-                isinstance(node.func, ast.Attribute)
-                and node.func.attr == "save_publication_figure"
-            )
-        )
-        for keyword in node.keywords
-        if keyword.arg == "out_dir" and isinstance(keyword.value, ast.Name)
-    }
-    if len(output_dir_names) != 1:
-        return code
-    output_dir_name = next(iter(output_dir_names))
-    indent = " " * int(contract_statement.col_offset)
-    projection = f"{indent}{marker} = []\n"
-    for index, (product, frame_name, source_name) in enumerate(entries):
-        local_name = f"bound_{index:03d}_{product}_source_data.csv"
-        projection += (
-            f"{indent}_easyicu_direct_bound_frame = "
-            f"{frame_name}.copy(deep=True)\n"
-            f'{indent}if {{"source_row_index", "source_table"}} & '
-            "set(_easyicu_direct_bound_frame.columns):\n"
-            f"{indent}    raise RuntimeError("
-            '"Bound parent already uses reserved figure provenance columns")\n'
-            f'{indent}_easyicu_direct_bound_frame.insert(0, "source_table", '
-            f"{source_name!r})\n"
-            f'{indent}_easyicu_direct_bound_frame.insert(0, "source_row_index", '
-            "range(len(_easyicu_direct_bound_frame)))\n"
-            f"{indent}_easyicu_direct_bound_source_name = {local_name!r}\n"
-            f"{indent}_easyicu_direct_bound_frame.to_csv(\n"
-            f"{indent}    {output_dir_name} / "
-            "_easyicu_direct_bound_source_name,\n"
-            f"{indent}    index=False,\n"
-            f"{indent})\n"
-            f"{indent}{marker}.append(_easyicu_direct_bound_source_name)\n"
-        )
-    projection += "\n"
-
-    lines = code.splitlines(keepends=True)
-    line_starts: List[int] = []
-    offset = 0
-    for line in lines:
-        line_starts.append(offset)
-        offset += len(line)
-
-    def absolute_offset(line_number: int, byte_column: int) -> int:
-        line = lines[line_number - 1]
-        character_column = len(line.encode("utf-8")[:byte_column].decode("utf-8"))
-        return line_starts[line_number - 1] + character_column
-
-    source_start = absolute_offset(
-        source_keyword.value.lineno,
-        source_keyword.value.col_offset,
-    )
-    source_end = absolute_offset(
-        source_keyword.value.end_lineno,
-        source_keyword.value.end_col_offset,
-    )
-    insert_at = line_starts[contract_statement.lineno - 1]
-    repaired = code
-    for start, end, replacement in sorted(
-        [
-            (source_start, source_end, marker),
-            (insert_at, insert_at, projection),
-        ],
-        key=lambda item: item[0],
-        reverse=True,
-    ):
-        repaired = repaired[:start] + replacement + repaired[end:]
-    try:
-        ast.parse(repaired)
-    except SyntaxError:
-        return code
-    return repaired
-
-
-def _figure_contract_source_assignment(
-    tree: ast.AST,
-    *,
-    source_value_type: type[ast.AST],
-) -> tuple[ast.Assign, ast.keyword] | None:
-    candidates: List[tuple[ast.Assign, ast.keyword]] = []
-    for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Call)
-            and (
-                (
-                    isinstance(node.value.func, ast.Name)
-                    and node.value.func.id == "make_figure_contract"
-                )
-                or (
-                    isinstance(node.value.func, ast.Attribute)
-                    and node.value.func.attr == "make_figure_contract"
-                )
-            )
-        ):
-            continue
-        source_keywords = [
-            keyword
-            for keyword in node.value.keywords
-            if keyword.arg == "source_data"
-            and isinstance(keyword.value, source_value_type)
-        ]
-        if len(source_keywords) == 1:
-            candidates.append((node, source_keywords[0]))
-    return candidates[0] if len(candidates) == 1 else None
-
-
-def _patch_direct_bound_figure_source_projection(
-    code: str,
-    *,
-    missing_table_names: Sequence[str],
-) -> str:
-    """Project directly loaded typed parents into local source-data files."""
-
-    plain_missing_names = [
-        str(name)
-        for name in missing_table_names
-        if isinstance(name, str)
-        and name
-        and Path(name).name == name
-        and Path(name).suffix.lower() == ".csv"
-    ]
-    if len(plain_missing_names) != len(missing_table_names) or not plain_missing_names:
-        return code
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return code
-
-    loaded_tables: Dict[str, str] = {}
-    duplicate_products: Set[str] = set()
-    for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Attribute)
-            and node.value.func.attr == "copy"
-            and isinstance(node.value.func.value, ast.Subscript)
-        ):
-            continue
-        row_subscript = node.value.func.value
-        if not (
-            isinstance(row_subscript.slice, ast.Constant)
-            and row_subscript.slice.value == 0
-            and isinstance(row_subscript.value, ast.Subscript)
-            and isinstance(row_subscript.value.value, ast.Name)
-            and isinstance(row_subscript.value.slice, ast.Constant)
-            and isinstance(row_subscript.value.slice.value, str)
-        ):
-            continue
-        input_key = row_subscript.value.slice.value
-        if not input_key.startswith("table:"):
-            continue
-        product = input_key.split(":", 1)[1]
-        if product in loaded_tables:
-            duplicate_products.add(product)
-            continue
-        loaded_tables[product] = node.targets[0].id
-    if duplicate_products:
-        return code
-    missing_products = [Path(name).stem for name in plain_missing_names]
-    if len(missing_products) != len(set(missing_products)) or any(
-        product not in loaded_tables for product in missing_products
-    ):
-        return code
-    source_assignment = _figure_contract_source_assignment(
-        tree,
-        source_value_type=ast.Constant,
-    )
-    if source_assignment is None:
-        return code
-    contract_statement, source_keyword = source_assignment
-    entries = [
-        (product, loaded_tables[product], source_name)
-        for source_name, product in zip(
-            plain_missing_names,
-            missing_products,
-            strict=True,
-        )
-    ]
-    return _materialize_direct_bound_source_frames(
-        code,
-        tree=tree,
-        contract_statement=contract_statement,
-        source_keyword=source_keyword,
-        entries=entries,
-    )
-
-
-def _patch_direct_bound_figure_source_materialization(code: str) -> str:
-    """Materialize the exact v1 DataFrame-dictionary projection shape."""
-
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return code
-    source_assignment = _figure_contract_source_assignment(
-        tree,
-        source_value_type=ast.Dict,
-    )
-    if source_assignment is None:
-        return code
-    contract_statement, source_keyword = source_assignment
-    source_dict = source_keyword.value
-    assert isinstance(source_dict, ast.Dict)
-    entries: List[tuple[str, str, str]] = []
-    for key, value in zip(source_dict.keys, source_dict.values, strict=True):
-        if not (
-            isinstance(key, ast.Constant)
-            and isinstance(key.value, str)
-            and isinstance(value, ast.Call)
-            and isinstance(value.func, ast.Attribute)
-            and value.func.attr == "assign"
-            and isinstance(value.func.value, ast.Call)
-            and isinstance(value.func.value.func, ast.Attribute)
-            and value.func.value.func.attr == "copy"
-            and isinstance(value.func.value.func.value, ast.Name)
-        ):
-            return code
-        frame_name = value.func.value.func.value.id
-        keywords = {keyword.arg: keyword.value for keyword in value.keywords}
-        source_table = keywords.get("source_table")
-        row_index = keywords.get("source_row_index")
-        if not (
-            set(keywords) == {"source_row_index", "source_table"}
-            and isinstance(source_table, ast.Constant)
-            and isinstance(source_table.value, str)
-            and Path(source_table.value).name == source_table.value
-            and Path(source_table.value).suffix.lower() == ".csv"
-            and Path(source_table.value).stem == key.value
-            and isinstance(row_index, ast.Call)
-            and isinstance(row_index.func, ast.Name)
-            and row_index.func.id == "range"
-            and len(row_index.args) == 1
-            and isinstance(row_index.args[0], ast.Call)
-            and isinstance(row_index.args[0].func, ast.Name)
-            and row_index.args[0].func.id == "len"
-            and len(row_index.args[0].args) == 1
-            and isinstance(row_index.args[0].args[0], ast.Name)
-            and row_index.args[0].args[0].id == frame_name
-        ):
-            return code
-        entries.append((key.value, frame_name, source_table.value))
-    return _materialize_direct_bound_source_frames(
-        code,
-        tree=tree,
-        contract_statement=contract_statement,
-        source_keyword=source_keyword,
-        entries=entries,
-    )
-
-
-def deterministic_contract_repair(
+def _deterministic_contract_repair_candidate(
     *,
     code: str,
     findings: Sequence[Any],
     previous_repair: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Patch objective contract/audit failures before asking the LLM to repair."""
+
+    cluster_count_repair_name = "cluster_count_summary_alias_v1"
+    if previous_repair != cluster_count_repair_name:
+        repaired = patch_cluster_count_summary_alias(code, findings)
+        if repaired != code:
+            return cluster_count_repair_name, repaired
+
+    unresolved_receipt_repair_name = "unresolved_input_binding_receipts_v1"
+    if previous_repair != unresolved_receipt_repair_name:
+        repaired = _patch_unresolved_input_binding_receipts(code, findings=findings)
+        if repaired != code:
+            return unresolved_receipt_repair_name, repaired
 
     render_echo_repair_name = "render_only_effect_echo_suppression_v1"
     if previous_repair != render_echo_repair_name:
@@ -5192,87 +5022,6 @@ def deterministic_contract_repair(
     )
     if convergence_contract != code:
         return "penalized_convergence_contract_v2", convergence_contract
-
-    direct_materialization_findings = []
-    for finding in findings:
-        validator = getattr(finding, "validator", None)
-        detail = getattr(finding, "detail", None)
-        if isinstance(finding, dict):
-            validator = finding.get("validator")
-            detail = finding.get("detail")
-        if (
-            validator == "figure_source_data"
-            and isinstance(detail, dict)
-            and detail.get("reason") == "missing_source_data"
-        ):
-            direct_materialization_findings.append(finding)
-    direct_materialization_repair_name = "direct_bound_figure_source_materialization_v1"
-    if (
-        len(direct_materialization_findings) == 1
-        and previous_repair != direct_materialization_repair_name
-    ):
-        repaired = _patch_direct_bound_figure_source_materialization(code)
-        if repaired != code:
-            return direct_materialization_repair_name, repaired
-
-    source_coverage_findings = []
-    for finding in findings:
-        validator = getattr(finding, "validator", None)
-        detail = getattr(finding, "detail", None)
-        if isinstance(finding, dict):
-            validator = finding.get("validator")
-            detail = finding.get("detail")
-        if (
-            validator == "figure_source_data"
-            and isinstance(detail, dict)
-            and detail.get("reason") == "incomplete_source_lineage_coverage"
-            and detail.get("missing_bound_tables")
-        ):
-            source_coverage_findings.append(finding)
-    direct_source_repair_name = "direct_bound_figure_source_projection_v1"
-    if (
-        len(source_coverage_findings) == 1
-        and previous_repair != direct_source_repair_name
-    ):
-        finding = source_coverage_findings[0]
-        detail = (
-            finding.get("detail")
-            if isinstance(finding, dict)
-            else getattr(finding, "detail", {})
-        )
-        repaired = _patch_direct_bound_figure_source_projection(
-            code,
-            missing_table_names=list(detail.get("missing_bound_tables") or []),
-        )
-        if repaired != code:
-            return direct_source_repair_name, repaired
-
-    unavailable_source_findings = []
-    for finding in source_coverage_findings:
-        detail = (
-            finding.get("detail")
-            if isinstance(finding, dict)
-            else getattr(finding, "detail", {})
-        )
-        if not detail.get("missing_bound_statistics"):
-            unavailable_source_findings.append(finding)
-    unavailable_source_repair_name = "unavailable_figure_full_source_projection_v1"
-    if (
-        len(unavailable_source_findings) == 1
-        and previous_repair != unavailable_source_repair_name
-    ):
-        repaired = _patch_unavailable_figure_full_source_projection(code)
-        if repaired != code:
-            return unavailable_source_repair_name, repaired
-
-    bound_source_repair_name = "bound_figure_source_projection_v2"
-    if (
-        len(unavailable_source_findings) == 1
-        and previous_repair != bound_source_repair_name
-    ):
-        repaired = _patch_bound_figure_source_projection(code)
-        if repaired != code:
-            return bound_source_repair_name, repaired
 
     attrition_identity_findings = []
     for finding in findings:
@@ -5323,6 +5072,22 @@ def deterministic_contract_repair(
         ):
             provenance_source_findings.append(finding)
     provenance_repair_name = "measurement_provenance_summary_mapping_v2"
+    provenance_alias_repair_name = "measurement_provenance_envelope_alias_v1"
+    if (
+        any(
+            (
+                finding.get("detail")
+                if isinstance(finding, dict)
+                else getattr(finding, "detail", {})
+            ).get("issue")
+            == "measurement_provenance_source_invalid"
+            for finding in provenance_source_findings
+        )
+        and previous_repair != provenance_alias_repair_name
+    ):
+        repaired = patch_closed_provenance_envelope_alias(code)
+        if repaired != code:
+            return provenance_alias_repair_name, repaired
     if provenance_source_findings and previous_repair != provenance_repair_name:
         repaired = patch_measurement_provenance_contract(code, findings=findings)
         if repaired != code:
@@ -5354,6 +5119,27 @@ def deterministic_contract_repair(
         if repaired != code:
             return repair_name, repaired
     return None
+
+
+def deterministic_contract_repair(
+    *,
+    code: str,
+    findings: Sequence[Any],
+    previous_repair: Optional[str] = None,
+    on_semantic_escalation: Optional[Callable[[SemanticRepairEscalation], None]] = None,
+) -> Optional[tuple[str, str]]:
+    """Expose only implementation-preserving contract repairs."""
+
+    candidate = _deterministic_contract_repair_candidate(
+        code=code,
+        findings=findings,
+        previous_repair=previous_repair,
+    )
+    return mechanical_repair_or_escalate(
+        candidate,
+        source="deterministic_contract_repair",
+        callback=on_semantic_escalation,
+    )
 
 
 # Captures ``NameError: name 'foo' is not defined`` for use by Fix F.
@@ -5666,7 +5452,7 @@ def _patch_scalar_cast_before_reduction(code: str) -> str:
     return repaired
 
 
-def _deterministic_runner_repair(
+def _deterministic_runner_repair_candidate(
     *,
     code: str,
     run_log: str,
@@ -5688,8 +5474,25 @@ def _deterministic_runner_repair(
         repaired = patch_structured_analysis_role_selection(code, run_log)
         if repaired is not None and repaired != code:
             return structured_role_repair, repaired
+
     if repair := _finding_json_repair(code, run_log, previous_repair):
         return repair
+
+    strict_numeric_result_repair = "strict_numeric_input_result_projection_v1"
+    if previous_repair != strict_numeric_result_repair:
+        repaired = patch_strict_numeric_input_result_projection(code, run_log)
+        if repaired != code:
+            return strict_numeric_result_repair, repaired
+
+    measurement_status_alias_repair = "bound_panel_measurement_status_alias_v1"
+    if previous_repair != measurement_status_alias_repair:
+        repaired = patch_bound_panel_measurement_status_alias(
+            code,
+            run_log,
+            resolved_input_bindings=resolved_input_bindings,
+        )
+        if repaired != code:
+            return measurement_status_alias_repair, repaired
 
     host_helper_import_repair = "relocate_known_host_helper_import_v1"
     if previous_repair != host_helper_import_repair:
@@ -5702,6 +5505,36 @@ def _deterministic_runner_repair(
         repaired = patch_raw_input_physical_superset_guard(code, run_log)
         if repaired != code:
             return input_scope_repair, repaired
+
+    raw_contract_mapping_repair = "raw_contract_mapping_iteration_v1"
+    if previous_repair != raw_contract_mapping_repair:
+        repaired = patch_raw_contract_mapping_iteration(code, run_log)
+        if repaired != code:
+            return raw_contract_mapping_repair, repaired
+
+    raw_contract_type_repair = "raw_contract_list_type_assertion_v1"
+    if previous_repair != raw_contract_type_repair:
+        repaired = patch_raw_contract_list_type_assertion(code, run_log)
+        if repaired != code:
+            return raw_contract_type_repair, repaired
+
+    raw_contract_document_repair = "raw_contract_document_fallback_v1"
+    if previous_repair != raw_contract_document_repair:
+        repaired = patch_raw_contract_document_fallback(code, run_log)
+        if repaired != code:
+            return raw_contract_document_repair, repaired
+
+    plausibility_schema_repair = "plausibility_range_schema_keys_v1"
+    if previous_repair != plausibility_schema_repair:
+        repaired = patch_plausibility_range_schema_keys(code, run_log)
+        if repaired != code:
+            return plausibility_schema_repair, repaired
+
+    nonfinite_missing_repair = "nonfinite_missing_mask_conflation_v1"
+    if previous_repair != nonfinite_missing_repair:
+        repaired = patch_nonfinite_missing_mask_conflation(code, run_log)
+        if repaired != code:
+            return nonfinite_missing_repair, repaired
 
     receipt_source_repair = "host_receipt_source_envelope_v1"
     if previous_repair != receipt_source_repair:
@@ -5752,6 +5585,16 @@ def _deterministic_runner_repair(
         repaired = patch_resolved_input_manifest_env(code, run_log)
         if repaired != code:
             return manifest_env_repair, repaired
+
+    consumption_owner_repair = "resolved_input_consumption_contract_owner_v1"
+    if previous_repair != consumption_owner_repair:
+        repaired = patch_resolved_input_consumption_contract_owner(
+            code,
+            run_log,
+            resolved_input_bindings=resolved_input_bindings,
+        )
+        if repaired != code:
+            return consumption_owner_repair, repaired
 
     all_rows_outcome_repair = "all_rows_outcome_coordinate_filter_v1"
     if previous_repair != all_rows_outcome_repair:
@@ -6071,9 +5914,13 @@ def _deterministic_runner_repair(
             "object of type ndarray is not json serializable",
         )
     )
+    json_nonfinite_value_failure = (
+        "out of range float values are not json compliant" in lowered
+    )
     json_numpy_key_failure = (
         "keys must be str, int, float, bool or none" in lowered
         or json_numpy_scalar_failure
+        or json_nonfinite_value_failure
     ) and "json.dump(" in code
     if json_numpy_key_failure:
         repair_name = "json_dump_numpy_key_sanitizer_v1"
@@ -6159,9 +6006,8 @@ def _deterministic_runner_repair(
         "indices for endog and exog are not aligned" in lowered
         and any(token in code for token in ("sm.Logit(", "sm.OLS(", "sm.GLM("))
     )
-    if (
-        statsmodels_endog_exog_index_mismatch
-        and _statsmodels_repair_allowed_for_family(code, analysis_family)
+    if statsmodels_endog_exog_index_mismatch and _statsmodels_repair_allowed_for_family(
+        code, analysis_family
     ):
         repair_name = "statsmodels_endog_exog_index_align_v1"
         if previous_repair != repair_name:
@@ -6552,25 +6398,7 @@ def _deterministic_runner_repair(
         repair_name = "inline_missing_to_jsonable_utils_v1"
         if previous_repair != repair_name:
             helper = textwrap.dedent("""
-                def to_jsonable(x):
-                    import math
-                    import numpy as np
-                    import pandas as pd
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if math.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    if isinstance(x, np.ndarray):
-                        return x.tolist()
-                    try:
-                        if pd.isna(x):
-                            return None
-                    except Exception:
-                        pass
-                    return str(x)
+                from easyicu.research_agent.script_runtime import to_jsonable
                 """).strip()
             repaired = code.replace(
                 "from easyicu.research_agent.utils import to_jsonable",
@@ -6670,29 +6498,15 @@ def _deterministic_runner_repair(
     if table_one_unclosed_syntax:
         repair_name = "table_one_descriptive_repair_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent("""
                 import json
                 import os
                 import math
                 import numpy as np
                 import pandas as pd
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if math.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    if isinstance(x, np.ndarray):
-                        return x.tolist()
-                    try:
-                        if pd.isna(x):
-                            return None
-                    except Exception:
-                        pass
-                    return str(x)
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 cohort_path = os.environ["COHORT_PARQUET"]
                 out_dir = os.environ["STEP_OUT_DIR"]
@@ -6767,7 +6581,9 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, default=to_jsonable)
                 print(json.dumps({"table": "table_one.csv", "summary": summary}, default=to_jsonable))
-                """).strip() + "\n"
+                """).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     outcome_incidence_broken_syntax = "syntaxerror" in lowered and (
@@ -6777,7 +6593,8 @@ def _deterministic_runner_repair(
     if outcome_incidence_broken_syntax:
         repair_name = "outcome_incidence_descriptive_repair_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent("""
                 import json
                 import os
                 import math
@@ -6788,22 +6605,7 @@ def _deterministic_runner_repair(
                 import matplotlib.pyplot as plt
                 from statsmodels.stats.proportion import proportion_confint
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if math.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    if isinstance(x, np.ndarray):
-                        return x.tolist()
-                    try:
-                        if pd.isna(x):
-                            return None
-                    except Exception:
-                        pass
-                    return str(x)
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 cohort_path = os.environ["COHORT_PARQUET"]
                 out_dir = os.environ["STEP_OUT_DIR"]
@@ -6885,7 +6687,9 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, default=to_jsonable)
                 print(json.dumps(summary, default=to_jsonable))
-                """).strip() + "\n"
+                """).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     repeated_keyword_syntax = (
@@ -6896,22 +6700,15 @@ def _deterministic_runner_repair(
     if repeated_keyword_syntax and binary_model_repair_allowed:
         repair_name = "prediction_split_minimal_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent("""
                 import json
                 import os
                 import numpy as np
                 import pandas as pd
                 from sklearn.model_selection import train_test_split
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if np.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    return x
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
                 out = os.environ["STEP_OUT_DIR"]
@@ -6958,7 +6755,9 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
                 print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
-                """).strip() + "\n"
+                """).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     logreg_nan = (
@@ -7021,7 +6820,8 @@ def _deterministic_runner_repair(
     if placeholder_ellipsis and binary_model_repair_allowed:
         repair_name = "prediction_discrimination_template_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent("""
                 import json
                 import math
                 import os
@@ -7040,15 +6840,7 @@ def _deterministic_runner_repair(
                     save_publication_figure,
                 )
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if np.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    return x
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 step_out_dir = os.environ["STEP_OUT_DIR"]
                 cohort_path = os.environ["COHORT_PARQUET"]
@@ -7121,7 +6913,9 @@ def _deterministic_runner_repair(
                 with open(os.path.join(step_out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
                 print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
-                """).strip() + "\n"
+                """).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     omitted_primary_predictor = re.search(
@@ -7229,7 +7023,7 @@ def _deterministic_runner_repair(
                     f'summary["outcomes"]["{match.group("outcome")}"]["{match.group("field")}"].get('
                     f'"1", summary["outcomes"]["{match.group("outcome")}"]'
                     f'["{match.group("field")}"].get(1, '
-                    f'{"0" if match.group("field") == "counts" else "0.0"}))'
+                    f"{'0' if match.group('field') == 'counts' else '0.0'}))"
                 ),
                 code,
             )
@@ -7285,7 +7079,8 @@ def _deterministic_runner_repair(
     if publication_style_nameerror:
         repair_name = "publication_bundle_promote_script_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent("""
                 from __future__ import annotations
                 import json
                 import os
@@ -7357,7 +7152,9 @@ def _deterministic_runner_repair(
                 with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, ensure_ascii=False)
                 print(json.dumps(summary, indent=2, ensure_ascii=False))
-                """).strip() + "\n"
+                """).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     # ----------------------------------------------------------------
@@ -7509,7 +7306,7 @@ def _deterministic_runner_repair(
 
         repaired = model_call.sub(_rewrite, patched, count=1)
         repaired = repaired.replace(
-            "X_array = X.to_numpy()\n" "y_array = y.to_numpy()\n",
+            "X_array = X.to_numpy()\ny_array = y.to_numpy()\n",
             "y, X = _easyicu_runner_repair_v1(X, y)\n"
             "X_array = np.asarray(X, dtype=float)\n"
             "y_array = np.asarray(y, dtype=float)\n",

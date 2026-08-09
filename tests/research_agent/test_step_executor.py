@@ -32,6 +32,16 @@ def _request(tmp_path: Path):
     )
 
 
+def test_runner_timeout_uses_backend_clock_or_requested_fallback():
+    from easyicu.research_agent.execution.step_execution import StepExecutor
+
+    executor = StepExecutor(clear_output_dir=lambda path: None)
+    runner = type("Runner", (), {"timeout_seconds": 23})()
+
+    assert executor.runner_timeout(object(), 17.0) == 17.0
+    assert executor.runner_timeout(runner, 17.0) == 23.0
+
+
 def test_unmanaged_runner_is_cleared_before_exact_single_execution(tmp_path) -> None:
     from easyicu.research_agent.execution.step_execution import StepExecutor
 

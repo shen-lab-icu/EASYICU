@@ -1,0 +1,63 @@
+{
+  "code_commit": "24711373acf39ae0c70ff216efaea7b646c058e8",
+  "code_tree_clean": true,
+  "comparison": "sha256 over the canonicalised frame (columns sorted, rows sorted, CSV rendering); equivalent to assert_frame_equal(check_exact=True) on the canonical ordering. NOT a byte comparison of stored files.",
+  "database": "eicu",
+  "kind": "sofa_partition_invariance_v1",
+  "pandas": "2.2.3",
+  "passed": true,
+  "platform": "macOS-15.7.1-arm64-arm-64bit-Mach-O",
+  "prepared_manifest_sha256": "78e1a1c8add7a776422479c69d46d5806d6b59135694e1c8463558bbd929ce2e",
+  "python": "3.13.5",
+  "requested_cohort": 3000,
+  "results": [
+    {
+      "cohort_id_sha256": "125db65b0ae305a4c37d09b463a5239bcbcde4d9fc6ffdb2988b78ae4f08708d",
+      "cohort_size": 2898,
+      "concept": "sofa",
+      "configurations": [
+        {
+          "canonical_frame_sha256": "0ae39053b9cfc4c3fac944c3dcf39781d7d2749c4f4496c15dec8fbfcb94eb48",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 456899,
+          "seconds": 16.04,
+          "value": 500
+        },
+        {
+          "canonical_frame_sha256": "0ae39053b9cfc4c3fac944c3dcf39781d7d2749c4f4496c15dec8fbfcb94eb48",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 456899,
+          "seconds": 7.21,
+          "value": 2000
+        },
+        {
+          "canonical_frame_sha256": "0ae39053b9cfc4c3fac944c3dcf39781d7d2749c4f4496c15dec8fbfcb94eb48",
+          "matches_reference": true,
+          "parameter": "parallel_workers",
+          "rows": 456899,
+          "seconds": 11.03,
+          "value": 1
+        },
+        {
+          "canonical_frame_sha256": "0ae39053b9cfc4c3fac944c3dcf39781d7d2749c4f4496c15dec8fbfcb94eb48",
+          "matches_reference": true,
+          "parameter": "parallel_workers",
+          "rows": 456899,
+          "seconds": 10.36,
+          "value": 4
+        }
+      ],
+      "passed": true,
+      "reference_canonical_frame_sha256": "0ae39053b9cfc4c3fac944c3dcf39781d7d2749c4f4496c15dec8fbfcb94eb48",
+      "reference_dtypes": {
+        "charttime": "float64",
+        "patientunitstayid": "int64",
+        "sofa": "float32"
+      },
+      "reference_rows": 456899,
+      "reference_seconds": 7.73
+    }
+  ]
+}

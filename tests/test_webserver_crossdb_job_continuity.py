@@ -32,7 +32,7 @@ def test_crossdb_raw_job_continuity_has_one_explicit_owner() -> None:
     owner = _read("js/screens-viz-crossdb-job-continuity.js")
     index = _read("index.html")
 
-    owner_src = "js/screens-viz-crossdb-job-continuity.js?v=20260710-cancel-fence"
+    owner_src = "js/screens-viz-crossdb-job-continuity.js?v=20260802-job-404"
     assert owner_src in index
     assert index.index("js/screens-viz-crossdb-setup.js?") < index.index("js/screens-viz.js?")
     assert index.index("js/screens-viz.js?") < index.index(owner_src)
@@ -51,7 +51,11 @@ def test_crossdb_raw_job_continuity_has_one_explicit_owner() -> None:
         "cancelFenceJobId",
         "RECONNECT_DELAYS_MS",
         "maxEventSeq",
-        "HTTP\\s+404",
+        # The missing-job branch keys on error.status. It used to match
+        # /HTTP\\s+404/ against error.message, which api.js only fills with
+        # the transport string when there is no human reason — and this
+        # route always sends one, so the branch was unreachable.
+        "error.status === 404",
     ):
         assert marker in owner
 
@@ -66,7 +70,7 @@ def test_crossdb_raw_job_continuity_has_one_explicit_owner() -> None:
 
     for marker in (
         "continuity.restoreIfNeeded()",
-        "continuity.onSourceChanged(pathValue(nextRoot), sourceIdentity(), nextMode || state.sampleMode)",
+        "continuity.onSourceChanged(pathValue(nextRoot), sourceIdentity(), nextMode || state.sampleMode, apiScope)",
         "disconnectJob({ forget: true })",
     ):
         assert marker in setup
@@ -84,6 +88,7 @@ def test_crossdb_raw_job_owner_stays_route_pure_and_bounded() -> None:
     assert "sourceIdentity.length > 256" in owner
     assert "JOB_ID_RE" in owner
     assert "SAMPLE_MODES" in owner
+    assert "FEATURE_SCOPES" in owner
     assert "JSON.stringify(meta)" in owner
     assert "JSON.stringify(result" not in owner
 
@@ -125,5 +130,7 @@ def test_crossdb_raw_job_continuity_executes_lifecycle_contract() -> None:
         "stale_stream_blocked": True,
         "replay_watermark": True,
         "reconnect_backoff": True,
+        "feature_scope_guard": True,
         "same_job_stale_stream": True,
+        "terminal_pointer_cleared": True,
     }

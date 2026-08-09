@@ -18,6 +18,14 @@ from easyicu.research_agent.schema import (
     ResearchContext,
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.resources.coder import (
+    bind_execution_cohort_runtime,
+    bind_primary_cohort_role,
+)
+from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
+from easyicu.research_agent.authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+)
 
 
 def _CaptureLLM(responses: list[str]):  # noqa: N802
@@ -83,6 +91,103 @@ def test_initial_coder_prompt_receives_primary_cohort_canonical_schema() -> None
     assert len(llm.calls) == 1
     _assert_canonical_schema_guidance(llm.calls[0][0][-1].content)
     _assert_partition_safety_guidance(llm.calls[0][0][-1].content)
+
+
+def test_primary_cohort_role_binds_resolved_predicate_receipt() -> None:
+    receipt = json.dumps(
+        {
+            "schema_version": "easyicu.primary_cohort_execution_prompt/1",
+            "raw_universe": {"rows": 10, "sha256": "a" * 64},
+            "authoritative_analysis_cohort": {
+                "rows": 8,
+                "sha256": "b" * 64,
+            },
+            "ordered_predicate_flow": [
+                {
+                    "predicate_kind": "inclusion",
+                    "concept_id": "registered_eligibility_concept",
+                    "resolved_column": "eligibility_flag",
+                    "op": "not_missing",
+                    "n_before": 10,
+                    "n_excluded": 2,
+                    "n_remaining": 8,
+                }
+            ],
+        },
+        sort_keys=True,
+    )
+    authority = bind_primary_cohort_role(
+        authority=HostCoderAuthority(),
+        locked_cohort_payload='{"name":"planned_cohort"}',
+        materialized_execution_payload=receipt,
+    )
+    text = authority.render()
+
+    assert "it is not already filtered" in text
+    assert "HOST-VERIFIED COHORT EXECUTION RECEIPT" in text
+    assert '"resolved_column": "eligibility_flag"' in text
+    assert "every non-missing value is exactly in {0, 1}" in text
+    assert "A threshold check alone is not a domain check" in text
+    assert "not permission to select rows by position" in text
+    assert "`resolved_column` entries are the only raw predicate coordinates" in text
+    assert "`manifest['raw_input_contracts']['contracts']`" in text
+    assert "not ordinary Planner step inputs" in text
+    assert "`contracts.get(resolved_column)`" in text
+    assert "rather than iterating it as a list" in text
+    assert "`manifest = document.get('manifest', document)`" in text
+    assert "never use an empty-object fallback" in text
+    assert "Do not read or audit related measured/count/status/timing siblings" in text
+    assert "`manifest['host_verified_cohort_execution_receipt']`" in text
+    assert "do not expect an alias or reconstruct the receipt" in text
+
+
+def test_execution_cohort_runtime_uses_only_step_raw_domain_contract() -> None:
+    text = bind_execution_cohort_runtime(authority=HostCoderAuthority()).render()
+
+    assert "raw_input_contracts" in text
+    assert "sole executable domain authority" in text
+    assert "Use its exact allowed_values when present" in text
+    assert "`minimum` and `maximum` keys" in text
+    assert "never index it as a list" in text
+    assert "never by filling missing values with NaN" in text
+    assert "do not recover one from prompt prose, the broader ResearchContext" in text
+    assert "ResearchContext JSON uses observed_domain.levels" not in text
+
+
+def test_execution_runtime_renders_the_exact_empty_plausibility_scope() -> None:
+    scope = FlagOnlyPlausibilityScope(
+        step_id="01_cohort",
+        expected_columns=(),
+        source_contracts_sha256="0" * 64,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    text = bind_execution_cohort_runtime(
+        authority=HostCoderAuthority(),
+        plausibility_scope=scope,
+    ).render()
+
+    assert "FLAG-ONLY PLAUSIBILITY RECEIPT SCOPE (host-owned): []" in text
+    assert "Do not write a non-empty `plausibility_audit`" in text
+    assert scope.scope_sha256 in text
+
+
+def test_execution_runtime_renders_only_exact_ranged_step_columns() -> None:
+    scope = FlagOnlyPlausibilityScope(
+        step_id="03_model",
+        expected_columns=("step_marker",),
+        source_contracts_sha256="1" * 64,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    text = bind_execution_cohort_runtime(
+        authority=HostCoderAuthority(),
+        plausibility_scope=scope,
+    ).render()
+
+    assert 'exact resolved columns ["step_marker"]' in text
+    assert "unrelated ResearchContext variable" in text
+    assert scope.scope_sha256 in text
 
 
 def test_repair_prompt_and_contract_guidance_share_primary_cohort_schema() -> None:
@@ -279,3 +384,23 @@ def test_primary_cohort_schema_guidance_does_not_leak_to_other_products(
     )
     assert "n_final_analysis_cohort" not in guidance
     assert "normalized_concept_id" not in guidance
+
+
+def test_contract_repair_guidance_forbids_raw_receipts_without_typed_inputs() -> None:
+    step = AnalysisStep(
+        step_id="define_analysis_cohort",
+        intent="Materialize the analysis cohort.",
+        inputs=["age"],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        method="cohort_definition_and_attrition",
+    )
+
+    guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={"input_bindings": [{"input_key": "raw:age"}]},
+        code="",
+        input_bindings={},
+    )
+
+    assert "no host-resolved typed inputs" in guidance
+    assert "`raw:<column>` receipts" in guidance

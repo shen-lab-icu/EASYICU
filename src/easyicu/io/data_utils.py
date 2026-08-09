@@ -1,16 +1,83 @@
-"""Data manipulation utilities for ICU tables.
+"""Deprecated table/ID helpers.
 
-This module provides utilities for data transformation, aggregation,
-merging, and ID system conversions.
+**Nothing inside EasyICU imports this module.** It survives only because its
+names are exported from the top-level package, so deleting it outright would
+break an external caller we cannot see. It goes in 2.0.
+
+The ID functions here are *not* forwarded to the canonical implementations in
+:mod:`easyicu.table.id_conversion`, because they do not mean the same thing.
+The package accumulated three separate vocabularies:
+
+========================  ======================================  ==================
+function                  ``easyicu.table`` (canonical)           here
+========================  ======================================  ==================
+``upgrade_id``            coarse -> fine (one-to-many)            fine -> coarse
+``change_id``             ``(data, id_map, from_id, to_id)``      ``(data, current_id, target_id, mapping)``
+``id_origin``             (see below)                             first observed time within the frame
+========================  ======================================  ==================
+
+and :mod:`easyicu.io.id_mapping`'s ``id_origin`` meant a third thing again —
+admission time per ID read from ``data-sources.json``'s ``id_cfg``. Forwarding
+any of these would silently change what a caller's existing code computes, so
+they keep their behaviour and warn instead.
+
+Migrate to :func:`easyicu.table.change_id`, which names the relation explicitly
+(``one_to_one`` / ``one_to_many`` / ``many_to_one`` / ``many_to_many``) rather
+than encoding it in a word that means three things. The plain-pandas wrappers
+(``select_columns``, ``filter_table``, ``sort_table``, ``rename_columns``,
+``drop_columns``, ``add_column``, ``pivot_table``) add nothing over pandas on
+``ICUTable.data``; use pandas.
 """
 
 from __future__ import annotations
 
 from typing import Any, Iterable, List, Mapping, Optional, Sequence
 
+import warnings
 import pandas as pd
 
 from ..table import ICUTable
+
+
+#: Kept per-name so the message can say *how* this version differs.
+_DEPRECATED_REASON = {
+    "id_origin": "means 'first observed time in this frame', which is neither "
+                 "easyicu.table's ID relation nor id_cfg's admission origin",
+    "id_windows": "duplicates the id_cfg window declaration",
+    "id_windows_simple": "duplicates the id_cfg window declaration",
+    "id_origin_infer": "infers what id_cfg already declares",
+    "id_map": "duplicates the id_cfg mapping declaration",
+    "upgrade_id": "converts fine -> coarse, the OPPOSITE of "
+                  "easyicu.table.upgrade_id",
+    "change_id": "takes (data, current_id, target_id, mapping); "
+                 "easyicu.table.change_id takes (data, id_map, from_id, to_id)",
+    "change_id_type": "does an inner merge with no relation check",
+    "stay_windows": "duplicates the id_cfg window declaration",
+    "merge_patid": "duplicates the id_cfg mapping declaration",
+}
+
+_PANDAS_WRAPPERS = frozenset({
+    "select_columns", "filter_table", "sort_table", "rename_columns",
+    "drop_columns", "add_column", "pivot_table", "merge_tables",
+    "aggregate_table", "re_time",
+})
+
+
+def _warn_deprecated(name: str) -> None:
+    if name in _PANDAS_WRAPPERS:
+        detail = (
+            "it adds nothing over pandas on ICUTable.data; use pandas directly"
+        )
+    else:
+        detail = _DEPRECATED_REASON.get(name, "it is unused and unmaintained")
+    warnings.warn(
+        f"easyicu.io.data_utils.{name} is deprecated: {detail}. "
+        "See the module docstring for the canonical replacement. "
+        "This module will be removed in EasyICU 2.0.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
 
 def stay_windows(
     data: pd.DataFrame,
@@ -56,6 +123,7 @@ def stay_windows(
         ...     interval=pd.Timedelta(hours=6)
         ... )
     """
+    _warn_deprecated("stay_windows")
     # Ensure time columns are datetime
     data = data.copy()
     
@@ -161,6 +229,7 @@ def id_windows(
         ...     interval=pd.Timedelta(hours=4)
         ... )
     """
+    _warn_deprecated("id_windows")
     # Ensure time column is datetime
     data = data.copy()
     
@@ -199,6 +268,7 @@ def id_origin(
     Returns:
         DataFrame with id_col and 'origin' column
     """
+    _warn_deprecated("id_origin")
     # Find time column
     time_cols = [
         col for col in data.columns
@@ -246,6 +316,7 @@ def upgrade_id(
         ...     id_map=icustays[['icustay_id', 'hadm_id']]
         ... )
     """
+    _warn_deprecated("upgrade_id")
     if from_id not in data.columns:
         raise ValueError(f"Column '{from_id}' not found in data")
     
@@ -284,6 +355,7 @@ def change_id_type(
     Returns:
         ICUTable with converted ID system
     """
+    _warn_deprecated("change_id_type")
     if not table.id_columns:
         raise ValueError("Table has no ID columns")
 
@@ -330,6 +402,7 @@ def merge_tables(
     Returns:
         Merged DataFrame
     """
+    _warn_deprecated("merge_tables")
     if not tables:
         return pd.DataFrame()
 
@@ -371,6 +444,7 @@ def aggregate_table(
     Returns:
         Aggregated ICUTable
     """
+    _warn_deprecated("aggregate_table")
     if by is None:
         by = list(table.id_columns)
         if table.index_column:
@@ -414,6 +488,7 @@ def filter_table(
     Returns:
         Filtered ICUTable
     """
+    _warn_deprecated("filter_table")
     if isinstance(condition, str):
         filtered = table.data.query(condition)
     else:
@@ -448,6 +523,7 @@ def pivot_table(
     Returns:
         Pivoted DataFrame
     """
+    _warn_deprecated("pivot_table")
     return pd.pivot_table(
         table.data,
         values=values,
@@ -469,6 +545,7 @@ def rename_columns(
     Returns:
         ICUTable with renamed columns
     """
+    _warn_deprecated("rename_columns")
     df = table.data.rename(columns=mapping)
 
     # Update metadata if renamed columns were in metadata
@@ -500,6 +577,7 @@ def select_columns(
     Returns:
         ICUTable with selected columns
     """
+    _warn_deprecated("select_columns")
     cols = list(columns)
     df = table.data[cols]
 
@@ -534,6 +612,7 @@ def add_column(
     Returns:
         ICUTable with new column
     """
+    _warn_deprecated("add_column")
     df = table.data.copy()
     df[name] = values
 
@@ -559,6 +638,7 @@ def drop_columns(
     Returns:
         ICUTable without specified columns
     """
+    _warn_deprecated("drop_columns")
     df = table.data.drop(columns=list(columns))
 
     # Update metadata
@@ -592,6 +672,7 @@ def sort_table(
     Returns:
         Sorted ICUTable
     """
+    _warn_deprecated("sort_table")
     df = table.data.sort_values(by=by, ascending=ascending).reset_index(drop=True)
 
     return ICUTable(
@@ -627,6 +708,7 @@ def id_origin_infer(
     Examples:
         >>> origins = id_origin_infer(admissions, id_var='icustay_id')
     """
+    _warn_deprecated("id_origin_infer")
     if not hasattr(data, '_metadata') or 'origin_col' not in getattr(data, '_metadata', {}):
         # Try to infer origin column (typically 'intime', 'admittime', etc.)
         time_cols = [
@@ -673,6 +755,7 @@ def id_windows_simple(
     Examples:
         >>> windows = id_windows_simple(admissions, 'icustay_id', 'intime', 'outtime')
     """
+    _warn_deprecated("id_windows_simple")
     if start_var not in data.columns or end_var not in data.columns:
         raise ValueError(f"Columns '{start_var}' and '{end_var}' must exist")
     
@@ -717,6 +800,7 @@ def id_map(
         ...     end_col='outtime'
         ... )
     """
+    _warn_deprecated("id_map")
     # Select required columns
     cols = list(set([source_id, target_id, start_col, end_col]))
     result = data[cols].copy()
@@ -759,6 +843,7 @@ def change_id(
         ...     mapping=id_mapping
         ... )
     """
+    _warn_deprecated("change_id")
     if current_id not in data.columns:
         raise ValueError(f"Current ID column '{current_id}' not found")
     
@@ -793,6 +878,7 @@ def merge_patid(
     Returns:
         Filtered DataFrame
     """
+    _warn_deprecated("merge_patid")
     if patient_ids is None or len(patient_ids) == 0:
         return data
     
@@ -811,6 +897,7 @@ def re_time(
     interval: pd.Timedelta,
 ) -> pd.Series:
     """Discretize times by flooring to the requested interval (ricu ``re_time``)."""
+    _warn_deprecated("re_time")
 
     if times is None or interval is None:
         return times

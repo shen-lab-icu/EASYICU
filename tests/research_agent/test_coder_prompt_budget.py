@@ -8,19 +8,27 @@ import pytest
 
 from easyicu.research_agent.agents.core import (
     CoderAgent,
-    CoderPromptBudgetError,
     _compact_repair_scope_contract,
+    _repair_specialization,
     _typed_input_scope_contract,
 )
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
+from easyicu.research_agent.resources.coder import bind_execution_cohort_runtime
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.research_context.prompt_scope import (
+    compact_adjusted_model_coder_guide_for_step,
+    compact_initial_coder_guide_for_step,
+    compact_quality_audit_coder_guide_for_step,
     compact_rendering_coder_guide_for_step,
     coder_context_requires_method_constraints,
     coder_guide_for_step,
     coder_rewrite_guide_for_step,
 )
 from easyicu.research_agent.providers.prompts import load_prompt_pack
+from easyicu.research_agent.providers.prompt_budget import (
+    PromptTransportBudgetError,
+    budgeted_client,
+)
 from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
@@ -32,7 +40,9 @@ from easyicu.research_agent.repairs.reasons import (
     repair_prompt_binding_sha256,
 )
 from easyicu.research_agent.schema import (
+    ClusterSelectionManifest,
     MissingnessProfile,
+    PlannedModelRequirement,
     TemporalConstraint,
     UserPreferences,
     ValidationFinding,
@@ -146,6 +156,113 @@ def test_raw_input_scope_preserves_physical_superset_in_generation_and_repair(ra
         assert "COHORT_PARQUET physical columns may be a strict superset" in contract
         assert "never require DataFrame.columns to equal" in contract
         assert "preserve full row payload" in contract
+
+
+def test_empty_planner_input_scope_forbids_inferred_provenance_columns(ra):
+    step = ra.AnalysisStep(
+        step_id="define_cohort",
+        intent="Apply the separately bound eligibility predicates.",
+        inputs=[],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_attrition"],
+        method="cohort_definition_with_attrition",
+    )
+
+    contract = _typed_input_scope_contract(step)
+
+    assert "no Planner-declared typed or raw-variable inputs" in contract
+    assert "host-owned execution receipt" in contract
+    assert "No measured/count provenance pair is declared" in contract
+    assert "Do not read those companions" in contract
+    # This asserted "Exact Planner-declared inputs for this step: []" and had
+    # been red for as long as the empty branch has existed. That enumeration
+    # line belongs to the NON-empty rendering; the empty case is a separate,
+    # complete branch that replaces it with one sentence covering both input
+    # categories at once. The assertion demanded a rendering this branch
+    # deliberately does not use, so it protected nothing while failing -- which
+    # is the worst of both. What has to stay true is that neither category is
+    # left unstated, and that is checked positively.
+    assert "typed or raw-variable" in contract
+    assert not any(
+        line.startswith("- Exact ") for line in contract.splitlines()
+    ), "the empty branch must not fall through to the enumerated rendering"
+
+
+def test_measurement_provenance_contract_never_binds_value_availability(ra):
+    step = ra.AnalysisStep(
+        step_id="summarize",
+        intent="Summarize one declared measurement.",
+        inputs=["signal_max", "signal_measured", "signal_n"],
+        expected_outputs=["table:summary"],
+        method="descriptive",
+    )
+
+    contract = _typed_input_scope_contract(step)
+
+    assert "`measured == (count > 0)`" in contract
+    assert "does not require the related value column to be non-missing" in contract
+    assert "Never compare value availability" in contract
+
+
+def test_typed_input_contract_exposes_exact_stable_descriptive_helper_apis(ra):
+    step = ra.AnalysisStep(
+        step_id="summarize",
+        intent="Summarize declared closed distributions.",
+        inputs=["status", "signal_measured", "signal_n"],
+        expected_outputs=["table:summary"],
+        method="descriptive",
+    )
+
+    contract = _typed_input_scope_contract(step)
+
+    assert (
+        "closed_categorical_counts(series, declared_levels=levels).table" in contract
+    )
+    assert "returns columns `level` and `count`" in contract
+    assert (
+        "measurement_provenance_receipt(frame, measured_column=..., "
+        "count_column=...)"
+    ) in contract
+    assert "Never inspect helper signatures" in contract
+    assert "build compatibility adapters" in contract
+
+
+def test_helper_signature_repair_receives_exact_stable_api_contract(ra):
+    authority = RepairPromptAuthority.create(
+        findings=[
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message="A host helper call violates its stable argument contract.",
+                detail={
+                    "reason": "host_helper_call_signature_invalid",
+                    "helper_name": "closed_categorical_counts",
+                    "line": 4,
+                    "violations": [
+                        "required_keyword_only_argument_missing",
+                        "unknown_keyword_argument",
+                    ],
+                },
+            )
+        ]
+    )
+
+    guidance = _repair_specialization(
+        context=_wide_context(ra, n_families=1),
+        repair_authority=authority,
+        code=(
+            "closed_categorical_counts("
+            "series, allowed_values=levels, variable_name=name)"
+        ),
+    )
+
+    assert "DIAGNOSED HOST-HELPER API REPAIR" in guidance
+    assert (
+        "closed_categorical_counts(series, declared_levels=levels).table"
+        in guidance
+    )
+    assert "measurement_provenance_receipt(frame" in guidance
+    assert "`inspect.signature`" in guidance
+    assert "do not add inputs or choose new levels" in guidance
 
 
 def test_typed_input_contract_validates_used_values_without_fabricating_nulls(ra):
@@ -815,6 +932,40 @@ def test_compact_rendering_guide_is_structural_not_intent_routed(ra):
     assert "save matching PNG, SVG, PDF, and TIFF" in guide
 
 
+def test_clustering_generation_guide_names_replayable_selection_summary(ra):
+    step = ra.AnalysisStep(
+        step_id="fit_candidate_clusters",
+        intent="Fit the declared candidate clustering solutions.",
+        inputs=["dataset:cluster_features"],
+        expected_outputs=[
+            "statistic:cluster_count",
+            "manifest:cluster_selection",
+            "table:cluster_characteristics",
+        ],
+        method="kmeans_clustering",
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    manifest_schema = json.dumps(
+        ClusterSelectionManifest.model_json_schema(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    assert manifest_schema in guide
+    assert '"cluster_selection"' in guide
+    assert '"selection_rule"' in guide
+    assert '"selected_n_clusters"' in guide
+    assert '"candidates"' in guide
+    assert '"minimum","maximum","elbow","multi_criteria"' in guide
+    assert "Pair `minimum` only with `minimize`" in guide
+    assert "the same closed object both to `cluster_selection.json`" in guide
+    assert '"cluster_stability"' in guide
+    assert '"n_resamples"' in guide
+    assert '"mean_adjusted_rand_index"' in guide
+
+
 @pytest.mark.parametrize(
     ("method", "outputs"),
     [
@@ -911,6 +1062,134 @@ def test_wide_quality_initial_prompt_stays_under_transport_gate_and_keeps_compan
     assert "VARIABLE-TYPE METHOD COMPATIBILITY" not in payload
 
 
+def test_wide_quality_prompt_compacts_tutorials_without_losing_authority(ra):
+    step = _quality_step(ra)
+    authority_marker = "host-quality-authority:" + ("x" * 12_000)
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+
+    CoderAgent(llm).run(
+        context=_wide_context(ra),
+        step=step,
+        host_authority=HostCoderAuthority.from_values([authority_marker]),
+    )
+
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+    assert _payload_bytes(messages) <= 42_000
+    assert authority_marker in payload
+    assert str(step.inputs) in payload
+    assert "WIDE DATA-QUALITY AUDIT CONTRACT:" in payload
+    assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" not in payload
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" not in payload
+    for family in range(4):
+        assert f'"name":"declared_family_{family}_first"' in payload
+        assert f'"name":"declared_family_{family}_measured"' in payload
+
+
+def test_compact_quality_guide_is_structural_not_intent_routed(ra):
+    step = _quality_step(ra).model_copy(
+        update={"intent": "Human prose contains no quality keywords."}
+    )
+
+    guide = compact_quality_audit_coder_guide_for_step(
+        load_prompt_pack()["coder"],
+        step,
+    )
+
+    assert "WIDE DATA-QUALITY AUDIT CONTRACT:" in guide
+    assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" not in guide
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" not in guide
+    assert "MECHANICAL PYTHON CONTRACT:" in guide
+    assert "OUTPUT SERIALIZATION CONTRACT:" in guide
+
+
+def test_compact_adjusted_guide_preserves_model_authority_not_intent(ra):
+    requirement = PlannedModelRequirement(
+        requirement_id="primary_binary_model",
+        outcome="outcome",
+        outcome_type="binary",
+        method_family="logistic_regression",
+        exposure_source="declared_family_0_first",
+        analysis_role="primary",
+        analysis_set="complete_case",
+    )
+    step = ra.AnalysisStep(
+        step_id="adjusted",
+        intent="Human prose contains no model keywords.",
+        inputs=["declared_family_0_first", "outcome"],
+        expected_outputs=["table:adjusted_association_estimates"],
+        method="adjusted_association_models",
+        model_requirements=[requirement],
+    )
+
+    guide = compact_adjusted_model_coder_guide_for_step(
+        load_prompt_pack()["coder"],
+        step,
+    )
+
+    assert "For a regression step that explicitly requests" in guide
+    assert "Before fitting, audit every categorical predictor" in guide
+    assert "ADJUSTED-MODEL EXECUTION CONTRACT (compact):" in guide
+    assert "STATISTICS APIs:" not in guide
+    assert "Treat `COHORT_PARQUET`" not in guide
+    assert "PANDAS IDIOM GOTCHAS" not in guide
+    descriptive = step.model_copy(
+        update={
+            "method": "descriptive",
+            "expected_outputs": ["table:cohort_summary"],
+            "model_requirements": [],
+        }
+    )
+    assert compact_adjusted_model_coder_guide_for_step(
+        load_prompt_pack()["coder"], descriptive
+    ) == coder_guide_for_step(load_prompt_pack()["coder"], descriptive)
+
+
+def test_wide_adjusted_prompt_compacts_without_losing_authority(ra):
+    requirement = PlannedModelRequirement(
+        requirement_id="primary_binary_model",
+        outcome="outcome",
+        outcome_type="binary",
+        method_family="logistic_regression",
+        exposure_source="declared_family_0_first",
+        analysis_role="primary",
+        analysis_set="complete_case",
+    )
+    step = ra.AnalysisStep(
+        step_id="adjusted",
+        intent="Fit the Planner-declared adjusted association.",
+        inputs=[
+            "artifact:analysis_cohort",
+            "declared_family_0_first",
+            "declared_family_0_measured",
+            "declared_family_0_n",
+            "outcome",
+        ],
+        expected_outputs=["table:adjusted_association_estimates"],
+        method="adjusted_association_models",
+        model_requirements=[requirement],
+    )
+    authority_marker = "host-adjusted-authority:" + ("x" * 10_000)
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+
+    CoderAgent(llm).run(
+        context=_wide_context(ra),
+        step=step,
+        host_authority=HostCoderAuthority.from_values([authority_marker]),
+    )
+
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+    assert _payload_bytes(messages) <= 42_000
+    assert authority_marker in payload
+    assert str(step.inputs) in payload
+    assert requirement.requirement_id in payload
+    assert "ADJUSTED-MODEL EXECUTION CONTRACT (compact):" in payload
+    assert compact_initial_coder_guide_for_step(
+        load_prompt_pack()["coder"], step
+    ) in payload
+
+
 def test_initial_prompt_compacts_non_consumed_source_concept_companions(ra):
     context = _wide_context(ra, n_families=4)
     step = ra.AnalysisStep(
@@ -955,7 +1234,7 @@ def test_initial_literal_response_fails_transport_before_candidate_persistence(
     llm = _CaptureLLM(["{}"])
     receipt_path = tmp_path / "provider_receipt.json"
     budget = StepProviderCallBudget(
-        2,
+        1,
         step_id="ordered_exposure_qc",
         receipt_path=receipt_path,
     )
@@ -974,6 +1253,78 @@ def test_initial_literal_response_fails_transport_before_candidate_persistence(
     assert budget.categories == ("initial_generation",)
     assert budget.initial_generation_resume_status() == "failed"
     assert receipt_path.exists()
+
+
+def test_incomplete_initial_response_gets_one_audited_regeneration(ra, tmp_path):
+    llm = _CaptureLLM(["{}", "import os\nvalue = 1\n"])
+    receipt_path = tmp_path / "provider_receipt.json"
+    budget = StepProviderCallBudget(
+        3,
+        step_id="ordered_exposure_qc",
+        receipt_path=receipt_path,
+    )
+    persisted = []
+    reservations = []
+
+    def persist(code):  # noqa: ANN001, ANN202
+        persisted.append(code)
+        return ContentRef(
+            sha256="a" * 64,
+            size_bytes=len(code.encode("utf-8")),
+            media_type="text/x-python",
+        )
+
+    code = CoderAgent(llm).run(
+        context=_wide_context(ra, n_families=1),
+        step=_quality_step(ra, n_families=1),
+        provider_budget=budget,
+        initial_generation_binding={"schema_version": "test"},
+        persist_candidate=persist,
+        on_initial_reserved=lambda transport_id, binding_sha256: reservations.append(
+            (transport_id, binding_sha256)
+        ),
+    )
+
+    assert code == "import os\nvalue = 1"
+    assert persisted == [code]
+    assert budget.categories == ("initial_generation", "initial_generation")
+    assert [entry["transport"]["state"] for entry in budget.initial_generation_entries] == [
+        "failed",
+        "completed",
+    ]
+    assert budget.initial_generation_entries[0]["transport"]["error_type"] == (
+        "IncompleteCoderResponseError"
+    )
+    assert len(reservations) == 2
+    assert reservations[0][0] != reservations[1][0]
+    assert "Regenerate the entire script" in llm.calls[1][0][-1].content
+
+
+def test_two_incomplete_initial_responses_fail_without_a_third_call(ra, tmp_path):
+    llm = _CaptureLLM(["{}", "still not Python"])
+    budget = StepProviderCallBudget(
+        3,
+        step_id="ordered_exposure_qc",
+        receipt_path=tmp_path / "provider_receipt.json",
+    )
+
+    with pytest.raises(ValueError, match="not a complete executable Python"):
+        CoderAgent(llm).run(
+            context=_wide_context(ra, n_families=1),
+            step=_quality_step(ra, n_families=1),
+            provider_budget=budget,
+            initial_generation_binding={"schema_version": "test"},
+            persist_candidate=lambda code: pytest.fail(
+                f"incomplete transport persisted code: {code}"
+            ),
+        )
+
+    assert len(llm.calls) == 2
+    assert budget.categories == ("initial_generation", "initial_generation")
+    assert [entry["transport"]["state"] for entry in budget.initial_generation_entries] == [
+        "failed",
+        "failed",
+    ]
 
 
 def test_interrupted_initial_generation_records_terminal_transport_failure(
@@ -1001,11 +1352,12 @@ def test_interrupted_initial_generation_records_terminal_transport_failure(
     receipt = json.loads(receipt_path.read_text("utf-8"))
     assert budget.categories == ("initial_generation",)
     assert budget.initial_generation_resume_status() == "failed"
-    assert receipt["initial_generation"]["transport"] == {
+    initial_generation = receipt["initial_generations"][-1]
+    assert initial_generation["transport"] == {
         "state": "failed",
         "error_type": "KeyboardInterrupt",
         "provider_history_len": 1,
-        "provider_history_sha256": receipt["initial_generation"]["transport"][
+        "provider_history_sha256": initial_generation["transport"][
             "provider_history_sha256"
         ],
         "provider_calls": 1,
@@ -1125,6 +1477,15 @@ def test_lossy_numeric_repair_binds_all_lines_to_host_helpers(ra):
         {
             "format": PATCH_FORMAT,
             "edits": [
+                {
+                    "old": "import pandas as pd\n",
+                    "new": (
+                        "import pandas as pd\n"
+                        "from easyicu.research_agent.methods.descriptive_inputs "
+                        "import strict_numeric_input\n"
+                    ),
+                    "expected_count": 1,
+                },
                 {
                     "old": "value = pd.to_numeric(source, errors='coerce')",
                     "new": "value = strict_numeric_input(source).values",
@@ -1499,7 +1860,7 @@ def test_bounded_repair_excerpt_never_promotes_embedded_authority_markers():
     assert '"reason": "TYPED_PRODUCT_BINDING_INVALID"' not in excerpt
 
 
-def test_oversized_typed_ticket_fails_before_patch_provider_call(ra):
+def test_oversized_typed_ticket_fails_at_full_rewrite_transport(ra):
     huge_ticket = [
         {
             "reason": "ROW_ALIGNMENT_UNVERIFIED",
@@ -1515,9 +1876,10 @@ def test_oversized_typed_ticket_fails_before_patch_provider_call(ra):
         }
     ]
     llm = _CaptureLLM([])
+    bounded_repair = budgeted_client(llm, "repair", "coder_repair")
 
-    with pytest.raises(CoderPromptBudgetError, match="minimal_patch") as exc:
-        CoderAgent(llm).repair(
+    with pytest.raises(PromptTransportBudgetError) as exc:
+        CoderAgent(llm, repair_llm=bounded_repair).repair(
             context=_wide_context(ra),
             step=_quality_step(ra),
             code="import os\nvalue = 1\n",
@@ -1525,28 +1887,35 @@ def test_oversized_typed_ticket_fails_before_patch_provider_call(ra):
             repair_authority=RepairPromptAuthority.create(typed_ticket=huge_ticket),
         )
 
-    assert exc.value.actual_bytes > exc.value.limit_bytes == 30_000
+    assert exc.value.consumer == "coder_repair"
+    assert exc.value.actual_tokens > exc.value.limit_tokens
     assert llm.calls == []
 
 
-def test_oversized_host_binding_notes_fail_without_silent_truncation(ra):
+def test_host_binding_too_wide_for_patch_uses_lossless_full_rewrite(ra):
     host_authority = HostCoderAuthority().append(
         "HOST-VERIFIED TYPED PARENT TABLE SCHEMAS (binding facts only):\n"
-        + "x" * 16_000
+        + "x" * 24_000
     )
-    llm = _CaptureLLM([])
+    llm = _CaptureLLM(["import os\nvalue = 2\n"])
+    bounded_repair = budgeted_client(llm, "repair", "coder_repair")
+    coder = CoderAgent(llm, repair_llm=bounded_repair)
 
-    with pytest.raises(CoderPromptBudgetError, match="minimal_patch") as exc:
-        CoderAgent(llm).repair(
-            context=_wide_context(ra),
-            step=_quality_step(ra),
-            host_authority=host_authority,
-            code="import os\nvalue = 1\n",
-            run_log="typed parent schema mismatch",
-        )
+    repaired = coder.repair(
+        context=_wide_context(ra),
+        step=_quality_step(ra),
+        host_authority=host_authority,
+        code="import os\nvalue = 1\n",
+        run_log="typed parent schema mismatch",
+    )
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
 
-    assert exc.value.actual_bytes > exc.value.limit_bytes == 30_000
-    assert llm.calls == []
+    assert repaired == "import os\nvalue = 2"
+    assert coder.last_repair_transport == "full_rewrite"
+    assert len(llm.calls) == 1
+    assert _payload_bytes(messages) > 30_000
+    assert host_authority.render() in payload
 
 
 def test_user_note_markers_cannot_impersonate_host_repair_authority(ra):
@@ -1924,19 +2293,20 @@ def test_assignment_model_roster_is_host_bound_outside_research_notes():
 def test_oversized_full_rewrite_fails_before_fallback_provider_call(ra):
     context = _wide_context(ra, n_families=1)
     step = _quality_step(ra, n_families=1)
-    code = "import os\n" + "# retained complete-script authority\n" * 2_000
+    code = "import os\n" + "# retained complete-script authority\n" * 4_000
     llm = _CaptureLLM(["not a patch"])
+    bounded_repair = budgeted_client(llm, "repair", "coder_repair")
 
-    with pytest.raises(CoderPromptBudgetError) as exc_info:
-        CoderAgent(llm).repair(
+    with pytest.raises(PromptTransportBudgetError) as exc_info:
+        CoderAgent(llm, repair_llm=bounded_repair).repair(
             context=context,
             step=step,
             code=code,
             run_log="one bounded mechanical failure",
         )
 
-    assert exc_info.value.mode == "full_rewrite"
-    assert exc_info.value.actual_bytes > exc_info.value.limit_bytes
+    assert exc_info.value.consumer == "coder_repair"
+    assert exc_info.value.actual_tokens > exc_info.value.limit_tokens
     assert len(llm.calls) == 1, "the oversized rewrite must never reach the provider"
 
 
@@ -2058,3 +2428,71 @@ def test_full_rewrite_keeps_scoped_guide_context_and_capability_contract(ra):
     assert "STEP-SCOPED RESEARCH CONTEXT:" in payload
     assert "COMPLETE PREVIOUS SCRIPT:" in payload
     assert "HOST-BOUND SCHEMA RECEIPT" in payload
+
+
+_RAW_INPUT_PROMPT_SURFACES = (
+    "typed_input_scope",
+    "compact_repair_scope",
+    "execution_cohort_runtime",
+)
+
+
+def _raw_input_prompt_surfaces(ra) -> dict[str, str]:
+    """Render every prompt surface that states the raw-input domain contract."""
+
+    step = ra.AnalysisStep(
+        step_id="06_primary_adjusted_association",
+        intent="Fit the declared adjusted association model.",
+        inputs=["age", "sex", "death", "exposure_max"],
+        expected_outputs=["table:adjusted_association_estimates"],
+        method="adjusted_association_models",
+    )
+    return {
+        "typed_input_scope": _typed_input_scope_contract(step),
+        "compact_repair_scope": _compact_repair_scope_contract(step),
+        "execution_cohort_runtime": bind_execution_cohort_runtime(
+            authority=HostCoderAuthority()
+        ).render(),
+    }
+
+
+@pytest.mark.parametrize("surface", _RAW_INPUT_PROMPT_SURFACES)
+def test_range_alias_sentence_is_never_interrupted_by_a_later_clause(ra, surface):
+    """The rendered prompt is the contract; assembling it from fragments is not.
+
+    A clause appended into the middle of an existing sentence still satisfies
+    every substring assertion about either fragment while the model reads
+    "... never index it as a list or use <other clause> `lower`/`upper`
+    aliases." Assert on the delivered text instead.
+    """
+
+    text = _raw_input_prompt_surfaces(ra)[surface]
+
+    assert "`lower`/`upper` aliases" in text
+    assert (
+        "never index it as a list or use `lower`/`upper` aliases." in text
+    ), f"{surface} splits the range-alias sentence"
+
+
+@pytest.mark.parametrize("surface", _RAW_INPUT_PROMPT_SURFACES)
+def test_out_of_range_policy_clause_opens_its_own_sentence(ra, surface):
+    """Every raw-input surface must bind the policy, and bind it readably.
+
+    The host publishes `out_of_range_action`, so a surface that names the
+    contract without saying the action is binding leaves the model to invent
+    one -- which is how a `retain_and_flag` column came back as a hard raise.
+    Requiring the clause to begin a sentence is what stops the fix from being
+    pasted into the middle of a neighbouring one.
+    """
+
+    text = _raw_input_prompt_surfaces(ra)[surface]
+    clause = "`plausibility_policy.out_of_range_action` is binding"
+
+    index = text.find(clause)
+    assert index != -1, f"{surface} never states that the range policy is binding"
+    prefix = text[:index]
+    assert (
+        prefix.endswith(". ") or prefix.endswith("\n") or not prefix
+    ), f"{surface} inserts the policy clause mid-sentence: ...{prefix[-60:]!r}"
+    assert "`retain_and_flag` means keep every such row" in text
+    assert "never drop, clip, impute, or raise on it" in text

@@ -946,6 +946,7 @@ def test_remote_openai_transport_cannot_be_authorized_as_local():
     [
         ("_resolved_base_url", "https://attacker.example/v1"),
         ("_model", "mutated-model"),
+        ("_completion_token_parameter", "max_completion_tokens"),
     ],
 )
 def test_registered_openai_transport_mutation_is_rejected_before_delivery(

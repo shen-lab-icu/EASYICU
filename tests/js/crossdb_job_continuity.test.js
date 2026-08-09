@@ -1,6 +1,15 @@
 /* Executable lifecycle contract for Cross-DB raw-distribution reconnects. */
 'use strict';
 
+function missingJobError() {
+  // Exactly what api.js hands a caller for HTTP 404 detail="unknown job".
+  const err = new Error('unknown job');
+  err.technical = '/api/jobs/x -> HTTP 404';
+  err.status = 404;
+  err.code = 'unknown job';
+  return err;
+}
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -13,6 +22,7 @@ const META = {
   raw_root: '/raw/icu',
   source_identity: 'eicu,miiv',
   sample_mode: 'standard',
+  feature_scope: 'all_catalog',
 };
 
 function storageWith(initial) {
@@ -142,8 +152,8 @@ function harness(options) {
   assert.deepEqual(running.calls.at(-1).slice(0, 3), ['terminal', META.job_id, 'cancelled']);
   assert.equal(running.calls.at(-1)[3], null);
   assert.equal(running.EventSource.instances[0].closed, true);
-  assert.ok(running.localStorage.getItem(KEY), 'terminal metadata remains available across a refresh');
-  running.context.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged('/raw/other', META.source_identity, META.sample_mode);
+  assert.equal(running.localStorage.getItem(KEY), null, 'terminal metadata must not replay the same result or error after refresh');
+  running.context.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged('/raw/other', META.source_identity, META.sample_mode, META.feature_scope);
   assert.equal(running.localStorage.getItem(KEY), null, 'changing the raw root must forget the old job');
 
   for (const status of ['failed', 'cancelled']) {
@@ -153,7 +163,7 @@ function harness(options) {
     });
     assert.equal(await terminal.context.EU_CROSSDB_JOB_CONTINUITY.restoreIfNeeded(), true);
     assert.deepEqual(terminal.calls.at(-1).slice(0, 3), ['terminal', META.job_id, status]);
-    assert.ok(terminal.localStorage.getItem(KEY));
+    assert.equal(terminal.localStorage.getItem(KEY), null);
   }
 
   const invalidResult = harness({
@@ -164,7 +174,7 @@ function harness(options) {
   assert.equal(await invalidResult.context.EU_CROSSDB_JOB_CONTINUITY.restoreIfNeeded(), false);
   assert.equal(invalidResult.localStorage.getItem(KEY), null, 'a rejected terminal result must not be replayed forever');
 
-  const missing = harness({ stored: JSON.stringify(META), snapshotError: new Error('/api/jobs/job_cross_01 -> HTTP 404') });
+  const missing = harness({ stored: JSON.stringify(META), snapshotError: missingJobError() });
   assert.equal(await missing.context.EU_CROSSDB_JOB_CONTINUITY.restoreIfNeeded(), false);
   assert.deepEqual(missing.calls.at(-1), ['unavailable', META.job_id]);
   assert.equal(missing.localStorage.getItem(KEY), null, 'server-restart/404 metadata must be cleared');
@@ -185,7 +195,7 @@ function harness(options) {
     snapshotFactory: () => pendingSnapshot,
   });
   const pendingRestore = changedDuringProbe.context.EU_CROSSDB_JOB_CONTINUITY.restoreIfNeeded();
-  changedDuringProbe.context.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged('/raw/other', META.source_identity, META.sample_mode);
+  changedDuringProbe.context.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged('/raw/other', META.source_identity, META.sample_mode, META.feature_scope);
   resolveSnapshot({ id: META.job_id, kind: META.kind, status: 'running', events: [] });
   assert.equal(await pendingRestore, false);
   assert.equal(changedDuringProbe.EventSource.instances.length, 0, 'a stale snapshot must not attach after the root changes');
@@ -196,7 +206,7 @@ function harness(options) {
   });
   assert.equal(await changedAfterConnect.context.EU_CROSSDB_JOB_CONTINUITY.restoreIfNeeded(), true);
   const oldStream = changedAfterConnect.EventSource.instances[0];
-  changedAfterConnect.context.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged('/raw/other', META.source_identity, META.sample_mode);
+  changedAfterConnect.context.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged('/raw/other', META.source_identity, META.sample_mode, META.feature_scope);
   assert.equal(oldStream.closed, true);
   const callsAfterSourceChange = changedAfterConnect.calls.length;
   oldStream.message({ type: 'progress', current: 5, total: 6 });
@@ -259,10 +269,15 @@ function harness(options) {
   const started = harness({ snapshot: null });
   assert.equal(started.context.EU_CROSSDB_JOB_CONTINUITY.start(META, { phase: 'queued' }), true);
   assert.deepEqual(Object.keys(JSON.parse(started.localStorage.getItem(KEY))).sort(), [
-    'job_id', 'kind', 'raw_root', 'sample_mode', 'source_identity',
+    'feature_scope', 'job_id', 'kind', 'raw_root', 'sample_mode', 'source_identity',
   ]);
-  started.context.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged(META.raw_root, META.source_identity, 'deeper');
+  started.context.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged(META.raw_root, META.source_identity, 'deeper', META.feature_scope);
   assert.equal(started.localStorage.getItem(KEY), null, 'changing sample mode must not resume a differently scoped job');
+
+  const scopeChanged = harness({ snapshot: null });
+  assert.equal(scopeChanged.context.EU_CROSSDB_JOB_CONTINUITY.start(META, { phase: 'queued' }), true);
+  scopeChanged.context.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged(META.raw_root, META.source_identity, META.sample_mode, 'curated_core');
+  assert.equal(scopeChanged.localStorage.getItem(KEY), null, 'changing feature scope must not resume a differently scoped job');
 
   process.stdout.write(JSON.stringify({
     restored: true,
@@ -273,7 +288,9 @@ function harness(options) {
     stale_stream_blocked: true,
     replay_watermark: true,
     reconnect_backoff: true,
+    feature_scope_guard: true,
     same_job_stale_stream: true,
+    terminal_pointer_cleared: true,
   }));
 })().catch(error => {
   console.error(error);

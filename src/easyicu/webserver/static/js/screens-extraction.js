@@ -215,7 +215,7 @@
           const routeNames = {
             guided: t('Guided Copilot', '研究引导'), ideas: t('Idea Mining', '想法挖掘'),
             extraction: t('Data Extraction', '数据抽取'), patient: t('Patient Review', '患者审阅'),
-            cohort: t('Cohort Statistics', '队列统计'), crossdb: t('Cross-DB Benchmark', '跨库基准'),
+            cohort: t('Cohort Statistics', '队列统计'), crossdb: t('Cross-database comparison', '跨库对比'),
             agent: t('Agent Projects', '研究项目'),
           };
           const rawTime = usingContext ? Date.parse(activeContext.updated_at || '') : Number(legacyStudy.ts || 0);
@@ -276,7 +276,7 @@
   let exFormat = 'parquet';     // parquet | csv | excel
   let exMerge = 'separate';
   let exExportDir = null;
-  let exReal = 'connect';   // connect | scanning | scanresult | converting | convfail | ready
+  let exReal = 'connect';   // connect | scanning | scanresult | converting | ready
   let exPath = '';   // the local folder the user points at; never prefilled
   let exManualSourceOpen = false;
   let exExpandedMod = 'demographics';
@@ -337,7 +337,7 @@
     ['Lab — Hematology', '实验室-血液学', 25, true, false],
     ['Vasopressors', '血管活性药物', 17, true, false],
     ['Other medications', '其他药物', 49, true, false],
-    ['Renal & urine output', '肾脏与尿量', 22, true, false],
+    ['Renal & urine output', '肾脏与尿量', 29, true, false],
     ['Neurological', '神经系统', 12, true, false],
     ['Circulatory', '循环系统', 10, true, false],
     ['Other scores', '其他评分', 9, true, false],
@@ -709,8 +709,12 @@
         </div>
         <div class="cfg-body">
           <div class="col gap-8">
-            ${[['Locate source folder', '定位源文件夹'], ['Identify database layout', '识别数据库结构'], ['Count tables & columns', '统计表与字段']].map((s, i) =>
-              `<div class="conv-step ${i === 0 ? 'done' : i === 1 ? 'run' : ''}"><div class="conv-node">${i === 0 ? icon('check', 12, 2.8) : i === 1 ? '<span class="spin sm" style="width:12px;height:12px;border-top-color:#fff;"></span>' : icon('clock', 11)}</div><div><div class="conv-t">${t(s[0], s[1])}</div></div><div></div></div>`).join('')}
+            ${/* The scan is a single opaque backend call: it reports no per-step
+                  progress, so pinning step 1 to "done" and step 2 to "running"
+                  asserted work we cannot observe. All three stay indeterminate
+                  until /api/data/scan returns. */''}
+            ${[['Locate source folder', '定位源文件夹'], ['Identify database layout', '识别数据库结构'], ['Count tables & columns', '统计表与字段']].map((s) =>
+              `<div class="conv-step run" data-progress-source="live-indeterminate"><div class="conv-node"><span class="spin sm" style="width:12px;height:12px;border-top-color:#fff;"></span></div><div><div class="conv-t">${t(s[0], s[1])}</div></div><div></div></div>`).join('')}
           </div>
           <div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Read-only — EasyICU only inspects structure here, it doesn’t open patient rows yet.', '只读 —— 此处仅检查结构,尚未读取任何患者数据。')}</div></div></div>
         </div>
@@ -806,36 +810,7 @@
         </div>
       </div>`;
   }
-  function convFailState() {
-    const failAt = 2; // step index that failed
-    return `
-      <div class="cfg" style="max-width:680px;">
-        <div class="cfg-head">
-          <div class="cfg-ico" style="color:var(--bad,#c0392b);">${icon('alert', 17)}</div>
-          <div class="grow"><div class="cfg-h">${t('Conversion paused', '转换已暂停')}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))} → ${preparedDestinationHint()}</div></div>
-          <span class="pill" style="height:20px;background:color-mix(in srgb,var(--bad,#c0392b) 14%,transparent);color:var(--bad,#c0392b);"><span class="dot" style="background:var(--bad,#c0392b);"></span>${t('1 step failed', '1 步失败')}</span>
-        </div>
-        <div class="cfg-body">
-          ${CONV_STEPS.map((s, i) => {
-            const st = i < failAt ? 'done' : i === failAt ? 'fail' : '';
-            const node = i < failAt ? icon('check', 12, 2.8) : i === failAt ? icon('close', 11, 3) : icon('clock', 11);
-            return `<div class="conv-step ${st}"><div class="conv-node" ${i === failAt ? 'style="background:var(--bad,#c0392b);border-color:var(--bad,#c0392b);color:#fff;"' : ''}>${node}</div><div><div class="conv-t">${t(s[0], s[1])}</div></div><div class="mono" style="font-size:10.5px;color:var(--ink-4);">${i < failAt ? 'ok' : i === failAt ? t('error', '错误') : ''}</div></div>`;
-          }).join('')}
-          <div class="note mt-16" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);">
-            <div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 15)}</div>
-            <div class="body">
-              <div class="t" style="font-size:12.5px;">${t('Verify concept mapping failed', '概念映射校验失败')}</div>
-              <div class="d" style="font-size:11.5px;">${t('4 source tables had unmapped columns (e.g. labevents.valueuom). Steps 1–2 are cached, so resuming re-runs only this step.', '有 4 张源表存在未映射字段(如 labevents.valueuom)。步骤 1–2 已缓存,继续后仅重跑此步。')}</div>
-            </div>
-          </div>
-          <div class="row gap-8 mt-16">
-            <button class="btn primary" data-ex-resume>${icon('refresh', 14)} ${t('Resume from step 3', '从第 3 步继续')}</button>
-            <button class="btn" data-nav="settings">${icon('sliders', 13)} ${t('Edit column mapping', '编辑字段映射')}</button>
-            <button class="btn ghost" data-ex-rescan>${t('Start over', '重新开始')}</button>
-          </div>
-        </div>
-      </div>`;
-  }
+
   // Driven by the live convert job (/api/jobs/convert + SSE). Renders real
   // per-file progress instead of the four fake CONV_STEPS.
   function convertingState() {
@@ -946,26 +921,7 @@
      A browser file input cannot enumerate the user's folders, so the local
      FastAPI process lists directories on demand via /api/fs/list. */
   let pickerEl = null;
-  function ensurePickerStyles() {
-    if (document.getElementById('euPickerCss')) return;
-    const s = document.createElement('style'); s.id = 'euPickerCss';
-    s.textContent = `
-      .eu-pick-back{position:fixed;inset:0;background:rgba(15,18,24,.42);backdrop-filter:blur(2px);z-index:1000;display:flex;align-items:center;justify-content:center;}
-      .eu-pick{width:min(560px,92vw);max-height:78vh;display:flex;flex-direction:column;background:var(--surface,#fff);border:1px solid var(--line,#e6e8ee);border-radius:14px;box-shadow:0 24px 60px rgba(15,18,24,.28);overflow:hidden;}
-      .eu-pick-h{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line,#e6e8ee);}
-      .eu-pick-h .t{font-weight:650;font-size:14px;}
-      .eu-pick-cur{font-family:var(--mono,monospace);font-size:11px;color:var(--ink-4,#8a91a0);padding:8px 16px;border-bottom:1px solid var(--line,#eef0f4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      .eu-pick-sc{display:flex;gap:6px;padding:8px 16px;flex-wrap:wrap;border-bottom:1px solid var(--line,#eef0f4);}
-      .eu-pick-sc button{font-size:11.5px;padding:3px 10px;border:1px solid var(--line,#e0e3ea);border-radius:999px;background:var(--surface-2,#f7f8fb);cursor:pointer;color:var(--ink-2,#3a4150);}
-      .eu-pick-list{overflow:auto;flex:1;padding:6px;}
-      .eu-pick-row{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:0;background:none;text-align:left;cursor:pointer;border-radius:8px;font-size:13px;color:var(--ink-1,#1a2030);}
-      .eu-pick-row:hover{background:var(--surface-2,#f2f4f8);}
-      .eu-pick-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      .eu-pick-row .hint{font-size:10px;color:var(--ink-4,#8a91a0);border:1px solid var(--line,#e0e3ea);border-radius:5px;padding:0 5px;flex:none;}
-      .eu-pick-f{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line,#e6e8ee);}
-      .eu-pick-empty{padding:24px;text-align:center;color:var(--ink-4,#8a91a0);font-size:12px;}`;
-    document.head.appendChild(s);
-  }
+
   function closePicker() { if (pickerEl) { pickerEl.remove(); pickerEl = null; } document.removeEventListener('keydown', pickerKey); }
   function pickerKey(e) { if (e.key === 'Escape') closePicker(); }
   function cleanFolderName(raw) {
@@ -977,7 +933,6 @@
     return base + (base.endsWith('/') ? '' : '/') + name;
   }
   function openFolderPicker(startPath, onPick, title, options) {
-    ensurePickerStyles();
     closePicker();
     const opts = options || {};
     let cur = startPath || '';
@@ -1842,7 +1797,7 @@
         <div class="glyph">${icon('check', 26, 2.6)}</div>
         <div class="st-t">${t('Extraction complete', '抽取完成')}</div>
         <div class="st-d">${r
-          ? `${r.file_count} ${t('concept files', '个概念文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''} + <span class="mono">_manifest.json</span> ${t('written to', '已写入')} <span class="mono">${outDir}</span>. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${t('Everything stayed on your machine.', '全部留在你的机器上。')}`
+          ? `${r.file_count} ${t('concept files', '个概念文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''} + <span class="mono">_manifest.json</span> ${t('written to', '已写入')} <span class="mono">${escHtml(outDir)}</span>. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${t('Everything stayed on your machine.', '全部留在你的机器上。')}`
           : t('Seeded demo preview — no files were written to disk. The ledger below shows what a real run would produce; switch to Real to write an actual export.', '演示种子预览 —— 没有向磁盘写入任何文件。下方清单展示真实运行会产出什么；切换到真实模式才会写出实际导出。')}</div>
         <div class="st-actions">
           <button class="btn primary" data-nav="patient">${icon('patient', 14)} ${t('Open in Patient Review', '打开患者审阅')}</button>
@@ -1892,7 +1847,6 @@
       else if (real && exReal === 'connect') body = connectState();
       else if (real && exReal === 'scanning') body = scanningState();
       else if (real && exReal === 'scanresult') body = scanResultState();
-      else if (real && exReal === 'convfail') body = convFailState();
       else if (real && exReal === 'converting') body = convertingState();
       else {
         body = `

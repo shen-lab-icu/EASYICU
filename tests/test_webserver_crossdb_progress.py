@@ -182,6 +182,69 @@ def test_raw_loader_fails_closed_on_operational_concept_error(
     assert "private path" not in json.dumps(exc_info.value.detail)
 
 
+def test_raw_loader_compiles_public_composite_output_to_executable_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "databases"
+    (root / "mimiciv").mkdir(parents=True)
+    _patch_distribution(monkeypatch)
+    calls: list[tuple[str, ...]] = []
+
+    def fake_load(*, concepts: list[str], **_kwargs: object) -> pd.DataFrame:
+        calls.append(tuple(concepts))
+        return _frame_for(concepts)
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load)
+
+    frames = crossdb_review._load_raw_feature_data(
+        data_root=str(root),
+        concepts=["sep3_sofa1", "hr"],
+        databases=["miiv"],
+        max_patients=40,
+        sample_size=100,
+    )
+
+    assert calls == [("sep3", "hr")]
+    assert set(frames["miiv"]["concept"]) == {"sep3_sofa1", "hr"}
+    assert "sep3" not in set(frames["miiv"]["concept"])
+
+
+def test_raw_catalog_payload_keeps_unobserved_features_as_explicit_missing() -> None:
+    frames = {
+        "miiv": pd.DataFrame({"concept": ["hr"], "value": [80.0]}),
+        "eicu": pd.DataFrame({"concept": ["hr"], "value": [82.0]}),
+    }
+
+    modules = {
+        row["module"]: row
+        for row in crossdb_review._raw_feature_distribution_payload(
+            frames,
+            ["hr", "sep3_sofa1"],
+        )
+    }
+
+    sepsis = modules["sepsis3_sofa1"]
+    missing = next(
+        row for row in sepsis["features"] if row["feature"] == "sep3_sofa1"
+    )
+    assert missing["present_count"] == 0
+    assert missing["shared"] is False
+    assert all(value["present"] is False for value in missing["values"])
+
+    availability = {
+        row["module"]: row
+        for row in crossdb_review._raw_module_availability(
+            list(modules.values()),
+            [
+                {"label": "MIMIC-IV", "database": "miiv"},
+                {"label": "eICU", "database": "eicu"},
+            ],
+        )
+    }
+    assert availability["sepsis3_sofa1"]["present_count"] == 0
+    assert availability["sepsis3_sofa1"]["values"][0]["coverage_pct"] == 0.0
+
+
 def test_raw_run_rejects_missing_requested_database_before_loading(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -20,12 +20,21 @@ Run without ``--run-real``.
 """
 from __future__ import annotations
 
-from easyicu.api import (
+from types import SimpleNamespace
+
+import pandas as pd
+import pytest
+
+from easyicu.api.extraction import (
+    EXTRACT_MODULES,
     EXTRACT_MODULE_ORDER,
     _SPECIAL_CONCEPT_MODULES,
-    _concepts_need_sofa2,
+    _get_extraction_mp_context,
     _group_modules_for_extraction,
+    _normalise_module_frame_for_parquet,
+    _resolve_extraction_grouping,
 )
+from easyicu.api.concepts import _concepts_need_sofa2
 
 
 def _split(modules):
@@ -55,6 +64,54 @@ def test_grouping_reduces_subprocess_count():
     # each ungrouped normal group holds exactly one module
     normal_ungrouped = [g for g in ungrouped if g["modules"]]
     assert all(len(g["modules"]) == 1 for g in normal_ungrouped)
+
+
+def test_low_memory_host_automatically_isolates_modules():
+    enabled, reason = _resolve_extraction_grouping(
+        True,
+        False,
+        environment={},
+        total_memory_mb=16 * 1024,
+    )
+
+    assert enabled is False
+    assert reason == "low_memory_host"
+
+
+def test_constrained_cache_budget_isolates_modules_on_large_server():
+    enabled, reason = _resolve_extraction_grouping(
+        True,
+        False,
+        environment={"EASYICU_CACHE_BUDGET_MB": "2048"},
+        total_memory_mb=1024 * 1024,
+    )
+
+    assert enabled is False
+    assert reason == "constrained_cache_budget"
+
+
+def test_large_server_keeps_grouped_speed_path():
+    enabled, reason = _resolve_extraction_grouping(
+        True,
+        False,
+        environment={},
+        total_memory_mb=128 * 1024,
+    )
+
+    assert enabled is True
+    assert reason == "shared_cache_speed_path"
+
+
+def test_expert_grouping_override_has_priority_over_host_size():
+    enabled, reason = _resolve_extraction_grouping(
+        True,
+        False,
+        environment={"EASYICU_EXTRACT_GROUPING": "1"},
+        total_memory_mb=16 * 1024,
+    )
+
+    assert enabled is True
+    assert reason == "forced_by_environment"
 
 
 def test_special_modules_attach_to_scoring_group():
@@ -108,3 +165,103 @@ def test_sofa2_trigger_detection_matches_loader():
     assert _concepts_need_sofa2(["my_sofa2_delta"]) is True
     # plain SOFA-1 concepts must NOT pull in the sofa2 dictionary
     assert _concepts_need_sofa2(["sofa", "hr", "map"]) is False
+
+
+class _FakeMultiprocessing:
+    def __init__(self, methods=("fork", "spawn")):
+        self.methods = list(methods)
+        self.requested = None
+
+    def get_all_start_methods(self):
+        return list(self.methods)
+
+    def get_context(self, method):
+        self.requested = method
+        return SimpleNamespace(method=method)
+
+
+@pytest.mark.parametrize(
+    "platform_name",
+    ["posix", "nt"],
+)
+def test_extraction_process_default_is_spawn_on_all_platforms(
+    monkeypatch, platform_name
+):
+    monkeypatch.delenv("EASYICU_MP_START_METHOD", raising=False)
+    fake_mp = _FakeMultiprocessing()
+
+    context = _get_extraction_mp_context(
+        fake_mp, platform_name=platform_name
+    )
+
+    assert context.method == "spawn"
+    assert fake_mp.requested == "spawn"
+
+
+def test_expert_can_explicitly_override_spawn_default(monkeypatch):
+    monkeypatch.setenv("EASYICU_MP_START_METHOD", "fork")
+    fake_mp = _FakeMultiprocessing()
+
+    context = _get_extraction_mp_context(fake_mp, platform_name="posix")
+
+    assert context.method == "fork"
+
+
+def test_invalid_extraction_process_method_fails_clearly(monkeypatch):
+    monkeypatch.setenv("EASYICU_MP_START_METHOD", "not-a-method")
+    fake_mp = _FakeMultiprocessing()
+
+    with pytest.raises(ValueError, match="not-a-method"):
+        _get_extraction_mp_context(fake_mp, platform_name="posix")
+
+
+def test_module_parquet_columns_follow_catalog_order_across_hash_seeds():
+    frame = pd.DataFrame(
+        {
+            "patientunitstayid": [1],
+            "charttime": [0.0],
+            "circ_event": [0],
+            "circ_failure": [1],
+        }
+    )
+
+    normalised = _normalise_module_frame_for_parquet(
+        frame,
+        ["circ_failure", "circ_event"],
+    )
+
+    assert list(normalised.columns) == [
+        "patientunitstayid",
+        "charttime",
+        "circ_failure",
+        "circ_event",
+    ]
+
+
+def test_module_parquet_normalisation_reuses_canonical_numeric_frame():
+    """Do not duplicate a full dense module at the Arrow write boundary."""
+    frame = pd.DataFrame(
+        {
+            "patientunitstayid": [1, 2],
+            "charttime": [0.0, 1.0],
+            "glu": [90.0, 100.0],
+        }
+    )
+
+    normalised = _normalise_module_frame_for_parquet(frame, ["glu"])
+
+    assert normalised is frame
+
+
+def test_renal_module_exports_kdigo_ascertainment_receipt():
+    """A full AKI negative must remain distinguishable from missing inputs."""
+    renal = set(EXTRACT_MODULES["renal"])
+    assert {
+        "aki_stage",
+        "aki_assessable",
+        "aki_ascertainment",
+        "observation_window_coverage",
+        "creatinine_ascertainment",
+        "urine_ascertainment",
+        "rrt_ascertainment",
+    }.issubset(renal)

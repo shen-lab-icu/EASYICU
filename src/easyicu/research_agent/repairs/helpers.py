@@ -405,6 +405,32 @@ def _patch_statsmodels_endog_exog_index_alignment(code: str) -> str:
 
 
 def _patch_json_dump_numpy_key_sanitizer(code: str) -> str:
+    """Make numpy scalars/keys serializable in generated code.
+
+    The sanitizer is bound to **this script's own call sites**, not to the
+    stdlib module.
+
+    It used to end with ``json.dump = ...; json.dumps = ...``, which rebinds
+    the stdlib module for every module in the interpreter -- the generated
+    script, and every EasyICU helper the script imports. Measured on
+    2026-08-07: after the preamble ran, ``cohort_row_identity_sha256`` (the
+    published cohort-identity recipe generated code is told to call) returned
+    a digest for ``[1, nan]`` instead of raising, because its
+    ``allow_nan=False`` guard was answered ``null`` by the sanitizer. A repair
+    for numpy dict keys was silently turning a fail-closed evidence guard into
+    a fail-open one.
+
+    ``allow_nan`` cannot separate the two callers -- the generated script that
+    needs the repair passes ``allow_nan=False`` too, and sanitizing *its* NaN
+    is precisely what the repair exists to do. The discriminator is scope, so
+    the call sites in this script are rewritten to the wrappers and the module
+    is left alone.
+
+    A script that aliases the module (``import json as j``) keeps its original
+    calls and the repair simply does not apply to them: an unrepaired step
+    fails, which is the safe direction.
+    """
+
     if "_easyicu_json_sanitize_v1" in code:
         return code
     helper = textwrap.dedent("""
@@ -422,7 +448,16 @@ def _patch_json_dump_numpy_key_sanitizer(code: str) -> str:
             except Exception:
                 pd = None
             if isinstance(value, dict):
-                return {str(_easyicu_json_sanitize_v1(k)): _easyicu_json_sanitize_v1(v) for k, v in value.items()}
+                sanitized = {}
+                for original_key, original_value in value.items():
+                    canonical_key = str(_easyicu_json_sanitize_v1(original_key))
+                    if canonical_key in sanitized:
+                        raise ValueError(
+                            "easyicu_json_key_collision: distinct mapping keys "
+                            f"canonicalize to {canonical_key!r}"
+                        )
+                    sanitized[canonical_key] = _easyicu_json_sanitize_v1(original_value)
+                return sanitized
             if isinstance(value, (list, tuple)):
                 return [_easyicu_json_sanitize_v1(v) for v in value]
             if np is not None and isinstance(value, np.integer):
@@ -445,7 +480,9 @@ def _patch_json_dump_numpy_key_sanitizer(code: str) -> str:
             return _easyicu_original_json_dump_v1(_easyicu_json_sanitize_v1(obj), fp, *args, **kwargs)
         def _easyicu_json_dumps_v1(obj, *args, **kwargs):
             return _easyicu_original_json_dumps_v1(_easyicu_json_sanitize_v1(obj), *args, **kwargs)
-        _easyicu_json_module_v1.dump = _easyicu_json_dump_v1
-        _easyicu_json_module_v1.dumps = _easyicu_json_dumps_v1
         """).strip()
-    return helper + "\n" + code
+    # Rewrite this script's own call sites instead of rebinding the module.
+    # ``dumps`` first: ``json.dump(`` is a prefix of ``json.dumps(``.
+    rewritten = re.sub(r"\bjson\.dumps\(", "_easyicu_json_dumps_v1(", code)
+    rewritten = re.sub(r"\bjson\.dump\(", "_easyicu_json_dump_v1(", rewritten)
+    return helper + "\n" + rewritten

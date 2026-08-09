@@ -31,6 +31,7 @@ def _write_receipt(
     schema_version: int | None = None,
     final_reservation_state: dict | None = None,
     initial_generation: dict | None = None,
+    initial_generations: list[dict] | None = None,
 ) -> None:
     resolved_schema = schema_version or (3 if logical_repairs is not None else 2)
     payload = {
@@ -46,6 +47,8 @@ def _write_receipt(
         payload["final_reservation_state"] = final_reservation_state
     if initial_generation is not None:
         payload["initial_generation"] = initial_generation
+    if initial_generations is not None:
+        payload["initial_generations"] = initial_generations
     payload["sha256"] = apb._receipt_digest({k: v for k, v in payload.items()})
     if tamper:
         payload["categories"] = categories + [
@@ -504,6 +507,84 @@ def test_schema_v6_initial_generation_transport_is_verified(tmp_path):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(apb.BaselineError, match="completed initial generation"):
+        apb.read_receipts(str(run), {})
+
+
+def test_schema_v7_initial_generation_epochs_are_verified(tmp_path):
+    run = tmp_path / "run_v7_initial"
+    run.mkdir()
+    categories = ["initial_generation", "concept_audit", "initial_generation"]
+
+    def entry(
+        *,
+        authority: str,
+        transport_id: str,
+        reserved_len: int,
+        terminal_len: int,
+        digest: str,
+    ) -> dict:
+        binding = {"authority": authority}
+        return {
+            "binding": binding,
+            "binding_sha256": apb._receipt_digest(binding),
+            "provider_history_len": reserved_len,
+            "provider_history_sha256": apb._receipt_digest(
+                {"categories": categories[:reserved_len]}
+            ),
+            "provider_transport_id": transport_id,
+            "transport": {
+                "state": "completed",
+                "after_code_sha256": digest * 64,
+                "after_code_size_bytes": 42,
+                "provider_history_len": terminal_len,
+                "provider_history_sha256": apb._receipt_digest(
+                    {"categories": categories[:terminal_len]}
+                ),
+                "provider_calls": 1,
+            },
+        }
+
+    _write_receipt(
+        run,
+        "01_model",
+        categories,
+        schema_version=7,
+        logical_repairs=[],
+        initial_generations=[
+            entry(
+                authority="A",
+                transport_id="initial_generation:1",
+                reserved_len=0,
+                terminal_len=1,
+                digest="a",
+            ),
+            entry(
+                authority="B",
+                transport_id="initial_generation:2",
+                reserved_len=2,
+                terminal_len=3,
+                digest="b",
+            ),
+        ],
+        final_reservation_state={
+            "required_token": None,
+            "bound_provider_history_len": None,
+            "bound_provider_history_sha256": None,
+            "completed_token": None,
+            "released": False,
+        },
+    )
+
+    assert apb.read_receipts(str(run), {})[0]["total_calls"] == 3
+
+    path = next((run / ".runtime" / "provider_call_budgets").glob("*.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["initial_generations"][1]["provider_transport_id"] = "initial_generation:1"
+    body = {key: value for key, value in payload.items() if key != "sha256"}
+    payload["sha256"] = apb._receipt_digest(body)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(apb.BaselineError, match="epochs inconsistent"):
         apb.read_receipts(str(run), {})
 
 

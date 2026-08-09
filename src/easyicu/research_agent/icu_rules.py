@@ -771,6 +771,41 @@ GENERAL_ICU_ANALYSIS_PRINCIPLES: Tuple[MethodologicalPrinciple, ...] = (
         ),
     ),
     MethodologicalPrinciple(
+        id="exposure_window_precedes_outcome_window",
+        phase="label",
+        kind="error",
+        principle=(
+            "State the exposure-ascertainment window and the outcome window "
+            "separately, and do not let them overlap. When an exposure is "
+            "ascertained over a period after t0, outcome events occurring "
+            "inside that same period cannot be treated as ordinary follow-up: "
+            "either start follow-up at the end of the ascertainment window "
+            "(analysing only units still at risk then), model the exposure as "
+            "time-varying, or state and justify the overlap explicitly. Any of "
+            "those is a legitimate design; leaving the overlap unstated is not."
+        ),
+        rationale=(
+            "A unit whose outcome occurs during ascertainment had less "
+            "opportunity to accumulate the exposure-defining evidence, so the "
+            "exposure and the outcome are partly measuring the same episode. "
+            "This is distinct from feature leakage, which runs the other way, "
+            "and it is not fixed by any amount of covariate adjustment. It "
+            "typically biases the association away from the null, and the "
+            "affected subgroup is exactly the sickest and earliest events. "
+            "Restarting follow-up at the window's end removes the overlap but "
+            "changes the population being described, so which estimate is "
+            "primary is a scientific choice that has to be reported, not a "
+            "detail."
+        ),
+        cross_db_note=(
+            "Database-agnostic: the hazard is the relationship between two "
+            "declared windows, not the source of either. What differs is how "
+            "early events are recorded — some databases carry event times that "
+            "precede the stated anchor, so check the sign of the interval "
+            "rather than assuming follow-up starts at zero."
+        ),
+    ),
+    MethodologicalPrinciple(
         id="label_built_in_outcome_window",
         phase="label",
         kind="error",

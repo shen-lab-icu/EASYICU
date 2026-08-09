@@ -269,6 +269,154 @@ def test_cohort_translation_preserves_existing_single_ledger_state(tmp_path):
     assert state.logical_repairs[0]["transport"]["state"] == "completed"
 
 
+def test_explicit_resume_appends_initial_generation_without_resetting_history(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="resume_generation")
+    first = StepProviderCallBudget(
+        5,
+        step_id="resume_generation",
+        receipt_path=path,
+    )
+    first_transport = first.reserve_initial_generation({"authority": "A"})
+    first.consume("initial_generation")
+    first.complete_initial_generation_transport(
+        provider_transport_id=first_transport,
+        after_code_sha256="a" * 64,
+        after_code_size_bytes=10,
+    )
+    first_state = load_provider_call_budget_state(
+        path,
+        step_id="resume_generation",
+    )
+    first_entry = first_state.initial_generations[0]
+
+    resumed = StepProviderCallBudget(
+        first_state.limit,
+        step_id="resume_generation",
+        consumed_categories=first_state.categories,
+        logical_repair_entries=first_state.logical_repairs,
+        initial_generation_entries=first_state.initial_generations,
+        allow_terminal_initial_generation_restart=True,
+        receipt_path=path,
+    )
+    second_transport = resumed.reserve_initial_generation({"authority": "B"})
+    resumed.consume("initial_generation")
+    resumed.complete_initial_generation_transport(
+        provider_transport_id=second_transport,
+        after_code_sha256="b" * 64,
+        after_code_size_bytes=20,
+    )
+
+    state = load_provider_call_budget_state(path, step_id="resume_generation")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert state.schema_version == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
+    assert state.categories == ("initial_generation", "initial_generation")
+    assert len(state.initial_generations) == 2
+    assert state.initial_generations[0] == first_entry
+    assert state.initial_generations[1]["binding"] == {"authority": "B"}
+    assert state.initial_generations[1]["transport"]["state"] == "completed"
+    assert second_transport != first_transport
+    assert "initial_generation" not in payload
+    assert len(payload["initial_generations"]) == 2
+    assert resumed.terminal_initial_generation_restart_allowed is False
+
+
+def test_terminal_initial_generation_cannot_restart_without_explicit_authority(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="no_restart")
+    budget = StepProviderCallBudget(3, step_id="no_restart", receipt_path=path)
+    transport_id = budget.reserve_initial_generation({"authority": "A"})
+    budget.consume("initial_generation")
+    budget.complete_initial_generation_transport(
+        provider_transport_id=transport_id,
+        after_code_sha256="a" * 64,
+        after_code_size_bytes=1,
+    )
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="different authority"):
+        budget.reserve_initial_generation({"authority": "B"})
+    assert len(budget.initial_generation_entries) == 1
+
+
+def test_local_retry_authority_requires_the_exact_failed_validation(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="local_retry")
+    budget = StepProviderCallBudget(3, step_id="local_retry", receipt_path=path)
+    transport_id = budget.reserve_initial_generation({"authority": "A"})
+    budget.consume("initial_generation")
+    budget.fail_initial_generation_transport(
+        provider_transport_id=transport_id,
+        error_type="IncompleteCoderResponseError",
+    )
+
+    assert (
+        budget.authorize_failed_initial_generation_retry(
+            error_type="KeyboardInterrupt",
+            max_generation_epochs=2,
+        )
+        is False
+    )
+    assert budget.authorize_failed_initial_generation_retry(
+        error_type="IncompleteCoderResponseError",
+        max_generation_epochs=2,
+    )
+    second_transport = budget.reserve_initial_generation({"authority": "A"})
+
+    assert second_transport != transport_id
+    assert len(budget.initial_generation_entries) == 2
+    assert budget.initial_generation_resume_status() == "unpaid_pending"
+
+
+def test_explicit_restart_cannot_bypass_paid_pending_initial_generation(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="paid_pending")
+    first = StepProviderCallBudget(3, step_id="paid_pending", receipt_path=path)
+    first.reserve_initial_generation({"authority": "A"})
+    first.consume("initial_generation")
+    state = load_provider_call_budget_state(path, step_id="paid_pending")
+    resumed = StepProviderCallBudget(
+        state.limit,
+        step_id="paid_pending",
+        consumed_categories=state.categories,
+        initial_generation_entries=state.initial_generations,
+        allow_terminal_initial_generation_restart=True,
+        receipt_path=path,
+    )
+
+    assert resumed.initial_generation_resume_status() == "paid_pending"
+    with pytest.raises(ProviderCallBudgetReceiptError, match="paid provider calls"):
+        resumed.reserve_initial_generation({"authority": "A"})
+    assert len(resumed.initial_generation_entries) == 1
+    assert resumed.categories == ("initial_generation",)
+
+
+def test_schema_v6_initial_generation_loads_into_generation_ledger(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="legacy_v6")
+    budget = StepProviderCallBudget(3, step_id="legacy_v6", receipt_path=path)
+    transport_id = budget.reserve_initial_generation({"authority": "legacy"})
+    budget.consume("initial_generation")
+    budget.complete_initial_generation_transport(
+        provider_transport_id=transport_id,
+        after_code_sha256="a" * 64,
+        after_code_size_bytes=1,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["schema_version"] = 6
+    payload["initial_generation"] = payload.pop("initial_generations")[0]
+    payload.pop("reserved_category_extensions")
+    payload["sha256"] = _canonical_digest(payload)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_provider_call_budget_state(path, step_id="legacy_v6")
+    assert state.schema_version == 6
+    assert len(state.initial_generations) == 1
+    assert state.initial_generation == state.initial_generations[0]
+
+
 def test_cohort_translation_budget_owner_is_structural_not_prose_routed():
     cohort_only = SimpleNamespace(
         step_id="01_cohort",
@@ -356,7 +504,11 @@ def test_default_budget_fits_two_semantic_repairs_final_audit_and_analyzer(
     tmp_path,
 ):
     limit = PipelineConfig(workdir=tmp_path).max_step_provider_calls
-    assert limit == 7
+    # The claim is that the default *fits* this sequence, not that it equals
+    # its length. The budget was raised 7 -> 9 on 2026-07-25 precisely because
+    # a default equal to the entitled spend leaves a structured-retry to be
+    # paid for out of a repair the step was promised.
+    assert limit >= 7
     budget = StepProviderCallBudget(
         limit,
         step_id="01_model",
@@ -535,6 +687,154 @@ def test_final_audit_phase_roundtrips_in_the_single_provider_receipt(tmp_path):
     assert released.reservation_released is True
 
 
+def test_deterministic_reaudit_extension_is_reserved_and_roundtrips(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="deterministic_reaudit")
+    budget = StepProviderCallBudget(
+        1,
+        step_id="deterministic_reaudit",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.bind_reserved_category("concept_audit", token="audit-before-repair")
+    budget.consume("concept_audit")
+    budget.bind_reserved_category("concept_audit", token="audit-after-repair")
+
+    assert budget.can_consume("concept_audit") is False
+    assert (
+        budget.authorize_deterministic_reserved_category_extension(
+            "concept_audit",
+            token="audit-after-repair",
+        )
+        is True
+    )
+    assert budget.base_limit == 1
+    assert budget.limit == 2
+    assert budget.can_consume("analyzer") is False
+    assert budget.can_consume("concept_audit") is True
+    budget.consume("concept_audit")
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="deterministic_reaudit",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert state.limit == 1
+    assert state.categories == ("concept_audit", "concept_audit")
+    assert len(state.reserved_category_extensions) == 1
+    assert state.reserved_category_extensions[0]["token"] == "audit-after-repair"
+
+    resumed = StepProviderCallBudget(
+        state.limit,
+        step_id="deterministic_reaudit",
+        consumed_categories=state.categories,
+        logical_repair_entries=state.logical_repairs,
+        initial_generation_entries=state.initial_generations,
+        receipt_path=path,
+        reserved_final_category=state.reserved_final_category,
+        required_reservation_token=state.required_reservation_token,
+        reservation_bound_provider_history_len=(
+            state.reservation_bound_provider_history_len
+        ),
+        completed_reservation_token=state.completed_reservation_token,
+        reservation_released=state.reservation_released,
+        reserved_category_extensions=state.reserved_category_extensions,
+    )
+    assert resumed.limit == 2
+    assert (
+        resumed.reservation_status(
+            "concept_audit",
+            token="audit-after-repair",
+        )
+        == "attempted_incomplete"
+    )
+    assert resumed.can_consume("concept_audit") is False
+
+
+def test_deterministic_reaudit_extension_cannot_buy_another_category(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="audit_only_extension")
+    budget = StepProviderCallBudget(
+        1,
+        step_id="audit_only_extension",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.bind_reserved_category("concept_audit", token="audit-before-repair")
+    budget.consume("concept_audit")
+    budget.bind_reserved_category("concept_audit", token="audit-after-repair")
+    budget.authorize_deterministic_reserved_category_extension(
+        "concept_audit",
+        token="audit-after-repair",
+    )
+
+    with pytest.raises(ProviderCallBudgetExhausted):
+        budget.consume("post_mutation_concept_repair_patch")
+    assert budget.categories == ("concept_audit",)
+    assert budget.can_consume("concept_audit") is True
+
+
+def test_deterministic_reaudit_extension_refuses_duplicate_token(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="one_call_per_token")
+    budget = StepProviderCallBudget(
+        1,
+        step_id="one_call_per_token",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.bind_reserved_category("concept_audit", token="audit-before-repair")
+    budget.consume("concept_audit")
+    budget.bind_reserved_category("concept_audit", token="audit-after-repair")
+    budget.authorize_deterministic_reserved_category_extension(
+        "concept_audit",
+        token="audit-after-repair",
+    )
+    budget.consume("concept_audit")
+
+    assert (
+        budget.authorize_deterministic_reserved_category_extension(
+            "concept_audit",
+            token="audit-after-repair",
+        )
+        is False
+    )
+    assert budget.limit == 2
+    assert budget.used == 2
+
+
+def test_deterministic_reaudit_extension_tamper_fails_closed(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="reaudit_tamper")
+    budget = StepProviderCallBudget(
+        1,
+        step_id="reaudit_tamper",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.bind_reserved_category("concept_audit", token="audit-before-repair")
+    budget.consume("concept_audit")
+    budget.bind_reserved_category("concept_audit", token="audit-after-repair")
+    budget.authorize_deterministic_reserved_category_extension(
+        "concept_audit",
+        token="audit-after-repair",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["reserved_category_extensions"][0]["provider_history_len"] = 0
+    payload["sha256"] = _payload_digest_without_sha(payload)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ProviderCallBudgetReceiptError,
+        match="reserved-category extension is inconsistent",
+    ):
+        load_provider_call_budget_state(
+            path,
+            step_id="reaudit_tamper",
+            expected_reserved_final_category="concept_audit",
+        )
+
+
 def test_final_audit_state_tamper_fails_with_recomputed_outer_digest(tmp_path):
     path = provider_call_budget_receipt_path(tmp_path, step_id="audit_tamper")
     budget = StepProviderCallBudget(
@@ -641,7 +941,24 @@ def test_analyzer_charges_the_same_step_budget_and_stops_when_exhausted():
     assert len(llm.calls) == 1
 
 
-def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
+def test_openai_transport_retries_do_not_consume_the_step_allowance(monkeypatch):
+    """Retrying the SAME request is one ask, so it costs one slot.
+
+    This asserted the opposite until 2026-08-04, when a real run showed what
+    that cost: the step allowance is funded in logical attempts by
+    ``step_provider_call_entitlement`` ("1 generation + 3 code repairs + ..."),
+    so charging HTTP retries against it spent the repairs that certificate had
+    just promised. h1's ``04_event_censoring_audit`` reached a repairable
+    ValueError traceback with 0 of its 3 code repairs left, having been charged
+    5 calls for 2 logical generations.
+
+    The retry bound did not live here -- ``manual_attempts`` in
+    ``providers/llm.py`` bounds retries, and the run/batch hard stop bounds
+    spend -- so this charge only converted a transport failure into a
+    scientific one. See
+    ``test_a_retried_request_is_not_a_second_repair.py``.
+    """
+
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
@@ -683,10 +1000,11 @@ def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
 
     assert result == "ok"
     assert completions.calls == 2
-    assert budget.categories == ("repair_patch", "repair_patch")
+    assert budget.categories == ("repair_patch",)
+    assert budget.remaining == 1
 
 
-def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
+def test_a_paid_call_may_finish_its_own_retries(monkeypatch):
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
@@ -715,7 +1033,9 @@ def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
     monkeypatch.setattr("time.sleep", sleeps.append)
     budget = StepProviderCallBudget(1, step_id="transport")
 
-    with pytest.raises(ProviderCallBudgetExhausted):
+    # The step pays once, up front, for the ask. What it bought is an answer,
+    # so the transport may finish its own bounded retries trying to get one.
+    with pytest.raises(Exception):
         complete_with_provider_budget(
             budget=budget,
             category="repair_patch",
@@ -724,9 +1044,12 @@ def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
             ),
         )
 
-    assert completions.calls == 1
-    assert budget.used == 1
-    assert sleeps == []
+    assert completions.calls == 3, "max_retries=3 is what bounds the attempts"
+    assert budget.used == 1, "and the ask still cost exactly one slot"
+
+    # An exhausted allowance still refuses the NEXT ask, which is the real gate.
+    with pytest.raises(ProviderCallBudgetExhausted):
+        budget.consume("repair_patch")
 
 
 def test_budget_receipt_is_atomic_restorable_and_survives_lower_limit(tmp_path):
@@ -1243,7 +1566,9 @@ def test_schema_v2_receipt_loads_without_inventing_logical_repairs(tmp_path):
     payload.pop("sha256")
     payload["schema_version"] = 2
     payload.pop("logical_repairs")
+    payload.pop("initial_generations")
     payload.pop("final_reservation_state")
+    payload.pop("reserved_category_extensions")
     canonical = json.dumps(
         payload,
         ensure_ascii=False,
@@ -1279,7 +1604,9 @@ def test_schema_v3_receipt_keeps_logical_repairs_without_audit_phase(tmp_path):
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload.pop("sha256")
     payload["schema_version"] = 3
+    payload.pop("initial_generations")
     payload.pop("final_reservation_state")
+    payload.pop("reserved_category_extensions")
     canonical = json.dumps(
         payload,
         ensure_ascii=False,
@@ -1571,7 +1898,16 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_probe_step=False,
         enable_replanning=False,
         runner_kind="subprocess",
+        # This unit test exercises provider-budget persistence, not host
+        # isolation.  Explicitly opt into the documented development-only
+        # fallback so nested macOS app sandboxes cannot change its semantics.
+        runner_kwargs={"allow_unsafe_host_fallback": True},
+        # Two calls cannot fund 1 generation + 3 code repairs + 2 LLM repairs +
+        # the reserved audit. That is the point: this test drives the step into
+        # exhaustion to check the budget survives a resume. Declaring the
+        # shortfall is what separates it from a config nobody sized on purpose.
         max_step_provider_calls=2,
+        allow_underfunded_step_provider_calls=True,
     )
     first = first_pipeline.run(
         question="Summarize the ICU cohort.",
@@ -1610,7 +1946,13 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_probe_step=False,
         enable_replanning=False,
         runner_kind="subprocess",
+        runner_kwargs={"allow_unsafe_host_fallback": True},
+        # Two calls cannot fund 1 generation + 3 code repairs + 2 LLM repairs +
+        # the reserved audit. That is the point: this test drives the step into
+        # exhaustion to check the budget survives a resume. Declaring the
+        # shortfall is what separates it from a config nobody sized on purpose.
         max_step_provider_calls=2,
+        allow_underfunded_step_provider_calls=True,
     )
     resumed_pipeline.run(
         question="Summarize the ICU cohort.",
@@ -1776,10 +2118,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
             ),
             (
                 "INTERPRET THE RESULTS",
-                [
-                    "Cohort summary completed "
-                    "{evidence:baseline_characteristics}."
-                ],
+                ["Cohort summary completed {evidence:baseline_characteristics}."],
             ),
         ]
     )
@@ -1795,6 +2134,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_probe_step=False,
         enable_replanning=False,
         runner_kind="subprocess",
+        # The isolation boundary has dedicated tests; keep this budget test
+        # deterministic when pytest itself runs inside a macOS app sandbox.
+        runner_kwargs={"allow_unsafe_host_fallback": True},
     )
     result = pipeline.run(
         question="Summarize the ICU cohort.",

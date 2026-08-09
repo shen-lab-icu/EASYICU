@@ -10,8 +10,10 @@ NOT trip it (case-neutral: no question-specific direction/threshold).
 from __future__ import annotations
 
 import json
+import inspect
 from pathlib import Path
 
+from easyicu.research_agent.reporting import readiness, result_integrity
 from easyicu.research_agent.reporting.readiness import (
     primary_result_plausibility_errors,
 )
@@ -21,6 +23,15 @@ def _summary(run_dir: Path, step_id: str, payload: dict) -> None:
     out = run_dir / "steps" / step_id / "outputs"
     out.mkdir(parents=True, exist_ok=True)
     (out / "step_summary.json").write_text(json.dumps(payload))
+
+
+def test_plausibility_gate_is_owned_by_the_result_integrity_module() -> None:
+    """Readiness preserves its public import without duplicating gate policy."""
+
+    assert primary_result_plausibility_errors is (
+        result_integrity.primary_result_plausibility_errors
+    )
+    assert "def primary_result_plausibility_errors" not in inspect.getsource(readiness)
 
 
 def test_events_exceeding_sample_is_flagged(tmp_path: Path):

@@ -27,9 +27,29 @@ __all__ = [
     "_step_scientific_signature",
     "completed_step_record_matches_plan",
     "legacy_host_checkpoint_may_inherit_plan_scope",
+    "measurement_companion_input_closure_evidence_id",
     "verified_plan_scientific_scope_count",
     "verified_plan_evidence_rank",
 ]
+
+_MEASUREMENT_COMPANION_INPUT_CLOSURE_ID_RE = re.compile(
+    r"analysis_plan_input_closure_revision_(\d+)_([0-9a-f]{8})"
+)
+
+
+def measurement_companion_input_closure_evidence_id(
+    *,
+    revision: int,
+    sha256: str,
+) -> str:
+    """Return the immutable id for one host-owned plan input closure."""
+
+    if isinstance(revision, bool) or int(revision) < 0:
+        raise ValueError("analysis plan revision must be a non-negative integer")
+    digest = str(sha256 or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError("analysis plan input closure requires a SHA-256 digest")
+    return f"analysis_plan_input_closure_revision_{int(revision)}_{digest[:8]}"
 
 
 def legacy_host_checkpoint_may_inherit_plan_scope(
@@ -109,15 +129,26 @@ def verified_plan_evidence_rank(record: Mapping[str, Any]) -> Optional[int]:
     evidence_id = str(record.get("evidence_id") or "").strip()
     if evidence_id == "analysis_plan":
         return -1
+    metadata = record.get("metadata")
+    closure_authority = (
+        record.get("producer") == "runtime_supervisor"
+        and record.get("generation_mode") == "system"
+        and isinstance(metadata, Mapping)
+        and metadata.get("reason") == "measurement_companion_input_closure"
+    )
     if evidence_id == "analysis_plan_input_closure":
-        metadata = record.get("metadata")
+        return 0 if closure_authority else None
+    closure_match = _MEASUREMENT_COMPANION_INPUT_CLOSURE_ID_RE.fullmatch(evidence_id)
+    if closure_match is not None:
+        revision = int(closure_match.group(1))
+        digest = str(record.get("sha256") or "").strip().lower()
         if (
-            record.get("producer") == "runtime_supervisor"
-            and record.get("generation_mode") == "system"
-            and isinstance(metadata, Mapping)
-            and metadata.get("reason") == "measurement_companion_input_closure"
+            closure_authority
+            and metadata.get("source_plan_revision") == revision
+            and metadata.get("closure_sha256") == digest
+            and closure_match.group(2) == digest[:8]
         ):
-            return 0
+            return revision
         return None
     match = re.fullmatch(r"analysis_plan_revision_(\d+)(?:_[0-9a-f]{8})?", evidence_id)
     return int(match.group(1)) if match is not None else None
@@ -131,8 +162,25 @@ def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
     are fully structured, ordinary semantic paraphrases cannot safely be
     distinguished from a changed estimand.  Only case/whitespace normalization
     is ignored.
+
+    ``scientific_capability`` is here because it selects the *execution owner*.
+    It was added to ``AnalysisStep`` without being added here, and the omission
+    was demonstrable rather than theoretical: flipping only that field on an
+    association primary step moved the resolved owner from
+    ``host_deterministic`` to ``agent_coded`` while this signature stayed
+    byte-identical.  A step whose result would be computed by the LLM coder
+    instead of the sealed host executor is not the same step, and a
+    seal/resume comparison that cannot see the difference would accept the
+    substitution under the approved plan's identity.
+
+    This is a comparison between two signatures computed by the same code --
+    the sealed record is re-validated through ``AnalysisStep`` before it is
+    fingerprinted -- so no stored digest changes: a pre-existing record
+    validates the field to ``None`` and matches a live plan that still declares
+    nothing.  What it newly refuses is a plan that changed it.
     """
 
+    structured_payload = _analysis_step_scientific_authority_payload(step)
     return (
         step.step_id,
         step.method,
@@ -141,36 +189,79 @@ def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
         " ".join(str(step.intent or "").split()).casefold(),
         tuple(step.icu_rule_refs),
         step.planned_analysis_role,
-        tuple(
-            (
-                requirement.requirement_id,
-                requirement.outcome,
-                requirement.outcome_type,
-                requirement.method_family,
-                requirement.exposure_source,
-                requirement.analysis_role,
-                requirement.analysis_set,
-                requirement.required_for_step_success,
-            )
-            for requirement in step.model_requirements
-        ),
-        tuple(
-            json.dumps(
-                contract.model_dump(mode="json"),
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            for contract in step.input_consumption_contracts
-        ),
-        (
-            json.dumps(
-                step.trajectory_stability_spec.model_dump(mode="json"),
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            if step.trajectory_stability_spec is not None
-            else None
-        ),
+        step.scientific_capability,
+        json.dumps(structured_payload, sort_keys=True, separators=(",", ":")),
+    )
+
+
+# Every public AnalysisStep field belongs to exactly one authority class.  Most
+# of the step is scientific authority today; the empty classes are deliberate,
+# not omissions.  Keeping the classification explicit means a newly added
+# public field cannot silently become invisible to seal/resume identity.
+_ANALYSIS_STEP_CORE_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
+    {
+        "step_id",
+        "method",
+        "inputs",
+        "expected_outputs",
+        "intent",
+        "icu_rule_refs",
+        "planned_analysis_role",
+        "scientific_capability",
+    }
+)
+_ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
+    {
+        "model_requirements",
+        "family_primary_result_requirement",
+        "input_consumption_contracts",
+        "table_one_spec",
+        "trajectory_stability_spec",
+        "exposure_outcome_distribution_spec",
+        "cohort_definition_spec",
+        "measurement_audit_spec",
+        "robustness_replay_spec",
+    }
+)
+_ANALYSIS_STEP_PRESENTATION_ONLY_FIELDS = frozenset()
+_ANALYSIS_STEP_RUNTIME_ONLY_FIELDS = frozenset()
+
+
+def _analysis_step_scientific_authority_payload(
+    step: AnalysisStep,
+) -> dict[str, Any]:
+    """Return the canonical structured portion of one step's authority.
+
+    The previous fingerprint hand-copied eight fields from each
+    ``PlannedModelRequirement`` and therefore omitted its covariates, model
+    terms, level/reference and primary-contrast declarations.  It also stopped
+    after ``trajectory_stability_spec`` and missed every later ``*_spec``.
+    Serializing the classified fields through Pydantic keeps nested contracts
+    complete and gives schema drift one fail-closed diagnostic surface.
+    """
+
+    classes = (
+        _ANALYSIS_STEP_CORE_SCIENTIFIC_AUTHORITY_FIELDS,
+        _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
+        _ANALYSIS_STEP_PRESENTATION_ONLY_FIELDS,
+        _ANALYSIS_STEP_RUNTIME_ONLY_FIELDS,
+    )
+    classified: set[str] = set()
+    overlaps: set[str] = set()
+    for fields in classes:
+        overlaps.update(classified.intersection(fields))
+        classified.update(fields)
+    public_fields = set(AnalysisStep.model_fields)
+    if overlaps or classified != public_fields:
+        missing = sorted(public_fields - classified)
+        unknown = sorted(classified - public_fields)
+        raise RuntimeError(
+            "AnalysisStep authority classification drift: "
+            f"missing={missing!r}, unknown={unknown!r}, overlaps={sorted(overlaps)!r}"
+        )
+    return step.model_dump(
+        mode="json",
+        include=_ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
     )
 
 
@@ -182,44 +273,68 @@ def _normalise_scientific_text(value: Any) -> Optional[str]:
     return " ".join(str(value).split()).casefold()
 
 
+_ANALYSIS_PLAN_CORE_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
+    {"research_question", "analysis_type", "rationale"}
+)
+_ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
+    {
+        "cohort",
+        "endpoint",
+        "robustness_specs",
+        "know_how_decisions",
+        "evalue_conversion_spec",
+        "subgroup_analysis_spec",
+    }
+)
+_ANALYSIS_PLAN_STEP_AUTHORITY_FIELDS = frozenset({"steps"})
+_ANALYSIS_PLAN_PRESENTATION_ONLY_FIELDS = frozenset({"display_labels"})
+_ANALYSIS_PLAN_RUNTIME_ONLY_FIELDS = frozenset({"revision"})
+
+
+def _classified_plan_scientific_payload(plan: AnalysisPlan) -> dict[str, Any]:
+    """Return structured plan science and fail when schema fields drift."""
+
+    classes = (
+        _ANALYSIS_PLAN_CORE_SCIENTIFIC_AUTHORITY_FIELDS,
+        _ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
+        _ANALYSIS_PLAN_STEP_AUTHORITY_FIELDS,
+        _ANALYSIS_PLAN_PRESENTATION_ONLY_FIELDS,
+        _ANALYSIS_PLAN_RUNTIME_ONLY_FIELDS,
+    )
+    classified: set[str] = set()
+    overlaps: set[str] = set()
+    for fields in classes:
+        overlaps.update(classified.intersection(fields))
+        classified.update(fields)
+    public_fields = set(AnalysisPlan.model_fields)
+    if overlaps or classified != public_fields:
+        raise RuntimeError(
+            "AnalysisPlan authority classification drift: "
+            f"missing={sorted(public_fields - classified)!r}, "
+            f"unknown={sorted(classified - public_fields)!r}, "
+            f"overlaps={sorted(overlaps)!r}"
+        )
+    return plan.model_dump(
+        mode="json",
+        include=_ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
+    )
+
+
 def _plan_scientific_scope_signature(plan: AnalysisPlan) -> Tuple[Optional[str], ...]:
     """Fingerprint Planner-owned science that applies to every plan step.
 
-    ``revision`` is deliberately absent: it records plan history, not a change
-    in the research question, analysis family, cohort, robustness contract, or
-    rationale. Structured values use canonical JSON so the signature remains
-    stable when it is serialized into a step record and loaded on resume.
+    ``display_labels`` and ``revision`` are deliberately absent: presentation
+    and plan history cannot change execution. ``steps`` have their own exact
+    per-step authority signature. Every remaining public field is classified
+    above so a schema addition cannot silently disappear from resume identity.
     """
 
-    plan_payload = plan.model_dump(
-        mode="json",
-        include={
-            "cohort",
-            "robustness_specs",
-            "display_labels",
-            "know_how_decisions",
-        },
-    )
+    plan_payload = _classified_plan_scientific_payload(plan)
     return (
         _normalise_scientific_text(plan.research_question),
         _normalise_scientific_text(plan.analysis_type),
         json.dumps(
-            plan_payload.get("cohort"),
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-        json.dumps(
-            plan_payload.get("robustness_specs", []),
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-        json.dumps(
-            plan_payload.get("display_labels", {}),
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-        json.dumps(
-            plan_payload.get("know_how_decisions", []),
+            plan_payload,
             sort_keys=True,
             separators=(",", ":"),
         ),

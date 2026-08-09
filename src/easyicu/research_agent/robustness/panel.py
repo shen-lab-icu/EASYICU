@@ -202,8 +202,24 @@ def default_robustness_specs() -> List[RobustnessSpec]:
         RobustnessSpec(
             spec_id="alt_missing_complete_case",
             axis="missing",
-            description="Restrict the model to complete cases for required variables.",
-            missing_override={"strategy": "complete_case"},
+            description=(
+                "Restrict the model to complete cases for the caller-defined "
+                "variables. Replace the placeholder names with the study's own "
+                "exposure, outcome and covariates before a paper-facing run; "
+                "the equivalence proof compares this exact list against the "
+                "primary model's analysis set."
+            ),
+            # A complete-case spec must name the variables whose completeness
+            # defines the set -- the host refuses to infer them. A fallback
+            # that omitted them looked case-neutral and was simply unrunnable:
+            # every run that reached it blocked.
+            missing_override={
+                "strategy": "complete_case",
+                "variables": [
+                    "author_defined_exposure",
+                    "author_defined_outcome",
+                ],
+            },
         ),
         RobustnessSpec(
             spec_id="alt_missing_median_impute",
@@ -829,6 +845,23 @@ def _first_float(summary: Dict[str, Any], keys: Sequence[str]) -> Optional[float
     return None
 
 
+def unexecuted_locked_spec_ids(panel: "RobustnessPanel") -> list[str]:
+    """Return the locked specifications the run never actually estimated.
+
+    A blank variant row is not a small result, it is the absence of one: the
+    protocol pre-specified the analysis and nothing carried it out.  Keyed on
+    the panel's own spec ids and its declared primary, so no method label or
+    product name decides whether the hole is visible.
+    """
+
+    return sorted(
+        row.spec_id
+        for row in panel.rows
+        if row.spec_id != panel.primary_spec_id
+        and (row.point_estimate is None or not row.converged)
+    )
+
+
 __all__ = [
     "MIN_AXIS_COUNTS",
     "PANEL_FILENAME",
@@ -845,6 +878,7 @@ __all__ = [
     "load_robustness_panel",
     "numeric_digest_for_panel",
     "robustness_specs_for_execution",
+    "unexecuted_locked_spec_ids",
     "validate_robustness_specs",
     "worst_rows_by_axis",
     "write_locked_robustness_specs",

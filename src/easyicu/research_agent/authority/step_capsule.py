@@ -10,7 +10,6 @@ only selector of current step authority.
 from __future__ import annotations
 
 import ast
-import hashlib
 import json
 import os
 import re
@@ -30,6 +29,10 @@ from pydantic import (
     model_validator,
 )
 
+from ..canonical_json import (
+    canonical_json_bytes as _canonical_json_bytes,
+    sha256_bytes as _sha256_bytes,
+)
 from ..gates.semantics import blocking_validator_findings
 from ..schema import ValidationFinding
 
@@ -443,20 +446,6 @@ def _validated_logical_path(value: str) -> str:
     ):
         raise ValueError("logical output path must be canonical and relative")
     return text
-
-
-def _sha256_bytes(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
 
 
 def _json_compatible(value: object) -> object:

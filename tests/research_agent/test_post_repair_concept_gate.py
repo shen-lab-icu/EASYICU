@@ -202,7 +202,16 @@ def test_contract_repair_reenters_concept_gate_before_runner(
 
     audited_scripts: list[str] = []
 
-    def concept_audit(self, *, context, script_text, step):
+    def concept_audit(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
         del self, context
         audited_scripts.append(script_text)
         if "UNSAFE_POST_REPAIR" not in script_text:
@@ -266,7 +275,98 @@ def test_contract_repair_reenters_concept_gate_before_runner(
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
 
 
-def test_contract_repair_mechanical_error_uses_remaining_step_budget(
+def test_quarantined_contract_repair_keeps_the_executed_attempt_and_its_reason(
+    ra, tmp_path: Path, monkeypatch
+) -> None:
+    """A repair that never executes must not erase the attempt that did.
+
+    The host executes once, fails the contract, and dispatches a repair.  The
+    repaired draft is then quarantined by the concept audit, so the loop never
+    reaches a second execution.  Two things have to survive that: the products
+    the first attempt really wrote, and the contract violation that caused the
+    repair -- otherwise the record reports only the quarantine and reads as if
+    the concept audit were the cause.
+    """
+
+    from easyicu.research_agent.audits.validators import (
+        ConceptUsageAuditor,
+        PrimaryModelContractValidator,
+    )
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+
+    def concept_audit(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
+        del self, context
+        if "UNSAFE_POST_REPAIR" not in script_text:
+            return []
+        return [
+            ValidationFinding(
+                validator="concept_usage_auditor",
+                severity="error",
+                message="Post-execution repair introduced an unsafe concept transform.",
+                detail={"step_id": step.step_id},
+            )
+        ]
+
+    def contract_audit(self, *, step, step_summary, **kwargs):
+        del self, kwargs
+        if step_summary.get("phase") != "initial":
+            return []
+        return [
+            ValidationFinding(
+                validator="primary_model_contract",
+                severity="error",
+                message="Declared coefficient table is missing.",
+                detail={"step_id": step.step_id},
+            )
+        ]
+
+    monkeypatch.setattr(ConceptUsageAuditor, "audit", concept_audit)
+    monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
+
+    result = _run(
+        _pipeline(ra, tmp_path, _scripted_llm(), monkeypatch),
+        pd.DataFrame(
+            {"stay_id": [1, 2, 3], "value": [1.0, None, 3.0], "death": [0, 1, 0]}
+        ),
+    )
+    run_dir = Path(result.workdir)
+    step_dir = run_dir / "steps" / "01_summary"
+    record = next(
+        item
+        for item in json.loads(
+            (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+        )["per_step_records"]
+        if item["step_id"] == "01_summary"
+    )
+
+    assert record["status"] == "blocked_by_concept_audit"
+    assert record["llm_contract_repair_attempts"] == 1
+
+    # The repaired draft never ran, so the only outputs that can be on disk
+    # are the ones the first attempt wrote.  They must still be there.
+    assert not (step_dir / "outputs" / "unsafe_executed.txt").exists()
+    assert (step_dir / "outputs" / "cohort_summary.csv").is_file()
+    assert (step_dir / "outputs" / "step_summary.json").is_file()
+
+    # The record has to name the contract violation, not just count repairs.
+    triggers = record["contract_repair_triggers"]
+    assert len(triggers) == 1
+    assert [finding["validator"] for finding in triggers[0]] == [
+        "primary_model_contract"
+    ]
+    assert "Declared coefficient table is missing." in triggers[0][0]["message"]
+
+
+def test_mechanically_invalid_contract_patch_uses_same_attempt_full_rewrite(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
@@ -289,10 +389,7 @@ def test_contract_repair_mechanical_error_uses_remaining_step_budget(
     llm = _scripted_llm(
         repair_responses=[
             _script_patch(_SAFE_CODE, _INVALID_HELPER_REPAIR_CODE),
-            _script_patch(
-                _INVALID_HELPER_REPAIR_CODE,
-                _RECOVERED_REPAIR_CODE,
-            ),
+            _RECOVERED_REPAIR_CODE,
         ]
     )
     result = _run(
@@ -310,15 +407,12 @@ def test_contract_repair_mechanical_error_uses_remaining_step_budget(
 
     assert _prompt_call_count(llm, "REPAIR THE PYTHON CODE") == 2
     assert record["status"] == "ok"
-    assert record["step_llm_repair_attempts"] == 2
-    assert record["step_llm_repair_classes"] == [
-        "contract",
-        "post_mutation_concept",
-    ]
+    assert record["step_llm_repair_attempts"] == 1
+    assert record["step_llm_repair_classes"] == ["contract"]
     assert record["step_provider_call_categories"] == [
         "initial_generation",
         "contract_repair_patch",
-        "post_mutation_concept_repair_patch",
+        "contract_repair_full_rewrite",
         "analyzer",
     ]
 
@@ -335,7 +429,16 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
         load_quarantined_concept_draft,
     )
 
-    def concept_audit(self, *, context, script_text, step):
+    def concept_audit(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
         del self, context
         findings = []
         if "INITIAL_CONCEPT_ERROR" in script_text:
@@ -720,7 +823,16 @@ def test_keyboard_interrupt_during_concept_repair_saves_draft_and_reraises(
         load_quarantined_concept_draft,
     )
 
-    def reject_draft(self, *, context, script_text, step):
+    def reject_draft(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
         del self, context, script_text
         return [
             ValidationFinding(

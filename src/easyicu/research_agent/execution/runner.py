@@ -54,9 +54,11 @@ from .code_hygiene import reorder_forward_references
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
+    FINGERPRINT_ONLY_DISTRIBUTIONS,
     OPTIONAL_BASELINE_PACKAGES,
 )
 from ..contracts.runtime import RunResult
+from ..orchestration.profiles import is_paper_facing_profile
 from .method_capabilities import set_runtime_capability_snapshot_provider
 
 _SAFE_INHERITED_ENV_KEYS = (
@@ -76,6 +78,12 @@ _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA_ENV = (
 )
 _RUN_ARTIFACT_AUTHORITY_ERROR_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_ERROR"
 _ROBUSTNESS_AUTHORITY_ENTRYPOINT = "_run_robustness_preflight_from_env"
+
+#: How long to keep asking whether a container has gone away after its own
+#: ``rm --force`` timed out, and how long to wait between asks.  This is
+#: patience, not permission: collection still requires proof of absence.
+_TEARDOWN_ABSENCE_BUDGET_SECONDS = 60.0
+_TEARDOWN_ABSENCE_POLL_SECONDS = 2.0
 
 
 def _python_source_tree_sha256(root: Path) -> str:
@@ -191,16 +199,96 @@ def _docker_mount_entry(source: str, target: str, *, readonly: bool) -> str:
     return f"{entry},readonly" if readonly else entry
 
 
+#: Depth limit for the generated-output sweep. Deep enough for the layouts
+#: generated code actually uses (``figures/``, ``tables/``, ``models/``), shallow
+#: enough that a runaway mkdir loop cannot stall evidence collection.
+MAX_OUTPUT_ARTIFACT_DEPTH = 8
+
+#: Ceilings on the generated-output tree. An evidence-bound run must not be
+#: able to produce output the sweep silently skips, nor exhaust inodes or disk
+#: while the sweep tries to enumerate it.
+MAX_OUTPUT_ARTIFACT_FILES = 5_000
+MAX_OUTPUT_ARTIFACT_DIRECTORIES = 1_000
+MAX_OUTPUT_ARTIFACT_TOTAL_BYTES = 2 * 1024**3
+MAX_OUTPUT_ARTIFACT_FILE_BYTES = 512 * 1024**2
+
+
+class OutputArtifactPolicyError(RuntimeError):
+    """Raised when generated output breaks the evidence-collection contract.
+
+    Fail closed rather than skip: in an evidence-bound design an artefact the
+    sweep cannot register must not be able to coexist with a successful run.
+    """
+
+
 def _collect_safe_output_artifacts(out_dir: Path) -> List[Path]:
-    """Collect only lexical single-link regular files from generated output."""
+    """Collect lexical single-link regular files from generated output.
+
+    Recurses into subdirectories: generated code routinely writes
+    ``outputs/figures/fig1.png`` and ``outputs/tables/table1.csv``, and a
+    top-level-only sweep dropped those from ``RunResult.artefacts`` — meaning
+    they never reached the SHA-256 evidence store even though the manuscript
+    could cite them.
+
+    Symlinks, hardlinked files and special files are still rejected (and
+    removed) rather than collected: they can point outside the sandbox.
+    """
 
     artefacts: List[Path] = []
-    for output_path in out_dir.iterdir():
-        metadata = os.lstat(output_path)
-        if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
-            artefacts.append(output_path)
-            continue
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+    pending: List[tuple[Path, int]] = [(out_dir, 0)]
+    directories = 0
+    total_bytes = 0
+    while pending:
+        current, depth = pending.pop()
+        try:
+            entries = sorted(current.iterdir())
+        except OSError as exc:
+            # Skipping here would let an unreadable directory — or a transient
+            # I/O error — drop its files from the evidence list while the run
+            # still reported success. Under an evidence-bound contract an
+            # unenumerable output directory is a failure, not a gap.
+            raise OutputArtifactPolicyError(
+                "cannot enumerate generated output directory " f"{current}: {exc}"
+            ) from exc
+        for output_path in entries:
+            metadata = os.lstat(output_path)
+            if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                if metadata.st_size > MAX_OUTPUT_ARTIFACT_FILE_BYTES:
+                    raise OutputArtifactPolicyError(
+                        f"generated output {output_path.relative_to(out_dir)} is "
+                        f"{metadata.st_size} bytes, over the "
+                        f"{MAX_OUTPUT_ARTIFACT_FILE_BYTES}-byte per-file limit"
+                    )
+                total_bytes += metadata.st_size
+                if total_bytes > MAX_OUTPUT_ARTIFACT_TOTAL_BYTES:
+                    raise OutputArtifactPolicyError(
+                        "generated output exceeds the "
+                        f"{MAX_OUTPUT_ARTIFACT_TOTAL_BYTES}-byte total limit"
+                    )
+                artefacts.append(output_path)
+                if len(artefacts) > MAX_OUTPUT_ARTIFACT_FILES:
+                    raise OutputArtifactPolicyError(
+                        f"generated output has more than {MAX_OUTPUT_ARTIFACT_FILES} "
+                        "files; evidence collection refuses to enumerate it"
+                    )
+                continue
+            if stat.S_ISDIR(metadata.st_mode):
+                if depth >= MAX_OUTPUT_ARTIFACT_DEPTH:
+                    raise OutputArtifactPolicyError(
+                        f"generated output directory "
+                        f"{output_path.relative_to(out_dir)} is nested deeper than "
+                        f"{MAX_OUTPUT_ARTIFACT_DEPTH} levels; anything below it "
+                        "would be omitted from the evidence artefact list"
+                    )
+                directories += 1
+                if directories > MAX_OUTPUT_ARTIFACT_DIRECTORIES:
+                    raise OutputArtifactPolicyError(
+                        f"generated output has more than "
+                        f"{MAX_OUTPUT_ARTIFACT_DIRECTORIES} directories"
+                    )
+                pending.append((output_path, depth + 1))
+                continue
+            # Symlink, hardlink, fifo, socket, device — never an artefact.
             output_path.unlink(missing_ok=True)
     artefacts.sort()
     return artefacts
@@ -566,6 +654,21 @@ def _as_text(stream: object) -> str:
     return str(stream)
 
 
+def macos_sandbox_permission_denied(stderr: object) -> bool:
+    """Return whether macOS refused the sandbox profile or its target exec.
+
+    A nested application sandbox can reject either ``sandbox_apply`` itself or
+    the subsequent ``execvp`` of a project virtualenv interpreter.  Require the
+    exact sandbox marker together with ``Operation not permitted`` so ordinary
+    generated-code failures never activate the development-only host fallback.
+    """
+
+    detail = _as_text(stderr).lower()
+    return "operation not permitted" in detail and (
+        "sandbox_apply" in detail or "sandbox-exec: execvp()" in detail
+    )
+
+
 class CodeRunner:
     """Run agent-generated Python in a fresh per-step directory."""
 
@@ -700,7 +803,7 @@ class CodeRunner:
             distributions.update(
                 package.pip_name for package in CURATED_METHOD_PACKAGES
             )
-            distributions.add("patsy")
+            distributions.update(FINGERPRINT_ONLY_DISTRIBUTIONS)
             probe = (
                 "import json, platform, sys\n"
                 "from importlib import metadata\n"
@@ -1010,7 +1113,8 @@ class CodeRunner:
             )
             _replace_regular_file_atomically(
                 log_path,
-                textwrap.dedent(f"""
+                textwrap.dedent(
+                    f"""
                     === step {step_id} ===
                     cmd: {' '.join(cmd)}
                     cwd: {step_dir}
@@ -1027,7 +1131,10 @@ class CodeRunner:
 
                     ---- stderr ----
                     {stderr}
-                    """).strip().encode("utf-8"),
+                    """
+                )
+                .strip()
+                .encode("utf-8"),
             )
             return RunResult(
                 step_id=step_id,
@@ -1107,8 +1214,7 @@ class CodeRunner:
                 and original_cmd
                 and Path(original_cmd[0]).name == "sandbox-exec"
                 and sys.platform == "darwin"
-                and "sandbox_apply" in stderr.lower()
-                and "operation not permitted" in stderr.lower()
+                and macos_sandbox_permission_denied(stderr)
             ):
                 retry_cmd = [self.python_executable, str(script_path)]
                 retry_timeout = max(
@@ -1270,7 +1376,8 @@ class CodeRunner:
         # fresh regular file rather than writing through it to a host victim.
         _replace_regular_file_atomically(
             log_path,
-            textwrap.dedent(f"""
+            textwrap.dedent(
+                f"""
                 === step {step_id} ===
                 cmd: {' '.join(cmd)}
                 original_cmd: {' '.join(original_cmd)}
@@ -1289,7 +1396,10 @@ class CodeRunner:
                 {stdout}
                 ---- stderr ----
                 {stderr}
-                """).strip().encode("utf-8"),
+                """
+            )
+            .strip()
+            .encode("utf-8"),
         )
 
         artefacts = _collect_safe_output_artifacts(out_dir)
@@ -1367,6 +1477,15 @@ class DockerRunner:
     GHOST_MONITOR_INTERVAL_SECONDS = 0.25
     RUNTIME_PROVENANCE_MAX_ATTEMPTS = 2
 
+    #: Default container resource caps. Chosen to fit an ordinary analysis
+    #: step (a Cox fit, a bootstrap, a figure render) with headroom, while
+    #: keeping one runaway step from taking the host — or a sibling step —
+    #: down with it.
+    DEFAULT_CPU_LIMIT = "4"
+    DEFAULT_MEMORY_LIMIT = "8g"
+    DEFAULT_PIDS_LIMIT = 256
+    DEFAULT_OPEN_FILES_LIMIT = 4096
+
     def __init__(
         self,
         *,
@@ -1381,6 +1500,9 @@ class DockerRunner:
         pull_image: bool = False,
         cpu_limit: Optional[str] = None,
         memory_limit: Optional[str] = None,
+        pids_limit: Optional[int] = None,
+        open_files_limit: Optional[int] = None,
+        submission_profile_name: Optional[str] = None,
         user: Optional[str] = None,
         platform: Optional[str] = None,
     ) -> None:
@@ -1399,13 +1521,56 @@ class DockerRunner:
         self.docker_executable = (
             docker_executable or os.environ.get("EASYICU_DOCKER_EXECUTABLE") or "docker"
         )
+        # Instance-level so a caller that knows removal is already hopeless --
+        # or a test -- can set the patience to zero without reaching into the
+        # module. The defaults are the module constants.
+        self.teardown_absence_budget_seconds = _TEARDOWN_ABSENCE_BUDGET_SECONDS
+        self.teardown_absence_poll_seconds = _TEARDOWN_ABSENCE_POLL_SECONDS
         self.network = network
         self.extra_mounts = self._validated_extra_mounts(extra_mounts or ())
         self.extra_env = dict(extra_env or {})
         reject_reserved_runner_env(self.extra_env, owner="DockerRunner")
         self.pull_image = bool(pull_image)
-        self.cpu_limit = cpu_limit
-        self.memory_limit = memory_limit
+        # Resource caps are ON by default. The timeout alone does not bound
+        # damage: generated code can exhaust host memory, fork until the host
+        # runs out of PIDs, or open enough files to starve sibling steps well
+        # inside a five-minute budget. Pass an explicit value to widen or
+        # narrow a limit; pass "" / 0 to opt out of one.
+        self.cpu_limit = self.DEFAULT_CPU_LIMIT if cpu_limit is None else cpu_limit
+        self.memory_limit = (
+            self.DEFAULT_MEMORY_LIMIT if memory_limit is None else memory_limit
+        )
+        self.pids_limit = (
+            self.DEFAULT_PIDS_LIMIT if pids_limit is None else int(pids_limit or 0)
+        )
+        self.open_files_limit = (
+            self.DEFAULT_OPEN_FILES_LIMIT
+            if open_files_limit is None
+            else int(open_files_limit or 0)
+        )
+        # A paper-facing profile pins the execution environment into the run's
+        # authority identity. "Docker was used" is not that environment if the
+        # caller could also pass ``memory_limit=""``: two runs claiming the
+        # same profile would then have run under different, unrecorded
+        # ceilings. Development profiles keep the opt-out.
+        if is_paper_facing_profile(submission_profile_name):
+            disabled = [
+                name
+                for name, value in (
+                    ("cpu_limit", self.cpu_limit),
+                    ("memory_limit", self.memory_limit),
+                    ("pids_limit", self.pids_limit),
+                    ("open_files_limit", self.open_files_limit),
+                )
+                if not value
+            ]
+            if disabled:
+                raise ValueError(
+                    "submission profile "
+                    f"{submission_profile_name!r} requires every container "
+                    "resource ceiling to be set; disabled: "
+                    + ", ".join(sorted(disabled))
+                )
         if user is not None:
             self.user = user
         elif os.name == "posix" and hasattr(os, "getuid") and hasattr(os, "getgid"):
@@ -1667,6 +1832,16 @@ class DockerRunner:
             cmd.append(f"--cpus={self.cpu_limit}")
         if self.memory_limit:
             cmd.append(f"--memory={self.memory_limit}")
+            # Without an equal swap cap the memory limit is advisory: the
+            # container simply swaps, and the host thrashes instead of the
+            # step failing fast.
+            cmd.append(f"--memory-swap={self.memory_limit}")
+        if self.pids_limit:
+            cmd.append(f"--pids-limit={self.pids_limit}")
+        if self.open_files_limit:
+            cmd.append(
+                f"--ulimit=nofile={self.open_files_limit}:{self.open_files_limit}"
+            )
 
         # Mount the complete run tree read-only.  Mount both the writable
         # attempt output and immutable script at independent container paths.
@@ -1878,6 +2053,8 @@ class DockerRunner:
 
             distribution_script = (
                 "import hashlib\n"
+                "import os\n"
+                "import sys\n"
                 "from pathlib import Path\n"
                 "import easyicu.research_agent as research_agent\n"
                 "from importlib.metadata import distributions\n"
@@ -1902,7 +2079,12 @@ class DockerRunner:
                 "    version = str(dist.version or '').strip()\n"
                 "    if name and version:\n"
                 "        rows[name.casefold()] = f'{name}=={version}'\n"
-                "print('\\n'.join(rows[key] for key in sorted(rows)))\n"
+                "sys.stdout.write('\\n'.join(rows[key] for key in sorted(rows)) + '\\n')\n"
+                "sys.stdout.flush()\n"
+                "# This read-only metadata probe has no cleanup contract inside the\n"
+                "# container.  Exit directly after flushing so third-party atexit\n"
+                "# handlers cannot strand an otherwise completed probe.\n"
+                "os._exit(0)\n"
             )
             capture_proc: Optional[subprocess.CompletedProcess[str]] = None
             for attempt_index in range(self.RUNTIME_PROVENANCE_MAX_ATTEMPTS):
@@ -1931,6 +2113,10 @@ class DockerRunner:
                     "-c",
                     distribution_script,
                 ]
+                ghost_monitor = self._start_ghost_container_monitor(
+                    cidfile=cidfile,
+                    fallback_name=container_name,
+                )
                 try:
                     capture_proc = subprocess.run(  # noqa: S603 - argv list, no shell
                         capture_cmd,
@@ -1960,6 +2146,11 @@ class DockerRunner:
                         "Docker execution-runtime dependency capture timed out "
                         f"after {attempt_index + 1} attempt(s). " + cleanup_note.strip()
                     ) from exc
+                finally:
+                    if ghost_monitor is not None:
+                        monitor_stop, monitor_thread = ghost_monitor
+                        monitor_stop.set()
+                        monitor_thread.join(timeout=1.0)
                 container_ref = self._required_container_reference(
                     cidfile,
                     fallback_name=container_name,
@@ -2159,6 +2350,8 @@ class DockerRunner:
             },
             "cpu_limit": self.cpu_limit,
             "memory_limit": self.memory_limit,
+            "pids_limit": self.pids_limit,
+            "open_files_limit": self.open_files_limit,
             "user": self.user,
             "platform": self.platform,
         }
@@ -2260,16 +2453,59 @@ class DockerRunner:
             cleanup_notes.append("rm failed")
 
         if not teardown_confirmed:
-            inspect_proc = _control(
-                ("container", "inspect", container_ref),
-                timeout=10.0,
-            )
-            if inspect_proc is not None:
-                inspect_error = inspect_proc.stderr.lower()
-                teardown_confirmed = inspect_proc.returncode != 0 and (
-                    "no such object" in inspect_error
-                    or "no such container" in inspect_error
+            # ``rm --force`` can outlast its own timeout while the removal it
+            # started proceeds -- a container whose bind mounts sit on a slow
+            # volume takes longer to unmount than to stop.  Asking once, right
+            # after that timeout, reads a container that is already going away
+            # and reports it as still present.
+            #
+            # Poll for absence within a bounded budget instead.  The invariant
+            # is unchanged: collection still requires PROOF the container is
+            # gone, and a container that is genuinely stuck still refuses after
+            # the budget.  Only the patience changed.
+            #
+            # Measured: 2 recorded steps hit this, both the robustness replay
+            # (17 output files, the largest set any step writes) on the
+            # external-drive run root, and each cost 3 steps -- itself plus the
+            # figure and panel that depend on it.  One of them was the
+            # full-cohort E1 run whose science had completed: primary OR
+            # 1.6077 (1.5393-1.6791) over 94,425 stays, sitting in the staging
+            # directory, refused collection.
+            # Bounded by BOTH a deadline and a poll count. The wall clock alone
+            # is not a bound here: the only thing that advances it inside this
+            # loop is the loop's own sleep, so a sleep that returns instantly
+            # spins. A test with `time.sleep` stubbed out ran this several
+            # million times before the count was added.
+            budget = float(
+                getattr(
+                    self,
+                    "teardown_absence_budget_seconds",
+                    _TEARDOWN_ABSENCE_BUDGET_SECONDS,
                 )
+            )
+            interval = float(
+                getattr(
+                    self,
+                    "teardown_absence_poll_seconds",
+                    _TEARDOWN_ABSENCE_POLL_SECONDS,
+                )
+            )
+            max_polls = max(1, int(budget / interval)) if interval > 0 else 1
+            deadline = time.monotonic() + budget
+            for _attempt in range(max_polls):
+                inspect_proc = _control(
+                    ("container", "inspect", container_ref),
+                    timeout=10.0,
+                )
+                if inspect_proc is not None:
+                    inspect_error = inspect_proc.stderr.lower()
+                    teardown_confirmed = inspect_proc.returncode != 0 and (
+                        "no such object" in inspect_error
+                        or "no such container" in inspect_error
+                    )
+                if teardown_confirmed or time.monotonic() >= deadline:
+                    break
+                time.sleep(interval)
             if not teardown_confirmed:
                 cleanup_notes.append("container presence could not be excluded")
 
@@ -2557,7 +2793,8 @@ class DockerRunner:
                 monitor_thread.join(timeout=1.0)
         duration = time.monotonic() - started
 
-        log_content = textwrap.dedent(f"""
+        log_content = textwrap.dedent(
+            f"""
                 === step {step_id} (DockerRunner) ===
                 image: {self.image}
                 image_id: {runtime_provenance.get("image_id")}
@@ -2572,7 +2809,8 @@ class DockerRunner:
                 {stdout}
                 ---- stderr ----
                 {stderr}
-                """).strip()
+                """
+        ).strip()
 
         if teardown_confirmed:
             self._ensure_real_directory(step_dir, replace_unsafe=False)

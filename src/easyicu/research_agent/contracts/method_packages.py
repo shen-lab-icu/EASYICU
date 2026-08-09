@@ -67,10 +67,21 @@ CURATED_METHOD_PACKAGES: Tuple[MethodPackage, ...] = (
     ),
 )
 
+# Distributions that change computed results but that the Coder is NOT invited to
+# import directly.  ``patsy`` is the standing case: statsmodels' formula interface
+# is built on it, so its version moves numbers, yet a Coder writes ``bs(age, df=4)``
+# inside a statsmodels formula rather than importing patsy.  Declaring it as a
+# MethodPackage would advertise a direct import nobody needs; leaving it out of the
+# fingerprint would let a version bump change results invisibly.  It belongs to
+# neither list, so it gets its own — with one owner instead of a literal repeated
+# in every builder of the distribution set.
+FINGERPRINT_ONLY_DISTRIBUTIONS: Tuple[str, ...] = ("patsy",)
+
 
 __all__ = [
     "BASELINE_PACKAGES",
     "OPTIONAL_BASELINE_PACKAGES",
     "MethodPackage",
     "CURATED_METHOD_PACKAGES",
+    "FINGERPRINT_ONLY_DISTRIBUTIONS",
 ]

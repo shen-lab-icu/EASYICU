@@ -24,6 +24,7 @@ import csv
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -32,12 +33,19 @@ from easyicu.concept.export_metadata import (
     build_export_file_metadata_binding,
     missing_primary_metadata_concepts,
 )
+from easyicu.concept_output_sources import (
+    ConceptLoadPlan,
+    ConceptLoadPlanError,
+    compile_concept_load_plan,
+)
+from easyicu.outcome_availability import structural_outcome_unavailability
 from easyicu.webserver.input_validation import parse_bool
 
 # Core metadata tables per database — a folder that holds these (as parquet or
 # csv) is recognised as that database. Mirrors check_data_status' core_tables.
 _CORE_TABLES = {
     "miiv": ["icustays", "patients", "admissions"],
+    "miii": ["icustays", "patients", "admissions"],
     "eicu": ["patient", "apachepatientresult"],
     "aumc": ["admissions", "drugitems"],
     "hirid": ["general_table", "observations"],
@@ -54,6 +62,10 @@ _DB_LABELS = {
 }
 
 _MODULE_MANIFESTS = ("easyicu_export_manifest.json", "_manifest.json")
+_EXPORT_METADATA_FILES = {
+    "feature_definitions.csv",
+    "feature_definitions.json",
+}
 _NATIVE_EXPORT_SCHEMA_V2 = "easyicu_native_export_v2"
 DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30
 _WORKSPACE_SAMPLE_LIMIT = 500
@@ -219,7 +231,22 @@ def _detect_database(path: Path) -> str:
     s = str(path).lower()
     if "eicu" in s:
         return "eicu"
-    if "miiv" in s or "mimic" in s:
+
+    # CONTENT BEATS NAME for the MIMIC pair. The two generations differ only in
+    # their stay-id column (stay_id vs icustay_id), and a path string is a weak
+    # signal: the token can come from an unrelated ancestor directory, and a
+    # prepared export is often filed under a name with no version at all.
+    # Read the schema first whenever the folder actually holds MIMIC tables.
+    by_schema = _detect_mimic_version_by_schema(path)
+    if by_schema:
+        return by_schema
+    if any(
+        token in s for token in ("mimiciii", "mimic-iii", "mimic_iii", "mimic3", "miii")
+    ):
+        return "miii"
+    if any(
+        token in s for token in ("mimiciv", "mimic-iv", "mimic_iv", "mimic4", "miiv")
+    ):
         return "miiv"
     if "aumc" in s:
         return "aumc"
@@ -241,11 +268,82 @@ def _detect_database(path: Path) -> str:
         pass
     if any(n.startswith("patient.") or n == "patient/" for n in names):
         return "eicu"
-    if any(n.startswith("admissions.") or n == "admissions/" for n in names):
-        return "miiv"
     if any(n.startswith("general_table") or n.startswith("general/") for n in names):
         return "hirid"
+    # An ambiguous "mimic" path is resolved by SCHEMA, not by table names.
+    # Both versions ship icustays/patients/admissions, so a converted MIMIC-IV
+    # in a flat parquet layout looks exactly like MIMIC-III by filename alone.
+    # The stay-id column is what actually differs, and it is what downstream
+    # extraction depends on.
+    has_admissions = any(
+        n.startswith("admissions.") or n == "admissions/" for n in names
+    )
+    if any(n in {"icu/", "hosp/"} for n in names):
+        return "miiv"
+    if has_admissions or any(n.startswith("icustays.") for n in names):
+        by_schema = _detect_mimic_version_by_schema(path)
+        if by_schema:
+            return by_schema
+        # Nothing on disk distinguishes the version — say so rather than
+        # guessing one whose ID column may be wrong.
+        return "unknown"
     return "unknown"
+
+
+#: Columns that appear in exactly one MIMIC generation.
+_MIMIC_VERSION_MARKERS = {
+    "miiv": ("stay_id", "anchor_year", "anchor_age"),
+    "miii": ("icustay_id", "dob", "hadm_id_seq"),
+}
+
+
+def _detect_mimic_version_by_schema(path: Path) -> Optional[str]:
+    """Tell MIMIC-III from MIMIC-IV by reading a table's column names.
+
+    Filenames cannot do this — both generations ship ``icustays``,
+    ``patients`` and ``admissions``. ``stay_id`` (MIMIC-IV) vs ``icustay_id``
+    (MIMIC-III) can, and reading a parquet footer costs no row scan.
+    """
+
+    for table in ("icustays", "patients", "admissions"):
+        columns = _peek_columns(path, table)
+        if not columns:
+            continue
+        lowered = {str(col).lower() for col in columns}
+        for db_key, markers in _MIMIC_VERSION_MARKERS.items():
+            if lowered.intersection(markers):
+                return db_key
+    return None
+
+
+def _peek_columns(path: Path, table: str) -> List[str]:
+    """Read a table's column names without loading any rows."""
+
+    for candidate in (path / f"{table}.parquet", path / table):
+        try:
+            if candidate.is_file():
+                import pyarrow.parquet as pq
+
+                return list(pq.read_schema(candidate).names)
+            if candidate.is_dir():
+                import pyarrow.parquet as pq
+
+                shard = next(candidate.glob("*.parquet"), None)
+                if shard is not None:
+                    return list(pq.read_schema(shard).names)
+        except Exception:
+            continue
+
+    csv_candidate = next(path.glob(f"{table}.csv*"), None)
+    if csv_candidate is not None:
+        try:
+            import pandas as pd
+
+            header = pd.read_csv(csv_candidate, nrows=0)
+            return list(header.columns)
+        except Exception:
+            return []
+    return []
 
 
 def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any]:
@@ -696,6 +794,10 @@ def _render_export_readme(
         sepsis_def.get("sofa_increase", {}) if isinstance(sepsis_def, dict) else {}
     )
     modules = [f.get("module") for f in files if f.get("module")]
+    concept_availability = manifest.get("concept_availability") or {}
+    structurally_unavailable_count = int(
+        concept_availability.get("structurally_unavailable_count") or 0
+    )
     unique_modules = []
     for module in modules:
         if module not in unique_modules:
@@ -741,6 +843,7 @@ def _render_export_readme(
         f"- Observation window: `{cohort.get('observation_window_hours', '')} hours`",
         f"- Modules: `{', '.join(unique_modules)}`",
         f"- Concepts selected: `{sum(int(f.get('concepts') or 0) for f in files)}`",
+        f"- Structurally unavailable for this database: `{structurally_unavailable_count}` (listed with reason codes in `_manifest.json`)",
         *definition_lines,
         "",
         "## Reproducibility files",
@@ -867,6 +970,7 @@ def _feature_definition_payload(
     concept_plan: Dict[str, List[str]],
     files: List[Dict[str, Any]],
     api_module: Any,
+    unavailable_concepts: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Build a metadata-only definition manifest for selected concepts."""
     from easyicu.concept.catalog import (
@@ -877,13 +981,17 @@ def _feature_definition_payload(
     )
 
     project_path = Path(__file__).resolve().parents[3]
-    callback_source = Path(getattr(api_module, "__file__", "")).resolve()
+    callback = getattr(api_module, "load_concepts", None)
+    callback_module = sys.modules.get(getattr(callback, "__module__", ""))
+    callback_source = Path(
+        getattr(callback_module, "__file__", getattr(api_module, "__file__", ""))
+    ).resolve()
     data_source_ref = _shareable_path_reference(data_path)
     export_ref = _shareable_path_reference(export_path)
     callback_source_ref = _shareable_path_reference(
         callback_source, relative_to=project_path
     )
-    project_ref = _shareable_path_reference(project_path)
+    project_ref = _shareable_project_reference(project_path)
     file_by_module: Dict[str, List[str]] = {}
     for item in files:
         module = str(item.get("module") or "")
@@ -891,6 +999,11 @@ def _feature_definition_payload(
         if module and file_name:
             file_by_module.setdefault(module, []).append(file_name)
 
+    unavailable_by_concept = {
+        str(item.get("concept_id")): dict(item)
+        for item in (unavailable_concepts or ())
+        if item.get("concept_id")
+    }
     records: List[Dict[str, Any]] = []
     for module, concept_ids in concept_plan.items():
         group_en, group_zh = CONCEPT_GROUP_NAMES.get(module, (module, module))
@@ -900,6 +1013,7 @@ def _feature_definition_payload(
             )
             desc_en, desc_zh = CONCEPT_DESCRIPTIONS.get(concept_id, ("", ""))
             derived_output_source = COMPOSITE_CONCEPT_OUTPUT_SOURCES.get(concept_id)
+            unavailable = unavailable_by_concept.get(concept_id)
             records.append(
                 {
                     "database": database,
@@ -912,6 +1026,18 @@ def _feature_definition_payload(
                     "module_name_zh": group_zh,
                     "description_en": desc_en,
                     "description_zh": desc_zh,
+                    "availability": (
+                        unavailable
+                        if unavailable is not None
+                        else {
+                            "concept_id": concept_id,
+                            "module": module,
+                            "database": database,
+                            "status": "selected_for_export",
+                            "reason_code": None,
+                            "supported_databases": [],
+                        }
+                    ),
                     "source": {
                         "data_source_ref": data_source_ref,
                         "export_ref": export_ref,
@@ -974,6 +1100,15 @@ def _shareable_path_reference(
         ),
         "absolute_path_omitted": bool(raw and path.is_absolute()),
     }
+
+
+def _shareable_project_reference(project_path: Path) -> Dict[str, Any]:
+    """Return stable public provenance for an EasyICU source checkout."""
+    ref = _shareable_path_reference(project_path)
+    # Checkouts and worktrees may have arbitrary directory names. Do not leak
+    # that local name into an otherwise shareable manifest.
+    ref["hint"] = "EASYICU"
+    return ref
 
 
 def _format_shareable_path_reference(ref: Any) -> str:
@@ -1115,6 +1250,39 @@ def _missing_primary_metadata_concepts(
         concept_plan=concept_plan,
         file_bindings=file_bindings,
     )
+
+
+def _classify_structurally_unavailable_concepts(
+    *,
+    concepts: Sequence[str],
+    concept_plan: Dict[str, List[str]],
+    database: str,
+) -> tuple[List[Dict[str, Any]], List[str]]:
+    """Separate owner-confirmed cross-database gaps from unexplained outputs."""
+
+    module_by_concept = {
+        concept: module
+        for module, module_concepts in concept_plan.items()
+        for concept in module_concepts
+    }
+    unavailable: List[Dict[str, Any]] = []
+    unexplained: List[str] = []
+    for concept in concepts:
+        receipt = structural_outcome_unavailability(concept, database)
+        if receipt is None:
+            unexplained.append(concept)
+            continue
+        unavailable.append(
+            {
+                "concept_id": receipt.concept_id,
+                "module": module_by_concept.get(receipt.concept_id),
+                "database": receipt.database,
+                "status": "structurally_unavailable",
+                "reason_code": receipt.reason_code,
+                "supported_databases": list(receipt.supported_databases),
+            }
+        )
+    return unavailable, unexplained
 
 
 def _coerce_int(
@@ -1682,6 +1850,38 @@ def _module_uses_sepsis_kwargs(concepts: List[str]) -> bool:
     return any(str(concept) in sepsis_concepts for concept in concepts)
 
 
+def _materialize_concept_load_plan(frame: Any, plan: ConceptLoadPlan) -> Any:
+    """Project loader source columns back onto the requested public outputs."""
+
+    if not plan.materializations or frame is None or not hasattr(frame, "columns"):
+        return frame
+
+    projected = frame
+    copied = False
+    for binding in plan.materializations:
+        output = binding.output_concept
+        source = binding.source_concept
+        if output in projected.columns or source not in projected.columns:
+            continue
+        if not copied:
+            projected = projected.copy()
+            copied = True
+        projected[output] = projected[source]
+
+    removable_sources = {
+        binding.source_concept
+        for binding in plan.materializations
+        if binding.source_concept not in plan.output_concepts
+        and binding.output_concept in projected.columns
+        and binding.source_concept in projected.columns
+    }
+    if removable_sources:
+        if not copied:
+            projected = projected.copy()
+        projected = projected.drop(columns=sorted(removable_sources))
+    return projected
+
+
 def make_export_runner(
     data_path: str,
     database: str,
@@ -1838,14 +2038,25 @@ def make_export_runner(
                 if getattr(job, "cancel_requested", False):
                     break
                 module_concepts = concept_plan[mod]
+                try:
+                    load_plan = compile_concept_load_plan(module_concepts)
+                except ConceptLoadPlanError as exc:
+                    raise ExportCohortError(
+                        "concept_output_load_plan_invalid",
+                        {
+                            "module": mod,
+                            "reason": exc.reason_code,
+                            "position": exc.position,
+                        },
+                    ) from exc
                 use_sofa2 = any(
                     c.startswith("sofa2") or c == "sep3_sofa2" for c in module_concepts
                 )
                 module_kwargs = dict(load_kwargs)
-                if _module_uses_sepsis_kwargs(module_concepts):
+                if _module_uses_sepsis_kwargs(list(load_plan.source_concepts)):
                     module_kwargs.update(sepsis_load_kwargs)
                 df = api.load_concepts(
-                    module_concepts,
+                    list(load_plan.source_concepts),
                     patient_ids=patient_ids,
                     database=database,
                     data_path=str(data_path),
@@ -1854,6 +2065,13 @@ def make_export_runner(
                     verbose=False,
                     **module_kwargs,
                 )
+                if isinstance(df, dict):
+                    df = {
+                        key: _materialize_concept_load_plan(sub, load_plan)
+                        for key, sub in df.items()
+                    }
+                else:
+                    df = _materialize_concept_load_plan(df, load_plan)
                 written: List[Dict[str, Any]] = []
                 if isinstance(df, dict):
                     for key, sub in df.items():
@@ -1928,10 +2146,17 @@ def make_export_runner(
             concept_plan={module: concept_plan[module] for module in sel},
             file_bindings=metadata_file_bindings,
         )
-        if missing_primary_metadata:
+        unavailable_concepts, unexplained_missing = (
+            _classify_structurally_unavailable_concepts(
+                concepts=missing_primary_metadata,
+                concept_plan={module: concept_plan[module] for module in sel},
+                database=database,
+            )
+        )
+        if unexplained_missing:
             raise ExportCohortError(
                 "column_metadata_primary_binding_missing",
-                {"concepts": missing_primary_metadata},
+                {"concepts": unexplained_missing},
             )
 
         if include_feature_definitions:
@@ -1942,6 +2167,7 @@ def make_export_runner(
                 concept_plan={module: concept_plan[module] for module in sel},
                 files=files,
                 api_module=api,
+                unavailable_concepts=unavailable_concepts,
             )
             definition_files = _write_feature_definition_files(out, definition_payload)
 
@@ -1971,6 +2197,10 @@ def make_export_runner(
                     "explicit" if concepts is not None else "all_in_selected_modules"
                 ),
                 "modules": {module: concept_plan[module] for module in sel},
+            },
+            "concept_availability": {
+                "structurally_unavailable_count": len(unavailable_concepts),
+                "structurally_unavailable": unavailable_concepts,
             },
             "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "files": files,
@@ -2543,7 +2773,12 @@ def _export_file_inventory(
     }
     out: List[Dict[str, Any]] = []
     for f in sorted(path.iterdir(), key=lambda p: p.name):
-        if f.name.startswith(".") or f.name in _MODULE_MANIFESTS or not f.is_file():
+        if (
+            f.name.startswith(".")
+            or f.name in _MODULE_MANIFESTS
+            or f.name in _EXPORT_METADATA_FILES
+            or not f.is_file()
+        ):
             continue
         if f.suffix.lower() not in {".csv", ".parquet", ".xlsx"}:
             continue
@@ -2625,6 +2860,7 @@ def _read_export_projection(
     *,
     columns: Optional[List[str]],
     stay_ids: Optional[set[str]],
+    entity_column: str = "stay_id",
 ) -> Any:
     """Read projected export columns, pushing a bounded stay filter when set."""
     import pandas as pd
@@ -2636,8 +2872,12 @@ def _read_export_projection(
         if columns is not None
         else list(available)
     )
-    if stay_ids is not None and "stay_id" in available and "stay_id" not in selected:
-        selected.insert(0, "stay_id")
+    if (
+        stay_ids is not None
+        and entity_column in available
+        and entity_column not in selected
+    ):
+        selected.insert(0, entity_column)
     if not selected:
         return pd.DataFrame()
     if stay_ids is not None and not stay_ids:
@@ -2652,11 +2892,11 @@ def _read_export_projection(
             dataset = ds.dataset(path, format="parquet")
             filter_expression = None
             if stay_ids is not None:
-                if "stay_id" not in dataset.schema.names:
+                if entity_column not in dataset.schema.names:
                     return pd.DataFrame(columns=selected)
-                field_type = dataset.schema.field("stay_id").type
+                field_type = dataset.schema.field(entity_column).type
                 values = pc.cast(pa.array(sorted(stay_ids)), field_type)
-                filter_expression = ds.field("stay_id").isin(values)
+                filter_expression = ds.field(entity_column).isin(values)
             return dataset.to_table(
                 columns=selected,
                 filter=filter_expression,
@@ -2667,6 +2907,7 @@ def _read_export_projection(
                 selected,
                 stay_ids=stay_ids,
                 source="parquet",
+                entity_column=entity_column,
             )
     if suffix == ".csv":
         return _read_export_frame_duckdb(
@@ -2674,11 +2915,29 @@ def _read_export_projection(
             selected,
             stay_ids=stay_ids,
             source="csv",
+            entity_column=entity_column,
         )
     frame = pd.read_excel(path, usecols=selected)
-    if stay_ids is not None and "stay_id" in frame.columns:
-        frame = frame[frame["stay_id"].map(_norm_id).isin(stay_ids)].copy()
+    if stay_ids is not None and entity_column in frame.columns:
+        frame = frame[frame[entity_column].map(_norm_id).isin(stay_ids)].copy()
     return frame
+
+
+def read_export_projection(
+    path: Path,
+    *,
+    columns: Optional[List[str]] = None,
+    stay_ids: Optional[set[str]] = None,
+    entity_column: str = "stay_id",
+) -> Any:
+    """Public, projected export reader for bounded webserver owners."""
+
+    return _read_export_projection(
+        path,
+        columns=columns,
+        stay_ids=stay_ids,
+        entity_column=entity_column,
+    )
 
 
 def _read_export_frame_duckdb(
@@ -2687,6 +2946,7 @@ def _read_export_frame_duckdb(
     *,
     stay_ids: Optional[set[str]],
     source: str,
+    entity_column: str = "stay_id",
 ) -> Any:
     import duckdb
 
@@ -2699,7 +2959,8 @@ def _read_export_frame_duckdb(
     query = f"SELECT {projection} FROM {reader}"
     params: List[Any] = [str(path)]
     if stay_ids is not None:
-        query += ' WHERE CAST("stay_id" AS VARCHAR) IN (SELECT UNNEST(?))'
+        escaped_entity = entity_column.replace('"', '""')
+        query += f' WHERE CAST("{escaped_entity}" AS VARCHAR) IN (SELECT UNNEST(?))'
         params.append(sorted(stay_ids))
     connection = duckdb.connect(database=":memory:")
     try:

@@ -124,6 +124,117 @@ def test_hirid_csv_shards_not_skipped_when_existing_parquet_is_corrupt(
     assert csv_path in converter._get_csv_files()
 
 
+def test_hirid_same_named_csv_shards_keep_distinct_table_identity(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "hirid"
+    observation_csv = (
+        data_dir / "observation_tables" / "csv" / "part-0.csv"
+    )
+    pharma_csv = data_dir / "pharma_records" / "csv" / "part-0.csv"
+    observation_csv.parent.mkdir(parents=True)
+    pharma_csv.parent.mkdir(parents=True)
+    observation_csv.write_text(
+        "patientid,variableid,value\n1,110,<1.0\n",
+        encoding="utf-8",
+    )
+    pharma_csv.write_text(
+        "patientid,pharmaid,givendose\n1,20,2.5\n",
+        encoding="utf-8",
+    )
+
+    converter = DataConverter(data_dir, database="hirid", verbose=False)
+    discovered = converter._get_csv_files()
+
+    assert set(discovered) == {observation_csv, pharma_csv}
+    assert converter._get_table_name(observation_csv) == "observations"
+    assert converter._get_table_name(pharma_csv) == "pharma"
+    assert converter._get_parquet_path(observation_csv) == (
+        data_dir / "observations" / "1.parquet"
+    )
+    assert converter._get_parquet_path(pharma_csv) == (
+        data_dir / "pharma" / "1.parquet"
+    )
+    assert not converter._should_shard(observation_csv)
+    assert not converter._should_shard(pharma_csv)
+    assert converter._status_key(observation_csv) != converter._status_key(
+        pharma_csv
+    )
+
+
+def test_hirid_csv_shards_convert_to_distinct_ricu_outputs(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "hirid"
+    observation_csv = (
+        data_dir / "observation_tables" / "csv" / "part-0.csv"
+    )
+    pharma_csv = data_dir / "pharma_records" / "csv" / "part-0.csv"
+    observation_csv.parent.mkdir(parents=True)
+    pharma_csv.parent.mkdir(parents=True)
+    observation_csv.write_text(
+        "patientid,variableid,stringvalue,value\n"
+        "1,110,13.30,13.3\n"
+        "2,120,<1.0,0.9\n",
+        encoding="utf-8",
+    )
+    pharma_csv.write_text(
+        "patientid,pharmaid,givendose\n1,20,2.5\n",
+        encoding="utf-8",
+    )
+
+    converter = DataConverter(
+        data_dir,
+        database="hirid",
+        parallel_workers=2,
+        verbose=False,
+    )
+    results = converter.convert_all(write_manifest=False)
+
+    assert set(results) == {
+        "observation_tables/csv/part-0.csv",
+        "pharma_records/csv/part-0.csv",
+    }
+    assert all(result["status"] == "completed" for result in results.values())
+    observation_out = pd.read_parquet(
+        data_dir / "observations" / "1.parquet"
+    )
+    pharma_out = pd.read_parquet(data_dir / "pharma" / "1.parquet")
+    assert observation_out["stringvalue"].tolist() == ["13.30", "<1.0"]
+    assert observation_out["value"].tolist() == [13.3, 0.9]
+    assert pharma_out["givendose"].tolist() == [2.5]
+
+    reloaded = DataConverter(data_dir, database="hirid", verbose=False)
+    assert reloaded.is_ready() == (True, [])
+
+
+def test_hirid_csv_shard_completion_is_checked_per_target(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "hirid"
+    csv_dir = data_dir / "observation_tables" / "csv"
+    csv_dir.mkdir(parents=True)
+    first = csv_dir / "part-0.csv"
+    second = csv_dir / "part-1.csv"
+    first.write_text("patientid,variableid,value\n1,110,1\n", encoding="utf-8")
+    second.write_text("patientid,variableid,value\n2,120,2\n", encoding="utf-8")
+
+    converter = DataConverter(data_dir, database="hirid", verbose=False)
+    first_result = converter._convert_file(first)
+    assert first_result["status"] == "completed"
+
+    discovered = converter._get_csv_files()
+    assert set(discovered) == {first, second}
+    assert converter._is_conversion_needed(first) == (
+        False,
+        "already converted and verified",
+    )
+    assert converter._is_conversion_needed(second) == (
+        True,
+        "parquet file does not exist",
+    )
+
+
 def test_corrupt_single_parquet_output_requires_reconversion(tmp_path: Path) -> None:
     csv_path = tmp_path / "general_table.csv"
     csv_path.write_text("id,value\n1,2\n", encoding="utf-8")

@@ -17,6 +17,7 @@ import hashlib
 import json
 import math
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -40,7 +41,9 @@ from ..planning.cohort_contract import (
     _DEFAULT_PATTERN_REGISTRY,
     _EXTRA_COHORT_CONCEPT_IDS,
     clear_cohort_concept_ids,
+    cohort_concept_id_scope,
     coerce_cohort_definition,
+    cohort_definition_has_explicit_selection,
     cohort_definition_sha,
     concept_id_exists,
     default_pattern_registry,
@@ -61,6 +64,16 @@ _IMPLEMENTED_AGGREGATIONS = set(ALLOWED_CTAS_AGGREGATIONS)
 
 class CohortDataError(KeyError):
     """Raised when materialised data cannot satisfy a CTAS definition."""
+
+
+class CohortAuthorityError(RuntimeError):
+    """Raised when a locked cohort definition cannot be enforced on the data.
+
+    Distinct from :class:`CohortDataError`, which is about one predicate being
+    unsatisfiable. This one means the run declared a cohort and then could not
+    apply it, so any downstream number would describe a population the plan
+    did not authorise.
+    """
 
 
 def _file_sha256(path: Path) -> str:
@@ -136,10 +149,10 @@ def write_locked_cohort_definition(
         definition_sha = cohort_definition_sha(definition)
         locked_sha = cohort_definition_sha(locked_definition)
         if definition_sha != locked_sha:
-            locked_is_empty = not (
-                locked_definition.inclusion or locked_definition.exclusion
+            locked_is_empty = not cohort_definition_has_explicit_selection(
+                locked_definition
             )
-            definition_is_real = bool(definition.inclusion or definition.exclusion)
+            definition_is_real = cohort_definition_has_explicit_selection(definition)
             if not (allow_empty_promotion and locked_is_empty and definition_is_real):
                 raise CohortSchemaError(
                     "cohort definition changed after plan lock; refusing to overwrite "
@@ -510,8 +523,10 @@ def analysis_cohort_authority_coordinates(
     """Recompute the science-owned coordinates bound by an analysis child."""
 
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
-    if definition is None or not (definition.inclusion or definition.exclusion):
-        raise CohortSchemaError("analysis cohort authority requires locked predicates")
+    if not cohort_definition_has_explicit_selection(definition):
+        raise CohortSchemaError(
+            "analysis cohort authority requires an explicit locked selection"
+        )
     bindings = _planner_declared_context_column_bindings(
         definition=definition,
         plan=plan,
@@ -543,6 +558,7 @@ def _raw_typed_plan_reference_issues(
     *,
     plan: Any,
     columns: tuple[str, ...],
+    reserved_coordinates: tuple[str, ...] = (),
 ) -> list[str]:
     """Return Planner-owned raw fields absent from the sealed cohort.
 
@@ -552,6 +568,7 @@ def _raw_typed_plan_reference_issues(
     """
 
     available = set(columns)
+    reserved = set(reserved_coordinates)
     invalid_locations: dict[str, list[str]] = {}
 
     def require_column(label: str, value: Any) -> None:
@@ -624,13 +641,21 @@ def _raw_typed_plan_reference_issues(
             categories[category] = categories.get(category, 0) + 1
         return categories
 
-    return [
-        (
-            f"raw name {name!r} is not an exact sealed cohort column; "
-            f"locations={location_categories(locations)!r}"
-        )
-        for name, locations in invalid_locations.items()
-    ]
+    issues: list[str] = []
+    for name, locations in invalid_locations.items():
+        categories = location_categories(locations)
+        if name in reserved:
+            issues.append(
+                f"raw name {name!r} is a sealed identity/time coordinate "
+                "reserved for host navigation, not an executable analysis "
+                f"field; locations={categories!r}"
+            )
+        else:
+            issues.append(
+                f"raw name {name!r} is not an exact executable sealed cohort "
+                f"column; locations={categories!r}"
+            )
+    return issues
 
 
 def _closed_observed_levels(variable: Any) -> list[Any]:
@@ -833,9 +858,11 @@ def validate_plan_typed_bindings_against_context(
     # analysis variables. Runtime raw-input contracts intentionally omit them,
     # so reject them while the Planner still has structured-retry authority.
     executable_columns = tuple(getattr(typed_cohort, "column_bindings", {}).keys())
+    reserved_coordinates = tuple(sorted(set(columns) - set(executable_columns)))
     raw_issues = _raw_typed_plan_reference_issues(
         plan=plan,
         columns=executable_columns,
+        reserved_coordinates=reserved_coordinates,
     )
     issues = list(raw_issues)
     primary_definition: Optional[CohortDefinition] = None
@@ -890,7 +917,7 @@ def validate_plan_typed_bindings_against_context(
     if not issues:
         return
 
-    column_set = set(columns)
+    column_set = set(executable_columns)
     producer_columns = sorted(
         {
             str(value).strip()
@@ -912,10 +939,12 @@ def validate_plan_typed_bindings_against_context(
     if raw_issues:
         correction = (
             "For raw step inputs, Table 1, model requirements, and robustness "
-            "fields, copy exact column names from the materialized-input roster "
-            "in the original prompt; concept ids are only valid inside typed "
-            "cohort predicates, and kind:name is only valid for an explicit "
-            "upstream product."
+            "fields, copy exact names from the executable materialized-input "
+            "roster in the original prompt. Never list cohort id/time "
+            "coordinates as analysis inputs; the host owns row navigation and "
+            "cohort accounting. Concept ids are only valid inside typed cohort "
+            "predicates, and kind:name is only valid for an explicit upstream "
+            "product."
         )
     else:
         correction = (
@@ -928,7 +957,9 @@ def validate_plan_typed_bindings_against_context(
         f"Invalid references: {detail}. {correction} Additional binding context: "
         "declared "
         f"typed source concepts={typed_sources!r}; declared columns="
-        f"{producer_columns!r}; sealed cohort columns={sorted(columns)!r}."
+        f"{producer_columns!r}; executable cohort columns="
+        f"{sorted(executable_columns)!r}; reserved navigation coordinates="
+        f"{list(reserved_coordinates)!r}."
     )
 
 
@@ -1024,7 +1055,7 @@ def materialize_locked_analysis_cohort(
         "error": None,
     }
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
-    if definition is None or not (definition.inclusion or definition.exclusion):
+    if not cohort_definition_has_explicit_selection(definition):
         return result
     from ..intake.materialized_metadata import (
         MaterializedMetadataError,
@@ -1177,16 +1208,38 @@ def load_materialized_analysis_cohort_result(
         recorded_parquet_sha = str(
             provenance.get("cohort_parquet_sha256") or ""
         ).strip()
-        # This is an authority recovery path, not a best-effort cache.  A
-        # pre-digest ledger cannot prove which parquet bytes originally closed
-        # the plan-phase materialization, so it must not be promoted into a new
-        # successful checkpoint.  Fresh runs deterministically rematerialize
-        # the cohort and write the digest; legacy runs fail closed instead of
-        # silently blessing same-row-count content drift.
-        if not recorded_parquet_sha:
-            return None
-        if _file_sha256(cohort_path) != recorded_parquet_sha:
-            return None
+        # This is an authority recovery path, not a best-effort cache: the
+        # bytes on disk must be proved to be the ones the materialization
+        # closed, or adoption is refused.  There are two proofs because there
+        # are two ledgers.  ``cohort_parquet_sha256`` anchors the untyped
+        # ``analysis_cohort/1`` ledger, which has nothing else.  The typed
+        # ``/2`` branch never writes that key -- it publishes a content-
+        # addressed authority sidecar instead -- so requiring the key alone
+        # refused every typed materialization the host had just performed.
+        # Measured over the recorded corpus: 164 of 164 ledgers are ``/2`` and
+        # none carries the key, so this recovery had never once succeeded, and
+        # the cohort-definition step it exists to adopt was written by the
+        # Coder in 127 of 127 runs.
+        verified_authority = None
+        if recorded_parquet_sha:
+            if _file_sha256(cohort_path) != recorded_parquet_sha:
+                return None
+        else:
+            from ..intake.materialized_metadata import (
+                load_verified_materialized_cohort_authority,
+            )
+
+            # Strictly stronger than the digest it stands in for: this pins the
+            # parquet bytes, size, row count, column list, schema digest and a
+            # per-row identity digest, and requires the sidecar's semantic
+            # provenance to equal this ledger.  A missing or broken authority
+            # yields None (or raises into the handler below), so a ledger with
+            # neither proof still fails closed.
+            verified_authority = load_verified_materialized_cohort_authority(
+                cohort_path
+            )
+            if verified_authority is None:
+                return None
         flow = pd.read_csv(flow_path)
         if flow.empty:
             return None
@@ -1211,8 +1264,18 @@ def load_materialized_analysis_cohort_result(
         "status": "applied",
         "path": cohort_path,
         "flow_path": flow_path,
-        "authority_path": None,
-        "authority_ref": provenance.get("materialized_cohort_authority_ref"),
+        # Report the authority this adoption actually verified, so a recovered
+        # result carries the same reference a fresh materialization would.
+        "authority_path": (
+            cohort_path.parent / verified_authority.reference.file
+            if verified_authority is not None
+            else None
+        ),
+        "authority_ref": (
+            verified_authority.reference.to_dict()
+            if verified_authority is not None
+            else provenance.get("materialized_cohort_authority_ref")
+        ),
         "cohort_definition_sha256": expected_definition_sha,
         "n_universe": n_universe,
         "n_cohort": n_cohort,
@@ -1293,6 +1356,7 @@ def _build_cohort_with_flow(
             "n_before": int(len(data)),
             "n_excluded": 0,
             "n_remaining": int(len(data)),
+            **_event_time_flow_fields(None),
         }
     ]
     ordered = [
@@ -1301,7 +1365,7 @@ def _build_cohort_with_flow(
     ]
     for order, (kind, predicate) in enumerate(ordered, start=1):
         before = int(mask.sum())
-        predicate_mask = _predicate_mask(
+        predicate_mask, event_time_window = _predicate_mask(
             data,
             predicate,
             column_bindings=column_bindings,
@@ -1326,6 +1390,10 @@ def _build_cohort_with_flow(
                 "n_before": before,
                 "n_excluded": before - remaining,
                 "n_remaining": remaining,
+                # The mask above is the only authority on what this predicate
+                # did; the same call that built it reports the window it used,
+                # so the ledger cannot describe a filter that was not applied.
+                **_event_time_flow_fields(event_time_window),
             }
         )
     return data.loc[mask].copy(), flow
@@ -1392,7 +1460,7 @@ def _predicate_mask(
     pred: ConceptPredicate,
     *,
     column_bindings: Optional[Dict[str, str]] = None,
-) -> Any:
+) -> tuple[Any, Optional["AppliedEventTimeWindow"]]:
     if pred.aggregation not in _IMPLEMENTED_AGGREGATIONS:
         raise NotImplementedError(
             f"aggregation {pred.aggregation!r} is not implemented by the CTAS "
@@ -1415,9 +1483,56 @@ def _predicate_mask(
     return _refine_occurrence_mask_by_event_time(data, pred, mask)
 
 
+@dataclass(frozen=True)
+class AppliedEventTimeWindow:
+    """The event-time window a predicate mask actually consulted.
+
+    The attrition ledger publishes ``resolved_column``, ``op`` and ``value``,
+    and the Coder authority prompt tells the Coder to reproduce the recorded
+    before/excluded/remaining counts from them. For a predicate that
+    ``_refine_occurrence_mask_by_event_time`` narrowed, those three fields are
+    not the whole predicate: the mask also consulted a second column. Correct
+    generated code then computes a different count and fails closed, which is
+    the right behaviour against a receipt that under-describes its own filter.
+
+    So the owner that applies the refinement is the owner that describes it:
+    this record is produced by the same call that builds the mask and is
+    written straight into the ledger row, leaving no second place for the two
+    to drift apart. ``None`` means the predicate was applied exactly as the
+    ledger's ordinary fields state.
+    """
+
+    event_time_column: str
+    start_offset_hours: float
+    end_offset_hours: float
+
+
+def _event_time_flow_fields(
+    refinement: Optional[AppliedEventTimeWindow],
+) -> Dict[str, Any]:
+    """Render one refinement as flat ledger fields.
+
+    Flat rather than nested because every other field of a flow row is flat and
+    the same rows are written verbatim to ``<stem>_flow.csv`` through
+    ``pd.DataFrame``; a nested object would land in that CSV as a repr string.
+    Unrefined predicates carry the keys with ``None`` so the ledger's schema
+    does not depend on which predicates a plan happened to declare.
+    """
+
+    return {
+        "event_time_column": refinement.event_time_column if refinement else None,
+        "event_time_start_hours": (
+            float(refinement.start_offset_hours) if refinement else None
+        ),
+        "event_time_end_hours": (
+            float(refinement.end_offset_hours) if refinement else None
+        ),
+    }
+
+
 def _refine_occurrence_mask_by_event_time(
     data: Any, pred: ConceptPredicate, mask: Any
-) -> Any:
+) -> tuple[Any, Optional[AppliedEventTimeWindow]]:
     """Intersect an event-occurrence predicate with its event-time window.
 
     ``build_cohort`` filters an already-materialised wide table and, by design,
@@ -1435,29 +1550,43 @@ def _refine_occurrence_mask_by_event_time(
     column is refined. Magnitude filters (age>=18, los>=1) and concepts without
     an event-time column are untouched, so association runs with no event-time
     columns behave exactly as before.
+
+    Returns the mask together with the window it consulted, or ``None`` when the
+    predicate was left exactly as its ordinary fields describe it. Every early
+    return below is a case the ledger's ``resolved_column``/``op``/``value``
+    already describe on their own.
+
+    ``pred.time_window`` and its ``end_offset_hours`` are taken as given:
+    ``ConceptPredicate.__post_init__`` refuses a predicate without a window and
+    ``TimeWindow.end_offset_hours`` is a required float, so guarding them here
+    only hid a broken invariant behind a silently unrefined mask. An infinite
+    end is a different matter -- ``_coerce_offset`` accepts ``"inf"`` for a
+    deliberately unbounded window, which refines nothing and could not be
+    published as a finite bound.
     """
     tw = pred.time_window
-    if tw is None:
-        return mask
     if pred.op != "==" or pred.value in (0, 0.0, False, None):
-        return mask
-    end = tw.end_offset_hours
-    if end is None or not math.isfinite(float(end)):
-        return mask
+        return mask, None
+    end = float(tw.end_offset_hours)
+    if not math.isfinite(end):
+        return mask, None
     event_time_col = f"{pred.concept_id}_time"
     if event_time_col not in data.columns:
-        return mask
+        return mask, None
     event_time = data[event_time_col]
-    in_window = (event_time >= float(tw.start_offset_hours)) & (
-        event_time <= float(end)
-    )
+    start = float(tw.start_offset_hours)
+    in_window = (event_time >= start) & (event_time <= end)
     # NaN event time (no event) -> not in window; keep the row's occurrence flag
     # from deciding membership only when the event genuinely falls in the window.
     try:
         in_window = in_window.fillna(False)
     except Exception:
         pass
-    return mask & in_window
+    return mask & in_window, AppliedEventTimeWindow(
+        event_time_column=event_time_col,
+        start_offset_hours=start,
+        end_offset_hours=end,
+    )
 
 
 def _apply_op(series: Any, op: str, value: Any) -> Any:
@@ -1489,6 +1618,7 @@ def _apply_op(series: Any, op: str, value: Any) -> Any:
 __all__ = [
     "ALLOWED_CTAS_AGGREGATIONS",
     "COHORT_LOCK_FILENAME",
+    "CohortAuthorityError",
     "CohortDefinition",
     "CohortDataError",
     "CohortSchemaError",
@@ -1500,6 +1630,7 @@ __all__ = [
     "build_cohort",
     "coerce_cohort_definition",
     "clear_cohort_concept_ids",
+    "cohort_concept_id_scope",
     "cohort_definition_sha",
     "concept_id_exists",
     "default_pattern_registry",

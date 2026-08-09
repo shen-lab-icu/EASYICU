@@ -3,10 +3,321 @@
 from __future__ import annotations
 
 import ast
+import re
 from typing import Any, Mapping, Sequence
 
 from ..gates.typed_input import resolved_input_shadowed_by_cohort_env_findings
 from ..schema import ValidationFinding
+
+
+def patch_bound_panel_measurement_status_alias(
+    code: str,
+    run_log: str,
+    *,
+    resolved_input_bindings: Mapping[str, Any] | None,
+) -> str:
+    """Use the exact measurement-status spelling declared by a bound panel.
+
+    Generated clustering code occasionally derives ``<feature>_measured``
+    from feature names that already end in ``_first``, yielding the impossible
+    ``<feature>_first_measured``.  This repair is allowed only when the runner
+    reported that exact missing-column family, the script names one literal
+    ``PANEL_KEY``, and that binding's typed product contract contains every
+    corresponding ``<feature>_measured`` column.  It never invents a column or
+    falls back to a different input.
+    """
+
+    missing_match = re.search(
+        r"Required (?:measurement-status|declared panel) columns are unavailable"
+        r"[^\[]*\[(?P<columns>[^\]]+)\]",
+        str(run_log or ""),
+    )
+    if missing_match is None or not isinstance(resolved_input_bindings, Mapping):
+        return code
+    missing_columns = re.findall(
+        r"['\"]([^'\"]+)['\"]", missing_match.group("columns")
+    )
+    if not missing_columns or any(
+        not column.endswith("_first_measured") for column in missing_columns
+    ):
+        return code
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    panel_key_candidates: list[str] = []
+    feature_assignment_candidates: list[tuple[str, tuple[str, ...]]] = []
+    status_assignment_candidates: list[tuple[ast.Assign, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        if (
+            isinstance(node.value, ast.Constant)
+            and target.id == "PANEL_KEY"
+            and isinstance(node.value.value, str)
+        ):
+            panel_key_candidates.append(node.value.value)
+        if target.id in {"FEATURE_NAMES", "feature_names"} and isinstance(
+            node.value, (ast.List, ast.Tuple)
+        ):
+            values = tuple(
+                element.value
+                for element in node.value.elts
+                if isinstance(element, ast.Constant)
+                and isinstance(element.value, str)
+            )
+            if len(values) == len(node.value.elts):
+                feature_assignment_candidates.append((target.id, values))
+        if target.id not in {"registered_status_columns", "status_columns"}:
+            continue
+        value = node.value
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "tuple"
+            and len(value.args) == 1
+            and isinstance(value.args[0], ast.GeneratorExp)
+        ):
+            generator = value.args[0]
+            container = "tuple"
+        elif isinstance(value, ast.ListComp):
+            generator = value
+            container = "list"
+        else:
+            continue
+        if len(generator.generators) != 1:
+            continue
+        comprehension = generator.generators[0]
+        if not (
+            isinstance(comprehension.target, ast.Name)
+            and isinstance(comprehension.iter, ast.Name)
+            and isinstance(generator.elt, ast.JoinedStr)
+            and len(generator.elt.values) == 2
+            and isinstance(generator.elt.values[0], ast.FormattedValue)
+            and isinstance(generator.elt.values[0].value, ast.Name)
+            and generator.elt.values[0].value.id == comprehension.target.id
+            and isinstance(generator.elt.values[1], ast.Constant)
+            and generator.elt.values[1].value == "_measured"
+        ):
+            continue
+        status_assignment_candidates.append((node, container))
+
+    if (
+        len(panel_key_candidates) != 1
+        or len(feature_assignment_candidates) != 1
+        or len(status_assignment_candidates) != 1
+    ):
+        return code
+    panel_key = panel_key_candidates[0]
+    feature_name, feature_names = feature_assignment_candidates[0]
+    if not feature_names or any(not value.endswith("_first") for value in feature_names):
+        return code
+    expected_missing = {f"{value}_measured" for value in feature_names}
+    if set(missing_columns) != expected_missing:
+        return code
+    expected_bound_columns = {
+        f"{value.removesuffix('_first')}_measured" for value in feature_names
+    }
+    binding = resolved_input_bindings.get(panel_key)
+    if not isinstance(binding, Mapping):
+        return code
+    product_contract = binding.get("product_contract")
+    bound_columns = product_contract.get("columns") if isinstance(product_contract, Mapping) else None
+    if not isinstance(bound_columns, list) or any(
+        not isinstance(column, str) for column in bound_columns
+    ):
+        return code
+    if not expected_bound_columns.issubset(set(bound_columns)):
+        return code
+
+    status_assignment, container = status_assignment_candidates[0]
+    value = status_assignment.value
+    if (
+        container == "tuple"
+        and (
+            not isinstance(value, ast.Call)
+            or not isinstance(value.args[0], ast.GeneratorExp)
+        )
+    ) or (container == "list" and not isinstance(value, ast.ListComp)):
+        return code
+    generator = value.args[0] if container == "tuple" else value
+    if (
+        len(generator.generators) != 1
+        or not isinstance(generator.generators[0].iter, ast.Name)
+        or generator.generators[0].iter.id != feature_name
+    ):
+        return code
+    lines = code.splitlines(keepends=True)
+    if status_assignment.value.end_lineno is None or status_assignment.value.end_col_offset is None:
+        return code
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def absolute_offset(lineno: int, utf8_column: int) -> int:
+        line = lines[lineno - 1]
+        character_column = len(line.encode("utf-8")[:utf8_column].decode("utf-8"))
+        return line_starts[lineno - 1] + character_column
+
+    start = absolute_offset(value.lineno, value.col_offset)
+    end = absolute_offset(value.end_lineno, value.end_col_offset)
+    element_name = generator.generators[0].target.id
+    replacement = (
+        f"tuple(f\"{{{element_name}.removesuffix('_first')}}_measured\" "
+        f"for {element_name} in {feature_name})"
+        if container == "tuple"
+        else f"[f\"{{{element_name}.removesuffix('_first')}}_measured\" "
+        f"for {element_name} in {feature_name}]"
+    )
+    repaired = code[:start] + replacement + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+def patch_resolved_input_consumption_contract_owner(
+    code: str,
+    run_log: str,
+    *,
+    resolved_input_bindings: Mapping[str, Any] | None,
+) -> str:
+    """Read a verified consumption contract from its binding, not its product.
+
+    Resolved-input manifests place ``consumption_contract`` beside
+    ``product_contract`` on the typed binding.  This repair only corrects a
+    generated script after the exact all-rows runtime failure, when the host
+    binding named in that failure proves the top-level contract is ``all_rows``
+    and the product contract does not contain a competing nested contract.
+    The existing fail-closed all-rows check remains unchanged.
+    """
+
+    failure = re.search(
+        r"RuntimeError:\s+Input\s+(?P<input_key>\S+)\s+does not have the required "
+        r"all_rows contract",
+        str(run_log or ""),
+        flags=re.IGNORECASE,
+    )
+    if failure is None:
+        return code
+    input_key = failure.group("input_key")
+    binding = (resolved_input_bindings or {}).get(input_key)
+    if not isinstance(binding, Mapping):
+        return code
+    consumption_contract = binding.get("consumption_contract")
+    product_contract = binding.get("product_contract")
+    identity_row = binding.get("identity_row")
+    if (
+        not isinstance(consumption_contract, Mapping)
+        or consumption_contract.get("mode") != "all_rows"
+        or not isinstance(product_contract, Mapping)
+        or "consumption_contract" in product_contract
+        or not isinstance(identity_row, Mapping)
+        or identity_row.get("declared_kind") != "table"
+        or identity_row.get("input_key") != input_key
+    ):
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    product_owners: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+            continue
+        value = node.value
+        binding_name: str | None = None
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and isinstance(value.func.value, ast.Name)
+            and value.func.attr == "get"
+            and value.args
+            and isinstance(value.args[0], ast.Constant)
+            and value.args[0].value == "product_contract"
+        ):
+            binding_name = value.func.value.id
+        elif (
+            isinstance(value, ast.Subscript)
+            and isinstance(value.value, ast.Name)
+            and isinstance(value.slice, ast.Constant)
+            and value.slice.value == "product_contract"
+        ):
+            binding_name = value.value.id
+        if binding_name is not None and binding_name != targets[0].id:
+            product_owners.setdefault(targets[0].id, set()).add(binding_name)
+
+    candidates: list[tuple[ast.Name, str]] = []
+    for node in ast.walk(tree):
+        owner: ast.Name | None = None
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "consumption_contract"
+        ):
+            owner = node.func.value
+        elif (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == "consumption_contract"
+        ):
+            owner = node.value
+        if owner is None:
+            continue
+        binding_names = product_owners.get(owner.id, set())
+        if len(binding_names) == 1:
+            candidates.append((owner, next(iter(binding_names))))
+    if len(candidates) != 1:
+        return code
+    owner, binding_name = candidates[0]
+    if not all(
+        isinstance(value, int)
+        for value in (
+            owner.lineno,
+            owner.col_offset,
+            owner.end_lineno,
+            owner.end_col_offset,
+        )
+    ):
+        return code
+
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    cursor = 0
+    for line in lines:
+        line_starts.append(cursor)
+        cursor += len(line)
+
+    def _offset(lineno: int, utf8_column: int) -> int:
+        line = lines[lineno - 1]
+        char_column = len(line.encode("utf-8")[:utf8_column].decode("utf-8"))
+        return line_starts[lineno - 1] + char_column
+
+    start = _offset(owner.lineno, owner.col_offset)
+    end = _offset(owner.end_lineno, owner.end_col_offset)
+    repaired = code[:start] + binding_name + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
 
 
 def patch_all_rows_outcome_coordinate_filter(
@@ -449,7 +760,7 @@ def patch_resolved_input_relative_path_root(
 ) -> str:
     """Join host-issued run-relative input paths to ``EASYICU_RUN_DIR``."""
 
-    coordinates: list[tuple[int, int, int, int]] = []
+    coordinates: list[tuple[tuple[int, int, int, int], str]] = []
     matching_findings = 0
     for finding in repair_findings:
         detail = finding.detail or {}
@@ -473,7 +784,12 @@ def patch_resolved_input_relative_path_root(
                 for value in values
             ):
                 return code
-            coordinates.append(tuple(int(value) for value in values))
+            kind = occurrence.get("kind", "environment_key")
+            if kind not in {"environment_key", "root_parameter"}:
+                return code
+            coordinates.append(
+                (tuple(int(value) for value in values), str(kind))
+            )
     if (
         matching_findings != 1
         or not coordinates
@@ -497,6 +813,18 @@ def patch_resolved_input_relative_path_root(
         and node.end_lineno is not None
         and node.end_col_offset is not None
     }
+    names = {
+        (
+            int(node.lineno),
+            int(node.col_offset),
+            int(node.end_lineno),
+            int(node.end_col_offset),
+        ): node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and node.end_lineno is not None
+        and node.end_col_offset is not None
+    }
     lines = code.splitlines(keepends=True)
     line_starts: list[int] = []
     offset = 0
@@ -509,20 +837,31 @@ def patch_resolved_input_relative_path_root(
         char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
         return line_starts[lineno - 1] + char_col
 
-    replacements: list[tuple[int, int]] = []
-    for coordinate in coordinates:
-        node = constants.get(coordinate)
-        if node is None:
+    replacements: list[tuple[int, int, str]] = []
+    for coordinate, kind in coordinates:
+        node = (
+            constants.get(coordinate)
+            if kind == "environment_key"
+            else names.get(coordinate)
+        )
+        if node is None or (
+            kind == "root_parameter"
+            and not isinstance(node.ctx, ast.Load)
+        ):
             return code
         replacements.append(
             (
                 absolute_offset(coordinate[0], coordinate[1]),
                 absolute_offset(coordinate[2], coordinate[3]),
+                (
+                    repr("EASYICU_RUN_DIR")
+                    if kind == "environment_key"
+                    else 'os.environ["EASYICU_RUN_DIR"]'
+                ),
             )
         )
     repaired = code
-    replacement = repr("EASYICU_RUN_DIR")
-    for start, end in sorted(replacements, reverse=True):
+    for start, end, replacement in sorted(replacements, reverse=True):
         repaired = repaired[:start] + replacement + repaired[end:]
     try:
         ast.parse(repaired)
@@ -629,6 +968,8 @@ def patch_resolved_input_cohort_env_shadow(
 
 __all__ = [
     "patch_all_rows_outcome_coordinate_filter",
+    "patch_bound_panel_measurement_status_alias",
+    "patch_resolved_input_consumption_contract_owner",
     "patch_resolved_input_manifest_env",
     "patch_resolved_input_cohort_env_shadow",
     "patch_resolved_input_relative_path_root",

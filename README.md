@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to **6 major public ICU databases**, automated extraction of **200+ standardized clinical concepts** (the canonical web-side catalog exposes **217** — 204 dictionary concepts plus 13 special concepts: 10 KDIGO AKI staging outputs, 2 circulatory-failure indicators, and the Sepsis-3 SOFA-1 diagnosis, all loadable through the same `load_concepts(...)` call), and a **web-based interface** for cohort definition, feature review, visualization, and export.
+EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to **6 major public ICU databases**, automated extraction of **200+ standardized clinical concepts** (the canonical web-side catalog exposes **224** — 204 dictionary concepts plus 20 special concepts: 17 KDIGO AKI staging and ascertainment outputs, 2 circulatory-failure indicators, and the Sepsis-3 SOFA-1 diagnosis, all loadable through the same `load_concepts(...)` call), and a **web-based interface** for cohort definition, feature review, visualization, and export.
 
 ## Why EasyICU
 
@@ -40,6 +40,7 @@ EasyICU has two layers that answer the two halves of one question — *how trust
 | Run the research-agent on a question + cohort | `easyicu-research-agent` |
 | Reproduce an external paper through the agent | `easyicu-research-replication` |
 | Host the LLM proxy used by the research-agent | `easyicu-llm-server` |
+| Install or refresh the optional Pi Copilot runtime bundled with the Web app | `easyicu-copilot-install` |
 | Copy-paste runnable scripts | [`examples/`](examples/) — start with [`quickstart_convert_and_load.py`](examples/quickstart_convert_and_load.py) |
 
 All console scripts are declared in `pyproject.toml` under `[project.scripts]` and become available once you install the package — see **[Path B](#path-b-python-api)** for the user vs. developer install options.
@@ -105,7 +106,8 @@ Swap the extra in brackets for what you actually need:
 | Native FastAPI web app (+ dormant-by-default provider status tooling) | `easyicu[webapp]` |
 | Plotly / Kaleido figure export | `easyicu[viz]` |
 | Host the LLM proxy for the research-agent | `easyicu[llmserver]` |
-| Opt-in LangGraph agent graph | `easyicu[agentic]` |
+| Research-agent HTTP/PDF/image helpers | `easyicu[agentic]` |
+| Official MCP SDK server transports | `easyicu[mcp]` |
 | Current active extras above | `easyicu[all]` |
 
 The **core install (`easyicu`) already bundles the research-agent's analytical
@@ -417,7 +419,9 @@ sepsis = load_concepts(
 # loader transparently.
 aki_and_circ = load_concepts(
     concepts=['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
-              'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+              'aki_stage_rrt', 'aki_assessable', 'aki_ascertainment',
+              'observation_window_coverage',
+              'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
               'creat_low_past_48hr', 'creat_low_past_7day',
               'circ_failure', 'circ_event'],
     database='miiv',
@@ -440,12 +444,34 @@ all_features = load_concepts(
 )
 ```
 
+`aki_stage == 0` is a definitive absence of AKI only when
+`aki_ascertainment == 'negative_complete'`; rows with partial or indeterminate
+ascertainment must not be used as non-AKI controls.
+
 > **Note on full-cohort extraction**: when you don't pass `patient_ids`
 > and `max_patients`, EasyICU loads every patient in the database. On a
 > 16 GB machine with limited free memory, `load_concepts(...)` may
 > auto-batch into subprocess workers — set the environment variable
 > `EASYICU_BATCH_TIMEOUT_SEC` (default 3600) to bound each batch in
 > case a worker hangs.
+> For disk exports, `extract_database(..., stream_output_batches=True)`
+> additionally chooses its default batch from **currently available** memory,
+> not nominal RAM. It reserves 25% (at least 2 GiB), combines a continuous
+> capacity estimate with conservative full-six release measurements, and then
+> resizes every module's later batches from its first measured process-tree
+> working set (up to 67k stays). This is not a fixed 10k low-memory tier: with
+> 8 GiB available the current initial pilots are approximately 20k for
+> MIMIC-III, 37k for MIMIC-IV, 25k for eICU, and 5k for the unusually dense
+> AUMC source. Below 24 GiB, MIMIC-III, MIMIC-IV and AUMC must provide a
+> measured pilot before one-shot execution is admitted; lower-risk calibrated
+> cohorts remain one-shot when their conservative peak fits the reserved
+> budget. When that high-risk guard alone requires a split, it starts from an
+> even half rather than creating a tiny residual batch. This guard follows the
+> 2026-08-03 observations that MIMIC-III one-shot reached about 16.83 GiB,
+> AUMC one-shot reached about 29.31 GiB, and a 67k eICU `other_scores` batch
+> reached about 15.6 GiB. Module/batch peak-RSS telemetry is written to the
+> manifests, and Sepsis derivation reuses the same outer batch instead of a
+> hidden 2k sub-batch. Explicit `batch_size` values remain authoritative.
 
 ### Domain-Specific Loaders
 

@@ -64,7 +64,7 @@
             'Inspect patient-level tables and time series, step up to cohort contrasts and SOFA reclassification, then benchmark one cohort definition across two or more ICU databases.',
             '查看单患者表格和时间序列，再做队列对比、SOFA 重分类，并把同一个队列定义放到两个或更多 ICU 数据库中做基准比较。',
           ),
-          [[t('Patient Review', '患者审阅'), 'patient'], [t('Cohort Statistics', '队列统计'), 'cohort'], [t('Cross-DB Benchmark', '跨库基准'), 'crossdb']],
+          [[t('Patient Review', '患者审阅'), 'patient'], [t('Cohort Statistics', '队列统计'), 'cohort'], [t('Cross-database comparison', '跨库对比'), 'crossdb']],
           false,
         ],
         [
@@ -111,7 +111,7 @@
           t('Do I need API tokens?', '需要 API token 吗？'),
           t(
             'Not for Demo Mode or any extraction, review, or benchmark work — those never call a model. Tokens only apply if you connect an external model endpoint for the Research Agent.',
-            '演示模式、数据抽取、审阅和跨库基准都不需要 token，这些不会调用模型。只有你为 Research Agent 连接外部模型端点时才需要 token。',
+            '演示模式、数据抽取、审阅和跨库对比都不需要 token，这些不会调用模型。只有你为 Research Agent 连接外部模型端点时才需要 token。',
           ),
         ],
       ];

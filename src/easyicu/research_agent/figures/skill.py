@@ -446,6 +446,7 @@ class PublicationFigureSkill:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         source_copy_ids: List[str] = []
+        source_copy_names: List[str] = []
         for name, frame in rendered.source_frames.items():
             try:
                 copy_path = out_dir / f"publication_figure_source_{name}.csv"
@@ -461,18 +462,23 @@ class PublicationFigureSkill:
                     "publication_figure_source_data",
                     f"publication_figure_source_{name}",
                 ],
+                inputs=rendered.source_evidence_ids,
                 producer=self.name,
                 generation_mode="deterministic_figure_skill",
                 prompt_pack_version=prompt_pack_version,
                 on_sha_change="new_id",
             )
             source_copy_ids.append(record.evidence_id)
+            source_copy_names.append(copy_path.name)
 
         contract = make_figure_contract(
             figure_id=rendered.figure_id,
             core_claim=rendered.core_claim,
             panels=rendered.panels,
-            source_data=rendered.source_evidence_ids or source_copy_ids,
+            # ``source_data`` is the publication-facing local CSV bundle, not
+            # an EvidenceStore id. The registered upstream and derived source
+            # ids remain explicit inputs to the evidence bundle below.
+            source_data=source_copy_names,
             statistics_note=rendered.statistics_note,
         )
         paths = save_publication_figure(
@@ -495,6 +501,7 @@ class PublicationFigureSkill:
             paths=paths,
             contract=contract,
             prompt_pack_version=prompt_pack_version,
+            source_evidence_ids=[*rendered.source_evidence_ids, *source_copy_ids],
         )
         contract_evidence_id = contract_record.evidence_id
         figure_ids = [record.evidence_id for record in figure_records]
@@ -2153,6 +2160,81 @@ def _unique_evidence_ids(records: Sequence[EvidenceRecord]) -> List[str]:
     return ids
 
 
+#: Panel roles that plot summaries by construction — effect estimates, curves
+#: over binned risk, cohort counts, performance metrics. A figure built only
+#: from these carries no per-patient mark, which is what makes it eligible to
+#: leave the host for a VLM review.
+#:
+#: Roles are omitted when a panel of that role can legitimately render one
+#: glyph per stay: ``phenotype_structure`` / ``phenotype_profile`` (embedding
+#: scatters), ``stability`` (per-subject trajectories), ``explainability``
+#: (per-patient SHAP beeswarms) and the free-form ``overview`` /
+#: ``relationship`` / ``mechanism`` / ``workflow`` roles. A figure containing
+#: one of those simply does not get the flag, and the egress gate keeps
+#: refusing to upload it.
+AGGREGATE_ONLY_PANEL_ROLES = frozenset(
+    {
+        "baseline_context",
+        "calibration",
+        "causal_contrast",
+        "causal_protocol",
+        "clinical_utility",
+        "cohort_accounting",
+        "data_quality",
+        "descriptive_result",
+        "deviation",
+        "diagnostics",
+        "heterogeneity",
+        "model_performance",
+        "primary_estimand",
+        "robustness",
+        "supplementary_provenance",
+        "survival_effect",
+        "temporal_absolute_risk",
+        "transportability",
+        "validation",
+    }
+)
+
+
+def _aggregate_disclosure_audit(
+    contract: Any,
+    *,
+    evidence: EvidenceStore,
+    source_ids: Sequence[str],
+) -> Any:
+    """Run the host-owned privacy audit that authorizes (or refuses) egress.
+
+    The figure-egress gate refuses to send image bytes to an external provider
+    without an ``aggregate_only`` declaration. Producing it here — from the
+    artefacts the figure was actually drawn from — is what makes the gate
+    reachable in production instead of only in a test that hand-builds the
+    metadata.
+
+    Panel role is an *input* to the audit, not the authorization: ``role`` is
+    written by the planner or by generated code, so a panel labelled
+    ``validation`` can still be a per-stay scatter. The audit additionally
+    opens every source artefact and refuses to clear a figure whose sources
+    expose subject identifiers, event timestamps, sub-threshold group counts,
+    or that it cannot read at all.
+
+    Absence is meaningful: an un-cleared figure is refused, which is the
+    correct answer whenever the host could not prove the image is aggregate.
+    """
+
+    from ..gates.figure_privacy import audit_figure_privacy
+
+    return audit_figure_privacy(
+        contract=contract,
+        evidence=evidence,
+        # ``relative_path`` on every record is relative to the store root, so
+        # the store root *is* the run directory for resolution purposes.
+        run_dir=Path(evidence.root),
+        source_evidence_ids=source_ids,
+        allowed_panel_roles=AGGREGATE_ONLY_PANEL_ROLES,
+    )
+
+
 def _source_fingerprint_metadata(
     evidence: EvidenceStore,
     source_ids: Sequence[str],
@@ -2188,13 +2270,24 @@ def _register_publication_figure_bundle(
     paths: Dict[str, Path],
     contract: Any,
     prompt_pack_version: Optional[str],
+    source_evidence_ids: Optional[Sequence[str]] = None,
     contract_metadata: Optional[Dict[str, Any]] = None,
     figure_metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[EvidenceRecord, List[EvidenceRecord]]:
     """Register a contract and every export with strict provenance links."""
 
-    source_ids = _figure_contract_source_ids(contract)
+    raw_source_ids = (
+        source_evidence_ids
+        if source_evidence_ids is not None
+        else _figure_contract_source_ids(contract)
+    )
+    source_ids = list(
+        dict.fromkeys(str(item) for item in raw_source_ids if str(item).strip())
+    )
     source_metadata = _source_fingerprint_metadata(evidence, source_ids)
+    privacy_audit = _aggregate_disclosure_audit(
+        contract, evidence=evidence, source_ids=source_ids
+    )
     script_record = evidence.register_file(
         kind="code",
         description="Deterministic PublicationFigureSkill renderer source.",
@@ -2235,6 +2328,31 @@ def _register_publication_figure_bundle(
         on_sha_change="new_id",
     )
 
+    # Registered whether or not the figure cleared: a refusal is the part a
+    # privacy reviewer most needs to be able to read back, and an unrecorded
+    # clearance is indistinguishable from one that was never performed.
+    privacy_record = evidence.register_json(
+        kind="log",
+        description=(
+            "Host-owned privacy audit deciding whether this figure's rendered "
+            "bytes may be sent to an external provider, with every source "
+            "artefact it inspected."
+        ),
+        payload=privacy_audit.as_receipt(),
+        filename=f"figure_privacy_audit_{contract.figure_id}.json",
+        evidence_id=f"figure_privacy_audit_{contract.figure_id}",
+        inputs=source_ids,
+        producer=PublicationFigureSkill.name,
+        generation_mode="deterministic_figure_skill",
+        prompt_pack_version=prompt_pack_version,
+        metadata={
+            "artifact_role": "figure_privacy_audit",
+            "figure_id": contract.figure_id,
+            "aggregate_only": privacy_audit.aggregate_only,
+        },
+        on_sha_change="new_id",
+    )
+
     figure_records: List[EvidenceRecord] = []
     for key, path in paths.items():
         suffix = path.suffix.lower()
@@ -2266,6 +2384,8 @@ def _register_publication_figure_bundle(
                 "source_evidence_ids": source_ids,
                 "figure_contract": contract_record.evidence_id,
                 "figure_role": "publication_figure",
+                "figure_privacy_audit_evidence_id": privacy_record.evidence_id,
+                **privacy_audit.as_metadata(),
             },
             on_sha_change="new_id",
         )

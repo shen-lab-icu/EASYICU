@@ -1,0 +1,55 @@
+/* Cohort Statistics scientific-chart owner.
+   Shared ECharts lifecycle/theme lives in screens-viz-echarts.js; this file
+   owns only Cohort-specific chart footprints and transition semantics. */
+.km-chart-wrap{
+  border-top:1px solid var(--line);
+  margin-top:10px;
+  padding-top:14px;
+}
+.cohort-echart-shell{
+  min-width:0;
+  position:relative;
+}
+.cohort-echart{
+  display:block;
+  height:var(--cohort-chart-height,320px);
+  width:100%;
+}
+.cohort-echart-shell.heatmap{
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  margin-top:10px;
+  overflow:hidden;
+  padding:4px;
+}
+.cohort-chart-fallback{
+  margin-top:10px;
+}
+.cohort-heat-legend{
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+  margin-top:10px;
+}
+.cohort-heat-legend span{
+  align-items:center;
+  color:var(--ink-3);
+  display:inline-flex;
+  font-size:11px;
+  gap:6px;
+}
+.cohort-heat-legend i{
+  border-radius:4px;
+  display:inline-block;
+  height:10px;
+  width:18px;
+}
+.cohort-heat-legend i.same{
+  background:rgba(34,137,122,0.50);
+}
+.cohort-heat-legend i.up{
+  background:rgba(190,76,76,0.50);
+}
+.cohort-heat-legend i.down{
+  background:rgba(42,111,178,0.50);
+}

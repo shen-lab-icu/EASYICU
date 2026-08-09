@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, TextIO, Tuple
 
+from statsmodels.stats.multitest import multipletests
+
 from ..authority.runtime_artifacts import verified_run_evidence_path
 
 
@@ -209,7 +211,9 @@ class MultipleTestingReport:
 
     @property
     def family_ids(self) -> List[str]:
-        return sorted({str(record.family_id) for record in self.records if record.family_id})
+        return sorted(
+            {str(record.family_id) for record in self.records if record.family_id}
+        )
 
     @property
     def n_families(self) -> int:
@@ -230,7 +234,9 @@ class MultipleTestingReport:
                 "notes": list(self.notes),
             }
         family_sizes = {
-            family_id: sum(1 for record in self.records if record.family_id == family_id)
+            family_id: sum(
+                1 for record in self.records if record.family_id == family_id
+            )
             for family_id in self.family_ids
         }
         return {
@@ -238,7 +244,9 @@ class MultipleTestingReport:
             "n_families": self.n_families,
             "family_sizes": family_sizes,
             "alpha": self.alpha,
-            "n_significant_raw": sum(1 for p in (r.p_value for r in self.records) if p <= self.alpha),
+            "n_significant_raw": sum(
+                1 for p in (r.p_value for r in self.records) if p <= self.alpha
+            ),
             "n_significant_bh": sum(1 for q in self.bh_adjusted if q <= self.alpha),
             "n_significant_bonferroni": sum(
                 1 for q in self.bonferroni_adjusted if q <= self.alpha
@@ -364,40 +372,33 @@ class MultipleTestingReport:
 # ---------------------------------------------------------------------------
 
 
-def _benjamini_hochberg(pvals: Sequence[float]) -> List[float]:
-    """Return BH-adjusted p-values in the *original* input order.
+def _adjust(pvals: Sequence[float], method: str) -> List[float]:
+    """Return adjusted p-values in the *original* input order.
 
-    Implements the standard ``q_i = min_{k >= i} (n * p_{(k)} / k)``
-    form (monotonic from the top down). Pure Python so the module has
-    no numpy dependency; for hundreds of p-values this is well under a
-    millisecond.
+    The arithmetic belongs to ``statsmodels`` (a hard core dependency), not
+    here: this module's job is deciding *which* p-values form a family, and
+    that is the part no library can do for us.
+
+    The empty guard is ours because ``multipletests`` raises on an empty
+    input while every caller here may legitimately have found no p-values.
+    Results are cast to built-in ``float`` so the report stays JSON-safe —
+    a numpy scalar would serialise fine in some writers and blow up in
+    others.
     """
-    n = len(pvals)
-    if n == 0:
+    if len(pvals) == 0:
         return []
-    # indexed_sorted: list of (orig_index, p) sorted by p ascending
-    indexed = sorted(enumerate(pvals), key=lambda x: x[1])
-    adjusted: List[Tuple[int, float]] = []
-    running_min = 1.0
-    # Walk from largest p to smallest so we can apply the monotone cap.
-    for rank_from_top, (orig_idx, p) in enumerate(reversed(indexed)):
-        # rank in 1..n where 1 is the smallest p
-        rank = n - rank_from_top
-        q = min(1.0, p * n / rank)
-        running_min = min(running_min, q)
-        adjusted.append((orig_idx, running_min))
-    # Reorder to original input positions
-    out = [0.0] * n
-    for orig_idx, q in adjusted:
-        out[orig_idx] = q
-    return out
+    adjusted = multipletests(list(pvals), method=method)[1]
+    return [float(value) for value in adjusted]
+
+
+def _benjamini_hochberg(pvals: Sequence[float]) -> List[float]:
+    """BH step-up FDR control, monotone from the top down."""
+    return _adjust(pvals, "fdr_bh")
 
 
 def _bonferroni(pvals: Sequence[float]) -> List[float]:
-    n = len(pvals)
-    if n == 0:
-        return []
-    return [min(1.0, p * n) for p in pvals]
+    """Bonferroni FWER control, capped at 1.0."""
+    return _adjust(pvals, "bonferroni")
 
 
 # ---------------------------------------------------------------------------
@@ -760,10 +761,13 @@ def _extract_pvalues_from_csv(
     except FileNotFoundError:
         notes.append(f"{artefact_path}: file not found; skipped.")
     except Exception as exc:
-        notes.append(f"{artefact_path}: unreadable ({type(exc).__name__}: {exc}); skipped.")
-    return _assign_source_local_family(
-        records, artefact_path=artefact_path, notes=notes
-    ), notes
+        notes.append(
+            f"{artefact_path}: unreadable ({type(exc).__name__}: {exc}); skipped."
+        )
+    return (
+        _assign_source_local_family(records, artefact_path=artefact_path, notes=notes),
+        notes,
+    )
 
 
 def _extract_pvalues_from_json(
@@ -784,7 +788,9 @@ def _extract_pvalues_from_json(
 
     omitted_untyped_coefficients = 0
 
-    def _walk(node: Any, path: str = "", inherited: Optional[Dict[str, Any]] = None) -> None:
+    def _walk(
+        node: Any, path: str = "", inherited: Optional[Dict[str, Any]] = None
+    ) -> None:
         nonlocal omitted_untyped_coefficients
         if isinstance(node, dict):
             metadata = dict(inherited or {})
@@ -802,9 +808,9 @@ def _extract_pvalues_from_json(
                     if p is not None:
                         if _row_is_nonhypothesis(metadata):
                             continue
-                        if _is_structured_coefficient(metadata) and not _declared_family(
+                        if _is_structured_coefficient(
                             metadata
-                        ):
+                        ) and not _declared_family(metadata):
                             omitted_untyped_coefficients += 1
                             continue
                         records.append(
@@ -832,9 +838,10 @@ def _extract_pvalues_from_json(
             f"{artefact_path}: omitted {omitted_untyped_coefficients} p-value(s) "
             "from structured coefficient objects without declared family metadata."
         )
-    return _assign_source_local_family(
-        records, artefact_path=artefact_path, notes=notes
-    ), notes
+    return (
+        _assign_source_local_family(records, artefact_path=artefact_path, notes=notes),
+        notes,
+    )
 
 
 def _iter_pvalue_sources(
@@ -883,7 +890,9 @@ def _declared_families_compatible(left: PValueRecord, right: PValueRecord) -> bo
     return left.family_id == right.family_id
 
 
-def _deduplicate_records(records: Sequence[PValueRecord]) -> Tuple[List[PValueRecord], int]:
+def _deduplicate_records(
+    records: Sequence[PValueRecord],
+) -> Tuple[List[PValueRecord], int]:
     """Collapse exact semantic duplicates without merging conflicting families."""
     deduplicated: List[PValueRecord] = []
     semantic_buckets: Dict[Tuple[str, str], List[int]] = {}
@@ -895,9 +904,7 @@ def _deduplicate_records(records: Sequence[PValueRecord]) -> Tuple[List[PValueRe
             semantic_key = (record.hypothesis_key, record.p_value.hex())
             matched_index: Optional[int] = None
             for candidate_index in semantic_buckets.get(semantic_key, []):
-                if _declared_families_compatible(
-                    deduplicated[candidate_index], record
-                ):
+                if _declared_families_compatible(deduplicated[candidate_index], record):
                     matched_index = candidate_index
                     break
             if matched_index is not None:

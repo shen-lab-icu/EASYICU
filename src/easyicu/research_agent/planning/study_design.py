@@ -54,6 +54,7 @@ _ANALYSIS_TYPE_TO_DESIGN_FAMILY: dict[str, StudyDesignFamily] = {
     # must not inherit a target-trial/causal-contrast contract.
     "treatment_response": "descriptive",
     "association_study": "association",
+    "ordinal_dose_response": "association",
     "descriptive_epidemiology": "descriptive",
     "data_quality_audit": "descriptive",
     "measurement_bias_audit": "descriptive",

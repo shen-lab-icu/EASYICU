@@ -52,14 +52,58 @@ def test_planner_prompt_contains_concept_allowlist() -> None:
     assert prompt.index("ALLOWED concept_ids") < prompt.index(
         "Every cohort/exposure/outcome concept"
     )
-    listed_ids = [
+    assert _listed_ids(prompt) == ["death", "sofa"]
+
+
+def _listed_ids(prompt: str) -> list[str]:
+    return [
         line.strip()[3:-1]
         for line in prompt.splitlines()
         if line.strip().startswith("- `") and line.strip().endswith("`")
     ]
-    assert len(listed_ids) >= 50
-    assert "sofa" in listed_ids
-    assert "death" in listed_ids
+
+
+def test_the_allowlist_is_this_run_s_export_not_the_dictionary() -> None:
+    """A menu of concepts this export does not carry costs planning attempts.
+
+    MEASURED on canary12's E3 cohort (104 columns, 2026-07-31): the prompt
+    published 264 concept ids as "the ONLY values acceptable" and 15 of them
+    bound against the sealed input -- 94.3% of the menu was unusable. The
+    Planner chose ``kdigo_aki``, the right concept for an AKI-stage cohort,
+    from the list the host handed it; the binder refused it for having no bound
+    column, and the next attempt improvised ``aki_stage``, which is not a
+    concept at all. Two of five planning attempts spent on a wrong menu, and
+    the run produced nothing.
+
+    This test asserts the direction that matters: an id the dictionary defines
+    but this context cannot bind is NOT offered. The count is checked against
+    the whole dictionary so it cannot pass by the list being empty.
+    """
+
+    from easyicu.research_agent.cohort.schema import known_concept_ids
+
+    listed = _listed_ids(_build_planner_user_prompt(_context()))
+
+    assert listed, "an empty menu makes the cohort unwritable"
+    assert set(listed) < set(known_concept_ids()), "the dictionary is not the menu"
+    assert "kdigo_aki" not in listed
+    assert "sofa" in listed and "death" in listed
+
+
+def test_without_sealed_columns_the_dictionary_is_still_offered() -> None:
+    """Narrowing must not become an empty menu when there is nothing to narrow by.
+
+    The binder still refuses an unbound predicate downstream, so being
+    permissive here costs a rejected plan; being empty here costs every plan.
+    """
+
+    from easyicu.research_agent.agents.core import _format_concept_id_allowlist
+    from easyicu.research_agent.cohort.schema import known_concept_ids
+
+    rendered = _format_concept_id_allowlist([])
+
+    assert len(_listed_ids(rendered)) == len(known_concept_ids())
+    assert "sealed columns were not" in rendered
 
 
 def test_planner_prompt_forbids_concept_id_synthesis() -> None:
@@ -151,3 +195,34 @@ def test_planner_context_formats_ctas_compatible_aggregation_hint() -> None:
 
 def test_planner_retry_headroom_allows_five_total_attempts() -> None:
     assert PLANNER_MAX_RETRIES == 4
+
+
+def test_a_concept_reachable_only_under_one_aggregation_is_still_offered() -> None:
+    """Bindability is a property of the (concept, aggregation) pair, not the id.
+
+    A sealed export carries ``sofa_max``, not ``sofa``: the id binds under
+    ``max`` and under nothing else. Checking a single aggregation would drop
+    every such concept from the menu -- over-narrowing, which costs the same
+    planning attempts the wide menu did, in the other direction. The earlier
+    fixtures could not see this because their columns bind under every
+    aggregation, so a one-aggregation mutant passed them unchanged.
+    """
+
+    from easyicu.research_agent.agents.core import _bindable_concept_ids
+    from easyicu.research_agent.cohort.schema import _resolve_predicate_column
+
+    columns = ["sofa_max", "lact_min", "death"]
+
+    assert (
+        _resolve_predicate_column(columns, "sofa", "count", column_bindings={}) is None
+    )
+    assert (
+        _resolve_predicate_column(columns, "sofa", "max", column_bindings={})
+        is not None
+    )
+
+    offered = _bindable_concept_ids(columns)
+
+    assert "sofa" in offered
+    assert "lact" in offered
+    assert "death" in offered

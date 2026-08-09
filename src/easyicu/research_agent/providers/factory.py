@@ -146,6 +146,7 @@ def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
             id(transport),
             type(transport),
             extra_body_identity,
+            str(instance_vars.get("_completion_token_parameter", "")),
         )
     if _is_reviewed_client_type(client, "CLIAgentLLMClient"):
         instance_vars = _safe_instance_vars(client)
@@ -1138,6 +1139,9 @@ def build_provider_client(
     environment: Optional[Mapping[str, str]] = None,
     base_url_override: object = _BASE_URL_UNSET,
     extra_body: Optional[Mapping[str, Any]] = None,
+    max_retries: int = 8,
+    stream_enabled: Optional[bool] = None,
+    allow_environment_overrides: bool = True,
 ) -> Any:
     """Build an OpenAI-compatible client under the canonical key policy.
 
@@ -1176,6 +1180,9 @@ def build_provider_client(
                 environment=env,
             ),
             "request_timeout": float(request_timeout),
+            "max_retries": int(max_retries),
+            "stream_enabled": stream_enabled,
+            "allow_environment_overrides": bool(allow_environment_overrides),
             "extra_headers": {
                 "HTTP-Referer": EASYICU_HTTP_REFERER,
                 "X-Title": title,
@@ -1247,6 +1254,9 @@ def build_provider_client(
             "model": model,
             "request_timeout": float(request_timeout),
             "api_key": loopback_key,
+            "max_retries": int(max_retries),
+            "stream_enabled": stream_enabled,
+            "allow_environment_overrides": bool(allow_environment_overrides),
         }
         if base_url:
             kwargs["base_url"] = base_url

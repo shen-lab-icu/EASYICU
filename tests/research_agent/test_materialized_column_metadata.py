@@ -77,6 +77,8 @@ from easyicu.research_agent.research_context.typed import (
     CanonicalColumnBinding,
     ResearchContextV2,
     binding_preserves_analysis_range,
+    canonical_column_binding,
+    descriptor_physical_updates,
     effective_analysis_plausibility_range,
     materialized_input_prompt_attachment,
     resolved_raw_input_contracts,
@@ -299,6 +301,80 @@ def test_resolved_raw_input_contracts_bind_domain_and_range_policy(
     )
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert payload["raw_input_contracts"] == contracts
+
+
+def test_resolved_raw_input_contracts_bind_sealed_observed_levels(
+    tmp_path: Path,
+) -> None:
+    context = _build_v2_context(tmp_path)
+    variables = [
+        (
+            variable.model_copy(
+                update={
+                    "observed_domain": {
+                        "n_unique": 2,
+                        "is_constant": False,
+                        "is_binary": False,
+                        "levels": ["Female", "Male"],
+                    }
+                }
+            )
+            if variable.name == "age"
+            else variable
+        )
+        for variable in context.variables
+    ]
+    context = ResearchContextV2.model_validate(
+        context.model_dump(mode="python") | {"variables": variables}
+    )
+
+    contracts = resolved_raw_input_contracts(context, ["age"])
+
+    assert contracts is not None
+    assert contracts["contracts"]["age"]["allowed_values"] == [
+        "Female",
+        "Male",
+    ]
+    assert contracts["contracts"]["age"]["allowed_values_basis"] == (
+        "sealed_research_context_observed_domain"
+    )
+
+
+def test_resolved_raw_input_contracts_reject_unbounded_or_malformed_levels(
+    tmp_path: Path,
+) -> None:
+    context = _build_v2_context(tmp_path)
+
+    def with_domain(domain: dict[str, object]) -> ResearchContextV2:
+        variables = [
+            (
+                variable.model_copy(update={"observed_domain": domain})
+                if variable.name == "age"
+                else variable
+            )
+            for variable in context.variables
+        ]
+        return ResearchContextV2.model_validate(
+            context.model_dump(mode="python") | {"variables": variables}
+        )
+
+    for domain in (
+        {
+            "n_unique": 2,
+            "is_constant": False,
+            "is_binary": False,
+            "levels": ["Female", "Female"],
+        },
+        {
+            "n_unique": 9,
+            "is_constant": False,
+            "is_binary": False,
+            "levels": [f"level_{index}" for index in range(9)],
+        },
+    ):
+        contracts = resolved_raw_input_contracts(with_domain(domain), ["age"])
+        assert contracts is not None
+        assert "allowed_values" not in contracts["contracts"]["age"]
 
 
 def test_materialized_cohort_publishes_exact_typed_sidecar(tmp_path: Path) -> None:
@@ -1020,6 +1096,40 @@ def test_typed_allowed_values_do_not_promote_event_status_to_ordinal(
     assert context.materialized_inputs.cohort.column_bindings["death"].binding[
         "metadata"
     ]["allowed_values"] == [0, 1]
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        ConceptColumnRole.FIRST_OBSERVATION_TIME,
+        ConceptColumnRole.LAST_OBSERVATION_TIME,
+        ConceptColumnRole.EVENT_TIME,
+    ],
+)
+def test_typed_time_representations_use_their_sealed_time_unit(role) -> None:
+    definition = load_dictionary(include_sofa2=True).get("lact")
+    assert definition is not None
+    binding = ColumnMetadataBinding(
+        metadata=project_concept_column_metadata(
+            definition,
+            spec=ColumnProjectionSpec(
+                column_name=f"lact_{role.value}",
+                source_concept="lact",
+                role=role,
+                time_origin="icu_admission",
+                time_unit="h",
+            ),
+            source_database="miiv",
+        )
+    )
+    canonical = canonical_column_binding(binding.metadata.column_name, binding)
+
+    updates = descriptor_physical_updates(canonical)
+
+    assert binding.metadata.canonical_unit is None
+    assert binding.metadata.time_unit == "h"
+    assert updates["unit"] == "h"
+    assert updates["temporal_resolution"] == "relative to icu_admission in h"
 
 
 def test_one_sided_analysis_plausibility_range_is_preserved(

@@ -38,6 +38,7 @@ from ..figures.skill import PublicationFigureSkill
 from .latex import scaffold_to_latex
 from ..literature import LiteratureAgent, LiteratureBundle
 from ..providers.mocks import MockLLMClient
+from ..providers.prompt_budget import budgeted_vlm_client
 from .manuscript_post import (
     _apply_writer_evidence_repair_decisions,
     bind_numeric_values,
@@ -46,8 +47,9 @@ from .manuscript_post import (
     _remove_tbd_sentences,
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
+    repair_miscited_numeric_citations,
 )
-from .readiness import execution_gate_status
+from .readiness import _is_cosmetic_visual_error, execution_gate_status
 from .writer_evidence import (
     _preferred_writer_evidence_names,
     _render_writer_evidence_digest,
@@ -69,6 +71,10 @@ from .reporting_checklist import (
 from .reviewer import run_reviewer_round
 from ..schema import CritiqueReport, EvidenceRef, ManuscriptDraftPacket
 from .side_findings import collect_side_findings
+from ..gates.figure_egress import (
+    FigureEgressReceiptError,
+    register_figure_egress_receipt,
+)
 from ..gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 from .pdf_render import render_pdf_for_run
 
@@ -85,6 +91,31 @@ _DEVELOPMENT_MUTABLE_PROVENANCE_FIELDS = frozenset(
         "requirements_sha256",
     }
 )
+
+
+def demote_cosmetic_publication_visual_findings(
+    findings: Sequence[ValidationFinding],
+) -> List[ValidationFinding]:
+    """Demote only the cosmetic visual errors on the publication bundle.
+
+    This used to demote *every* ``error`` from the final publication audit,
+    and it ran before readiness — so ``readiness._is_cosmetic_visual_error``,
+    which exists precisely to separate a text-spacing nit from a blank,
+    cropped, unreadable or numerically inconsistent figure, never saw the
+    original severity. A genuinely broken publication figure reached the
+    readiness gate as a warning and could no longer block ``manuscript_ready``.
+
+    Reusing the readiness predicate keeps one rule instead of two.
+    """
+
+    return [
+        (
+            finding.model_copy(update={"severity": "warning"})
+            if _is_cosmetic_visual_error(finding)
+            else finding
+        )
+        for finding in findings
+    ]
 
 
 def _runtime_dependency_rows(lock_bytes: bytes) -> Tuple[str, ...]:
@@ -565,26 +596,59 @@ def run_write_phase(
                         fig_paths.append(run_dir / record.relative_path)
                 if fig_paths:
                     vlm_adapter = pipeline._visual_qa_adapter
+                    egress_policy = None
                     if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
-                        client = pipeline._vlm_client or role_resolver("analyzer")
-                        if client is not None:
-                            vlm_adapter = VLMVisualQAAdapter(client)
-                    publication_visual_findings = VisualQAAuditor(
-                        vlm_adapter=vlm_adapter
-                    ).audit(figure_paths=fig_paths)
-                    # See the final-pass demotion above: layout-style
-                    # visual_qa errors raised on the publication
-                    # bundle are cosmetic and must not block
-                    # acceptance after the per-step repair budget
-                    # has been exhausted upstream.
-                    findings.extend(
-                        (
-                            finding.model_copy(update={"severity": "warning"})
-                            if finding.severity == "error"
-                            else finding
+                        # An injected client is still a consumer of the
+                        # role, so it gets the same envelope; `or` used to let
+                        # it past unwrapped and unattributed.
+                        client = budgeted_vlm_client(
+                            pipeline, role_resolver, "vlm_visual_qa"
                         )
-                        for finding in publication_visual_findings
+                        if client is not None:
+                            egress_policy = pipeline._figure_egress_policy(
+                                evidence=evidence, run_dir=run_dir
+                            )
+                            vlm_adapter = VLMVisualQAAdapter(
+                                client, egress_policy=egress_policy
+                            )
+                    if egress_policy is not None:
+                        # Phase 1 of the egress record, written *before* any
+                        # byte can leave. If the upload succeeds and the host
+                        # then dies, the run still carries the intent and its
+                        # authority; a completed receipt that is missing is
+                        # then a detectable gap rather than silence.
+                        register_figure_egress_receipt(
+                            policy=egress_policy,
+                            evidence=evidence,
+                            run_dir=run_dir,
+                            phase="intent",
+                        )
+                    try:
+                        publication_visual_findings = VisualQAAuditor(
+                            vlm_adapter=vlm_adapter
+                        ).audit(figure_paths=fig_paths)
+                    finally:
+                        # Phase 2 runs even when visual QA raised, because the
+                        # upload may already have happened. Failure to write it
+                        # is not demotable: an unrecorded egress is exactly the
+                        # state this receipt exists to make impossible.
+                        if egress_policy is not None:
+                            register_figure_egress_receipt(
+                                policy=egress_policy,
+                                evidence=evidence,
+                                run_dir=run_dir,
+                                phase="completed",
+                            )
+                    findings.extend(
+                        demote_cosmetic_publication_visual_findings(
+                            publication_visual_findings
+                        )
                     )
+        except FigureEgressReceiptError:
+            # Deliberately not caught by the blanket handler below: the run
+            # sent (or may have sent) image bytes off the host and cannot say
+            # so in its own evidence.
+            raise
         except Exception as exc:
             findings.append(
                 ValidationFinding(
@@ -655,20 +719,29 @@ def run_write_phase(
             # evidence id so the manuscript can cite
             # ``{evidence:literature_prisma}`` without pulling the
             # whole citation table into the binder.
+            # The artifact is always written; what changed is that it stops
+            # claiming a search happened when none did.  A run with no retrieval
+            # source enabled used to publish "identified 4 ... included 4",
+            # which reads as a systematic search that found four papers rather
+            # than four preset references passing through untouched.
+            prisma_path = run_dir / "literature_prisma.json"
+            prisma_md_path = run_dir / "literature_prisma.md"
+            provenance = literature.search_provenance
+            prisma_path.write_text(
+                json.dumps(
+                    {
+                        "research_question": literature.research_question,
+                        "prisma": literature.prisma,
+                        "search_provenance": (
+                            provenance.model_dump() if provenance is not None else None
+                        ),
+                    },
+                    indent=2,
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
             if literature.prisma is not None:
-                prisma_path = run_dir / "literature_prisma.json"
-                prisma_md_path = run_dir / "literature_prisma.md"
-                prisma_path.write_text(
-                    json.dumps(
-                        {
-                            "research_question": literature.research_question,
-                            "prisma": literature.prisma,
-                        },
-                        indent=2,
-                        default=str,
-                    ),
-                    encoding="utf-8",
-                )
                 p = literature.prisma
                 prisma_md = (
                     "# PRISMA 2020 flow (O21)\n\n"
@@ -678,27 +751,41 @@ def run_write_phase(
                     f"- Records eligible: **{p.get('eligible', 0)}**\n"
                     f"- Records included in review: **{p.get('included', 0)}**\n"
                 )
-                prisma_md_path.write_text(prisma_md, encoding="utf-8")
-                if evidence.get("literature_prisma") is None:
-                    evidence.register_file(
-                        kind="statistic",
-                        description=(
-                            "PRISMA 2020 flow counts for the literature search (O21)."
-                        ),
-                        source_path=prisma_path,
-                        evidence_id="literature_prisma",
-                        producer="literature",
-                        generation_mode="system",
-                    )
-                if evidence.get("literature_prisma_summary") is None:
-                    evidence.register_file(
-                        kind="log",
-                        description="Human-readable PRISMA flow summary (O21).",
-                        source_path=prisma_md_path,
-                        evidence_id="literature_prisma_summary",
-                        producer="literature",
-                        generation_mode="system",
-                    )
+            else:
+                sources = ", ".join(provenance.sources_enabled) if provenance else ""
+                prisma_md = (
+                    "# Literature provenance (O21)\n\n"
+                    "**No PRISMA flow is reported: no literature search was "
+                    "conducted for this run.**\n\n"
+                    f"- Retrieval sources enabled: **{sources or 'none'}**\n"
+                    "- Curated references carried through: "
+                    f"**{provenance.curated_seed_count if provenance else 0}**\n\n"
+                    "A PRISMA flow describes screening and selection. Reporting "
+                    "one for a preset reference list would overstate what was "
+                    "done.\n"
+                )
+            prisma_md_path.write_text(prisma_md, encoding="utf-8")
+            if evidence.get("literature_prisma") is None:
+                evidence.register_file(
+                    kind="statistic",
+                    description=(
+                        "Literature search provenance, with PRISMA 2020 flow "
+                        "counts when a retrieval source actually ran (O21)."
+                    ),
+                    source_path=prisma_path,
+                    evidence_id="literature_prisma",
+                    producer="literature",
+                    generation_mode="system",
+                )
+            if evidence.get("literature_prisma_summary") is None:
+                evidence.register_file(
+                    kind="log",
+                    description="Human-readable literature provenance summary (O21).",
+                    source_path=prisma_md_path,
+                    evidence_id="literature_prisma_summary",
+                    producer="literature",
+                    generation_mode="system",
+                )
         except Exception as exc:
             findings.append(
                 ValidationFinding(
@@ -856,6 +943,24 @@ def run_write_phase(
                     f"{len(citation_repairs)} citation(s) appended."
                 ),
                 detail={"citation_repairs": citation_repairs},
+            )
+        )
+    scaffold, miscitation_repairs = repair_miscited_numeric_citations(
+        scaffold,
+        evidence=evidence,
+    )
+    if miscitation_repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_numeric_auditor",
+                severity="warning",
+                message=(
+                    "Appended the owning step's citation to "
+                    f"{len(miscitation_repairs)} number(s) cited to a step that "
+                    "registered no such value; the writer's own citation was "
+                    "kept."
+                ),
+                detail={"miscitation_repairs": miscitation_repairs},
             )
         )
     if (
@@ -1458,6 +1563,16 @@ def run_write_phase(
             bound_text = bound_path.read_text(encoding="utf-8")
         except Exception:
             bound_text = ""
+        # The checklist is a coverage report over what this run PRODUCED, not
+        # an analysis-facing writer consumer, so it takes its own view here
+        # rather than reading the one frozen near the top of this function.
+        # Everything the checklist asks about -- the bound scaffold, the causal
+        # audit -- is registered by this phase AFTER that freeze, so the frozen
+        # view made it report artefacts as "awaiting" that the same run had
+        # already bound, and cost a fully executed run its reporting-coverage
+        # score. Same digest-verified call, so an old or superseded record still
+        # cannot leak in; only the moment it is taken differs.
+        checklist_evidence_records = evidence.current_verified_records(per_step_records)
         if pipeline._reporting_checklist_names is not None:
             wanted = tuple(n.lower() for n in pipeline._reporting_checklist_names)
         else:
@@ -1473,7 +1588,7 @@ def run_write_phase(
                 (
                     "strobe",
                     build_strobe_checklist(
-                        evidence_records=current_verified_evidence_records,
+                        evidence_records=checklist_evidence_records,
                         bound_manuscript=bound_text,
                         task_kind=getattr(pipeline, "_benchmark_task_kind", None),
                     ),
@@ -1484,7 +1599,7 @@ def run_write_phase(
                 (
                     "tripod_ai",
                     build_tripod_ai_checklist(
-                        evidence_records=current_verified_evidence_records,
+                        evidence_records=checklist_evidence_records,
                         bound_manuscript=bound_text,
                     ),
                 )
@@ -1494,7 +1609,7 @@ def run_write_phase(
                 (
                     "internal_phenotype",
                     build_internal_phenotype_checklist(
-                        evidence_records=current_verified_evidence_records,
+                        evidence_records=checklist_evidence_records,
                         bound_manuscript=bound_text,
                         task_kind=getattr(pipeline, "_benchmark_task_kind", None),
                     ),

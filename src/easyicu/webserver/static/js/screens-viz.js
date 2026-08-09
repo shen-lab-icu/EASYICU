@@ -1,4 +1,4 @@
-/* Screens: Data Visualization — Patient Review, Cohort Statistics, Cross-DB Benchmark */
+/* Screens: Data Visualization — Patient Review, Cohort Statistics, Cross-database comparison */
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});
   // demo/fixture data layer lives in screens-viz-demo.js (loaded first);
@@ -9,8 +9,14 @@
     demoCatalogModules, demoIsTimeIndexed, demoFeatureModule, demoCoverageForFeature,
     demoRowsForModule, demoReviewStatus, demoQualityStatus, demoRateTone,
     demoThresholds, demoBaseValue, demoTableValue, demoCharttimeAt, demoSignal, demoTimeLanes, demoSignalDelta,
+    demoHasClinicalModel, demoScenarioName, demoTypicalPointCount,
     demoFeatureTone, demoCategorySection, demoQualityPanelRows,
   } = window.VIZ_DEMO;
+  const { buildPatientDrilldown: buildDemoPatientDrilldown } = window.VIZ_DEMO_DRILLDOWN;
+  const {
+    signalKey: ptSignalKey,
+    catalogLanes: patientCatalogLanes,
+  } = window.EU_PATIENT_FEATURES;
 
   function workspaceSamplingNote(summary) {
     const s = summary || {};
@@ -19,7 +25,11 @@
   }
 
   function vizRail(active) {
-    const real = window.EU_DATA === 'real';
+    const dataMode = window.getDataMode
+      ? window.getDataMode()
+      : (window.EU_DATA === 'real' ? 'real' : 'demo');
+    const real = dataMode === 'real';
+    const officialDemo = !real && officialDemoContext();
     const xdb = active === 'crossdb' ? window.EU_CROSSDB_WORKSPACE : null;
     const drill = active === 'patient' ? patientDrilldown() : null;
     const cohort = active === 'cohort' ? cohortReview() : null;
@@ -29,7 +39,9 @@
       || (!ws.route && active === 'patient' && ws.summary && ws.summary.stays != null)
     );
     const patientSource = active === 'patient' ? patientActiveSourceMeta() : null;
-    const label = real ? t('Real', '真实') : t('Demo', '演示');
+    const label = real
+      ? t('Real', '真实')
+      : (officialDemo ? t('Official demo', '官方演示') : t('Demo', '演示'));
     const xdbRaw = xdb && xdb.source_type === 'raw_database_root';
     const xdbDemo = xdb && xdb.source_type === 'legacy_simulated_multidb_feature_frames';
     let dataset;
@@ -43,11 +55,11 @@
       const loaded = (drill.data_tables || {}).loaded_summary || {};
       dataset = (drill.source || {}).label || (drill.demo ? t('Demo · EasyICU catalog', '演示 · EasyICU 字典') : t('Local export', '本地导出'));
       cohortLine = drill.demo
-        ? `${fmtInt(drill.summary && drill.summary.entities)} ${t('seeded entities', '个种子实体')}`
+        ? `${fmtInt(drill.summary && drill.summary.entities)} ${t('synthetic entities', '个合成实体')}`
         : `${fmtInt(drill.summary && drill.summary.entities)} ${t('entities', '个实体')}`;
       variables = drill.demo
         ? `${fmtInt(drill.summary && drill.summary.modules)} ${t('modules', '个模块')} · ${fmtInt(loaded.review_features)} ${t('features', '个特征')}`
-        : `${fmtInt(drill.summary && drill.summary.modules)} ${t('modules', '个模块')}`;
+        : `${fmtInt(drill.summary && drill.summary.modules)} ${t('modules', '个模块')} · ${fmtInt(loaded.review_features)} ${t('features', '个特征')}`;
     } else if (cohort) {
       const fsel = cohort.feature_selection || {};
       dataset = (cohort.source || {}).label || t('Local export', '本地导出');
@@ -75,7 +87,7 @@
         variables = `${fmtInt(scope.selectedModuleCount)} / ${fmtInt(scope.totalModuleCount || moduleCount)} ${t('modules', '个模块')} · ${fmtInt(scope.selectedFeatureCount)} / ${fmtInt(scope.totalFeatureCount || featureCount)} ${t('features', '个特征')}`;
       } else {
         dataset = real ? t('No export loaded', '尚未加载导出') : t('Demo · EasyICU catalog', '演示 · EasyICU 字典');
-        cohortLine = real ? t('load exported tables', '加载导出表') : `${DEMO_ENTITY_COUNT} ${t('seeded entities', '个种子实体')}`;
+        cohortLine = real ? t('load exported tables', '加载导出表') : t('official demos available', '官方演示数据可用');
         variables = real ? t('from export manifest', '来自导出清单') : `${fmtInt(moduleCount)} ${t('modules', '个模块')} · ${fmtInt(featureCount)} ${t('features', '个特征')}`;
       }
     }
@@ -94,14 +106,10 @@
   let patientView = 'idle';   // idle | loading | loaded
   let patientTab = 'tables';
   let patientSeriesMode = 'lanes';
-  let crossDensityModule = 'all';
-  let crossDensityFeature = null;
-  let crossDensityScope = 'core'; // core | all — restore the old curated "one subplot per canonical concept" default
-  // Canonical clinical concepts and the hard-bounded raw request live in the
-  // Cross-DB raw owner loaded before this shared visualization shell.
-  const CROSS_DENSITY_CANON = window.EU_CROSSDB_RAW.coreFeatures();
   const crossSetup = window.EU_CROSSDB_SETUP;
+  const crossResults = window.EU_CROSSDB_RESULTS;
   const crossRawProgress = window.EU_CROSSDB_PROGRESS;
+  const cohortCharts = window.EU_COHORT_CHARTS;
   function resetCrossSetupForSourceChange() {
     crossSetup.onRegistryChanged();
   }
@@ -119,6 +127,17 @@
 
   function esc(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  }
+  function displayDataMode() {
+    return window.getDataMode
+      ? window.getDataMode()
+      : (window.EU_DATA === 'real' ? 'real' : 'demo');
+  }
+  function officialDemoContext() {
+    const context = window.EU_DATA_MODE_CONTEXT;
+    return context && String(context.kind || '').startsWith('official_demo')
+      ? context
+      : null;
   }
   function fmtInt(v) { return v == null ? '—' : Number(v).toLocaleString(); }
   function fmtNum(v, digits = 1) {
@@ -280,28 +299,7 @@
   function patientModuleLabel(row) {
     return patientI18nLabel(row && row.label_i18n, row && (row.label || row.module));
   }
-  function demoTablePreviewRowContext(rowIndex, timeIndexed) {
-    const idx = Math.max(0, Number(rowIndex) || 0);
-    if (!timeIndexed) {
-      return {
-        entityIndex: idx,
-        timeIndex: 0,
-        entityRef: `demo_ent_${idx + 1}`,
-        charttime: null,
-        valueSeed: idx,
-      };
-    }
-    const timepointsPerEntity = 12;
-    const entityIndex = Math.floor(idx / timepointsPerEntity);
-    const timeIndex = idx % timepointsPerEntity;
-    return {
-      entityIndex,
-      timeIndex,
-      entityRef: `demo_ent_${entityIndex + 1}`,
-      charttime: demoCharttimeAt(timeIndex),
-      valueSeed: entityIndex * 13 + timeIndex,
-    };
-  }
+
   function patientFeatureLabel(row) {
     return patientI18nLabel(row && row.name_i18n, row && (row.name || row.feature));
   }
@@ -568,26 +566,30 @@
     const mapped = {
       'Entity scope': t('Entity scope', '实体范围'),
       'Loaded signals': t('Loaded signals', '已加载信号'),
-      'Clinical lanes': t('Clinical lanes', '临床泳道'),
-      'Clinical Lanes': t('Clinical lanes', '临床泳道'),
-      'Feature matrices': t('Feature matrices', '特征矩阵'),
-      'Feature Matrix': t('Feature Matrix', '特征矩阵'),
+      'Clinical lanes': t('Module overview', '模块总览'),
+      'Clinical Lanes': t('Module overview', '模块总览'),
+      'Feature matrices': t('Module coverage', '模块覆盖'),
+      'Feature Matrix': t('Module coverage', '模块覆盖'),
       'Review mode': t('Review mode', '审阅模式'),
-      'Single Patient': t('Single Patient', '单患者'),
-      'Multi-Patient Comparison': t('Multi-Patient Comparison', '多患者同特征对比'),
+      'Single Patient': t('Trajectory gallery', '轨迹画廊'),
+      'Multi-Patient Comparison': t('Cross-patient comparison', '跨患者对比'),
     };
     return mapped[label] || label;
   }
   function patientSeriesDetail(value) {
     let detail = String(value || '');
     const legacyAggregateDetail = ['time windows x features', 'single entity', ['aggregate', 'comparison'].join(' ')].join(' / ');
-    detail = detail.replace(legacyAggregateDetail, 'clinical lanes / single entity / same-feature comparison');
+    detail = detail.replace(legacyAggregateDetail, 'module overview / trajectory gallery / cross-patient comparison');
+    detail = detail.replace(
+      'clinical lanes / single entity / multi-entity same-feature traces',
+      'module overview / trajectory gallery / cross-patient comparison',
+    );
     detail = detail.replace('catalog lane signals', 'catalog signals');
-    detail = detail.replace('matrix groups available', 'lanes available');
+    detail = detail.replace('matrix groups available', 'modules available');
     if (window.EU_LANG === 'zh') {
-      detail = detail.replace('clinical lanes / single entity / same-feature comparison', '临床泳道 / 单实体 / 同特征对比');
+      detail = detail.replace('module overview / trajectory gallery / cross-patient comparison', '模块总览 / 轨迹画廊 / 跨患者对比');
       detail = detail.replace('catalog signals', '目录信号');
-      detail = detail.replace('lanes available', '条临床泳道可用');
+      detail = detail.replace('modules available', '个模块可用');
       detail = detail.replace('selected-entity signals', '个已选实体信号');
       detail = detail.replace('pseudonymous options exposed', '个去标识实体选项');
     }
@@ -795,6 +797,14 @@
         </div>
       </div>`;
   }
+  function sourceModeSelector(realMode) {
+    return `
+      <div class="eyebrow" style="margin-bottom:10px;">${t('Data source', '数据源')}</div>
+      <div class="radio-row">
+        <label class="radio ${realMode ? 'on' : ''}" role="button" tabindex="0" data-datamode="real"><span class="mk"></span> ${t('Previously exported data', '此前导出的数据')}</label>
+        <label class="radio ${realMode ? '' : 'on'}" role="button" tabindex="0" data-datamode="demo"><span class="mk"></span> ${t('Demo data', '演示数据')}</label>
+      </div>`;
+  }
   function setSourceAddFeedback(container, message, kind) {
     const box = container && container.querySelector('[data-src-add-feedback]');
     if (!box) return;
@@ -849,26 +859,7 @@
   }
   let sourcePickerEl = null;
   let sourcePickerReturnFocus = null;
-  function ensureSourcePickerStyles() {
-    if (document.getElementById('euPickerCss')) return;
-    const s = document.createElement('style'); s.id = 'euPickerCss';
-    s.textContent = `
-      .eu-pick-back{position:fixed;inset:0;background:rgba(15,18,24,.42);backdrop-filter:blur(2px);z-index:1000;display:flex;align-items:center;justify-content:center;}
-      .eu-pick{width:min(560px,92vw);max-height:78vh;display:flex;flex-direction:column;background:var(--surface,#fff);border:1px solid var(--line,#e6e8ee);border-radius:14px;box-shadow:0 24px 60px rgba(15,18,24,.28);overflow:hidden;}
-      .eu-pick-h{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line,#e6e8ee);}
-      .eu-pick-h .t{font-weight:650;font-size:14px;}
-      .eu-pick-cur{font-family:var(--mono,monospace);font-size:11px;color:var(--ink-4,#8a91a0);padding:8px 16px;border-bottom:1px solid var(--line,#eef0f4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      .eu-pick-sc{display:flex;gap:6px;padding:8px 16px;flex-wrap:wrap;border-bottom:1px solid var(--line,#eef0f4);}
-      .eu-pick-sc button{font-size:11.5px;padding:3px 10px;border:1px solid var(--line,#e0e3ea);border-radius:999px;background:var(--surface-2,#f7f8fb);cursor:pointer;color:var(--ink-2,#3a4150);}
-      .eu-pick-list{overflow:auto;flex:1;padding:6px;}
-      .eu-pick-row{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:0;background:none;text-align:left;cursor:pointer;border-radius:8px;font-size:13px;color:var(--ink-1,#1a2030);}
-      .eu-pick-row:hover{background:var(--surface-2,#f2f4f8);}
-      .eu-pick-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      .eu-pick-row .hint{font-size:10px;color:var(--ink-4,#8a91a0);border:1px solid var(--line,#e0e3ea);border-radius:5px;padding:0 5px;flex:none;}
-      .eu-pick-f{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line,#e6e8ee);}
-      .eu-pick-empty{padding:24px;text-align:center;color:var(--ink-4,#8a91a0);font-size:12px;}`;
-    document.head.appendChild(s);
-  }
+
   function closeSourcePicker(options) {
     const returnFocus = sourcePickerReturnFocus;
     if (sourcePickerEl) { sourcePickerEl.remove(); sourcePickerEl = null; }
@@ -902,7 +893,6 @@
       if (onPick) onPick('');
       return;
     }
-    ensureSourcePickerStyles();
     closeSourcePicker({ restoreFocus: false });
     sourcePickerReturnFocus = document.activeElement;
     let cur = startPath || '';
@@ -1102,6 +1092,7 @@
       const reviewOwner = window.EU_PATIENT_REVIEW || {};
       if (reviewOwner.navigation && reviewOwner.navigation.prime) reviewOwner.navigation.prime(payload);
       if (reviewOwner.tables && reviewOwner.tables.prime) reviewOwner.tables.prime(payload);
+      if (reviewOwner.features && reviewOwner.features.prime) reviewOwner.features.prime(payload);
       vizErr = null;
       window.EU_HASWORK = true;
       done && done(true);
@@ -1166,6 +1157,10 @@
   function crossSetupConfig() {
     return {
       api: window.EU_API,
+      catalogTotals: {
+        modules: (window.EU_CATALOG && window.EU_CATALOG.groups || []).length,
+        features: window.EU_CATALOG && window.EU_CATALOG.totalConcepts,
+      },
       helpers: {
         esc,
         fmtInt,
@@ -1184,12 +1179,57 @@
       runRaw: loadRealCrossdb,
       runDemo: loadDemoCrossdb,
       header: crossHeader,
-      renderLoaded: crossRealLoaded,
+      renderLoaded(payload) {
+        return crossResults.render(payload, crossResultsConfig());
+      },
       resetResult() {
-        crossDensityModule = 'all';
-        crossDensityFeature = null;
+        crossResults.reset();
         window.EU_VIZ_WORKSPACE = null;
         window.EU_CROSSDB_WORKSPACE = null;
+      },
+    };
+  }
+  function crossResultsConfig() {
+    return {
+      catalogTotals: {
+        modules: (window.EU_CATALOG && window.EU_CATALOG.groups || []).length,
+        features: window.EU_CATALOG && window.EU_CATALOG.totalConcepts,
+      },
+      coreFeatures: window.EU_CROSSDB_RAW.coreFeatures(),
+      helpers: {
+        catalogFeatureMeta,
+        catalogModuleLabel,
+        esc,
+        fmtInt,
+        fmtNum,
+        fmtPct,
+        icon,
+        metricLabel: crossMetricLabel,
+        statusLabel: crossStatusLabel,
+        t,
+        term: crossTerm,
+      },
+      repaint() { repaintScreen('crossdb'); },
+      expandScope() {
+        crossSetup.setSourceMethod('raw');
+        crossSetup.setFeatureScope('all');
+        crossSetup.setView('idle');
+        crossResults.reset();
+        window.EU_VIZ_WORKSPACE = null;
+        window.EU_CROSSDB_WORKSPACE = null;
+        repaintScreen('crossdb');
+      },
+      exportPayload(payload) {
+        if (!payload) {
+          vizErr = t('No Cross-DB payload is loaded yet.', '尚未加载 Cross-DB 载荷。');
+          repaintScreen('crossdb');
+          return;
+        }
+        downloadJsonFile('easyicu-crossdb-review.json', {
+          exported_at: new Date().toISOString(),
+          payload_scope: 'bounded_crossdb_review',
+          crossdb_review: payload,
+        });
       },
     };
   }
@@ -1202,8 +1242,7 @@
     window.EU_CROSSDB_WORKSPACE = null;
     window.EU_COHORT_REVIEW = null;
     resetCohortFeatureSelection();
-    crossDensityModule = 'all';
-    crossDensityFeature = null;
+    crossResults.reset();
     // An explicitly configured raw ICU root wins over the registered-export
     // fallback — otherwise the setup UI's root/database/sampling choices are
     // silently discarded whenever >=2 exports happen to be registered.
@@ -1233,7 +1272,7 @@
     }
     if (!requestedRawRoot && registeredPathOverride) {
       vizErr = paths.length < 2
-        ? t('Select at least two registered EasyICU exports before running Cross-DB.', '运行跨库基准前，请至少选择两个已注册的 EasyICU 导出。')
+        ? t('Select at least two registered EasyICU exports before starting the cross-database comparison.', '开始跨库对比前，请至少选择两个已注册的 EasyICU 导出。')
         : t('Registered export comparison API is unavailable in this browser session.', '当前浏览器会话无法使用已注册导出对比 API。');
       done && done(false);
       return;
@@ -1262,6 +1301,7 @@
       const rawRequest = window.EU_CROSSDB_RAW.buildRequest({
         dataRoot: rawRoot,
         databases: rawDatabases,
+        featureScope: setupSnapshot.featureScope || crossSetup.featureScope(),
         maxPatients: sampleProfile.maxPatients,
         sampleSize: sampleProfile.sampleSize,
       });
@@ -1285,6 +1325,7 @@
           raw_root: rawRoot,
           source_identity: crossSetup.sourceIdentity(rawDatabases),
           sample_mode: setupSnapshot.sampleMode || crossSetup.sampleMode(),
+          feature_scope: rawRequest.feature_scope,
         }, queuedProgress, done);
         if (!watching) {
           crossRawProgress.clear();
@@ -1313,7 +1354,10 @@
   }
   window.EU_CROSSDB_JOB_HOST = {
     canRestore() {
-      return window.EU_DATA === 'real' && crossSetup.view() === 'idle' && !window.EU_CROSSDB_WORKSPACE;
+      return displayDataMode() === 'real'
+        && crossSetup.sourceMethod() === 'raw'
+        && crossSetup.view() === 'idle'
+        && !window.EU_CROSSDB_WORKSPACE;
     },
     acceptResume(meta) {
       return crossSetup.acceptResume(meta);
@@ -1392,8 +1436,60 @@
     },
   };
   window.EU_CROSSDB_SOURCE_HOST = {
+    registrySources() {
+      return registrySources();
+    },
     registeredPaths() {
       return explicitRegistryCrossdbPaths();
+    },
+    officialPaths() {
+      const owner = window.EU_OFFICIAL_DEMO_SOURCES || window.EU_PATIENT_DEMO_SOURCES;
+      return owner && typeof owner.registeredSources === 'function'
+        ? owner.registeredSources(registrySources()).map(source => source.path)
+        : [];
+    },
+    openOfficial(sourceId) {
+      const owner = window.EU_OFFICIAL_DEMO_SOURCES || window.EU_PATIENT_DEMO_SOURCES;
+      const source = owner && typeof owner.source === 'function' ? owner.source(sourceId) : null;
+      if (!source || !source.status || source.status.state !== 'prepared' || !source.status.registered) {
+        vizErr = t('Prepare this official demo before using it in the cross-database comparison.', '请先准备好这个官方 Demo，再用于跨库对比。');
+        repaintScreen('crossdb');
+        return;
+      }
+      window.EU_CROSSDB_SOURCE_HOST.runOfficial();
+    },
+    runOfficial() {
+      if (crossSetup.view() === 'loading') return;
+      const owner = window.EU_OFFICIAL_DEMO_SOURCES || window.EU_PATIENT_DEMO_SOURCES;
+      const hydration = window.EU_API && window.EU_API.hydrateWorkspaceRegistry
+        ? window.EU_API.hydrateWorkspaceRegistry()
+        : Promise.resolve();
+      Promise.resolve(hydration).then(() => {
+        const pair = owner && typeof owner.rememberPair === 'function'
+          ? owner.rememberPair(registrySources())
+          : [];
+        const paths = pair.map(source => source.path);
+        if (paths.length < 2) {
+          vizErr = t('Prepare both the MIMIC-IV and eICU official demos before starting the cross-database comparison.', '开始跨库对比前，请准备好 MIMIC-IV 与 eICU 两个官方 Demo。');
+          repaintScreen('crossdb');
+          return;
+        }
+        window.EU_DATA = 'real';
+        vizErr = null;
+        const operationId = crossSetup.beginOperation();
+        crossSetup.setRegisteredLoading(true);
+        crossSetup.setView('loading');
+        repaintScreen('crossdb');
+        loadRealCrossdb(ok => {
+          if (!crossSetup.operationCurrent(operationId)) return;
+          crossSetup.setRegisteredLoading(false);
+          crossSetup.setView(ok ? 'loaded' : 'idle');
+          repaintScreen('crossdb');
+        }, { operationId, registeredPaths: paths });
+      }).catch(error => {
+        vizErr = String((error && error.message) || error);
+        repaintScreen('crossdb');
+      });
     },
     runRegistered() {
       if (crossSetup.view() === 'loading') return;
@@ -1425,8 +1521,7 @@
     if (!operationActive()) return;
     window.EU_CROSSDB_WORKSPACE = null;
     window.EU_VIZ_WORKSPACE = null;
-    crossDensityModule = 'all';
-    crossDensityFeature = null;
+    crossResults.reset();
     const databases = opts && Array.isArray(opts.selectedKeys)
       ? opts.selectedKeys.slice()
       : crossSetup.selectedKeys();
@@ -1589,394 +1684,7 @@
       </div>`;
   }
 
-  function buildDemoPatientDrilldown(selectedRef) {
-    const modules = demoCatalogModules();
-    const totalFeatures = modules.reduce((acc, row) => acc + row.features.length, 0);
-    const moduleProfiles = modules.map((row, idx) => {
-      const coverage = Math.max(58, Math.min(100, 84 + (idx % 5) * 3 - (row.features.length > 25 ? 4 : 0)));
-      const entities = Math.round(DEMO_ENTITY_COUNT * coverage / 100);
-      const timeIndexed = demoIsTimeIndexed(row.module);
-      return {
-        module: row.module,
-        label: row.label,
-        rows: demoRowsForModule(row.module, row.features.length, coverage),
-        feature_count: row.features.length,
-        observed_features: row.features.length,
-        entities,
-        coverage_pct: Number(coverage.toFixed(1)),
-        time_indexed: timeIndexed,
-        dynamic_features: timeIndexed ? row.features.length : 0,
-        static_features: timeIndexed ? 0 : row.features.length,
-        preview_features: row.features.slice(0, 6),
-      };
-    });
-    const totalRows = moduleProfiles.reduce((acc, row) => acc + (Number(row.rows) || 0), 0);
-    const tableModules = moduleProfiles.map(row => ({
-      module: row.module,
-      label: row.label,
-      review_features: row.feature_count,
-      observed_features: row.observed_features,
-      rows: row.rows,
-      entities: row.entities,
-      coverage_pct: row.coverage_pct,
-      share_pct: totalFeatures ? Number((row.feature_count / totalFeatures * 100).toFixed(1)) : null,
-      shape: row.time_indexed ? 'time_indexed' : 'static',
-      dynamic_features: row.dynamic_features,
-      static_features: row.static_features,
-      preview_features: row.preview_features.map(feature => {
-        const meta = catalogFeatureMeta(feature);
-        return { feature, name: meta.name || feature, unit: meta.unit || '', group: row.label };
-      }),
-      status: demoReviewStatus(row.coverage_pct, row.feature_count),
-    }));
-    const selectedIndex = Math.max(0, Math.min(4, Number(String(selectedRef || 'demo_ent_1').replace(/\D+/g, '')) - 1 || 0));
-    const entities = [0, 1, 2, 3, 4].map(idx => ({
-      ref: `demo_ent_${idx + 1}`,
-      label: `Demo entity ${idx + 1}`,
-      ordinal: idx + 1,
-      outcome: idx === 2 ? 'Deceased' : 'Survived',
-      severity: `SOFA-2 ${6 + idx}`,
-    }));
-    const timeLanes = demoTimeLanes(selectedIndex);
-    const signalIndex = {};
-    timeLanes.forEach(lane => (lane.signals || []).forEach(sig => { if (!signalIndex[sig.feature]) signalIndex[sig.feature] = sig; }));
-    const selected = {
-      ref: entities[selectedIndex].ref,
-      label: entities[selectedIndex].label,
-      ordinal: selectedIndex + 1,
-      demographics: { age: 58 + selectedIndex * 6, sex: selectedIndex % 2 ? 'F' : 'M' },
-      scores: { sofa2_max: 6 + selectedIndex, sepsis3_sofa2: selectedIndex !== 1 },
-      outcomes: { status: entities[selectedIndex].outcome, icu_los_days: Number((4.2 + selectedIndex * 1.3).toFixed(1)) },
-      signals: (timeLanes.find(l => l.lane === 'vitals') || {}).signals || [],
-    };
-    const qualityRows = [];
-    modules.forEach((moduleRow, moduleIdx) => {
-      moduleRow.features.forEach((feature, featureIdx) => {
-        const coverage = demoCoverageForFeature(feature, moduleIdx + featureIdx);
-        const missing = Number((100 - coverage).toFixed(1));
-        const timeIndexed = demoIsTimeIndexed(moduleRow.module);
-        const demoPointCount = Array.isArray(DEMO_CHART_HOURS) && DEMO_CHART_HOURS.length ? DEMO_CHART_HOURS.length : 12;
-        const records = timeIndexed
-          ? Math.max(1, Math.round(DEMO_ENTITY_COUNT * demoPointCount * (coverage / 100)))
-          : Math.max(1, Math.round(DEMO_ENTITY_COUNT * (coverage / 100)));
-        const outlier = DEMO_THRESHOLDS[feature] ? Number((((featureIdx + moduleIdx) % 4) * 0.4).toFixed(1)) : 0;
-        const duplicate = timeIndexed ? Number((((featureIdx + 1) % 5) * 0.08).toFixed(2)) : 0;
-        const meta = catalogFeatureMeta(feature);
-        qualityRows.push({
-          feature,
-          name: meta.name || feature,
-          module: moduleRow.module,
-          records,
-          entities: Math.max(1, Math.round(DEMO_ENTITY_COUNT * coverage / 100)),
-          coverage_pct: coverage,
-          missing_pct: missing,
-          out_of_physio_pct: outlier,
-          duplicate_time_pct: duplicate,
-          density_per_entity: Number((records / DEMO_ENTITY_COUNT).toFixed(3)),
-          time_indexed: timeIndexed,
-          status: demoQualityStatus(missing, outlier, duplicate),
-        });
-      });
-    });
-    const weight = qualityRows.reduce((acc, row) => acc + Math.max(row.records, 1), 0) || 1;
-    const weighted = key => Number((qualityRows.reduce((acc, row) => acc + (Number(row[key]) || 0) * Math.max(row.records, 1), 0) / weight).toFixed(1));
-    const qualitySummary = {
-      concept_count: qualityRows.length,
-      total_records: qualityRows.reduce((acc, row) => acc + row.records, 0),
-      weighted_missing_pct: weighted('missing_pct'),
-      weighted_out_of_physio_pct: weighted('out_of_physio_pct'),
-      weighted_duplicate_time_pct: weighted('duplicate_time_pct'),
-      denominator_entities: DEMO_ENTITY_COUNT,
-    };
-    const topIssues = qualityRows.slice().sort((a, b) =>
-      (b.missing_pct - a.missing_pct) || (b.out_of_physio_pct - a.out_of_physio_pct) || (b.records - a.records)
-    ).slice(0, 5);
-    const quality = moduleProfiles.map(row => ({
-      module: row.module,
-      rows: row.rows,
-      column_count: row.feature_count,
-      covered_entities: row.entities,
-      coverage_pct: row.coverage_pct,
-      quality_status: row.coverage_pct >= 80 ? 'ok' : (row.coverage_pct >= 50 ? 'warn' : 'bad'),
-    }));
-    const readyLanes = timeLanes.filter(row => row.status === 'ready' && (row.signals || []).length);
-    const loadedSignals = readyLanes.reduce((acc, row) => acc + row.signal_count, 0);
-    const comparisonFeatures = qualityRows.filter(row => row.time_indexed).sort((a, b) => b.records - a.records).slice(0, 8)
-      .map(row => ({ feature: row.feature, name: row.name, module: row.module, records: row.records, entities: row.entities, coverage_pct: row.coverage_pct, density_per_entity: row.density_per_entity }));
-    const compareFeature = (comparisonFeatures[0] && comparisonFeatures[0].feature) || 'hr';
-    const compareMeta = catalogFeatureMeta(compareFeature);
-    const compareModule = demoFeatureModule(compareFeature);
-    const comparisonTraces = entities.map((entity, idx) => {
-      const signal = demoSignal(compareFeature, idx);
-      const values = (signal.values || []).map(Number).filter(Number.isFinite);
-      return {
-        ref: entity.ref,
-        label: entity.label,
-        values,
-        times: values.map((_, timeIndex) => demoCharttimeAt(timeIndex)),
-        point_count: values.length,
-        bounded: true,
-        max_points: values.length,
-      };
-    }).filter(trace => trace.values.length >= 2);
-    const sections = [
-      demoCategorySection('vitals', 'Vital Signs Snapshot', ['hr', 'map', 'sbp', 'dbp', 'resp', 'temp', 'spo2'], signalIndex),
-      demoCategorySection('labs', 'Key Laboratory Snapshot', ['lact', 'crea', 'plt', 'wbc', 'hgb', 'bili', 'glu'], signalIndex),
-      demoCategorySection('scores', 'Scores and sepsis flags', ['sofa', 'sofa2', 'qsofa', 'sirs', 'gcs'], signalIndex),
-      demoCategorySection('support', 'Support and therapies', ['mech_vent', 'vent_ind', 'rrt', 'norepi_rate', 'epi_rate', 'peep'], signalIndex),
-    ];
-    const summary = {
-      entities: DEMO_ENTITY_COUNT,
-      modules: modules.length,
-      file_count: modules.length,
-      total_rows: totalRows,
-      review_entities: DEMO_ENTITY_COUNT,
-      review_entity_cap: DEMO_ENTITY_COUNT,
-      review_scope: 'catalog_seeded_demo_full_feature_set',
-      static_aggregate_scope: 'easyicu_catalog_seeded_demo',
-      dynamic_aggregate_scope: 'seeded_48h_demo_window',
-      mean_age: 63.4,
-      female_pct: 42.6,
-      mortality: 20.8,
-      median_los_icu: 5.4,
-      median_sofa2: 7,
-      sepsis_pct: 62.5,
-    };
-    const tablePreviews = tableModules.slice(0, 32).map((row, moduleIdx) => {
-      const timeIndexed = row.shape === 'time_indexed';
-      const features = (row.preview_features || []).map(f => f.feature || f.name).filter(Boolean).slice(0, timeIndexed ? 6 : 8);
-      const displayColumns = ['entity'].concat(timeIndexed ? ['charttime'] : []).concat(features);
-      const previewLimit = timeIndexed ? 24 : 8;
-      const previewRows = Array.from({ length: previewLimit }, (_, idx) => {
-        const context = demoTablePreviewRowContext(idx, timeIndexed);
-        const out = { entity: context.entityRef };
-        if (timeIndexed) out.charttime = context.charttime;
-        features.forEach((feature, featureIdx) => {
-          out[feature] = demoTableValue(feature, context.valueSeed + featureIdx + moduleIdx);
-        });
-        return out;
-      });
-      return {
-        module: row.module,
-        label: row.label,
-        file: `${row.module}.demo`,
-        rows_total: row.rows,
-        columns_total: Math.max(row.review_features + (timeIndexed ? 2 : 1), displayColumns.length),
-        display_columns: displayColumns,
-        hidden_columns: Math.max(0, row.review_features - features.length),
-        row_cap: previewRows.length,
-        column_cap: displayColumns.length,
-        pseudonymous_entity_column: true,
-        status: 'ready',
-        rows: previewRows,
-        row_count: previewRows.length,
-        truncated_rows: row.rows > previewRows.length,
-        truncated_columns: row.review_features > features.length,
-        payload_scope: 'seeded_pseudonymous_module_table_preview',
-      };
-    });
-    return {
-      ok: true,
-      mode: 'demo',
-      demo: true,
-      source: { label: 'Demo · EasyICU feature catalog', database: 'demo', path_hash: 'catalog-demo' },
-      provenance: {
-        computed_from: ['window.EU_CATALOG.groups', 'window.EU_CATALOG.groupConcepts', 'deterministic_seeded_patient_signals'],
-        payload_scope: 'catalog_shaped_seeded_demo_no_real_patient_rows',
-        signals: 'deterministic_seeded_values_for_ui_preview',
-      },
-      privacy: {
-        raw_rows_returned: false,
-        direct_identifiers_returned: false,
-        max_entity_options: 5,
-        max_points_per_signal: 12,
-        payload_tables_are_aggregated: true,
-      },
-      summary,
-      eligibility_flow: {
-        title: 'Eligibility flow (ICU stays)',
-        title_i18n: { en: 'Eligibility flow (ICU stays)', zh: '入组筛选流程（ICU 住院）' },
-        has_stepwise_report: true,
-        payload_scope: 'demo_cohort_attrition_metadata_only',
-        privacy: { patient_rows_returned: false, direct_identifiers_returned: false },
-        steps: [
-          {
-            id: 'source_total',
-            label: 'All ICU stays',
-            label_i18n: { en: 'All ICU stays', zh: '全部 ICU 住院' },
-            count: 72,
-            denominator: 72,
-            pct_of_initial: 100,
-            excluded: null,
-            excluded_pct_of_previous: null,
-            note: 'catalog-shaped demo source pool',
-            note_i18n: { en: 'catalog-shaped demo source pool', zh: '目录形演示来源池' },
-            basis: 'seeded_demo',
-          },
-          {
-            id: 'adult_stay_filter',
-            label: 'Adult first ICU stay',
-            label_i18n: { en: 'Adult first ICU stay', zh: '成人首次 ICU 住院' },
-            count: 56,
-            denominator: 72,
-            pct_of_initial: 77.8,
-            excluded: 16,
-            excluded_pct_of_previous: 22.2,
-            note: 'age >= 18 · first stay',
-            note_i18n: { en: 'age >= 18 · first stay', zh: '年龄 ≥ 18 · 首次 ICU' },
-            basis: 'seeded_demo',
-          },
-          {
-            id: 'target_clinical_cohort',
-            label: 'Sepsis-3 cohort',
-            label_i18n: { en: 'Sepsis-3 cohort', zh: 'Sepsis-3 脓毒症队列' },
-            count: DEMO_ENTITY_COUNT,
-            denominator: 72,
-            pct_of_initial: Number((DEMO_ENTITY_COUNT / 72 * 100).toFixed(1)),
-            excluded: 8,
-            excluded_pct_of_previous: 14.3,
-            note: 'suspected infection + SOFA signal',
-            note_i18n: { en: 'suspected infection + SOFA signal', zh: '疑似感染 + SOFA 信号' },
-            basis: 'seeded_demo',
-          },
-          {
-            id: 'final_cohort',
-            label: 'Final review cohort',
-            label_i18n: { en: 'Final review cohort', zh: '最终审阅队列' },
-            count: DEMO_ENTITY_COUNT,
-            denominator: 72,
-            pct_of_initial: Number((DEMO_ENTITY_COUNT / 72 * 100).toFixed(1)),
-            excluded: 0,
-            excluded_pct_of_previous: 0,
-            note: 'UI preview only',
-            note_i18n: { en: 'UI preview only', zh: '仅用于界面预览' },
-            basis: 'seeded_demo',
-            final: true,
-          },
-        ],
-      },
-      module_profiles: moduleProfiles,
-      entities,
-      selected,
-      time_lanes: timeLanes,
-      quality,
-      quality_metrics: {
-        summary: qualitySummary,
-        features: qualityRows.slice(0, 80),
-        top_issues: topIssues,
-        payload_scope: 'catalog_seeded_quality_metrics_no_row_payload',
-      },
-      data_tables: {
-        loaded_summary: {
-          entities: DEMO_ENTITY_COUNT,
-          review_features: totalFeatures,
-          observed_features: totalFeatures,
-          module_count: modules.length,
-          source_count: 1,
-        },
-        module_picker: {
-          default_module: tableModules[0] && tableModules[0].module,
-          module_count: tableModules.length,
-          selection_mode: 'module_then_feature',
-        },
-        detail_gate: {
-          title: 'Catalog-shaped demo; no source rows',
-          default_open: false,
-          reason: 'Demo rows are deterministic seeded values, while modules and feature names come from the real EasyICU concept catalog.',
-          available_detail_modes: ['module_glance', 'single_feature_metadata'],
-        },
-        modules: tableModules,
-        table_previews: tablePreviews,
-        payload_scope: 'easyicu_catalog_demo_without_row_payload',
-      },
-      trajectory_review: {
-        contract: [
-          { index: '01', label: 'Entity scope', detail: `${entities.length} demo entity options exposed`, status: 'ready' },
-          { index: '02', label: 'Loaded signals', detail: `${loadedSignals} catalog signals`, status: 'ready' },
-          { index: '03', label: 'Feature matrices', detail: `${readyLanes.length} matrix groups available`, status: 'ready' },
-          { index: '04', label: 'Review mode', detail: 'clinical lanes / single entity / same-feature comparison', status: 'ready' },
-        ],
-        modes: [
-          { id: 'feature_matrix', label: 'Feature Matrix', status: 'ready', description: 'Bounded time-window by feature matrices for grouped EasyICU catalog signals.' },
-          { id: 'single_entity', label: 'Single Patient', status: 'ready', description: 'Selected seeded demo entity trends and latest values.' },
-          { id: 'multi_entity_comparison', label: 'Multi-Patient Comparison', status: 'ready', description: 'One selected feature compared across bounded pseudonymous entities.' },
-        ],
-        lanes: readyLanes,
-        single_entity: { selected_ref: selected.ref, selected_label: selected.label, signals: selected.signals.slice(0, 12) },
-        multi_entity_comparison: {
-          selection_cap: 5,
-          normalization_available: true,
-          feature: compareFeature,
-          label: compareMeta.name || compareFeature,
-          unit: compareMeta.unit || '',
-          module: compareModule,
-          module_label: catalogModuleLabel(compareModule),
-          traces: comparisonTraces,
-          compared_entities: comparisonTraces.length,
-          features: comparisonFeatures,
-          payload_scope: 'seeded_pseudonymous_multi_entity_same_feature_traces',
-        },
-        payload_scope: 'catalog_demo_feature_matrix_semantics_bounded',
-      },
-      patient_overview: {
-        navigator: {
-          current: selected.label,
-          ordinal: selected.ordinal,
-          options: entities.map(item => ({ ref: item.ref, label: item.label, outcome: item.outcome, severity: item.severity })),
-          actions: ['first', 'previous', 'next', 'last', 'random'],
-        },
-        dashboard: {
-          mode: 'Dashboard',
-          summary_cards: [
-            { label: 'Age / sex', value: `${selected.demographics.age} / ${selected.demographics.sex}`, tone: 'neutral' },
-            { label: 'SOFA-2 max', value: String(selected.scores.sofa2_max), tone: selected.scores.sofa2_max < 10 ? 'warn' : 'bad' },
-            { label: 'Sepsis-3', value: selected.scores.sepsis3_sofa2 ? 'Positive' : 'Negative', tone: selected.scores.sepsis3_sofa2 ? 'warn' : 'ok' },
-            { label: 'Outcome', value: selected.outcomes.status, tone: selected.outcomes.status === 'Deceased' ? 'bad' : 'ok' },
-            { label: 'ICU LOS', value: `${selected.outcomes.icu_los_days} d`, tone: 'neutral' },
-          ],
-          trend_panels: sections.filter(s => s.available_count).slice(0, 3),
-          sofa_comparator: signalIndex.sofa && signalIndex.sofa2
-            ? { status: 'ready', features: [{ feature: 'sofa', label: 'SOFA-1', current: signalIndex.sofa.current, values: signalIndex.sofa.values }, { feature: 'sofa2', label: 'SOFA-2', current: signalIndex.sofa2.current, values: signalIndex.sofa2.values }] }
-            : { status: 'unavailable', reason: 'SOFA-1 and SOFA-2 signals are both required.' },
-        },
-        category_view: { mode: 'Category View', sections },
-        data_table: {
-          mode: 'Data Table',
-          available_features: totalFeatures,
-          row_preview: 'blocked',
-          reason: 'Demo preserves the Patient Overview contract without returning source rows.',
-        },
-        payload_scope: 'catalog_demo_patient_overview_semantics_pseudonymous',
-      },
-      quality_review: {
-        summary_cards: [
-          { label: 'QC concepts', value: qualitySummary.concept_count, tone: 'ok' },
-          { label: 'Seeded observations', value: qualitySummary.total_records, tone: 'accent' },
-          { label: 'Weighted missing', value: qualitySummary.weighted_missing_pct, unit: '%', tone: demoRateTone(qualitySummary.weighted_missing_pct, 5, 20) },
-          { label: 'Out-of-physio', value: qualitySummary.weighted_out_of_physio_pct, unit: '%', tone: demoRateTone(qualitySummary.weighted_out_of_physio_pct, 1, 5) },
-          { label: 'Duplicate TS', value: qualitySummary.weighted_duplicate_time_pct, unit: '%', tone: demoRateTone(qualitySummary.weighted_duplicate_time_pct, 0.5, 2) },
-        ],
-        contract: [
-          { index: '01', label: 'Catalog concept scope', detail: `${qualitySummary.concept_count} concepts · ${DEMO_ENTITY_COUNT} demo entities · ${qualitySummary.total_records} seeded observations`, status: 'ready' },
-          { index: '02', label: 'Missingness gate', detail: `${qualitySummary.weighted_missing_pct}% weighted missing`, status: demoRateTone(qualitySummary.weighted_missing_pct, 5, 20) },
-          { index: '03', label: 'Physiologic range', detail: `${qualitySummary.weighted_out_of_physio_pct}% out-of-range values`, status: demoRateTone(qualitySummary.weighted_out_of_physio_pct, 1, 5) },
-          { index: '04', label: 'Temporal integrity', detail: `${qualitySummary.weighted_duplicate_time_pct}% duplicate time rows`, status: demoRateTone(qualitySummary.weighted_duplicate_time_pct, 0.5, 2) },
-        ],
-        panels: [
-          { id: 'missingness', label: 'Missingness', rows: demoQualityPanelRows(qualityRows.slice().sort((a, b) => b.missing_pct - a.missing_pct), 'missing_pct') },
-          { id: 'outliers', label: 'Out-of-Physio', rows: demoQualityPanelRows(qualityRows.slice().sort((a, b) => b.out_of_physio_pct - a.out_of_physio_pct), 'out_of_physio_pct') },
-          { id: 'temporal', label: 'Temporal Integrity', rows: demoQualityPanelRows(qualityRows.slice().sort((a, b) => b.duplicate_time_pct - a.duplicate_time_pct), 'duplicate_time_pct') },
-        ],
-        top_issues: topIssues,
-        module_coverage: quality,
-        payload_scope: 'catalog_demo_quality_semantics_aggregate_only',
-      },
-      blocked_features: [
-        { id: 'demo_not_manuscript_result', status: 'blocked', reason: 'Seeded demo values exercise the UI only; load a real export for analysis.' },
-        { id: 'raw_identifier_table', status: 'blocked', reason: 'Patient Review returns aggregates and pseudonymous demo entities only.' },
-      ],
-    };
-  }
+
 
   /* ---------------- PATIENT REVIEW ---------------- */
   function patientTabs() {
@@ -2014,20 +1722,20 @@
       const hasPrevious = Boolean(previewPage.has_previous || activePreview && activePreview.has_previous);
       const hasNext = Boolean(previewPage.has_next || activePreview && activePreview.has_next);
       const pageSize = Number(previewPage.page_size || activePreview && activePreview.page_size || tableState.pageSize || 24);
-      const basisScope = drill.demo ? 'catalog-seeded demo aggregate' : 'demographics aggregate';
+      const basisScope = drill.demo ? 'clinically constrained synthetic aggregate' : 'demographics aggregate';
       const rows = [
-        ['Entities', fmtInt(s.entities), drill.demo ? 'seeded demo denominator' : 'cohort denominator from active export'],
+        ['Entities', fmtInt(s.entities), drill.demo ? 'synthetic fallback denominator' : 'cohort denominator from active export'],
         ['Mean age', fmtNum(s.mean_age, 1), basisScope],
         ['Female', fmtPct(s.female_pct), basisScope],
-        ['Mortality', fmtPct(s.mortality), drill.demo ? 'catalog-seeded demo outcome' : 'outcome aggregate'],
-        ['Median SOFA-2', fmtNum(s.median_sofa2, 1), drill.demo ? 'catalog-seeded demo score' : 'score aggregate'],
-        ['Sepsis-3 positive', fmtPct(s.sepsis_pct), drill.demo ? 'catalog-seeded demo event' : 'event aggregate'],
+        ['Mortality', fmtPct(s.mortality), drill.demo ? 'synthetic fallback outcome' : 'outcome aggregate'],
+        ['Median SOFA-2', fmtNum(s.median_sofa2, 1), drill.demo ? 'synthetic fallback score' : 'score aggregate'],
+        ['Sepsis-3 positive', fmtPct(s.sepsis_pct), drill.demo ? 'synthetic fallback event' : 'event aggregate'],
       ];
       const reviewModules = (dt.modules && dt.modules.length ? dt.modules : modules).slice(0, drill.demo ? 32 : 64);
       const activeModule = reviewModules.find(m => m.module === tableState.module) || reviewModules[0] || {};
       const previewFeatures = activeModule.preview_features || [];
       const workspaceCopy = drill.demo
-        ? t('catalog-shaped seeded demo: module counts and feature names come from the EasyICU concept catalog; seeded values are UI preview only.', '目录形演示：模块数量和特征名来自 EasyICU 概念目录，数值只是界面预览。')
+        ? t('Clinically constrained synthetic fallback: modules and feature names come from the EasyICU catalog; modeled values share one deterministic phenotype model and are for UI rehearsal only.', '临床约束合成兜底：模块和特征名来自 EasyICU 目录；建模数值共享同一个确定性表型模型，仅用于界面演练。')
         : t('module table previews, feature counts, source scope and optional detail gate are computed from the active export.', '模块表格预览、特征数量、来源范围和详情边界都从当前导出计算。');
       return `
       <div class="st-stats mt-16">
@@ -2058,7 +1766,7 @@
       </div>
       ${tableOwner && tableOwner.statusHtml ? tableOwner.statusHtml({ t, esc, icon }) : ''}
       <div class="patient-table-frame mt-12">
-        <div class="patient-id-note">${drill.demo ? t('Demo entity tokens are seeded UI references.', '演示实体 token 是种子界面引用。') : t('Entity tokens are local pseudonymous references. Direct clinical identifiers stay on disk.', '实体 token 是本地伪匿名引用；直接临床标识符保留在磁盘上。')}</div>
+        <div class="patient-id-note">${drill.demo ? t('Synthetic entity tokens are UI-only references.', '合成实体 token 仅用于界面引用。') : t('Entity tokens are local pseudonymous references. Direct clinical identifiers stay on disk.', '实体 token 是本地伪匿名引用；直接临床标识符保留在磁盘上。')}</div>
         <div class="patient-table-scroll" data-patient-table-preview style="--pt-cols:${Math.max(6, previewColumns.length)};">
         <table class="eu-table patient-preview-table" aria-label="${esc(`${patientModuleLabel(activeModule)} ${t('bounded table preview', '有界表格预览')}`)}">
           <thead><tr>${previewColumns.map(c => `<th${c === 'entity' ? ' class="patient-entity-col"' : ' class="num"'}>${esc(patientColumnLabel(c, activePreview))}</th>`).join('')}</tr></thead>
@@ -2176,9 +1884,6 @@
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">Demo / seeded example values for UI preview — not a real run output.</p>`;
   }
 
-  function ptSignalKey(sig) {
-    return String((sig && (sig.feature || sig.key || sig.name)) || '').toLowerCase();
-  }
   function patientVitalSmallMultiples(lanes) {
     const renderer = window.EU_PATIENT_SERIES && window.EU_PATIENT_SERIES.renderModulePanels;
     if (typeof renderer !== 'function') return '';
@@ -2221,17 +1926,28 @@
     const drill = patientDrilldown();
     const review = drill ? (drill.trajectory_review || {}) : {};
     const signals = drill && drill.selected ? (drill.selected.signals || []) : [];
-    const lanes = Array.isArray(review.lanes) ? review.lanes : (drill && Array.isArray(drill.time_lanes) ? drill.time_lanes : []);
-    const readyLanes = lanes.filter(lane => (lane.signals || []).length);
+    const rawLanes = Array.isArray(review.lanes) ? review.lanes : (drill && Array.isArray(drill.time_lanes) ? drill.time_lanes : []);
+    const featureOwner = window.EU_PATIENT_REVIEW && window.EU_PATIENT_REVIEW.features;
+    const augmentedLanes = featureOwner && featureOwner.augmentLanes
+      ? featureOwner.augmentLanes(rawLanes, drill)
+      : rawLanes;
+    const lanes = patientCatalogLanes(
+      augmentedLanes,
+      drill && drill.feature_coverage,
+      feature => featureOwner && featureOwner.stateFor
+        ? featureOwner.stateFor(feature, drill)
+        : {},
+    );
+    const readyLanes = lanes.filter(lane => (lane.signals || []).length || (lane.features || []).length);
     if (drill && readyLanes.length) {
       return `
       ${patientEntityNavigator(drill, drill.selected, {
-        detail: t('This tab restores the old clinical-lane review modes while keeping the current bounded entity controls.', '这里恢复旧版临床泳道审阅模式，同时保留当前有界实体切换。'),
+        detail: t('All three views use the same selected entity; switch between module coverage, loaded charts, and cross-patient comparison.', '三个视图共用当前患者：分别查看模块覆盖、已加载轨迹和跨患者同特征对比。'),
       })}
       ${patientTimeSeriesWorkbench(drill, review, readyLanes)}
       <div class="note ok mt-16">
         <div class="ico">${icon('rows', 16)}</div>
-        <div class="body"><span class="t">${t('Old review logic restored', '旧版审阅逻辑已恢复')}</span> <span class="d" style="display:inline;">— ${t('Clinical lanes, single-patient trajectories and same-feature multi-patient comparison are primary; exact value matrices remain available below as an audit view.', '临床泳道、单患者轨迹和多患者同特征对比是主视图；精确值矩阵保留在下方作为审计视图。')}</span></div>
+        <div class="body"><span class="t">${t('Three distinct review views', '三种审阅视图')}</span> <span class="d" style="display:inline;">— ${t('Module overview shows all catalog features and loading states; trajectory gallery shows loaded charts for the current entity; cross-patient comparison aligns the same feature across entities.', '模块总览展示全部特征及加载状态；轨迹画廊展示当前患者已加载图表；跨患者对比查看同一特征在不同患者中的表现。')}</span></div>
       </div>
       <div class="grid cards-4 mt-16">
         ${(review.contract || []).map(row => `
@@ -2251,7 +1967,7 @@
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">Signal arrays are capped at ${fmtInt((drill.privacy || {}).max_points_per_signal)} points for browser review.</p>`;
     }
     if (drill) {
-      return `<div class="empty mt-16"><div class="glyph">${icon('viz', 22)}</div><div class="t">No bounded signals in this export</div><div class="d">The active export did not include supported vitals columns for the selected entity.</div></div>`;
+      return `<div class="empty mt-16"><div class="glyph">${icon('viz', 22)}</div><div class="t">${t('No bounded signals in this export', '该导出没有可用的有界信号')}</div><div class="d">${t('The active export did not include supported vitals columns for the selected entity.', '当前导出中，所选实体没有受支持的生命体征列。')}</div></div>`;
     }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && Array.isArray(ws.series) && ws.series.length) {
@@ -2388,7 +2104,7 @@
         : '';
       const boundedTitle = drill.demo ? patientQualityText('Catalog demo bounded review') : patientQualityText('Local export bounded review');
       const boundedDetail = drill.demo
-        ? t('Coverage, missingness and physiologic-range flags are deterministic seeded values over the real EasyICU feature catalog. Load a real export for analysis-ready denominators.', '覆盖率、缺失率和生理范围标记是基于真实 EasyICU 特征目录的确定性演示值；分析级分母需要加载真实导出。')
+        ? t('Coverage and quality indicators describe the clinically constrained synthetic fallback only. Load an official demo or local export for source-backed denominators.', '覆盖率和质量指标只描述临床约束合成兜底。请加载官方演示数据或本地导出，以获得有来源支撑的分母。')
         : t('Shown coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed over the bounded local review sample. Modules without computed entity coverage remain inventory-only; formal claims stay locked to the evidence-bound agent path.', '此处显示的覆盖率、缺失率、生理范围标记和重复时间戳率基于本地有界审阅样本计算。未计算实体覆盖率的模块仅显示文件清单信息；正式结论仍锁定在证据绑定的 Agent 路径。');
       return `
       <div class="note ok mt-16">
@@ -2463,7 +2179,7 @@
     if (ws && Array.isArray(ws.quality)) {
       return `
       <div class="card pad mt-16">
-        <div class="eyebrow" style="margin-bottom:6px;">Per-module stay-id presence</div>
+        <div class="eyebrow" style="margin-bottom:6px;">${t('Per-module stay-id presence', '各模块 stay-id 出现情况')}</div>
         ${ws.quality.map(q => {
           const hasCoverage = q.coverage_pct != null && Number.isFinite(Number(q.coverage_pct));
           const coverage = hasCoverage ? Math.max(0, Math.min(100, Number(q.coverage_pct))) : null;
@@ -2473,23 +2189,27 @@
       </div>
       <div class="note info mt-16">
         <div class="ico">${icon('shield', 16)}</div>
-        <div class="body"><div class="t">Local export snapshot</div><div class="d">Percentages are unique stay_id values found in each file divided by the loaded stay set. Event-only modules can be sparse by design; analysis gates still resolve denominators separately.</div></div>
+        <div class="body"><div class="t">${t('Local export snapshot', '本地导出快照')}</div><div class="d">${t('Percentages are unique stay_id values found in each file divided by the loaded stay set. Event-only modules can be sparse by design; analysis gates still resolve denominators separately.', '百分比 = 各文件中出现的唯一 stay_id 数 ÷ 已载入的 stay 集合。仅事件类模块本就可能稀疏；分析闸门仍会单独解析分母。')}</div></div>
       </div>`;
     }
     const cov = [['Vitals', 98, 'ok'], ['Labs', 88, 'ok'], ['SOFA / SOFA-2', 94, 'ok'], ['Sepsis-3', 90, 'ok'], ['Fluids', 72, 'warn'], ['Ventilation', 58, 'bad']];
     return `
       <div class="card pad mt-16">
-        <div class="eyebrow" style="margin-bottom:6px;">Per-concept coverage</div>
+        <div class="eyebrow" style="margin-bottom:6px;">${t('Per-concept coverage', '各概念覆盖率')}</div>
         ${cov.map(([n, pct, c]) => `
           <div class="qrow"><span>${n}</span><div class="qbar ${c === 'ok' ? '' : c}"><span style="width:${pct}%"></span></div><span class="qv">${pct}%</span></div>`).join('')}
       </div>
       <div class="note warn mt-16">
         <div class="ico">${icon('beaker', 16)}</div>
-        <div class="body"><div class="t">Ventilation coverage below threshold</div><div class="d">58% of stays have ventilation fields; the agent will flag affected denominators before any analysis uses them.</div></div>
+        <div class="body"><div class="t">${t('Ventilation coverage below threshold', '通气覆盖率低于阈值')}</div><div class="d">${t('Demo figures: 58% of stays have ventilation fields. In a real export the agent flags affected denominators before any analysis uses them.', '演示数值：58% 的 stay 具有通气字段。在真实导出中，代理会在任何分析使用这些分母前先行标记。')}</div></div>
       </div>`;
   }
 
   function patientTabBody() {
+    if (patientTab !== 'series') {
+      const chartOwner = window.EU_PATIENT_CHARTS;
+      if (chartOwner && typeof chartOwner.dispose === 'function') chartOwner.dispose();
+    }
     switch (patientTab) {
       case 'tables': return ptTables();
       case 'series': return ptSeries();
@@ -2515,12 +2235,19 @@
     const owner = window.EU_PATIENT_REVIEW || {};
     if (owner.navigation && owner.navigation.reset) owner.navigation.reset();
     if (owner.tables && owner.tables.reset) owner.tables.reset();
+    if (owner.features && owner.features.reset) owner.features.reset();
   }
   function bindPatientTableControls(root) {
     const owner = window.EU_PATIENT_REVIEW && window.EU_PATIENT_REVIEW.tables;
     if (owner && typeof owner.bind === 'function') owner.bind(root, patientBrowseConfig());
   }
   function bindPatientSeriesControls(root) {
+    const chartOwner = window.EU_PATIENT_CHARTS;
+    if (chartOwner && typeof chartOwner.mount === 'function') chartOwner.mount(root);
+    const featureOwner = window.EU_PATIENT_REVIEW && window.EU_PATIENT_REVIEW.features;
+    if (featureOwner && typeof featureOwner.bind === 'function') {
+      featureOwner.bind(root, patientBrowseConfig());
+    }
     root.querySelectorAll('[data-patient-series-mode]').forEach(b => b.addEventListener('click', e => {
       e.preventDefault();
       const next = b.dataset.patientSeriesMode;
@@ -2557,6 +2284,10 @@
     render() {
       if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('patient');
       const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('patient') : '';
+      const dataMode = window.getDataMode
+        ? window.getDataMode()
+        : (window.EU_DATA === 'real' ? 'real' : 'demo');
+      const realMode = dataMode === 'real';
       if (patientView === 'loading') {
         return `${guidedNote}<div class="card pad">${skeletonWorkspace(window.EU_DATA)}</div>`;
       }
@@ -2564,8 +2295,16 @@
         const drill = patientDrilldown();
         const ws = window.EU_VIZ_WORKSPACE;
         const s = drill ? drill.summary : (ws && ws.summary);
+        const demoSourceOwner = window.EU_PATIENT_DEMO_SOURCES;
+        const officialDemo = demoSourceOwner && demoSourceOwner.activeMetadata
+          ? demoSourceOwner.activeMetadata(registrySources(), registryActivePath())
+          : null;
         const readyTitle = drill
-          ? (drill.demo ? t('Catalog-shaped demo review workspace ready', '目录形演示审阅工作区已就绪') : t('Local export patient drilldown ready', '本地导出患者审阅已就绪'))
+          ? (drill.demo
+            ? t('Clinically constrained synthetic fallback ready', '临床约束合成兜底已就绪')
+            : (officialDemo
+              ? `${officialDemo.title} ${t('official demo ready', '官方演示已就绪')}`
+              : t('Local export patient drilldown ready', '本地导出患者审阅已就绪')))
           : (ws ? t('Local export workspace ready', '本地导出工作区已就绪') : t('Demo review workspace ready', '演示审阅工作区已就绪'));
         const boundedReview = drill && s && s.review_scope === 'browser_bounded_entity_sample';
         const entityStats = boundedReview
@@ -2576,23 +2315,30 @@
           : null;
         const readyStats = s
           ? (drill && drill.demo
-            ? `${fmtInt(s.entities)} ${t('seeded entities', '个种子实体')} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(loadedFeatureCount)} ${t('catalog features', '个目录特征')}`
+            ? `${fmtInt(s.entities)} ${t('synthetic entities', '个合成实体')} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(loadedFeatureCount)} ${t('catalog features', '个目录特征')}`
             : `${entityStats} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(s.total_rows)} ${t('rows', '行')}`)
-          : `48 ${t('seeded entities', '个种子实体')} · 19 ${t('modules', '个模块')} · ${t('catalog features', '目录特征')}`;
+          : `48 ${t('synthetic entities', '个合成实体')} · 19 ${t('modules', '个模块')} · ${t('catalog features', '目录特征')}`;
         const demoLoadedNote = (drill && drill.demo) ? `
         <div class="note warn mt-12">
           <div class="ico">${icon('beaker', 16)}</div>
           <div class="body">
-            <div class="t">${t('Catalog-shaped seeded demo', '目录形种子演示')}</div>
-            <div class="d">${t('Modules and feature names come from the real EasyICU catalog; values and row counts are deterministic seeded UI examples, not a local export or manuscript result.', '模块与特征名取自真实的 EasyICU 目录；数值和行数是确定性的界面种子示例，不是本地导出或稿件结果。')}</div>
+            <div class="t">${t('Clinically constrained synthetic fallback', '临床约束合成兜底')}</div>
+            <div class="d">${t('This offline fallback uses deterministic, correlated ICU trajectories derived from one synthetic phenotype model. It contains no real records and must not be used for clinical inference or manuscript results.', '这个离线兜底使用由同一合成表型模型派生的确定性相关 ICU 轨迹；其中不含真实记录，不得用于临床推断或稿件结果。')}</div>
           </div>
           <button class="btn sm" data-patient-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
+        </div>` : officialDemo ? `
+        <div class="note info mt-12" data-patient-official-demo="${esc(officialDemo.source_id)}">
+          <div class="ico">${icon('db', 16)}</div>
+          <div class="body">
+            <div class="t">${esc(officialDemo.title)} · ${esc(officialDemo.version)}</div>
+            <div class="d">${t('This Patient Review is backed by official deidentified demo records processed through the normal EasyICU conversion and concept-mapping pipeline.', '当前患者审阅来自官方去标识化 Demo 记录，并经过 EasyICU 正常的转换与概念映射流程。')} ${esc(officialDemo.provider)} · ${esc(officialDemo.license)}</div>
+          </div>
         </div>` : (!drill && !ws) ? `
         <div class="note warn mt-12">
           <div class="ico">${icon('beaker', 16)}</div>
           <div class="body">
-            <div class="t">${t('Seeded demo workspace', '种子演示工作区')}</div>
-            <div class="d">${t('This tab is showing seeded demo rows. The real Patient Review backend appears after switching to Real and loading a local export; it shows module table overview, feature matrices, and concept-level quality metrics.', '此标签页显示的是种子演示行。切换到真实模式并加载本地导出后会出现真实的患者审阅后端；它展示模块表概览、特征矩阵和概念级质量指标。')}</div>
+            <div class="t">${t('Synthetic fallback workspace', '合成兜底工作区')}</div>
+            <div class="d">${t('This tab is showing synthetic UI data. Load an official demo or local export for source-backed module tables, feature matrices, and quality metrics.', '此标签页显示合成界面数据。请加载官方演示数据或本地导出，以查看有来源支撑的模块表、特征矩阵和质量指标。')}</div>
           </div>
           <button class="btn sm" data-patient-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
         </div>` : '';
@@ -2615,6 +2361,10 @@
         </div>`;
       }
       /* idle */
+      const demoSourceOwner = window.EU_PATIENT_DEMO_SOURCES;
+      const officialDemoSources = demoSourceOwner && typeof demoSourceOwner.render === 'function'
+        ? demoSourceOwner.render({ t, esc })
+        : `<div class="note warn"><div class="body"><div class="d">${t('Official demo-source controls are unavailable; the clinically constrained synthetic fallback remains usable.', '官方演示数据源控件暂不可用；仍可使用带临床约束的合成兜底。')}</div></div><button class="btn sm" data-gen>${t('Load synthetic fallback', '加载合成兜底')}</button></div>`;
       return `
       ${guidedNote}
       <div class="card pad">
@@ -2622,31 +2372,30 @@
           <div>
             <div class="eyebrow">${t('Patient Review', '患者审阅')}</div>
             <div class="panel-title" style="margin-top:4px;font-size:17px;">${t('Load a review workspace', '加载审阅工作区')}</div>
-            <div class="panel-sub">${window.EU_DATA === 'real' ? t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。') : t('Start with exported EasyICU tables or generate a catalog-shaped demo; review tabs appear immediately after loading.', '从已导出的 EasyICU 数据表开始，或生成目录形演示；加载后审阅标签页立即出现。')}</div>
+            <div class="panel-sub">${realMode ? t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。') : t('Choose an official deidentified ICU demo, or use the offline synthetic fallback for interaction rehearsal only.', '选择官方去标识化 ICU 演示数据，或仅在离线界面演练时使用合成兜底。')}</div>
           </div>
         </div>
 
         <div style="border-top:1px solid var(--hair);padding-top:16px;">
           <div class="eyebrow" style="margin-bottom:10px;">${t('Data source', '数据源')}</div>
           <div class="radio-row">
-            <label class="radio ${window.EU_DATA === 'real' ? 'on' : ''}" role="button" tabindex="0" data-datamode="real"><span class="mk"></span> ${t('Previously exported data', '此前导出的数据')}</label>
-            <label class="radio ${window.EU_DATA !== 'real' ? 'on' : ''}" role="button" tabindex="0" data-datamode="demo"><span class="mk"></span> ${t('Demo data', '演示数据')}</label>
+            <label class="radio ${realMode ? 'on' : ''}" role="button" tabindex="0" data-datamode="real"><span class="mk"></span> ${t('Previously exported data', '此前导出的数据')}</label>
+            <label class="radio ${!realMode ? 'on' : ''}" role="button" tabindex="0" data-datamode="demo"><span class="mk"></span> ${t('Demo data', '演示数据')}</label>
           </div>
         </div>
 
+        ${realMode ? `
         <div class="card sunken pad mt-16">
-          <div class="eyebrow" style="margin-bottom:4px;">${window.EU_DATA === 'real' ? t('Local export', '本地导出') : t('Demo review', '演示审阅')}</div>
-          <div style="font-weight:600;font-size:14px;">${window.EU_DATA === 'real' ? t('Load exported EasyICU tables', '加载已导出的 EasyICU 数据表') : t('Generate a catalog-shaped demo review workspace', '生成目录形演示审阅工作区')}</div>
-          <div class="panel-sub" style="margin-top:2px;">${window.EU_DATA === 'real' ? t('Pick a registered local export, or add one by path.', '选择已注册的本地导出，或按路径添加一个。') : t('Uses the real EasyICU feature catalog for tables, trends, patient overview, and quality checks; seeded values are only for UI preview.', '表格、趋势、患者概览和质量检查均使用真实的 EasyICU 特征目录；种子数值仅用于界面预览。')}</div>
+          <div class="eyebrow" style="margin-bottom:4px;">${t('Local export', '本地导出')}</div>
+          <div style="font-weight:600;font-size:14px;">${t('Load exported EasyICU tables', '加载已导出的 EasyICU 数据表')}</div>
+          <div class="panel-sub" style="margin-top:2px;">${t('Pick a registered local export, or add one by path.', '选择已注册的本地导出，或按路径添加一个。')}</div>
           ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
-          ${window.EU_DATA === 'real' ? `
           ${patientSourceReadyCard()}
           ${sourceRegistryBlock('single')}
           <p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">${t('Use Data Extraction first to create or refresh this folder. The last successful export is remembered locally.', '请先用数据抽取创建或刷新该文件夹。上次成功的导出会被本地记住。')}</p>
-          <button class="btn primary block lg mt-16" data-gen>${icon('folder', 14)} ${t('Load local export', '加载本地导出')}</button>` : `
-          <p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">${t('Demo profile is fixed: 48 patients · 48 hours · all EasyICU catalog modules, with seeded ICU-like values for preview only. Nothing to configure.', '演示配置固定：48 名患者 · 48 小时 · 全部 EasyICU 目录模块，种子化的类 ICU 数值仅供预览，无需任何配置。')}</p>
-          <button class="btn primary block lg mt-16" data-gen>${icon('play', 14)} ${t('Load the demo workspace', '一键加载演示工作区')}</button>`}
-        </div>
+          <button class="btn primary block lg mt-16" data-gen>${icon('folder', 14)} ${t('Load local export', '加载本地导出')}</button>
+        </div>` : `
+        <div class="card sunken pad mt-16">${officialDemoSources}</div>`}
       </div>
 
       <div class="empty mt-16">
@@ -2656,10 +2405,60 @@
       </div>`;
     },
     afterRender(root) {
+      const dataMode = window.getDataMode
+        ? window.getDataMode()
+        : (window.EU_DATA === 'real' ? 'real' : 'demo');
+      const realMode = dataMode === 'real';
       bindSourceRegistry(root, 'patient');
-      if (window.EU_DATA === 'real' && patientView === 'idle' && !window.EU_PATIENT_SOURCES && !window.EU_PATIENT_SOURCES_LOADING) {
+      if (realMode && patientView === 'idle' && !window.EU_PATIENT_SOURCES && !window.EU_PATIENT_SOURCES_LOADING) {
         loadPatientSources(ok => {
           if (ok && window.location.hash === '#patient' && patientView === 'idle') repaintScreen('patient');
+        });
+      }
+      const demoSourceOwner = window.EU_PATIENT_DEMO_SOURCES;
+      if (!realMode && patientView === 'idle' && demoSourceOwner) {
+        demoSourceOwner.ensureLoaded(() => {
+          if (window.location.hash === '#patient' && patientView === 'idle' && window.getDataMode() !== 'real') {
+            repaintScreen('patient');
+          }
+        });
+        demoSourceOwner.bind(root, {
+          refresh: () => {
+            if (window.location.hash === '#patient' && patientView === 'idle') repaintScreen('patient');
+          },
+          openPrepared: sourceId => {
+            if (patientView === 'loading') return;
+            const source = demoSourceOwner.rememberOpened && demoSourceOwner.rememberOpened(sourceId);
+            if (!source || !source.status || !source.status.active) {
+              vizErr = t(
+                'The selected official demo is not active yet. Activate it before opening.',
+                '所选官方演示尚未激活，请先激活后再打开。',
+              );
+              repaintScreen('patient');
+              return;
+            }
+            resetPatientBrowseOwners();
+            patientView = 'loading';
+            window.EU_DATA = 'real';
+            window.EU_VIZ_WORKSPACE = null;
+            window.EU_PATIENT_DRILLDOWN = null;
+            window.EU_PATIENT_SOURCES = null;
+            vizErr = null;
+            repaintScreen('patient');
+            const hydration = window.EU_API && window.EU_API.hydrateWorkspaceRegistry
+              ? window.EU_API.hydrateWorkspaceRegistry()
+              : Promise.resolve();
+            Promise.resolve(hydration).then(() => {
+              loadRealPatient(ok => {
+                patientView = ok ? 'loaded' : 'idle';
+                repaintScreen('patient');
+              });
+            }).catch(error => {
+              vizErr = String((error && error.message) || error);
+              patientView = 'idle';
+              repaintScreen('patient');
+            });
+          },
         });
       }
       root.querySelectorAll('.radio[data-datamode]').forEach(b => b.addEventListener('keydown', e => {
@@ -2669,12 +2468,18 @@
       }));
       root.querySelectorAll('[data-gen]').forEach(b => b.addEventListener('click', () => {
         if (patientView === 'loading') return;
+        const rerunningLoadedWorkspace = patientView === 'loaded';
+        const useSourceBackedPipeline = window.EU_DATA === 'real'
+          && (realMode || rerunningLoadedWorkspace);
         resetPatientBrowseOwners();
         patientView = 'loading';
         repaintScreen('patient');
-        if (window.EU_DATA === 'real') {
+        if (useSourceBackedPipeline) {
           loadRealPatient(ok => { patientView = ok ? 'loaded' : 'idle'; repaintScreen('patient'); });
         } else {
+          if (window.setDataModeContext) window.setDataModeContext(null);
+          window.EU_DATA = 'demo';
+          try { localStorage.setItem('easyicu_home_data', 'demo'); } catch (e) {}
           setTimeout(() => {
             const payload = buildDemoPatientDrilldown();
             window.EU_PATIENT_DRILLDOWN = payload;
@@ -2692,6 +2497,7 @@
       root.querySelectorAll('[data-patient-use-real]').forEach(b => b.addEventListener('click', () => {
         patientView = 'idle';
         resetPatientBrowseOwners();
+        if (window.setDataModeContext) window.setDataModeContext(null);
         window.EU_DATA = 'real';
         window.EU_VIZ_WORKSPACE = null;
         window.EU_PATIENT_DRILLDOWN = null;
@@ -2747,6 +2553,7 @@
   }
 
   function cohortPanelBody() {
+    if (cohortCharts && typeof cohortCharts.begin === 'function') cohortCharts.begin();
     const review = cohortReview();
     const demoLoaded = window.EU_DATA !== 'real' && cohortView === 'loaded';
     switch (cohortPanel) {
@@ -3383,39 +3190,28 @@
   }
 
   function cohortSurvivalChart(curve) {
-    const groups = curve.groups || [];
-    const allPoints = groups.flatMap(g => g.points || []);
-    const maxTime = Math.max(1, ...allPoints.map(p => Number(p.time) || 0), ...(((curve.number_at_risk || {}).times || []).map(Number)));
-    const w = 760, h = 300, l = 56, r = 22, tpad = 22, b = 46;
-    const plotW = w - l - r, plotH = h - tpad - b;
-    const x = value => l + (Number(value || 0) / maxTime) * plotW;
-    const y = value => tpad + (1 - (Number(value || 0) / 100)) * plotH;
-    const colors = ['#0f766e', '#2563eb', '#8b5cf6', '#b45309'];
-    const xticks = [0, maxTime / 4, maxTime / 2, maxTime * 0.75, maxTime].map(v => Math.round(v * 10) / 10);
-    const yticks = [0, 25, 50, 75, 100];
-    const stepPath = (points) => {
-      const pts = (points && points.length) ? points : [{ time: 0, survival: 100 }];
-      let d = `M ${x(pts[0].time)} ${y(pts[0].survival)}`;
-      for (let i = 1; i < pts.length; i += 1) {
-        d += ` H ${x(pts[i].time)} V ${y(pts[i].survival)}`;
-      }
-      return d;
-    };
-    return `
-      <div class="km-chart-wrap">
-        <svg class="km-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(curve.label || 'Kaplan-Meier curve')}">
-          <rect x="${l}" y="${tpad}" width="${plotW}" height="${plotH}" rx="4" fill="#fbfbf8" stroke="#e5e2da"></rect>
-          ${yticks.map(v => `<line x1="${l}" x2="${w - r}" y1="${y(v)}" y2="${y(v)}" class="km-grid"></line><text x="${l - 10}" y="${y(v) + 4}" text-anchor="end" class="km-axis">${v}%</text>`).join('')}
-          ${xticks.map(v => `<line x1="${x(v)}" x2="${x(v)}" y1="${tpad}" y2="${h - b}" class="km-grid faint"></line><text x="${x(v)}" y="${h - 18}" text-anchor="middle" class="km-axis">${fmtNum(v, 1)}</text>`).join('')}
-          <text x="${l + plotW / 2}" y="${h - 2}" text-anchor="middle" class="km-axis-title">${cohortText('Days')}</text>
-          <text x="14" y="${tpad + plotH / 2}" transform="rotate(-90 14 ${tpad + plotH / 2})" text-anchor="middle" class="km-axis-title">${cohortText('Survival probability')}</text>
-          ${groups.map((g, i) => `<path d="${stepPath(g.points || [])}" class="km-line" style="stroke:${colors[i % colors.length]};"></path>`).join('')}
-        </svg>
-        <div class="km-legend">
-          ${groups.map((g, i) => `<span><i style="background:${colors[i % colors.length]};"></i>${esc(cohortText(g.label))} · n ${fmtInt(g.n)} · ${cohortText('events')} ${fmtInt(g.events)}</span>`).join('')}
-        </div>
-        <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each step down is one event (e.g. a death); a gap between curves means the groups differ. Unadjusted — for an adjusted effect, run this cohort in Agent Projects.', '曲线每下降一格代表一次事件（如一例死亡）；两条曲线分开表示组间有差异。未做校正 —— 想要校正后的效应，请把该队列带入「研究项目」运行分析。')}</span></div>
-      </div>`;
+    if (!cohortCharts || typeof cohortCharts.survivalSlot !== 'function') return '';
+    return `<div class="km-chart-wrap">
+      ${cohortCharts.survivalSlot({
+        label: cohortText(curve.label || 'Kaplan-Meier curve'),
+        description: t(
+          'Kaplan-Meier survival probability by cohort group. Curves are unadjusted aggregate estimates.',
+          '按队列分组的 Kaplan-Meier 生存概率；曲线为未校正的聚合估计。',
+        ),
+        xLabel: cohortText('Days'),
+        yLabel: cohortText('Survival probability'),
+        groupLabel: cohortText('Group'),
+        eventsLabel: cohortText('events'),
+        finalLabel: t('Final survival', '末次生存率'),
+        groups: (curve.groups || []).map(group => ({
+          label: cohortText(group.label),
+          n: fmtInt(group.n),
+          events: fmtInt(group.events),
+          points: group.points || [],
+        })),
+      })}
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each step down is one event (e.g. a death); a gap between curves means the groups differ. Unadjusted — for an adjusted effect, run this cohort in Agent Projects.', '曲线每下降一格代表一次事件（如一例死亡）；两条曲线分开表示组间有差异。未做校正 —— 想要校正后的效应，请把该队列带入「研究项目」运行分析。')}</span></div>
+    </div>`;
   }
 
   // Coarse, always-available effect summary so the panel does not surface a lone
@@ -3659,13 +3455,6 @@
       <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Fail-closed scope')}</div><div class="d">${t('Coverage is aggregate-only. Row-level filtering, subgroup missingness, and eligibility waterfalls remain blocked until a bounded cohort-builder backend exists.', '覆盖率是仅聚合结果。行级筛选、亚组缺失率和纳排瀑布图会在有界队列构建后端就绪前保持拦截。')}</div></div></div>`;
   }
 
-  function cohortSofaCellFill(tone, intensity) {
-    const a = Math.max(0.08, Math.min(0.72, 0.12 + intensity * 0.52));
-    if (tone === 'up') return `rgba(190, 76, 76, ${a.toFixed(3)})`;
-    if (tone === 'down') return `rgba(42, 111, 178, ${a.toFixed(3)})`;
-    return `rgba(34, 137, 122, ${a.toFixed(3)})`;
-  }
-
   const SOFA_MATRIX_GRANULARITIES = {
     coarse: {
       label: 'Coarse',
@@ -3784,26 +3573,20 @@
     }
     const mode = cohortSofaMatrixMode === 'count' ? 'count' : 'pct';
     const hasExactMatrix = !!binned.exact;
-    const cellMin = bins.length > 12 ? 54 : (bins.length > 6 ? 72 : 92);
-    const matrixMinWidth = Math.max(620, 112 + bins.length * cellMin);
-    const maxCount = Math.max(1, ...matrix.flatMap(row => (row.cells || []).map(cell => Number(cell.count) || 0)));
-    const maxPct = Math.max(1, ...matrix.flatMap(row => (row.cells || []).map(cell => Number(cell.pct) || 0)));
-    const corner = `${t('SOFA-1', 'SOFA-1')} \\ ${t('SOFA-2', 'SOFA-2')}`;
-    const headers = bins.map(label => `<div class="sofa-heat-head col">${esc(label)}</div>`).join('');
-    const rows = matrix.map((row, rowIndex) => {
-      const cells = (row.cells || []).map((cell, colIndex) => {
-        const count = Number(cell.count) || 0;
-        const pct = Number(cell.pct) || 0;
-        const value = mode === 'count' ? fmtInt(count) : fmtPct(pct);
-        const intensity = mode === 'count' ? count / maxCount : pct / maxPct;
-        const tone = colIndex > rowIndex ? 'up' : colIndex < rowIndex ? 'down' : 'same';
-        const label = `${row.label} to ${bins[colIndex] || ''}: ${fmtInt(count)} · ${fmtPct(pct)}`;
-        return `<div class="sofa-heat-cell ${tone}" style="--heat-bg:${cohortSofaCellFill(tone, intensity)};" title="${esc(label)}" aria-label="${esc(label)}">
-          <span class="sofa-heat-value mono">${value}</span>
-        </div>`;
-      }).join('');
-      return `<div class="sofa-heat-head row">${esc(row.label)}</div>${cells}`;
-    }).join('');
+    const maxValue = Math.max(
+      1,
+      ...matrix.flatMap(row => (row.cells || []).map(cell => (
+        mode === 'count' ? Number(cell.count) || 0 : Number(cell.pct) || 0
+      ))),
+    );
+    const chartMatrix = matrix.map(row => ({
+      label: row.label,
+      cells: (row.cells || []).map(cell => ({
+        count: Number(cell.count) || 0,
+        pct: Number(cell.pct) || 0,
+        intensity: (mode === 'count' ? Number(cell.count) || 0 : Number(cell.pct) || 0) / maxValue,
+      })),
+    }));
     return `
       <div class="sofa-matrix-head mt-12">
         <div>
@@ -3821,18 +3604,23 @@
           </div>
         </div>
       </div>
-      <div class="sofa-heat-scroll">
-        <div class="sofa-heatmap" style="--sofa-data-cols:${bins.length}; --sofa-cell-min:${cellMin}px; --sofa-min-width:${matrixMinWidth}px;">
-          <div class="sofa-heat-head corner">${esc(corner)}</div>
-          ${headers}
-          ${rows}
-        </div>
-      </div>
-      <div class="sofa-heat-legend">
-        <span><i class="same"></i>${cohortText('Same severity band')}</span>
-        <span><i class="up"></i>${cohortText('SOFA-2 higher band')}</span>
-        <span><i class="down"></i>${cohortText('SOFA-2 lower band')}</span>
-      </div>
+      ${cohortCharts && typeof cohortCharts.heatmapSlot === 'function'
+        ? cohortCharts.heatmapSlot({
+          label: cohortText('Worst-ICU severity transition matrix'),
+          description: hasExactMatrix
+            ? cohortText('Rows are SOFA-1 score bands; columns are SOFA-2 score bands. Use the granularity control to move from clinical bands to exact 0-24 scores.')
+            : cohortText('Rows are SOFA-1 severity bands; columns are SOFA-2 bands. Color intensity follows the selected value.'),
+          bins,
+          matrix: chartMatrix,
+          mode,
+          xLabel: 'SOFA-2',
+          yLabel: 'SOFA-1',
+          valueLabel: mode === 'count' ? 'N' : '%',
+          sameLabel: cohortText('Same severity band'),
+          upLabel: cohortText('SOFA-2 higher band'),
+          downLabel: cohortText('SOFA-2 lower band'),
+        })
+        : ''}
       <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Cells on the diagonal are patients scored the same by SOFA-1 and SOFA-2; off-diagonal cells are patients the two definitions disagree on — large off-diagonal cells are where switching score versions would change your cohort.', '对角线上的格子是 SOFA-1 与 SOFA-2 评分一致的患者；对角线以外是两套定义不一致的患者 —— 偏离对角线的大格子意味着换用评分版本会改变你的队列。')}</span></div>`;
   }
 
@@ -4528,7 +4316,54 @@
     },
     rail: () => vizRail('cohort'),
     afterRender(root) {
+      if (cohortCharts && typeof cohortCharts.mount === 'function') cohortCharts.mount(root);
+      const realMode = displayDataMode() === 'real';
       bindSourceRegistry(root, 'cohort');
+      const demoSourceOwner = window.EU_OFFICIAL_DEMO_SOURCES || window.EU_PATIENT_DEMO_SOURCES;
+      if (!realMode && cohortView === 'idle' && demoSourceOwner) {
+        demoSourceOwner.ensureLoaded(() => {
+          if (window.location.hash === '#cohort' && cohortView === 'idle' && displayDataMode() !== 'real') {
+            repaintScreen('cohort');
+          }
+        });
+        demoSourceOwner.bind(root, {
+          refresh: () => {
+            if (window.location.hash === '#cohort' && cohortView === 'idle') repaintScreen('cohort');
+          },
+          openPrepared: sourceId => {
+            if (cohortView === 'loading') return;
+            const source = demoSourceOwner.rememberOpened && demoSourceOwner.rememberOpened(sourceId);
+            if (!source || !source.status || !source.status.active) {
+              vizErr = t(
+                'The selected official demo is not active yet. Activate it before opening.',
+                '所选官方演示尚未激活，请先激活后再打开。',
+              );
+              repaintScreen('cohort');
+              return;
+            }
+            cohortView = 'loading';
+            window.EU_DATA = 'real';
+            window.EU_COHORT_REVIEW = null;
+            window.EU_VIZ_WORKSPACE = null;
+            resetCohortFeatureSelection();
+            vizErr = null;
+            repaintScreen('cohort');
+            const hydration = window.EU_API && window.EU_API.hydrateWorkspaceRegistry
+              ? window.EU_API.hydrateWorkspaceRegistry()
+              : Promise.resolve();
+            Promise.resolve(hydration).then(() => {
+              loadRealCohort(ok => {
+                cohortView = ok ? 'loaded' : 'idle';
+                repaintScreen('cohort');
+              });
+            }).catch(error => {
+              vizErr = String((error && error.message) || error);
+              cohortView = 'idle';
+              repaintScreen('cohort');
+            });
+          },
+        });
+      }
       root.querySelectorAll('[data-cohort-run]').forEach(b => b.addEventListener('click', () => {
         if (cohortView === 'loading') return;
         if (window.EU_DATA === 'real') {
@@ -4547,6 +4382,22 @@
           cohortView = 'loading'; repaintScreen('cohort');
           setTimeout(() => { cohortView = 'loaded'; window.EU_HASWORK = true; repaintScreen('cohort'); }, 1300);
         }
+      }));
+      root.querySelectorAll('[data-cohort-demo-fallback]').forEach(b => b.addEventListener('click', () => {
+        if (cohortView === 'loading') return;
+        if (window.setDataModeContext) window.setDataModeContext(null);
+        window.EU_DATA = 'demo';
+        window.EU_COHORT_REVIEW = null;
+        window.EU_VIZ_WORKSPACE = null;
+        resetCohortFeatureSelection();
+        vizErr = null;
+        cohortView = 'loading';
+        repaintScreen('cohort');
+        setTimeout(() => {
+          cohortView = 'loaded';
+          window.EU_HASWORK = true;
+          repaintScreen('cohort');
+        }, 450);
       }));
       const tabsEl = root.querySelector('#cohtabs');
       if (tabsEl) tabsEl.addEventListener('click', e => {
@@ -4568,6 +4419,7 @@
       }));
       root.querySelectorAll('[data-cohort-use-real]').forEach(b => b.addEventListener('click', () => {
         cohortView = 'idle';
+        if (window.setDataModeContext) window.setDataModeContext(null);
         window.EU_DATA = 'real';
         window.EU_COHORT_REVIEW = null;
         window.EU_VIZ_WORKSPACE = null;
@@ -4656,57 +4508,56 @@
       if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('cohort');
       const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('cohort') : '';
       const ws = window.EU_VIZ_WORKSPACE;
+      const dataMode = displayDataMode();
+      const realMode = dataMode === 'real';
+      const officialDemo = officialDemoContext();
       let review = cohortReview();
       if (reloadStaleRealCohortIfNeeded(review)) review = null;
       const loaded = cohortLoaded();
       const head = `${guidedNote}
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">
-        <span>${cohortText('Workspace')}</span> ${icon('chevron', 11)} <span>${ws ? cohortText('Local export') : (loaded ? cohortText('Demo cohort') : cohortText('Not configured'))}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">${cohortText('Cohort statistics')}</span>
+        <span>${cohortText('Workspace')}</span> ${icon('chevron', 11)} <span>${loaded ? (realMode ? cohortText('Local export') : (officialDemo ? t('Official demo', '官方演示') : cohortText('Demo cohort'))) : cohortText('Not configured')}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">${cohortText('Cohort statistics')}</span>
       </div>
       <div class="page-head" style="margin-bottom:16px;">
         <h1 style="margin-top:0;">${t('Cohort Statistics', '队列统计')}</h1>
-        <p class="lead">${loaded ? (ws ? t('Local export cohort · real exported module tables · local-only summary', '本地导出队列 · 真实导出模块表 · 仅本地汇总') : t('Demo contrast: Sepsis vs Non-sepsis · group contrast · coverage audit · SOFA reclassification', '演示对照：Sepsis 与非 Sepsis · 组间对照 · 覆盖审计 · SOFA 重分层')) : t('Choose a demo cohort review or load a registered local export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '先运行演示队列审阅或加载已注册的本地导出，然后再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。')}</p>
+        <p class="lead">${loaded ? (review ? (realMode ? t('Local export cohort · real exported module tables · local-only summary', '本地导出队列 · 真实导出模块表 · 仅本地汇总') : t('Official deidentified demo cohort · source-backed aggregate review', '官方去标识化演示队列 · 有来源支撑的聚合审阅')) : t('Synthetic fallback contrast · UI rehearsal only', '合成兜底对照 · 仅用于界面演练')) : t('Choose one official demo or one registered export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '选择一个官方演示或一个已注册导出，再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。')}</p>
         <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Key terms', '关键术语')}: ${window.gloss('cohort', t('cohort', '队列'))} · ${window.gloss('denominator', t('denominator', '分母'))} · ${window.gloss('SOFA')} · ${window.gloss('Sepsis-3')}</div>
       </div>`;
       if (cohortView !== 'loading' && !loaded) {
-        if (window.EU_DATA !== 'real') {
-          return head + `<div class="card pad" style="max-width:760px;" data-cohort-config-required="true">
+        const demoSourceOwner = window.EU_OFFICIAL_DEMO_SOURCES || window.EU_PATIENT_DEMO_SOURCES;
+        const officialDemoSources = demoSourceOwner && typeof demoSourceOwner.render === 'function'
+          ? demoSourceOwner.render(
+            { t, esc },
+            { scope: 'cohort', fallbackAttribute: 'data-cohort-demo-fallback' },
+          )
+          : `<div class="note warn"><div class="body"><div class="d">${t('Official demo-source controls are unavailable.', '官方演示数据源控件暂不可用。')}</div></div></div>`;
+        return head + `<div class="card pad" data-cohort-config-required="true">
             <div class="panel-head">
               <div>
-                <div class="eyebrow">${t('Review setup required', '需要先配置审阅')}</div>
-                <div class="panel-title" style="font-size:17px;">${t('Run or load a cohort review first', '请先运行或加载队列审阅')}</div>
-                <div class="panel-sub mt-4">${t('Cohort Statistics no longer opens with preloaded seeded results. Start a demo review intentionally, or switch to Real and load a registered export.', '队列统计不再默认打开预加载的 seeded 结果。请明确启动演示审阅，或切换到真实模式并加载已注册导出。')}</div>
+                <div class="eyebrow">${t('Cohort Statistics', '队列统计')}</div>
+                <div class="panel-title" style="font-size:17px;">${t('Choose one cohort data source', '选择一个队列数据源')}</div>
+                <div class="panel-sub mt-4">${realMode ? t('Use one registered local EasyICU export.', '使用一个已注册的本地 EasyICU 导出。') : t('Use one official deidentified ICU demo; synthetic data remains an explicit offline fallback.', '使用一个官方去标识化 ICU 演示；合成数据仅作为明确的离线兜底。')}</div>
               </div>
-              <span class="pill demo"><span class="dot"></span>${t('Demo available', '可用演示')}</span>
+              <span class="pill ${realMode ? '' : 'demo'}"><span class="dot"></span>${realMode ? t('1 source required', '需要 1 个来源') : t('Official demos', '官方演示')}</span>
+            </div>
+            <div style="border-top:1px solid var(--hair);padding-top:16px;">
+              ${sourceModeSelector(realMode)}
             </div>
             ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
-            <div class="note info mt-16">
-              <div class="ico">${icon('shield', 14)}</div>
-              <div class="body">
-                <div class="t">${t('Explicit setup check', '显式配置检查')}</div>
-                <div class="d">${t('Demo values are seeded UI examples, not findings. Real cohort review is computed from your active local EasyICU export.', '演示值只是 seeded UI 示例，不是研究发现。真实队列审阅会从当前 active 的本地 EasyICU 导出计算。')}</div>
-              </div>
-            </div>
-            <div class="row wrap gap-8 mt-16">
-              <button class="btn primary" data-cohort-run>${icon('play', 13)} ${t('Run demo cohort review', '运行演示队列审阅')}</button>
-              <button class="btn" data-cohort-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
-              <button class="btn" data-nav="extraction">${icon('extract', 13)} ${t('Open Data Extraction', '打开数据抽取')}</button>
-            </div>
+            ${realMode ? `<div class="card sunken pad mt-16">
+              <div class="eyebrow">${t('Local export', '本地导出')}</div>
+              <div class="panel-title mt-4">${t('Load one exported cohort snapshot', '加载一个已导出的队列快照')}</div>
+              <div class="panel-sub mt-4">${t('This is the same active export contract used by Patient Review.', '这里使用与患者审阅相同的 active 导出契约。')}</div>
+              ${!registryActivePath() ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('No active export selected', '尚未选择 active 导出')}</div><div class="d">${cohortMissingExportMessage()}</div></div></div>` : ''}
+              ${sourceRegistryBlock('single')}
+              <button class="btn primary mt-16" data-cohort-run ${!registryActivePath() ? 'aria-disabled="true"' : ''}>${icon('folder', 14)} ${t('Load local export', '加载本地导出')}</button>
+            </div>` : `<div class="card sunken pad mt-16">${officialDemoSources}</div>`}
           </div>
           <div class="empty mt-16" data-cohort-empty-preview="true">
             <div class="glyph">${icon('cohort', 22)}</div>
             <div class="t">${t('Cohort review awaits setup', '队列审阅等待配置')}</div>
             <div class="d">${t('After setup, this page will show group contrast, KM/log-rank, coverage audit, cohort profile, and SOFA reclassification.', '配置后，这里会显示组间对照、KM/log-rank、生存风险表、覆盖审计、队列画像和 SOFA 重分层。')}</div>
           </div>`;
-        }
-        return head + `<div class="card pad" style="max-width:720px;">
-          <div class="panel-title" style="font-size:17px;">${t('Load a local export first', '请先加载本地导出')}</div>
-          <div class="panel-sub mt-4">${t('Cohort Statistics uses the same export snapshot as Patient Review.', '队列统计使用与患者审阅相同的导出快照。')}</div>
-          ${!registryActivePath() ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('No active export selected', '尚未选择 active 导出')}</div><div class="d">${cohortMissingExportMessage()}</div></div></div>` : ''}
-          ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
-          ${sourceRegistryBlock('single')}
-          <button class="btn primary mt-16" data-cohort-run ${!registryActivePath() ? 'aria-disabled="true"' : ''}>${icon('folder', 14)} ${t('Load local export', '加载本地导出')}</button>
-        </div>`;
       }
       if (cohortView === 'loading') {
         return head + `<div class="card pad">
@@ -4763,7 +4614,7 @@
       <div class="nextbar accent mt-16">
         <div class="nb-ico">${icon('arrow', 16)}</div>
         <div class="grow"><div class="nb-t">${t('Compared the groups — what’s next?', '对比完组间差异 —— 下一步？')}</div><div class="nb-d">${t('Assemble an auditable analysis and a review-ready draft in Agent Projects, or benchmark the cohort across databases.', '在「研究项目」组装可审计分析与待核验草稿，或跨数据库对比队列。')}</div></div>
-        <button class="btn" data-nav="crossdb">${icon('benchmark', 13)} ${t('Cross-DB Benchmark', '跨库基准')}</button>
+        <button class="btn" data-nav="crossdb">${icon('benchmark', 13)} ${t('Cross-database comparison', '跨库对比')}</button>
         <button class="btn primary" data-study-handoff data-study-source="cohort" data-study-target="agent">${icon('agent', 13)} ${t('Analyze in Agent Projects','进入研究项目')}</button>
       </div>`;
     },
@@ -4779,8 +4630,8 @@
       'Local export': '本地导出',
       'Demo cohort': '演示队列',
       'Not configured': '未配置',
-      'Cross-DB benchmark': '跨库基准',
-      'Cross-DB benchmark ready': '跨库基准已就绪',
+      'Cross-DB benchmark': '跨库对比',
+      'Cross-DB benchmark ready': '跨库对比已就绪',
       'Raw ICU data root': '原始 ICU 数据根目录',
       'Real raw database mode': '真实原始数据库模式',
       'Databases': '数据库',
@@ -4914,417 +4765,23 @@
     const xdb = window.EU_CROSSDB_WORKSPACE;
     const xdbDemo = xdb && xdb.source_type === 'legacy_simulated_multidb_feature_frames';
     const xdbRaw = xdb && xdb.source_type === 'raw_database_root';
+    const dataMode = displayDataMode();
+    const officialDemo = officialDemoContext();
     const sourceLabel = xdb
-      ? (xdbDemo ? crossTerm('Demo simulated frames') : (xdbRaw ? t('Local raw databases', '本地原始数据库') : crossTerm('Local exports')))
-      : (ws ? crossTerm('Local export') : (window.EU_DATA === 'real' ? crossTerm('Not configured') : crossTerm('Demo cohort')));
+      ? (xdbDemo ? crossTerm('Demo simulated frames') : (xdbRaw ? t('Local raw databases', '本地原始数据库') : (officialDemo ? t('Official demo pair', '官方 Demo 组合') : crossTerm('Local exports'))))
+      : (ws ? crossTerm('Local export') : (dataMode === 'real' ? crossTerm('Not configured') : crossTerm('Demo cohort')));
     return `
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">
-        <span>${crossTerm('Workspace')}</span> ${icon('chevron', 11)} <span>${sourceLabel}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">${crossTerm('Cross-DB benchmark')}</span>
+        <span>${crossTerm('Workspace')}</span> ${icon('chevron', 11)} <span>${sourceLabel}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">${t('Cross-database comparison', '跨库对比')}</span>
       </div>
       <div class="page-head" style="margin-bottom:14px;">
-        <h1 style="margin-top:0;">${crossTerm('Cross-DB benchmark')}</h1>
-        <p class="lead">${window.EU_DATA === 'real' ? t('Compare registered EasyICU exports or locally sampled raw ICU database folders.', '对比已注册的 EasyICU 导出，或通过本地抽样读取原始 ICU 数据库文件夹。') : t('Same cohort definition compared across ≥2 ICU databases.', '用同一个队列定义对比两个或更多 ICU 数据库。')}</p>
+        <h1 style="margin-top:0;">${t('Cross-database comparison', '跨库对比')}</h1>
+        <p class="lead">${dataMode === 'real' ? t('Check concept coverage and aggregate distributions across prepared exports or locally sampled ICU databases.', '检查已准备导出或本地抽样 ICU 数据库之间的概念覆盖和聚合分布。') : t('Compare the official MIMIC-IV and eICU demo exports through the same aggregate pipeline used for local data.', '通过与本地数据相同的聚合流程，对比官方 MIMIC-IV 与 eICU Demo 导出。')}</p>
       </div>`;
   }
-  function crossFmt(key, value) {
-    if (value == null) return '—';
-    if (key === 'stays' || key === 'cohort_size' || key === 'modules' || key === 'total_rows' || key === 'total_records') return fmtInt(value);
-    if (key === 'feature_rows' || key === 'concepts_present') return fmtInt(value);
-    if (key === 'female_pct' || key === 'mortality' || key === 'mortality_pct' || key === 'sepsis_pct' || key === 'coverage_median_pct') return fmtPct(value);
-    return fmtNum(value, 1);
-  }
-  function crossAvailCell(v) {
-    if (!v || !v.present) return `<td class="num xdb-avail-cell missing">${crossTerm('Missing')}</td>`;
-    const pct = (typeof v.coverage_pct === 'number') ? v.coverage_pct : null;
-    if (pct == null) return `<td class="num xdb-avail-cell present">${crossTerm('Present')}</td>`;
-    const bg = pct >= 80 ? 'rgba(15,118,110,0.18)' : pct >= 50 ? 'rgba(180,83,9,0.16)' : 'rgba(190,18,60,0.14)';
-    return `<td class="num xdb-avail-cell" style="background:${bg};">${fmtPct(pct)}</td>`;
-  }
-
-  function crossRealLoaded(xdb) {
-    const sources = xdb.sources || [];
-    const labels = sources.map(s => s.label || s.database || 'local');
-    const shared = xdb.shared_modules || [];
-    const availability = xdb.availability || [];
-    const provenance = xdb.provenance || {};
-    const privacy = xdb.privacy || {};
-    const blocked = xdb.blocked_features || [];
-    const gate = xdb.compatibility_gate || {};
-    const gateStatus = gate.status || 'compatible';
-    const mode = gate.comparison_mode || 'descriptive_only';
-    const rawMode = xdb.source_type === 'raw_database_root';
-    const demoMode = xdb.source_type === 'legacy_simulated_multidb_feature_frames';
-    const readyTitle = demoMode
-      ? t('Seeded simulated density benchmark ready', '种子模拟密度对比已就绪')
-      : (rawMode ? t('Real raw-database density benchmark ready', '真实原始数据库密度对比已就绪') : t('Real cross-database benchmark ready', '真实跨数据库对比已就绪'));
-    const sourceUnit = rawMode || demoMode ? t('databases', '个数据库') : t('exports', '个导出');
-    const sourceMode = demoMode ? crossTerm('demo seed') : (rawMode ? crossTerm('root hash') : crossTerm('path hash'));
-    const noteTitle = demoMode
-      ? t('Legacy seeded feature-frame distribution', '旧版种子特征帧分布')
-      : (rawMode ? t('Raw ICU database distribution', '原始 ICU 数据库分布') : t('Registered export comparison', '已注册导出对比'));
-    const noteDetail = demoMode
-      ? t('Feature density curves are computed from the old clinically-shaped demo generator, then aggregated by module; this is not a user database.', '特征密度曲线来自旧版临床形态演示生成器，并按模块聚合；这不是用户数据库。')
-      : (rawMode ? t('Feature density curves are computed from local ICU database folders through easyicu.load_concepts; no patient rows are returned.', '特征密度曲线通过 easyicu.load_concepts 从本地 ICU 数据库文件夹计算；不会返回患者行级数据。') : t('Cross-DB aggregate-only payload from the local source registry. Matched cohort definitions and formal claims still require the evidence-bound agent path.', '这是来自本地来源注册表的跨库仅聚合载荷。匹配队列定义和正式声明仍需走证据绑定 Agent 路径。'));
-    const blockedIds = blocked.map(item => crossStatusLabel(item.id)).join(', ') || crossTerm('unsupported analyses');
-    return `
-      <div class="loaded-bar">
-        <span class="pill ok"><span class="dot"></span>${crossTerm('Loaded')}</span>
-        <div class="grow"><span style="font-weight:600;font-size:13px;">${readyTitle}</span> <span class="mono" style="font-size:11px;color:var(--ink-4);">${fmtInt(sources.length)} ${sourceUnit} · ${fmtInt(shared.length)} ${t('shared modules', '个共享模块')}</span></div>
-        <button class="btn sm" data-viz-reset>${icon('sliders', 13)} ${crossTerm('Change selection')}</button>
-        <button class="btn sm" data-crossdb-export>${icon('download', 13)} ${crossTerm('Export JSON')}</button>
-      </div>
-      ${crossDbRecordCards(sources, labels)}
-      ${crossRealFeatureDensityByModule(xdb.feature_distributions || [], labels)}
-      <div class="note info mt-16">
-        <div class="ico">${icon('benchmark', 16)}</div>
-        <div class="body"><span class="t">${noteTitle}</span> <span class="d" style="display:inline;">— ${noteDetail}</span></div>
-      </div>
-      <div class="note ok mt-16">
-        <div class="ico">${icon('shield', 16)}</div>
-        <div class="body"><span class="t">${t('Compatibility gate', '兼容性核验')}: ${esc(crossStatusLabel(gateStatus))}</span> <span class="d" style="display:inline;">— ${esc(crossStatusLabel(mode))} · ${crossStatusLabel('matched_cohort')}=false · ${crossStatusLabel('inferential_statistics')}=false.</span></div>
-      </div>
-      <details class="xdb-audit mt-16">
-      <summary>${t('Provenance & audit', '溯源与审计')} · ${t('source hashes, distribution summary, availability matrix, scope', '来源哈希、分布摘要、可用性矩阵、范围')}</summary>
-      <div class="sec-stack"><div class="lbl">${crossTerm('Source provenance')}</div></div>
-      <div class="src-grid">
-        ${sources.map(source => `
-          <div class="src-card">
-            <div class="row gap-8" style="min-width:0;">
-              <span style="color:var(--accent-ink);">${icon('db', 15)}</span>
-              <div style="min-width:0;">
-                <div style="font-weight:650;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(source.label || crossTerm('Local export'))}</div>
-                <div class="mono" style="font-size:10.5px;color:var(--ink-4);">${esc((source.database || t('local', '本地')).toUpperCase())} · ${sourceMode} ${esc(source.path_hash || '—')}</div>
-              </div>
-            </div>
-          </div>`).join('')}
-      </div>
-      <div class="sec-stack"><div class="lbl">${demoMode ? crossTerm('Loaded seeded distribution summary') : (rawMode ? crossTerm('Loaded raw-database distribution summary') : crossTerm('Loaded cross-database export summary'))}</div></div>
-      <div class="table-wrap table-scroll">
-        <table class="eu-table">
-          <thead><tr><th>${crossTerm('Metric')}</th>${labels.map(c => `<th class="num">${esc(c)}</th>`).join('')}<th class="num">Δ ${t('range', '范围')}</th></tr></thead>
-          <tbody>
-            ${(xdb.rows || []).map(row => `<tr><td class="key">${esc(crossMetricLabel(row.label || row.key))}</td>${(row.values || []).map(v => `<td class="num">${crossFmt(row.key, v)}</td>`).join('')}<td class="num" style="color:var(--ink-3);">${crossFmt(row.key, row.delta)}</td></tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
-      <div class="sec-stack"><div class="lbl">${crossTerm('Module availability matrix')}</div></div>
-      <div class="table-wrap table-scroll">
-        <table class="eu-table">
-          <thead><tr><th>${crossTerm('Module')}</th>${labels.map(c => `<th class="num">${esc(c)}</th>`).join('')}<th class="num">${crossTerm('Shared')}</th></tr></thead>
-          <tbody>
-            ${availability.map(row => `<tr><td class="key">${esc(catalogModuleLabel(row.module))}</td>${(row.values || []).map(v => crossAvailCell(v)).join('')}<td class="num">${row.shared ? crossTerm('Yes') : crossTerm('No')}</td></tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
-      <div class="sec-stack"><div class="lbl">${crossTerm('Shared exported modules')}</div></div>
-      <div class="row wrap gap-6">
-        ${shared.length ? shared.map(m => `<span class="chip solid">${esc(catalogModuleLabel(m))}</span>`).join('') : `<span class="pill warn">${crossTerm('No shared modules detected')}</span>`}
-      </div>
-      <div class="note warn mt-16">
-        <div class="ico">${icon('lock', 16)}</div>
-        <div class="body"><span class="t">${crossTerm('Fail-closed scope')}</span> <span class="d" style="display:inline;">— ${blockedIds} ${t('remain blocked', '保持拦截')}。${t('Raw rows returned', '是否返回原始行')}=${privacy.raw_rows_returned === true ? 'true' : 'false'}；${t('inference', '推断')}=${esc(crossStatusLabel(provenance.inference || 'blocked_until_numeric_evidence_gate'))}。</span></div>
-      </div>
-      </details>
-      <div class="nextbar accent mt-16">
-        <div class="nb-ico">${icon('arrow', 16)}</div>
-        <div class="grow"><div class="nb-t">${t('Benchmarked the databases — what’s next?', '完成跨库基准 —— 下一步？')}</div><div class="nb-d">${t('Take a single database into an auditable analysis and review-ready draft in Agent Projects — or go back and adjust the cohort.', '在「研究项目」中把某个数据库带入可审计分析与待核验草稿，或回到前面调整队列。')}</div></div>
-        <button class="btn" data-nav="cohort">${icon('cohort', 13)} ${t('Back to Cohort Statistics', '返回队列统计')}</button>
-        <button class="btn primary" data-study-handoff data-study-source="crossdb" data-study-target="agent">${icon('agent', 13)} ${t('Create cross-DB analysis plan','创建跨库分析计划')}</button>
-      </div>`;
-  }
-
-  function crossDbRecordCards(sources, labels) {
-    /* Legacy Figure-3 Cross-DB header: one record-count card per database, color-keyed to the density legend. */
-    const cards = (sources || []).map((source, i) => {
-      const label = labels[i] || source.label || source.database || `DB ${i + 1}`;
-      const summary = source.summary || {};
-      const records = summary.total_records != null ? summary.total_records : summary.cohort_size;
-      const color = densityPalette(i);
-      return `
-        <div class="xdb-rec-card" style="border-left-color:${color};">
-          <div class="xdb-rec-name"><span class="xdb-rec-dot" style="background:${color};"></span>${esc(label)}</div>
-          <div class="xdb-rec-value">${records != null ? fmtInt(records) : '—'}</div>
-          <div class="xdb-rec-unit">${t('records', '条记录')}</div>
-        </div>`;
-    }).join('');
-    if (!cards) return '';
-    return `<div class="xdb-rec-cards mt-16">${cards}</div>
-      <div class="viz-cap"><b>${t('What this shows', '这组数字是什么')}</b><span>${t('Per-database record volume included in this benchmark run — a size reference for the density plots below, not an outcome result.', '本次基准运行中各数据库纳入的记录规模 —— 只是下方分布图的样本量参照，不是结局结果。')}</span></div>`;
-  }
-
-  function crossRealFeatureDensityByModule(modules, labels) {
-    return crossFeatureDensityPanel(
-      t('Multi-database feature value-distribution grid', '多数据库特征取值分布网格'),
-      t('Old Cross-DB layout: one subplot per feature, grouped by module; each subplot overlays the selected databases’ value-distribution (KDE) curves — not record counts. No patient rows are returned.', '旧版 Cross-DB 布局：每个特征一个小图，按模块分组；每个小图叠加所选数据库的取值分布（KDE）曲线 —— 不是记录数。不会返回患者行级数据。'),
-      modules,
-      labels,
-    );
-  }
-
-  function crossFeatureDensityPanel(title, subtitle, modules, labels) {
-    const allCleaned = (modules || []).filter(module => module && (module.features || []).length);
-    if (!allCleaned.length) return '';
-    /* Curated default: restore the legacy Figure-3 "one subplot per canonical concept" grid
-       instead of dumping all ~247 catalog features. 'all' is opt-in. */
-    const canonSet = new Set(CROSS_DENSITY_CANON);
-    const coreModules = allCleaned
-      .map(module => ({ ...module, features: (module.features || []).filter(f => canonSet.has(String(f.feature || '').toLowerCase())) }))
-      .filter(module => module.features.length);
-    const allFeatureCount = allCleaned.reduce((acc, module) => acc + (module.features || []).length, 0);
-    const coreFeatureCount = coreModules.reduce((acc, module) => acc + (module.features || []).length, 0);
-    const hasExtendedCatalog = allFeatureCount > coreFeatureCount;
-    const scope = (coreModules.length && (!hasExtendedCatalog || crossDensityScope !== 'all')) ? 'core' : 'all';
-    const cleaned = scope === 'core' ? coreModules : allCleaned;
-    let selectedModule = crossDensityModule || 'all';
-    if (selectedModule !== 'all' && !cleaned.some(module => module.module === selectedModule)) selectedModule = 'all';
-    const visible = selectedModule === 'all' ? cleaned : cleaned.filter(module => module.module === selectedModule);
-    const totalFeatures = cleaned.reduce((acc, module) => acc + (module.features || []).length, 0);
-    const sharedFeatures = cleaned.reduce((acc, module) => acc + Number(module.shared_feature_count || 0), 0);
-    const visibleFeatures = visible.reduce((acc, module) => acc + (module.features || []).length, 0);
-    const labelRow = (labels || []).map((label, i) => `<span><i style="background:${densityPalette(i)};"></i>${esc(label)}</span>`).join('');
-    const moduleOptions = [
-      `<option value="all" ${selectedModule === 'all' ? 'selected' : ''}>${esc(t('All modules', '全部模块'))}</option>`,
-      ...cleaned.map(module => `<option value="${esc(module.module)}" ${selectedModule === module.module ? 'selected' : ''}>${esc(catalogModuleLabel(module.module))} (${fmtInt((module.features || []).length)})</option>`),
-    ].join('');
-    const detail = findCrossDensityFeature(visible, crossDensityFeature) || (visible[0] && visible[0].features && { module: visible[0], row: visible[0].features[0] });
-    if (detail && (!crossDensityFeature || !findCrossDensityFeature(visible, crossDensityFeature))) crossDensityFeature = crossFeatureKey(detail.module, detail.row);
-    const scopeToggle = coreModules.length && hasExtendedCatalog ? `
-        <div class="xdb-density-scope">
-          <button class="chip ${scope === 'core' ? 'solid' : ''}" data-density-scope="core">${t('Core concepts', '核心概念')} <span class="mono">${fmtInt(coreFeatureCount)}</span></button>
-          <button class="chip ${scope === 'all' ? 'solid' : ''}" data-density-scope="all">${t('All features', '全部特征')} <span class="mono">${fmtInt(allFeatureCount)}</span></button>
-        </div>` : '';
-    return `
-      <div class="sec-stack"><div class="lbl">${esc(title)}</div></div>
-      <div class="xdb-density-panel" data-density-total="${totalFeatures}">
-        <div class="xdb-density-top">
-          <div>
-            <div class="xdb-density-title">${esc(title)}</div>
-            <div class="xdb-density-sub">${esc(subtitle)}</div>
-            <div class="xdb-density-meta mono">${scope === 'core' ? `${t('curated core concepts', '精选核心概念')} · ` : ''}${fmtInt(cleaned.length)} ${t('modules', '个模块')} · ${fmtInt(totalFeatures)} ${t('features', '个特征')} · ${fmtInt(sharedFeatures)} ${t('shared across selected databases', '个在所选数据库间共享')} · ${t('showing', '正在显示')} ${fmtInt(visibleFeatures)}</div>
-          </div>
-          <div class="xdb-density-legend">${labelRow}</div>
-        </div>
-        <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each mini-plot is one clinical concept; each colored curve is one database. Curves that overlap = the concept is measured consistently across databases; a shifted or missing curve = a unit or definition mismatch worth checking in the Data Dictionary before pooling.', '每个小图是一个临床概念，每条彩色曲线是一个数据库。曲线重叠 = 概念在各库间口径一致；曲线错位或缺失 = 单位或定义不一致，合并分析前应先到「数据字典」核对。')}</span></div>
-        ${scopeToggle}
-        ${scope === 'all' ? `
-        <div class="xdb-density-selectrow">
-          <label for="xdbDensityModule">${t('Module to display', '选择展示模块')}</label>
-          <select id="xdbDensityModule" data-density-module-select>${moduleOptions}</select>
-          <span class="mono">${selectedModule === 'all' ? t('showing every catalog module', '正在显示全部概念模块') : t('showing selected module only', '仅显示所选模块')}</span>
-        </div>
-        <div class="xdb-density-controls">
-          <button class="chip ${selectedModule === 'all' ? 'solid' : ''}" data-density-module-filter="all">${crossTerm('All modules')}</button>
-          ${cleaned.map(module => `<button class="chip ${selectedModule === module.module ? 'solid' : ''}" data-density-module-filter="${esc(module.module)}">${esc(catalogModuleLabel(module.module))} <span class="mono">${fmtInt((module.features || []).length)}</span></button>`).join('')}
-        </div>` : ''}
-        ${detail ? crossFeatureDensityDetail(detail.module, detail.row, labels || []) : ''}
-        ${visible.map(module => crossFeatureDensityModule(module, labels || [])).join('')}
-      </div>`;
-  }
-
-  function crossFeatureDensityModule(module, labels) {
-    const features = module.features || [];
-    const moduleLabel = catalogModuleLabel(module.module);
-    return `
-      <section class="xdb-density-module" data-density-module="${esc(module.module)}">
-        <div class="xdb-density-module-head">
-          <div><h3>${esc(moduleLabel)}</h3><p>${fmtInt(features.length)} ${t('features', '个特征')} · ${fmtInt(module.shared_feature_count || 0)} ${crossTerm('Shared')}</p></div>
-          <span class="pill dashed">${esc(module.module)}</span>
-        </div>
-        <div class="xdb-density-features" style="--xdb-grid-cols:${Math.min(4, Math.max(1, Math.ceil(Math.sqrt(features.length || 1))))}">
-          ${features.map(row => crossFeatureDensityFeature(module, row, labels)).join('')}
-        </div>
-      </section>`;
-  }
-
-  function crossFeatureKey(module, row) {
-    return `${module.module || 'module'}::${row.feature || row.label || 'feature'}`;
-  }
-
-  function findCrossDensityFeature(modules, key) {
-    if (!key) return null;
-    for (const module of modules || []) {
-      for (const row of module.features || []) {
-        if (crossFeatureKey(module, row) === key) return { module, row };
-      }
-    }
-    return null;
-  }
-
-  function crossFeatureDensityFeature(module, row, labels) {
-    const meta = catalogFeatureMeta(row.feature);
-    const curve = crossFeatureCurve(row, labels);
-    const key = crossFeatureKey(module, row);
-    return `
-      <button class="xdb-density-feature ${crossDensityFeature === key ? 'selected' : ''}" data-density-feature="${esc(row.feature)}" data-density-feature-key="${esc(key)}" type="button">
-        <div class="xdb-density-name"><span>${esc(meta.name)}</span><small>${esc(row.feature)}${meta.unit ? ` · ${esc(meta.unit)}` : ''}</small></div>
-        ${curve}
-      </button>`;
-  }
-
-  function crossFeatureDensityDetail(module, row, labels) {
-    const meta = catalogFeatureMeta(row.feature);
-    const values = row.values || [];
-    const moduleLabel = catalogModuleLabel(module.module);
-    return `
-      <div class="xdb-density-detail" data-density-detail="${esc(crossFeatureKey(module, row))}">
-        <div class="xdb-density-detail-head">
-          <div>
-            <div class="xdb-density-detail-title">${esc(meta.name)}</div>
-            <div class="xdb-density-detail-sub">${esc(moduleLabel)} · ${esc(row.feature)}${meta.unit ? ` · ${esc(meta.unit)}` : ''} · ${crossTerm('aggregate density only')}</div>
-          </div>
-          <span class="pill dashed">${fmtInt(values.filter(v => v.present).length)} ${t('curves', '条曲线')}</span>
-        </div>
-        <div class="xdb-density-detail-plot">${crossFeatureCurve(row, labels)}</div>
-        <div class="table-wrap table-scroll xdb-density-detail-table">
-          <table class="eu-table">
-            <thead><tr><th>${crossTerm('Database')}</th><th class="num">${crossTerm('Values')}</th><th class="num">${crossTerm('Range')}</th><th class="num">${crossTerm('Density points')}</th></tr></thead>
-            <tbody>
-              ${values.map((v, i) => `<tr>
-                <td class="key"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${densityPalette(i)};margin-right:6px;"></span>${esc(labels[i] || v.source || `${crossTerm('Database')} ${i + 1}`)}</td>
-                <td class="num">${v.present ? fmtInt(v.non_null || v.n || 0) : crossTerm('Missing')}</td>
-                <td class="num">${v.present && v.min != null && v.max != null ? `${fmtDensity(v.min)}-${fmtDensity(v.max)}` : '—'}</td>
-                <td class="num">${Array.isArray(v.points) ? fmtInt(v.points.length) : (Array.isArray(v.categories) ? fmtInt(v.categories.length) : '—')}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>`;
-  }
-
-  function crossFeatureCurve(row, labels) {
-    const series = (row.values || [])
-      .map((value, i) => ({ value, label: labels[i] || value.source || `${t('export', '导出')} ${i + 1}`, color: densityPalette(i) }))
-      .filter(item => item.value && item.value.present && Array.isArray(item.value.points) && item.value.points.length >= 2);
-    if (!series.length) return crossCategoricalBars(row, labels);
-    const xs = series.flatMap(item => item.value.points.map(p => Number(p.x)).filter(Number.isFinite));
-    const ys = series.flatMap(item => item.value.points.map(p => Number(p.density)).filter(Number.isFinite));
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const maxY = Math.max(0.000001, ...ys);
-    const w = 360, h = 72, padX = 8, padTop = 8, padBottom = 14;
-    const xScale = x => padX + ((Number(x) - minX) / ((maxX - minX) || 1)) * (w - padX * 2);
-    const yScale = y => padTop + (1 - Number(y) / maxY) * (h - padTop - padBottom);
-    const paths = series.map(item => {
-      const pts = item.value.points.filter(p => Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.density)));
-      const line = pts.map((p, idx) => `${idx ? 'L' : 'M'}${xScale(p.x).toFixed(1)},${yScale(p.density).toFixed(1)}`).join(' ');
-      const area = `${line} L${xScale(pts[pts.length - 1].x).toFixed(1)},${(h - padBottom).toFixed(1)} L${xScale(pts[0].x).toFixed(1)},${(h - padBottom).toFixed(1)} Z`;
-      return `<path class="xdb-density-area" d="${area}" fill="${item.color}"></path><path class="xdb-density-line" d="${line}" stroke="${item.color}"></path>`;
-    }).join('');
-    const totalN = series.reduce((acc, item) => acc + Number(item.value.non_null || item.value.n || 0), 0);
-    // x-axis ticks so a reader can tell AT WHAT VALUES the curves diverge (the
-    // point of the cross-DB view). Tick marks live in the stretched SVG; the
-    // value labels + unit live in an HTML row below it so text is not distorted
-    // by preserveAspectRatio="none".
-    const unit = (catalogFeatureMeta(row.feature).unit) || '';
-    const midX = (minX + maxX) / 2;
-    const tickXs = [minX, midX, maxX];
-    const tickMarks = tickXs.map(tx => `<line class="xdb-density-tick" x1="${xScale(tx).toFixed(1)}" x2="${xScale(tx).toFixed(1)}" y1="${(h - padBottom - 3).toFixed(1)}" y2="${(h - padBottom).toFixed(1)}"></line>`).join('');
-    const xaxis = `<div class="xdb-density-xaxis"><span>${fmtDensity(minX)}</span><span>${fmtDensity(midX)}</span><span>${fmtDensity(maxX)}${unit ? ' ' + esc(unit) : ''}</span></div>`;
-    // y is relative density on one shared scale; each DB curve is area-normalized
-    // independently, so peak height also reflects range width — state that so the
-    // axis is not read as an absolute count or pure concentration.
-    const stats = `<span>${fmtInt(series.length)} ${crossTerm('database curves')}</span><span>${t('y: relative density (area-normalized per DB)', 'y: 相对密度（各库按面积归一）')}</span><span>n=${fmtInt(totalN)}</span>`;
-    return `
-      <div class="xdb-density-plot">
-        <svg class="xdb-density-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
-          <line class="xdb-density-axis-line" x1="${padX}" x2="${w - padX}" y1="${h - padBottom}" y2="${h - padBottom}"></line>
-          ${tickMarks}
-          ${paths}
-        </svg>
-        ${xaxis}
-        <div class="xdb-density-stats">${stats}</div>
-      </div>`;
-  }
-
-  function crossCategoricalBars(row, labels) {
-    return `
-      <div class="xdb-density-values">
-        ${(row.values || []).map((v, i) => {
-          const label = labels[i] || v.source || `${t('export', '导出')} ${i + 1}`;
-          const cats = (v.categories || []).slice(0, 4);
-          return `
-            <div class="xdb-density-cat ${v.present ? '' : 'missing'}">
-              <span class="xdb-density-src">${esc(label)}</span>
-              <span class="xdb-density-cat-bars">${cats.map(cat => `<i title="${esc(cat.label)} ${fmtPct(cat.pct)}" style="width:${Math.max(2, Number(cat.pct) || 0)}%;background:${densityPalette(i)};"></i>`).join('')}</span>
-              <span class="xdb-density-num mono">${v.present ? `${fmtInt(v.non_null || 0)} ${crossTerm('values')}` : crossTerm('Missing')}</span>
-            </div>`;
-        }).join('')}
-      </div>`;
-  }
-
-  function densityPalette(i) {
-    const palette = ['var(--accent)', 'oklch(62% 0.11 255)', 'oklch(64% 0.10 35)', 'oklch(62% 0.10 145)', 'oklch(58% 0.10 300)', 'oklch(60% 0.10 75)'];
-    return palette[i % palette.length];
-  }
-
-  function fmtDensity(value) {
-    if (value == null || !Number.isFinite(Number(value))) return '—';
-    const n = Number(value);
-    if (n >= 1000) return Math.round(n).toLocaleString();
-    if (n >= 100) return n.toFixed(0);
-    if (n >= 10) return n.toFixed(1);
-    return n.toFixed(2);
-  }
-
-
-  function crossDistributionPanel(title, subtitle, rows) {
-    const palette = ['var(--accent)', 'oklch(62% 0.11 255)', 'oklch(64% 0.10 35)', 'oklch(62% 0.10 145)', 'oklch(58% 0.10 300)', 'oklch(60% 0.10 75)'];
-    const legend = (rows[0] && rows[0].values || []).map((v, i) => `<span><i style="background:${palette[i % palette.length]};"></i>${esc(v.label)}</span>`).join('');
-    return `
-      <div class="sec-stack"><div class="lbl">${esc(title)}</div></div>
-      <div class="xdb-dist-panel">
-        <div class="xdb-dist-top">
-          <div class="xdb-dist-sub">${esc(subtitle)}</div>
-          <div class="xdb-dist-legend">${legend}</div>
-        </div>
-        <div class="xdb-dist-rows">
-          ${rows.map(row => crossDistributionRow(row, palette)).join('')}
-        </div>
-      </div>`;
-  }
-
-  function crossDistributionRow(row, palette) {
-    const nums = (row.values || []).flatMap(v => {
-      const out = [];
-      if (typeof v.value === 'number') out.push(v.value);
-      if (typeof v.low === 'number') out.push(v.low);
-      if (typeof v.high === 'number') out.push(v.high);
-      return out;
-    });
-    if (!nums.length) return '';
-    const min = Math.min(...nums);
-    const max = Math.max(...nums);
-    const pad = Math.max((max - min) * 0.08, max === min ? Math.max(1, max * 0.05) : 0.01);
-    const lo = min - pad;
-    const hi = max + pad;
-    const pos = value => Math.max(0, Math.min(100, ((value - lo) / (hi - lo)) * 100));
-    const fmt = value => {
-      if (value == null) return '—';
-      const n = Number(value);
-      if (Math.abs(n) >= 100) return n.toFixed(0);
-      if (Math.abs(n) >= 10) return n.toFixed(1);
-      return n.toFixed(2);
-    };
-    return `
-      <div class="xdb-dist-row">
-        <div class="xdb-dist-label"><span>${esc(row.label)}</span><small>${esc(row.unit || '')}</small></div>
-        <div class="xdb-dist-axis">
-          ${(row.values || []).map((v, i) => {
-            if (typeof v.value !== 'number') return '';
-            const color = palette[i % palette.length];
-            const band = typeof v.low === 'number' && typeof v.high === 'number'
-              ? `<span class="xdb-dist-band" style="left:${pos(v.low)}%;width:${Math.max(1.2, pos(v.high) - pos(v.low))}%;background:${color};"></span>`
-              : '';
-            return `${band}<span class="xdb-dist-dot" title="${esc(v.label)} ${fmt(v.value)}" style="left:${pos(v.value)}%;background:${color};"></span>`;
-          }).join('')}
-        </div>
-        <div class="xdb-dist-range mono">${fmt(min)}–${fmt(max)}</div>
-      </div>`;
-  }
-
   S.crossdb = {
     section: 'viz', nav: 'viz', sub: 'crossdb', wide: true,
-    crumbs: ['Home', 'Data Workspace','Cross-DB Benchmark'],
+    crumbs: ['Home', 'Data Workspace', 'Cross-database comparison'],
     get actionHtml() {
       return crossSetup.actionHtml(crossSetupConfig());
     },
@@ -5334,39 +4791,8 @@
     },
     afterRender(root) {
       crossSetup.bind(root, crossSetupConfig());
-      root.querySelectorAll('[data-density-scope]').forEach(b => b.addEventListener('click', () => {
-        crossDensityScope = b.dataset.densityScope || 'core';
-        crossDensityModule = 'all';
-        crossDensityFeature = null;
-        repaintScreen('crossdb');
-      }));
-      root.querySelectorAll('[data-density-module-filter]').forEach(b => b.addEventListener('click', () => {
-        crossDensityModule = b.dataset.densityModuleFilter || 'all';
-        crossDensityFeature = null;
-        repaintScreen('crossdb');
-      }));
-      root.querySelectorAll('[data-density-module-select]').forEach(select => select.addEventListener('change', () => {
-        crossDensityModule = select.value || 'all';
-        crossDensityFeature = null;
-        repaintScreen('crossdb');
-      }));
-      root.querySelectorAll('[data-density-feature-key]').forEach(b => b.addEventListener('click', () => {
-        crossDensityFeature = b.dataset.densityFeatureKey || null;
-        repaintScreen('crossdb');
-      }));
-      root.querySelectorAll('[data-crossdb-export]').forEach(b => b.addEventListener('click', () => {
-        const payload = window.EU_CROSSDB_WORKSPACE;
-        if (!payload) {
-          vizErr = t('No Cross-DB payload is loaded yet.', '尚未加载 Cross-DB 载荷。');
-          repaintScreen('crossdb');
-          return;
-        }
-        downloadJsonFile('easyicu-crossdb-review.json', {
-          exported_at: new Date().toISOString(),
-          payload_scope: 'bounded_crossdb_review',
-          crossdb_review: payload,
-        });
-      }));
+      crossResults.mount(root);
+      crossResults.bind(root, window.EU_CROSSDB_WORKSPACE, crossResultsConfig());
     },
   };
 })();

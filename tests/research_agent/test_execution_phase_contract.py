@@ -31,9 +31,101 @@ import inspect
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import fields
+from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
+
+
+def test_primary_cohort_predicates_extend_only_raw_contract_authority() -> None:
+    from easyicu.research_agent.research_context.typed import (
+        raw_contract_inputs_for_step,
+    )
+
+    receipt = {
+        "ordered_predicate_flow": [
+            {"predicate_kind": "universe", "resolved_column": None},
+            {
+                "predicate_kind": "inclusion",
+                "resolved_column": "eligibility_max",
+            },
+        ]
+    }
+
+    assert raw_contract_inputs_for_step(
+        planner_declared_inputs=["table:parent", "age"],
+        primary_cohort_execution_receipt=receipt,
+    ) == ("table:parent", "age", "eligibility_max")
+    assert raw_contract_inputs_for_step(
+        planner_declared_inputs=["age"],
+        primary_cohort_execution_receipt=None,
+    ) == ("age",)
+
+
+def test_primary_cohort_predicate_contract_rejects_typed_or_invalid_coordinate() -> None:
+    from easyicu.research_agent.research_context.typed import (
+        raw_contract_inputs_for_step,
+    )
+    from easyicu.research_agent.intake.materialized_metadata import (
+        MaterializedMetadataError,
+    )
+
+    with pytest.raises(
+        MaterializedMetadataError,
+        match="invalid resolved column",
+    ):
+        raw_contract_inputs_for_step(
+            planner_declared_inputs=[],
+            primary_cohort_execution_receipt={
+                "ordered_predicate_flow": [
+                    {"resolved_column": "table:not_a_raw_column"}
+                ]
+            },
+        )
+
+
+def test_primary_cohort_contract_uses_full_authority_without_widening_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.research_context import typed
+
+    base_context = object()
+    scoped_context = object()
+    calls: list[tuple[object, tuple[str, ...]]] = []
+
+    def fake_resolver(
+        context: object,
+        names: tuple[str, ...],
+    ) -> dict[str, object]:
+        calls.append((context, names))
+        return {"contracts": {name: {} for name in names if ":" not in name}}
+
+    monkeypatch.setattr(typed, "resolved_raw_input_contracts", fake_resolver)
+    receipt = {
+        "ordered_predicate_flow": [
+            {"resolved_column": None},
+            {"resolved_column": "eligibility_max"},
+        ]
+    }
+
+    result = typed.resolved_raw_input_contracts_for_step(
+        coder_base_context=base_context,
+        coder_context=scoped_context,
+        planner_declared_inputs=["table:parent"],
+        primary_cohort_execution_receipt=receipt,
+    )
+
+    assert result == {"contracts": {"eligibility_max": {}}}
+    assert calls == [(base_context, ("table:parent", "eligibility_max"))]
+
+    typed.resolved_raw_input_contracts_for_step(
+        coder_base_context=base_context,
+        coder_context=scoped_context,
+        planner_declared_inputs=["age"],
+        primary_cohort_execution_receipt=None,
+    )
+    assert calls[-1] == (scoped_context, ("age",))
 
 
 def test_llm_authority_signature_binds_endpoint_options_and_fallback_order() -> None:
@@ -57,6 +149,25 @@ def test_llm_authority_signature_binds_endpoint_options_and_fallback_order() -> 
     fallback_ab = SimpleNamespace(name="fallback", _clients=[endpoint_a, endpoint_b])
     fallback_ba = SimpleNamespace(name="fallback", _clients=[endpoint_b, endpoint_a])
     assert llm_signature(fallback_ab) != llm_signature(fallback_ba)
+
+
+def test_pipeline_cache_identifies_contextual_mocks_without_importing_them() -> None:
+    from easyicu.research_agent.authority.pipeline_cache import (
+        iter_mock_clients,
+        llm_signature,
+    )
+    from easyicu.research_agent.providers.llm import LLMRouter
+    from easyicu.research_agent.providers.mocks import (
+        MockLLMClient,
+        PatternScriptedMockLLMClient,
+    )
+
+    default = MockLLMClient()
+    scripted = PatternScriptedMockLLMClient([])
+    router = LLMRouter(default=default, planner=scripted)
+
+    assert llm_signature(default) == "mock"
+    assert list(iter_mock_clients(router)) == [default, scripted]
 
 
 def test_capsule_checkpoint_upsert_never_overwrites_prior_terminal_attempt() -> None:
@@ -879,7 +990,37 @@ def test_stability_standard_executor_supersedes_stale_resume_capsule():
     assert "trajectory_stability_executor_owns_step(" in selector_source
     assert "trajectory_stability_executor_code(" in selector_source
     assert "preflight_standard_code = standard_executor.code" in assignment
+    assert "plausibility_scope=plausibility_authority.scope" in assignment
     assert "selected_resume_capsule" not in assignment
+
+
+def test_standard_executor_failure_is_attributed_to_its_actual_owner():
+    from easyicu.research_agent.execution.standard_executor_diagnostics import (
+        standard_executor_failure_finding,
+    )
+
+    finding = standard_executor_failure_finding(
+        step_record={
+            "deterministic_standard_analysis": "grouped_table_one",
+            "deterministic_standard_selection_reason": "table_one_spec_preflight",
+        },
+        step_id="02_table_one",
+        reason="preexecution_concept_gate_failed",
+        failure_phase="preexecution_concept_gate",
+    )
+
+    assert finding.validator == "deterministic_standard_executor"
+    assert "grouped_table_one" in finding.message
+    assert "trajectory" not in finding.message.casefold()
+    assert finding.detail == {
+        "step_id": "02_table_one",
+        "issue_code": "deterministic_standard_executor_failed_closed",
+        "failure_phase": "preexecution_concept_gate",
+        "analysis_kind": "grouped_table_one",
+        "selection_reason": "table_one_spec_preflight",
+        "reason": "preexecution_concept_gate_failed",
+        "executor_errors": None,
+    }
 
 
 @pytest.mark.parametrize(
@@ -1250,7 +1391,11 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
     monkeypatch,
     tmp_path,
 ):
+    from easyicu.research_agent.authority.plausibility import (
+        FlagOnlyPlausibilityScope,
+    )
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import final_validation
     from easyicu.research_agent.gates import contract as contract_gate
     from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -1322,16 +1467,16 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         return _demote
 
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_demote_step_contract_for_primary_runner",
         preserve_demotions("primary_runner_demotion"),
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_demote_result_figure_shape_for_family_renderer",
         preserve_demotions("figure_shape_demotion"),
     )
-    original_compile = pipeline_execute.compile_sealed_step_result_shadow
+    original_compile = final_validation.compile_sealed_step_result_shadow
     compiler_calls = []
 
     def compile_once(**kwargs):
@@ -1339,7 +1484,7 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         return original_compile(**kwargs)
 
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "compile_sealed_step_result_shadow",
         compile_once,
     )
@@ -1349,7 +1494,7 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
             return list(legacy_findings)
 
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "StepSummaryFractionEnvelopeDualReader",
         PassthroughFractionEnvelopeValidator,
     )
@@ -1383,6 +1528,13 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         step_record={},
         completed_step_records=({"step_id": "06_parent", "status": "ok"},),
         resolved_input_bindings={},
+        plausibility_scope=FlagOnlyPlausibilityScope(
+            step_id="07_review",
+            expected_columns=(),
+            source_contracts_sha256="0" * 64,
+            authority_kind="test",
+        ),
+        script_text="",
         attempt_id="attempt-2",
         checkpoint_id="checkpoint-9",
         **{argument: StubValidator(name) for argument, name in validator_names.items()},
@@ -1452,7 +1604,11 @@ def test_final_fraction_consumer_fails_closed_when_sealed_compile_fails(
     monkeypatch,
     tmp_path,
 ):
+    from easyicu.research_agent.authority.plausibility import (
+        FlagOnlyPlausibilityScope,
+    )
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import final_validation
     from easyicu.research_agent.execution.envelope_sealing import (
         SealedStepResultEnvelopeSnapshot,
     )
@@ -1467,27 +1623,27 @@ def test_final_fraction_consumer_fails_closed_when_sealed_compile_fails(
         error_code="sealed_envelope_compile_failed",
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "compile_sealed_step_result_shadow",
         lambda **_kwargs: failed_snapshot,
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_step_execution_cohort_path",
         lambda **_kwargs: tmp_path / "cohort.parquet",
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_bound_step_execution_cohort_path",
         lambda **_kwargs: tmp_path / "cohort.parquet",
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_demote_step_contract_for_primary_runner",
         lambda _record, _summary, findings: list(findings),
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_demote_result_figure_shape_for_family_renderer",
         lambda _context, findings: list(findings),
     )
@@ -1502,7 +1658,7 @@ def test_final_fraction_consumer_fails_closed_when_sealed_compile_fails(
         )
 
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_step_deterministic_contract_findings",
         fraction_only_contract_findings,
     )
@@ -1519,6 +1675,13 @@ def test_final_fraction_consumer_fails_closed_when_sealed_compile_fails(
         step_record={"status": "running"},
         completed_step_records=(),
         resolved_input_bindings={},
+        plausibility_scope=FlagOnlyPlausibilityScope(
+            step_id=step.step_id,
+            expected_columns=(),
+            source_contracts_sha256="0" * 64,
+            authority_kind="test",
+        ),
+        script_text="",
         attempt_id="attempt-1",
         checkpoint_id="checkpoint-1",
         stat_validator=EmptyValidator(),
@@ -1648,6 +1811,83 @@ def test_primary_cohort_coder_receives_only_exact_locked_cohort_payload():
     assert "robustness_specs" not in payload
 
 
+def test_primary_cohort_coder_receives_verified_physical_predicate_receipt(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        ConceptPredicate,
+        TimeWindow,
+        materialize_locked_analysis_cohort,
+    )
+    from easyicu.research_agent.execution.phase import (
+        _planner_materialized_cohort_prompt_payload,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [11, 12, 13],
+            "age": [31.0, None, 54.0],
+        }
+    ).to_parquet(universe_path, index=False)
+    plan = AnalysisPlan(
+        research_question="Apply the declared eligibility predicate.",
+        cohort=CohortDefinition(
+            name="eligible_stays",
+            inclusion=(
+                ConceptPredicate(
+                    concept_id="age",
+                    time_window=TimeWindow(
+                        anchor="icu_admit",
+                        start_offset_hours=0,
+                        end_offset_hours=24,
+                    ),
+                    aggregation="first",
+                    op=">=",
+                    value=18,
+                ),
+            ),
+        ),
+        robustness_specs=[],
+        steps=[],
+    )
+    result = materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=plan,
+        universe_path=universe_path,
+    )
+
+    payload = json.loads(
+        _planner_materialized_cohort_prompt_payload(
+            plan=plan,
+            universe_path=universe_path,
+            analysis_cohort_path=Path(result["path"]),
+        )
+    )
+
+    assert payload["raw_universe"]["rows"] == 3
+    assert payload["authoritative_analysis_cohort"]["rows"] == 2
+    assert payload["ordered_predicate_flow"][1] == {
+        "aggregation": "first",
+        "concept_id": "age",
+        "n_before": 3,
+        "n_excluded": 1,
+        "n_remaining": 2,
+        "op": ">=",
+        "predicate_kind": "inclusion",
+        "resolved_column": "age",
+        "step_order": 1,
+        "value": 18,
+        # A magnitude filter is never narrowed by an event time, so the ledger
+        # states that explicitly rather than omitting the fields on some rows.
+        "event_time_column": None,
+        "event_time_start_hours": None,
+        "event_time_end_hours": None,
+    }
+
+
 def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked():
     from easyicu.research_agent.execution import phase as pipeline_execute
 
@@ -1673,6 +1913,8 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
     assert "or has_primary_cohort_universe_producer" in source
     assert source.count("if run_input_authority_state.corrupted:") == 2
     assert '"remaining_steps_suppressed": True' in source
+    assert "primary_cohort_execution_receipt = (" in source
+    assert "host_verified_cohort_execution_receipt=(" in source
 
     runner_call = source.index("run_result = step_executor.execute(")
     cohort_authority_check = source.index(
@@ -1821,9 +2063,9 @@ def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
         "resume_state",
     }
     missing = required_plan_fields - plan_fields
-    assert (
-        not missing
-    ), f"_PlanPhaseResult is missing fields {missing} consumed by run_execute_phase."
+    assert not missing, (
+        f"_PlanPhaseResult is missing fields {missing} consumed by run_execute_phase."
+    )
 
     exec_fields = {f.name for f in fields(_ExecutePhaseResult)}
     required_exec_fields = {

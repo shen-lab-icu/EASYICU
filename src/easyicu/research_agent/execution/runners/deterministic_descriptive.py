@@ -20,6 +20,9 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from ...authority.plausibility import FlagOnlyPlausibilityScope
+from .plausibility_receipt import render_standard_plausibility_receipt_code
+
 __all__ = ["absolute_risk_context_code", "run_absolute_risk_context"]
 
 _COMPANION_SUFFIXES = (
@@ -47,16 +50,112 @@ _VALUE_SUFFIXES = (
 )
 
 
-def absolute_risk_context_code() -> str:
-    """Return the small script consumed by the instrumented step runner."""
+def absolute_risk_context_code(
+    *,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
+) -> str:
+    """Return the small script consumed by the instrumented step runner.
 
-    return textwrap.dedent("""
+    The body is one call into host code, but the plausibility receipt is
+    RENDERED here rather than computed inside it.  The obligation gate reads
+    the script's own source to find a comparison against bounds taken from the
+    contract, and a call into an imported function shows it nothing -- so a
+    delegating stub is refused with ``plausibility_check_not_attributable``
+    however correctly the callee behaves.
+
+    That refusal was invisible until 2026-08-04, because this owner had never
+    claimed a step: its ownership predicate carried a method allowlist the
+    Planner never matched, 0 claims in 89 opportunities. The first run in which
+    it did claim died here. The six sibling runners that were reachable all
+    render the receipt the same way.
+    """
+
+    receipt = (
+        render_standard_plausibility_receipt_code(
+            plausibility_scope,
+            frame_name="plausibility_frame",
+        )
+        if plausibility_scope is not None and plausibility_scope.expected_columns
+        else ""
+    )
+    body = textwrap.dedent(
+        """
         from easyicu.research_agent.execution.runners.deterministic_descriptive import (
             run_absolute_risk_context,
         )
 
         run_absolute_risk_context()
-        """).strip()
+        """
+    ).strip()
+    if not receipt:
+        return body
+    # One read-modify-write after the body has written its summary, matching
+    # the robustness runner: a second canonical write would give the static
+    # obligation gate two writers to reason about.
+    return "\n\n".join(
+        (
+            textwrap.dedent(
+                """
+                import json
+                import os
+                from pathlib import Path
+
+                import pandas as pd
+
+                plausibility_frame = pd.read_parquet(os.environ["COHORT_PARQUET"])
+                """
+            ).strip(),
+            receipt,
+            body,
+            textwrap.dedent(
+                """
+                summary_path = Path(os.environ["STEP_OUT_DIR"]) / "step_summary.json"
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                summary["plausibility_audit"] = plausibility_audit
+                summary_path.write_text(
+                    json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
+                )
+                """
+            ).strip(),
+        )
+    )
+
+
+#: The products this runner is competent to emit, identical to the set its
+#: ownership predicate admits.  The Planner picks one of these NAMES; the
+#: science is the same table either way.
+_SUPPORTED_PRODUCTS = (
+    "absolute_risk_context",
+    "absolute_risk",
+    "exposure_prevalence_and_absolute_risk",
+    "exposure_outcome_summary",
+)
+
+
+def _declared_product(step: Mapping[str, Any]) -> str:
+    """Return the product name the plan promised, not this runner's habit.
+
+    The runner wrote ``exposure_outcome_summary`` unconditionally while the
+    capability registry advertises it to the Planner as ``absolute_risk_context``
+    -- so a plan that promised the advertised name got a step that registered a
+    different one, and ``declared_product_contract`` refused it with
+    ``declared_product_missing``. That went unseen for as long as this owner
+    never claimed a step (0 of 89); e2's first real claim died on it.
+
+    Only the four names this runner's ownership predicate admits are honoured,
+    so a plan cannot rename the product into something this runner does not
+    compute. With nothing declared the historical name is kept.
+    """
+
+    for value in step.get("expected_outputs") or []:
+        kind, separator, name = str(value or "").strip().lower().partition(":")
+        # The kind matters as much as the name. This runner writes ONE csv, and
+        # a plan naming ``figure:absolute_risk_context`` is asking a renderer
+        # for a picture -- 1 of the 92 recorded declarations does exactly that,
+        # and honouring it would register a table under a figure's name.
+        if separator and kind == "table" and name in _SUPPORTED_PRODUCTS:
+            return name
+    return "exposure_outcome_summary"
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -533,7 +632,8 @@ def run_absolute_risk_context() -> Dict[str, Any]:
             )
 
     table = pd.DataFrame(rows)
-    table_path = out_dir / "exposure_outcome_summary.csv"
+    product = _declared_product(step)
+    table_path = out_dir / f"{product}.csv"
     table.to_csv(table_path, index=False)
     summary = {
         "step_id": step_id,
@@ -553,7 +653,7 @@ def run_absolute_risk_context() -> Dict[str, Any]:
         "source_state_columns": source_columns,
         "n_summary_rows": int(len(table)),
         "adjusted_effect": None,
-        "output_files": {"exposure_outcome_summary": table_path.name},
+        "output_files": {f"table:{product}": table_path.name},
         "notes": [
             "Exposure columns came from the current plan step's structured inputs.",
             "Continuous exposures use median and IQR; no post-hoc bins were created.",

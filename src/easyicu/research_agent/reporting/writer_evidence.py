@@ -24,6 +24,7 @@ from ..authority.runtime_artifacts import (
     current_step_records,
 )
 from ..scalar_utils import _first_present_scalar
+from .p_values import prepare_p_values_for_writer, render_claim_value_for_writer
 
 __all__ = [
     "_resolve_writer_aux_path",
@@ -487,6 +488,7 @@ def _render_writer_evidence_digest(
         )
         if not has_panel_primary:
             digest_row.update(_summarise_primary_association_table(primary_path))
+        digest_row = prepare_p_values_for_writer(digest_row)
         lines.append(
             "  "
             + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
@@ -681,7 +683,12 @@ def _render_writer_evidence_digest_v2(
             secondary_lines.append(f"- {step_id}")
             for c in secondary_claims:
                 secondary_lines.append(
-                    f"  {c.source_field}={c.value} (canonical={c.canonical})"
+                    f"  {c.source_field}="
+                    + render_claim_value_for_writer(
+                        source_field=c.source_field,
+                        value=c.value,
+                        canonical=c.canonical,
+                    )
                 )
             if truncated:
                 secondary_lines.append(
@@ -720,7 +727,13 @@ def _render_writer_evidence_digest_v2(
                 truncated = True
             secondary_lines.append(f"- {step_id}")
             for key, value in uncovered_pairs:
-                secondary_lines.append(f"  {key}={value}")
+                secondary_lines.append(
+                    f"  {key}="
+                    + render_claim_value_for_writer(
+                        source_field=key,
+                        value=value,
+                    )
+                )
             if truncated:
                 secondary_lines.append(
                     f"  ... ({uncovered_pairs_total - cap} more leaves omitted; pass evidence= or raise the per-step cap to see)"
@@ -838,6 +851,104 @@ def _is_hidden_robustness_row_claim(step_id: str, source_field: str) -> bool:
     return step_id == "robustness_panel" and source_field.startswith("row_")
 
 
+def _primary_effect_interpretation_lines(
+    *,
+    run_dir: Path,
+    evidence_id: Any,
+) -> List[str]:
+    """Say what the panel's primary number IS, not just how large it is.
+
+    THE DIGEST IS A NUMBERS-ONLY CHANNEL, AND A NUMBER'S MEANING IS NOT A
+    NUMBER.  ``WRITER_DIGEST_PREFERRED_KEYS`` is 89 entries and every one names
+    a quantity; the secondary block reads ``numeric_claims()``, which by
+    construction holds only numbers.  So an effect SCALE, the CONTRAST it
+    refers to, and the ADJUSTMENT SET have no path to the Writer at all -- and
+    the Writer is forbidden from stating facts absent from its digest.
+
+    MEASURED over every writer digest on disk, 2026-08-03: 17 of 17 carry no
+    effect scale, while 15 of those 17 runs have it in their own step summary.
+    The visible cost is one sentence per manuscript::
+
+        the primary stage-based estimate was 6.47782, with a 95% confidence
+        interval from 6.02368 to 6.96620
+
+    6.48 of what?  Per stage?  Stage 3 versus stage 0?  The evidence answers
+    all of it -- ``effect_scale=odds_ratio``,
+    ``exposure_expression=aki_stage_max__is_3``, ``covariates=[age, sex]`` --
+    and none of it reached the sentence.  A clinician cannot read that result
+    and a journal cannot publish it.
+
+    The chain already exists and is never walked: the panel's primary row
+    carries the ``evidence_id`` of the step that produced the estimate, and
+    that step's summary carries the interpretation.  MEASURED over 89 recorded
+    panels: 73 resolve end to end, 0 fail on a missing file, 0 fail on a
+    missing scale; the other 16 have no ``evidence_id`` on the primary row and
+    are told so rather than guessed at.
+
+    Deliberately NOT changed here: the printed precision.  ``_fmt_panel_number``
+    emits ``%.6g`` and the numeric binder matches the Writer's literal back to
+    the claim ledger, so rounding for prose is a separate change that has to be
+    made at the binder too.
+    """
+
+    if not evidence_id:
+        return [
+            "primary interpretation: UNAVAILABLE -- the panel's primary row "
+            "names no source evidence, so the host cannot state the effect "
+            "scale. Do not describe the estimate's units or contrast."
+        ]
+    summary_path = run_dir / "evidence" / f"{evidence_id}__step_summary.json"
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        summary = None
+    if not isinstance(summary, dict):
+        return [
+            "primary interpretation: UNAVAILABLE -- the source evidence for "
+            f"the primary row ({evidence_id}) could not be read. Do not "
+            "describe the estimate's units or contrast."
+        ]
+
+    scale = summary.get("effect_scale") or summary.get("primary_estimate_label")
+    if not scale:
+        return [
+            "primary interpretation: UNAVAILABLE -- the producing step "
+            "declared no effect scale. Report the estimate without naming its "
+            "units or contrast."
+        ]
+
+    contracts = summary.get("model_contracts")
+    contract = (
+        contracts[0]
+        if isinstance(contracts, list) and contracts and isinstance(contracts[0], dict)
+        else {}
+    )
+    facts: List[str] = [f"effect_scale={scale}"]
+    contrast = contract.get("exposure_expression") or summary.get("exposure")
+    if contrast:
+        facts.append(f"exposure_contrast={contrast}")
+    outcome = contract.get("outcome") or summary.get("outcome")
+    if outcome:
+        facts.append(f"outcome={outcome}")
+    covariates = summary.get("covariates") or summary.get("adjustment_covariates")
+    if isinstance(covariates, list) and covariates:
+        facts.append("adjusted_for=" + ",".join(str(value) for value in covariates))
+    elif covariates is not None:
+        facts.append("adjusted_for=none_declared")
+    method = contract.get("method_family") or summary.get("estimator_kind")
+    if method:
+        facts.append(f"estimator={method}")
+    producing_step = contract.get("model_id") or summary.get("requirement_id")
+    if producing_step:
+        facts.append(f"model_id={producing_step}")
+
+    return [
+        "primary interpretation: " + ", ".join(facts),
+        "State the scale and the contrast in the sentence that reports this "
+        "estimate. Do not restate it as a bare number.",
+    ]
+
+
 def _render_robustness_panel_block(*, run_dir: Path | None) -> List[str]:
     if run_dir is None:
         return []
@@ -864,6 +975,12 @@ def _render_robustness_panel_block(*, run_dir: Path | None) -> List[str]:
             f"CI=[{_fmt_panel_number(primary.ci_low)}, "
             f"{_fmt_panel_number(primary.ci_high)}], "
             f"n={primary.n}"
+        )
+        lines.extend(
+            _primary_effect_interpretation_lines(
+                run_dir=Path(run_dir),
+                evidence_id=getattr(primary, "evidence_id", None),
+            )
         )
     converged_variants = [
         row

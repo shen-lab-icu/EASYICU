@@ -58,7 +58,7 @@ def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         pipeline_module,
         "_enforce_advanced_plan_contract",
-        lambda *, plan, context: (plan, []),
+        lambda *, plan, context, **_kwargs: (plan, []),
     )
     monkeypatch.setattr(
         pipeline_module,
@@ -68,7 +68,42 @@ def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         pipeline_module,
         "_ensure_audit_panel_step_in_plan",
-        lambda *, plan, context: (plan, []),
+        lambda *, plan, context, **_kwargs: (plan, []),
+    )
+
+
+def _allow_reportable_capability_for_readiness_unit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Isolate readiness mechanics from capability-resolution fixtures.
+
+    These focused tests predate the scientific-capability gate and intentionally
+    use tiny display/manuscript plans rather than executable estimator plans.
+    Supply an already-valid owner receipt here; capability resolution and its
+    fail-closed integration are covered in their dedicated suites.
+    """
+
+    import easyicu.research_agent.reporting.readiness as readiness_module
+    from easyicu.research_agent.planning.capability_registry import (
+        ScientificCapabilityAssessment,
+    )
+
+    assessment = ScientificCapabilityAssessment(
+        capability_id="descriptive_measurement_v1",
+        analysis_type="descriptive_epidemiology",
+        question_present=True,
+        question_coordinates_resolved=True,
+        input_contract_resolved=True,
+        runtime_data_available=None,
+        execution_backend_available=None,
+        scientific_validator_available=True,
+        claim_ceiling="reportable",
+        reason="Focused readiness fixture supplies a valid capability receipt.",
+    )
+    monkeypatch.setattr(
+        readiness_module,
+        "assess_scientific_capability",
+        lambda **_kwargs: assessment,
     )
 
 
@@ -478,7 +513,7 @@ def test_pipeline_repairs_failed_generated_code(ra, tmp_path: Path, monkeypatch)
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Write a compact cohort table.",
-                    "inputs": ["age", "death"],
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -562,6 +597,7 @@ def test_pipeline_repairs_cross_step_source_status_denominator_drift(
     """A later Table 1 must preserve a prior explicit source-status lock."""
 
     _disable_article_contract(monkeypatch)
+
     def source_lock_script() -> str:
         return """
 import json
@@ -710,6 +746,7 @@ def test_pipeline_repairs_fixed_cohort_drift_in_current_step(
     """An explicit fixed-cohort promise routes N drift to local code repair."""
 
     _disable_article_contract(monkeypatch)
+
     def summary_script(*, cohort_n: int, field: str) -> str:
         return f"""
 import json
@@ -730,7 +767,11 @@ print(json.dumps(summary))
                     "step_id": "01_cohort_lock",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Record the completed analytic cohort.",
-                    "inputs": ["age"],
+                    # No ranged raw input: the script below only counts rows, so
+                    # declaring one would owe a plausibility receipt it never
+                    # computes -- and the step would be blocked before it ever
+                    # reached the fixed-cohort repair this test is about.
+                    "inputs": ["death"],
                     "expected_outputs": [],
                     "method": "descriptive",
                     "icu_rule_refs": [],
@@ -739,7 +780,7 @@ print(json.dumps(summary))
                     "step_id": "02_reconcile",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Keep the completed cohort fixed while reconciling outputs.",
-                    "inputs": ["age"],
+                    "inputs": ["death"],
                     "expected_outputs": [],
                     "method": "data_quality_audit",
                     "icu_rule_refs": [],
@@ -829,7 +870,10 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
                     "step_id": "05_primary_association",
                     "planned_analysis_role": "primary",
                     "intent": "Estimate the adjusted odds ratio for the exposure.",
-                    "inputs": ["age", "death"],
+                    # See 01_cohort_lock above: the scripts here fabricate the
+                    # estimate table outright, so a ranged input would block the
+                    # step before the crash-after-contract-repair path is reached.
+                    "inputs": ["death"],
                     "expected_outputs": ["statistic:primary_association"],
                     "method": "logistic_regression",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -956,9 +1000,17 @@ def test_method_substitution_contract_repair_is_blocked_when_budget_is_zero(
                     "intent": (
                         "Estimate the adjusted odds ratio for Sepsis-3 and mortality."
                     ),
-                    "inputs": ["sepsis3", "death", "age", "map_min"],
+                    # The overadjustment rule reads the *covariates the summary
+                    # reports*, not the declared inputs; the script fabricates its
+                    # table and reads no column, so declaring the ranged raw
+                    # inputs would only block it before the rule can fire.
+                    "inputs": ["sepsis3", "death"],
                     "expected_outputs": ["statistic:primary_association"],
-                    "method": "logistic",
+                    # `logistic` alone is not one of the effect-method heads that
+                    # grant effect authority, and without that authority the
+                    # overadjustment auditor never runs -- so the step would fail
+                    # the product contract instead of the rule under test.
+                    "method": "logistic_regression",
                     "icu_rule_refs": ["no_overadjustment_for_exposure_constituents"],
                 }
             ],
@@ -1059,16 +1111,23 @@ print(json.dumps(summary))
     assert "map_min_missing_indicator" in covariates
     assert [f for f in record.get("contract_findings", []) if f["severity"] == "error"]
 
+    escalations = [
+        item
+        for item in record.get("semantic_repair_escalations", [])
+        if item["repair_id"] == "drop_overadjustment_covariates_v1"
+    ]
+    assert escalations
+    assert escalations[-1]["issue_code"] == ("scientific_design_change_requires_replan")
+    assert escalations[-1]["action"] == "replan_or_human_review"
+
     repair_ledger = json.loads(
         (run_dir / "repairs_applied.json").read_text(encoding="utf-8")
     )
-    blocked = [
+    assert not [
         item
         for item in repair_ledger["repairs"]
         if item["repair_id"] == "drop_overadjustment_covariates_v1"
-    ]
-    assert blocked
-    assert blocked[-1]["outcome"] == "blocked_by_automatic_repair_policy"
+    ], "semantic design changes must not enter the automatic-repair ledger"
 
 
 def test_generic_association_figure_coder_failure_fails_closed(
@@ -1085,7 +1144,7 @@ def test_generic_association_figure_coder_failure_fails_closed(
                     "step_id": "03_primary_association",
                     "planned_analysis_role": "primary",
                     "intent": "Estimate the adjusted odds ratio.",
-                    "inputs": ["sepsis3", "death", "age"],
+                    "inputs": ["sepsis3", "death"],
                     "expected_outputs": ["statistic:primary_or"],
                     "method": "logistic_regression",
                     "icu_rule_refs": [],
@@ -1232,6 +1291,8 @@ def test_initial_authority_checkpoint_io_failure_never_enters_code_fallback(
     expected_code_calls: int,
     error_pattern: str,
 ):
+    import re
+
     from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.authority.step_runtime import (
         StepAuthorityRuntimeError,
@@ -1306,14 +1367,42 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_latex=False,
     )
 
-    with pytest.raises(StepAuthorityRuntimeError, match=error_pattern):
-        pipeline.run(
-            question="Summarize the locked ICU cohort.",
-            cohort=pd.DataFrame({"stay_id": [1, 2]}),
-            cohort_name="checkpoint_failure_test",
-            database="synthetic",
-            stop_after_analysis=True,
-        )
+    result = pipeline.run(
+        question="Summarize the locked ICU cohort.",
+        cohort=pd.DataFrame({"stay_id": [1, 2]}),
+        cohort_name="checkpoint_failure_test",
+        database="synthetic",
+        stop_after_analysis=True,
+    )
+
+    # ``run`` no longer re-raises: 89b04b1 made an unexpected step exception end
+    # the run fail-closed instead of escaping it, so the run stays sealable and
+    # the traceback is persisted. That retired the transport this test used, not
+    # the properties it protected, so both are asserted at their current owners.
+    #
+    # Property 1 -- the failure is *recorded*, with its typed reason, against the
+    # step that raised. A generic message here would mean the run is sealable but
+    # undiagnosable.
+    workdir = Path(str(result.workdir))
+    manifest = json.loads((workdir / "manifest.json").read_text(encoding="utf-8"))
+    records = {
+        record["step_id"]: record
+        for record in manifest["per_step_records"]
+        if isinstance(record, dict) and record.get("step_id")
+    }
+    assert records["01_summary"]["status"] == "execution_raised"
+    recorded_error = str(records["01_summary"].get("error") or "")
+    assert StepAuthorityRuntimeError.__name__ in recorded_error, recorded_error
+    assert re.search(error_pattern, recorded_error), recorded_error
+
+    # Property 2 -- the run is floored, so nothing downstream can read a
+    # checkpoint-failed run as a result. ``manuscript_path`` is still written
+    # (a scaffold always is); ``status`` is what says it carries no finding.
+    status = json.loads((workdir / "run_status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "diagnostic_only"
+    assert status["strict_fail_closed"] is True
+    assert status["gates"]["execution_complete"] is False
+    assert status["gates"]["completed_step_count"] == 0
 
     code_calls = [
         messages
@@ -1480,6 +1569,14 @@ def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(
     otherwise-correct ordinal analysis down to ``diagnostic_only``.
     """
 
+    # `sofa2` carries a plausibility range, and unlike the fallback fixtures
+    # below both scripts here really do read it -- so the step genuinely owes a
+    # flag-only receipt.  Both drafts are wrapped in the host's own receipt
+    # block (the same one the offline mock provider appends) rather than a
+    # hand-copied literal, so the fixture cannot drift away from the contract it
+    # is meant to satisfy.
+    from easyicu.research_agent.providers.mocks import _with_mock_plausibility_receipt
+
     _disable_article_contract(monkeypatch)
     plan = json.dumps(
         {
@@ -1501,10 +1598,13 @@ def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(
     repaired_code = """
 import json
 import os
+from pathlib import Path
+
 import pandas as pd
 
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
+out_dir = Path(out)
 pd.DataFrame({
     "variable": ["sofa2"],
     "median": [float(df["sofa2"].median())],
@@ -1522,9 +1622,12 @@ print(json.dumps(summary))
     initial_code = """
 import json
 import os
+from pathlib import Path
+
 import pandas as pd
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
+out_dir = Path(out)
 
 levels = df["sofa2"].value_counts().sort_index()
 pd.DataFrame({
@@ -1542,6 +1645,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 print(json.dumps(summary))
 """
+    initial_code = _with_mock_plausibility_receipt(initial_code)
+    repaired_code = _with_mock_plausibility_receipt(repaired_code)
     llm = PatternScriptedMockLLMClient(
         [
             *_stable_plan_rules(plan),
@@ -1619,7 +1724,11 @@ def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Produce a Table 1 cohort summary.",
-                    "inputs": ["sofa2", "death"],
+                    # The draft below raises immediately and reads nothing, so a
+                    # ranged raw input here would be refused by the plausibility
+                    # preflight and the step would never reach the *runtime*
+                    # failure whose repair this test is about.
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -1691,7 +1800,7 @@ def test_pipeline_falls_back_when_repair_model_call_fails(
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Produce a Table 1 cohort summary.",
-                    "inputs": ["sofa2", "death"],
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -1765,7 +1874,7 @@ def test_pipeline_falls_back_when_successful_script_writes_no_artefacts(
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Produce a Table 1 cohort summary.",
-                    "inputs": ["sofa2", "death"],
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -2501,8 +2610,14 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert (run_dir / "analysis_plan_revision_2.json").exists()
 
 
+# The tests in this block characterize the retired candidate transformations
+# below the public safety boundary.  Production calls the wrappers in
+# ``repairs.source``; those wrappers never expose a METHOD_SUBSTITUTION and are
+# covered by ``test_repair_registry`` / ``test_code_repair``.
 def test_deterministic_runner_repair_patches_statsmodels_dtype_failure(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import numpy as np
@@ -2528,7 +2643,9 @@ res = sm.Logit(y, X).fit(disp=0)
 
 
 def test_deterministic_runner_repair_patches_arbitrary_statsmodels_assignment(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import numpy as np
@@ -2548,7 +2665,9 @@ cc_model = sm.Logit(cc_df["death"], sm.add_constant(cc_df[["lactate", "sex_M"]])
 
 
 def test_deterministic_runner_repair_preserves_statsmodels_constructor_kwargs(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import numpy as np
@@ -2573,7 +2692,9 @@ result = model.fit(disp=0)
 
 
 def test_deterministic_runner_repair_aligns_statsmodels_endog_exog_indices(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import numpy as np
@@ -2608,7 +2729,9 @@ result = model.fit()
 
 
 def test_deterministic_summary_repair_aligns_indices_after_dtype_repair(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 import numpy as np
@@ -2646,7 +2769,9 @@ result = model.fit()
 
 
 def test_deterministic_runner_repair_reapplies_dtype_after_coder_rewrite(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import numpy as np
@@ -2683,7 +2808,9 @@ result = _fit_logistic(df[["age", "sex_M"]], df["death"])
 
 
 def test_deterministic_runner_repair_adds_missing_os_import(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 value = os.environ["COHORT_PARQUET"]
@@ -2700,7 +2827,9 @@ print(value)
 
 
 def test_deterministic_runner_repair_strips_python_prefix(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = "pythonimport os\nvalue = os.environ['COHORT_PARQUET']\n"
     repaired = _deterministic_runner_repair(
@@ -2714,7 +2843,9 @@ def test_deterministic_runner_repair_strips_python_prefix(ra):
 
 
 def test_deterministic_runner_repair_replaces_unclosed_table_one(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import pandas as pd
@@ -2735,7 +2866,9 @@ summary = {
 
 
 def test_deterministic_runner_repair_updates_proportion_confint_nobs(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 from statsmodels.stats.proportion import proportion_confint
@@ -2752,7 +2885,9 @@ ci_lower, ci_upper = proportion_confint(count=events, n=len(df), method="wilson"
 
 
 def test_deterministic_runner_repair_flattens_matplotlib_xerr(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 xerr_lower = np.array([or_estimate - or_lower])
@@ -2773,7 +2908,9 @@ ax.errorbar([or_estimate], [0], xerr=np.array([[xerr_lower], [xerr_upper]]), fmt
 
 
 def test_deterministic_runner_repair_filters_statsmodels_conf_int_rows(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import numpy as np
@@ -2819,7 +2956,9 @@ plot_df = pd.DataFrame({
 
 
 def test_deterministic_runner_repair_conf_int_filter_is_case_neutral(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import numpy as np
@@ -2856,7 +2995,9 @@ def test_deterministic_runner_repair_materializes_analysis_cohort_before_require
     tmp_path: Path,
     monkeypatch,
 ):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import json
@@ -2924,7 +3065,9 @@ write_json(out_dir / "step_summary.json", step_summary)
 
 
 def test_deterministic_runner_repair_analysis_cohort_source_is_case_neutral(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import pandas as pd
@@ -2947,7 +3090,9 @@ if missing_cols:
 
 
 def test_deterministic_runner_repair_downgrades_bad_publication_contract(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 # Create figure contract with panels
@@ -2983,7 +3128,9 @@ fig, ax = plt.subplots()
 def test_deterministic_runner_repair_downgrades_bad_publication_contract_without_comment(
     ra,
 ):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 figure_contract = make_figure_contract(
@@ -3047,7 +3194,9 @@ def test_promote_sibling_figure_exports_normalizes_outputs_stem(ra, tmp_path: Pa
 
 
 def test_deterministic_runner_repair_restores_shadowed_json_module(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import json
@@ -3073,7 +3222,9 @@ with open("step_summary.json", "w") as f:
 
 
 def test_deterministic_runner_repair_dedupes_outcome_before_unique(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 primary_predictor = "vaso_any_24h"
@@ -3095,7 +3246,9 @@ if not set(model_df[outcome].unique()).issubset({0, 1}):
 
 
 def test_deterministic_runner_repair_encodes_sex_before_robustness_nan_check(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 covariates = ['sex', 'map_min_24h']
@@ -3133,7 +3286,9 @@ if len(rv_df) > 0:
 
 
 def test_deterministic_runner_repair_replaces_hallucinated_figure_utils_import(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 from easyicu.research_output.figure_utils import make_figure_contract, save_publication_figure
@@ -3155,7 +3310,9 @@ contract = make_figure_contract(
 
 
 def test_deterministic_runner_repair_does_not_strip_real_host_module(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 from easyicu.research_agent.methods.descriptive_inputs import (
@@ -3178,7 +3335,9 @@ print(build_grouped_table_one)
 def test_deterministic_runner_repair_inserts_stub_after_parenthesized_import(ra):
     import ast
 
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 from easyicu.research_agent.methods.descriptive_inputs import (
@@ -3199,7 +3358,9 @@ print(fake_table)
 
 
 def test_deterministic_runner_repair_inserts_stub_before_late_import(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 from pathlib import Path
@@ -3218,7 +3379,9 @@ import json
 
 
 def test_deterministic_runner_repair_filters_x_cols_after_dummy_encoding(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 model_df = pd.get_dummies(model_df, columns=["sex"], drop_first=True)
@@ -3240,7 +3403,9 @@ X = model_df[x_cols].copy()
 def test_deterministic_runner_repair_filters_x_cols_before_dropna_after_dummy_encoding(
     ra,
 ):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 sex_dummies = pd.get_dummies(model_df["sex"], prefix="sex", drop_first=True)
@@ -3264,7 +3429,9 @@ X = model_df[x_cols].astype(float)
 
 
 def test_deterministic_runner_repair_filters_generic_dropna_after_dummy_encoding(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 model_df = pd.get_dummies(model_df, columns=['sex'], drop_first=True)
@@ -3289,7 +3456,9 @@ model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna(subset=[outcome_co
 
 
 def test_deterministic_runner_repair_uses_df_for_missing_indicator_source(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 df = pd.read_parquet(cohort_path)
@@ -3312,7 +3481,9 @@ model_df['creat_missing'] = model_df[creat_missing].isnull().any(axis=1).astype(
 
 
 def test_deterministic_runner_repair_restores_outcome_in_all_vars_subset(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 outcome_col = 'death'
@@ -3335,7 +3506,9 @@ cc_df = df[all_vars].dropna()
 def test_deterministic_runner_repair_restores_predictor_and_sex_in_robustness_script(
     ra,
 ):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 predictor_col = creatinine_col
@@ -3369,7 +3542,9 @@ ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
 
 
 def test_deterministic_runner_repair_stabilizes_predictor_col_robustness_template(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 outcome_col = "readmission_30d"
@@ -3437,7 +3612,9 @@ ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
 
 
 def test_deterministic_runner_repair_preserves_indentation_for_robustness_patch(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 def main():
@@ -3470,7 +3647,9 @@ def main():
 
 
 def test_deterministic_runner_repair_handles_undefined_primary_predictor_summary(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 summary = {
@@ -3489,7 +3668,9 @@ summary = {
 
 
 def test_deterministic_runner_repair_replaces_broken_outcome_incidence(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 STEP_NAME = "outcome_incidence"
@@ -3508,7 +3689,9 @@ final_model = ols("logit(" +
 
 
 def test_deterministic_runner_repair_rewrites_broken_prediction_split_script(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 from sklearn.model_selection import train_test_split
@@ -3531,7 +3714,9 @@ figure_contract = FigureContract(
 
 
 def test_deterministic_runner_repair_preserves_categorical_prediction_columns(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 for col in predictors:
@@ -3554,7 +3739,9 @@ categorical_features = ["sex"]
 
 
 def test_deterministic_runner_repair_injects_logreg_imputation(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 from sklearn.model_selection import train_test_split
@@ -3576,7 +3763,9 @@ y_pred_proba = model.predict_proba(X_test)[:, 1]
 
 
 def test_deterministic_runner_repair_fixes_prediction_calibration_import(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 from sklearn.metrics import roc_auc_score, brier_score_loss, calibration_curve
@@ -3595,7 +3784,9 @@ from sklearn.metrics import roc_auc_score, brier_score_loss, calibration_curve
 
 
 def test_deterministic_runner_repair_retries_prediction_calibration_import(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 from sklearn.metrics import roc_auc_score, brier_score_loss, calibration_curve
@@ -3614,7 +3805,9 @@ from sklearn.metrics import roc_auc_score, brier_score_loss, calibration_curve
 
 
 def test_deterministic_runner_repair_rank_reduces_singular_logit(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import statsmodels.api as sm
@@ -3634,7 +3827,9 @@ result = model.fit(disp=0, method='newton')
 
 
 def test_deterministic_summary_repair_rank_reduces_nested_primary_model(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 import numpy as np
@@ -3685,8 +3880,54 @@ result = run_model()
     assert "age_dup" not in result.params.index
 
 
+def test_deterministic_summary_repair_prioritizes_failed_primary_over_sensitivity(ra):
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
+
+    code = """
+import statsmodels.api as sm
+fit_method = "statsmodels_logit_mle"
+interval_method = "profile_normal"
+ci_low = beta - 1.96 * se
+reported_interval_method = "wald_95_percent"
+result = sm.Logit(y, X).fit(disp=False, maxiter=200)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "model_contracts": [
+                {
+                    "analysis_role": "primary",
+                    "fit_status": "not_fitted",
+                    "fit_failure_reason": "Singular matrix",
+                },
+                {
+                    "analysis_role": "sensitivity",
+                    "fit_status": "fitted",
+                },
+            ],
+            "sensitivity_result": {"odds_ratio": 1.60799},
+        },
+        analysis_family="cohort_definition_sensitivity",
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "rank_safe_statsmodels_design_v1"
+    assert "_easyicu_rank_safe_design_v1" in patched
+    assert (
+        "result = sm.GLM(y, X, family=sm.families.Binomial()).fit("
+        "disp=False, maxiter=200)"
+    ) in patched
+    assert 'fit_method = "statsmodels_glm_binomial_irls_rank_safe"' in patched
+    assert 'interval_method = "wald_95_percent"' in patched
+
+
 def test_deterministic_runner_repair_promotes_publication_bundle_script(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 from easyicu.research_agent.figures.publication import make_figure_contract
@@ -3705,7 +3946,9 @@ save_publication_figure(figure_contract, fig)
 
 
 def test_deterministic_runner_repair_swaps_csv_reader_for_parquet(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import pandas as pd
@@ -3722,7 +3965,9 @@ df = pd.read_csv(cohort_path, encoding='utf-8')
 
 
 def test_deterministic_runner_repair_swaps_env_csv_reader_for_parquet(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import os
@@ -3740,7 +3985,9 @@ cohort = pd.read_csv(os.environ['COHORT_PARQUET'])
 
 
 def test_deterministic_runner_repair_removes_qcut_observed_without_case_fallback(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import pandas as pd
@@ -3760,7 +4007,9 @@ summary = {"mortality_rate": df["death"].mean()}
 
 
 def test_deterministic_runner_repair_does_not_default_to_norepi_case_fallback(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import statsmodels.api as sm
@@ -3775,7 +4024,9 @@ summary = {"primary_or": None}
 
 
 def test_deterministic_runner_repair_sanitizes_numpy_json_keys(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import json
@@ -3889,7 +4140,9 @@ def test_step_contract_does_not_duplicate_host_measurement_provenance_gate(ra):
 
 
 def test_deterministic_runner_repair_restores_primary_predictor_in_logit_design(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 import pandas as pd
@@ -3926,7 +4179,9 @@ step_summary = {"n_total_stays": int(n_total), "odds_ratio": primary_or}
 def test_deterministic_runner_repair_restores_primary_predictor_with_indented_x_line(
     ra,
 ):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 def main():
@@ -3948,7 +4203,9 @@ def main():
 
 
 def test_deterministic_runner_repair_fixes_stringified_binary_outcome_key(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 table_one_data.append({"variable": "30-day readmission", "type": "binary", "count": summary["outcomes"]["readmission_30d"]["counts"][1],
@@ -5307,7 +5564,9 @@ def test_plan_cap_makes_room_for_late_primary_anchor_without_exceeding_cap(ra):
 
 def test_deterministic_runner_repair_injects_undefined_helper_stub(ra):
     """Regression: NameError for an undefined helper triggers stub injection."""
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = (
         "import json\n"
@@ -5337,7 +5596,9 @@ def test_deterministic_runner_repair_injects_undefined_helper_stub(ra):
 
 def test_deterministic_runner_repair_skips_helper_already_defined(ra):
     """If the helper IS defined, the stub injection must not fire."""
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = (
         "def to_json_serializable(value):\n"
@@ -6276,8 +6537,9 @@ def test_readiness_artifacts_reject_unresolved_manifest_comments(
 
 
 def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
@@ -6617,7 +6879,9 @@ def _authoritative_readiness_records(
 def test_readiness_publication_ready_requires_article_display_suite(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
@@ -6702,7 +6966,9 @@ def test_readiness_publication_ready_requires_article_display_suite(
 def test_readiness_publication_ready_accepts_complete_display_suite(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
@@ -7506,7 +7772,9 @@ def test_association_display_suite_rejects_risk_difference_without_absolute_risk
 def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -7593,7 +7861,9 @@ def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
 def test_author_review_note_marks_superseded_publication_export_error_nonblocking(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -7673,7 +7943,9 @@ def test_author_review_note_marks_superseded_publication_export_error_nonblockin
 def test_readiness_keeps_current_publication_figure_export_error_active(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -7754,7 +8026,9 @@ def test_readiness_keeps_current_publication_figure_export_error_active(
 def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manuscript(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -7831,7 +8105,9 @@ def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manusc
 def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -7912,7 +8188,9 @@ def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
 def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -8047,10 +8325,12 @@ def _readiness_fixture_for_manifest_caveats(ra, tmp_path: Path):
 def test_readiness_supersedes_stale_manifest_caveat_error_when_current_bound_is_clean(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """A caveat-count error from an earlier writer pass must retire when the
     latest bound manuscript carries no manifest-caveat comments (e.g. a
     resume whose rewrite cites only caveat-free records)."""
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context, plan, evidence, caveat_finding, per_step_records = (
@@ -8902,7 +9182,9 @@ def test_strip_columns_from_list_literals_noop_when_columns_absent(ra):
 
 def test_deterministic_runner_repair_fixes_column_hallucination(ra):
     """End-to-end: agent-emitted column-hallucination KeyError is auto-patched."""
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = (
         "import pandas as pd\n"
@@ -9037,9 +9319,7 @@ def test_preserve_figure_steps_after_replan_restores_exact_parent_products(ra):
     )
     current_figure = ra.AnalysisStep(
         step_id="01_model_training_figure",
-        intent=(
-            "Render the publication figure declared by step " "'01_model_training'."
-        ),
+        intent=("Render the publication figure declared by step '01_model_training'."),
         method="visualization",
         inputs=["table:model_performance", "table:roc_curve"],
         expected_outputs=["figure:discrimination_calibration"],
@@ -9090,9 +9370,7 @@ def test_preserve_figure_steps_after_replan_does_not_invent_missing_parent(ra):
     )
     current_figure = ra.AnalysisStep(
         step_id="01_model_training_figure",
-        intent=(
-            "Render the publication figure declared by step " "'01_model_training'."
-        ),
+        intent=("Render the publication figure declared by step '01_model_training'."),
         method="visualization",
         inputs=["table:model_performance"],
         expected_outputs=["figure:discrimination_calibration"],
@@ -9221,6 +9499,9 @@ def test_step_contract_repair_guidance_requires_figure_recording(ra):
 
     assert "figure output" in guidance
     assert "figure_path" in guidance
+    assert "never reconstruct source data from Matplotlib" in guidance
+    assert "panel title, reader-facing claim, role" in guidance
+    assert "actual plotted analytic rows" in guidance
 
 
 def test_step_contract_repair_guidance_for_clustering_contract(ra):
@@ -9364,6 +9645,67 @@ def test_semantic_aliases_include_clustering_aliases(ra, tmp_path: Path):
     assert "cluster_summary" in aliases
     assert "cluster_characteristics" in aliases
     assert "cluster_mortality" in aliases
+
+
+def test_clustering_bundle_assigns_each_semantic_alias_to_one_artifact(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="04_primary_clustering",
+        intent="Fit and characterize candidate clusters.",
+        method="unsupervised_clustering",
+        expected_outputs=[
+            "statistic:cluster_count",
+            "manifest:cluster_selection",
+            "table:cluster_characteristics",
+            "log:clustering_algorithm_details",
+            "manifest:clustering_methodology",
+        ],
+    )
+    paths = [
+        tmp_path / "step_summary.json",
+        tmp_path / "cluster_characteristics.csv",
+        tmp_path / "clustering_algorithm_details.json",
+        tmp_path / "clustering_methodology.json",
+    ]
+    for path in paths:
+        path.write_text("{}", encoding="utf-8")
+
+    owners: dict[str, list[str]] = {}
+    for path in paths:
+        for alias in _semantic_aliases_for(step, path):
+            owners.setdefault(alias, []).append(path.name)
+
+    assert {alias: names for alias, names in owners.items() if len(names) > 1} == {}
+    assert owners["cluster_summary"] == ["cluster_characteristics.csv"]
+    assert owners["clustering_methodology"] == ["clustering_methodology.json"]
+    assert owners["clustering_algorithm_details"] == [
+        "clustering_algorithm_details.json"
+    ]
+
+
+def test_clustering_algorithm_details_keeps_methodology_fallback_alias(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="04_primary_clustering",
+        intent="Fit candidate clusters.",
+        method="unsupervised_clustering",
+        expected_outputs=["log:clustering_algorithm_details"],
+    )
+    details = tmp_path / "clustering_algorithm_details.json"
+    details.write_text("{}", encoding="utf-8")
+
+    aliases = _semantic_aliases_for(step, details)
+
+    assert "clustering_algorithm_details" in aliases
+    assert "clustering_methodology" in aliases
 
 
 def test_semantic_aliases_bind_kdigo_sensitivity_to_primary_association(
@@ -9523,7 +9865,9 @@ def test_figure_detection_uses_structured_artifacts_and_word_boundaries(ra):
 
 
 def test_deterministic_summary_repair_restores_primary_predictor_after_soft_failure(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 import pandas as pd
@@ -9557,7 +9901,9 @@ except Exception as e:
 
 
 def test_deterministic_summary_repair_dedupes_predictor_design_matrix(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 model_df = pd.get_dummies(model_df, columns=categorical_cols, drop_first=True)
@@ -9584,7 +9930,9 @@ except Exception as e:
 
 
 def test_deterministic_summary_repair_preserves_categorical_sex_before_dropna(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 model_df = df[required_cols].copy()
@@ -9613,7 +9961,9 @@ X = model_df[['lactate_max_24h', 'age', 'sex', 'map_min_24h', 'vaso_any_24h']].a
 
 
 def test_deterministic_summary_repair_handles_insufficient_data_message(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 model_df = df[['lactate_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'death']].copy()
@@ -9636,7 +9986,9 @@ model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
 
 
 def test_deterministic_summary_repair_handles_null_model_summary_with_sex(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 covariates = ['age', 'sex']
@@ -9661,7 +10013,9 @@ model_df = model_df.replace([np.inf, -np.inf], np.nan)
 
 
 def test_deterministic_summary_repair_infers_predictor_from_code_for_sex_coercion(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 primary_predictor = 'kdigo_stage_max_24h'
@@ -9686,7 +10040,9 @@ model_df = model_df.replace([np.inf, -np.inf], np.nan)
 
 
 def test_deterministic_summary_repair_encodes_raw_sex_for_logit_without_predictor(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 outcome_col = "death"
@@ -9717,7 +10073,9 @@ complete_case_model = sm.Logit(y_complete, X_complete).fit(disp=0)
 
 
 def test_deterministic_summary_repair_reuses_dtype_repair_for_soft_failure(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 import statsmodels.api as sm
@@ -9746,7 +10104,9 @@ result = model.fit(disp=0)
 
 
 def test_deterministic_summary_repair_patches_nested_logit_helper_dtype(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 import pandas as pd
@@ -9784,7 +10144,9 @@ def _fit_logistic(X, y):
 
 
 def test_deterministic_summary_repair_casts_dummy_design_for_null_logit(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 X_encoded = pd.get_dummies(X, columns=categorical_cols, drop_first=True)
@@ -9808,7 +10170,9 @@ result = model.fit(disp=0)
 
 
 def test_formula_dummy_name_error_is_left_to_agent_repair(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 import pandas as pd
@@ -9839,7 +10203,9 @@ except Exception as e:
 def test_deterministic_summary_repair_leaves_singular_ordinal_model_to_agent(
     ra,
 ):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 import os
@@ -9906,7 +10272,9 @@ def test_singular_ordinal_primary_model_does_not_inject_fallback_outputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     cohort = pd.DataFrame(
         {
@@ -9976,7 +10344,9 @@ def test_summary_repair_does_not_substitute_glm_for_mle_retvals_failure(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """A caught GLM API failure must return to agent repair, not a new model."""
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     cohort = pd.DataFrame(
         {
@@ -10048,7 +10418,9 @@ def test_summary_repair_does_not_substitute_logit_for_null_primary_or(
 ):
     """A null Logit result remains an agent-owned repair/fail-closed outcome."""
 
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     n = 160
     cohort = pd.DataFrame(
@@ -10146,7 +10518,9 @@ with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as 
 
 
 def test_deterministic_summary_repair_restores_predictor_in_helper_design(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 def compute_or_ci(df, predictor, outcome_col, covariates):
@@ -10185,7 +10559,9 @@ def compute_or_ci(df, predictor, outcome_col, covariates):
 
 
 def test_deterministic_summary_repair_stabilizes_robustness_missingness_models(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 outcome_col = 'readmission_30d'
@@ -10250,7 +10626,9 @@ for strategy, or_est, or_lower, or_upper, n, event_rate in [
 
 
 def test_deterministic_summary_repair_allows_generic_unknown_error(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 X_encoded = pd.get_dummies(X, columns=categorical_cols, drop_first=True)
@@ -10273,7 +10651,9 @@ result = model.fit(disp=0)
 
 
 def test_deterministic_summary_repair_casts_bool_before_simple_imputer(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_summary_repair_candidate as _deterministic_summary_repair,
+    )
 
     code = """
 X_sklearn = model_df[x_cols].copy()
@@ -10297,7 +10677,9 @@ pipeline.fit(X_sklearn, y_sklearn)
 
 
 def test_deterministic_runner_repair_filters_missing_dummy_columns(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import (
+        _deterministic_runner_repair_candidate as _deterministic_runner_repair,
+    )
 
     code = """
 model_df = pd.get_dummies(model_df, columns=["sex"], drop_first=True)

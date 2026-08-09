@@ -106,13 +106,50 @@
 
   /* ---- global workspace mode: Demo / Real (cross-cutting state) ---- */
   try { window.EU_DATA = localStorage.getItem('easyicu_home_data') || 'demo'; } catch (e) { window.EU_DATA = 'demo'; }
+  /*
+   * Public data-mode display contract.
+   *
+   * EU_DATA remains the processing mode because an official MIMIC/eICU demo
+   * must use the same source-backed API path as a local export.  The immutable
+   * context below separately records what the user selected, so official
+   * deidentified records remain visibly "Demo" throughout the shell.
+   */
+  window.EU_DATA_MODE_CONTEXT = null;
+  window.setDataModeContext = function (context) {
+    if (context == null) {
+      window.EU_DATA_MODE_CONTEXT = null;
+      return null;
+    }
+    const displayMode = validMode(context.display_mode) ? context.display_mode : null;
+    const processingMode = validMode(context.processing_mode) ? context.processing_mode : null;
+    const kind = String(context.kind || '').trim();
+    if (!displayMode || !processingMode || !kind) {
+      throw new Error('EU_DATA_MODE_CONTEXT_INVALID');
+    }
+    const value = Object.freeze({
+      display_mode: displayMode,
+      processing_mode: processingMode,
+      kind,
+      source_id: String(context.source_id || ''),
+      source_label: String(context.source_label || ''),
+    });
+    window.EU_DATA_MODE_CONTEXT = value;
+    return value;
+  };
+  window.getDataMode = function () {
+    const context = window.EU_DATA_MODE_CONTEXT;
+    return context && validMode(context.display_mode)
+      ? context.display_mode
+      : (validMode(window.EU_DATA) ? window.EU_DATA : 'demo');
+  };
   // becomes true once the user has produced downstream work worth protecting
   window.EU_HASWORK = false;
   window.setDataMode = function (m, opts) {
     if (m !== 'demo' && m !== 'real') return;
-    if (window.EU_DATA === m) return;
+    if (window.getDataMode() === m) return;
     const apply = () => {
       window.EU_STALE = true;  // changing the source invalidates downstream
+      window.setDataModeContext(null);
       window.EU_DATA = m;
       window.EU_VIZ_WORKSPACE = null;
       window.EU_CROSSDB_WORKSPACE = null;

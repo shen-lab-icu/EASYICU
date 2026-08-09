@@ -40,6 +40,15 @@ class MeasurementSourceStatusResult:
     status_table: pd.DataFrame
 
 
+@dataclass(frozen=True)
+class ConditionalEventTimeResult:
+    """Validated event-time applicability plus a replayable temporal audit."""
+
+    row_status: pd.Series
+    audit: dict[str, Any]
+    status_table: pd.DataFrame
+
+
 def _numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
 
@@ -237,9 +246,114 @@ def reconcile_measurement_source_status(
     )
 
 
+def reconcile_conditional_event_time(
+    frame: pd.DataFrame,
+    *,
+    event_status_column: str,
+    event_time_column: str,
+    minimum_time: float = 0.0,
+) -> ConditionalEventTimeResult:
+    """Validate a time observed only when a complete binary event occurs.
+
+    Event absence is not missingness.  Missing time among event-positive rows
+    remains genuine missingness.  A time recorded for an event-negative row is
+    contradictory and fails closed.  Times before the declared origin are
+    retained and counted separately so a study-specific protocol can decide
+    whether to exclude, redefine an anchor, or block the analysis.
+    """
+
+    selected = (event_status_column, event_time_column)
+    if len(set(selected)) != len(selected):
+        raise ValueError("event status and event time columns must be distinct")
+    missing = [column for column in selected if column not in frame.columns]
+    if missing:
+        raise ValueError(f"conditional event-time columns missing: {missing}")
+
+    event_raw = frame[event_status_column]
+    event = _numeric(event_raw)
+    event_valid = (
+        event_raw.notna()
+        & event.notna()
+        & np.isfinite(event.to_numpy(dtype=float))
+        & event.isin([0, 1])
+    )
+    if not bool(event_valid.all()):
+        raise ValueError(
+            "conditional event-time status must be a complete binary column"
+        )
+
+    time_raw = frame[event_time_column]
+    event_time = _numeric(time_raw)
+    time_coercion_invalid = time_raw.notna() & (
+        event_time.isna() | ~np.isfinite(event_time.to_numpy(dtype=float))
+    )
+    if bool(time_coercion_invalid.any()):
+        raise ValueError("conditional event time contains non-numeric values")
+
+    event_present = event.eq(1)
+    event_absent = ~event_present
+    time_present = event_time.notna()
+    contradictory = event_absent & time_present
+    if bool(contradictory.any()):
+        raise ValueError(
+            "conditional event time is present while its event status is absent"
+        )
+
+    time_missing = event_present & ~time_present
+    time_before_origin = event_present & time_present & event_time.lt(minimum_time)
+    time_valid = event_present & time_present & ~time_before_origin
+    labels = pd.Series(index=frame.index, dtype="string", name="source_status")
+    labels.loc[event_absent] = "event_absent_not_applicable"
+    labels.loc[time_valid] = "event_time_observed"
+    labels.loc[time_missing] = "event_time_missing"
+    labels.loc[time_before_origin] = "event_time_before_origin"
+    if bool(labels.isna().any()):
+        raise ValueError("conditional event-time status is not a closed partition")
+
+    ordered_statuses = (
+        "event_absent_not_applicable",
+        "event_time_observed",
+        "event_time_missing",
+        "event_time_before_origin",
+    )
+    counts = labels.value_counts().reindex(ordered_statuses, fill_value=0).astype(int)
+    audit = {
+        "observation_semantics": "conditional_event_time",
+        "event_status_column": event_status_column,
+        "event_time_column": event_time_column,
+        "minimum_time": float(minimum_time),
+        "n_total": int(len(frame)),
+        "eligible_event_n": int(event_present.sum()),
+        "not_applicable_event_absent_n": int(event_absent.sum()),
+        "observed_event_time_n": int(time_present.sum()),
+        "missing_event_time_n": int(time_missing.sum()),
+        "before_origin_n": int(time_before_origin.sum()),
+        "contradictory_event_absent_with_time_n": int(contradictory.sum()),
+    }
+    status_table = pd.DataFrame(
+        {
+            "source_status": counts.index.astype(str),
+            "count": counts.to_numpy(dtype=int),
+            "denominator": int(len(frame)),
+            "percentage": (
+                100.0 * counts.to_numpy(dtype=float) / len(frame)
+                if len(frame)
+                else np.full(len(counts), np.nan)
+            ),
+        }
+    )
+    return ConditionalEventTimeResult(
+        row_status=labels,
+        audit=audit,
+        status_table=status_table,
+    )
+
+
 __all__ = [
     "BinaryEventPresenceResult",
+    "ConditionalEventTimeResult",
     "MeasurementSourceStatusResult",
     "reconcile_binary_event_presence",
+    "reconcile_conditional_event_time",
     "reconcile_measurement_source_status",
 ]

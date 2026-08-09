@@ -7,7 +7,14 @@ with metadata for ICU data handling, corresponding to R ricu's table classes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, Iterator, List, Optional, Union, Dict, Callable
+from typing import (
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Union,
+)
 
 import pandas as pd
 
@@ -562,10 +569,11 @@ class WinTbl(TsTbl):
         index_var: Optional[str] = None,
         dur_var: Optional[str] = None,
         interval: Optional[pd.Timedelta] = None,
-        by_ref: bool = False
+        by_ref: bool = False,
+        dur_unit: Optional[str] = None,
     ):
         """Initialize WinTbl.
-        
+
         Args:
             data: DataFrame with windowed time series data
             id_vars: ID column name(s)
@@ -573,15 +581,43 @@ class WinTbl(TsTbl):
             dur_var: Duration column (auto-detected if None)
             interval: Time step (auto-detected if None)
             by_ref: If True, use data by reference
+            dur_unit: Unit of ``dur_var`` ('seconds'/'minutes'/'hours'/'days'/
+                'timedelta'). Structural, unlike ``DataFrame.attrs``, which does
+                not survive every pandas operation. When given it is also
+                written to the frame so the attrs-based readers agree; when
+                omitted it is read back from the frame if declared there.
         """
         # Auto-detect dur_var if not provided
         if dur_var is None:
             dur_var = self._detect_dur_var(data, index_var)
         
         self.dur_var = dur_var
-        
+
+        # Duration unit as a structural field. A timedelta column is
+        # self-describing; a numeric one is only meaningful with a unit, and
+        # attrs alone is too fragile a carrier (concat/groupby can drop it).
+        from .duration import (
+            UNIT_TIMEDELTA,
+            get_dur_var_unit,
+            set_dur_var_unit,
+        )
+
+        if dur_unit is None:
+            declared = get_dur_var_unit(data)
+            if declared is None and dur_var in getattr(data, "columns", []):
+                if pd.api.types.is_timedelta64_dtype(data[dur_var]):
+                    declared = UNIT_TIMEDELTA
+            dur_unit = declared
+        elif isinstance(data, pd.DataFrame):
+            set_dur_var_unit(data, dur_unit)
+        self.dur_unit = dur_unit
+
         # Initialize parent
         super().__init__(data, id_vars, index_var, interval, by_ref)
+
+        # Re-assert on the stored frame: the parent may have copied it.
+        if self.dur_unit is not None and isinstance(self.data, pd.DataFrame):
+            set_dur_var_unit(self.data, self.dur_unit)
     
     @staticmethod
     def _detect_dur_var(data: pd.DataFrame, index_var: Optional[str] = None) -> str:
@@ -852,7 +888,8 @@ def rbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
             tables[0].id_vars,
             tables[0].index_var,
             tables[0].dur_var,
-            tables[0].interval
+            tables[0].interval,
+            dur_unit=_combined_dur_unit(tables, dfs, tables[0].dur_var),
         )
     elif isinstance(tables[0], TsTbl):
         return TsTbl(
@@ -866,35 +903,218 @@ def rbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
     else:
         return result
 
+
+def _combined_dur_unit(tables, frames, column):
+    """The one window contract, and the one ``dur_var`` unit, a combine may keep.
+
+    Rebuilding a WinTbl from combined frames used to copy only ``dur_var`` and
+    ``interval`` from the first input, so binding a minutes table onto an hours
+    table produced a 60x-mixed column wearing the first table's label. The unit
+    is read from every input — the structural ``WinTbl.dur_unit`` as well as
+    the frame ``attrs``, because ``pd.concat``/``pd.merge`` do not reliably
+    carry ``attrs`` through.
+
+    The unit check is keyed on a single column name, so it can only speak for
+    inputs that *have* that column. The structural check runs first and covers
+    the case it cannot see: a window table whose duration column is named
+    differently, or which is windowed over a different index or id.
+    """
+
+    from .duration import assert_window_contract, combine_dur_var_units
+
+    assert_window_contract(
+        [
+            (
+                position,
+                getattr(tbl, "dur_var", None),
+                getattr(tbl, "index_var", None),
+                _as_column_tuple(getattr(tbl, "id_vars", None)),
+            )
+            for position, tbl in enumerate(tables)
+            if isinstance(tbl, WinTbl)
+        ],
+        column=column,
+    )
+    return combine_dur_var_units(
+        list(frames),
+        column=column,
+        declared=[getattr(tbl, "dur_unit", None) for tbl in tables],
+    )
+
+
+def _as_column_tuple(value) -> tuple:
+    """Normalise an ``id_vars`` that may be a bare string or a sequence."""
+
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    return tuple(value)
+
+
+class KeyAlignmentError(ValueError):
+    """Tables were column-bound without proof they describe the same rows."""
+
+
+def _cbind_frame(tbl: Union[IdTbl, pd.DataFrame]) -> pd.DataFrame:
+    return tbl.data if isinstance(tbl, (IdTbl, TsTbl, WinTbl)) else tbl
+
+
+def _same_values(left: pd.Series, right: pd.Series) -> bool:
+    """Element-wise equality that treats missing == missing and ignores dtype.
+
+    ``Series.equals`` would reject an int64 column bound against the float64
+    version of the same identifiers, which is a real and harmless case once a
+    frame has been through a merge.
+    """
+
+    left_values = left.to_numpy()
+    right_values = right.to_numpy()
+    if left_values.shape != right_values.shape:
+        return False
+    try:
+        matched = left_values == right_values
+    except (TypeError, ValueError):
+        return left.astype(str).equals(right.astype(str))
+    both_missing = pd.isna(left_values) & pd.isna(right_values)
+    return bool((matched | both_missing).all())
+
+
+def _assert_cbind_alignment(
+    tables: Sequence[Union[IdTbl, pd.DataFrame]],
+) -> tuple[List[str], Optional[int]]:
+    """Refuse to bind columns whose rows are only assumed to line up.
+
+    ``pd.concat(axis=1)`` joins on the pandas index, which after a filter or a
+    sort is unrelated to which patient a row belongs to. Binding a left table
+    ordered ``[stay 1, stay 2]`` against a right table ordered ``[stay 2, stay
+    1]`` produced one row holding stay 1's exposure and stay 2's outcome, and
+    the result was still a well-formed typed table — nothing raised, and no
+    column recorded the swap. Anything a caller cannot prove is aligned is now
+    an error instead.
+
+    Returns the typed anchor's key columns and position, which the caller uses
+    to keep exactly one copy of those keys. A bare frame may appear first, but
+    it does not disable row-shape checks or the checks between later typed
+    tables.
+    """
+
+    row_anchor_df = _cbind_frame(tables[0])
+    for position, other in enumerate(tables[1:], start=1):
+        other_df = _cbind_frame(other)
+        if len(other_df) != len(row_anchor_df):
+            raise KeyAlignmentError(
+                f"table {position} has {len(other_df)} row(s) against "
+                f"{len(row_anchor_df)} in table 0; column-binding them would "
+                "pad or truncate one of them"
+            )
+        if not row_anchor_df.index.equals(other_df.index):
+            raise KeyAlignmentError(
+                f"table {position} does not share table 0's row index, so "
+                "column-binding would align rows by label and silently "
+                "introduce missing values"
+            )
+
+    typed_positions = [
+        position
+        for position, table in enumerate(tables)
+        if isinstance(table, (IdTbl, TsTbl, WinTbl))
+    ]
+    if not typed_positions:
+        return [], None
+
+    typed_anchor_position = typed_positions[0]
+    anchor = tables[typed_anchor_position]
+    assert isinstance(anchor, (IdTbl, TsTbl, WinTbl))
+    anchor_df = anchor.data
+    keys = [column for column in anchor.meta_vars() if column]
+    missing = [column for column in keys if column not in anchor_df.columns]
+    if missing:
+        raise KeyAlignmentError(
+            f"table {typed_anchor_position} declares key column(s) {missing} "
+            "that it does not carry, "
+            "so no other table can be checked against it"
+        )
+
+    for position in typed_positions[1:]:
+        other = tables[position]
+        assert isinstance(other, (IdTbl, TsTbl, WinTbl))
+        other_df = _cbind_frame(other)
+        absent = [column for column in keys if column not in other_df.columns]
+        if absent:
+            raise KeyAlignmentError(
+                f"table {position} is a typed ICU table but does not carry key "
+                f"column(s) {absent}, so its rows cannot be shown to describe "
+                "the same subjects and times as table 0"
+            )
+        disagreeing = [
+            column
+            for column in keys
+            if not _same_values(anchor_df[column], other_df[column])
+        ]
+        if disagreeing:
+            raise KeyAlignmentError(
+                f"table {position} disagrees with table "
+                f"{typed_anchor_position} on key column(s) {disagreeing}: the "
+                "same row position refers to different subjects or times in "
+                "the two tables"
+            )
+    return keys, typed_anchor_position
+
+
 def cbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
-              check_names: bool = False) -> Union[IdTbl, pd.DataFrame]:
+              check_names: bool = True) -> Union[IdTbl, pd.DataFrame]:
     """Column-bind tables (R ricu cbind_id_tbl).
-    
+
+    Typed ICU tables must agree on their key columns row by row; the keys are
+    then carried once, from the first table.
+
     Args:
         *tables: Tables to combine
-        check_names: Whether to check for duplicate column names
-        
+        check_names: Whether to reject duplicate column names in the result
+
     Returns:
         Combined table
+
+    Raises:
+        KeyAlignmentError: rows are not provably the same subjects and times.
     """
-    # Extract DataFrames
+    if not tables:
+        return pd.DataFrame()
+
+    keys, typed_anchor_position = _assert_cbind_alignment(tables)
+
+    # The unit check reads each input's own duration column, so it needs the
+    # frames as given; the bind gets the deduplicated ones.
+    source_frames = [_cbind_frame(tbl) for tbl in tables]
     dfs = []
-    for tbl in tables:
-        if isinstance(tbl, (IdTbl, TsTbl, WinTbl)):
-            dfs.append(tbl.data)
-        else:
-            dfs.append(tbl)
-    
+    for position, (tbl, frame) in enumerate(zip(tables, source_frames)):
+        if (
+            keys
+            and isinstance(tbl, (IdTbl, TsTbl, WinTbl))
+            and position != typed_anchor_position
+        ):
+            frame = frame.drop(columns=[c for c in keys if c in frame.columns])
+        dfs.append(frame)
+
     # Combine
     result = pd.concat(dfs, axis=1)
-    
+
     # Check for duplicates if requested
     if check_names and len(result.columns) != len(set(result.columns)):
-        raise ValueError("Duplicate column names found")
-    
+        duplicated = sorted({c for c in result.columns if list(result.columns).count(c) > 1})
+        raise ValueError(f"Duplicate column names found: {duplicated}")
+
     # Return same type as first input
     if isinstance(tables[0], WinTbl):
-        return WinTbl(result, tables[0].id_vars, tables[0].index_var, tables[0].dur_var, tables[0].interval)
+        return WinTbl(
+            result,
+            tables[0].id_vars,
+            tables[0].index_var,
+            tables[0].dur_var,
+            tables[0].interval,
+            dur_unit=_combined_dur_unit(tables, dfs, tables[0].dur_var),
+        )
     elif isinstance(tables[0], TsTbl):
         return TsTbl(result, tables[0].id_vars, tables[0].index_var, tables[0].interval)
     elif isinstance(tables[0], IdTbl):
@@ -943,7 +1163,8 @@ def merge_lst(tables: List[Union[IdTbl, pd.DataFrame]],
             tables[0].id_vars,
             tables[0].index_var,
             tables[0].dur_var,
-            tables[0].interval
+            tables[0].interval,
+            dur_unit=_combined_dur_unit(tables, dfs, tables[0].dur_var),
         )
     elif isinstance(tables[0], TsTbl):
         return TsTbl(
@@ -1145,180 +1366,14 @@ def data_vars(x) -> List[str]:
 # ID type conversion functions (R ricu tbl-utils.R change_id)
 # ============================================================================
 
-def upgrade_id(
-    data: pd.DataFrame,
-    id_map: pd.DataFrame,
-    from_id: str,
-    to_id: str,
-    keep_old_id: bool = False,
-) -> pd.DataFrame:
-    """Upgrade ID type to a higher level (R ricu upgrade_id).
-    
-    Converts IDs to a higher-level identifier (e.g., hadm_id -> icustay_id).
-    This is a one-to-many relationship.
-    
-    Args:
-        data: Input DataFrame with lower-level IDs
-        id_map: Mapping DataFrame with both ID columns
-        from_id: Current ID column name (lower level)
-        to_id: Target ID column name (higher level)
-        keep_old_id: Whether to keep the original ID column
-        
-    Returns:
-        DataFrame with upgraded IDs
-        
-    Examples:
-        >>> # Upgrade from hadm_id to icustay_id
-        >>> vitals = pd.DataFrame({'hadm_id': [1, 1, 2], 'hr': [80, 85, 90]})
-        >>> mapping = pd.DataFrame({'hadm_id': [1, 1, 2], 'icustay_id': [10, 11, 20]})
-        >>> upgrade_id(vitals, mapping, 'hadm_id', 'icustay_id')
-        # Result: 3 rows become 4 rows (hadm_id=1 duplicated for 2 stays)
-    """
-    # Validate inputs
-    if from_id not in data.columns:
-        raise ValueError(f"Column '{from_id}' not found in data")
-    if from_id not in id_map.columns or to_id not in id_map.columns:
-        raise ValueError(f"Columns '{from_id}' and '{to_id}' must be in id_map")
-    
-    # Get unique mapping (remove duplicates in id_map)
-    mapping = id_map[[from_id, to_id]].drop_duplicates()
-    
-    # Merge to add new ID
-    result = data.merge(mapping, on=from_id, how='left')
-    
-    # Optionally remove old ID
-    if not keep_old_id:
-        result = result.drop(columns=[from_id])
-    
-    return result
+# Canonical ID-system conversion lives in ``id_conversion``; re-exported
+# here so ``from easyicu.table import change_id`` keeps working.
+from .id_conversion import IdMapRelationError as IdMapRelationError  # noqa: E402
+from .id_conversion import change_id as change_id  # noqa: E402
+from .id_conversion import classify_id_relation as classify_id_relation  # noqa: E402
+from .id_conversion import downgrade_id as downgrade_id  # noqa: E402
+from .id_conversion import upgrade_id as upgrade_id  # noqa: E402
 
-def downgrade_id(
-    data: pd.DataFrame,
-    id_map: pd.DataFrame,
-    from_id: str,
-    to_id: str,
-    agg_funcs: Optional[Dict[str, Union[str, Callable]]] = None,
-    keep_old_id: bool = False,
-) -> pd.DataFrame:
-    """Downgrade ID type to a lower level (R ricu downgrade_id).
-    
-    Converts IDs to a lower-level identifier (e.g., icustay_id -> hadm_id).
-    This is a many-to-one relationship requiring aggregation.
-    
-    Args:
-        data: Input DataFrame with higher-level IDs
-        id_map: Mapping DataFrame with both ID columns
-        from_id: Current ID column name (higher level)
-        to_id: Target ID column name (lower level)
-        agg_funcs: Dictionary mapping column names to aggregation functions
-                   (default: first for non-numeric, mean for numeric)
-        keep_old_id: Whether to keep the original ID column
-        
-    Returns:
-        DataFrame with downgraded IDs and aggregated data
-        
-    Examples:
-        >>> # Downgrade from icustay_id to hadm_id
-        >>> vitals = pd.DataFrame({
-        ...     'icustay_id': [10, 11, 20],
-        ...     'hr': [80, 85, 90],
-        ...     'temp': [36.5, 37.0, 36.8]
-        ... })
-        >>> mapping = pd.DataFrame({
-        ...     'icustay_id': [10, 11, 20],
-        ...     'hadm_id': [1, 1, 2]
-        ... })
-        >>> downgrade_id(vitals, mapping, 'icustay_id', 'hadm_id',
-        ...              agg_funcs={'hr': 'mean', 'temp': 'mean'})
-        # Result: 3 rows become 2 rows (stays 10 and 11 merged into hadm 1)
-    """
-    # Validate inputs
-    if from_id not in data.columns:
-        raise ValueError(f"Column '{from_id}' not found in data")
-    if from_id not in id_map.columns or to_id not in id_map.columns:
-        raise ValueError(f"Columns '{from_id}' and '{to_id}' must be in id_map")
-    
-    # Get unique mapping
-    mapping = id_map[[from_id, to_id]].drop_duplicates()
-    
-    # Merge to add new ID
-    result = data.merge(mapping, on=from_id, how='left')
-    
-    # Determine columns to aggregate
-    group_cols = [to_id]
-    if keep_old_id:
-        group_cols.append(from_id)
-    
-    data_cols = [col for col in result.columns if col not in [from_id, to_id]]
-    
-    # Build aggregation dict
-    if agg_funcs is None:
-        agg_funcs = {}
-        for col in data_cols:
-            if pd.api.types.is_numeric_dtype(result[col]):
-                agg_funcs[col] = 'mean'
-            else:
-                agg_funcs[col] = 'first'
-    
-    # Apply aggregation if needed
-    if not keep_old_id:
-        result = result.drop(columns=[from_id])
-        result = result.groupby(to_id, as_index=False).agg(agg_funcs)
-    else:
-        result = result.groupby([to_id, from_id], as_index=False).agg(agg_funcs)
-    
-    return result
-
-def change_id(
-    data: pd.DataFrame,
-    id_map: pd.DataFrame,
-    from_id: str,
-    to_id: str,
-    keep_old_id: bool = False,
-    agg_funcs: Optional[Dict[str, Union[str, Callable]]] = None,
-) -> pd.DataFrame:
-    """Change ID type (auto-detect upgrade vs downgrade) (R ricu change_id).
-    
-    Automatically determines whether to upgrade or downgrade based on
-    the cardinality of the ID mapping.
-    
-    Args:
-        data: Input DataFrame
-        id_map: Mapping DataFrame with both ID columns
-        from_id: Current ID column name
-        to_id: Target ID column name
-        keep_old_id: Whether to keep the original ID column
-        agg_funcs: Aggregation functions (for downgrade only)
-        
-    Returns:
-        DataFrame with changed IDs
-        
-    Examples:
-        >>> # Auto-detect direction
-        >>> change_id(data, mapping, 'hadm_id', 'icustay_id')
-    """
-    # Check cardinality to determine direction
-    mapping = id_map[[from_id, to_id]].drop_duplicates()
-    
-    from_unique = mapping[from_id].nunique()
-    to_unique = mapping[to_id].nunique()
-    
-    if to_unique > from_unique:
-        # Upgrade (one-to-many)
-        return upgrade_id(data, id_map, from_id, to_id, keep_old_id)
-    elif to_unique < from_unique:
-        # Downgrade (many-to-one)
-        return downgrade_id(data, id_map, from_id, to_id, agg_funcs, keep_old_id)
-    else:
-        # One-to-one mapping
-        mapping_dict = dict(zip(mapping[from_id], mapping[to_id]))
-        result = data.copy()
-        result[to_id] = result[from_id].map(mapping_dict)
-        
-        if not keep_old_id:
-            result = result.drop(columns=[from_id])
-        
-        return result
 
 def rbind_lst(
     tables: List[Union[pd.DataFrame, ICUTable, IdTbl, TsTbl, WinTbl]],
@@ -1392,7 +1447,8 @@ def rbind_lst(
                 metadata['id_vars'],
                 metadata['index_var'],
                 metadata['dur_var'],
-                metadata['interval']
+                metadata['interval'],
+                dur_unit=_combined_dur_unit(tables, dfs, metadata['dur_var']),
             )
     elif metadata and 'id_columns' in metadata:
         return ICUTable(

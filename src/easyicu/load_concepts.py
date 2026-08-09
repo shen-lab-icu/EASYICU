@@ -98,6 +98,23 @@ USE_MINIMAL_COLUMNS = True
 
 logger = logging.getLogger(__name__)
 
+
+def _is_missing_column_projection_error(exc: Exception) -> bool:
+    """Return whether *exc* explicitly reports a projected column is absent."""
+    message = str(exc).lower()
+    if isinstance(exc, KeyError):
+        return "columns " in message and " not found in table " in message
+    if isinstance(exc, ValueError):
+        return "usecols do not match columns" in message
+    return (
+        type(exc).__name__ == "ArrowInvalid"
+        and (
+            "no match for fieldref" in message
+            or ("field" in message and "not found" in message)
+        )
+    )
+
+
 class ConceptLoader:
     """概念加载器 - 复刻 R ricu 的 load_concepts"""
     
@@ -231,7 +248,12 @@ class ConceptLoader:
         table_name: str,
         columns: Optional[Iterable[str]],
     ) -> pd.DataFrame:
-        """在列过滤失败时回退到全表加载。"""
+        """Load a projection, with a tightly bounded compatibility fallback.
+
+        Only an explicit missing-column projection error may retry without a
+        projection. I/O, corruption, permission and memory failures propagate
+        unchanged. Low-memory mode never retries with a full-table read.
+        """
         # Check cache first
         if table_name in self._table_cache:
             return self._table_cache[table_name]
@@ -241,8 +263,14 @@ class ConceptLoader:
         if columns:
             try:
                 df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
-            except Exception:
-                # 回退到加载全部列，确保兼容缺少列描述的表
+            except Exception as exc:
+                if self._low_memory or not _is_missing_column_projection_error(exc):
+                    raise
+                logger.warning(
+                    "Table %s has an incomplete column descriptor; retrying "
+                    "without projection outside low-memory mode",
+                    table_name,
+                )
                 df = load_table(self._src_name, table_name, path=self.data_path)
         else:
             df = load_table(self._src_name, table_name, path=self.data_path)
@@ -262,8 +290,40 @@ class ConceptLoader:
             extra.append(source.value_var)
         if getattr(source, 'index_var', None):
             extra.append(source.index_var)
+        if getattr(source, 'dur_var', None):
+            extra.append(source.dur_var)
         if getattr(source, 'unit_var', None):
             extra.append(source.unit_var)
+
+        # Source callbacks may declare semantic input columns that are not a
+        # table default (for example MetaVision ``statusdescription`` and
+        # CareVue ``stopped``).  The main ConceptResolver already honours this
+        # dictionary-owned contract; the compatibility ConceptLoader must not
+        # silently project those columns away.
+        params = getattr(source, 'params', None) or {}
+        source_extra_vars = params.get('extra_vars', [])
+        if isinstance(source_extra_vars, str):
+            source_extra_vars = [source_extra_vars]
+        if not isinstance(source_extra_vars, (list, tuple)):
+            raise TypeError(
+                "Concept source 'extra_vars' must be a string or a list of strings"
+            )
+        for extra_var in source_extra_vars:
+            if not isinstance(extra_var, str) or not extra_var.strip():
+                raise TypeError(
+                    "Concept source 'extra_vars' entries must be non-empty strings"
+                )
+            extra.append(extra_var)
+
+        # Duration callbacks also need their explicit end and grouping
+        # columns.  These are params rather than ConceptSource attributes and
+        # are not guaranteed to be part of a table's default projection.
+        for param_name in ('stop_var', 'grp_var'):
+            column = params.get(param_name)
+            if isinstance(column, str) and column.strip():
+                extra.append(column)
+
+        extra = list(dict.fromkeys(extra))
         
         # DEBUG: 输出提取的列信息
         result = self._infer_required_columns(source.table, id_type, extra)
@@ -840,7 +900,15 @@ class ConceptLoader:
             
             # 转换时间列为数值（如果需要）
             time_col = source.index_var or self._get_time_column(df)
-            if time_col and time_col in df.columns:
+            mimic_duration_callback = source.callback in {
+                'mimic_dur_inmv',
+                'mimic_dur_incv',
+            }
+            if (
+                time_col
+                and time_col in df.columns
+                and not mimic_duration_callback
+            ):
                 df = self._convert_time_column_to_hours(df, time_col, id_col)
             
             # 调用callback
@@ -854,6 +922,19 @@ class ConceptLoader:
                 data_source=self._data_source,
                 interval=interval,
             )
+
+            # MIMIC duration arithmetic must run while both the start and end
+            # clocks are still absolute datetimes.  Only after the callback
+            # has clipped and measured the episode do we place its start on
+            # the public relative-hour axis.  Normalise both CareVue and
+            # MetaVision to one compatibility-loader time column so their
+            # source frames concatenate and aggregate on the same key.
+            if mimic_duration_callback and time_col and time_col in df.columns:
+                df = self._convert_mimic_duration_time_to_hours(
+                    df, time_col, id_col
+                )
+                if time_col != 'time':
+                    df = df.rename(columns={time_col: 'time'})
             
             return df
         
@@ -983,6 +1064,65 @@ class ConceptLoader:
             logger.debug(f"时间转换失败: {e}")
         
         return df
+
+    def _convert_mimic_duration_time_to_hours(
+        self,
+        df: pd.DataFrame,
+        time_col: str,
+        id_col: str,
+    ) -> pd.DataFrame:
+        """Place a completed MIMIC duration episode on the ICU-hour axis."""
+
+        if time_col not in df.columns or pd.api.types.is_numeric_dtype(
+            df[time_col]
+        ):
+            return df
+        if self._data_source is None or not id_col or id_col not in df.columns:
+            raise ValueError(
+                "MIMIC duration time alignment requires a data source and ICU stay id"
+            )
+        try:
+            table = self._data_source.load_table(
+                'icustays',
+                columns=[id_col, 'intime'],
+                verbose=False,
+            )
+            bounds = table.data if hasattr(table, 'data') else table
+        except Exception as exc:
+            raise ValueError(
+                "MIMIC duration time alignment could not load ICU intime"
+            ) from exc
+        if not isinstance(bounds, pd.DataFrame):
+            bounds = pd.DataFrame(bounds)
+        if id_col not in bounds.columns or 'intime' not in bounds.columns:
+            raise ValueError(
+                "MIMIC duration time alignment requires ICU stay id and intime"
+            )
+
+        bounds = bounds[[id_col, 'intime']].dropna(subset=[id_col]).copy()
+        conflicting = bounds.dropna(subset=['intime']).groupby(id_col)[
+            'intime'
+        ].nunique(dropna=True)
+        if conflicting.gt(1).any():
+            raise ValueError("MIMIC ICU stay table contains conflicting intimes")
+        bounds = bounds.drop_duplicates(subset=[id_col], keep='last')
+        intime = df[id_col].map(bounds.set_index(id_col)['intime'])
+        intime = pd.to_datetime(intime, errors='coerce', utc=True).dt.tz_localize(
+            None
+        )
+        event_time = pd.to_datetime(
+            df[time_col], errors='coerce', utc=True
+        ).dt.tz_localize(None)
+        unresolved = intime.isna() | event_time.isna()
+        if unresolved.any():
+            raise ValueError(
+                "MIMIC duration time alignment found episodes without ICU intime"
+            )
+
+        result = df.copy()
+        relative_seconds = (event_time - intime).dt.total_seconds()
+        result[time_col] = (relative_seconds // 60.0) / 60.0
+        return result
     
     def _load_recursive_concept(
         self,

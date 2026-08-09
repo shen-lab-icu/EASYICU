@@ -29,7 +29,7 @@ CONCEPT_DICTIONARY = {
     'vent_ind': ('Ventilation Duration Windows', '机械通气时间窗', 'boolean'),
     'o2sat': ('Oxygen Saturation (SpO2)', '血氧饱和度', '%'),
     'sao2': ('Arterial Oxygen Saturation', '动脉血氧饱和度', '%'),
-    'mech_vent': ('Mechanical Ventilation', '机械通气', 'boolean'),
+    'mech_vent': ('Mechanical Ventilation Mode', '机械通气模式', 'category'),
     'vent_mode': ('Ventilator Breath-Control Mode', '呼吸机控制类型', 'category'),
     'vent_breath_seq': ('Ventilator Breath Sequencing', '呼吸机呼吸序列', 'category'),
     'driving_pres_controlled': ('Driving Pressure (controlled vent)', '驱动压(控制通气)', 'cmH2O'),
@@ -92,7 +92,7 @@ CONCEPT_DICTIONARY = {
     'dex': ('Dextrose (D10)', '葡萄糖（10%）', 'mL/hr'),
     'dobu_dur': ('Dobutamine Duration', '多巴酚丁胺持续时间', 'hours'),
     'dobu_rate': ('Dobutamine Rate', '多巴酚丁胺速率', 'mcg/kg/min'),
-    'dobu60': ('Dobutamine >60min', '多巴酚丁胺>60分钟', 'boolean'),
+    'dobu60': ('Dobutamine Rate (>60min)', '多巴酚丁胺速率（持续>60分钟）', 'mcg/kg/min'),
     'epi_dur': ('Epinephrine Duration', '肾上腺素持续时间', 'hours'),
     'epi_rate': ('Epinephrine Rate', '肾上腺素速率', 'mcg/kg/min'),
     'furosemide': ('Furosemide (Lasix)', '呋塞米 (速尿)', 'boolean'),
@@ -238,9 +238,9 @@ CONCEPT_DICTIONARY = {
     # 药物 (扩展)
     'dopa_rate': ('Dopamine Rate', '多巴胺速率', 'mcg/kg/min'),
     'dopa_dur': ('Dopamine Duration', '多巴胺持续时间', 'hours'),
-    'dopa60': ('Dopamine >60min', '多巴胺>60分钟', 'boolean'),
-    'norepi60': ('Norepinephrine >60min', '去甲肾上腺素>60分钟', 'boolean'),
-    'epi60': ('Epinephrine >60min', '肾上腺素>60分钟', 'boolean'),
+    'dopa60': ('Dopamine Rate (>60min)', '多巴胺速率（持续>60分钟）', 'mcg/kg/min'),
+    'norepi60': ('Norepinephrine Rate (>60min)', '去甲肾上腺素速率（持续>60分钟）', 'mcg/kg/min'),
+    'epi60': ('Epinephrine Rate (>60min)', '肾上腺素速率（持续>60分钟）', 'mcg/kg/min'),
     'phn_rate': ('Phenylephrine Rate', '去氧肾上腺素速率', 'mcg/kg/min'),
 
     # 肾脏与尿量率
@@ -256,6 +256,16 @@ CONCEPT_DICTIONARY = {
     'aki_stage_creat': ('AKI Stage (Creatinine)', 'AKI分期（肌酐）', '0-3'),
     'aki_stage_uo': ('AKI Stage (Urine Output)', 'AKI分期（尿量）', '0-3'),
     'aki_stage_rrt': ('AKI Stage (RRT)', 'AKI分期（RRT）', '0-3'),
+    # These are receipts rather than measurements.  Their explicit storage
+    # kinds keep native-v2 exports portable and prevent categorical
+    # ascertainment states from being coerced to floating point.
+    'aki_assessable': ('KDIGO AKI Assessable', 'KDIGO AKI 可判定性', 'boolean'),
+    'aki_ascertainment': ('KDIGO AKI Ascertainment', 'KDIGO AKI 判定状态', 'category'),
+    'aki_assessment_reason': ('KDIGO AKI Assessment Reason', 'KDIGO AKI 判定原因', 'category'),
+    'observation_window_coverage': ('KDIGO Observation-window Coverage', 'KDIGO 观察窗覆盖度', 'category'),
+    'creatinine_ascertainment': ('KDIGO Creatinine-component Ascertainment', 'KDIGO 肌酐组件判定状态', 'category'),
+    'urine_ascertainment': ('KDIGO Urine-output-component Ascertainment', 'KDIGO 尿量组件判定状态', 'category'),
+    'rrt_ascertainment': ('KDIGO RRT-component Ascertainment', 'KDIGO RRT 组件判定状态', 'category'),
     # 🔧 2026-02-12: 添加规范化后的 KDIGO 扩展列
     'creat_low_past_48hr': ('Lowest Creatinine in Past 48h', '过去48小时内最低肌酐', 'mg/dL'),
     'creat_low_past_7day': ('Baseline Creatinine (7-day lowest)', '基线肌酐（7天内最低值）', 'mg/dL'),
@@ -489,6 +499,12 @@ CONCEPT_GROUPS_INTERNAL = {
     'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium', 'apixaban', 'aspirin', 'diltiazem', 'enoxaparin', 'esmolol', 'insulin', 'labetalol', 'nicardipine', 'phenytoin', 'warfarin'],
     # 🔧 2026-02-04: 移除重复的 kdigo_aki/kdigo_creat/kdigo_uo，只保留 aki_* 规范名
     'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
+              # KDIGO ascertainment receipt.  ``aki_stage == 0`` alone is not
+              # evidence of a complete negative when an input component was
+              # unavailable, so export the state alongside the stage.
+              'aki_assessable', 'aki_ascertainment', 'aki_assessment_reason',
+              'observation_window_coverage', 'creatinine_ascertainment',
+              'urine_ascertainment', 'rrt_ascertainment',
               # 规范化后的列名（从 kdigo_* 展开列规范化而来）
               'creat_low_past_48hr', 'creat_low_past_7day', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
               # 液体平衡（入量/出量衍生）

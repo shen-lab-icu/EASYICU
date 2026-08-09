@@ -1440,6 +1440,40 @@ def test_nested_effect_estimate_is_scientific_output_not_diagnostic_companion():
     assert "unauthorized_effect_product" in _kinds(findings)
 
 
+def test_nonfinite_input_counts_are_closed_diagnostic_counters():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:distribution"]),
+        step_summary={
+            "output_files": {"table:distribution": "distribution.csv"},
+            "nonfinite_input_counts": {
+                "odds_ratio": 0,
+                "ci_low": 1,
+                "ci_high": 2,
+            },
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    "invalid_count",
+    [True, -1, 1.5, "0", {"odds_ratio": 0}],
+)
+def test_nonfinite_input_counts_cannot_hide_non_counter_effect_values(invalid_count):
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:distribution"]),
+        step_summary={
+            "output_files": {"table:distribution": "distribution.csv"},
+            "nonfinite_input_counts": {"odds_ratio": invalid_count},
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
 @pytest.mark.parametrize("status", ["deferred", "non-estimable", "not_estimated"])
 def test_noncomputed_effect_status_is_not_an_effect_result(status):
     findings = declared_product_contract_findings(
@@ -3015,7 +3049,6 @@ def test_host_slot_authorization_accepts_planned_primary_adjusted_effect():
         ),
         planner_parent_anchors=[
             "table:adjusted_association_estimates",
-            "artifact:primary_model_specification",
         ],
     ) == {"figure:primary_adjusted_effect": "primary_estimand"}
 

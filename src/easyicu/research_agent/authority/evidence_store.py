@@ -506,6 +506,74 @@ _NUMERIC_LEAF_RE = re.compile(r"^[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?$"
 # identifiers (SOFA-2), CI labels (95% CI), and chapter-section refs
 # (Section 4). When a manuscript truly needs to cite a two-digit count
 # it should embed it inside an explicit evidence placeholder.
+#: Nouns that make a preceding 1-2 digit integer a *count* rather than an
+#: identifier, version, section or level. Kept explicit: the risk of binding a
+#: number that is not a count is a wrong footnote, so the list only holds words
+#: that cannot follow a version or section number in normal manuscript prose.
+_COUNTED_NOUNS = (
+    "patients",
+    "stays",
+    "icu stays",
+    "admissions",
+    "encounters",
+    "subjects",
+    "participants",
+    "cases",
+    "controls",
+    "deaths",
+    "events",
+    "episodes",
+    "observations",
+    "records",
+    "individuals",
+    "centres",
+    "centers",
+    "sites",
+    "hospitals",
+)
+_COUNTED_NOUN_PATTERN = "|".join(
+    noun.replace(" ", r"\s+") for noun in sorted(_COUNTED_NOUNS, key=len, reverse=True)
+)
+
+#: Words that make the following integer an ordinal / category label rather
+#: than a count. "stage 4 patients" describes which patients, not how many, and
+#: binding the 4 as a sample size would demand evidence for a disease stage.
+_CATEGORY_LABEL_WORDS = (
+    "arm",
+    "class",
+    "cohort",
+    "day",
+    "grade",
+    "group",
+    "level",
+    "phase",
+    "quartile",
+    "quintile",
+    "stage",
+    "step",
+    "tercile",
+    "tier",
+    "type",
+    "week",
+    "year",
+)
+# Python lookbehinds must be fixed width, so this is a *chain* of one
+# lookbehind per label word rather than one lookbehind over an alternation of
+# differing widths. Each `[Ss]tage` form keeps a single width while matching
+# both the sentence-initial and mid-sentence spelling.
+_CATEGORY_LABEL_LOOKBEHINDS = "".join(
+    r"(?<!\b[" + word[0].upper() + word[0] + r"]" + word[1:] + r"\s)"
+    for word in sorted(_CATEGORY_LABEL_WORDS)
+)
+
+#: Chinese measure words that make the preceding integer a count. The project
+#: supports ``manuscript_language="zh"``, and a zh manuscript writes "42例患者"
+#: where an en one writes "42 patients" — the same claim, previously unbound.
+_ZH_COUNTED_PATTERN = (
+    r"(?:例|名|位|人)(?:患者|病人|受试者|对象|死亡|事件)?"
+    r"|(?:个|起|次)(?:事件|中心|医院|站点|队列)"
+)
+
 _NUMERIC_IN_PROSE_RE = re.compile(
     r"(?<![A-Za-z_\d.])"  # avoid mid-identifier digits
     r"(?P<value>"
@@ -530,6 +598,34 @@ _NUMERIC_IN_PROSE_RE = re.compile(
     # *levels* ("95% CI", "90% confidence", "99% credible interval"), which
     # are labels, not claims.
     r"\d{1,2}%(?!\s*(?:CI\b|confidence|credible))"
+    r"|"  # --- counted short integer ---
+    # A 1-2 digit integer in an explicit counting context. Small subgroup
+    # sizes, death counts and event counts are exactly the numbers a reviewer
+    # checks and exactly the ones a writer is most likely to get wrong, so
+    # leaving every "the subgroup included 42 patients" unbound left a hole in
+    # value-level provenance. Binding is gated on the *phrase*, not the digits:
+    # either an explicit ``n = 42`` / ``n of 42``, or a count immediately
+    # followed by a counted noun. That excludes SOFA-2, Sepsis-3, Section 4,
+    # Figure 2, Table 1 and "95% CI" without needing to enumerate them.
+    r"(?<![A-Za-z_\d.])"
+    # Neither end of a written range ("8-12 events") is a count.
+    r"(?<![-–])"
+    # "stage 4 patients" / "grade 3 patients" label a subgroup; the integer is
+    # an ordinal, not a sample size.
+    + _CATEGORY_LABEL_LOOKBEHINDS
+    + r"(?:"
+    r"(?<=\bn\s=\s)\d{1,2}"
+    r"|"
+    r"(?<=\bn=)\d{1,2}"
+    r"|"
+    r"\d{1,2}(?=\s+(?:" + _COUNTED_NOUN_PATTERN + r")\b)"
+    r"|"
+    r"\d{1,2}(?=\s*(?:" + _ZH_COUNTED_PATTERN + r"))"
+    r")"
+    # A short integer that opens a range ("8-12 events") is a bound, not a
+    # count. Scoped to this branch only: the general numeric form must keep
+    # matching both ends of "0.71-0.82".
+    r"(?!\s*[-–])"
     r")"
     r"(?![A-Za-z_\d]|\.\d)"  # not followed by identifier / decimal continuation
 )

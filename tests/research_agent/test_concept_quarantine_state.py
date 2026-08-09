@@ -7,6 +7,9 @@ import inspect
 
 from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.execution import concept_audit as concept_audit_execution
+from easyicu.research_agent.execution.concept_reaudit import (
+    DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE,
+)
 from easyicu.research_agent.schema import ValidationFinding
 
 
@@ -157,6 +160,23 @@ def _provider_failure(*, step_id: str = "05_analysis") -> ValidationFinding:
     )
 
 
+def _proven_reaudit_budget_failure(
+    *, step_id: str = "05_analysis"
+) -> ValidationFinding:
+    return ValidationFinding(
+        validator="provider_call_budget",
+        severity="error",
+        message="reserved final audit budget exhausted",
+        detail={
+            "issue_code": DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE,
+            "step_id": step_id,
+            "category": "concept_audit",
+            "used": 9,
+            "limit": 9,
+        },
+    )
+
+
 def test_final_audit_continuation_requires_exact_transport_failure_quarantine() -> None:
     provider_failure = _provider_failure()
 
@@ -224,6 +244,48 @@ def test_provider_failure_is_deferred_only_before_reserved_final_audit() -> None
     assert not concept_audit_execution._defer_provider_failure_until_final_audit(
         include_llm=False,
         reserved_final_category=None,
+        quarantine_findings=[failure],
+        step_id="05_analysis",
+    )
+
+
+def test_proven_deterministic_reaudit_budget_failure_is_deferred_and_retired() -> None:
+    failure = _proven_reaudit_budget_failure()
+
+    assert concept_audit_execution._defer_provider_failure_until_final_audit(
+        include_llm=False,
+        reserved_final_category="concept_audit",
+        quarantine_findings=[failure],
+        step_id="05_analysis",
+    )
+
+    quarantine = concept_audit_execution.ConceptQuarantineState()
+    quarantine.draft_active = True
+    quarantine.pending_errors = [failure]
+    assert concept_audit_execution._retire_completed_provider_failure_continuation(
+        quarantine,
+        step_id="05_analysis",
+        fresh_findings=[],
+    )
+    assert quarantine.pending_errors == []
+    assert quarantine.draft_active is False
+
+
+def test_unmarked_provider_budget_failure_remains_blocking() -> None:
+    failure = _proven_reaudit_budget_failure().model_copy(
+        update={
+            "detail": {
+                "step_id": "05_analysis",
+                "category": "concept_audit",
+                "used": 9,
+                "limit": 9,
+            }
+        }
+    )
+
+    assert not concept_audit_execution._defer_provider_failure_until_final_audit(
+        include_llm=False,
+        reserved_final_category="concept_audit",
         quarantine_findings=[failure],
         step_id="05_analysis",
     )

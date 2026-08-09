@@ -19,9 +19,117 @@ for tests or deterministic demos; use ``--llm openai`` (and an
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
+
+
+HUMAN_REVIEW_PENDING_EXIT_CODE = 75
+HUMAN_REVIEW_REJECTED_EXIT_CODE = 77
+
+
+def _is_interactive_terminal() -> bool:
+    """Return whether a same-process review conversation is possible."""
+
+    return bool(sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def _pending_payload(pending: Any, *, entrypoint: str) -> Dict[str, Any]:
+    payload = pending.model_dump(mode="json")
+    payload.update(
+        {
+            "status": "human_review_pending",
+            "terminal": False,
+            "entrypoint": entrypoint,
+            "external_resume_supported": False,
+            f"resumable_via_{entrypoint}": False,
+            "message": (
+                "This pause supports same-process resume only. The current "
+                f"{entrypoint} response does not retain a resume channel after "
+                "it returns."
+            ),
+        }
+    )
+    return payload
+
+
+def _emit_noninteractive_pending(pending: Any) -> int:
+    """Emit one machine-readable pause and return the dedicated exit code."""
+
+    print(
+        json.dumps(
+            _pending_payload(pending, entrypoint="cli"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return HUMAN_REVIEW_PENDING_EXIT_CODE
+
+
+def _prompt_review_decision(request: Any) -> tuple[str, str, str]:
+    print(
+        json.dumps(
+            request.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    while True:
+        token = input("Decision [approve/reject]: ").strip().casefold()
+        if token in {"approve", "approved", "a"}:
+            decision = "approved"
+            break
+        if token in {"reject", "rejected", "r"}:
+            decision = "rejected"
+            break
+        print("Enter 'approve' or 'reject'.", file=sys.stderr)
+    reviewer = ""
+    while not reviewer:
+        reviewer = input("Reviewer name: ").strip()
+        if not reviewer:
+            print("Reviewer name cannot be empty.", file=sys.stderr)
+    note = input("Review note (optional): ").strip()
+    return decision, reviewer, note
+
+
+def _resume_interactive_review(pipeline: Any, pending: Any) -> Any:
+    """Collect exact digest-bound decisions and resume before this process exits."""
+
+    from .orchestration.workflow import HumanReviewDecision
+
+    print(
+        f"Run {pending.run_id} requires {len(pending.requests)} human review "
+        f"decision(s). Resume scope: {pending.resume_scope}."
+    )
+    decisions = []
+    for request in pending.requests:
+        decision, reviewer, note = _prompt_review_decision(request)
+        decisions.append(
+            HumanReviewDecision(
+                review_id=request.review_id,
+                authority_sha256=request.authority_sha256,
+                decision=decision,
+                reviewer=reviewer,
+                decided_at=datetime.now(timezone.utc).isoformat(),
+                note=note,
+            )
+        )
+    return pipeline.resume_human_review(decisions, run_id=pending.run_id)
+
+
+def _print_pipeline_result(result: Any) -> None:
+    print(f"run_id:       {result.run_id}")
+    print(f"workdir:      {result.workdir}")
+    print(f"context:      {result.context_path}")
+    print(f"plan:         {result.plan_path}")
+    print(f"manifest:     {result.manifest_path}")
+    print(f"report:       {result.report_path}")
+    print(f"manuscript:   {result.manuscript_path}")
+    print(f"evidence:     {result.evidence_count} artefacts")
+    print(f"findings:     {result.findings_count}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -65,8 +173,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--cross-database",
         default=None,
-        help="Comma-separated list of databases for replication "
-        "(e.g. 'eicu,hirid').",
+        help="Comma-separated list of databases for replication (e.g. 'eicu,hirid').",
     )
     p.add_argument(
         "--inclusion",
@@ -94,8 +201,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--timeout",
         type=float,
-        default=300.0,
-        help="Per-step subprocess timeout in seconds (default: 300).",
+        default=900.0,
+        help="Per-step subprocess timeout in seconds (default: 900).",
     )
     p.add_argument(
         "--manuscript-language",
@@ -191,6 +298,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     from .providers.mocks import MockLLMClient
     from .pipeline import ResearchAgentPipeline
     from .orchestration.experiment_spec import load_experiment_spec
+    from .orchestration.workflow import HumanReviewPending, HumanReviewRejected
 
     if args.llm is None:
         raise SystemExit("Choose an explicit --llm backend (`mock` or `openai`).")
@@ -287,15 +395,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             exclusion_criteria=args.exclusion,
         )
 
-    print(f"run_id:       {result.run_id}")
-    print(f"workdir:      {result.workdir}")
-    print(f"context:      {result.context_path}")
-    print(f"plan:         {result.plan_path}")
-    print(f"manifest:     {result.manifest_path}")
-    print(f"report:       {result.report_path}")
-    print(f"manuscript:   {result.manuscript_path}")
-    print(f"evidence:     {result.evidence_count} artefacts")
-    print(f"findings:     {result.findings_count}")
+    if isinstance(result, HumanReviewPending):
+        if not _is_interactive_terminal():
+            return _emit_noninteractive_pending(result)
+        try:
+            result = _resume_interactive_review(pipeline, result)
+        except HumanReviewRejected as exc:
+            print(
+                json.dumps(
+                    {
+                        "status": "human_review_rejected",
+                        "terminal": True,
+                        "run_id": result.run_id,
+                        "rejected_review_ids": list(exc.review_ids),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return HUMAN_REVIEW_REJECTED_EXIT_CODE
+        except (EOFError, KeyboardInterrupt):
+            print("", file=sys.stderr)
+            return _emit_noninteractive_pending(result)
+
+    _print_pipeline_result(result)
     return 0
 
 

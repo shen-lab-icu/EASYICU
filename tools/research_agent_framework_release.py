@@ -2,8 +2,9 @@
 """Run the no-provider Research Agent framework release gate.
 
 The gate exercises resource selection, bounded context, permissioned memory,
-capability approval, LangGraph/HITL, semantic golden, typed inputs, architecture
-and dependency direction.  It never calls an LLM endpoint or reads ICU data.
+capability approval, the explicit workflow/HITL contract, semantic golden,
+typed inputs, architecture and dependency direction.  It never calls an LLM
+endpoint or reads ICU data.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_VERSION = "easyicu.research_agent_framework_release/2"
-TOOL_VERSION = "1.2.0"
+TOOL_VERSION = "1.3.0"
 
 RELEASE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -59,7 +60,7 @@ RELEASE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "tests/research_agent/test_coder_resource_wiring.py",
             "tests/research_agent/test_reviewed_memory_wiring.py",
             "tests/research_agent/test_capability_workflow_wiring.py",
-            "tests/research_agent/test_graph_poc.py",
+            "tests/research_agent/test_workflow.py",
             "tests/research_agent/test_char_golden_run_bundle.py",
             "tests/research_agent/test_typed_input_consumption_receipt.py",
             "tests/research_agent/test_typed_input_sdk.py",

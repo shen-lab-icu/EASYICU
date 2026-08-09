@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 import pytest
 
@@ -57,6 +59,7 @@ def _step() -> AnalysisStep:
 def test_grouped_table_one_has_overall_groups_tests_and_correct_missingness():
     table = build_grouped_table_one(_frame(), _spec())
 
+    assert set(table["schema_version"]) == {"easyicu.table_one_result/3"}
     assert set(table["group"]) == {"Overall", "0", "1"}
     age_zero = table[(table["variable"] == "age") & (table["group"] == "0")]
     assert age_zero.iloc[0]["denominator_n"] == 3
@@ -74,6 +77,81 @@ def test_grouped_table_one_has_overall_groups_tests_and_correct_missingness():
         "sex": 1,
     }
     assert set(table["test_name"]) == {"mann_whitney_u", "fisher_exact"}
+
+
+def test_grouped_table_one_emits_binary_continuous_and_category_smd():
+    table = build_grouped_table_one(_frame(), _spec())
+
+    age = table[table["variable"] == "age"]
+    expected_age = ((60.0 + 80.0 + 90.0) / 3.0 - (50.0 + 70.0) / 2.0) / math.sqrt(
+        (pd.Series([50.0, 70.0]).var() + pd.Series([60.0, 80.0, 90.0]).var()) / 2.0
+    )
+    assert age["standardized_mean_difference"].tolist() == pytest.approx(
+        [expected_age] * len(age)
+    )
+    assert age["absolute_standardized_mean_difference"].tolist() == pytest.approx(
+        [abs(expected_age)] * len(age)
+    )
+    assert set(age["standardized_difference_status"]) == {"computed"}
+    assert set(age["standardized_difference_reference_group"]) == {"0"}
+    assert set(age["standardized_difference_comparison_group"]) == {"1"}
+
+    sex_f = table[(table["variable"] == "sex") & (table["category"] == "F")]
+    reference = 1.0 / 2.0
+    comparison = 2.0 / 3.0
+    expected_sex_f = (comparison - reference) / math.sqrt(
+        (reference * (1.0 - reference) + comparison * (1.0 - comparison)) / 2.0
+    )
+    assert sex_f["standardized_mean_difference"].tolist() == pytest.approx(
+        [expected_sex_f] * len(sex_f)
+    )
+    sex_m = table[(table["variable"] == "sex") & (table["category"] == "M")]
+    assert sex_m["standardized_mean_difference"].tolist() == pytest.approx(
+        [-expected_sex_f] * len(sex_m)
+    )
+
+
+def test_grouped_table_one_marks_multi_group_smd_not_applicable():
+    frame = pd.DataFrame(
+        {
+            "arm": [0, 0, 1, 1, 2, 2],
+            "age": [50.0, 60.0, 70.0, 80.0, 90.0, 100.0],
+            "sex": ["F", "M", "F", "M", "F", "M"],
+        }
+    )
+    spec = _spec()
+    spec["group_levels"] = [0, 1, 2]
+
+    table = build_grouped_table_one(frame, spec)
+
+    assert table["standardized_mean_difference"].isna().all()
+    assert table["absolute_standardized_mean_difference"].isna().all()
+    assert set(table["standardized_difference_status"]) == {
+        "not_applicable_more_than_two_groups"
+    }
+    assert table["standardized_difference_reference_group"].isna().all()
+    assert table["standardized_difference_comparison_group"].isna().all()
+
+
+def test_grouped_table_one_handles_zero_pooled_variance_without_infinity():
+    frame = _frame()
+    frame["age"] = [50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+
+    same = build_grouped_table_one(frame, _spec())
+    age_same = same[same["variable"] == "age"]
+    assert age_same["p_value"].eq(1.0).all()
+    assert set(age_same["test_name"]) == {"mann_whitney_u"}
+    assert age_same["standardized_mean_difference"].eq(0.0).all()
+    assert set(age_same["standardized_difference_status"]) == {"computed"}
+
+    frame.loc[frame["arm"] == 1, "age"] = 60.0
+    different = build_grouped_table_one(frame, _spec())
+    age_different = different[different["variable"] == "age"]
+    assert age_different["standardized_mean_difference"].isna().all()
+    assert age_different["absolute_standardized_mean_difference"].isna().all()
+    assert set(age_different["standardized_difference_status"]) == {
+        "undefined_zero_pooled_variance"
+    }
 
 
 def test_grouped_table_one_matches_json_integer_levels_to_parquet_floats():
@@ -172,6 +250,32 @@ def test_table_one_output_gate_accepts_exact_sdk_result(tmp_path):
         tmp_path / "table_one.csv", index=False
     )
     assert table_one_output_findings(step=_step(), out_dir=tmp_path) == []
+
+
+def test_table_one_output_gate_rejects_tampered_smd(tmp_path):
+    table = build_grouped_table_one(_frame(), _spec())
+    table.loc[
+        (table["variable"] == "age") & (table["group"] == "Overall"),
+        "standardized_mean_difference",
+    ] = 0.0
+    table.to_csv(tmp_path / "table_one.csv", index=False)
+
+    findings = table_one_output_findings(step=_step(), out_dir=tmp_path)
+    assert "table_one_standardized_difference_invalid" in {
+        finding.detail["reason"] for finding in findings
+    }
+
+
+def test_table_one_output_gate_requires_smd_contract_columns(tmp_path):
+    table = build_grouped_table_one(_frame(), _spec()).drop(
+        columns=["standardized_mean_difference"]
+    )
+    table.to_csv(tmp_path / "table_one.csv", index=False)
+
+    findings = table_one_output_findings(step=_step(), out_dir=tmp_path)
+    assert [finding.detail["reason"] for finding in findings] == [
+        "table_one_schema_incomplete"
+    ]
 
 
 def test_table_one_output_gate_rejects_wrong_missingness_denominator(tmp_path):

@@ -19,6 +19,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from easyicu.webserver import agent_outputs
+from easyicu.webserver.provider_url_security import (
+    ProviderUrlSecurityError,
+    validate_credential_endpoint,
+)
 
 _MAX_EXTERNAL_CALLS_PER_RUN = 1
 _DEFAULT_MAX_OUTPUT_TOKENS = 1200
@@ -151,6 +155,17 @@ def provider_readiness(
     default_base = _default_base_url(provider_text)
     model_name, model = _first_env(env, model_names)
     has_base_url = bool(base_url or default_base)
+    base_url_validation = "provider_default" if default_base and not base_url else "missing"
+    base_url_rejection_reason: Optional[str] = None
+    if base_url:
+        try:
+            validate_provider_base_url(base_url)
+        except ProviderAdapterError as exc:
+            base_url_validation = "rejected"
+            base_url_rejection_reason = str(exc.detail.get("reason") or "rejected")
+        else:
+            base_url_validation = "validated"
+    base_url_safe = has_base_url and base_url_validation != "rejected"
     missing: List[str] = []
     if external and not ai_enabled:
         missing.append("ai_enabled")
@@ -158,6 +173,8 @@ def provider_readiness(
         missing.append("credential")
     if external and not has_base_url:
         missing.append("base_url")
+    if external and has_base_url and not base_url_safe:
+        missing.append("base_url_safety")
     if external and not model:
         missing.append("model")
     if external and env_file.get("status") == "insecure_permissions":
@@ -174,6 +191,8 @@ def provider_readiness(
         "base_url_source": (
             base_name if base_url else ("provider_default" if default_base else None)
         ),
+        "base_url_validation": base_url_validation,
+        "base_url_rejection_reason": base_url_rejection_reason,
         "model_env_candidates": model_names,
         "model_present": bool(model),
         "model_source": model_name if model else None,
@@ -182,7 +201,7 @@ def provider_readiness(
             or (
                 ai_enabled
                 and api_key
-                and has_base_url
+                and base_url_safe
                 and model
                 and env_file.get("status") != "insecure_permissions"
             )
@@ -241,6 +260,7 @@ def write_provider_config(
         _model_env_names(provider_text)[0]: model,
     }
     if base_url:
+        validate_provider_base_url(base_url)
         entries[_base_url_env_names(provider_text)[0]] = base_url
     max_tokens = str(max_tokens or "").strip()
     if max_tokens:
@@ -315,6 +335,9 @@ def _load_external_credentials(
     if not base_url:
         base_url = _default_base_url(provider)
     else:
+        # Re-checked here, not only where the UI writes it: the env file is an
+        # ordinary file, and this is the last point before the key is sent.
+        validate_provider_base_url(base_url)
         base_url = _chat_completions_url(base_url)
     model_name, model = _first_env(env, _model_env_names(provider))
     attempted = {
@@ -395,6 +418,45 @@ def _api_key_env_names(provider: str) -> List[str]:
     if normalized == "custom":
         return ["EASYICU_LLM_API_KEY"]
     return [f"{_env_token(normalized)}_API_KEY", "EASYICU_LLM_API_KEY"]
+
+
+def validate_provider_base_url(base_url: str) -> str:
+    """Refuse a provider URL this host should not send an API key to.
+
+    The configured base URL is where the ``Authorization: Bearer <key>``
+    header goes, and the request is issued by the server, from inside the
+    network the server sits in. An unchecked value therefore buys two things
+    at once: an SSRF probe into whatever the host can reach, and delivery of
+    the operator's key to an address of the caller's choosing. ``requests``
+    strips the auth header across a host change, so the redirect risk here is
+    reach rather than credentials — redirects are refused anyway, because a
+    destination that was checked and a destination that is contacted should be
+    the same one.
+
+    Plaintext ``http`` is allowed only to loopback, which is how the local
+    model proxies used for benchmarking are addressed.
+
+    What this deliberately does not claim: resolving a name here does not bind
+    it for later. A name that answers publicly now and privately at request
+    time is not caught by this check alone, which is why it runs again when
+    credentials are loaded.
+    """
+
+    try:
+        return validate_credential_endpoint(base_url)
+    except ProviderUrlSecurityError as exc:
+        error = (
+            "external_provider_base_url_required"
+            if exc.reason == "missing"
+            else "external_provider_base_url_rejected"
+        )
+        raise ProviderAdapterError(
+            {
+                "error": error,
+                **({"reason": exc.reason} if exc.reason != "missing" else {}),
+                "secrets_returned": False,
+            }
+        ) from exc
 
 
 def _base_url_env_names(provider: str) -> List[str]:
@@ -592,7 +654,23 @@ def _post_chat_completion(
     import requests
 
     safe_request = {k: v for k, v in request.items() if k != "easyicu_policy"}
-    response = requests.post(url, json=safe_request, headers=headers, timeout=timeout)
+    # No redirects: the address that was checked must be the address that is
+    # contacted. A 3xx would otherwise move the request to a host nothing
+    # validated, which is the whole point of validating it.
+    response = requests.post(
+        url,
+        json=safe_request,
+        headers=headers,
+        timeout=timeout,
+        allow_redirects=False,
+    )
+    if response.is_redirect or response.is_permanent_redirect:
+        raise ProviderAdapterError(
+            {
+                "error": "external_provider_redirect_refused",
+                "status_code": response.status_code,
+            }
+        )
     response.raise_for_status()
     data = response.json()
     if not isinstance(data, dict):

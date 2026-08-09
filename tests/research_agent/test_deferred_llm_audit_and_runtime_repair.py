@@ -8,6 +8,9 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.authority.provider_budget import (
+    PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
+)
 from easyicu.research_agent.providers.mocks import (
     PatternScriptedMockLLMClient,
     ScriptedMockLLMClient,
@@ -278,7 +281,14 @@ def test_automatic_contract_repair_does_not_consume_llm_contract_allowance(
             )
         ]
 
-    def one_structural_repair(*, code, findings, previous_repair=None):
+    def one_structural_repair(
+        *,
+        code,
+        findings,
+        previous_repair=None,
+        on_semantic_escalation=None,
+    ):
+        del on_semantic_escalation
         del findings
         if (
             "INITIAL_CONTRACT_ERROR" in code
@@ -710,22 +720,22 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     )
     llm = PatternScriptedMockLLMClient(
         [
-            ("ICU-AWARE RESEARCH PLAN", [_plan()] * 8),
+            ("ICU-AWARE RESEARCH PLAN", [_plan()] * 16),
             (
                 "WRITE THE PYTHON CODE",
-                [_summary_script(phase="CAPSULE_RESUME")] * 8,
+                [_summary_script(phase="CAPSULE_RESUME")] * 16,
             ),
             (
                 "CONSERVATIVE ICU CONCEPT-USE AUDITOR",
-                [json.dumps({"findings": []})] * 8,
+                [json.dumps({"findings": []})] * 16,
             ),
-            ("INTERPRET THE RESULTS", ["The cohort summary is available."] * 8),
+            ("INTERPRET THE RESULTS", ["The cohort summary is available."] * 16),
         ]
     )
 
     def capsule_auditor(endpoint: str) -> ScriptedMockLLMClient:
         client = ScriptedMockLLMClient(
-            [json.dumps({"findings": []})] * 8,
+            [json.dumps({"findings": []})] * 16,
             repeat_last=True,
         )
         client.name = "capsule-auditor"
@@ -773,7 +783,10 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     assert first_capsule.capsule.stage == "executed_concept_audited"
     assert first_capsule.capsule.execution is not None
     assert first_capsule.capsule.concept_audit is not None
-    assert first_record["step_provider_call_receipt_version"] == 6
+    assert (
+        first_record["step_provider_call_receipt_version"]
+        == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
+    )
     assert first_record["step_provider_call_receipt"].endswith(".json")
     assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
     assert _call_count(llm, "CONSERVATIVE ICU CONCEPT-USE AUDITOR") == 0
@@ -1155,12 +1168,33 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
         "stop_after_step_id": "01_summary",
         "stop_after_analysis": True,
     }
-    with pytest.raises(StepAuthorityRuntimeError, match="simulated post-receipt"):
-        build_pipeline().run(**run_kwargs)
+    # The crash no longer escapes `run`: a step that raises is caught, sealed
+    # into the manifest as a terminal record, and the run stops there. So the
+    # crash is read out of the ledger rather than out of a raised exception.
+    build_pipeline().run(**run_kwargs)
     run_dir = next(tmp_path.glob("run_*"))
-    first_record = _latest_step_record(run_dir)
-    assert first_record["status"] == "repair_transport_pending"
+    crash_ledger = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    step_records = [
+        record
+        for record in crash_ledger["per_step_records"]
+        if record.get("step_id") == "01_summary"
+    ]
+    assert step_records[-1]["status"] == "execution_raised"
+
+    # The attempt's own checkpoint is still there, and -- this is the part that
+    # decides whether the resume is free -- the crash record that supersedes it
+    # carries the coordinates a resume needs. A resume reads only the CURRENT
+    # record, so coordinates left behind on an older one are invisible.
+    first_record = [
+        record
+        for record in step_records
+        if record["status"] == "repair_transport_pending"
+    ][-1]
     assert first_record["capsule_pending_repair_attempt_id"] == 1
+    assert step_records[-1]["capsule_pending_repair_attempt_id"] == 1
+    assert step_records[-1]["step_authority_capsule_ref"]
     assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
     # This fixture intentionally returns a complete script to the patch route,
     # so one logical repair uses patch + authorized full-rewrite calls.

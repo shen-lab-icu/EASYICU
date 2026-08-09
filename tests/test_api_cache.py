@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from easyicu import api
+from easyicu.api import concepts as concept_api
 
 
 def test_clear_global_loader_clears_datasource_cache() -> None:
@@ -26,15 +27,15 @@ def test_clear_global_loader_clears_datasource_cache() -> None:
             self.datasource = DataSource()
 
     loader = Loader()
-    api._global_loader = loader
-    api._loader_config = ("miiv", "/tmp/example", None, frozenset())
+    concept_api._global_loader = loader
+    concept_api._loader_config = ("miiv", "/tmp/example", None, frozenset())
 
     api.clear_global_loader()
 
     assert loader.concept_resolver.cleared
     assert loader.datasource.cleared
-    assert api._global_loader is None
-    assert api._loader_config is None
+    assert concept_api._global_loader is None
+    assert concept_api._loader_config is None
 
 
 def test_compress_dtypes_handles_table_wrappers() -> None:

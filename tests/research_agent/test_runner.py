@@ -21,8 +21,41 @@ def test_run_result_has_one_dependency_neutral_contract_owner():
     assert RunnerRunResult is ContractRunResult
 
 
+@pytest.fixture
+def unauthorized_host_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Withdraw the suite-wide host-fallback grant for one test.
+
+    ``tests/conftest.py`` sets ``EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1`` for
+    every research-agent test so test-owned scripts still run when an outer
+    CI/Codex sandbox prevents ``sandbox-exec`` from nesting.  That grant is
+    right for tests that merely need generated code to execute, and wrong for
+    the tests below, which *own* the fail-closed isolation boundary: inheriting
+    it makes them assert a guard while the harness has already authorized
+    exactly what the guard exists to refuse, so they fail whether or not the
+    production default is intact.
+    """
+
+    monkeypatch.delenv("EASYICU_ALLOW_UNSAFE_HOST_FALLBACK", raising=False)
+
+
 def _is_python_executable(command: str) -> bool:
     return Path(command).name.startswith("python")
+
+
+def _skip_if_outer_macos_sandbox_denied(result) -> None:
+    from easyicu.research_agent.execution.runner import (
+        macos_sandbox_permission_denied,
+    )
+
+    if (
+        result.effective_isolation == "macos_sandbox_exec"
+        and not result.succeeded
+        and macos_sandbox_permission_denied(result.stderr)
+    ):
+        pytest.skip(
+            "isolation_backend_unavailable: outer macOS sandbox denied "
+            "CodeRunner target execution"
+        )
 
 
 def test_output_cleanup_never_follows_untrusted_symlinks(tmp_path: Path):
@@ -458,7 +491,7 @@ def test_code_runner_preserves_bare_python_command(ra, tmp_path: Path):
 
 
 def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
-    ra, tmp_path: Path, monkeypatch
+    ra, tmp_path: Path, monkeypatch, unauthorized_host_fallback
 ):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -493,6 +526,7 @@ def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
         assert result.returncode == 126
         assert not (result.out_dir / "probe.json").exists()
         return
+    _skip_if_outer_macos_sandbox_denied(result)
     assert result.succeeded
     payload = json.loads((result.out_dir / "probe.json").read_text(encoding="utf-8"))
     assert payload["api_key"] is None
@@ -502,7 +536,7 @@ def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
 
 
 def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
-    ra, tmp_path: Path, monkeypatch
+    ra, tmp_path: Path, monkeypatch, unauthorized_host_fallback
 ):
     import easyicu.research_agent.execution.runner as runner_mod
 
@@ -539,7 +573,7 @@ def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
 
 
 def test_code_runner_default_blocks_direct_host_execution(
-    ra, tmp_path: Path, monkeypatch
+    ra, tmp_path: Path, monkeypatch, unauthorized_host_fallback
 ):
     import easyicu.research_agent.execution.runner as runner_mod
 
@@ -568,7 +602,9 @@ def test_code_runner_default_blocks_direct_host_execution(
     sys.platform != "darwin" or shutil.which("sandbox-exec") is None,
     reason="requires the macOS sandbox-exec backend",
 )
-def test_macos_sandbox_executes_resolved_python_symlink(ra, tmp_path: Path):
+def test_macos_sandbox_executes_resolved_python_symlink(
+    ra, tmp_path: Path, unauthorized_host_fallback
+):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
     runtime_dir = Path(sys.executable).parent.resolve(strict=True)
@@ -590,6 +626,7 @@ def test_macos_sandbox_executes_resolved_python_symlink(ra, tmp_path: Path):
         ),
     )
 
+    _skip_if_outer_macos_sandbox_denied(result)
     assert result.succeeded, result.stderr
     assert result.effective_isolation == "macos_sandbox_exec"
     assert (result.out_dir / "ok.txt").read_text(encoding="utf-8") == "ok"
@@ -600,7 +637,7 @@ def test_macos_sandbox_executes_resolved_python_symlink(ra, tmp_path: Path):
     reason="requires the macOS sandbox-exec backend",
 )
 def test_macos_sandbox_imports_pandas_and_easyicu_but_confines_files(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, unauthorized_host_fallback
 ):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -636,6 +673,7 @@ def test_macos_sandbox_imports_pandas_and_easyicu_but_confines_files(
         ),
     )
 
+    _skip_if_outer_macos_sandbox_denied(result)
     assert result.succeeded, result.stderr
     assert result.effective_isolation == "macos_sandbox_exec"
     payload = json.loads((result.out_dir / "probe.json").read_text(encoding="utf-8"))
@@ -1040,6 +1078,63 @@ def test_runner_retries_without_macos_sandbox_when_profile_apply_is_denied(
     assert result.isolation_degraded is True
     assert result.effective_isolation == "host_subprocess"
     assert "profile application" in (result.isolation_degradation_reason or "")
+
+
+def test_runner_retries_without_macos_sandbox_when_target_exec_is_denied(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Explicit development fallback also covers nested-sandbox execvp denial."""
+
+    import easyicu.research_agent.execution.runner as runner_mod
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
+    )
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, *, cwd, env, timeout):
+        calls.append(list(cmd))
+        if cmd[0] == "sandbox-exec":
+            return SimpleNamespace(
+                stdout="",
+                stderr=(
+                    "sandbox-exec: execvp() of '/tmp/.venv/bin/python' failed: "
+                    "Operation not permitted"
+                ),
+                returncode=71,
+            )
+        Path(env["STEP_OUT_DIR"], "ok.txt").write_text("ok", encoding="utf-8")
+        return SimpleNamespace(stdout="ok\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(
+        runner,
+        "build_command",
+        lambda *, script_path: [
+            "sandbox-exec",
+            "-p",
+            "(deny network*)",
+            "python",
+            str(script_path),
+        ],
+    )
+    monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
+
+    result = runner.run(step_id="macos_execvp_fallback", code="print('ok')\n")
+
+    assert result.succeeded
+    assert len(calls) == 2
+    assert calls[0][0] == "sandbox-exec"
+    assert result.isolation_degraded is True
+    assert result.effective_isolation == "host_subprocess"
+    assert "could not apply its profile" in result.stderr
 
 
 def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(

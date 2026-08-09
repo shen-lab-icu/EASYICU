@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+from dataclasses import dataclass
 from typing import Any, Iterable
 
 import numpy as np
@@ -21,6 +22,77 @@ from ..schema import TableOneSpec, TableOneVariableSpec
 
 class TableOneContractError(ValueError):
     """The data cannot satisfy the Planner-owned Table 1 design."""
+
+
+@dataclass(frozen=True)
+class StandardizedDifferenceResult:
+    """One binary-group standardized difference and its audit status."""
+
+    value: float | None
+    status: str
+
+    @property
+    def absolute_value(self) -> float | None:
+        return None if self.value is None else abs(self.value)
+
+
+def standardized_difference_from_moments(
+    *,
+    reference_location: float | None,
+    reference_variance: float | None,
+    comparison_location: float | None,
+    comparison_variance: float | None,
+    empty_group: bool = False,
+) -> StandardizedDifferenceResult:
+    """Return ``comparison - reference`` over the equal-weight pooled SD.
+
+    Continuous variables supply sample means and variances. Categorical rows
+    supply level proportions and Bernoulli variances. The shared kernel keeps
+    the deterministic executor and output gate on one statistical definition.
+    """
+
+    if empty_group:
+        return StandardizedDifferenceResult(None, "not_testable_empty_group")
+    moments = (
+        reference_location,
+        reference_variance,
+        comparison_location,
+        comparison_variance,
+    )
+    if any(value is None for value in moments):
+        return StandardizedDifferenceResult(
+            None, "not_testable_insufficient_group_values"
+        )
+    reference_location = float(reference_location)
+    reference_variance = float(reference_variance)
+    comparison_location = float(comparison_location)
+    comparison_variance = float(comparison_variance)
+    if not all(
+        math.isfinite(value)
+        for value in (
+            reference_location,
+            reference_variance,
+            comparison_location,
+            comparison_variance,
+        )
+    ):
+        raise TableOneContractError(
+            "Table 1 standardized-difference moments must be finite"
+        )
+    if reference_variance < 0 or comparison_variance < 0:
+        raise TableOneContractError(
+            "Table 1 standardized-difference variances must be non-negative"
+        )
+    difference = comparison_location - reference_location
+    pooled_variance = (reference_variance + comparison_variance) / 2.0
+    if pooled_variance == 0.0:
+        if difference == 0.0:
+            return StandardizedDifferenceResult(0.0, "computed")
+        return StandardizedDifferenceResult(None, "undefined_zero_pooled_variance")
+    value = difference / math.sqrt(pooled_variance)
+    if not math.isfinite(value):
+        raise TableOneContractError("Table 1 standardized difference must be finite")
+    return StandardizedDifferenceResult(value, "computed")
 
 
 def table_one_spec_sha256(spec: TableOneSpec | dict[str, Any]) -> str:
@@ -113,6 +185,16 @@ def _numeric_test(
             return float(result.pvalue), "welch_t"
         result = stats.f_oneway(*groups, equal_var=False)
         return float(result.pvalue), "welch_anova"
+    # SciPy versions disagree on the fully tied rank-test edge case: some
+    # return 1.0 while newer builds can return NaN.  The groups are exactly
+    # indistinguishable here, so resolve that one mathematical case before
+    # delegating while keeping every other non-finite result fail-closed.
+    reference = groups[0][0]
+    if all(bool(np.equal(values, reference).all()) for values in groups):
+        return (
+            1.0,
+            "mann_whitney_u" if len(groups) == 2 else "kruskal_wallis",
+        )
     if len(groups) == 2:
         result = stats.mannwhitneyu(groups[0], groups[1], alternative="two-sided")
         return float(result.pvalue), "mann_whitney_u"
@@ -176,13 +258,21 @@ def _base_row(
     denominator_n: int,
     nonmissing_n: int,
     missing_n: int,
+    group_missing_excluded_n: int,
     p_value: float | None,
     test_name: str,
     contract_sha256: str,
+    standardized_difference: StandardizedDifferenceResult,
+    reference_group: str | None,
+    comparison_group: str | None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": "easyicu.table_one_result/1",
+        "schema_version": "easyicu.table_one_result/3",
         "contract_sha256": contract_sha256,
+        # Rows the grouping variable could not place, removed from this table
+        # before any denominator was taken.  Carried on every row so that no
+        # consumer can read the table without also reading what is not in it.
+        "group_missing_excluded_n": group_missing_excluded_n,
         "variable_order": variable_order,
         "variable": variable.name,
         "variable_type": variable.variable_kind,
@@ -202,7 +292,85 @@ def _base_row(
         "q75": None,
         "p_value": p_value,
         "test_name": test_name,
+        "standardized_mean_difference": standardized_difference.value,
+        "absolute_standardized_mean_difference": (
+            standardized_difference.absolute_value
+        ),
+        "standardized_difference_status": standardized_difference.status,
+        "standardized_difference_reference_group": reference_group,
+        "standardized_difference_comparison_group": comparison_group,
     }
+
+
+def _numeric_standardized_difference(
+    series: pd.Series,
+    group_masks: list[pd.Series],
+) -> StandardizedDifferenceResult:
+    if len(group_masks) != 2:
+        return StandardizedDifferenceResult(None, "not_applicable_more_than_two_groups")
+    groups = [_numeric_values(series[mask], label=series.name) for mask in group_masks]
+    if any(values.size == 0 for values in groups):
+        return standardized_difference_from_moments(
+            reference_location=None,
+            reference_variance=None,
+            comparison_location=None,
+            comparison_variance=None,
+            empty_group=True,
+        )
+    if any(values.size < 2 for values in groups):
+        return standardized_difference_from_moments(
+            reference_location=None,
+            reference_variance=None,
+            comparison_location=None,
+            comparison_variance=None,
+        )
+    return standardized_difference_from_moments(
+        reference_location=float(np.mean(groups[0])),
+        reference_variance=float(np.var(groups[0], ddof=1)),
+        comparison_location=float(np.mean(groups[1])),
+        comparison_variance=float(np.var(groups[1], ddof=1)),
+    )
+
+
+def _categorical_standardized_differences(
+    series: pd.Series,
+    group_masks: list[pd.Series],
+    variable: TableOneVariableSpec,
+) -> dict[str, StandardizedDifferenceResult]:
+    if len(group_masks) != 2:
+        result = StandardizedDifferenceResult(
+            None, "not_applicable_more_than_two_groups"
+        )
+        return {_token(level): result for level in variable.levels}
+    nonmissing = [int(series[mask].notna().sum()) for mask in group_masks]
+    if any(value == 0 for value in nonmissing):
+        result = standardized_difference_from_moments(
+            reference_location=None,
+            reference_variance=None,
+            comparison_location=None,
+            comparison_variance=None,
+            empty_group=True,
+        )
+        return {_token(level): result for level in variable.levels}
+    results: dict[str, StandardizedDifferenceResult] = {}
+    for level in variable.levels:
+        level_token = _token(level)
+        proportions = [
+            float(
+                series[mask]
+                .dropna()
+                .map(lambda value: _token(value) == level_token)
+                .mean()
+            )
+            for mask in group_masks
+        ]
+        results[level_token] = standardized_difference_from_moments(
+            reference_location=proportions[0],
+            reference_variance=proportions[0] * (1.0 - proportions[0]),
+            comparison_location=proportions[1],
+            comparison_variance=proportions[1] * (1.0 - proportions[1]),
+        )
+    return results
 
 
 def build_grouped_table_one(
@@ -221,11 +389,21 @@ def build_grouped_table_one(
         raise TableOneContractError(
             f"Table 1 input columns are missing: {missing_columns}"
         )
+    ungrouped = frame[contract.group_by].isna()
+    group_missing_excluded_n = int(ungrouped.sum())
+    if group_missing_excluded_n:
+        if contract.missing_group_policy == "fail_closed":
+            raise TableOneContractError(
+                "Table 1 grouping variable contains missing values under "
+                f"fail_closed policy: {group_missing_excluded_n} of "
+                f"{len(frame)} rows have no {contract.group_by!r} value"
+            )
+        # One filtered frame feeds Overall and every group, so the denominator
+        # and its parts keep describing the same rows.  Filtering per group and
+        # leaving Overall on the full frame is the same defect as counting
+        # events on rows a model never fitted.
+        frame = frame.loc[~ungrouped]
     group_series = frame[contract.group_by]
-    if bool(group_series.isna().any()):
-        raise TableOneContractError(
-            "Table 1 grouping variable contains missing values under fail_closed policy"
-        )
     group_masks = _closed_masks(
         group_series, contract.group_levels, label=contract.group_by
     )
@@ -243,6 +421,34 @@ def build_grouped_table_one(
     for variable_order, variable in enumerate(contract.variables, start=1):
         p_value, test_name = _p_value(frame, group_masks, variable)
         series = frame[variable.name]
+        if variable.summary != "count_percent" and variable.levels:
+            # An ordinal row summarised numerically may still declare its
+            # closed set (a SOFA component, a KDIGO stage).  Declaring it has
+            # to mean something, or the plan promises a check nobody runs:
+            # a value outside the set stops the step here, exactly as an
+            # undeclared grouping value does above.  ``_closed_masks`` raises
+            # on the unexpected value; the masks it returns are unused.
+            _closed_masks(series, variable.levels, label=variable.name)
+        reference_group = (
+            str(_python_scalar(contract.group_levels[0]))
+            if len(contract.group_levels) == 2
+            else None
+        )
+        comparison_group = (
+            str(_python_scalar(contract.group_levels[1]))
+            if len(contract.group_levels) == 2
+            else None
+        )
+        numeric_smd = (
+            None
+            if variable.summary == "count_percent"
+            else _numeric_standardized_difference(series, group_masks)
+        )
+        categorical_smd = (
+            _categorical_standardized_differences(series, group_masks, variable)
+            if variable.summary == "count_percent"
+            else {}
+        )
         for group_order, (group_label, mask) in enumerate(display_groups):
             grouped = series[mask]
             denominator_n = int(grouped.shape[0])
@@ -256,9 +462,19 @@ def build_grouped_table_one(
                 denominator_n=denominator_n,
                 nonmissing_n=nonmissing_n,
                 missing_n=missing_n,
+                group_missing_excluded_n=group_missing_excluded_n,
                 p_value=p_value,
                 test_name=test_name,
                 contract_sha256=contract_sha256,
+                standardized_difference=(
+                    numeric_smd
+                    if numeric_smd is not None
+                    else StandardizedDifferenceResult(
+                        None, "not_applicable_more_than_two_groups"
+                    )
+                ),
+                reference_group=reference_group,
+                comparison_group=comparison_group,
             )
             if variable.summary == "count_percent":
                 for level, level_mask in zip(
@@ -275,16 +491,22 @@ def build_grouped_table_one(
                             100.0 * count / nonmissing_n if nonmissing_n else None
                         ),
                     )
+                    smd = categorical_smd[_token(level)]
+                    row.update(
+                        standardized_mean_difference=smd.value,
+                        absolute_standardized_mean_difference=smd.absolute_value,
+                        standardized_difference_status=smd.status,
+                    )
                     rows.append(row)
                 continue
             values = _numeric_values(grouped, label=variable.name)
             row = dict(base)
             if values.size:
-                if variable.summary in {"mean_sd", "both"}:
-                    row["mean"] = float(np.mean(values))
-                    row["sd"] = (
-                        float(np.std(values, ddof=1)) if values.size > 1 else None
-                    )
+                # Mean/SD remain in the source-data contract even when the
+                # reader-facing summary is median/IQR, because they are the
+                # auditable moments underlying the SMD.
+                row["mean"] = float(np.mean(values))
+                row["sd"] = float(np.std(values, ddof=1)) if values.size > 1 else None
                 if variable.summary in {"median_iqr", "both"}:
                     row["median"] = float(np.median(values))
                     row["q25"] = float(np.quantile(values, 0.25))
@@ -294,7 +516,9 @@ def build_grouped_table_one(
 
 
 __all__ = [
+    "StandardizedDifferenceResult",
     "TableOneContractError",
     "build_grouped_table_one",
+    "standardized_difference_from_moments",
     "table_one_spec_sha256",
 ]

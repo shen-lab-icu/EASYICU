@@ -11,6 +11,7 @@ that silently funnels a family back into the forest fails here.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -234,6 +235,13 @@ def test_phenotyping_question_renders_cluster_figure(ra, tmp_path: Path):
         / "easyicu_phenotype_publication_figure.figure_contract.json"
     )
     assert contract.exists()
+    contract_payload = json.loads(contract.read_text(encoding="utf-8"))
+    assert set(contract_payload["source_data"]) == {
+        "publication_figure_source_phenotype_profile_plot_data.csv",
+        "publication_figure_source_phenotype_stability_plot_data.csv",
+    }
+    for source_name in contract_payload["source_data"]:
+        assert (contract.parent / source_name).is_file()
     _assert_hero_covered(context, tmp_path, "phenotyping")
 
 

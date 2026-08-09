@@ -39,6 +39,16 @@ def _matches(text: str) -> list[str]:
         ("8% decline", ["8%"]),
         ("下降了 5%", ["5%"]),
         ("100% adherence", ["100%"]),
+        # Counted short integers bind (2026-07-25). Small subgroup sizes, death
+        # counts and event counts are the numbers a reviewer checks first and
+        # the ones a writer most often gets wrong; leaving them unbound left
+        # "the subgroup included 42 patients" unverifiable while every decimal
+        # in the same sentence was value-checked. Binding is gated on the
+        # counting phrase, never on the digits alone.
+        ("n=42 patients enrolled", ["42"]),
+        ("n = 8 for the primary model", ["8"]),
+        ("There were 8 deaths and 17 events", ["8", "17"]),
+        ("recruited across 3 sites", ["3"]),
     ],
 )
 def test_canary_matches(text: str, expected: list[str]) -> None:
@@ -54,9 +64,13 @@ def test_canary_matches(text: str, expected: list[str]) -> None:
         "95% CI 1.11 to 1.50",  # the level is skipped; the bounds still bind
         "95%CI without a space",
         # Identifier / structural collisions the 2-digit rejection protects.
+        # These stay unbound even though counted short integers now bind: none
+        # of them is followed by a counted noun or preceded by "n =".
         "SOFA-2 score",
         "Section 4 results",
-        "n=42 patients enrolled",
+        "Figure 2 and Table 1",
+        "the 30-day endpoint",
+        "between 8-12 events",  # a range bound is not a count
         "ARDS-3 phenotype",
     ],
 )

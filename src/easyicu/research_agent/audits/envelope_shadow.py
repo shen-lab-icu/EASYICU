@@ -21,6 +21,14 @@ from easyicu.research_agent.contracts.result_envelope import (
 )
 from easyicu.research_agent.schema import AnalysisStep, ValidationFinding
 
+_MAX_REPORTED_NORMALIZATION_ERRORS = 12
+"""How many distinct normalization errors the blocking finding spells out.
+
+Bounded because the message reaches a prompt, and stated rather than silently
+truncated: a report that stops without saying it stopped reads as the whole
+list.
+"""
+
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -41,6 +49,22 @@ class ValidatorShadowMismatch(_StrictModel):
         "summary_not_mapping",
     ]
     detail: str = Field(min_length=1, max_length=500)
+    decisive: bool = True
+    """Whether this mismatch is a disagreement between the two DECISIONS.
+
+    Every other code compares two things: the legacy inputs against the
+    canonical envelope's, or the legacy findings against the canonical ones.
+    ``normalization_error`` is the one exception -- it is the canonical
+    normalizer complaining about the input it was handed, on its own, while
+    both validators may still return exactly the same verdict.
+
+    MEASURED over every recorded run: 11 distinct steps across 5 of the 9 tasks
+    were failed ``contract_failed`` by this comparison, and in ALL ELEVEN the
+    two verdicts were byte-identical (``legacy_findings_sha256 ==
+    canonical_findings_sha256``, both with zero findings). Nine of the eleven
+    carried nothing but ``normalization_error``. The gate that exists to catch
+    a disagreement between two decisions had never once caught one.
+    """
 
 
 class ValidatorShadowComparison(_StrictModel):
@@ -52,6 +76,10 @@ class ValidatorShadowComparison(_StrictModel):
     compared_product_ids: tuple[str, ...] = ()
     mismatches: tuple[ValidatorShadowMismatch, ...] = ()
     decision_effect: Literal["none"] = "none"
+
+    @property
+    def decisive_mismatches(self) -> tuple[ValidatorShadowMismatch, ...]:
+        return tuple(item for item in self.mismatches if item.decisive)
 
 
 def canonical_registered_output_table_artifacts(
@@ -93,6 +121,16 @@ class FractionScaleShadowComparison(_StrictModel):
     )
     mismatches: tuple[ValidatorShadowMismatch, ...] = ()
     decision_effect: Literal["none"] = "none"
+
+    @property
+    def decisive_mismatches(self) -> tuple[ValidatorShadowMismatch, ...]:
+        return tuple(item for item in self.mismatches if item.decisive)
+
+    @property
+    def observed_mismatches(self) -> tuple[ValidatorShadowMismatch, ...]:
+        """Recorded, non-blocking: one side's complaint about its own input."""
+
+        return tuple(item for item in self.mismatches if not item.decisive)
 
 
 def _canonical_json_sha256(payload: Any) -> str:
@@ -175,23 +213,54 @@ def compare_validator_shadow_inputs(
                 detail=f"Envelope product {product_id!r} was not declared by the summary.",
             )
         )
-    error_codes = sorted(
-        {
-            issue.code
-            for issue in envelope.normalization_issues
-            if issue.severity == "error"
-        }
-    )
-    for code in error_codes:
+    # Per issue, not per code. Collapsing to a set of codes discarded the
+    # product and the field path the normalizer had already computed, and a
+    # real blocked step then read only "reported error 'invalid_registered_count'".
+    # Finding the cause meant hand-scanning four emitted CSVs; the issue itself
+    # said `row[4].n` of `table:cohort_input_reconciliation` all along.
+    rendered: list[str] = []
+    seen_details: set[str] = set()
+    for issue in envelope.normalization_issues:
+        if issue.severity != "error":
+            continue
+        where = " ".join(
+            part
+            for part in (
+                f"in {issue.product_id}" if issue.product_id else "",
+                f"at {issue.field_path}" if issue.field_path else "",
+            )
+            if part
+        )
+        detail = (
+            f"Canonical normalization reported error {issue.code!r}"
+            + (f" {where}" if where else "")
+            + f": {issue.message}"
+        )
+        if detail in seen_details:
+            continue
+        seen_details.add(detail)
+        rendered.append(detail)
+    for detail in rendered[:_MAX_REPORTED_NORMALIZATION_ERRORS]:
+        mismatches.append(
+            ValidatorShadowMismatch(
+                code="normalization_error", detail=detail, decisive=False
+            )
+        )
+    withheld = len(rendered) - _MAX_REPORTED_NORMALIZATION_ERRORS
+    if withheld > 0:
         mismatches.append(
             ValidatorShadowMismatch(
                 code="normalization_error",
-                detail=f"Canonical normalization reported error {code!r}.",
+                detail=(
+                    f"{withheld} further normalization error(s) were not listed; "
+                    "read the canonical envelope for the rest."
+                ),
+                decisive=False,
             )
         )
     return ValidatorShadowComparison(
         step_id=envelope.step_id,
-        exact_match=not mismatches,
+        exact_match=not any(item.decisive for item in mismatches),
         compared_product_ids=tuple(sorted(declared_ids | canonical_ids)),
         mismatches=tuple(mismatches),
     )
@@ -274,7 +343,7 @@ def compare_fraction_scale_shadow(
         )
     return FractionScaleShadowComparison(
         step_id=envelope.step_id,
-        exact_match=not mismatches,
+        exact_match=not any(item.decisive for item in mismatches),
         legacy_finding_count=len(legacy_findings),
         canonical_finding_count=len(canonical_findings),
         legacy_findings_sha256=legacy_sha256,
@@ -283,22 +352,47 @@ def compare_fraction_scale_shadow(
     )
 
 
+def _blocking_message_causes(comparison: FractionScaleShadowComparison) -> str:
+    """The mismatch details, deduplicated, in the order they were recorded."""
+
+    seen: set[str] = set()
+    causes: list[str] = []
+    for mismatch in comparison.mismatches:
+        if mismatch.detail in seen:
+            continue
+        seen.add(mismatch.detail)
+        causes.append(mismatch.detail)
+    if not causes:
+        return "No mismatch detail was recorded."
+    return " ".join(causes)
+
+
 def fraction_scale_shadow_blocking_finding(
     *,
     validator_name: str,
     step_id: str,
     comparison: FractionScaleShadowComparison,
 ) -> ValidationFinding:
-    """Render one fail-closed bounded-metric migration finding."""
+    """Render one fail-closed bounded-metric migration finding.
+
+    The cause leads the message and the migration boilerplate trails it. Only
+    ``message`` reaches an LLM consumer -- ``detail`` is read by deterministic
+    repairs but is projected away before any prompt (``_compact_findings``
+    keeps validator / severity / message and clips the message to 240 chars
+    from the tail). A message that opened with boilerplate therefore delivered
+    a blocked step and no noun: the live E1 step ``06`` failure reported only
+    that a shadow "could not safely replace the legacy view", never that the
+    canonical normalizer had rejected a registered missingness partition.
+    """
 
     return ValidationFinding(
         validator=validator_name,
         severity="error",
         message=(
-            "Canonical bounded fraction/percentage shadow could not safely "
-            f"replace the legacy view for step {step_id}. Keep the legacy "
-            "consumer active until source, digest, normalization, scalar-tree, "
-            "and finding decisions agree exactly."
+            f"Bounded-metric shadow blocked step {step_id}. "
+            f"{_blocking_message_causes(comparison)} "
+            "Keep the legacy consumer active until source, digest, "
+            "normalization, scalar-tree and finding decisions agree exactly."
         ),
         detail={
             "step_id": step_id,
@@ -306,12 +400,61 @@ def fraction_scale_shadow_blocking_finding(
             "mismatch_codes": sorted(
                 {mismatch.code for mismatch in comparison.mismatches}
             ),
+            # The code alone is a label, not a diagnosis: ``normalization_error``
+            # is raised for whichever inner error the canonical normalizer hit,
+            # and that inner code lives only on ``mismatch.detail``. Dropping it
+            # left a real blocked step with nothing to debug.
+            "mismatch_details": [mismatch.detail for mismatch in comparison.mismatches],
             "legacy_finding_count": comparison.legacy_finding_count,
             "canonical_finding_count": comparison.canonical_finding_count,
             "legacy_findings_sha256": comparison.legacy_findings_sha256,
             "canonical_findings_sha256": comparison.canonical_findings_sha256,
         },
     )
+
+
+def fraction_scale_shadow_observed_findings(
+    *,
+    validator_name: str,
+    step_id: str,
+    comparison: FractionScaleShadowComparison,
+) -> list[ValidationFinding]:
+    """Record a non-decisive migration observation without failing the step.
+
+    The comparison's own type declares ``decision_effect = "none"``. When the
+    two verdicts agree, that declaration is honoured: the mismatch is still
+    reported -- the migration is only measurable if it is -- but at ``info``,
+    and it carries ``decision_effect`` so no downstream reader can mistake it
+    for a verdict.
+    """
+
+    observed = comparison.observed_mismatches
+    if not observed:
+        return []
+    return [
+        ValidationFinding(
+            validator=validator_name,
+            severity="info",
+            message=(
+                f"Bounded-metric migration observation for step {step_id}: the "
+                "canonical normalizer reported issues while both views returned "
+                f"the identical verdict ({comparison.legacy_finding_count} "
+                "finding(s), matching digests). "
+                f"{_blocking_message_causes(comparison)}"
+            ),
+            detail={
+                "step_id": step_id,
+                "canonical_shadow_blocked": False,
+                "decision_effect": "none",
+                "mismatch_codes": sorted({item.code for item in observed}),
+                "mismatch_details": [item.detail for item in observed],
+                "legacy_finding_count": comparison.legacy_finding_count,
+                "canonical_finding_count": comparison.canonical_finding_count,
+                "legacy_findings_sha256": comparison.legacy_findings_sha256,
+                "canonical_findings_sha256": comparison.canonical_findings_sha256,
+            },
+        )
+    ]
 
 
 __all__ = [
@@ -322,4 +465,5 @@ __all__ = [
     "compare_fraction_scale_shadow",
     "compare_validator_shadow_inputs",
     "fraction_scale_shadow_blocking_finding",
+    "fraction_scale_shadow_observed_findings",
 ]

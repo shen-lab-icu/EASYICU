@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from easyicu.research_agent.agents.core import PlannerAgent
-from easyicu.research_agent.research_context.prompt_scope import scoped_planner_context
+from easyicu.research_agent.research_context.prompt_scope import (
+    scoped_planner_context,
+    scoped_reporting_context,
+)
 from easyicu.research_agent.schema import (
     CohortDescriptor,
     ConceptDescriptor,
@@ -128,6 +131,41 @@ def test_wide_planner_request_preserves_catalog_and_stays_bounded() -> None:
     assert "unrelated_signal_0_mean" not in detailed
     assert "unrelated_signal_0_mean" in catalog
     assert "You MAY select a catalog column" in catalog
+
+
+def test_planner_catalog_deduplicates_shared_metadata_without_losing_columns() -> None:
+    context = _wide_context()
+    prompt = PlannerAgent.request_messages(context)[1].content
+    catalog = prompt.split("PLANNER VARIABLE RESOURCE PROJECTION", maxsplit=1)[1]
+
+    assert catalog.count("W1=icu_admission[0,24]h") == 1
+    assert (
+        "unrelated_signal_0_mean | role=other | dtype=float64 | "
+        "source=unrelated_signal_0 | window_ref=W1"
+    ) in catalog
+    for index in range(95):
+        assert catalog.count(f"unrelated_signal_{index}_mean |") == 1
+
+
+def test_reporting_scope_keeps_study_coordinates_not_discovery_roster() -> None:
+    context = _wide_context()
+    before = context.model_dump_json()
+    scoped = scoped_reporting_context(context)
+
+    assert context.model_dump_json() == before
+    assert {variable.name for variable in scoped.variables} >= {
+        "stay_id",
+        "age",
+        "sex",
+        "death",
+        "renal_score_max",
+        "renal_score_n",
+        "renal_score_measured",
+    }
+    assert not any(
+        variable.name.startswith("unrelated_signal_")
+        for variable in scoped.variables
+    )
 
 
 def test_resource_scope_is_case_neutral() -> None:

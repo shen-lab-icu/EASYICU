@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from pydantic import ValidationError
 
+from .authority.step_recovery import StepRecoverySignature
 from .contracts.declared_product import (
     PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
@@ -56,11 +57,13 @@ from .icu_rules import (
     overadjustment_caution,
     treatment_mediator_caution,
 )
+from .planning.cohort_contract import cohort_definition_has_explicit_selection
+from .planning.endpoint_contract import endpoint_contract_findings as endpoint_contract_findings
 from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_structure_findings,
 )
-from .contracts.table_one import bind_table_one_execution_spec, table_one_output_findings
+from .contracts.table_one import table_one_output_findings
 from .scalar_utils import (
     _first_numeric_scalar_with_key_fragment,
     _first_present_scalar,
@@ -81,16 +84,6 @@ from .trajectory.contract import (
     trajectory_phenotyping_contract_applies,
 )
 from .trajectory.plan_contract import trajectory_plan_contract_applies
-
-_WIDE_MEASUREMENT_VALUE_SUFFIXES = (
-    "_median",
-    "_first",
-    "_last",
-    "_mean",
-    "_max",
-    "_min",
-    "_sum",
-)
 
 
 def _migrate_render_step_contract(
@@ -122,71 +115,6 @@ def _migrate_render_step_contract(
     if method is not None:
         update["method"] = method
     return child.model_copy(update=update)
-
-
-def _augment_measurement_companion_inputs(
-    *,
-    plan: AnalysisPlan,
-    context: ResearchContext,
-) -> tuple[AnalysisPlan, List[ValidationFinding]]:
-    """Close structural provenance inputs for selected wide summaries.
-
-    The planner remains the owner of which clinical values a step analyzes.
-    Exact count/measured companions are provenance inputs, not new scientific
-    choices; add only registered companions and never fuzzy-match concepts.
-    """
-
-    available = {str(variable.name) for variable in context.variables}
-    revised_steps: List[AnalysisStep] = []
-    additions_by_step: Dict[str, List[str]] = {}
-    for step in plan.steps or []:
-        inputs = [str(value) for value in (step.inputs or [])]
-        seen = set(inputs)
-        additions: List[str] = []
-        for input_name in list(inputs):
-            if ":" in input_name:
-                continue
-            suffix = next(
-                (
-                    candidate
-                    for candidate in _WIDE_MEASUREMENT_VALUE_SUFFIXES
-                    if input_name.endswith(candidate)
-                ),
-                None,
-            )
-            if suffix is None:
-                continue
-            base = input_name[: -len(suffix)]
-            if not base:
-                continue
-            for companion in (f"{base}_measured", f"{base}_n"):
-                if companion in available and companion not in seen:
-                    inputs.append(companion)
-                    additions.append(companion)
-                    seen.add(companion)
-        if additions:
-            additions_by_step[str(step.step_id)] = additions
-            revised_steps.append(step.model_copy(update={"inputs": inputs}))
-        else:
-            revised_steps.append(step)
-        bind_table_one_execution_spec(revised_steps[-1], context)
-
-    if not additions_by_step:
-        return plan, []
-    revised = plan.model_copy(update={"steps": revised_steps})
-    finding = ValidationFinding(
-        validator="planner_input_closure",
-        severity="info",
-        message=(
-            "Added registered count/measured provenance companions for "
-            "planner-selected per-stay measurement summaries."
-        ),
-        detail={
-            "reason": "measurement_companion_input_closure",
-            "added_inputs_by_step": additions_by_step,
-        },
-    )
-    return revised, [finding]
 
 
 _REPORT_INPUT_PRODUCT_KINDS = frozenset({"manifest", "statistic", "table"})
@@ -409,9 +337,7 @@ def _cohort_definition_prose(plan: AnalysisPlan) -> str:
 
 def _cohort_definition_is_empty(plan: AnalysisPlan) -> bool:
     cohort = getattr(plan, "cohort", None)
-    if cohort is None:
-        return True
-    return not (getattr(cohort, "inclusion", ()) or getattr(cohort, "exclusion", ()))
+    return not cohort_definition_has_explicit_selection(cohort)
 
 
 def _cohort_definition_contract_findings(
@@ -419,12 +345,10 @@ def _cohort_definition_contract_findings(
 ) -> List[ValidationFinding]:
     """Reject a 纳排 that lives only in free-text step intents.
 
-    The planner must express the analysis cohort's inclusion/exclusion as
-    structured predicates so the framework can materialise and enforce it
-    (``materialize_locked_analysis_cohort``). When the plan implies a cohort
-    but ``plan.cohort`` has no structured predicates, the 纳排 is unenforceable
-    and unauditable and downstream steps silently run on the full universe.
-    Surface that as an error instead of passing silently.
+    The planner must either express structured inclusion/exclusion predicates
+    or explicitly select every sealed input row. A default empty cohort is
+    ambiguous: it may be omitted 纳排 rather than an intentional full-input
+    population, so it remains an error.
     """
     if not _cohort_definition_is_empty(plan):
         return []
@@ -437,15 +361,17 @@ def _cohort_definition_contract_findings(
             message=(
                 "The plan defines an analysis cohort in prose (a cohort / "
                 "eligibility / attrition step) but plan.cohort carries no "
-                "structured inclusion/exclusion predicates. The 纳排 cannot be "
-                "materialised, enforced, or audited, and downstream steps will "
-                "run on the full universe. Express the inclusion/exclusion as "
-                "typed cohort predicates (concept_id, time_window, aggregation, "
-                "op, value)."
+                "structured inclusion/exclusion predicates and did not set "
+                "cohort.selection_mode='all_input_rows'. The population cannot "
+                "be materialised or audited. Express typed predicates "
+                "(concept_id, time_window, aggregation, op, value), or explicitly "
+                "select every sealed input row."
             ),
             detail={"cohort": "empty", "expects_cohort": True},
         )
     ]
+
+
 
 
 # Contract "family" buckets this enforcer knows how to normalise. These are the
@@ -579,6 +505,7 @@ _CLUSTERING_ANALYSIS_METHODS = frozenset(
         "k_means_clustering",
         "phenotyping",
         "phenotype_clustering",
+        "phenotype_clustering_and_structure",
         "unsupervised_clustering",
         "latent_class",
         "latent_class_analysis",
@@ -1095,6 +1022,7 @@ def _enforce_advanced_plan_contract(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    long_trajectory_bound: bool = False,
 ) -> tuple[AnalysisPlan, List[ValidationFinding]]:
     """Constrain advanced plan shape while leaving analysis code to the agent."""
 
@@ -1105,6 +1033,7 @@ def _enforce_advanced_plan_contract(
     if trajectory_plan_contract_applies(
         plan=plan,
         context=context,
+        long_trajectory_bound=long_trajectory_bound,
     ) and not any(
         trajectory_phenotyping_contract_applies(context=context, step=step)
         for step in (plan.steps or [])
@@ -1708,12 +1637,26 @@ def _effect_figure_source_authorized(
     is structurally linked to the latest successful direct parent through an
     exact typed effect-result input. Numeric summaries and non-figure effect
     products remain governed by the ordinary effect-method authorization.
+
+    Rendering is recognised by what the step declares, not by what it is
+    called.  The conditions below already say it exactly: every declared output
+    is ``figure:``/``log:``, and every input is a typed ``statistic:``/``table:``
+    bound by evidence id and sha256 to a successful effect parent -- a step
+    built that way has no cohort to re-analyse.  Requiring the *name* to match a
+    list of figure spellings on top of that refused legitimate render children:
+    ``forest_plot``, the standard name for this figure and one the Planner is
+    told it may use, was absent from the list.  What survives is the property
+    that veto was reaching for -- a render child may not claim to be the
+    analysis -- read from ``_EFFECT_CONTRACT_METHODS``, the same vocabulary
+    :func:`effect_output_authorized` uses to decide who owns an effect result,
+    rather than from a second private list that can drift away from it.
     """
 
     step_id = str(step.step_id or "")
     output_products = [typed_product(raw) for raw in (step.expected_outputs or [])]
     if (
-        _normalised_method_head(str(step.method or "")) not in _FIGURE_METHODS
+        _normalised_method_head(str(step.method or ""))
+        in (_EFFECT_CONTRACT_METHODS | _ROBUSTNESS_EFFECT_CONTRACT_METHODS)
         or not output_products
         or any(product is None for product in output_products)
         or not any(product[0] == "figure" for product in output_products if product)
@@ -2709,6 +2652,23 @@ def _typed_plan_dag_findings(plan: AnalysisPlan) -> List[ValidationFinding]:
     return findings
 
 
+def _step_recovery_contract(step: AnalysisStep) -> dict[str, Any]:
+    """Persist the inspectable recovery identity of one dropped plan step."""
+
+    signature = StepRecoverySignature.from_step(step)
+    payload = signature.model_dump(mode="json")
+    if signature.family_primary_result_requirement is None:
+        payload.pop("family_primary_result_requirement", None)
+    return {
+        "step_id": signature.step_id,
+        "planned_analysis_role": signature.planned_analysis_role,
+        "method": signature.method,
+        "expected_outputs": list(signature.expected_outputs),
+        "recovery_signature": payload,
+        "recovery_signature_sha256": signature.canonical_digest(),
+    }
+
+
 def _cap_plan_preserving_figure_steps(
     *,
     plan: AnalysisPlan,
@@ -2917,6 +2877,26 @@ def _cap_plan_preserving_figure_steps(
         step_id for step_id in preserved_step_ids if step_id in kept_ids
     ]
     capped = plan.model_copy(update={"steps": kept})
+    # Name the scientific products that were dropped, not only the step ids. A
+    # reader of the findings — or of the manuscript that quotes them — cannot
+    # tell from "dropped: 13_x, 14_y" that the run no longer contains, say, the
+    # calibration figure or the PH diagnostic it was asked for. The step ids are
+    # internal; the declared outputs are the thing whose absence changes what
+    # the analysis means.
+    dropped_outputs = sorted(
+        {
+            str(output).strip()
+            for step in steps
+            if step.step_id in set(dropped_ids)
+            for output in (getattr(step, "expected_outputs", None) or ())
+            if str(output).strip()
+        }
+    )
+    dropped_step_products = [
+        _step_recovery_contract(step)
+        for step in steps
+        if step.step_id in set(dropped_ids)
+    ]
     findings = [
         ValidationFinding(
             validator="planner",
@@ -2926,9 +2906,19 @@ def _cap_plan_preserving_figure_steps(
                 f"max_total_steps={cap}. Dropped: "
                 f"{', '.join(dropped_ids[:6])}"
                 + (" ..." if len(dropped_ids) > 6 else "")
+                + (
+                    "; the analysis no longer produces "
+                    + ", ".join(dropped_outputs[:6])
+                    + (" ..." if len(dropped_outputs) > 6 else "")
+                    if dropped_outputs
+                    else ""
+                )
             ),
             detail={
                 "dropped_step_ids": dropped_ids,
+                "dropped_expected_outputs": dropped_outputs,
+                "dropped_step_products": dropped_step_products,
+                "plan_truncated": True,
                 "cap": cap,
                 "protected_step_ids": sorted(protected_ids),
                 "preserved_figure_step_ids": preserved_step_ids,
@@ -4031,6 +4021,8 @@ def _primary_exposure_overadjustment_findings(
     (``context.primary_exposure``); it is never inferred, so the check stays
     silent rather than guessing.
     """
+    if not effect_output_authorized(step):
+        return []
     exposure = (getattr(context, "primary_exposure", None) or "").strip()
     if not exposure:
         return []
@@ -4108,6 +4100,8 @@ def _primary_model_leakage_findings(
     ``context.primary_exposure``); they are never inferred, so each check stays
     silent rather than guessing.
     """
+    if not effect_output_authorized(step):
+        return []
     covariates = read_adjustment_covariates(out_dir)
     if not covariates:
         return []
@@ -4181,6 +4175,7 @@ def _step_contract_findings(
     completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
     resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
     out_dir: Optional[Path] = None,
+    trajectory_role_contract_applies: bool = True,
 ) -> List[ValidationFinding]:
     if not isinstance(step_summary, dict) or not step_summary:
         return [
@@ -4256,6 +4251,7 @@ def _step_contract_findings(
                 resolved_input_bindings=resolved_input_bindings,
             ),
             out_dir=out_dir,
+            trajectory_role_contract_applies=trajectory_role_contract_applies,
         )
     )
     from .figures.distribution_availability import (
@@ -4788,6 +4784,21 @@ def _step_contract_repair_guidance(
         if isinstance(assignment_contract, Mapping)
         else None
     )
+    if isinstance(input_bindings, Mapping):
+        exact_input_keys = sorted(str(key) for key in input_bindings)
+        if exact_input_keys:
+            guidance.append(
+                "Every step_summary.input_bindings receipt must use one of these "
+                "exact host-resolved typed input keys, with no aliases or raw-column "
+                "receipts: " + json.dumps(exact_input_keys, ensure_ascii=False)
+            )
+        else:
+            guidance.append(
+                "This step has no host-resolved typed inputs. Omit "
+                "step_summary.input_bindings or write an empty list; raw Planner "
+                "columns are bound separately and must not be reported as "
+                "`raw:<column>` receipts."
+            )
     if isinstance(assignment_models, list) and len(assignment_models) > 1:
         roster = [
             {
@@ -4946,6 +4957,21 @@ def _step_contract_repair_guidance(
             "statistic, resampling stability, or silhouette when appropriate)."
         )
         guidance.append(
+            "Use one of these exact top-level step_summary JSON shapes, populated "
+            "with the values this script actually evaluated. Non-binding selection "
+            "example: `\"cluster_selection\": {\"criterion\": "
+            "\"silhouette_score\", \"selection_rule\": \"maximum\", "
+            "\"direction\": \"maximize\", \"selected_n_clusters\": 2, "
+            "\"candidates\": [{\"n_clusters\": 2, \"criterion_value\": 0.31}, "
+            "{\"n_clusters\": 3, \"criterion_value\": 0.27}], \"rationale\": "
+            "\"selected the evaluated maximum\"}`. Stability alternative: "
+            "`\"cluster_stability\": {\"selected_n_clusters\": 2, "
+            "\"n_resamples\": 3, \"mean_adjusted_rand_index\": 0.93}`. "
+            "Replace every example value with the truthful selected k, criterion "
+            "values, repeat count, and stability metric; do not leave only sibling "
+            "scalars such as `selected_silhouette` or `selected_stability_ari`."
+        )
+        guidance.append(
             "Keep clustering self-contained: create labels, cluster characteristics, "
             "method/selection metadata, and the clustering figure inside this "
             "script. Add descriptive outcomes only when the plan declares them; "
@@ -4956,17 +4982,47 @@ def _step_contract_repair_guidance(
             "the declared cluster-selection manifest so manuscript evidence aliases bind."
         )
     if "figure:" in expected:
+        declared_figure_stems = [
+            str(item).split(":", 1)[1].strip()
+            for item in (step.expected_outputs or [])
+            if str(item).strip().lower().startswith("figure:")
+            and str(item).split(":", 1)[1].strip()
+        ]
         guidance.append(
             "This step declares a figure output. Save a real figure file such as PNG/SVG/"
             "PDF/TIFF and record its path in step_summary.json using a key such as "
             "`figure_path`, `figure_file`, or `figure_files`."
         )
+        for stem in declared_figure_stems:
+            quoted_stem = json.dumps(stem, ensure_ascii=False)
+            guidance.append(
+                f"For declared `figure:{stem}`, call the host helper directly as "
+                "`saved = save_publication_figure(fig=fig, out_dir=out_dir, "
+                f"stem={quoted_stem}, contract=contract)`. It writes the canonical "
+                f"same-stem companion `{stem}.figure_contract.json`; record "
+                "`saved[\"contract\"]` in step_summary.json. Do not manually write, "
+                f"rename, or advertise the underscore alias "
+                f"`{stem}_figure_contract.json`; it must not replace the canonical "
+                "dot-suffix companion."
+            )
         guidance.append(
             "In every top-level FigureContract, `source_data` must be one local CSV "
             "basename string or a flat list of local CSV basename strings from the "
             "current step output directory. Never write a dict, list of dicts, "
             "evidence object, absolute path, or path metadata there; put evidence ids "
             "in panel `evidence_ids` and other provenance in step_summary metadata."
+        )
+        guidance.append(
+            "Build figure source-data CSVs from the actual plotted analytic rows "
+            "before rendering, preserving a host-verifiable source row/key and the "
+            "upstream value columns; never reconstruct source data from Matplotlib "
+            "Axes, collections, lines, patches, artist coordinates, or rendered "
+            "pixels: a canvas is not scientific provenance. Every panel contract "
+            "must declare a panel title, reader-facing claim, role, local "
+            "source-data basename(s), source columns, and the evidence ids that bind "
+            "those rows. Do not invent a synthetic source table such as a rendered "
+            "panel; if the plotted values cannot be traced to a declared analytic "
+            "table or statistic, fail closed instead of emitting the figure."
         )
     if not guidance:
         guidance.append(

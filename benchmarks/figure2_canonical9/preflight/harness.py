@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
@@ -36,7 +37,8 @@ import easyicu.research_agent as ra
 from easyicu.research_agent.evaluation_scorecard import compute_tristate
 from easyicu.research_agent.providers.llm import llm_is_mockish
 from easyicu.research_agent.providers.mocks import (
-    _mock_code_primary_association,
+    _mock_code_prediction_model,
+    _mock_code_trajectory_clustering,
     PatternScriptedMockLLMClient,
 )
 from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
@@ -46,7 +48,7 @@ from benchmarks.figure2_canonical9.evaluator.acceptance import (
 )
 from benchmarks.figure2_canonical9.preflight import runtime as rt
 from benchmarks.figure2_canonical9.preflight.fixtures import (
-    E1E3_CASES,
+    PREFLIGHT_CASES,
     FULFILLMENT_NOT_PRODUCED_OFFLINE,
     FULFILLMENT_PLANNED_ONLY,
     FULFILLMENT_PRODUCED,
@@ -66,6 +68,331 @@ _FAULT_CODE = (
     "# injected preflight coder fault (deterministic, offline)\n"
     "raise RuntimeError('injected preflight coder fault')\n"
 )
+
+
+def _survival_preflight_code(case: PreflightCase) -> str:
+    """Reviewed local H1 script: real PHReg + auditable diagnostic artifacts."""
+
+    template = r"""
+    from __future__ import annotations
+    import json
+    import os
+    from pathlib import Path
+
+    import numpy as np
+    import pandas as pd
+    from scipy.stats import norm
+    from statsmodels.duration.hazard_regression import PHReg
+
+    out_dir = Path(os.environ["STEP_OUT_DIR"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+    columns = ["vent_24h_any", "followup_days", "event_28d", "age", "sofa2"]
+    model_df = df[columns].replace([np.inf, -np.inf], np.nan).dropna().copy()
+    model_df["event_28d"] = model_df["event_28d"].astype(int)
+    if len(model_df) < 40 or model_df["event_28d"].nunique() != 2:
+        raise RuntimeError("survival preflight requires both event classes and >=40 rows")
+
+    exog = model_df[["vent_24h_any", "age", "sofa2"]].astype(float)
+    fit = PHReg(
+        model_df["followup_days"].astype(float),
+        exog,
+        status=model_df["event_28d"],
+        ties="efron",
+    ).fit(disp=0)
+    names = list(exog.columns)
+    rows = []
+    for name, beta, se, p_value in zip(names, fit.params, fit.bse, fit.pvalues):
+        rows.append({
+            "contrast_id": name,
+            "effect_measure": "hazard_ratio",
+            "estimate": float(np.exp(beta)),
+            "lower_ci": float(np.exp(beta - 1.959963984540054 * se)),
+            "upper_ci": float(np.exp(beta + 1.959963984540054 * se)),
+            "p_value": float(p_value),
+            "n": int(len(model_df)),
+            "event_n": int(model_df["event_28d"].sum()),
+        })
+    pd.DataFrame(rows).to_csv(out_dir / "cox_summary.csv", index=False)
+
+    curve_rows = []
+    for group, group_df in model_df.groupby("vent_24h_any", observed=True):
+        survival = 1.0
+        for time in sorted(group_df.loc[group_df["event_28d"] == 1, "followup_days"].unique()):
+            at_risk = int((group_df["followup_days"] >= time).sum())
+            events = int(
+                (
+                    (group_df["followup_days"] == time)
+                    & (group_df["event_28d"] == 1)
+                ).sum()
+            )
+            if at_risk:
+                survival *= 1.0 - events / at_risk
+            curve_rows.append({
+                "vent_24h_any": int(group),
+                "time_days": float(time),
+                "survival_probability": float(survival),
+                "at_risk": at_risk,
+                "events": events,
+            })
+    pd.DataFrame(curve_rows).to_csv(out_dir / "survival_curve.csv", index=False)
+
+    schoenfeld = np.asarray(fit.schoenfeld_residuals)
+    event_times = model_df["followup_days"].to_numpy(dtype=float)
+    valid = (
+        np.isfinite(schoenfeld[:, 0])
+        & np.isfinite(event_times)
+        & (model_df["event_28d"].to_numpy(dtype=int) == 1)
+    )
+    if int(valid.sum()) >= 3:
+        correlation = float(np.corrcoef(schoenfeld[valid, 0], np.log1p(event_times[valid]))[0, 1])
+        z_value = correlation * np.sqrt(max(int(valid.sum()) - 2, 1)) / np.sqrt(
+            max(1.0 - correlation**2, 1e-12)
+        )
+        p_value = float(2.0 * norm.sf(abs(z_value)))
+    else:
+        correlation = float("nan")
+        p_value = float("nan")
+    pd.DataFrame([{
+        "term": "vent_24h_any",
+        "diagnostic": "schoenfeld_time_correlation_screen",
+        "correlation": correlation,
+        "p_value": p_value,
+        "diagnostic_only": True,
+    }]).to_csv(out_dir / "ph_diagnostics.csv", index=False)
+
+    primary = next(row for row in rows if row["contrast_id"] == "vent_24h_any")
+    summary = {
+        "method": "cox_proportional_hazards",
+        "status": "ok",
+        "primary_estimand": "hazard ratio from fixed 24-hour landmark",
+        "hazard_ratio": primary["estimate"],
+        "output_files": {
+            "table:cox_summary": "cox_summary.csv",
+            "table:survival_curve": "survival_curve.csv",
+            "table:ph_diagnostics": "ph_diagnostics.csv",
+            "statistic:hazard_ratio": "cox_summary.csv",
+        },
+    }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
+    print(json.dumps(summary))
+    """
+    return textwrap.dedent(template).strip() + "\n"
+
+
+def _causal_preflight_code(case: PreflightCase) -> str:
+    """Reviewed local H2 script: propensity, IPTW, balance, and positivity."""
+
+    template = r"""
+    from __future__ import annotations
+    import json
+    import os
+    from pathlib import Path
+
+    import numpy as np
+    import pandas as pd
+    import statsmodels.api as sm
+
+    out_dir = Path(os.environ["STEP_OUT_DIR"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+    exposure = "vasopressor"
+    outcome = "death"
+    covariates = ["age", "sofa2", "lact", "map"]
+    model_df = df[[exposure, outcome, *covariates]].replace(
+        [np.inf, -np.inf], np.nan
+    ).dropna().copy()
+    model_df[exposure] = model_df[exposure].astype(int)
+    model_df[outcome] = model_df[outcome].astype(int)
+    if len(model_df) < 60 or model_df[exposure].nunique() != 2:
+        raise RuntimeError("causal preflight requires exposure overlap and >=60 rows")
+
+    design = sm.add_constant(model_df[covariates].astype(float), has_constant="add")
+    assignment_fit = sm.Logit(model_df[exposure], design).fit(disp=0, maxiter=200)
+    propensity = np.asarray(assignment_fit.predict(design), dtype=float)
+    propensity = np.clip(propensity, 1e-4, 1.0 - 1e-4)
+    treated_probability = float(model_df[exposure].mean())
+    treatment = model_df[exposure].to_numpy(dtype=int)
+    weights = np.where(
+        treatment == 1,
+        treated_probability / propensity,
+        (1.0 - treated_probability) / (1.0 - propensity),
+    )
+    observed = model_df[outcome].to_numpy(dtype=float)
+    treated_risk = float(np.average(observed[treatment == 1], weights=weights[treatment == 1]))
+    control_risk = float(np.average(observed[treatment == 0], weights=weights[treatment == 0]))
+    risk_difference = treated_risk - control_risk
+
+    effect = pd.DataFrame([{
+        "contrast_id": "early_vasopressor_ate",
+        "estimand": "stabilized_iptw_ate_risk_difference",
+        "effect_measure": "risk_difference",
+        "estimate": risk_difference,
+        "treated_risk": treated_risk,
+        "control_risk": control_risk,
+        "n": int(len(model_df)),
+    }])
+    effect.to_csv(out_dir / "causal_effect.csv", index=False)
+
+    def smd(values, group, sample_weight):
+        treated = group == 1
+        mean_t = np.average(values[treated], weights=sample_weight[treated])
+        mean_c = np.average(values[~treated], weights=sample_weight[~treated])
+        var_t = np.average((values[treated] - mean_t) ** 2, weights=sample_weight[treated])
+        var_c = np.average((values[~treated] - mean_c) ** 2, weights=sample_weight[~treated])
+        return float((mean_t - mean_c) / np.sqrt(max((var_t + var_c) / 2.0, 1e-12)))
+
+    balance_rows = []
+    unit_weights = np.ones(len(model_df), dtype=float)
+    for covariate in covariates:
+        values = model_df[covariate].to_numpy(dtype=float)
+        balance_rows.append({
+            "covariate": covariate,
+            "smd_before": smd(values, treatment, unit_weights),
+            "smd_after": smd(values, treatment, weights),
+        })
+    pd.DataFrame(balance_rows).to_csv(
+        out_dir / "covariate_balance.csv", index=False
+    )
+
+    positivity = pd.DataFrame([{
+        "propensity_min": float(propensity.min()),
+        "propensity_max": float(propensity.max()),
+        "fraction_below_0_05": float(np.mean(propensity < 0.05)),
+        "fraction_above_0_95": float(np.mean(propensity > 0.95)),
+        "effective_sample_size": float(weights.sum() ** 2 / np.sum(weights**2)),
+    }])
+    positivity.to_csv(out_dir / "positivity_diagnostics.csv", index=False)
+
+    assignment = model_df[[exposure, *covariates]].copy()
+    assignment["propensity_score"] = propensity
+    assignment["stabilized_weight"] = weights
+    assignment.to_csv(out_dir / "assignment_model.csv", index=False)
+
+    summary = {
+        "method": "causal_emulation",
+        "status": "ok",
+        "primary_estimand": "stabilized IPTW ATE-style 28-day risk difference",
+        "causal_claim_scope": "observational target-trial assumptions required",
+        "assignment_models": [{
+            "model_id": "preflight_propensity",
+            "fit_status": "fitted",
+            "n": int(len(model_df)),
+            "propensity_score_column": "propensity_score",
+        }],
+        "output_files": {
+            "table:causal_effect": "causal_effect.csv",
+            "table:covariate_balance": "covariate_balance.csv",
+            "table:positivity_diagnostics": "positivity_diagnostics.csv",
+            "artifact:assignment_model": "assignment_model.csv",
+            "statistic:risk_difference": "causal_effect.csv",
+        },
+    }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
+    print(json.dumps(summary))
+    """
+    return textwrap.dedent(template).strip() + "\n"
+
+
+def _primary_preflight_code(
+    case: PreflightCase,
+    *,
+    context: ResearchContext,
+) -> str:
+    """Choose a reviewed local Coder response by typed analysis family."""
+
+    if case.primary_code_kind == "association":
+        return _association_preflight_code(case)
+    if case.primary_code_kind == "prediction":
+        return _mock_code_prediction_model(
+            ctx=context,
+            step_id=case.primary_step_id,
+            outcome=case.target_outcome,
+        )
+    if case.primary_code_kind == "survival":
+        return _survival_preflight_code(case)
+    if case.primary_code_kind == "causal":
+        return _causal_preflight_code(case)
+    if case.primary_code_kind == "trajectory":
+        return _mock_code_trajectory_clustering(
+            ctx=context,
+            step_id=case.primary_step_id,
+            outcome=case.target_outcome,
+        )
+    raise ValueError(
+        f"unsupported preflight primary_code_kind={case.primary_code_kind!r}"
+    )
+
+
+def _association_preflight_code(case: PreflightCase) -> str:
+    """Reviewed Coder smoke that proves execution without claiming an effect.
+
+    The free-form association capability has no closed effect-output contract.
+    This diagnostic therefore fits the declared logistic design but publishes
+    only execution facts.  Coefficients, odds ratios and confidence intervals
+    remain absent until a formal typed effect contract owns them.
+    """
+
+    template = f"""
+    from __future__ import annotations
+    import json
+    import os
+    from pathlib import Path
+
+    import numpy as np
+    import pandas as pd
+    import statsmodels.api as sm
+
+    out_dir = Path(os.environ["STEP_OUT_DIR"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    frame = pd.read_parquet(os.environ["COHORT_PARQUET"])
+    exposure = {case.primary_exposure!r}
+    outcome = {case.target_outcome!r}
+    covariates = ["age"]
+    model_frame = frame[[exposure, outcome, *covariates]].replace(
+        [np.inf, -np.inf], np.nan
+    ).dropna().copy()
+    design = sm.add_constant(
+        model_frame[[exposure, *covariates]].astype(float),
+        has_constant="add",
+    )
+    result = sm.Logit(model_frame[outcome].astype(int), design).fit(
+        disp=0,
+        maxiter=200,
+    )
+    diagnostics = {{
+        "n": int(len(model_frame)),
+        "event_n": int(model_frame[outcome].astype(int).sum()),
+        "design_column_n": int(design.shape[1]),
+        "design_rank": int(np.linalg.matrix_rank(design.to_numpy(dtype=float))),
+        "converged": bool(result.mle_retvals.get("converged", False)),
+    }}
+    pd.DataFrame([diagnostics]).to_csv(
+        out_dir / "association_model_diagnostics.csv",
+        index=False,
+    )
+    summary = {{
+        "method": "logistic_regression",
+        "status": "ok",
+        "interpretation_class": "diagnostic_only_no_effect_claim",
+        "output_files": {{
+            "table:association_model_diagnostics": (
+                "association_model_diagnostics.csv"
+            )
+        }},
+        "model_diagnostics": diagnostics,
+    }}
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, indent=2),
+        encoding="utf-8",
+    )
+    print(json.dumps(summary))
+    """
+    return textwrap.dedent(template).strip() + "\n"
 
 # Both values must be passed to CodeRunner explicitly.  ``runner_network`` is
 # a DockerRunner option; it does not configure the subprocess runner used by
@@ -196,33 +523,35 @@ class ScriptedPreflightLLM:
             target_outcome=case.target_outcome,
             primary_exposure=case.primary_exposure,
         )
-        primary_code = _mock_code_primary_association(
-            ctx=context,
-            step_id=case.primary_step_id,
-            outcome=case.target_outcome,
-            predictor=case.primary_exposure,
-            adjust=["age"],
-            typed_model_contract=True,
-        )
-        if request_replan_from_primary:
+        primary_code = _primary_preflight_code(case, context=context)
+        if request_replan_from_primary and case.primary_code_kind == "association":
             primary_code = primary_code.replace(
                 '"method": "logistic_regression",',
                 '"method": "logistic_regression",\n'
                 '        "replan_requested": True,',
             )
-        primary_responses: List[str] = [primary_code]
+        # Re-serve the same reviewed script on a bounded repair request.  The
+        # harness is testing the pipeline's repair/fail-stop control flow, not
+        # asking a mock to invent progressively different science.
+        primary_responses: List[str] = [primary_code] * 16
         if fault_step == case.primary_step_id:
             primary_responses = [fault_code] * 16
         replan_responses = _replan_responses(case, strategy=replan_strategy)
         rules: List[tuple[str, List[str]]] = [
             # Rules are generic -> specific; PatternScriptedMock gives the
             # later matching rule priority.
-            ("RESEARCH PLAN AS JSON", [plan_json]),
             ("WRITE THE PYTHON CODE", ["MOCK RESPONSE — preflight auxiliary"] * 32),
             (case.primary_step_id, primary_responses),
         ]
         if fault_step is not None and fault_step != case.primary_step_id:
             rules.append((fault_step, [fault_code] * 16))
+        # Complex Planner prompts can contain benchmark step identifiers in
+        # their case-specific context.  This exact role anchor must therefore
+        # outrank code step-id rules, while remaining narrower than text merely
+        # embedding a parsed plan.
+        rules.append(
+            ("Produce an ICU-AWARE RESEARCH PLAN as JSON", [plan_json] * 8)
+        )
         # This must come after the step-id rules: a Replanner prompt embeds the
         # current plan (and therefore every step id), but it must receive a
         # plan JSON rather than a code-fault response.
@@ -577,11 +906,12 @@ def run_preflight(
         question=case.question,
         cohort=case.build_cohort(n_rows),
         target_outcome=case.target_outcome,
-        primary_exposure=case.primary_exposure,
         database=case.database,
         cohort_name=f"{case.task_id}_preflight",
         concept_descriptions=dict(case.concept_descriptions),
     )
+    if case.primary_exposure:
+        run_kwargs["primary_exposure"] = case.primary_exposure
     if stop_after_step_id is not None:
         run_kwargs["stop_after_step_id"] = stop_after_step_id
         run_kwargs["stop_after_analysis"] = True
@@ -688,14 +1018,16 @@ def paper_acceptance_verdict(run: PreflightRun):
 def _cli(task_key: str) -> int:
     import tempfile
 
-    case = E1E3_CASES.get(task_key)
+    case = PREFLIGHT_CASES.get(task_key)
     if case is None:
         case = next(
-            (c for c in E1E3_CASES.values() if c.task_id.startswith(task_key)),
+            (c for c in PREFLIGHT_CASES.values() if c.task_id.startswith(task_key)),
             None,
         )
     if case is None:
-        raise SystemExit(f"unknown task key {task_key!r}; try e1/e2/e3")
+        raise SystemExit(
+            f"unknown task key {task_key!r}; try e1/e2/e3/m2/h1/h2/h3"
+        )
     tmp = Path(tempfile.mkdtemp(prefix=f"preflight_{task_key}_"))
     run = run_preflight(case, workdir=tmp)
     if not run.pipeline_ran:

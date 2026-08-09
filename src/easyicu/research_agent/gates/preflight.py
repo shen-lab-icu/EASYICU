@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
+from ..icu_rules import companion_count_column_for_measured
 from ..research_context.prompt_scope import normalised_method_head
 from ..schema import AnalysisStep, ValidationFinding
 from .ast_semantics import (
@@ -25,10 +26,14 @@ from .ast_semantics import (
     runtime_context_opaque_level_findings as _runtime_context_level_findings,
 )
 from .binary_feasibility import binary_feasibility_guard_findings
+from .host_helper_serialization import (
+    host_helper_result_serialization_findings,
+)
 from .host_helper_result import (
     host_helper_result_findings,
     table_one_spec_binding_findings,
 )
+from .interval_method import confidence_interval_method_findings
 from .numeric_reduction import is_array_boolean_predicate as _is_array_boolean_predicate
 from .numeric_reduction import is_proven_array_boolean_predicate
 from .numeric_reduction import misnested_boolean_mask_reduction_expression
@@ -45,9 +50,10 @@ _TRY_STAR_NODE_TYPES = (
 )
 _TRY_NODE_TYPES = (ast.Try, *_TRY_STAR_NODE_TYPES)
 _TYPE_PARAMETER_NODE_TYPES = tuple(
-    node_type
-    for name in ("TypeVar", "ParamSpec", "TypeVarTuple")
-    if (node_type := getattr(ast, name, None)) is not None
+    filter(
+        None,
+        (getattr(ast, name, None) for name in ("TypeVar", "ParamSpec", "TypeVarTuple")),
+    )
 )
 _STRUCTURAL_ACCOUNTING_PRODUCTS = frozenset(
     {
@@ -72,7 +78,13 @@ def _is_frame_columns(node: ast.AST) -> bool:
 def _function_arbitrary_column_fallback(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> Optional[tuple[int, str]]:
-    """Find a fallback that returns a dtype-compatible frame-order column."""
+    """Find a fallback that returns a dtype-compatible frame-order column.
+
+    The defect is *frame order*: taking whichever column happens to sit first
+    in the DataFrame.  Only two expressions carry frame order -- the frame's
+    own ``.columns`` and a ``select_dtypes(...)`` selection over it.  Indexing
+    a Python list at ``0`` does not, however the list is spelled.
+    """
 
     candidate_return_seen = False
     for node in ast.walk(function):
@@ -98,7 +110,15 @@ def _function_arbitrary_column_fallback(
         base_name = _call_name(node.value)
         index = node.slice
         is_first = isinstance(index, ast.Constant) and index.value == 0
-        if is_first and ("select_dtypes" in base_name or base_name.endswith("columns")):
+        # ``_is_frame_columns`` rather than a ``"columns"`` name suffix: the
+        # suffix matched every local list whose name merely ends that way.
+        # Measured over 2,136 recorded scripts, the suffix form fired 3 times
+        # and caught the defect 0 times; all 3 were a declared schema list
+        # guarded by an exactly-one assertion and then indexed -- which is the
+        # very remedy this finding's own message asks for. No recorded script
+        # binds frame order to a local name and indexes that, so reading the
+        # expression instead of the name loses nothing.
+        if is_first and ("select_dtypes" in base_name or _is_frame_columns(node.value)):
             return int(node.lineno), function.name
     return None
 
@@ -960,6 +980,41 @@ def _branch_all_paths_exit(statements: list[ast.stmt]) -> bool:
     return _block_flow_outcomes(statements) == {_FLOW_FUNCTION_EXIT}
 
 
+def _branch_never_falls_through(statements: list[ast.stmt]) -> bool:
+    """True when control never reaches the statement after this block.
+
+    ``_branch_all_paths_exit`` answers a narrower question -- does every path
+    leave the FUNCTION -- and its callers in the provenance rules need exactly
+    that, because a ``continue`` is not a raise and must not be read as one.
+
+    The unbound-local rules need this wider question instead.  They ask whether
+    a handler can fall into the statements after the ``try`` and read a name the
+    ``try`` body never assigned.  A handler ending in ``continue`` or ``break``
+    cannot: ``continue`` jumps to the next iteration and ``break`` leaves the
+    loop, and either way the siblings after the ``try`` are skipped.  (Both are
+    syntax errors outside a loop, so there is no case where the following
+    siblings are reachable anyway.)
+
+    Measured consequence of conflating the two: a real 2026-08-01 robustness
+    step wrote the textbook form --
+
+        try:
+            numeric_effect = float(candidate)
+        except (TypeError, ValueError):
+            continue
+        if numeric_effect == numeric_effect:
+            ...
+
+    -- which cannot raise UnboundLocalError, because the read is unreachable
+    when the handler runs.  ``_block_flow_outcomes`` already classified that
+    handler as ``{loop_escape}``; the equality test above then discarded the
+    distinction, the gate refused correct code, and the step died having spent
+    two provider calls on a defect that was not there.
+    """
+
+    return _FLOW_FALLTHROUGH not in _block_flow_outcomes(statements)
+
+
 def _has_unrelated_control_ancestor(
     node: ast.AST, parents: dict[ast.AST, ast.AST]
 ) -> bool:
@@ -1165,9 +1220,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             ambiguous_names.add(str(node.name))
         if isinstance(node, ast.MatchMapping) and node.rest in marker_names:
             ambiguous_names.add(str(node.rest))
-        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (
-            node.name in marker_names
-        ):
+        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (node.name in marker_names):
             ambiguous_names.add(node.name)
         targets: list[ast.AST] = []
         if isinstance(node, ast.Assign):
@@ -3532,9 +3585,7 @@ def _pre312_fstring_subscript_quote_findings(
     occurrences = [
         {
             **occurrence,
-            "outer_quote": (
-                "double" if occurrence["outer_quote"] == '"' else "single"
-            ),
+            "outer_quote": ("double" if occurrence["outer_quote"] == '"' else "single"),
         }
         for occurrence in occurrences
     ]
@@ -4406,6 +4457,221 @@ def _undefined_direct_call_findings(tree: ast.Module) -> list[ValidationFinding]
     ]
 
 
+_MODULE_DUNDERS = frozenset(
+    {
+        "__name__",
+        "__file__",
+        "__doc__",
+        "__package__",
+        "__spec__",
+        "__loader__",
+        "__builtins__",
+    }
+)
+
+
+def _names_bound_in_scope(scope: ast.AST) -> set[str]:
+    """Every name this one scope binds, not descending into nested definitions."""
+
+    bound: set[str] = set()
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        arguments = scope.args
+        for group in (
+            arguments.posonlyargs,
+            arguments.args,
+            arguments.kwonlyargs,
+        ):
+            bound.update(argument.arg for argument in group)
+        for solo in (arguments.vararg, arguments.kwarg):
+            if solo is not None:
+                bound.add(solo.arg)
+
+    def _walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound.add(child.name)
+                continue
+            if isinstance(child, ast.Lambda):
+                continue
+            if isinstance(child, ast.Import):
+                for alias in child.names:
+                    bound.add(alias.asname or alias.name.split(".", 1)[0])
+            elif isinstance(child, ast.ImportFrom):
+                for alias in child.names:
+                    bound.add(alias.asname or alias.name)
+            elif isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                bound.add(child.id)
+            elif isinstance(child, ast.ExceptHandler) and child.name:
+                bound.add(child.name)
+            elif isinstance(child, (ast.Global, ast.Nonlocal)):
+                bound.update(child.names)
+            _walk(child)
+
+    _walk(scope)
+    return bound
+
+
+def unresolvable_names(tree: ast.Module) -> list[tuple[str, int]]:
+    """Names read where Python's scope rules cannot resolve them.
+
+    ``compile()`` accepts every one of these -- a ``NameError`` is a runtime
+    event -- so the syntax check is happy and the container is not.  A name is
+    reported with the first line that reads it.
+
+    A read resolves if the name is bound in its own scope, in an enclosing
+    function scope, at module level, or is a builtin.  Nothing else counts, and
+    that is the whole point: an earlier version of this check collected
+    bindings from the *whole program*, so a name that was only ever a local of
+    some other function looked bound.  canary4 died on exactly that --
+    ``predicate_flow`` is a local of ``validate_receipt`` and ``main`` reads it
+    as a global at line 133.  Both the module-only and whole-tree versions
+    returned nothing for that script.
+
+    Measured over the 409 recorded generated scripts: 4 flagged (1.0%), and
+    every one is a real defect --
+
+    * ``predicate_flow``  -- canary4, the death above
+    * ``cohort_df``       -- an earlier run, same shape, also fatal
+    * ``provenance_audit``-- unverifiable, that container never started
+    * ``source_index``    -- a typo for ``source_row_index`` inside a ``raise``
+      branch.  It has never executed, so no run has died of it; if the branch
+      ever fires it replaces a written diagnostic with a ``NameError``, exactly
+      when something has already gone wrong.
+
+    A ``match`` statement binds names that are not ``Name`` stores, so a module
+    containing one is abstained on rather than guessed at.  There is not one in
+    the corpus, and a wrong flag costs a healthy step a repair -- the expensive
+    direction to be wrong in.
+    """
+
+    if any(isinstance(node, ast.Match) for node in ast.walk(tree)):
+        return []
+
+    parents = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    scopes: list[ast.AST] = [tree]
+    scopes.extend(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+    )
+    bound_by_scope = {id(scope): _names_bound_in_scope(scope) for scope in scopes}
+    # ``global x`` inside a function binds x at MODULE level, not in the
+    # function that declares it -- so a sibling reading x afterwards is legal
+    # Python.  Attributing it to the declaring scope reported that sibling,
+    # which is the false positive this check must not produce.
+    declared_global: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            declared_global.update(node.names)
+    module_names = (
+        bound_by_scope[id(tree)]
+        | declared_global
+        | set(dir(builtins))
+        | set(_MODULE_DUNDERS)
+    )
+
+    loaded: dict[str, int] = {}
+    for scope in scopes:
+        visible = set(module_names) | bound_by_scope[id(scope)]
+        enclosing = parents.get(id(scope))
+        while enclosing is not None:
+            if isinstance(
+                enclosing, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+            ):
+                visible |= bound_by_scope[id(enclosing)]
+            enclosing = parents.get(id(enclosing))
+
+        def _reads(node: ast.AST) -> None:
+            for child in ast.iter_child_nodes(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.FunctionDef,
+                        ast.AsyncFunctionDef,
+                        ast.ClassDef,
+                        ast.Lambda,
+                    ),
+                ):
+                    continue
+                if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                    if child.id not in visible:
+                        loaded.setdefault(child.id, int(child.lineno))
+                _reads(child)
+
+        _reads(scope)
+
+    return sorted(loaded.items())
+
+
+def module_level_unbound_names(tree: ast.Module) -> list[tuple[str, int]]:
+    """The module-scope answer, kept because the host's own fragments use it.
+
+    A rendered fragment is not a whole module, so asking about function scopes
+    it does not contain would be meaningless.  Delegates rather than repeating
+    the walk.
+    """
+
+    module_scope = ast.Module(
+        body=[
+            statement
+            for statement in tree.body
+            if not isinstance(
+                statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            )
+        ],
+        type_ignores=[],
+    )
+    defined = _names_bound_in_scope(tree)
+    return [
+        (name, line)
+        for name, line in unresolvable_names(module_scope)
+        if name not in defined
+    ]
+
+
+def _unresolvable_name_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Reject a read Python's scope rules cannot resolve.
+
+    fresh22 died on ``hashlib`` at module level; the H1 canary died twice in one
+    step on ``manifest`` then ``table_one_spec``; canary4 died on
+    ``predicate_flow``, a local of one function read as a global by another.
+    Each cost an execution slot, and the last one cost the three steps behind
+    it.  All six instances in the recorded corpus are real defects.
+
+    ``_undefined_direct_call_findings`` overlaps on one shape -- a bare call to
+    a name nothing defines -- and keeps its own reasoning.  A name both reject
+    is reported twice, and both reports are true; neither is allowed to assume
+    the other ran.
+    """
+
+    unbound = unresolvable_names(tree)
+    if not unbound:
+        return []
+    return [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message=(
+                "The script reads names Python cannot resolve where they are "
+                "used, so it raises NameError at run time: "
+                + ", ".join(f"{name} (line {line})" for name, line in unbound)
+                + ". A name assigned inside another function is not visible "
+                "here. Bind each one in the scope that reads it -- import it, "
+                "pass it as an argument, or return it from the function that "
+                "computes it -- instead of assuming it is already in scope."
+            ),
+            detail={
+                "reason": "unresolvable_name",
+                "names": [{"name": name, "line": line} for name, line in unbound],
+            },
+        )
+    ]
+
+
 def _local_call_signature_findings(tree: ast.Module) -> list[ValidationFinding]:
     """Reject direct local-helper calls that Python can prove are invalid."""
 
@@ -4916,7 +5182,7 @@ def _branch_local_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
                 continuing_handlers = [
                     handler
                     for handler in statement.handlers
-                    if not _branch_all_paths_exit(handler.body)
+                    if not _branch_never_falls_through(handler.body)
                 ]
                 handler_guaranteed = [
                     _top_level_stores(handler.body) for handler in continuing_handlers
@@ -5186,6 +5452,23 @@ def _branch_local_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
                     first_load = min(load_lines)
                     if later_store_lines and min(later_store_lines) < first_load:
                         continue
+                    # Deliberately the NARROW predicate, not
+                    # ``_branch_never_falls_through``. Python deletes the
+                    # exception alias when the handler is left by ANY route,
+                    # ``continue`` and ``break`` included, and the delete
+                    # removes the name outright -- it does not restore whatever
+                    # ``alias`` held before the ``try``. So
+                    #
+                    #     exc = "before"
+                    #     for item in items:
+                    #         try: f(item)
+                    #         except ValueError as exc: continue
+                    #         print(exc)          # NameError on a later pass
+                    #
+                    # really does fail, and reading ``continue`` as "cannot
+                    # reach the read" here would hide it. Only ``raise`` and
+                    # ``return`` leave the function, which is what makes the
+                    # later read unreachable.
                     if alias in assigned_before and _branch_all_paths_exit(
                         handler.body
                     ):
@@ -5501,9 +5784,7 @@ def _builtin_int_binding_is_unmodified(tree: ast.Module) -> bool:
             return False
         if isinstance(node, ast.MatchMapping) and node.rest == "int":
             return False
-        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (
-            node.name == "int"
-        ):
+        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (node.name == "int"):
             return False
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             if any(alias.name == "*" for alias in node.names):
@@ -6901,16 +7182,26 @@ def _notna_gated_domain_checks(
     return list(dict.fromkeys(checks))
 
 
+# ``audit_publication_exports_json`` is the JSON-primitive form of
+# ``audit_publication_exports`` and takes the identical signature, so the two
+# share one contract object rather than repeating the literal -- a drifted copy
+# is how this registry has produced wrong blocks before.
+_PUBLICATION_EXPORT_AUDIT_CALL_CONTRACT: dict[str, object] = {
+    "max_positional": 1,
+    "positional_parameter": "paths",
+    "required_keywords": (),
+    "allowed_keywords": ("paths", "min_bytes", "require_svg_text"),
+}
+
 _HOST_HELPER_CALL_CONTRACTS: dict[tuple[str, str], dict[str, object]] = {
     (
         "easyicu.research_agent.figures.publication",
         "audit_publication_exports",
-    ): {
-        "max_positional": 1,
-        "positional_parameter": "paths",
-        "required_keywords": (),
-        "allowed_keywords": ("paths", "min_bytes", "require_svg_text"),
-    },
+    ): _PUBLICATION_EXPORT_AUDIT_CALL_CONTRACT,
+    (
+        "easyicu.research_agent.figures.publication",
+        "audit_publication_exports_json",
+    ): _PUBLICATION_EXPORT_AUDIT_CALL_CONTRACT,
     (
         "easyicu.research_agent.methods.descriptive_inputs",
         "closed_categorical_counts",
@@ -6932,8 +7223,196 @@ _HOST_HELPER_CALL_CONTRACTS: dict[tuple[str, str], dict[str, object]] = {
 }
 
 
+#: Host entry points whose contract is COMPILED from their own signature.
+#:
+#: The registry above is hand-transcribed, and its own comment records the cost:
+#: "a drifted copy is how this registry has produced wrong blocks before."  For
+#: a keyword-only host entry point there is nothing to transcribe -- Python
+#: reports the parameter list exactly -- and transcription can only introduce
+#: the drift.
+#:
+#: MEASURED over 1,068 recorded step logs: six steps died on
+#: ``TypeError: <helper>() got an unexpected keyword argument``, and every one
+#: was a host-owned function that the hand table did not list.  The most recent
+#: killed m1's ``07_adjusted_association_figure`` on 2026-08-04 with ``dpi=``,
+#: two code repairs deep and seven provider calls still unspent, at the step
+#: that stood between a nine-step-green run and its manuscript.  ``dpi`` is a
+#: real parameter -- of ``save_publication_figure``, which the Coder prompt
+#: names two paragraphs away -- so the model was transposing a documented
+#: keyword onto the wrong callee, which no prompt edit reliably prevents and a
+#: signature comparison catches exactly.
+#:
+#: Entries are added by naming the function, never by copying its parameters.
+#: A callee that accepts ``**kwargs`` is skipped: nothing can be unexpected.
+_SIGNATURE_DERIVED_HOST_HELPERS: tuple[tuple[str, str], ...] = (
+    (
+        "easyicu.research_agent.execution.runners.adjusted_association_figure_executor",
+        "run_adjusted_association_figure",
+    ),
+    (
+        "easyicu.research_agent.execution.runners.adjusted_association_executor",
+        "run_adjusted_association_from_env",
+    ),
+    (
+        "easyicu.research_agent.methods.descriptive_inputs",
+        "strict_numeric_input",
+    ),
+    (
+        "easyicu.research_agent.methods.source_status",
+        "reconcile_binary_event_presence",
+    ),
+    (
+        "easyicu.research_agent.methods.survival_inputs",
+        "event_time_reconciliation_receipt",
+    ),
+)
+
+
+def _compile_signature_derived_contracts() -> None:
+    """Fill the registry from the callees' own signatures, once, at import.
+
+    A helper that cannot be imported or inspected is skipped rather than
+    guessed at: an unknown signature must not become a block.
+    """
+
+    import inspect as _inspect
+    import importlib as _importlib
+
+    for module_name, symbol in _SIGNATURE_DERIVED_HOST_HELPERS:
+        key = (module_name, symbol)
+        if key in _HOST_HELPER_CALL_CONTRACTS:
+            continue
+        try:
+            function = getattr(_importlib.import_module(module_name), symbol)
+            signature = _inspect.signature(function)
+        except Exception:  # noqa: BLE001 - an uninspectable helper is not a block
+            continue
+        parameters = list(signature.parameters.values())
+        if any(
+            parameter.kind is _inspect.Parameter.VAR_KEYWORD for parameter in parameters
+        ):
+            continue
+        positional = [
+            parameter
+            for parameter in parameters
+            if parameter.kind
+            in (
+                _inspect.Parameter.POSITIONAL_ONLY,
+                _inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+        if any(
+            parameter.kind is _inspect.Parameter.VAR_POSITIONAL
+            for parameter in parameters
+        ):
+            continue
+        _HOST_HELPER_CALL_CONTRACTS[key] = {
+            # A derived contract knows one thing: the set of parameter names.
+            # It deliberately carries no required-keyword or call-shape rule,
+            # and the flag says so where the rules are applied.
+            "derived_from_signature": True,
+            "max_positional": len(positional),
+            "positional_parameter": positional[0].name if positional else "",
+            # Only the unknown-keyword half is derived. Which of a helper's
+            # parameters a given step is REQUIRED to pass is a scientific
+            # decision the signature does not encode, so it stays empty here
+            # and remains the hand table's business where one exists.
+            "required_keywords": (),
+            "allowed_keywords": tuple(
+                parameter.name
+                for parameter in parameters
+                if parameter.kind
+                in (
+                    _inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    _inspect.Parameter.KEYWORD_ONLY,
+                )
+            ),
+        }
+
+
+_compile_signature_derived_contracts()
+
+
+def _measurement_provenance_scope_findings(
+    tree: ast.Module,
+    step: AnalysisStep,
+) -> list[ValidationFinding]:
+    """Reject provenance calls that widen the Planner's raw-input scope.
+
+    ResearchContext may describe related provenance coordinates for semantic
+    interpretation, while executable measured/count pairs remain owned by the
+    step's exact inputs.  A host cohort-execution receipt can separately bind
+    predicate columns, but it never grants sibling-column access.
+    """
+
+    declared_inputs = {
+        str(value).strip()
+        for value in step.inputs
+        if ":" not in str(value) and str(value).strip()
+    }
+    declared_pairs = {
+        (measured_column, count_column)
+        for measured_column in declared_inputs
+        if (count_column := companion_count_column_for_measured(measured_column))
+        and count_column in declared_inputs
+    }
+    findings: list[ValidationFinding] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and _call_name(node.func).rsplit(".", 1)[-1]
+            == "measurement_provenance_receipt"
+        ):
+            continue
+        keyword_values = {
+            str(keyword.arg): keyword.value
+            for keyword in node.keywords
+            if keyword.arg is not None
+        }
+        measured_node = keyword_values.get("measured_column")
+        count_node = keyword_values.get("count_column")
+        observed_pair = (
+            (
+                str(measured_node.value),
+                str(count_node.value),
+            )
+            if isinstance(measured_node, ast.Constant)
+            and isinstance(measured_node.value, str)
+            and isinstance(count_node, ast.Constant)
+            and isinstance(count_node.value, str)
+            else None
+        )
+        if declared_pairs and (
+            observed_pair is None or observed_pair in declared_pairs
+        ):
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=(
+                    "Generated code invokes measurement provenance outside an "
+                    "exact Planner-declared measured/count input pair."
+                ),
+                detail={
+                    "reason": "measurement_provenance_pair_undeclared",
+                    "helper_name": "measurement_provenance_receipt",
+                    "line": int(node.lineno),
+                    "declared_pairs": [list(pair) for pair in sorted(declared_pairs)],
+                    **(
+                        {"observed_pair": list(observed_pair)}
+                        if observed_pair is not None
+                        else {}
+                    ),
+                },
+            )
+        )
+    return findings
+
+
 def _host_helper_call_signature_findings(
     tree: ast.Module,
+    step: AnalysisStep,
 ) -> list[ValidationFinding]:
     """Validate calls to imported, stable host helpers before execution.
 
@@ -7083,23 +7562,130 @@ def _host_helper_call_signature_findings(
         allowed_keywords = set(contract["allowed_keywords"])
         keyword_names = [keyword.arg for keyword in node.keywords]
         violations: list[str] = []
-        if any(isinstance(argument, ast.Starred) for argument in node.args):
-            violations.append("starred_positional_arguments_unverifiable")
+        detail_additions: dict[str, object] = {}
+        # A hand-written contract also encodes which keywords a call MUST pass,
+        # so an argument the checker cannot read could hide a missing one and is
+        # refused. A DERIVED contract makes no such demand -- its only rule is
+        # that no literal keyword is unknown to the callee -- so an unreadable
+        # argument hides nothing it checks, and refusing it blocks correct code.
+        #
+        # It blocked the host's own code. On 2026-08-04 adding
+        # ``run_adjusted_association_from_env`` to the derived registry turned
+        # this rule on against the sealed scaffold in
+        # ``adjusted_association_executor._prologue``, which the host writes
+        # itself, calls ``**declared_model``, and comments "The call is host
+        # property too". m1 died at 05_primary_adjusted_association_model with
+        # ``deterministic_standard_blocked`` and no repair attempted.
+        derived_contract = bool(contract.get("derived_from_signature"))
+        if not derived_contract:
+            if any(isinstance(argument, ast.Starred) for argument in node.args):
+                violations.append("starred_positional_arguments_unverifiable")
+            if any(name is None for name in keyword_names):
+                violations.append("expanded_keyword_arguments_unverifiable")
         if len(node.args) > max_positional:
             violations.append("keyword_only_parameters_passed_positionally")
-        if any(name is None for name in keyword_names):
-            violations.append("expanded_keyword_arguments_unverifiable")
         explicit_keywords = [name for name in keyword_names if name is not None]
         if len(explicit_keywords) != len(set(explicit_keywords)):
             violations.append("duplicate_keyword_arguments")
-        if any(name not in allowed_keywords for name in explicit_keywords):
+        unknown_keywords = [
+            name for name in explicit_keywords if name not in allowed_keywords
+        ]
+        if unknown_keywords:
             violations.append("unknown_keyword_argument")
-        if node.args and positional_parameter in explicit_keywords:
-            violations.append(f"{positional_parameter}_bound_more_than_once")
-        if not node.args and positional_parameter not in explicit_keywords:
-            violations.append(f"{positional_parameter}_argument_missing")
+        # A contract that names no positional parameter cannot demand one.
+        # Every hand-written entry has a first positional argument that is in
+        # practice required; a keyword-only host entry point has none, and
+        # before this guard such a contract reported ``_argument_missing`` on
+        # every correct call.
+        if positional_parameter:
+            if node.args and positional_parameter in explicit_keywords:
+                violations.append(f"{positional_parameter}_bound_more_than_once")
+            if not node.args and positional_parameter not in explicit_keywords:
+                violations.append(f"{positional_parameter}_argument_missing")
         if not set(required_keywords) <= set(explicit_keywords):
             violations.append("required_keyword_only_argument_missing")
+        if helper_name == "measurement_provenance_receipt":
+            keyword_values = {
+                str(keyword.arg): keyword.value
+                for keyword in node.keywords
+                if keyword.arg is not None
+            }
+            measured_node = keyword_values.get("measured_column")
+            count_node = keyword_values.get("count_column")
+            measured_column = (
+                str(measured_node.value)
+                if isinstance(measured_node, ast.Constant)
+                and isinstance(measured_node.value, str)
+                else None
+            )
+            count_column = (
+                str(count_node.value)
+                if isinstance(count_node, ast.Constant)
+                and isinstance(count_node.value, str)
+                else None
+            )
+            declared_inputs = {
+                str(value).strip()
+                for value in step.inputs
+                if ":" not in str(value) and str(value).strip()
+            }
+            expected_count = (
+                companion_count_column_for_measured(measured_column)
+                if measured_column is not None
+                else None
+            )
+            measured_candidates = sorted(
+                value
+                for value in declared_inputs
+                if count_column is not None
+                and companion_count_column_for_measured(value) == count_column
+            )
+            role_contract_relevant = bool(
+                (measured_column is not None and measured_column in declared_inputs)
+                or (count_column is not None and count_column in declared_inputs)
+                or (expected_count is not None and expected_count in declared_inputs)
+                or measured_candidates
+            )
+            if (
+                role_contract_relevant
+                and measured_column is not None
+                and expected_count is None
+            ):
+                violations.append("measured_column_role_invalid")
+                detail_additions["observed_measured_column"] = measured_column
+                if len(measured_candidates) == 1:
+                    detail_additions["expected_measured_column"] = measured_candidates[
+                        0
+                    ]
+            if (
+                role_contract_relevant
+                and count_column is not None
+                and not measured_candidates
+            ):
+                violations.append("count_column_role_invalid")
+                detail_additions["observed_count_column"] = count_column
+                if expected_count is not None and expected_count in declared_inputs:
+                    detail_additions["expected_count_column"] = expected_count
+            if (
+                role_contract_relevant
+                and measured_column is not None
+                and count_column is not None
+                and expected_count is not None
+                and expected_count != count_column
+            ):
+                violations.append("measurement_companion_columns_mismatch")
+                detail_additions.setdefault(
+                    "observed_measured_column",
+                    measured_column,
+                )
+                detail_additions.setdefault("observed_count_column", count_column)
+                if expected_count in declared_inputs:
+                    detail_additions.setdefault("expected_count_column", expected_count)
+                if len(measured_candidates) == 1:
+                    detail_additions.setdefault(
+                        "expected_measured_column",
+                        measured_candidates[0],
+                    )
         if not violations:
             continue
         findings.append(
@@ -7117,9 +7703,114 @@ def _host_helper_call_signature_findings(
                     "max_positional": max_positional,
                     "required_keywords": list(required_keywords),
                     "violations": sorted(set(violations)),
+                    # Which keywords, and which the helper actually has. A
+                    # repair handed only "unknown_keyword_argument" has to
+                    # guess what to drop; m1's 07_adjusted_association_figure
+                    # spent two repairs on exactly that and still shipped
+                    # ``dpi=`` into the sandbox. The violation CODE stays
+                    # stable; the names travel beside it.
+                    **(
+                        {
+                            "unknown_keywords": sorted(unknown_keywords),
+                            "allowed_keywords": list(allowed_keywords),
+                        }
+                        if unknown_keywords
+                        else {}
+                    ),
+                    **detail_additions,
                 },
             )
         )
+    return findings
+
+
+_COUNT_COMPANION_CLOSED_DOMAIN_HELPERS = frozenset(
+    {"allowed_values_for", "closed_categorical_counts", "require_binary"}
+)
+
+
+def _count_companion_closed_domain_findings(
+    tree: ast.Module,
+    step: AnalysisStep,
+) -> list[ValidationFinding]:
+    """Reject treating a declared measurement count as binary/categorical."""
+
+    declared_inputs = {
+        str(value).strip()
+        for value in step.inputs
+        if ":" not in str(value) and str(value).strip()
+    }
+    count_columns = {
+        count_column
+        for measured_column in declared_inputs
+        if (count_column := companion_count_column_for_measured(measured_column))
+        and count_column in declared_inputs
+    }
+    if not count_columns:
+        return []
+
+    def _call_tail(call: ast.Call) -> str:
+        return _call_name(call.func).rsplit(".", 1)[-1]
+
+    def _literal_count_columns(call: ast.Call) -> set[str]:
+        return {
+            str(node.value)
+            for argument in (*call.args, *(item.value for item in call.keywords))
+            for node in ast.walk(argument)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and str(node.value) in count_columns
+        }
+
+    closed_level_bindings: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Call) or _call_tail(value) != "allowed_values_for":
+            continue
+        literal_columns = _literal_count_columns(value)
+        if len(literal_columns) != 1:
+            continue
+        count_column = next(iter(literal_columns))
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if isinstance(target, ast.Name):
+                closed_level_bindings[target.id] = count_column
+
+    findings: list[ValidationFinding] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        helper_name = _call_tail(node)
+        if helper_name not in _COUNT_COMPANION_CLOSED_DOMAIN_HELPERS:
+            continue
+        implicated = _literal_count_columns(node)
+        for argument in (*node.args, *(item.value for item in node.keywords)):
+            implicated.update(
+                closed_level_bindings[nested.id]
+                for nested in ast.walk(argument)
+                if isinstance(nested, ast.Name) and nested.id in closed_level_bindings
+            )
+        for count_column in sorted(implicated):
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "A declared measurement-count companion is a non-negative "
+                        "observation count, not a binary or closed categorical domain."
+                    ),
+                    detail={
+                        "reason": "count_companion_closed_domain_invalid",
+                        "helper_name": helper_name,
+                        "line": int(node.lineno),
+                        "column": count_column,
+                        "role": "audit_only_count_companion",
+                        "failure_mode": "closed_domain_assumption",
+                    },
+                )
+            )
     return findings
 
 
@@ -7594,12 +8285,16 @@ def _host_helper_runtime_introspection_findings(
                     helper_references[f"{alias.asname}.save_publication_figure"] = (
                         "save_publication_figure"
                     )
-                elif (
-                    alias.name == "easyicu.research_agent.methods.descriptive_inputs"
-                    and alias.asname
+                elif alias.asname and any(
+                    module == alias.name
+                    for module, _symbol in _HOST_HELPER_CALL_CONTRACTS
                 ):
-                    helper_references[f"{alias.asname}.closed_categorical_counts"] = (
-                        "closed_categorical_counts"
+                    helper_references.update(
+                        {
+                            f"{alias.asname}.{symbol}": symbol
+                            for module, symbol in _HOST_HELPER_CALL_CONTRACTS
+                            if module == alias.name
+                        }
                     )
         elif isinstance(node, ast.ImportFrom) and node.level == 0:
             if node.module == "inspect":
@@ -7616,12 +8311,14 @@ def _host_helper_runtime_introspection_findings(
                         if alias.name == "save_publication_figure"
                     }
                 )
-            elif node.module == "easyicu.research_agent.methods.descriptive_inputs":
+            elif any(
+                module == node.module for module, _symbol in _HOST_HELPER_CALL_CONTRACTS
+            ):
                 helper_references.update(
                     {
-                        alias.asname or alias.name: "closed_categorical_counts"
+                        alias.asname or alias.name: alias.name
                         for alias in node.names
-                        if alias.name == "closed_categorical_counts"
+                        if (node.module, alias.name) in _HOST_HELPER_CALL_CONTRACTS
                     }
                 )
     if not helper_references:
@@ -8309,14 +9006,20 @@ def audit_mechanical_code_contracts(
     findings.extend(_finalized_exposure_reconciliation_findings(tree, step))
     findings.extend(_typed_dataframe_erasure_findings(tree, step))
     findings.extend(_undefined_direct_call_findings(tree))
+    findings.extend(_unresolvable_name_findings(tree))
     findings.extend(_local_call_signature_findings(tree))
     findings.extend(_local_read_before_assignment_findings(tree))
     findings.extend(_branch_local_unbound_findings(tree))
     findings.extend(_ordinal_rounding_findings(tree))
     findings.extend(_scalar_cast_before_reduction_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
-    findings.extend(_host_helper_call_signature_findings(tree))
+    findings.extend(_measurement_provenance_scope_findings(tree, step))
+    findings.extend(_host_helper_call_signature_findings(tree, step))
+    findings.extend(_count_companion_closed_domain_findings(tree, step))
     findings.extend(host_helper_result_findings(tree, step))
+    findings.extend(
+        host_helper_result_serialization_findings(tree, script_text=script_text)
+    )
     findings.extend(table_one_spec_binding_findings(tree, step))
     findings.extend(_boolean_reduction_identity_findings(tree))
     findings.extend(_local_helper_unpack_arity_findings(tree))
@@ -8326,11 +9029,16 @@ def audit_mechanical_code_contracts(
     findings.extend(_strict_numeric_nonfinite_findings(tree))
     findings.extend(_categorical_level_reconciliation_findings(tree))
     findings.extend(
-        binary_feasibility_guard_findings(tree)
+        confidence_interval_method_findings(tree)
+        + binary_feasibility_guard_findings(tree)
         + _cohort_count_findings(tree)
         + _runtime_context_level_findings(tree)
     )
     return findings
 
 
-__all__ = ["audit_mechanical_code_contracts"]
+__all__ = [
+    "audit_mechanical_code_contracts",
+    "module_level_unbound_names",
+    "unresolvable_names",
+]

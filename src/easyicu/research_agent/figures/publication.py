@@ -1014,6 +1014,41 @@ def audit_publication_exports(
     return findings
 
 
+def audit_publication_exports_json(
+    paths: Mapping[str, Path] | Iterable[Path] | str | Path,
+    *,
+    min_bytes: int = 1024,
+    require_svg_text: bool = True,
+) -> List[Dict[str, Any]]:
+    """JSON-primitive form of :func:`audit_publication_exports`.
+
+    The Coder prompt routes publication export-QA findings straight into
+    ``step_summary.json`` under a serialization contract that says JSON values
+    must be Python primitives, but the typed audit returns ``ValidationFinding``
+    models: five host call sites in ``figures/skill.py`` merge them into the
+    typed findings pipeline, so that return type is load-bearing and cannot
+    become plain dicts.  Publishing the converted form is what closes the gap.
+    Without it the Coder has to invent a ``json.dump(default=...)`` for a host
+    type the prompt never described, and on the 2026-07-30 run two Coders
+    invented it differently and both were wrong -- one returned the object it
+    was handed (circular reference), the other raised on it.
+
+    This is also the single owner of that conversion: the same
+    ``model_dump(mode="json")`` was already spelled out five times in
+    ``figures/skill.py`` and a sixth time as a private helper inside the mock
+    provider, which is how the host proved it knew the conversion was required
+    while never telling the Coder about it.
+    """
+    return [
+        finding.model_dump(mode="json")
+        for finding in audit_publication_exports(
+            paths,
+            min_bytes=min_bytes,
+            require_svg_text=require_svg_text,
+        )
+    ]
+
+
 __all__ = [
     "FigureArchetype",
     "ExportFormat",
@@ -1027,4 +1062,5 @@ __all__ = [
     "add_panel_label",
     "save_publication_figure",
     "audit_publication_exports",
+    "audit_publication_exports_json",
 ]

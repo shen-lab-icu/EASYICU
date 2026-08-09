@@ -88,12 +88,12 @@ def _identity_transforms(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         plan_authority,
         "augment_trajectory_plan_products",
-        lambda *, plan, context: (plan, []),
+        lambda *, plan, context, **_kwargs: (plan, []),
     )
     monkeypatch.setattr(
         plan_authority,
-        "_augment_measurement_companion_inputs",
-        lambda *, plan, context: (plan, []),
+        "close_measurement_companion_inputs",
+        lambda *, plan, context, **_kwargs: (plan, []),
     )
 
 
@@ -152,7 +152,7 @@ def test_candidate_transform_order_keeps_second_snapshot_restore() -> None:
             "_cap_plan_preserving_figure_steps",
             "_project_locked_robustness_specs_after_replan",
             "augment_trajectory_plan_products",
-            "_augment_measurement_companion_inputs",
+            "close_measurement_companion_inputs",
         }
     ]
     assert relevant == [
@@ -162,7 +162,7 @@ def test_candidate_transform_order_keeps_second_snapshot_restore() -> None:
         "_cap_plan_preserving_figure_steps",
         "_project_locked_robustness_specs_after_replan",
         "augment_trajectory_plan_products",
-        "_augment_measurement_companion_inputs",
+        "close_measurement_companion_inputs",
         "_preserve_completed_step_snapshots_after_replan",
     ]
 
@@ -181,7 +181,7 @@ def test_second_snapshot_restore_repairs_intermediate_transform(
 
     monkeypatch.setattr(
         plan_authority,
-        "_augment_measurement_companion_inputs",
+        "close_measurement_companion_inputs",
         mutate_completed,
     )
     result = plan_authority.normalize_replan_candidate(

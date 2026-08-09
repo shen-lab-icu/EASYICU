@@ -7,9 +7,14 @@ from pathlib import Path
 
 import pytest
 
+from easyicu.research_agent.schema import AnalysisStep
 from easyicu.research_agent.execution.cohort_routing import (
     StepExecutionCohortRoutingError,
+    bind_step_execution_cohort,
     bound_step_execution_cohort_path,
+)
+from easyicu.research_agent.execution.envelope_sealing import (
+    compile_sealed_step_result_shadow,
 )
 from easyicu.research_agent.execution.phase import (
     _evaluate_final_deterministic_gates,
@@ -47,6 +52,56 @@ def test_bound_analysis_cohort_replaces_the_run_level_fallback(tmp_path: Path) -
     assert selected == child.resolve()
 
 
+def test_planner_spelled_cohort_product_replaces_the_run_level_fallback(
+    tmp_path: Path,
+) -> None:
+    """``cohort:analysis_set`` names the same reserved population.
+
+    Matching only the literal ``analysis_cohort`` left the runner surface on
+    the run-level fallback while the step's own typed input pointed somewhere
+    else -- two populations under two names, which is what this boundary
+    exists to prevent.
+    """
+
+    fallback = tmp_path / "development_sample.parquet"
+    fallback.write_bytes(b"run-level sample")
+    child = tmp_path / "evidence" / "analysis_set.parquet"
+    child.parent.mkdir()
+    child.write_bytes(b"step-emitted primary cohort")
+    binding = _binding(tmp_path, "evidence/analysis_set.parquet")
+    binding["product"] = "analysis_set"
+
+    selected = bound_step_execution_cohort_path(
+        run_dir=tmp_path,
+        fallback_path=fallback,
+        resolved_input_bindings={"cohort:analysis_set": binding},
+    )
+
+    assert selected == child.resolve()
+
+
+def test_unreserved_analysis_set_spellings_stay_on_the_fallback(
+    tmp_path: Path,
+) -> None:
+    """Only the reserved ``cohort:`` spelling claims the primary population."""
+
+    fallback = tmp_path / "development_sample.parquet"
+    fallback.write_bytes(b"run-level sample")
+    other = tmp_path / "evidence" / "analysis_set.parquet"
+    other.parent.mkdir()
+    other.write_bytes(b"model-specific analysis set")
+    binding = _binding(tmp_path, "evidence/analysis_set.parquet")
+    binding["product"] = "analysis_set"
+
+    selected = bound_step_execution_cohort_path(
+        run_dir=tmp_path,
+        fallback_path=fallback,
+        resolved_input_bindings={"table:analysis_set": binding},
+    )
+
+    assert selected == fallback.resolve()
+
+
 def test_non_cohort_typed_inputs_do_not_change_the_runner_surface(
     tmp_path: Path,
 ) -> None:
@@ -65,6 +120,52 @@ def test_non_cohort_typed_inputs_do_not_change_the_runner_surface(
     )
 
     assert selected == fallback.resolve()
+
+
+def test_run_level_fallback_is_digest_bound_for_the_result_envelope(
+    tmp_path: Path,
+) -> None:
+    fallback = tmp_path / "cohort_analysis.parquet"
+    fallback.write_bytes(b"sealed cohort bytes")
+    output_dir = tmp_path / "steps" / "02_summary" / "outputs"
+    output_dir.mkdir(parents=True)
+    step_record: dict[str, object] = {}
+
+    selected = bind_step_execution_cohort(
+        tmp_path,
+        fallback,
+        {},
+        step_record,
+    )
+    step = AnalysisStep(
+        step_id="02_summary",
+        intent="Summarize the locked cohort.",
+    )
+    snapshot = compile_sealed_step_result_shadow(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "cohort_path": "/easyicu-run/cohort_analysis.parquet",
+        },
+        output_dir=output_dir,
+        run_dir=tmp_path,
+        execution_cohort_path=selected,
+        execution_cohort_sha256=str(step_record["execution_cohort_sha256"]),
+        current_status="ok",
+    )
+
+    assert selected == fallback.resolve()
+    assert step_record["execution_cohort_role"] == "run_level_execution_cohort"
+    assert (
+        step_record["execution_cohort_sha256"]
+        == hashlib.sha256(fallback.read_bytes()).hexdigest()
+    )
+    assert snapshot.ready is True
+    assert not [
+        issue
+        for issue in snapshot.envelope.normalization_issues
+        if issue.code == "absolute_unbound_path"
+    ]
 
 
 @pytest.mark.parametrize("mutation", ["absolute_path", "sha256", "relative_path"])

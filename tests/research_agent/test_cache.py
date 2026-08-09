@@ -2,9 +2,8 @@
 
 Pin five contracts:
 
-1. Two runs with identical inputs and ``enable_cache=True`` return
-   the *same* run_id and the same evidence count — the second one
-   doesn't re-execute the pipeline.
+1. Identical inputs reuse a prior run only after the host verifies a
+   manuscript-ready terminal authority; analysis-only runs remain fresh.
 2. Cache off (default) means every run is fresh, even with identical
    inputs.
 3. Mutating the cohort invalidates the cache.
@@ -43,17 +42,61 @@ def test_cache_off_runs_each_time(ra, synthetic_cohort, tmp_path: Path):
     assert a.run_id != b.run_id, "cache off must produce a fresh run_id every time"
 
 
-def test_cache_hit_reuses_run_id_and_workdir(ra, synthetic_cohort, tmp_path: Path):
+def test_analysis_only_runs_are_not_cached_as_completed(
+    ra, synthetic_cohort, tmp_path: Path
+):
     a = _run(ra, cohort=synthetic_cohort, workdir=tmp_path, enable_cache=True)
     b = _run(ra, cohort=synthetic_cohort, workdir=tmp_path, enable_cache=True)
-    assert b.run_id == a.run_id, "cache hit should return the prior run_id"
-    assert b.workdir == a.workdir
-    assert b.evidence_count == a.evidence_count
-    # The cache index file is on disk under the workdir's .cache dir.
+    assert b.run_id != a.run_id
+    for result in (a, b):
+        status = json.loads(
+            (Path(result.workdir) / "run_status.json").read_text(encoding="utf-8")
+        )
+        assert status["status"] == "analysis_only"
+        assert status["gates"]["manuscript_ready"] is False
     cache_index = tmp_path / ".cache" / "cache_index.json"
-    assert cache_index.exists(), "cache index file must be created"
-    data = json.loads(cache_index.read_text(encoding="utf-8"))
-    assert any(v.get("run_id") == a.run_id for v in data.values())
+    assert (
+        not cache_index.exists()
+        or json.loads(cache_index.read_text(encoding="utf-8")) == {}
+    )
+
+
+def test_cache_lookup_reuses_a_host_verified_completed_candidate(
+    ra, tmp_path: Path, monkeypatch
+) -> None:
+    from easyicu.research_agent.authority import pipeline_cache
+
+    result = _write_cache_candidate(ra, tmp_path)
+    run_dir = Path(result.workdir)
+    paths = {
+        "context": Path(result.context_path),
+        "plan": Path(result.plan_path),
+        "report": Path(result.report_path),
+        "manuscript": Path(result.manuscript_path),
+    }
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    monkeypatch.setattr(
+        pipeline_cache,
+        "_completed_run_payload",
+        lambda **_kwargs: (paths, manifest),
+    )
+    cache = pipeline_cache.PipelineCache(tmp_path / ".cache")
+    cache.save_index(
+        {
+            "verified": {
+                "run_id": result.run_id,
+                "workdir": result.workdir,
+                "evidence_count": "1",
+                "findings_count": "0",
+            }
+        }
+    )
+
+    reused = cache.lookup("verified", scientific_identity={"question": "q"})
+
+    assert reused is not None
+    assert reused.run_id == result.run_id
+    assert reused.workdir == result.workdir
 
 
 def test_cache_invalidates_on_cohort_change(ra, synthetic_cohort, tmp_path: Path):
@@ -176,17 +219,42 @@ def _write_cache_candidate(
     final_sequence: int = 2,
     partial_sequence: int = 1,
 ):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.authority.run_input import seal_run_input_capsule
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
-    (run_dir / "research_context.json").write_text("{}", encoding="utf-8")
-    (run_dir / "analysis_plan.json").write_text(
+    question = "Cache candidate question."
+    cohort_path = run_dir / "cohort.parquet"
+    cohort_path.write_bytes(b"cache-candidate-cohort")
+    context_path = run_dir / "research_context.json"
+    context_path.write_text(
+        ResearchContext(
+            research_question=question,
+            cohort=CohortDescriptor(
+                cohort_name="cache_candidate",
+                database="synthetic",
+                n_stays=1,
+                n_patients=1,
+            ),
+            variables=[],
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    plan_path = run_dir / "analysis_plan.json"
+    plan_path.write_text(
         json.dumps({"steps": [{"step_id": "01_model"}]}),
         encoding="utf-8",
     )
-    (run_dir / "results_report.md").write_text("report", encoding="utf-8")
-    (run_dir / "manuscript_scaffold_bound.md").write_text(
-        "manuscript", encoding="utf-8"
-    )
+    report_path = run_dir / "results_report.md"
+    report_path.write_text("report", encoding="utf-8")
+    manuscript_path = run_dir / "manuscript_scaffold_bound.md"
+    manuscript_path.write_text("manuscript", encoding="utf-8")
+    script_path = run_dir / "analysis.py"
+    script_path.write_text("print('complete')\n", encoding="utf-8")
+    summary_path = run_dir / "step_summary.json"
+    summary_path.write_text(json.dumps({"status": "ok"}), encoding="utf-8")
     gates = {
         "execution_complete": True,
         "evidence_complete": True,
@@ -195,13 +263,74 @@ def _write_cache_candidate(
         "manuscript_ready": True,
         "publication_ready": status == "publication_ready",
     }
-    (run_dir / "run_status.json").write_text(
-        json.dumps({"status": status, "gates": gates}),
+    status_path = run_dir / "run_status.json"
+    status_path.write_text(
+        json.dumps({"status": status, "gates": gates, "research_question": question}),
         encoding="utf-8",
     )
+
+    evidence = EvidenceStore(run_dir)
+    evidence.register_file(
+        kind="log",
+        description="Frozen research context.",
+        source_path=context_path,
+        evidence_id="research_context",
+        producer="pipeline",
+        generation_mode="system",
+    )
+    scientific_identity = {"question": question}
+    seal_run_input_capsule(
+        run_dir=run_dir,
+        evidence=evidence,
+        scientific_identity=scientific_identity,
+        initial_environment={"llm_signature": "test"},
+        context_path=context_path,
+        cohort_path=cohort_path,
+        experiment_spec_path=None,
+    )
+    for evidence_id, kind, description, source_path in (
+        ("analysis_plan", "log", "Frozen analysis plan.", plan_path),
+        (
+            "manuscript_scaffold_bound",
+            "log",
+            "Bound manuscript.",
+            manuscript_path,
+        ),
+        ("run_status", "log", "Terminal run status.", status_path),
+    ):
+        evidence.register_file(
+            kind=kind,
+            description=description,
+            source_path=source_path,
+            evidence_id=evidence_id,
+            producer="pipeline",
+            generation_mode="system",
+        )
+    evidence.register_file(
+        kind="code",
+        description="Executed analysis script.",
+        source_path=script_path,
+        produced_by_step="01_model",
+        evidence_id="model_script",
+        producer="coder",
+        generation_mode="agent_generated",
+    )
+    evidence.register_file(
+        kind="statistic",
+        description="Machine-readable step summary.",
+        source_path=summary_path,
+        produced_by_step="01_model",
+        script_evidence_id="model_script",
+        evidence_id="model_summary",
+        producer="pipeline",
+        generation_mode="system",
+    )
+    evidence_payload = [record.model_dump(mode="json") for record in evidence.records()]
     manifest = {
         "checkpoint_sequence": final_sequence,
         "run_id": run_id,
+        "research_question": question,
+        "started_at": "2026-07-15T11:59:00+00:00",
         "finished_at": "2026-07-15T12:00:00+00:00",
         "context_path": "research_context.json",
         "plan_path": "analysis_plan.json",
@@ -210,8 +339,16 @@ def _write_cache_candidate(
         "artifact_paths": {"run_status": "run_status.json"},
         "readiness": gates,
         "writer_probe_mode": False,
-        "per_step_records": [{"step_id": "01_model", "status": step_status}],
-        "evidence": [{"evidence_id": "ev_1"}],
+        "per_step_records": [
+            {
+                "step_id": "01_model",
+                "status": step_status,
+                "evidence_ids": ["model_script", "model_summary"],
+                "script_evidence_id": "model_script",
+                "step_summary_evidence_id": "model_summary",
+            }
+        ],
+        "evidence": evidence_payload,
         "findings": [],
         "notes": notes,
     }
@@ -234,7 +371,7 @@ def _write_cache_candidate(
         manifest_path=str(run_dir / "manifest.json"),
         report_path=str(run_dir / "results_report.md"),
         manuscript_path=str(run_dir / "manuscript_scaffold_bound.md"),
-        evidence_count=1,
+        evidence_count=len(evidence_payload),
         findings_count=0,
     )
 
@@ -336,18 +473,17 @@ def test_cache_rejects_manifest_only_completed_run_without_authority(
 
 def test_cache_rejects_valid_run_under_wrong_scientific_identity(
     ra,
-    synthetic_cohort,
     tmp_path: Path,
 ) -> None:
     from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
-    result = _run(
-        ra,
-        cohort=synthetic_cohort,
-        workdir=tmp_path,
-        enable_cache=True,
-    )
+    result = _write_cache_candidate(ra, tmp_path)
     cache = PipelineCache(tmp_path / ".cache")
+    cache.record_hit(
+        "complete",
+        result,
+        scientific_identity={"question": "Cache candidate question."},
+    )
     index = cache.load_index()
     assert len(index) == 1
     cache_key = next(iter(index))
@@ -363,22 +499,21 @@ def test_cache_rejects_valid_run_under_wrong_scientific_identity(
 
 def test_cache_rejects_mutated_root_status_even_when_manifest_is_ready(
     ra,
-    synthetic_cohort,
     tmp_path: Path,
 ) -> None:
     from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
-    result = _run(
-        ra,
-        cohort=synthetic_cohort,
-        workdir=tmp_path,
-        enable_cache=True,
-    )
+    result = _write_cache_candidate(ra, tmp_path)
     run_dir = Path(result.workdir)
     capsule = json.loads(
         (run_dir / "run_input_capsule.json").read_text(encoding="utf-8")
     )
     cache = PipelineCache(tmp_path / ".cache")
+    cache.record_hit(
+        "complete",
+        result,
+        scientific_identity=capsule["scientific_identity"],
+    )
     cache_key = next(iter(cache.load_index()))
     (run_dir / "run_status.json").write_text(
         json.dumps({"status": "manuscript_ready", "gates": {}}),
@@ -396,21 +531,22 @@ def test_cache_rejects_mutated_root_status_even_when_manifest_is_ready(
 
 def test_cache_rejects_mutated_selected_evidence(
     ra,
-    synthetic_cohort,
     tmp_path: Path,
 ) -> None:
     from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
-    result = _run(
-        ra,
-        cohort=synthetic_cohort,
-        workdir=tmp_path,
-        enable_cache=True,
-    )
+    result = _write_cache_candidate(ra, tmp_path)
     run_dir = Path(result.workdir)
     capsule = json.loads(
         (run_dir / "run_input_capsule.json").read_text(encoding="utf-8")
     )
+    cache = PipelineCache(tmp_path / ".cache")
+    cache.record_hit(
+        "complete",
+        result,
+        scientific_identity=capsule["scientific_identity"],
+    )
+    cache_key = next(iter(cache.load_index()))
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     context_record = next(
         record
@@ -419,8 +555,6 @@ def test_cache_rejects_mutated_selected_evidence(
     )
     evidence_path = run_dir / context_record["relative_path"]
     evidence_path.write_text("{}", encoding="utf-8")
-    cache = PipelineCache(tmp_path / ".cache")
-    cache_key = next(iter(cache.load_index()))
 
     assert (
         cache.lookup(
@@ -435,6 +569,7 @@ def test_cache_rejects_mutated_selected_evidence(
     ("status", "notes", "step_status", "final_sequence", "partial_sequence"),
     [
         ("analysis_only", "complete", "ok", 2, 1),
+        ("human_review_rejected", "complete", "ok", 2, 1),
         ("manuscript_ready", "paused_after_analysis", "ok", 2, 1),
         ("manuscript_ready", "complete", "contract_failed", 2, 1),
         ("manuscript_ready", "complete", "ok", 1, 2),

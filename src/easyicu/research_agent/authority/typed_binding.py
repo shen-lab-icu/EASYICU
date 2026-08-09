@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
@@ -20,6 +21,7 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     merge_host_table_contract,
+    locked_primary_cohort_product,
     typed_product_binding_contract,
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
@@ -28,6 +30,11 @@ from ..contracts.artifact_consumption import (
     ArtifactConsumptionError,
     verify_artifact_consumption,
 )
+from ..contracts.typed_schema import (
+    merge_host_json_contract,
+    typed_json_structure_receipt,
+)
+from ..contracts.cohort_receipt import cohort_receipt_authorized_columns
 from ..authority.evidence_store import sha256_of_file
 from ..authority.development_projection import (
     DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE,
@@ -38,7 +45,12 @@ from ..authority.runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
 )
-from ..schema import AnalysisPlan, AnalysisStep, EvidenceRef
+from ..schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    ArtifactConsumptionContract,
+    EvidenceRef,
+)
 from .plan_scope import (
     _serializable_plan_scientific_scope_signature,
     _step_scientific_signature,
@@ -71,11 +83,60 @@ __all__ = [
     "_typed_parent_schema_context_block",
     "_write_host_input_binding_receipts",
     "_write_resolved_inputs_manifest",
+    "host_authorized_ambient_trajectory_entry",
+    "host_owns_input_binding_receipts",
+    "rank_scale_columns_entry",
+    "study_endpoint_declaration_entry",
 ]
+
+HOST_AUTHORIZED_AMBIENT_INPUTS_SCHEMA_VERSION = (
+    "easyicu.host_authorized_ambient_inputs/1"
+)
+
+STUDY_ENDPOINT_DECLARATION_SCHEMA_VERSION = "easyicu.study_endpoint_declaration/1"
+
+RANK_SCALE_COLUMNS_SCHEMA_VERSION = "easyicu.rank_scale_columns/1"
 
 _RESUME_TYPED_INPUT_BINDING_FINGERPRINT_SCHEMA_VERSION = (
     "easyicu.resume_typed_input_bindings/2"
 )
+
+
+_TYPED_INPUT_KEY_PATTERN = re.compile(r"[a-z][a-z0-9_]*:[a-z][a-z0-9_]*")
+
+
+def _neutral_consumption_contract(
+    *,
+    input_name: str,
+    binding: Mapping[str, Any],
+) -> Optional[ArtifactConsumptionContract]:
+    """Return the no-claim ``all_rows`` contract when one can be verified.
+
+    ``all_rows`` is the absence of a selection, not a selection: this module's
+    own rule is that a consumer with no explicit role selection must preserve
+    every row.  ``single_row`` and ``one_per_role`` are the modes that assert
+    something, and the host never compiles those -- a consumer that needs one
+    still fails closed against this receipt, because the mode will not match.
+
+    Returns ``None`` when the binding does not already carry what the receipt
+    is made of.  That is the pre-existing state, so nothing that works today
+    can start failing here.
+    """
+
+    if not _TYPED_INPUT_KEY_PATTERN.fullmatch(input_name or ""):
+        return None
+    product_contract = binding.get("product_contract")
+    if not isinstance(product_contract, Mapping):
+        return None
+    row_count = product_contract.get("row_count")
+    if isinstance(row_count, bool) or not isinstance(row_count, int) or row_count < 0:
+        return None
+    artifact_sha256 = str(binding.get("sha256") or "")
+    if len(artifact_sha256) != 64:
+        return None
+    if not Path(str(binding.get("absolute_path") or "")).is_file():
+        return None
+    return ArtifactConsumptionContract(input_key=input_name, mode="all_rows")
 
 
 def _attach_verified_consumption_contract(
@@ -89,13 +150,26 @@ def _attach_verified_consumption_contract(
         for contract in step.input_consumption_contracts
         if contract.input_key == input_name
     ]
-    if not contracts:
-        return binding
-    if len(contracts) != 1:  # schema validation already prevents this
+    if len(contracts) > 1:  # schema validation already prevents this
         raise ArtifactConsumptionError("ambiguous input consumption contract")
+    if contracts:
+        contract = contracts[0]
+    else:
+        # The Planner was being asked to transcribe a constant: every one of
+        # the 235 contracts declared across the recorded corpus is
+        # ``all_rows`` with no role column and no roles. When it omitted the
+        # line instead, the consumer died inside the container for want of a
+        # receipt the host could have compiled from bytes it had already
+        # verified. The declaration still wins wherever it is made.
+        contract = _neutral_consumption_contract(
+            input_name=input_name,
+            binding=binding,
+        )
+        if contract is None:
+            return binding
     updated = dict(binding)
     updated["consumption_contract"] = verify_artifact_consumption(
-        contract=contracts[0],
+        contract=contract,
         binding=binding,
     )
     return updated
@@ -861,6 +935,30 @@ def _resolve_typed_input_evidence(
     )
 
 
+#: Serializations a consumer can parse without being told any coordinates.
+#: Read off the recorded corpus rather than enumerated by intent: every typed
+#: input that ever bound without a compiled schema receipt was one of these.
+_SELF_DESCRIBING_TYPED_INPUT_SUFFIXES = frozenset({".json", ".jsonl"})
+
+
+def _binding_is_readable_without_a_schema_receipt(
+    verified_path: Path,
+    producer_contract: Optional[Mapping[str, Any]],
+) -> bool:
+    """Say whether a consumer can locate values without a host schema receipt.
+
+    Two ways, and only two.  The bytes describe themselves, or the producer
+    declared coordinates for them.  A binding that has neither reaches the
+    consumer as a path and a digest.
+    """
+
+    if Path(verified_path).suffix.lower() in _SELF_DESCRIBING_TYPED_INPUT_SUFFIXES:
+        return True
+    return bool(
+        producer_contract and any(key != "schema_version" for key in producer_contract)
+    )
+
+
 def _resolve_typed_artifact_evidence(
     *,
     input_name: str,
@@ -891,8 +989,15 @@ def _resolved_typed_input_binding(
     producer_step_records: Sequence[Mapping[str, Any]] = (),
     authoritative_cohort_path: Optional[Path] = None,
     development_sample: Optional[Any] = None,
+    locked_cohort_name: object = None,
+    refusals: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Build the exact, digest-verified runtime binding for one typed input."""
+    """Build the exact, digest-verified runtime binding for one typed input.
+
+    ``refusals`` collects a typed reason for the refusals this function can
+    explain. A caller that passes one gets a diagnosis it can hand back to the
+    Planner instead of the generic "no verified host binding".
+    """
 
     typed_product = _typed_input_product(input_name)
     if typed_product is None:
@@ -923,9 +1028,20 @@ def _resolved_typed_input_binding(
     verified_path = parent_verified_path
     selected_record = record
     declared_kind, product_name = typed_product
+    # The primary-cohort identity is decided by its owner, not by one spelling
+    # of it: ``cohort:analysis_set`` and the plan's own ``cohort:<cohort.name>``
+    # are the same locked population as ``analysis_cohort``.  Recognising only
+    # a subset here let typed consumers execute on the full cohort while the
+    # run still reported the development sample -- twice now, most recently on
+    # canary20's primary model (94,425 rows against a contract expecting the
+    # 1,000-row sample), so the reader must be the one that knows all three.
+    binds_primary_cohort = (
+        locked_primary_cohort_product(input_name, locked_cohort_name=locked_cohort_name)
+        is not None
+    )
     parent_already_development_scoped = (
         development_sample is not None
-        and product_name == "analysis_cohort"
+        and binds_primary_cohort
         and _producer_output_is_already_development_scoped(
             evidence_id=evidence_ref.evidence_id,
             producer_step_records=producer_step_records,
@@ -934,18 +1050,20 @@ def _resolved_typed_input_binding(
     )
     if (
         development_sample is not None
-        and product_name == "analysis_cohort"
+        and binds_primary_cohort
         and not parent_already_development_scoped
     ):
         projection = resolve_development_input_projection(
-            product_name=product_name,
+            declared_input=input_name,
             parent_evidence_id=parent_evidence_id,
             parent_sha256=parent_sha256,
             parent_produced_by_step=parent_produced_by_step,
+            parent_verified_path=parent_verified_path,
             evidence_records=evidence_records,
             run_dir=run_dir,
             authoritative_cohort_path=authoritative_cohort_path,
             development_sample=development_sample,
+            locked_cohort_name=locked_cohort_name,
         )
         if projection is None:
             return None
@@ -1021,9 +1139,79 @@ def _resolved_typed_input_binding(
         host_contract = merge_host_table_contract(producer_contract, schema_receipt)
         if projection is not None:
             host_contract.update(projection.row_identity_contract)
+    elif verified_path.suffix.lower() == ".json":
+        structure_receipt = typed_json_structure_receipt(
+            artifact_path=verified_path,
+            expected_sha256=binding["sha256"],
+        )
+        if structure_receipt is None:
+            # Unusually large or structurally unsafe JSON remains directly
+            # parseable by suffix, but no structural coordinates are promoted.
+            host_contract = dict(producer_contract or {})
+            host_contract.pop("json_structure", None)
+            host_contract["schema_version"] = "easyicu.host_typed_product.v1"
+        else:
+            host_contract = merge_host_json_contract(
+                producer_contract,
+                structure_receipt,
+            )
+    elif not _binding_is_readable_without_a_schema_receipt(
+        verified_path, producer_contract
+    ):
+        # A BINDING MUST TELL ITS CONSUMER WHERE TO LOOK, OR NOT BE PUBLISHED.
+        #
+        # The table branch above compiles a schema receipt; a self-describing
+        # serialization needs none because the reader parses the file itself.
+        # Anything else reaches the consumer as a path and a digest, and the
+        # generated code has no choice but to guess what is inside.
+        #
+        # MEASURED over every recorded resolved input on 2026-08-03 (1,071
+        # bindings): 992 resolved to physical tables and carried a full column /
+        # dtype / row-count receipt; 76 were self-describing JSON values; THREE
+        # were neither. Structured JSON now receives a host-sealed, value-free
+        # path/key receipt in the branch above. All three opaque files were the
+        # same pickle bound as
+        # ``artifact:trained_prediction_model``, and all three killed the step
+        # that consumed them -- each in a different way, because each generated
+        # script invented its own guess about the coordinates:
+        #
+        #   06_held_out_discrimination  ValueError: Prediction artifact contract
+        #                               must declare id_column and
+        #                               prediction_column
+        #   08_held_out_calibration     RuntimeError: does not contain a
+        #                               supported held-out prediction table or
+        #                               aligned prediction vectors
+        #   10_clinical_utility         RuntimeError: lacks consumption_contract
+        #
+        # Two further steps died as their collateral, so one unreadable binding
+        # cost five of thirteen steps.  The refusal is keyed on the
+        # SERIALIZATION rather than on the evidence kind or the product name:
+        # ``RUNTIME_TYPED_INPUT_EVIDENCE_KINDS`` maps four typed kinds onto
+        # ``log`` evidence, and what makes a binding readable is whether its
+        # bytes can be parsed without coordinates -- not what the registry
+        # labelled it.
+        if refusals is not None:
+            refusals.append(
+                {
+                    "input": str(input_name),
+                    "reason": "typed_input_serialization_is_unreadable",
+                    "produced_by_step": binding["produced_by_step"],
+                    "serialization": Path(verified_path).suffix.lower() or "(none)",
+                    "message": (
+                        f"{input_name} resolves to a "
+                        f"{Path(verified_path).suffix.lower() or 'suffixless'} file "
+                        "whose contents the host cannot describe, so a consumer "
+                        "cannot locate any value inside it. Declare this product "
+                        "as a table whose columns carry the values downstream "
+                        "steps read."
+                    ),
+                }
+            )
+        return None
     else:
-        # Non-table typed products retain their pre-existing contract and
-        # version. This patch adds physical table schema facts only.
+        # Readable: either the consumer parses the serialization directly or the
+        # producer declared its own coordinates. An empty contract here is
+        # honest, not missing; structured JSON was handled above.
         host_contract = dict(producer_contract or {})
         host_contract["schema_version"] = "easyicu.host_typed_product.v1"
     host_contract.update(
@@ -1133,6 +1321,376 @@ def _coder_authority_with_typed_parent_schema_receipts(
     return authority.append(_assignment_model_authority_context_block(bindings))
 
 
+def _validated_primary_cohort_execution_receipt(
+    receipt: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Return a JSON-safe, row-accounted host cohort execution receipt."""
+
+    try:
+        payload = json.loads(
+            json.dumps(
+                receipt,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("host cohort execution receipt must be finite JSON") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != "easyicu.primary_cohort_execution_prompt/1"
+    ):
+        raise ValueError("host cohort execution receipt schema is invalid")
+
+    def _is_sha256(value: Any) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        )
+
+    def _row_count(value: Any, *, field: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                f"host cohort execution receipt {field} must be a non-negative integer"
+            )
+        return value
+
+    if not _is_sha256(payload.get("cohort_definition_sha256")):
+        raise ValueError("host cohort execution receipt cohort digest is invalid")
+    raw_universe = payload.get("raw_universe")
+    analysis_cohort = payload.get("authoritative_analysis_cohort")
+    flow = payload.get("ordered_predicate_flow")
+    if (
+        not isinstance(raw_universe, dict)
+        or not isinstance(analysis_cohort, dict)
+        or not isinstance(flow, list)
+        or not flow
+        or any(not isinstance(row, dict) for row in flow)
+    ):
+        raise ValueError("host cohort execution receipt structure is invalid")
+    if not _is_sha256(raw_universe.get("sha256")) or not _is_sha256(
+        analysis_cohort.get("sha256")
+    ):
+        raise ValueError("host cohort execution receipt artifact digest is invalid")
+    for optional_digest in ("row_identity_sha256", "authority_sha256"):
+        value = analysis_cohort.get(optional_digest)
+        if value is not None and not _is_sha256(value):
+            raise ValueError(
+                f"host cohort execution receipt {optional_digest} is invalid"
+            )
+    identity_column = analysis_cohort.get("identity_column")
+    if identity_column is not None and (
+        not isinstance(identity_column, str) or not identity_column.strip()
+    ):
+        raise ValueError("host cohort execution receipt identity_column is invalid")
+
+    raw_rows = _row_count(raw_universe.get("rows"), field="raw rows")
+    analysis_rows = _row_count(analysis_cohort.get("rows"), field="analysis rows")
+    previous_remaining: Optional[int] = None
+    for index, row in enumerate(flow):
+        before = _row_count(row.get("n_before"), field="n_before")
+        excluded = _row_count(row.get("n_excluded"), field="n_excluded")
+        remaining = _row_count(row.get("n_remaining"), field="n_remaining")
+        resolved_column = row.get("resolved_column")
+        if resolved_column is not None and not (
+            isinstance(resolved_column, str)
+            and resolved_column.strip()
+            and ":" not in resolved_column
+        ):
+            raise ValueError("host cohort execution receipt resolved_column is invalid")
+        if row.get("step_order") != index:
+            raise ValueError("host cohort execution receipt step order is invalid")
+        if before != excluded + remaining:
+            raise ValueError("host cohort execution receipt partition is invalid")
+        if previous_remaining is not None and before != previous_remaining:
+            raise ValueError("host cohort execution receipt flow is discontinuous")
+        previous_remaining = remaining
+    if (
+        flow[0].get("predicate_kind") != "universe"
+        or flow[0]["n_before"] != raw_rows
+        or flow[0]["n_remaining"] != raw_rows
+        or previous_remaining != analysis_rows
+    ):
+        raise ValueError("host cohort execution receipt row accounting is invalid")
+    return payload
+
+
+def host_authorized_ambient_trajectory_entry(
+    trajectory: Any,
+) -> Optional[Dict[str, Any]]:
+    """Describe the ambient long trajectory in the step's own typed record.
+
+    The host stages this table, verifies it to a SHA-256, and hands its path
+    to every step through ``TRAJECTORY_PARQUET``.  It is deliberately NOT a
+    Planner-declared input: it has no name in the executable roster, and the
+    plan contract refuses a plan that lists one.  Until now that decision was
+    published to the agent only as prompt prose, while the one machine-readable
+    record the generated script opens and verifies -- ``resolved_inputs`` --
+    named the cohort and nothing else.
+
+    MEASURED: a step that declared ``manifest:trajectory_window_manifest``, and
+    whose prompt therefore carried the MANDATORY paragraph saying its windows
+    come from this table, wrote a correct loader for it and then discarded the
+    result::
+
+        # This step has only the typed analysis-cohort input.  Use the
+        # explicitly registered fixed-window columns and do not process the
+        # undeclared, potentially very large trajectory table.
+        trajectory = pd.DataFrame()
+
+    It then died on the empty frame.  The premise in that comment is what has
+    to go: the code trusted its typed record over the prose, and the record
+    agreed with it.  Naming the table here -- with the same relative path,
+    digest and role columns the cohort entry carries -- makes "undeclared"
+    false rather than arguing with it.
+
+    Returns ``None`` when no trajectory is bound, so a wide-column run and a
+    non-trajectory run produce a byte-identical manifest.
+    """
+
+    if trajectory is None:
+        return None
+    relative_path = str(getattr(trajectory, "trajectory_file", "") or "").strip()
+    digest = str(getattr(trajectory, "trajectory_sha256", "") or "").strip()
+    if not relative_path or not digest:
+        return None
+    columns = [
+        str(item)
+        for item in (getattr(trajectory, "trajectory_columns", None) or ())
+        if str(item).strip()
+    ]
+    roles = {
+        "identity_column": getattr(trajectory, "identity_column", None),
+        "time_column": getattr(trajectory, "time_column", None),
+        "concept_column": getattr(trajectory, "concept_column", None),
+        "numeric_value_column": getattr(trajectory, "numeric_value_column", None),
+        "text_value_column": getattr(trajectory, "text_value_column", None),
+    }
+    resolved_roles = {
+        key: str(value) for key, value in roles.items() if str(value or "").strip()
+    }
+    if not columns or len(resolved_roles) != len(roles):
+        return None
+    if any(value not in columns for value in resolved_roles.values()):
+        raise ValueError("trajectory role columns must exist in the bound table")
+    # `concepts` is published as "the whole vocabulary present in the table",
+    # which is a property of the TABLE, not of one step.  The per-step scoped
+    # projection narrows this list to the concepts the step's declared
+    # variables select -- and a LONG-bound run declares no trajectory
+    # variables at all, so that intersection is empty by construction.
+    #
+    # MEASURED: handed the scoped projection, this builder published
+    # `"concepts": []` under a sentence promising completeness. A record that
+    # asserts it is complete and lists nothing is worse than no record: it
+    # tells the agent, with the host's authority, that the table is empty.
+    # Refuse the scoped projection instead of narrowing the claim.
+    scope = str(getattr(trajectory, "projection_scope", "full") or "full")
+    if scope != "full":
+        raise ValueError(
+            "the ambient trajectory entry publishes the table's complete "
+            "vocabulary and must be built from the unscoped context, not "
+            f"from a {scope!r} projection"
+        )
+    concepts = [
+        str(item)
+        for item in (getattr(trajectory, "materialized_concepts", None) or ())
+        if str(item).strip()
+    ]
+    if not concepts:
+        return None
+    window = getattr(trajectory, "window", None)
+    entry: Dict[str, Any] = {
+        "access": "TRAJECTORY_PARQUET",
+        "relative_path": relative_path,
+        "sha256": digest,
+        "columns": columns,
+        "concepts": concepts,
+        "authorization": (
+            "Host-staged and host-verified. Reading this table in this step is "
+            "authorized: it is not an undeclared file. It is deliberately not a "
+            "Planner-declared input and must never be added to `inputs`. Select "
+            "concepts by exact string from `concepts`; that list is the whole "
+            "vocabulary present in the table."
+        ),
+    }
+    entry.update(resolved_roles)
+    for field, key in (
+        ("trajectory_rows", "row_count"),
+        ("time_unit", "time_unit"),
+        ("time_origin", "time_origin"),
+    ):
+        value = getattr(trajectory, field, None)
+        if value is not None and str(value).strip():
+            entry[key] = value
+    if isinstance(window, Mapping) and window:
+        entry["window"] = dict(window)
+    return entry
+
+
+#: Roles whose values are ranks, not measurements on an interval scale.
+#: Read from the context's own ``VariableRole`` vocabulary rather than from a
+#: list of score names: the dictionary already assigns the role, and a name list
+#: here would be a second, divergent opinion about what GCS is.
+_RANK_SCALE_VARIABLE_ROLES = frozenset({"ordinal_score"})
+
+
+def rank_scale_columns_entry(context: Any) -> Optional[Dict[str, Any]]:
+    """Publish which bound columns are ranks, and what their domain is.
+
+    MEASURED on the five never-passing tasks: 6 of 29 scientific blocking
+    findings are an ordinal score used as an interval measurement -- GCS as a
+    continuous propensity-score covariate and in standardized mean differences,
+    SOFA components passed to a summary that reports arithmetic means, per-hour
+    medians of ordinal levels emitted as fractional SOFA, and availability
+    counted from non-missingness with no level-domain check at all.
+
+    The concept layer already knows all of it. ``gcs_max`` arrives with
+    ``role="ordinal_score"``, ``valid_range=[3.0, 15.0]`` and the pitfall "GCS is
+    ordinal; do not take its mean. Report worst (min) or representative
+    (last/first) GCS."
+
+    The record the generated script opens knows none of it. ``product_contract``
+    is built from the artifact file alone, so it publishes closed value sets for
+    string categoricals (``adm``, ``sex``) and lists every ordinal in
+    ``numeric_columns`` beside lactate -- ``if name in numeric_set: continue`` is
+    the line an ordinal falls through. A script reading that record sees a
+    float32 and averages it.
+
+    Published as its own context-derived entry rather than merged into
+    ``product_contract``: that profile is a digest-verified receipt for the bytes
+    of one file, and a fact that came from the context does not belong inside it.
+    """
+
+    variables = getattr(context, "variables", None) or ()
+    columns: Dict[str, Any] = {}
+    for variable in variables:
+        role = getattr(getattr(variable, "role", None), "value", None) or getattr(
+            variable, "role", None
+        )
+        if str(role) not in _RANK_SCALE_VARIABLE_ROLES:
+            continue
+        name = str(getattr(variable, "name", "") or "").strip()
+        if not name:
+            continue
+        entry: Dict[str, Any] = {"role": str(role)}
+        # The declared plausible domain and the domain actually present are
+        # different facts and both matter: the first says which values are legal
+        # levels, the second says which of them this cohort contains. A check
+        # written against only the second passes a cohort that happens to be
+        # clean and misses the invalid level the audit asked about.
+        valid_range = getattr(variable, "valid_range", None)
+        if valid_range:
+            entry["valid_range"] = [float(value) for value in valid_range]
+        observed = getattr(variable, "observed_domain", None)
+        if isinstance(observed, Mapping):
+            levels = observed.get("levels")
+            if isinstance(levels, list) and levels:
+                entry["observed_levels"] = list(levels)
+            for key in ("min", "max", "n_unique"):
+                if observed.get(key) is not None:
+                    entry[f"observed_{key}"] = observed[key]
+        aggregation = getattr(variable, "aggregation_default", None)
+        # ``.value`` before ``str``: an enum stringifies to "AggregationRule.
+        # MAX_LAST", which is a Python identifier and not the vocabulary the rest
+        # of the record uses. A reader matching it against the aggregation names
+        # it knows would find no match and fall back to choosing one.
+        aggregation = getattr(aggregation, "value", aggregation)
+        if aggregation is not None and str(aggregation).strip():
+            entry["aggregation_default"] = str(aggregation)
+        columns[name] = entry
+    if not columns:
+        return None
+    return {
+        "columns": columns,
+        "authorization": (
+            "These bound columns carry RANKS, not interval measurements, as "
+            "declared by the concept layer -- they appear among the numeric "
+            "columns of the artifact profile because their storage dtype is "
+            "numeric, which is a fact about storage and not about the scale. "
+            "Summarise them rank-preservingly (median, quantile, worst, "
+            "first/last, or a declared level distribution); an arithmetic mean "
+            "or any statistic that can land between two levels is not a value "
+            "of this scale. A value outside the declared domain is an invalid "
+            "level and must stop the step, not be counted as available. Using "
+            "one as a numeric model covariate is permitted only if the script's "
+            "own output states that coding."
+        ),
+    }
+
+
+def study_endpoint_declaration_entry(endpoint: Any) -> Optional[Dict[str, Any]]:
+    """Publish the plan's typed endpoint in the step's own machine-readable record.
+
+    The endpoint is the other half of what the cohort declaration says: the
+    cohort names who is counted, the endpoint names what happened to them and
+    when follow-up ended.  ``EndpointSpec`` has carried ``time_column``,
+    ``time_origin`` and ``censoring_rule`` for some time, with a validator that
+    refuses to infer any of them, and the typed context already verifies the
+    columns it names against the sealed cohort.
+
+    MEASURED over 291 recorded runs: nothing ever declared one.  What the
+    generated code got instead was the follow-up rule as prose in one step's
+    ``icu_rule_refs`` -- written in 3 of 13 survival plans, absent from the
+    other 10 -- so it reached for whatever time column it could find.  Across
+    the 11 runs with recovered source that produced SEVEN distinct combinations
+    of ``{los_icu, los_hosp, death_time, discharge_time, END_HOURS}``.  The
+    concept auditor then blocked steps for contradicting a "planner-required ICU
+    discharge time ``los_icu``" that appears in no plan for that task -- the
+    plans that stated anything stated hospital discharge.  Neither side was
+    reading a declaration, because there was none to read.
+
+    Published here rather than in the Coder prompt because the prompt is where
+    the losing copy already lived: the generated script opens
+    ``resolved_inputs``, hash-verifies it, and trusts it over prose.  The Coder
+    prompt is also 152 bytes from its hard budget on the widest step, so a
+    paragraph there would evict typed context to restate what a record can hold.
+    """
+
+    if endpoint is None:
+        return None
+    kind = str(getattr(endpoint, "kind", "") or "").strip()
+    name = str(getattr(endpoint, "name", "") or "").strip()
+    if not kind or not name:
+        return None
+    entry: Dict[str, Any] = {
+        "name": name,
+        "kind": kind,
+        "authorization": (
+            "The study's endpoint as DECLARED by the locked plan, not as "
+            "inferred. Implement exactly these fields: they are the study "
+            "definition, and a step that substitutes a different time column, "
+            "origin, censoring rule or level set is analysing a different study "
+            "than the one under review. If a field this step needs is absent "
+            "here, stop and report that rather than choosing one. Before "
+            "building a risk set or a landmark outcome from event_column and "
+            "time_column, reconcile the pair: an event whose time is missing or "
+            "non-finite cannot be placed on the follow-up axis, and comparing it "
+            "against a horizon silently recodes it to 'no event'. A censored row "
+            "with no event time is the expected shape and must not be excluded "
+            "on that basis. `event_time_reconciliation_receipt` in "
+            "easyicu.research_agent.methods.survival_inputs checks exactly this "
+            "against these declared levels and returns counts only."
+        ),
+    }
+    for field in (
+        "absence_semantics",
+        "event_column",
+        "time_column",
+        "time_origin",
+        "censoring_rule",
+    ):
+        value = getattr(endpoint, field, None)
+        if value is not None and str(value).strip():
+            entry[field] = str(value)
+    levels = getattr(endpoint, "levels", None)
+    if levels is not None:
+        entry["levels"] = list(levels)
+    return entry
+
+
 def _write_resolved_inputs_manifest(
     *,
     run_dir: Path,
@@ -1141,6 +1699,10 @@ def _write_resolved_inputs_manifest(
     bindings: Mapping[str, Mapping[str, Any]],
     context_path: Optional[Path] = None,
     raw_input_contracts: Optional[Mapping[str, Any]] = None,
+    host_verified_cohort_execution_receipt: Optional[Mapping[str, Any]] = None,
+    host_authorized_ambient_trajectory: Optional[Mapping[str, Any]] = None,
+    study_endpoint: Optional[Mapping[str, Any]] = None,
+    rank_scale_columns: Optional[Mapping[str, Any]] = None,
 ) -> Path:
     """Persist the step's authority capsule outside its writable overlay."""
 
@@ -1160,8 +1722,25 @@ def _write_resolved_inputs_manifest(
             raise ValueError(
                 "planner_declared_inputs must contain only non-empty strings"
             )
+        # A name repeated in this list is not ambiguous, so refusing it buys
+        # nothing and costs the run.  Both copies index the same entry of
+        # ``bindings`` / ``contracts`` and resolve to the same column, and both
+        # readers below (``declared_typed_inputs`` and ``authorized_raw_inputs``)
+        # are sets, so a repeat already collapses before anything compares it.
+        #
+        # The host manufactures the repeat itself.  ``close_measurement_
+        # companion_inputs`` appends registered ``_measured``/``_n`` companions
+        # to a step's public inputs; a later replan rewrites that step's inputs,
+        # keeps the appended tail verbatim and re-declares one of the same names
+        # in its own body.  A real run died exactly there -- ``lact_n`` absent in
+        # revision 1, appended by the closure in revision 2, declared a second
+        # time by revision 3 -- and the refusal killed the run mid-plan.
+        #
+        # Deduplicating here also makes the uniqueness precondition that
+        # ``typed_input_receipt`` re-checks on the written manifest true by
+        # construction rather than by hope; that reader stays as it is.
         if item in seen_declared_inputs:
-            raise ValueError("planner_declared_inputs must not contain duplicates")
+            continue
         seen_declared_inputs.add(item)
         declared_inputs.append(item)
     declared_typed_inputs = {
@@ -1183,24 +1762,101 @@ def _write_resolved_inputs_manifest(
         "planner_declared_inputs": declared_inputs,
         "inputs": {key: dict(value) for key, value in bindings.items()},
     }
+    validated_cohort_receipt: Optional[Dict[str, Any]] = None
+    receipt_raw_inputs: Set[str] = set()
+    if host_verified_cohort_execution_receipt is not None:
+        validated_cohort_receipt = _validated_primary_cohort_execution_receipt(
+            host_verified_cohort_execution_receipt
+        )
+        # Both fields, from the one declaration the producer also reads.  This
+        # side used to take ``resolved_column`` alone while
+        # ``raw_contract_inputs_for_step`` already authorized the event-time
+        # column too, so a plan whose cohort predicate carried a time window
+        # produced contracts this check called unauthorized and killed the run
+        # at its first step.
+        receipt_raw_inputs = cohort_receipt_authorized_columns(
+            validated_cohort_receipt["ordered_predicate_flow"]
+        )
     if raw_input_contracts is not None:
         raw_payload = dict(raw_input_contracts)
         contracts = raw_payload.get("contracts")
-        declared_raw_inputs = {item for item in declared_inputs if ":" not in item}
+        authorized_raw_inputs = {
+            item for item in declared_inputs if ":" not in item
+        } | receipt_raw_inputs
         if (
             raw_payload.get("schema_version")
             != "easyicu.resolved_raw_input_contracts/1"
             or not isinstance(contracts, Mapping)
-            or set(contracts) != declared_raw_inputs
+            or set(contracts) != authorized_raw_inputs
         ):
             raise ValueError(
-                "raw input contracts must exactly match Planner-declared raw inputs"
+                "raw input contracts must exactly match Planner-declared or "
+                "host-receipt raw inputs"
             )
         declared_digest = str(raw_payload.pop("contracts_sha256", "") or "")
         if declared_digest != canonical_sha256(raw_payload):
             raise ValueError("raw input contract digest mismatch")
         raw_payload["contracts_sha256"] = declared_digest
         payload["raw_input_contracts"] = raw_payload
+    if validated_cohort_receipt is not None:
+        payload["host_verified_cohort_execution_receipt"] = validated_cohort_receipt
+    if host_authorized_ambient_trajectory is not None:
+        ambient = dict(host_authorized_ambient_trajectory)
+        ambient_relative = str(ambient.get("relative_path", "") or "")
+        ambient_path = (Path(run_dir).resolve() / ambient_relative).resolve()
+        try:
+            ambient_path.relative_to(Path(run_dir).resolve())
+        except ValueError as exc:
+            raise ValueError(
+                "ambient trajectory path must be contained by run_dir"
+            ) from exc
+        if not ambient_path.is_file():
+            raise ValueError("ambient trajectory path must name an existing file")
+        ambient_digest = str(ambient.get("sha256", "") or "")
+        if len(ambient_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in ambient_digest
+        ):
+            raise ValueError("ambient trajectory sha256 is invalid")
+        payload["host_authorized_ambient_inputs"] = {
+            "schema_version": HOST_AUTHORIZED_AMBIENT_INPUTS_SCHEMA_VERSION,
+            "trajectory": ambient,
+        }
+    if study_endpoint is not None:
+        declaration = dict(study_endpoint)
+        # The two fields that make this a declaration rather than a label. A
+        # record naming an endpoint whose kind is unknown would put the reader
+        # straight back into inferring one from the column name.
+        for required in ("name", "kind"):
+            if not str(declaration.get(required, "") or "").strip():
+                raise ValueError(f"study endpoint declaration must carry {required}")
+        # A time axis without its origin is the defect this record exists to
+        # close: a duration and a timestamp are indistinguishable by dtype, and
+        # a step that guesses wrong reports follow-up from the wrong zero.
+        if declaration.get("time_column") and not str(
+            declaration.get("time_origin", "") or ""
+        ).strip():
+            raise ValueError(
+                "a study endpoint declaring time_column must declare time_origin"
+            )
+        payload["study_endpoint"] = {
+            "schema_version": STUDY_ENDPOINT_DECLARATION_SCHEMA_VERSION,
+            **declaration,
+        }
+    if rank_scale_columns is not None:
+        ranks = dict(rank_scale_columns)
+        declared_columns = ranks.get("columns")
+        # An entry naming no column would publish "nothing here is a rank" with
+        # the host's authority -- the same shape as the ambient-trajectory entry
+        # that shipped `"concepts": []` under a promise of completeness. Refuse
+        # it; the builder returns None when there is nothing to declare.
+        if not isinstance(declared_columns, Mapping) or not declared_columns:
+            raise ValueError(
+                "a rank-scale declaration must name at least one column"
+            )
+        payload["rank_scale_columns"] = {
+            "schema_version": RANK_SCALE_COLUMNS_SCHEMA_VERSION,
+            **ranks,
+        }
     if context_path is not None:
         resolved_context = Path(context_path).resolve()
         run_root = Path(run_dir).resolve()
@@ -1222,6 +1878,40 @@ def _write_resolved_inputs_manifest(
     )
     temporary_path.replace(manifest_path)
     return manifest_path
+
+
+def host_owns_input_binding_receipts(
+    *,
+    deterministic_standard_executor_used: bool,
+    deterministic_fallback_used: bool,
+    sealed_renderer_repair: bool,
+) -> bool:
+    """Whether the HOST, not the generated script, must write the receipts.
+
+    Exactly one rule, stated once, for every producer whose code the host
+    rendered itself: a registered standard executor, one of the deterministic
+    fallback runners (robustness/sensitivity, absolute-risk context,
+    missingness audit), or a sealed renderer repair.  None of them can be
+    asked to manufacture a receipt for its own input -- it would be attesting
+    to itself -- so ``_write_host_input_binding_receipts`` records it from the
+    authority bindings instead.
+
+    The execute layer used to spell this rule out at each call site, and the
+    two copies disagreed: the site that runs BEFORE the contract gate omitted
+    ``deterministic_fallback_used``, and the site that includes it runs AFTER
+    the gate.  A fallback runner therefore had its receipts written only at a
+    point it could never reach, because the gate had already refused the step
+    for the absence of exactly those receipts.  Measured over every recorded
+    run: 12 of 18 deterministic-fallback steps were refused that way and 11
+    of the 12 died; the single survivor was a Coder rewrite that hand-built
+    the receipt block.
+    """
+
+    return bool(
+        deterministic_standard_executor_used
+        or deterministic_fallback_used
+        or sealed_renderer_repair
+    )
 
 
 def _write_host_input_binding_receipts(
@@ -1314,6 +2004,7 @@ def _resume_typed_input_bindings(
                 f"typed input {input_name} could not be resolved: "
                 + json.dumps(reason, sort_keys=True, default=str)
             )
+        binding_refusals: List[Dict[str, Any]] = []
         binding = _resolved_typed_input_binding(
             input_name=input_name,
             evidence_ref=ref,
@@ -1322,8 +2013,15 @@ def _resume_typed_input_bindings(
             producer_step_records=trusted_step_records,
             authoritative_cohort_path=cohort_path,
             development_sample=development_sample,
+            locked_cohort_name=getattr(getattr(plan, "cohort", None), "name", None),
+            refusals=binding_refusals,
         )
         if binding is None:
+            if binding_refusals:
+                raise ValueError(
+                    f"typed input {input_name} has no verified host binding: "
+                    + json.dumps(binding_refusals[0], sort_keys=True, default=str)
+                )
             raise ValueError(f"typed input {input_name} has no verified host binding")
         try:
             binding = _attach_verified_consumption_contract(
@@ -1437,6 +2135,7 @@ class TypedBindingResolver:
                     seen.add(ref.evidence_id)
                     typed_evidence_ids.append(ref.evidence_id)
                 if ref is not None:
+                    binding_refusals: List[Dict[str, Any]] = []
                     binding = _resolved_typed_input_binding(
                         input_name=value,
                         evidence_ref=ref,
@@ -1445,10 +2144,16 @@ class TypedBindingResolver:
                         producer_step_records=records_snapshot,
                         authoritative_cohort_path=self.authoritative_cohort_path,
                         development_sample=self.development_sample,
+                        locked_cohort_name=getattr(
+                            getattr(plan, "cohort", None), "name", None
+                        ),
+                        refusals=binding_refusals,
                     )
                     if binding is None:
                         failures.append(
-                            {
+                            binding_refusals[0]
+                            if binding_refusals
+                            else {
                                 "input": value,
                                 "reason": "verified_binding_unavailable",
                             }

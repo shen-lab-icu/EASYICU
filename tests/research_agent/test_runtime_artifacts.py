@@ -317,3 +317,100 @@ def test_checkpoint_sequence_outranks_mtime_for_current_authority(tmp_path: Path
     assert authority is not None
     assert authority["checkpoint_sequence"] == 4
     assert authority["per_step_records"][0]["status"] == "contract_failed"
+
+
+def test_final_manifest_external_history_is_digest_verified_and_hydrated(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        STEP_ATTEMPT_HISTORY_REF_SCHEMA,
+        encode_step_attempt_history_jsonl,
+        load_run_artifact_authority,
+        write_run_checkpoint,
+    )
+
+    history = [
+        {"step_id": "01_model", "status": "candidate_checkpointed", "large": "x" * 500},
+        {"step_id": "01_model", "status": "ok", "large": "y" * 500},
+    ]
+    evidence = EvidenceStore(tmp_path)
+    record = evidence.register_text(
+        kind="log",
+        description="External append-only step attempt history.",
+        text=encode_step_attempt_history_jsonl(history),
+        filename="step_attempt_history.jsonl",
+        evidence_id="step_attempt_history",
+        producer="pipeline",
+        generation_mode="system",
+        publish_aliases=False,
+    )
+    write_run_checkpoint(
+        tmp_path / "manifest.json",
+        {
+            "per_step_records": [history[-1]],
+            "step_attempt_history": [],
+            "step_attempt_history_ref": {
+                "schema_version": STEP_ATTEMPT_HISTORY_REF_SCHEMA,
+                "format": "jsonl",
+                "evidence_id": record.evidence_id,
+                "relative_path": record.relative_path,
+                "sha256": record.sha256,
+                "record_count": len(history),
+            },
+            "evidence": [record.model_dump(mode="json")],
+        },
+    )
+
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["step_attempt_history"] == []
+    authority = load_run_artifact_authority(tmp_path)
+    assert authority is not None
+    assert authority["step_attempt_history"] == history
+
+
+def test_external_history_tampering_fails_closed(tmp_path: Path) -> None:
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        STEP_ATTEMPT_HISTORY_REF_SCHEMA,
+        RunArtifactAuthorityError,
+        encode_step_attempt_history_jsonl,
+        load_run_artifact_authority,
+        write_run_checkpoint,
+    )
+
+    history = [{"step_id": "01_model", "status": "ok"}]
+    evidence = EvidenceStore(tmp_path)
+    record = evidence.register_text(
+        kind="log",
+        description="External append-only step attempt history.",
+        text=encode_step_attempt_history_jsonl(history),
+        filename="step_attempt_history.jsonl",
+        evidence_id="step_attempt_history",
+        producer="pipeline",
+        generation_mode="system",
+        publish_aliases=False,
+    )
+    write_run_checkpoint(
+        tmp_path / "manifest.json",
+        {
+            "per_step_records": history,
+            "step_attempt_history": [],
+            "step_attempt_history_ref": {
+                "schema_version": STEP_ATTEMPT_HISTORY_REF_SCHEMA,
+                "format": "jsonl",
+                "evidence_id": record.evidence_id,
+                "relative_path": record.relative_path,
+                "sha256": record.sha256,
+                "record_count": 1,
+            },
+            "evidence": [record.model_dump(mode="json")],
+        },
+    )
+    (tmp_path / record.relative_path).write_text(
+        '{"step_id":"01_model","status":"forged"}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RunArtifactAuthorityError, match="digest verification"):
+        load_run_artifact_authority(tmp_path)

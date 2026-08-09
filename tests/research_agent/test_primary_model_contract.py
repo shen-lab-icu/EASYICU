@@ -698,40 +698,47 @@ def test_primary_model_contract_blocks_planner_requirement_field_drift(
 
 def test_plan_normalizer_preserves_typed_model_requirements() -> None:
     from easyicu.research_agent.agents.core import _normalise_plan_payload
-
-    payload, dropped = _normalise_plan_payload(
-        {
-            "research_question": "Is an exposure associated with an outcome?",
-            "steps": [
-                {
-                    "step_id": "01_model",
-                    "planned_analysis_role": "primary",
-                    "intent": "Fit the planner-selected model.",
-                    "method": "adjusted_association_models",
-                    "expected_outputs": ["table:adjusted_association_estimates"],
-                    "model_requirements": [
-                        {
-                            "requirement_id": "primary_model",
-                            "outcome": "outcome",
-                            "outcome_type": "binary",
-                            "method_family": "logistic_regression",
-                            "exposure_source": "exposure",
-                            "analysis_role": "primary",
-                            "analysis_set": "complete_case",
-                            "required_for_step_success": True,
-                            "case_hint": "must be discarded",
-                        }
-                    ],
-                }
-            ],
-        }
+    from easyicu.research_agent.agents.plan_payload import (
+        PlannerScientificProjectionError,
     )
+
+    raw = {
+        "research_question": "Is an exposure associated with an outcome?",
+        "steps": [
+            {
+                "step_id": "01_model",
+                "planned_analysis_role": "primary",
+                "intent": "Fit the planner-selected model.",
+                "method": "adjusted_association_models",
+                "expected_outputs": ["table:adjusted_association_estimates"],
+                "model_requirements": [
+                    {
+                        "requirement_id": "primary_model",
+                        "outcome": "outcome",
+                        "outcome_type": "binary",
+                        "method_family": "logistic_regression",
+                        "exposure_source": "exposure",
+                        "analysis_role": "primary",
+                        "analysis_set": "complete_case",
+                        "required_for_step_success": True,
+                        "case_hint": "must be discarded",
+                    }
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(PlannerScientificProjectionError, match="case_hint"):
+        _normalise_plan_payload(raw)
+
+    del raw["steps"][0]["model_requirements"][0]["case_hint"]
+    payload, dropped = _normalise_plan_payload(raw)
 
     plan = AnalysisPlan.model_validate(payload)
     requirement = plan.steps[0].model_requirements[0]
     assert requirement.requirement_id == "primary_model"
     assert requirement.required_for_step_success is True
-    assert dropped["model_requirements"] == ["primary_model:case_hint"]
+    assert dropped["model_requirements"] == []
 
 
 @pytest.mark.parametrize(
@@ -1462,6 +1469,57 @@ def test_primary_model_contract_detects_unreported_zero_event_category(
     assert "zero_cell_separation_requires_penalized_fit" in issues
 
 
+def test_numeric_covariate_availability_term_is_not_a_categorical_encoding():
+    frame = pd.DataFrame(
+        {
+            "death": [0, 1] * 20,
+            "charlson_max": list(range(20)) * 2,
+        }
+    )
+    frame.loc[frame["charlson_max"].isin([17, 18]), "death"] = 0
+    coefficients = pd.DataFrame(
+        [
+            {
+                "source_variable": "charlson_max",
+                "term": "charlson_max",
+                "_term_role": "adjustment",
+            },
+            {
+                "source_variable": "charlson_max",
+                "term": "charlson_missing",
+                "_term_role": "availability",
+            },
+        ]
+    )
+    coefficients = pd.concat([coefficients, coefficients], ignore_index=True)
+    contract = {
+        "baseline_missing_policy": "explicit_missing_category",
+        "analysis_set": "source_aware",
+    }
+
+    cells = PrimaryModelContractValidator._categorical_zero_event_cells(
+        frame=frame,
+        outcome="death",
+        covariates=["charlson_max"],
+        contract=contract,
+        coefficient_rows=coefficients,
+    )
+    assert cells == []
+
+    encoded = coefficients.assign(
+        term=["charlson_max[T.17]", "charlson_max[T.18]"] * 2,
+        _term_role=["adjustment"] * 4,
+    )
+    encoded_cells = PrimaryModelContractValidator._categorical_zero_event_cells(
+        frame=frame,
+        outcome="death",
+        covariates=["charlson_max"],
+        contract=contract,
+        coefficient_rows=encoded,
+    )
+    assert {cell["level"] for cell in encoded_cells} >= {"17", "18"}
+
+
 def test_primary_model_contract_replays_actual_adjustment_zero_cell_without_prior_plan(
     tmp_path: Path,
 ):
@@ -1524,6 +1582,30 @@ def test_primary_model_contract_blocks_invalid_fitted_term_interval(
     )
 
     assert "fitted_term_missing_or_invalid_interval" in _issue_types(findings)
+
+
+def test_primary_model_contract_blocks_interval_method_label_mismatch(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    table_path = out_dir / "model_coefficients.csv"
+    table = pd.read_csv(table_path)
+    table.loc[
+        table["model_id"].eq("lab_source_aware"),
+        "interval_method",
+    ] = "wald_95_percent"
+    table.to_csv(table_path, index=False)
+
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(),
+        step_summary={"model_contracts": _contracts()},
+        context=_context(),
+        completed_step_records=_prior_records(),
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    assert "interval_method_contract_mismatch" in _issue_types(findings)
 
 
 def test_primary_model_contract_allows_explicit_reference_row_without_interval(
@@ -1949,6 +2031,7 @@ def test_coder_prompt_declares_primary_model_canonical_enums() -> None:
     assert 'keep `exposure_role="primary"`' in prompt
     assert "use and report `alpha <= 1/n`" in prompt
     assert "planner-owned `model_requirements`" in prompt
+    assert "`*_n` companion is a non-negative observation count" in prompt
     assert "matching `requirement_id`" in prompt
     assert "`fit_failure_reason`" in prompt
     assert "not a generic contract for" in prompt

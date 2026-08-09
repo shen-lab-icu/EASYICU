@@ -87,6 +87,39 @@ def test_openai_client_disables_sdk_retries(monkeypatch, ra):
     assert client._max_retries == 5
 
 
+def test_openai_client_can_freeze_transport_environment(monkeypatch, ra):
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    captured = {}
+
+    class _OpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.chat = SimpleNamespace(completions=SimpleNamespace())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+    monkeypatch.setenv("EASYICU_LLM_TIMEOUT", "999")
+    monkeypatch.setenv("EASYICU_LLM_MAX_RETRIES", "77")
+    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://mutated.example/v1")
+
+    client = OpenAIClient(
+        model="frozen-model",
+        api_key="test-key",
+        base_url="https://frozen.example/v1",
+        request_timeout=13.0,
+        max_retries=2,
+        stream_enabled=False,
+        allow_environment_overrides=False,
+    )
+
+    assert client._timeout == 13.0
+    assert client._max_retries == 2
+    assert client._stream_enabled is False
+    assert client._resolved_base_url == "https://frozen.example/v1"
+    assert str(captured["base_url"]) == "https://frozen.example/v1"
+
+
 def test_unmanaged_external_client_is_rejected_before_transport(ra):
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
@@ -186,13 +219,13 @@ def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
             assert "stream_options" not in kwargs
             return stream
 
+    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
     client = _mock_transport_client(
         monkeypatch,
         OpenAIClient,
         model="gpt-5.6-luna",
         completions=_Completions(),
     )
-    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
 
     out, call_usage = client.complete_with_usage(
         [LLMMessage(role="user", content="return json")]
@@ -258,13 +291,13 @@ def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):
         def create(self, **kwargs):
             return stream
 
+    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
     client = _mock_transport_client(
         monkeypatch,
         OpenAIClient,
         model="gpt-5.6-luna",
         completions=_Completions(),
     )
-    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
 
     with pytest.raises(ValueError, match="broken stream"):
         client.complete([LLMMessage(role="user", content="return json")])
@@ -316,6 +349,12 @@ def test_openai_client_supports_local_noauth_proxy_mode(monkeypatch, ra):
                     "completion_tokens": 4,
                     "total_tokens": 16,
                 },
+                "model": "provider/served-model",
+                "easyicu_model_provenance": {
+                    "requested_model": "configured-model",
+                    "attempted_model": "fallback-model",
+                    "fallback_used": True,
+                },
             }
 
     class _HttpClient:
@@ -350,11 +389,51 @@ def test_openai_client_supports_local_noauth_proxy_mode(monkeypatch, ra):
     assert http_client.calls[0][0] == "/chat/completions"
     assert http_client.calls[0][1]["model"] == "gpt-5.4"
     assert http_client.calls[0][1]["seed"] == 7
+    assert http_client.calls[0][1]["max_completion_tokens"] == 2048
+    assert "max_tokens" not in http_client.calls[0][1]
     assert client.last_usage == {
         "prompt_tokens": 12,
         "completion_tokens": 4,
         "total_tokens": 16,
+        "actual_model": "provider/served-model",
+        "model_provenance": {
+            "requested_model": "configured-model",
+            "attempted_model": "fallback-model",
+            "fallback_used": True,
+        },
     }
+
+
+def test_openai_client_uses_legacy_token_cap_for_non_reasoning_model(monkeypatch, ra):
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+
+    captured = {}
+
+    class _Completions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            message = SimpleNamespace(content="OK")
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=message, finish_reason="stop")],
+                usage=None,
+            )
+
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-4o-mini",
+        completions=_Completions(),
+    )
+
+    assert (
+        client.complete(
+            [LLMMessage(role="user", content="return OK")],
+            max_tokens=77,
+        )
+        == "OK"
+    )
+    assert captured["max_tokens"] == 77
+    assert "max_completion_tokens" not in captured
 
 
 def test_openai_client_zero_manual_retry_budget_makes_one_attempt(monkeypatch, ra):
@@ -450,7 +529,15 @@ def test_openai_client_ignores_invalid_retry_after_values(monkeypatch, ra, retry
     assert sleeps == [5.0]
 
 
-def test_openai_client_transport_retry_consumes_provider_budget(monkeypatch, ra):
+def test_openai_client_transport_retry_costs_one_slot_not_two(monkeypatch, ra):
+    """A 500 that is retried and then answered is one ask, charged once.
+
+    Reversed on 2026-08-04. The step allowance is funded in logical attempts,
+    so charging the retry spent one of the code repairs the configuration had
+    just certified. Rationale and the real-run evidence:
+    ``test_a_retried_request_is_not_a_second_repair.py``.
+    """
+
     from easyicu.research_agent.providers.llm import LLMMessage
     from easyicu.research_agent.authority.provider_budget import (
         StepProviderCallBudget,
@@ -471,11 +558,17 @@ def test_openai_client_transport_retry_consumes_provider_budget(monkeypatch, ra)
     )
 
     assert result == "OK"
-    assert completions.calls == 2
-    assert budget.categories == ("coder", "coder")
+    assert completions.calls == 2, "the transport still retried"
+    assert budget.categories == ("coder",), "but the step was asked once"
 
 
-def test_openai_client_does_not_sleep_or_call_over_provider_budget(monkeypatch, ra):
+def test_openai_client_retries_the_ask_the_step_already_paid_for(monkeypatch, ra):
+    """An exhausted allowance no longer cancels retries of a paid call.
+
+    It never was the retry bound: ``manual_attempts`` is, and it still is.
+    What the allowance gates is the NEXT ask, asserted at the end.
+    """
+
     from easyicu.research_agent.providers.llm import LLMMessage
     from easyicu.research_agent.authority.provider_budget import (
         ProviderCallBudgetExhausted,
@@ -491,15 +584,18 @@ def test_openai_client_does_not_sleep_or_call_over_provider_budget(monkeypatch, 
     monkeypatch.delenv("EASYICU_LLM_STREAM", raising=False)
     monkeypatch.setattr("time.sleep", sleeps.append)
 
-    with pytest.raises(ProviderCallBudgetExhausted):
-        complete_with_provider_budget(
-            budget=budget,
-            category="coder",
-            call=lambda: client.complete(
-                [LLMMessage(role="user", content="return OK")]
-            ),
-        )
+    result = complete_with_provider_budget(
+        budget=budget,
+        category="coder",
+        call=lambda: client.complete([LLMMessage(role="user", content="return OK")]),
+    )
 
-    assert completions.calls == 1
-    assert budget.categories == ("coder",)
-    assert sleeps == []
+    # The budget was down to its last slot and the first attempt returned 504.
+    # Before, that cancelled the retry and the step got nothing for what it had
+    # already paid. Now the paid ask is allowed to finish, and it succeeds.
+    assert result == "OK"
+    assert completions.calls > 1, "the paid ask was allowed to retry"
+    assert budget.categories == ("coder",), "and cost exactly one slot"
+    assert sleeps, "the retry backed off rather than hammering"
+    with pytest.raises(ProviderCallBudgetExhausted):
+        budget.consume("coder")

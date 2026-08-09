@@ -27,18 +27,21 @@ Environment variables:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hmac
 import ipaddress
 import json
 import os
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
+from contextlib import asynccontextmanager
 from typing import Any, Iterator, Sequence
 
 import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from easyicu.webserver.host_security import AllowedHostsMiddleware
@@ -117,8 +120,59 @@ MODEL_ALIASES = {
     "hosted-default": HOSTED_DEFAULT_MODEL,
 }
 
+# Per-request size ceilings. A requests/minute limit alone does not bound cost:
+# 20 requests can each carry a 50 MB body, 5,000 messages and max_tokens=200000.
+# These bound the *shape* of a single request; the rate limit bounds frequency.
+HOSTED_MAX_BODY_BYTES = int(
+    os.getenv("EASYICU_HOSTED_MAX_BODY_BYTES", str(2 * 1024 * 1024)) or 0
+)
+HOSTED_MAX_MESSAGES = int(os.getenv("EASYICU_HOSTED_MAX_MESSAGES", "200") or 0)
+HOSTED_MAX_OUTPUT_TOKENS = int(
+    os.getenv("EASYICU_HOSTED_MAX_OUTPUT_TOKENS", "8192") or 0
+)
+# Separate from the ceiling: a request that does not ask for a length should not
+# be billed as if it asked for the maximum.
+HOSTED_DEFAULT_OUTPUT_TOKENS = int(
+    os.getenv("EASYICU_HOSTED_DEFAULT_OUTPUT_TOKENS", "2048") or 0
+)
+HOSTED_MAX_COMPLETIONS = int(os.getenv("EASYICU_HOSTED_MAX_COMPLETIONS", "1") or 0)
+
+# Fields forwarded upstream. An allowlist (rather than copying the whole client
+# payload) keeps a caller from smuggling provider-side options — routing,
+# provider preferences, unbounded sampling knobs — through the relay.
+HOSTED_FORWARDED_FIELDS = frozenset(
+    {
+        "model",
+        "messages",
+        "stream",
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "stop",
+        "seed",
+        "n",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "presence_penalty",
+        "frequency_penalty",
+    }
+)
+
+# Cap on distinct client IPs tracked for rate limiting, so the state dict cannot
+# grow without bound under spoofed or rotating source addresses.
+HOSTED_RATE_LIMIT_MAX_TRACKED_IPS = int(
+    os.getenv("EASYICU_HOSTED_RATE_LIMIT_MAX_IPS", "4096") or 0
+)
+
+#: Upper bound on simultaneous upstream calls (see _upstream_slot).
+HOSTED_MAX_CONCURRENT_UPSTREAM = int(
+    os.getenv("EASYICU_HOSTED_MAX_CONCURRENT_UPSTREAM", "8") or 1
+)
+_UPSTREAM_SEMAPHORE: "asyncio.Semaphore | None" = None
+
 _RATE_LIMIT_LOCK = threading.Lock()
-_RATE_LIMIT_STATE: dict[str, deque[float]] = {}
+_RATE_LIMIT_STATE: "OrderedDict[str, deque[float]]" = OrderedDict()
 
 
 def _require_openrouter_key() -> None:
@@ -195,7 +249,20 @@ def _check_rate_limit(client_ip: str) -> None:
     now = time.time()
     window_start = now - 60
     with _RATE_LIMIT_LOCK:
+        # Evict IPs whose window has fully expired, then bound the table by LRU.
+        # Without this the dict grows one entry per distinct source address seen
+        # since boot.
+        stale = [
+            ip
+            for ip, seen in _RATE_LIMIT_STATE.items()
+            if not seen or seen[-1] < window_start
+        ]
+        for ip in stale:
+            if ip != client_ip:
+                _RATE_LIMIT_STATE.pop(ip, None)
+
         bucket = _RATE_LIMIT_STATE.setdefault(client_ip, deque())
+        _RATE_LIMIT_STATE.move_to_end(client_ip)
         while bucket and bucket[0] < window_start:
             bucket.popleft()
         if len(bucket) >= HOSTED_RATE_LIMIT:
@@ -204,6 +271,12 @@ def _check_rate_limit(client_ip: str) -> None:
                 detail=f"Rate limit exceeded for {client_ip}. Limit={HOSTED_RATE_LIMIT}/min",
             )
         bucket.append(now)
+
+        while (
+            HOSTED_RATE_LIMIT_MAX_TRACKED_IPS > 0
+            and len(_RATE_LIMIT_STATE) > HOSTED_RATE_LIMIT_MAX_TRACKED_IPS
+        ):
+            _RATE_LIMIT_STATE.popitem(last=False)
 
 
 def _check_auth(request: Request) -> None:
@@ -242,9 +315,139 @@ def _build_upstream_headers(request: Request) -> dict[str, str]:
     return headers
 
 
+async def _read_bounded_body(request: Request) -> bytes:
+    """Read the request body, refusing anything over the configured ceiling.
+
+    Streams and stops at the limit so an oversized (or lying Content-Length)
+    request never gets fully buffered in memory.
+    """
+
+    limit = HOSTED_MAX_BODY_BYTES
+    declared = request.headers.get("content-length")
+    if limit > 0 and declared:
+        try:
+            if int(declared) > limit:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Request body exceeds {limit} bytes.",
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Invalid Content-Length header."
+            ) from None
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if limit > 0 and total > limit:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Request body exceeds {limit} bytes.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@asynccontextmanager
+async def _upstream_slot():
+    """Bound how many upstream calls are in flight at once.
+
+    Without this the threadpool is the only limit, so a burst of slow upstream
+    calls exhausts it and starves every other route.
+    """
+
+    global _UPSTREAM_SEMAPHORE
+    if _UPSTREAM_SEMAPHORE is None:
+        _UPSTREAM_SEMAPHORE = asyncio.Semaphore(HOSTED_MAX_CONCURRENT_UPSTREAM)
+    async with _UPSTREAM_SEMAPHORE:
+        yield
+
+
+def _strict_int(value: Any, field: str) -> int:
+    """Accept only a real integer — not 8192.9, not "8192", not True.
+
+    ``int(8192.9)`` silently truncates, which let a value pass the ceiling check
+    in one form and reach the provider in another.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field!r} must be an integer, got {type(value).__name__}.",
+        )
+    return value
+
+
+def _validate_request_shape(payload: dict[str, Any]) -> dict[str, Any]:
+    """Reject oversized requests and return a NORMALISED payload.
+
+    Validating a coerced copy while forwarding the caller's raw value let
+    ``max_tokens: 8192.9`` (or the string ``"8192"``) pass the ceiling check and
+    still reach the provider un-normalised. The normalised values are written
+    back so what was checked is what is sent.
+    """
+
+    payload = dict(payload)
+    messages = payload.get("messages")
+    if messages is not None:
+        if not isinstance(messages, list):
+            raise HTTPException(status_code=400, detail="'messages' must be a list.")
+        if HOSTED_MAX_MESSAGES > 0 and len(messages) > HOSTED_MAX_MESSAGES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Too many messages: {len(messages)} > " f"{HOSTED_MAX_MESSAGES}."
+                ),
+            )
+
+    max_tokens = payload.get("max_tokens")
+    if max_tokens is not None:
+        max_tokens = _strict_int(max_tokens, "max_tokens")
+        payload["max_tokens"] = max_tokens
+        if max_tokens < 1:
+            raise HTTPException(
+                status_code=400, detail="'max_tokens' must be positive."
+            )
+        if HOSTED_MAX_OUTPUT_TOKENS > 0 and max_tokens > HOSTED_MAX_OUTPUT_TOKENS:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"'max_tokens' exceeds the hosted ceiling: {max_tokens} > "
+                    f"{HOSTED_MAX_OUTPUT_TOKENS}."
+                ),
+            )
+
+    completions = payload.get("n")
+    if completions is not None:
+        completions = _strict_int(completions, "n")
+        payload["n"] = completions
+        if completions < 1 or (
+            HOSTED_MAX_COMPLETIONS > 0 and completions > HOSTED_MAX_COMPLETIONS
+        ):
+            raise HTTPException(
+                status_code=413,
+                detail=f"'n' exceeds the hosted ceiling of {HOSTED_MAX_COMPLETIONS}.",
+            )
+
+    stream_value = payload.get("stream")
+    if stream_value is not None and not isinstance(stream_value, bool):
+        raise HTTPException(status_code=400, detail="'stream' must be a boolean.")
+
+    return payload
+
+
 def _build_upstream_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    upstream_payload = dict(payload)
+    # Forward an allowlist rather than the caller's whole payload, so
+    # provider-side options the relay has not vetted cannot ride along.
+    upstream_payload = {
+        key: value for key, value in payload.items() if key in HOSTED_FORWARDED_FIELDS
+    }
     upstream_payload["model"] = _resolve_model(payload.get("model"))
+    # A ceiling is not a default. Defaulting an omitted max_tokens to the
+    # maximum allowed made every unspecified request bill at the ceiling.
+    if HOSTED_DEFAULT_OUTPUT_TOKENS > 0:
+        upstream_payload.setdefault("max_tokens", HOSTED_DEFAULT_OUTPUT_TOKENS)
     return upstream_payload
 
 
@@ -290,6 +493,43 @@ def _post_upstream(
 ) -> requests.Response:
     headers = _build_upstream_headers(request)
     upstream_url = f"{OPENROUTER_BASE_URL}/chat/completions"
+    requested_model = str(upstream_payload.get("model") or "")
+    attempts: list[dict[str, Any]] = []
+
+    def record_attempt(
+        *,
+        model: str,
+        response: requests.Response | None = None,
+        retrying: bool = False,
+        transport_error: bool = False,
+    ) -> None:
+        if transport_error:
+            attempts.append({"model": model, "outcome": "transport_error"})
+            return
+        if response is None:  # pragma: no cover - defensive boundary
+            return
+        status_code = int(response.status_code)
+        attempt = {
+            "model": model,
+            "status_code": status_code,
+            "outcome": "success" if status_code < 400 else "retry" if retrying else "failed",
+        }
+        if retrying:
+            attempt["retry_reason"] = "retryable_upstream_response"
+        attempts.append(attempt)
+
+    def with_model_provenance(
+        response: requests.Response,
+        *,
+        attempted_model: str,
+    ) -> requests.Response:
+        # ``requests.Response`` permits local attributes.  Keeping provenance
+        # beside the response lets the HTTP boundary disclose a fallback while
+        # preserving the OpenAI-compatible response body for ordinary callers.
+        response.easyicu_requested_model = requested_model  # type: ignore[attr-defined]
+        response.easyicu_attempted_model = attempted_model  # type: ignore[attr-defined]
+        response.easyicu_model_attempts = tuple(attempts)  # type: ignore[attr-defined]
+        return response
 
     try:
         upstream_response = requests.post(
@@ -304,8 +544,17 @@ def _post_upstream(
             status_code=502, detail=f"Upstream request failed: {exc}"
         ) from exc
 
-    if stream or not _should_retry_with_fallback(upstream_response):
-        return upstream_response
+    should_retry = not stream and _should_retry_with_fallback(upstream_response)
+    record_attempt(
+        model=requested_model,
+        response=upstream_response,
+        retrying=should_retry,
+    )
+    if not should_retry:
+        return with_model_provenance(
+            upstream_response,
+            attempted_model=requested_model,
+        )
 
     fallback_payload = dict(upstream_payload)
     for fallback_model in _fallback_models_for(str(upstream_payload.get("model", ""))):
@@ -320,13 +569,24 @@ def _post_upstream(
                 stream=False,
             )
         except requests.RequestException:
+            record_attempt(model=fallback_model, transport_error=True)
             continue
-        if upstream_response.status_code < 400 or not _should_retry_with_fallback(
-            upstream_response
-        ):
-            return upstream_response
+        should_retry = _should_retry_with_fallback(upstream_response)
+        record_attempt(
+            model=fallback_model,
+            response=upstream_response,
+            retrying=should_retry,
+        )
+        if upstream_response.status_code < 400 or not should_retry:
+            return with_model_provenance(
+                upstream_response,
+                attempted_model=fallback_model,
+            )
 
-    return upstream_response
+    return with_model_provenance(
+        upstream_response,
+        attempted_model=str(fallback_payload.get("model") or requested_model),
+    )
 
 
 def _json_or_text(response: requests.Response) -> Any:
@@ -366,6 +626,12 @@ def health() -> dict[str, Any]:
         "auth_required": bool(HOSTED_SERVER_TOKEN),
         "unauthenticated_local_development": HOSTED_ALLOW_UNAUTHENTICATED_LOCAL,
         "allowed_model_aliases": sorted(MODEL_ALIASES),
+        "max_body_bytes": HOSTED_MAX_BODY_BYTES,
+        "max_messages": HOSTED_MAX_MESSAGES,
+        "max_output_tokens": HOSTED_MAX_OUTPUT_TOKENS,
+        "default_output_tokens": HOSTED_DEFAULT_OUTPUT_TOKENS,
+        "max_completions": HOSTED_MAX_COMPLETIONS,
+        "max_concurrent_upstream": HOSTED_MAX_CONCURRENT_UPSTREAM,
     }
 
 
@@ -396,34 +662,107 @@ async def chat_completions(request: Request):
         )
     _check_rate_limit(_client_ip(request))
 
+    body = await _read_bounded_body(request)
     try:
-        payload = await request.json()
+        payload = json.loads(body)
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=400, detail="Request body must be JSON."
         ) from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be an object.")
+    payload = _validate_request_shape(payload)
     upstream_payload = _build_upstream_payload(payload)
-    stream_value = upstream_payload.get("stream", False)
-    if not isinstance(stream_value, bool):
-        raise HTTPException(status_code=400, detail="stream must be a boolean.")
-    stream = stream_value
-    upstream_response = _post_upstream(request, upstream_payload, stream=stream)
-
+    stream = bool(upstream_payload.get("stream", False))
+    # _post_upstream uses a synchronous client with a 180 s timeout. Awaiting it
+    # directly on the event loop would let one slow upstream call stall every
+    # other request on this worker — including /health. Run it on the threadpool
+    # and bound how many can be in flight at once.
     if stream:
-        if upstream_response.status_code >= 400:
-            data = _json_or_text(upstream_response)
-            upstream_response.close()
-            return JSONResponse(status_code=upstream_response.status_code, content=data)
-        return StreamingResponse(
-            _stream_upstream(upstream_response),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        # A streaming call is not "done" when requests.post returns — the body
+        # has not been consumed yet. Releasing the slot here would let an
+        # unbounded number of long-lived streams run concurrently while the
+        # semaphore looked satisfied, so the slot has to span the whole stream.
+        return await _bounded_streaming_response(request, upstream_payload)
 
+    async with _upstream_slot():
+        upstream_response = await run_in_threadpool(
+            _post_upstream, request, upstream_payload, stream=False
+        )
     data = _json_or_text(upstream_response)
+    if isinstance(data, dict) and upstream_response.status_code < 400:
+        requested_model = str(
+            getattr(upstream_response, "easyicu_requested_model", "") or ""
+        )
+        attempted_model = str(
+            getattr(upstream_response, "easyicu_attempted_model", "") or ""
+        )
+        attempts = list(
+            getattr(upstream_response, "easyicu_model_attempts", ()) or ()
+        )
+        upstream_reported_model = str(data.get("model") or "")
+        actual_model = upstream_reported_model or attempted_model
+        if actual_model:
+            # OpenAI-compatible clients read the top-level model field.  It
+            # therefore represents the actual upstream response model rather
+            # than the model requested before a hosted fallback.
+            data["model"] = actual_model
+        data["easyicu_model_provenance"] = {
+            "schema_version": "easyicu.hosted_model_provenance/2",
+            "requested_model": requested_model,
+            "attempted_model": attempted_model,
+            "upstream_reported_model": upstream_reported_model or None,
+            "fallback_used": bool(
+                requested_model and attempted_model and requested_model != attempted_model
+            ),
+            "attempts": attempts,
+        }
     return JSONResponse(status_code=upstream_response.status_code, content=data)
+
+
+async def _bounded_streaming_response(request: Request, upstream_payload: dict):
+    """Hold an upstream slot for the lifetime of a streamed response."""
+
+    slot = _upstream_slot()
+    await slot.__aenter__()
+    try:
+        upstream_response = await run_in_threadpool(
+            _post_upstream, request, upstream_payload, stream=True
+        )
+    except BaseException:
+        await slot.__aexit__(None, None, None)
+        raise
+
+    if upstream_response.status_code >= 400:
+        data = _json_or_text(upstream_response)
+        upstream_response.close()
+        await slot.__aexit__(None, None, None)
+        return JSONResponse(status_code=upstream_response.status_code, content=data)
+
+    async def _release_after(iterator):
+        try:
+            for chunk in iterator:
+                yield chunk
+        finally:
+            # Runs on client disconnect too, so an abandoned stream cannot
+            # leak the slot.
+            upstream_response.close()
+            await slot.__aexit__(None, None, None)
+
+    return StreamingResponse(
+        _release_after(_stream_upstream(upstream_response)),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-EasyICU-Requested-Model": str(
+                getattr(upstream_response, "easyicu_requested_model", "") or ""
+            ),
+            "X-EasyICU-Attempted-Model": str(
+                getattr(upstream_response, "easyicu_attempted_model", "") or ""
+            ),
+        },
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

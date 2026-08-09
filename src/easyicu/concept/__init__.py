@@ -60,6 +60,117 @@ WINDOW_AGGREGATE_OVERRIDES: Dict[str, tuple] = {
 }
 
 
+def _declare_dur_var_hours(frame) -> None:
+    """Record that ``frame``'s ``dur_var`` is now expressed in hours.
+
+    Every timedelta→hours conversion below must call this, otherwise the
+    public expansion path has to guess the unit back from the values.
+    """
+
+    from ..table.duration import UNIT_HOURS, set_dur_var_unit
+
+    set_dur_var_unit(frame, UNIT_HOURS)
+
+
+def _normalize_source_dur_var_hours(
+    frame,
+    *,
+    concept_name: str,
+    source_frame=None,
+):
+    """Normalize one source frame before row-binding multiple concept sources.
+
+    ``DataFrame.attrs`` is not reliably retained by column projection or
+    ``pd.concat``.  Recover the producer declaration from the pre-projection
+    frame, convert the source duration exactly once, and return a frame whose
+    numeric ``dur_var`` is explicitly in hours.
+    """
+
+    if "dur_var" not in frame.columns:
+        return frame
+
+    from ..table.duration import (
+        UNIT_HOURS,
+        get_dur_var_unit,
+        resolve_dur_var_hours,
+        set_dur_var_unit,
+    )
+
+    declared = get_dur_var_unit(frame) or get_dur_var_unit(source_frame)
+    if declared:
+        set_dur_var_unit(frame, declared)
+    if pd.api.types.is_numeric_dtype(
+        frame["dur_var"]
+    ) or pd.api.types.is_timedelta64_dtype(frame["dur_var"]):
+        frame["dur_var"] = resolve_dur_var_hours(
+            frame,
+            concept=concept_name,
+        )
+        set_dur_var_unit(frame, UNIT_HOURS)
+    return frame
+
+
+def _drop_negative_source_end_durations(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    source_table: str,
+    column: str = "dur_var",
+) -> pd.DataFrame:
+    """Drop raw end-before-start records before strict duration validation.
+
+    ``resolve_dur_var_hours`` intentionally rejects every negative duration:
+    once a value has reached the generic window layer, it cannot distinguish
+    a corrupt source record from a producer/unit bug.  Here that provenance is
+    still known: ``column`` was just calculated as source end minus source
+    start.  Public ICU datasets contain a handful of such malformed records,
+    so quarantine those rows with an explicit warning while keeping the
+    generic window contract fail-closed for all other negative durations.
+    """
+
+    if column not in frame.columns or frame.empty:
+        return frame
+    values = pd.to_numeric(frame[column], errors="coerce")
+    invalid = values < 0
+    count = int(invalid.sum())
+    if not count:
+        return frame
+    logger.warning(
+        "dropping %d raw end-before-start row(s) for concept %r from table %r",
+        count,
+        concept_name,
+        source_table,
+    )
+    return frame.loc[~invalid].copy()
+
+
+def _source_duration_is_end(source) -> bool:
+    """Return whether a configured source duration column stores an end time.
+
+    This is schema semantics and must never be inferred from sampled patient
+    values.  The old ``head(100)``/80% heuristic made the same eICU
+    ``drugstopoffset`` column switch meaning when the patient batch boundary
+    changed, so 45k and 67k exports produced different D10 time grids.
+
+    Future dictionaries can declare ``params.dur_is_end`` explicitly.
+    Existing ricu-compatible sources use unambiguous end/stop column names.
+    """
+
+    params = getattr(source, "params", None) or {}
+    explicit = params.get("dur_is_end")
+    if isinstance(explicit, str):
+        normalized = explicit.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    elif explicit is not None:
+        return bool(explicit)
+
+    name = re.sub(r"[^a-z0-9]+", "", str(getattr(source, "dur_var", "")).lower())
+    return "end" in name or "stop" in name
+
+
 def resolve_window_aggregate(concept_name: str, agg_method):
     """套用概念级窗口聚合覆盖，返回最终的 agg_method（纯函数，便于单测）。
 
@@ -372,6 +483,10 @@ from .schema import (  # noqa: F401
     ConceptDictionary,
     ConceptSource,
 )
+from .errors import (  # noqa: F401
+    ConceptError,
+    ConceptExtractionUnavailable,
+)
 
 
 
@@ -392,15 +507,18 @@ from ..utils import compute_patient_ids_hash as _compute_patient_ids_hash
 # --------------------------------------------------------------------------
 _CACHE_BUDGET_ENV = "EASYICU_CACHE_BUDGET_MB"
 _CACHE_BUDGET_DEFAULT_FRACTION = 0.25
-_CACHE_BUDGET_FALLBACK_BYTES = 4 * 1024 ** 3
+_CACHE_BUDGET_LOW_MEMORY_HOST_BYTES = 24 * 1024 ** 3
+_CACHE_BUDGET_LOW_MEMORY_BYTES = 512 * 1024 ** 2
+_CACHE_BUDGET_FALLBACK_BYTES = _CACHE_BUDGET_LOW_MEMORY_BYTES
 
 
 def _resolve_cache_budget_bytes() -> Optional[int]:
     """Byte budget for the resolver's in-memory caches.
 
     ``EASYICU_CACHE_BUDGET_MB`` > 0 pins the budget; <= 0 disables the
-    bound entirely (legacy unbounded behaviour). Default: 25% of physical
-    RAM, or 4GB when psutil is unavailable.
+    bound entirely (legacy unbounded behaviour). Default: 512MB on hosts
+    with at most 24GB RAM, otherwise 25% of physical RAM. The conservative
+    fallback is also 512MB when host capacity cannot be established.
     """
     raw = os.environ.get(_CACHE_BUDGET_ENV)
     if raw is not None:
@@ -415,7 +533,10 @@ def _resolve_cache_budget_bytes() -> Optional[int]:
     try:
         import psutil
 
-        return int(psutil.virtual_memory().total * _CACHE_BUDGET_DEFAULT_FRACTION)
+        total = int(psutil.virtual_memory().total)
+        if total <= _CACHE_BUDGET_LOW_MEMORY_HOST_BYTES:
+            return _CACHE_BUDGET_LOW_MEMORY_BYTES
+        return int(total * _CACHE_BUDGET_DEFAULT_FRACTION)
     except Exception:
         return _CACHE_BUDGET_FALLBACK_BYTES
 
@@ -641,14 +762,21 @@ class ConceptResolver:
     def _ensure_requested_concept_columns(
         df: pd.DataFrame,
         concept_names: Iterable[str],
+        *,
+        materialize_missing: bool = True,
     ) -> pd.DataFrame:
-        """Keep merged API schemas stable when a requested concept has no rows."""
+        """Keep merged API schemas stable when a requested concept has no rows.
+
+        Extraction can defer structural all-null columns to its Arrow writer.
+        That avoids allocating one dense pandas block per unavailable concept
+        across millions of rows while preserving the public API default.
+        """
         if not isinstance(df, pd.DataFrame):
             return df
         if df.empty:
             return df
         missing = [name for name in concept_names if name not in df.columns]
-        if not missing:
+        if not missing or not materialize_missing:
             return df
         out = df.copy()
         for name in missing:
@@ -983,6 +1111,9 @@ class ConceptResolver:
         **kwargs,  # Additional parameters for callbacks (e.g., win_length, worst_val_fun)
     ):
         names = [name for name in concept_names]
+        defer_empty_columns_to_arrow = bool(
+            kwargs.pop("_defer_empty_columns_to_arrow", False)
+        )
         required_names = self._expand_dependencies(names)  # Ensure dependencies are expanded
         tables: Dict[str, ICUTable] = {}
         aggregators = self._normalise_aggregators(aggregate, required_names)
@@ -1097,6 +1228,9 @@ class ConceptResolver:
         wide_table_merged_df = None  # 🚀 保存批量加载的合并结果，避免重复合并
         wide_table_covered_names = set()
         wide_table_frames: List[pd.DataFrame] = []
+        materialize_wide_concept_frames = (
+            not merge or availability_sink is not None
+        )
         
         # 🔧 FIX: 只有当没有多数据源概念时才使用批量加载
         # 因为批量加载只处理一个表，不支持多表合并（如eICU的map需要合并vitalperiodic和vitalaperiodic）
@@ -1227,26 +1361,26 @@ class ConceptResolver:
                         table_batch_df = batch_df
                         table_covered_names = _concept_names
                         
-                        # 🚀 perf B4: avoid the per-concept .copy() — ICUTable
-                        # does not mutate its data, so each concept's view
-                        # can reference the same parent batch_df. The
-                        # `.dropna()` on a column subset returns a new
-                        # filtered frame anyway, so we still get an
-                        # independent dataframe per concept (just without
-                        # the unnecessary full-column-set copy in front).
-                        for concept_name, val_var in concepts_info_filtered:
-                            concept_df = batch_df.loc[
-                                batch_df[concept_name].notna(),
-                                [id_col, 'charttime', concept_name],
-                            ]
-                            _tbl = ICUTable(
-                                data=concept_df,
-                                id_columns=[id_col],
-                                index_column='charttime',
-                                value_column=concept_name
-                            )
-                            _tbl._pre_aggregated = True
-                            table_batch_results[concept_name] = _tbl
+                        # In merge mode ``batch_df`` is already the requested
+                        # wide result.  Do not immediately split it back into
+                        # one sparse DataFrame per concept: those copies were
+                        # retained alongside the wide frame and often doubled
+                        # peak memory.  Dict-mode and availability audits still
+                        # materialize their per-concept public objects.
+                        if materialize_wide_concept_frames:
+                            for concept_name, val_var in concepts_info_filtered:
+                                concept_df = batch_df.loc[
+                                    batch_df[concept_name].notna(),
+                                    [id_col, 'charttime', concept_name],
+                                ]
+                                _tbl = ICUTable(
+                                    data=concept_df,
+                                    id_columns=[id_col],
+                                    index_column='charttime',
+                                    value_column=concept_name
+                                )
+                                _tbl._pre_aggregated = True
+                                table_batch_results[concept_name] = _tbl
                         
                         if verbose:
                             logger.info(f"✅ 宽表批量加载完成，加载了 {len(concepts_info_filtered)} 个概念")
@@ -1361,36 +1495,56 @@ class ConceptResolver:
                         if 'measuredat_minutes' in batch_df.columns:
                             _time_col_out = 'measuredat_minutes'
 
-                        # 🔧 FIX 2026-05: AUMC batch-multi outputs minutes, but single-concept
-                        # path and _align_time_to_admission expect hours. Convert to hours here
-                        # to match single-concept behavior (avoid downstream time-unit mismatch
-                        # when merging sub-concepts, e.g. in _callback_news/mews).
-                        # 转换因子统一走 time_units.minutes_to_hours_series（单一来源，禁止裸 /60.0）。
+                        # AUMC batch-multi output is still on the database-wide
+                        # absolute minute clock.  Route it through the same ICU
+                        # admission alignment as the single-concept path; a
+                        # bare minutes->hours conversion leaves repeat
+                        # admissions shifted by tens of thousands of hours.
                         _db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                         if _db_name == 'aumc' and _time_col_out == 'measuredat_minutes':
-                            from ..utils.time_units import minutes_to_hours_series
                             batch_df = batch_df.copy()
-                            batch_df['measuredat_minutes'] = minutes_to_hours_series(batch_df['measuredat_minutes'])
+                            batch_df = self._align_time_to_admission(
+                                batch_df,
+                                data_source,
+                                [id_col],
+                                _time_col_out,
+                            )
+                            # The all-covered fast path returns this frame
+                            # directly, bypassing the regular R-format merger
+                            # that normally canonicalises the time-column name.
+                            # Streamed derived vitals therefore need the
+                            # producer to publish the canonical key here.
+                            batch_df = batch_df.rename(
+                                columns={_time_col_out: "charttime"}
+                            )
+                            _time_col_out = "charttime"
 
                         covered_names = set()
                         for concept_name in batch_itemids:
                             if concept_name not in batch_df.columns:
                                 continue
-                            concept_df = batch_df[[id_col, _time_col_out, concept_name]].copy()
-                            concept_df = concept_df.dropna(subset=[concept_name])
-                            _tbl = ICUTable(
-                                data=concept_df,
-                                id_columns=[id_col],
-                                index_column=_time_col_out,
-                                value_column=concept_name,
-                            )
-                            _tbl._pre_aggregated = True
-                            table_batch_results[concept_name] = _tbl
+                            if materialize_wide_concept_frames:
+                                concept_df = batch_df.loc[
+                                    batch_df[concept_name].notna(),
+                                    [id_col, _time_col_out, concept_name],
+                                ]
+                                _tbl = ICUTable(
+                                    data=concept_df,
+                                    id_columns=[id_col],
+                                    index_column=_time_col_out,
+                                    value_column=concept_name,
+                                )
+                                _tbl._pre_aggregated = True
+                                table_batch_results[concept_name] = _tbl
                             covered_names.add(concept_name)
 
                         if covered_names:
                             keep_cols = [id_col, _time_col_out] + [name for name in names if name in covered_names and name in batch_df.columns]
-                            table_batch_df = batch_df[keep_cols].copy()
+                            table_batch_df = (
+                                batch_df
+                                if list(batch_df.columns) == keep_cols
+                                else batch_df.loc[:, keep_cols]
+                            )
                             table_covered_names = set(covered_names)
 
                         if verbose and covered_names:
@@ -1424,7 +1578,7 @@ class ConceptResolver:
                 wide_table_merged_df = wide_table_merged_df.merge(frame, on=merge_keys, how='outer', sort=False)
 
         # 如果没有使用批量加载，使用串行加载
-        if not wide_table_batch_results and len(table_to_concepts) == 1 and concept_workers > 1 and total > 1:
+        if not wide_table_covered_names and len(table_to_concepts) == 1 and concept_workers > 1 and total > 1:
             shared_table = list(table_to_concepts.keys())[0]
             if verbose:
                 logger.info(f"🔄 所有 {total} 个概念共享表 '{shared_table}'，使用串行加载以共享缓存")
@@ -1466,7 +1620,10 @@ class ConceptResolver:
                     logger.info(f"🔄 检测到共享子概念 {shared_sub_concepts}，使用串行加载以利用缓存")
                 effective_workers = 1
 
-        def _resolve(name: str, position: int) -> tuple[str, ICUTable]:
+        def _resolve(
+            name: str,
+            position: int,
+        ) -> tuple[str, Optional[ICUTable]]:
             # 🚀 如果已经通过批量加载获取了数据，直接返回
             if name in wide_table_batch_results:
                 concept_table = wide_table_batch_results[name]
@@ -1474,6 +1631,10 @@ class ConceptResolver:
                     row_count = len(concept_table.data) if (isinstance(concept_table, ICUTable) or hasattr(concept_table, 'data')) else len(concept_table)
                     logger.info("✅  概念 '%s' (批量) 已加载 (行数: %s)", name, row_count)
                 return name, concept_table
+            if name in wide_table_covered_names:
+                # merge=True can return the producer-built wide frame directly.
+                # A per-concept sparse table would only duplicate that payload.
+                return name, None
             
             if verbose and logger.isEnabledFor(logging.INFO):
                 logger.info("➡️  [%d/%d] 加载概念 '%s'", position, total, name)
@@ -1510,16 +1671,46 @@ class ConceptResolver:
                     }
                     for future in as_completed(future_map):
                         name, concept_table = future.result()
-                        results[name] = concept_table
+                        if concept_table is not None:
+                            results[name] = concept_table
             else:
                 for idx, name in enumerate(names, start=1):
                     name, concept_table = _resolve(name, idx)
-                    results[name] = concept_table
+                    if concept_table is not None:
+                        results[name] = concept_table
 
-            tables = {
-                name: results[name]
-                for name in names
-            }
+            tables = {name: results[name] for name in names if name in results}
+
+            def _materialize_covered_wide_tables_for_fallback() -> None:
+                """Recreate sparse tables only if the direct wide merge cannot finish."""
+                if wide_table_merged_df is None or wide_table_merged_df.empty:
+                    return
+                id_col = wide_table_merged_df.columns[0]
+                time_col = next(
+                    (
+                        candidate
+                        for candidate in ("charttime", "measuredat_minutes")
+                        if candidate in wide_table_merged_df.columns
+                    ),
+                    None,
+                )
+                if time_col is None:
+                    return
+                for concept_name in wide_table_covered_names:
+                    if concept_name in tables or concept_name not in wide_table_merged_df:
+                        continue
+                    concept_df = wide_table_merged_df.loc[
+                        wide_table_merged_df[concept_name].notna(),
+                        [id_col, time_col, concept_name],
+                    ]
+                    concept_table = ICUTable(
+                        data=concept_df,
+                        id_columns=[id_col],
+                        index_column=time_col,
+                        value_column=concept_name,
+                    )
+                    concept_table._pre_aggregated = True
+                    tables[concept_name] = concept_table
 
             if availability_sink is not None and availability_context is not None:
                 unavailable_by_table: Dict[str, List[str]] = {}
@@ -1573,7 +1764,11 @@ class ConceptResolver:
                 if verbose:
                     logger.info("🚀 使用宽表批量加载的合并结果，跳过合并步骤")
                 return self._downcast_float64_to_float32(
-                    self._ensure_requested_concept_columns(wide_table_merged_df, names)
+                    self._ensure_requested_concept_columns(
+                        wide_table_merged_df,
+                        names,
+                        materialize_missing=not defer_empty_columns_to_arrow,
+                    )
                 )
 
             # 如果是r_compatible模式，使用增强的ricu风格合并
@@ -1648,7 +1843,11 @@ class ConceptResolver:
                             if verbose:
                                 logger.info("🚀 使用部分宽表批量结果并仅合并剩余概念")
                             return self._downcast_float64_to_float32(
-                                self._ensure_requested_concept_columns(merged_partial, names)
+                                self._ensure_requested_concept_columns(
+                                    merged_partial,
+                                    names,
+                                    materialize_missing=not defer_empty_columns_to_arrow,
+                                )
                             )
                         # Partial merge failed (e.g. non-charttime time column) — fall through to full merge
                     elif _all_covered:
@@ -1663,13 +1862,23 @@ class ConceptResolver:
                             self._ensure_requested_concept_columns(
                                 wide_table_merged_df.reset_index(drop=True),
                                 names,
+                                materialize_missing=not defer_empty_columns_to_arrow,
                             )
                         )
-                return self._to_r_format_merged_enhanced(tables, names, interval, data_source=data_source)
+                _materialize_covered_wide_tables_for_fallback()
+                return self._to_r_format_merged_enhanced(
+                    tables,
+                    names,
+                    interval,
+                    data_source=data_source,
+                    materialize_missing_concepts=not defer_empty_columns_to_arrow,
+                    consume_sources=True,
+                )
 
             merged = self._ensure_requested_concept_columns(
                 self._merge_tables(tables),
                 names,
+                materialize_missing=not defer_empty_columns_to_arrow,
             )
             return merged
         finally:
@@ -2183,6 +2392,8 @@ class ConceptResolver:
                         extra_columns.append(source.value_var)
                     if getattr(source, 'index_var', None):
                         extra_columns.append(source.index_var)
+                    if getattr(source, 'dur_var', None):
+                        extra_columns.append(source.dur_var)
                     if getattr(source, 'unit_var', None):
                         extra_columns.append(source.unit_var)
                     # Some callbacks need a second, explicitly declared source column
@@ -2644,48 +2855,83 @@ class ConceptResolver:
                         # 直接在 DuckDB 中 GROUP BY patientid → MAX(datetime)
                         # 然后与 general 表的 discharge_status 合并
                         import duckdb as _hd_duckdb
-                        bucket_dir = data_source.base_path / 'observations_bucket'
                         _hd_conn = _hd_duckdb.connect()
                         _hd_conn.execute("SET memory_limit = '2GB'")
                         
                         # 先获取死亡患者ID
+                        #
+                        # This fast path is a second copy of the ``hirid_death``
+                        # logic in ``callback_apply``; it had the same silent
+                        # failure. Swallowing the read error left ``dead_pids``
+                        # empty, which fell through to an empty frame below and
+                        # reported HiRID mortality as zero. Fail closed here too,
+                        # or the optimisation quietly changes the science.
                         try:
                             general_tbl = data_source.load_table('general', columns=['patientid', 'discharge_status'], verbose=False)
                             general_df = general_tbl.data if hasattr(general_tbl, 'data') else general_tbl
                             if not isinstance(general_df, pd.DataFrame):
                                 general_df = pd.DataFrame(general_df)
+                            if 'discharge_status' not in general_df.columns:
+                                raise KeyError("general table has no 'discharge_status' column")
                             dead_pids = set(general_df.loc[
                                 general_df['discharge_status'].astype(str).str.lower() == 'dead',
                                 'patientid'
                             ].unique())
-                        except Exception:
-                            dead_pids = set()
+                        except Exception as _hd_general_exc:
+                            _hd_conn.close()
+                            raise ConceptExtractionUnavailable(
+                                concept_id=concept_name,
+                                database='hirid',
+                                stage='load_general',
+                                detail=(
+                                    'the general table could not be read '
+                                    f'({_hd_general_exc})'
+                                ),
+                                cause=_hd_general_exc,
+                            ) from _hd_general_exc
                         
                         # 确定要查询的死亡患者列表
-                        _query_pids = dead_pids
-                        if patient_ids and dead_pids:
-                            if isinstance(patient_ids, dict):
-                                pid_list = list(next(iter(patient_ids.values())))
-                            else:
-                                pid_list = list(patient_ids)
-                            _query_pids = set(p for p in pid_list if p in dead_pids)
-                        
-                        if _query_pids and bucket_dir.exists():
-                            # 显式文件列表，过滤 AppleDouble (._*.parquet) — 见 datasource._enumerate_bucket_parquet_files
-                            _hd_files = _enumerate_bucket_parquet_files(bucket_dir)
-                            if _hd_files:
-                                _hd_files_sql = "[" + ", ".join(f"'{f}'" for f in _hd_files) + "]"
-                                # Same bucket dir was produced by one converter run →
-                                # all parquet files share schema. Skip union_by_name=true
-                                # so DuckDB does not pre-sweep 81 files for schema
-                                # reconciliation on slow mounts (the dominant cost
-                                # on macfuse). Fallback below if schemas differ.
-                                _hd_read_expr_fast = f"read_parquet({_hd_files_sql})"
-                                _hd_read_expr_safe = f"read_parquet({_hd_files_sql}, union_by_name=true)"
-                            else:
-                                _hd_glob = _duckdb_path(bucket_dir / 'bucket_id=*' / '*.parquet')
-                                _hd_read_expr_fast = f"read_parquet('{_hd_glob}')"
-                                _hd_read_expr_safe = f"read_parquet('{_hd_glob}', union_by_name=true)"
+                        #
+                        # Shared with the `callback_apply` copy so the two
+                        # cannot drift on the question they answer: every guard
+                        # below is about the deaths *in this cohort*, not every
+                        # death in the database.
+                        from .callback_apply import (
+                            _refuse_untimed_deaths,
+                            deaths_within_cohort,
+                            hirid_observation_read_exprs,
+                        )
+
+                        _query_pids = deaths_within_cohort(dead_pids, patient_ids)
+                        _hd_read_exprs = hirid_observation_read_exprs(
+                            data_source.base_path
+                        )
+
+                        if _query_pids and _hd_read_exprs is None:
+                            # Patients are recorded as deceased but the table
+                            # that times their last observation is not there.
+                            # The empty frame the old ``else`` produced is a
+                            # missing input, not a cohort without deaths.
+                            _hd_conn.close()
+                            raise ConceptExtractionUnavailable(
+                                concept_id=concept_name,
+                                database='hirid',
+                                stage='observations_bucket',
+                                detail=(
+                                    f'{len(_query_pids)} patient(s) in this '
+                                    'cohort are recorded as deceased but the '
+                                    'observations data are missing from both '
+                                    f'{data_source.base_path / "observations_bucket"} '
+                                    'and '
+                                    f'{data_source.base_path / "observations"}'
+                                ),
+                            )
+                        if _query_pids and _hd_read_exprs is not None:
+                            (
+                                _hd_read_expr_fast,
+                                _hd_read_expr_safe,
+                                _hd_layout,
+                            ) = _hd_read_exprs
                             src_ids = list(source.ids) if hasattr(source.ids, '__iter__') else [source.ids]
                             # Register dead-pid and variableid filters as DuckDB
                             # views so the planner does a true semi-join instead
@@ -2721,6 +2967,31 @@ class ConceptResolver:
                             finally:
                                 _hd_conn.unregister("_hirid_death_pids")
                                 _hd_conn.unregister("_hirid_death_ids")
+                            # The query returns one row per death it could
+                            # time. A death it could not time simply does not
+                            # come back, so a shortfall here lowers the
+                            # reported mortality with nothing to show for it.
+                            _hd_timed = (
+                                set(frame['patientid']) if len(frame) else set()
+                            )
+                            _hd_untimed = set(_query_pids) - _hd_timed
+                            if _hd_untimed:
+                                # Closed before the raise below: this frame is
+                                # about to be left and the connection has no
+                                # other owner.
+                                _hd_conn.close()
+                            # Total loss and partial loss are the same defect
+                            # here -- deaths absent from the result, mortality
+                            # reported lower than the source, no trace. One
+                            # helper answers for both so the two copies of this
+                            # callback cannot drift on where the line sits.
+                            _refuse_untimed_deaths(
+                                database='hirid',
+                                concept_id=concept_name,
+                                timing_ids=src_ids,
+                                timed=len(_hd_timed),
+                                untimed=_hd_untimed,
+                            )
                             frame[concept_name] = True
                         else:
                             frame = pd.DataFrame(columns=['patientid', 'datetime', concept_name])
@@ -3750,35 +4021,76 @@ class ConceptResolver:
                         frame[duration_col] = (frame[source.dur_var] - frame[source_index_column]).dt.total_seconds() / 60
                     
                     # Case 2: 数值类型的 endtime (如 AUMC 的毫秒时间)
-                    # 检测：如果 dur_var 是数值且通常大于 index_var，说明是 endtime
+                    # 结束时间语义来自字典契约/列名，不从当前患者批次抽样猜测。
                     elif pd.api.types.is_numeric_dtype(frame[source.dur_var]) and \
                          pd.api.types.is_numeric_dtype(frame[source_index_column]):
-                        # 检查 dur_var 是否大于 index_var（表示它是 endtime）
-                        # 使用抽样检查以提高性能
-                        sample_size = min(100, len(frame))
-                        if sample_size > 0:
-                            sample = frame.head(sample_size)
-                            dur_vals = pd.to_numeric(sample[source.dur_var], errors='coerce')
-                            idx_vals = pd.to_numeric(sample[source_index_column], errors='coerce')
-                            valid_mask = dur_vals.notna() & idx_vals.notna()
-                            if valid_mask.sum() > 0:
-                                # 如果大部分 dur_var > index_var，则认为是 endtime
-                                ratio = (dur_vals[valid_mask] > idx_vals[valid_mask]).mean()
-                                if ratio > 0.8:  # 80% 以上的值满足 dur_var > index_var
-                                    dur_is_end = True
-                                    # 计算 duration = endtime - starttime (数值)
-                                    # 🔧 FIX 2025-02-14: R ricu keeps duration in MINUTES, NOT hours
-                                    # AUMC: 分钟（datasource.py 已将 ms 转为分钟）
-                                    # eICU: 分钟（offset 列本身就是分钟）
-                                    frame[duration_col] = frame[source.dur_var] - frame[source_index_column]
-                                    
-                                    if DEBUG_MODE:
-                                        db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                                        print(f"   🔧 {db_name} dur_is_end=True: {source.dur_var}={dur_vals.head(3).tolist()}, "
-                                              f"{source_index_column}={idx_vals.head(3).tolist()}")
+                        if _source_duration_is_end(source):
+                            dur_is_end = True
+                            # 计算 duration = endtime - starttime (数值)
+                            # 🔧 FIX 2025-02-14: R ricu keeps duration in MINUTES, NOT hours
+                            # AUMC: 分钟（datasource.py 已将 ms 转为分钟）
+                            # eICU: 分钟（offset 列本身就是分钟）
+                            frame[duration_col] = (
+                                frame[source.dur_var]
+                                - frame[source_index_column]
+                            )
+
+                            if DEBUG_MODE:
+                                db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                                print(
+                                    f"   🔧 {db_name} dur_is_end=True: "
+                                    f"{source.dur_var}="
+                                    f"{frame[source.dur_var].head(3).tolist()}, "
+                                    f"{source_index_column}="
+                                    f"{frame[source_index_column].head(3).tolist()}"
+                                )
                     
                     if dur_is_end and DEBUG_MODE:
                         print(f"   dur_var '{source.dur_var}' → duration '{duration_col}' (示例: {frame[duration_col].head(1).tolist()})")
+                    if dur_is_end:
+                        from ..table.duration import (
+                            UNIT_MINUTES,
+                            UNIT_SECONDS,
+                            set_dur_var_unit,
+                        )
+
+                        frame = _drop_negative_source_end_durations(
+                            frame,
+                            concept_name=concept_name,
+                            source_table=source.table,
+                            column=duration_col,
+                        )
+                        source_db = (
+                            data_source.config.name
+                            if hasattr(data_source, "config")
+                            and hasattr(data_source.config, "name")
+                            else ""
+                        )
+                        # SIC Offset/OffsetEnd are seconds.  Every other
+                        # numeric end-offset producer reaching this point is
+                        # normalised to minutes by its source loader.
+                        set_dur_var_unit(
+                            frame,
+                            UNIT_SECONDS
+                            if source_db in {"sic", "sic_demo"}
+                            else UNIT_MINUTES,
+                        )
+                if "dur_var" in frame.columns and pd.api.types.is_numeric_dtype(
+                    frame["dur_var"]
+                ):
+                    from ..table.duration import (
+                        UNIT_MINUTES,
+                        get_dur_var_unit,
+                        set_dur_var_unit,
+                    )
+
+                    # Source-level end offsets are normalized to numeric
+                    # minutes by the loader even when the original end-time
+                    # column arrives as an object/string. Declare that exact
+                    # producer contract before value-only callbacks project
+                    # the frame.
+                    if not get_dur_var_unit(frame):
+                        set_dur_var_unit(frame, UNIT_MINUTES)
 
             value_column = source.value_var or table.value_column
             if value_column is None:
@@ -3845,7 +4157,14 @@ class ConceptResolver:
             if unit_column and unit_column not in frame.columns:
                 unit_column = None
 
-            if source.regex:
+            # A regex-only rgx_itm may already have been resolved to exact
+            # sub_var values above and pushed down into the parquet query.
+            # Re-applying the regex here is both redundant and incorrect after
+            # DuckDB aggregation: sub_var is no longer present and the value
+            # column has been renamed to concept_name, so numeric measurements
+            # (for example eICU ETCO2) would be matched against the label regex
+            # and every row would be discarded.
+            if source.regex and _rgx_pre_matched_ids is None:
                 # 确定 regex 应该应用在哪一列：
                 # - 如果同时存在 ids 和 regex，ids 用于过滤 sub_var，regex 用于过滤 value_var
                 # - 如果只有 regex（没有 ids），regex 用于过滤 sub_var（ricu 的 rgx_itm 行为）
@@ -3915,6 +4234,13 @@ class ConceptResolver:
                     data_source=data_source,
                     interval=interval,
                 )
+            from ..table.duration import get_dur_var_unit
+
+            # Keep the declaration outside DataFrame.attrs as the remaining
+            # source pipeline may merge admission times or filter rows. Those
+            # pandas operations are allowed to discard attrs even though they
+            # do not alter ``dur_var``.
+            source_dur_unit = get_dur_var_unit(frame)
 
             # 🔧 FIX: After callback, if source_index_column was consumed/renamed by
             # the callback (e.g. sic_death renames OffsetOfDeath→death and adds charttime),
@@ -3922,9 +4248,12 @@ class ConceptResolver:
             if (source_index_column and
                     source_index_column not in frame.columns and
                     len(frame) > 0):
+                consumed_source_index = source_index_column
                 for fallback_time in ['charttime', 'starttime', 'datetime']:
                     if fallback_time in frame.columns:
                         source_index_column = fallback_time
+                        if index_column == consumed_source_index:
+                            index_column = fallback_time
                         break
             
             # 单位过滤（在回调之后）
@@ -4253,9 +4582,19 @@ class ConceptResolver:
             frame_subset = frame.loc[:, ordered_cols]
             if frame_subset.columns.duplicated().any():
                 frame_subset = frame_subset.loc[:, ~frame_subset.columns.duplicated()]
+            if source_dur_unit and "dur_var" in frame_subset.columns:
+                from ..table.duration import set_dur_var_unit
+
+                set_dur_var_unit(frame_subset, source_dur_unit)
+            frame_subset = _normalize_source_dur_var_hours(
+                frame_subset,
+                concept_name=concept_name,
+                source_frame=frame,
+            )
             
             frames.append(frame_subset)
 
+        combined_dur_unit = None
         if not frames:
             # 返回空 DataFrame 而不是报错（某些概念可能在测试数据中没有数据）
             # 检查是否是因为缺少必要的表文件
@@ -4305,7 +4644,15 @@ class ConceptResolver:
                     else:
                         print(f"  Source {i+1}: {len(frame)}行, 无stay_id列")
             
+            from ..table.duration import combine_dur_var_units, set_dur_var_unit
+
+            combined_dur_unit = combine_dur_var_units(
+                frames,
+                column="dur_var",
+            )
             combined = pd.concat(frames, ignore_index=True)
+            if combined_dur_unit:
+                set_dur_var_unit(combined, combined_dur_unit)
             
             # DEBUG: 检查combined是否有dur_var
             if DEBUG_MODE and 'dur_var' in combined.columns:
@@ -4321,7 +4668,8 @@ class ConceptResolver:
             # All possible eICU time offset columns
             eicu_time_cols = [
                 'labresultoffset', 'observationoffset', 'nursingchartoffset', 
-                'respiratorycharting_offset', 'intakeoutput_offset', 'respchartoffset',
+                'respiratorycharting_offset', 'intakeoutput_offset',
+                'intakeoutputoffset', 'respchartoffset',
                 'infusionoffset', 'drugstartoffset', 'drugstopoffset', 'drugorderoffset',
                 'culturetakenoffset', 'cultureoffset',
                 # 🔥 添加 respiratorycare 表的时间列
@@ -4395,6 +4743,37 @@ class ConceptResolver:
                 
                 if DEBUG_MODE:
                     print(f"   🔧 [AUMC] 时间列统一完成, charttime 有效值: {combined['charttime'].notna().sum()}/{len(combined)}")
+
+        # MIMIC-IV multi-source concepts can combine charted point events
+        # (``charttime``) with procedure/input windows (``starttime`` plus
+        # ``endtime``).  pd.concat keeps both start columns, while the first
+        # source fixes ``index_column`` to charttime.  Without coalescing,
+        # procedure rows have a null start and disappear during expansion.
+        elif db_name in ['miiv', 'miiv_demo']:
+            miiv_start_cols = [
+                col for col in ('charttime', 'starttime')
+                if col in combined.columns
+            ]
+            if miiv_start_cols:
+                if 'charttime' not in combined.columns:
+                    combined = combined.rename(
+                        columns={miiv_start_cols[0]: 'charttime'}
+                    )
+                for col in miiv_start_cols:
+                    if col == 'charttime' or col not in combined.columns:
+                        continue
+                    combined['charttime'] = combined['charttime'].fillna(
+                        combined[col]
+                    )
+                    combined = combined.drop(columns=[col])
+                index_column = 'charttime'
+
+                if DEBUG_MODE:
+                    print(
+                        "   🔧 [MIMIC-IV] 时间列统一完成, "
+                        f"charttime 有效值: "
+                        f"{combined['charttime'].notna().sum()}/{len(combined)}"
+                    )
         
         # 🔧 CRITICAL FIX 2026-02-09: MIMIC-III 多源时间列统一
         # MIMIC-III 的 inputevents_cv 使用 charttime，inputevents_mv 使用 starttime
@@ -4724,6 +5103,10 @@ class ConceptResolver:
             # Align time to ICU admission if requested (BEFORE any aggregation)
             if align_to_admission:
                 # DEBUG
+                if combined_dur_unit and "dur_var" in combined.columns:
+                    from ..table.duration import set_dur_var_unit
+
+                    set_dur_var_unit(combined, combined_dur_unit)
                 combined = self._align_time_to_admission(
                     combined,
                     data_source,
@@ -4827,7 +5210,11 @@ class ConceptResolver:
             # 🔧 FIX: Only expand true window concepts, NOT point event concepts
             # POINT_EVENT_CONCEPTS like 'abx' have endtime/stoptime columns from source tables
             # but should NOT be expanded - they use set_val(TRUE) callback for point events
-            from ..utils.compat import POINT_EVENT_CONCEPTS, DURATION_CONCEPTS
+            from ..utils.compat import (
+                DURATION_CONCEPTS,
+                MIXED_POINT_WINDOW_CONCEPTS,
+                POINT_EVENT_CONCEPTS,
+            )
             is_point_event = concept_name in POINT_EVENT_CONCEPTS
             is_duration_concept = concept_name in DURATION_CONCEPTS or concept_name.endswith('_dur')
             
@@ -4843,6 +5230,8 @@ class ConceptResolver:
                 # 🔧 FIX 2026-02-05: distribute_amount 内部已经处理时间展开，不需要再次 expand
                 # MIMIC-III ins 概念使用 inputevents_mv 的 distribute_amount callback
                 'distribute_amount',
+                # Interval totals are allocated into ICU-hour bins internally.
+                'distribute_volume_hourly',
             ]
             callback_already_expanded = False
             if sources:
@@ -4963,17 +5352,58 @@ class ConceptResolver:
                 
                 # Expand windows to hourly time series
                 try:
+                    # RRT deliberately combines active point evidence (for
+                    # example MIMIC-IV CRRT charting) with explicit treatment
+                    # windows (procedureevents).  ``expand`` drops rows whose
+                    # end time is null, so partition the mixed frame and add
+                    # the point rows back after expanding only true windows.
+                    point_rows = pd.DataFrame()
+                    expansion_input = combined
+                    if (
+                        concept_name in MIXED_POINT_WINDOW_CONCEPTS
+                        and end_col in combined.columns
+                        and index_column in combined.columns
+                    ):
+                        point_mask = (
+                            combined[index_column].notna()
+                            & combined[end_col].isna()
+                        )
+                        if concept_name in combined.columns:
+                            point_mask &= combined[concept_name].notna()
+                        if point_mask.any():
+                            point_columns = list(dict.fromkeys([
+                                *id_columns,
+                                index_column,
+                                *keep_vars,
+                            ]))
+                            point_columns = [
+                                col for col in point_columns
+                                if col in combined.columns and col != end_col
+                            ]
+                            point_rows = combined.loc[
+                                point_mask, point_columns
+                            ].copy()
+                            expansion_input = combined.loc[~point_mask].copy()
+
                     if DEBUG_MODE:
-                        print(f"   🔍 DEBUG: expand前, 行数={len(combined)}, start_var={index_column}, end_var={end_col}")
-                        print(f"   🔍 DEBUG: endtime样本: {combined[end_col].head(3).tolist() if end_col in combined.columns else 'N/A'}")
-                    combined = expand(
-                        combined,
+                        print(f"   🔍 DEBUG: expand前, 行数={len(expansion_input)}, start_var={index_column}, end_var={end_col}")
+                        print(f"   🔍 DEBUG: endtime样本: {expansion_input[end_col].head(3).tolist() if end_col in expansion_input.columns else 'N/A'}")
+                    expanded = expand(
+                        expansion_input,
                         start_var=index_column,
                         end_var=end_col,
                         step_size=interval,
                         id_cols=id_columns,
                         keep_vars=keep_vars,
                     )
+                    if not point_rows.empty:
+                        combined = pd.concat(
+                            [expanded, point_rows],
+                            ignore_index=True,
+                            sort=False,
+                        )
+                    else:
+                        combined = expanded
                     if DEBUG_MODE:
                         print(f"   🔍 DEBUG: expand后, 行数={len(combined)}")
                     if verbose:
@@ -5111,7 +5541,20 @@ class ConceptResolver:
         if _any_win_tbl and 'dur_var' in combined.columns and index_column:
             from ..table import WinTbl
             # 🔧 FIX: Ensure dur_var is numeric (can become object after pd.concat with NaN)
-            combined['dur_var'] = pd.to_numeric(combined['dur_var'], errors='coerce')
+            # pd.to_numeric on a timedelta column yields NANOSECONDS, which any
+            # downstream unit reading would misread by ~10 orders of magnitude —
+            # convert those through the declared-unit helper instead.
+            if pd.api.types.is_timedelta64_dtype(combined['dur_var']):
+                from ..table.duration import UNIT_HOURS, set_dur_var_unit
+
+                combined['dur_var'] = (
+                    combined['dur_var'].dt.total_seconds() / 3600.0
+                )
+                set_dur_var_unit(combined, UNIT_HOURS)
+            else:
+                combined['dur_var'] = pd.to_numeric(
+                    combined['dur_var'], errors='coerce'
+                )
             # Separate rows: with dur_var (WinTbl sources) and without (TsTbl sources)
             ts_source_rows = combined[combined['dur_var'].isna()].copy()
             combined = combined.dropna(subset=['dur_var'])
@@ -5190,6 +5633,29 @@ class ConceptResolver:
         Returns:
             DataFrame with time converted to hours since ICU admission
         """
+        from ..table.duration import (
+            UNIT_HOURS,
+            get_dur_var_unit,
+            resolve_dur_var_hours,
+            set_dur_var_unit,
+        )
+
+        dur_unit = get_dur_var_unit(data)
+
+        def _normalize_duration_to_hours(frame):
+            nonlocal dur_unit
+            if "dur_var" not in frame.columns:
+                return frame
+            if dur_unit and not get_dur_var_unit(frame):
+                set_dur_var_unit(frame, dur_unit)
+            if pd.api.types.is_numeric_dtype(
+                frame["dur_var"]
+            ) or pd.api.types.is_timedelta64_dtype(frame["dur_var"]):
+                frame["dur_var"] = resolve_dur_var_hours(frame)
+                set_dur_var_unit(frame, UNIT_HOURS)
+                dur_unit = UNIT_HOURS
+            return frame
+
         # eICU和AUMC时间列需要特殊处理
         # eICU uses offset columns (labresultoffset, observationoffset, etc.) which are
         # already in MINUTES from ICU admission. Convert to HOURS for consistency.
@@ -5212,9 +5678,11 @@ class ConceptResolver:
                         if not col.endswith('_dur'):
                             cols_to_convert.add(col)
             
-            # 自动检测其他可能的时间列 (start, stop, dur_var)
+            # 自动检测其他可能的时间列。dur_var follows its own declared
+            # unit contract and must not be divided as though it were an
+            # absolute offset.
             for col in data.columns:
-                if col in ['start', 'stop', 'dur_var']:
+                if col in ['start', 'stop']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
             
@@ -5223,20 +5691,17 @@ class ConceptResolver:
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
                     data[col] = minutes_to_hours_series(data[col])
+            _normalize_duration_to_hours(data)
             return data
 
         if db_name == 'aumc':
-            # AUMC时间列是绝对时间戳（毫秒，已在datasource.py中转换为分钟）
-            # R ricu 的行为：使用绝对时间（小时），不减去 admittedat
-            # 
-            # 🔧 ricu 兼容模式：
-            # ricu 的 change_id 对于 AUMC 不做时间相对化，因为数据默认是 admissionid 级别
-            # 当 id_var == target_id 时，change_id 直接返回不处理时间
-            # 因此 ricu 导出的 CSV 使用绝对时间（floor(ms/3600000) = 小时）
-            # 
-            # 为了与 ricu 兼容，easyicu 也使用绝对时间：
-            # - 不减去 admittedat
-            # - 只将分钟转换为小时
+            # AUMC timestamps are milliseconds from a database-wide epoch.
+            # The bucketed loader converts them to absolute minutes, so every
+            # timed column still has to subtract this admission's admittedat.
+            # Keeping the absolute clock happened to look correct for first
+            # admissions (whose admittedat is often zero) but shifted later
+            # admissions by up to ~100,000 hours while native-v2 claimed that
+            # charttime was relative to ICU admission.
             
             # 收集所有需要转换的时间列
             cols_to_convert = set()
@@ -5250,20 +5715,136 @@ class ConceptResolver:
                             cols_to_convert.add(col)
             
             for col in data.columns:
-                if col in ['start', 'stop', 'dur_var']:
+                if col in ['start', 'stop']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
             
             if not cols_to_convert:
                 return data
-            
-            # 时间转换：只将分钟转换为小时（不减去 admittedat）— 统一走 time_units
-            from ..utils.time_units import minutes_to_hours_series
-            for col in cols_to_convert:
-                if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
-                    # 分钟转小时（单一来源转换因子）
-                    data[col] = minutes_to_hours_series(data[col])
 
+            primary_id = next((col for col in id_columns if col in data.columns), None)
+            if primary_id is None:
+                raise ValueError(
+                    "AUMC time alignment requires an admission identifier"
+                )
+            source_contains_admission_origin = "admittedat" in data.columns
+            if source_contains_admission_origin:
+                # Admission/outcome concepts are loaded from the admissions
+                # table itself.  Re-merging the same column would create
+                # admittedat_x/admittedat_y and leave no canonical origin.
+                frame = data.copy()
+            else:
+                try:
+                    admission_times = getattr(self, "_aumc_admissions_cache", None)
+                    if (
+                        admission_times is None
+                        or primary_id not in admission_times.columns
+                        or "admittedat" not in admission_times.columns
+                        or "dischargedat" not in admission_times.columns
+                    ):
+                        admissions = data_source.load_table(
+                            "admissions",
+                            columns=[primary_id, "admittedat", "dischargedat"],
+                            verbose=False,
+                        )
+                        admission_times = (
+                            admissions.data
+                            if hasattr(admissions, "data")
+                            else admissions
+                        )
+                        if "dischargedat" not in admission_times.columns:
+                            admission_times = admission_times.copy()
+                            admission_times["dischargedat"] = pd.NA
+                        admission_times = (
+                            admission_times[
+                                [primary_id, "admittedat", "dischargedat"]
+                            ]
+                            .drop_duplicates(subset=[primary_id], keep="last")
+                            .copy()
+                        )
+                        self._aumc_admissions_cache = admission_times
+                    frame = data.merge(
+                        admission_times,
+                        on=primary_id,
+                        how="left",
+                        validate="many_to_one",
+                    )
+                except Exception as exc:
+                    raise ValueError(
+                        "AUMC time alignment requires admissions.admittedat"
+                    ) from exc
+
+            admittedat = pd.to_numeric(frame["admittedat"], errors="coerce")
+            if admittedat.notna().sum() == 0:
+                raise ValueError(
+                    "AUMC time alignment found no usable admissions.admittedat"
+                )
+            # ICUDataSource normalises AUMC timestamp columns from raw
+            # milliseconds to minutes.  Accept raw milliseconds as a defensive
+            # fallback for custom datasource implementations.
+            admittedat_scale = (
+                3_600_000.0
+                if admittedat.abs().median(skipna=True) > 1_000_000_000
+                else 60.0
+            )
+            discharge_hours = None
+            if "dischargedat" in frame.columns:
+                discharge_hours = (
+                    pd.to_numeric(frame["dischargedat"], errors="coerce")
+                    - admittedat
+                ) / admittedat_scale
+            for col in cols_to_convert:
+                if col in frame.columns and pd.api.types.is_numeric_dtype(frame[col]):
+                    # Source columns reach this layer as absolute minutes.
+                    # Subtract on the source clock before scaling.  Dividing
+                    # two large absolute offsets separately can turn an exact
+                    # integer hour into e.g. 634.9999999999999, which floors to
+                    # the preceding ICU hour at a clinical window boundary.
+                    frame[col] = (
+                        pd.to_numeric(frame[col], errors="coerce") - admittedat
+                    ) / admittedat_scale
+            if (
+                not source_contains_admission_origin
+                and index_column
+                and index_column in frame.columns
+            ):
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                    ICU_TIME_POST_DISCHARGE_HOURS,
+                    ICU_TIME_PRE_ADMISSION_HOURS,
+                )
+
+                event_hours = pd.to_numeric(
+                    frame[index_column], errors="coerce"
+                )
+                if discharge_hours is None:
+                    upper_hours = pd.Series(
+                        ICU_TIME_FALLBACK_LIMIT_HOURS,
+                        index=frame.index,
+                        dtype="float64",
+                    )
+                else:
+                    upper_hours = discharge_hours.add(
+                        ICU_TIME_POST_DISCHARGE_HOURS
+                    ).fillna(ICU_TIME_FALLBACK_LIMIT_HOURS)
+                invalid_time = event_hours.notna() & (
+                    (event_hours < -ICU_TIME_PRE_ADMISSION_HOURS)
+                    | (event_hours > upper_hours)
+                )
+                excluded = int(invalid_time.sum())
+                if excluded:
+                    logger.warning(
+                        "dropping %d AUMC row(s) outside the ICU episode "
+                        "(24h pre/post allowance)",
+                        excluded,
+                    )
+                    frame = frame.loc[~invalid_time].copy()
+            origin_columns = ["admittedat"]
+            if "dischargedat" not in cols_to_convert:
+                origin_columns.append("dischargedat")
+            data = frame.drop(columns=origin_columns, errors="ignore")
+
+            _normalize_duration_to_hours(data)
             return data
         
         if db_name == 'sic':
@@ -5283,15 +5864,7 @@ class ConceptResolver:
                             cols_to_convert.add(col)
             
             for col in data.columns:
-                # Include 'dur_var' alongside start/stop. SIC interval tables
-                # (e.g. data_range for mech_vent: Offset/OffsetEnd in seconds)
-                # produce a 'dur_var' = OffsetEnd - Offset still in SECONDS, while
-                # the index column is converted to hours below. The aumc branch
-                # already converts 'dur_var'; omitting it for SIC left dur_var in
-                # seconds and an hours index, so win_tbl expansion (end = start +
-                # dur) blew up (e.g. vent_ind exploding to tens of millions of
-                # rows). Convert dur_var on the same seconds->hours basis.
-                if col in ['start', 'stop', 'dur_var']:
+                if col in ['start', 'stop']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
 
@@ -5302,6 +5875,42 @@ class ConceptResolver:
                         # Values > 5000 cannot be hours (= 208 days), must be seconds
                         data[col] = data[col] / 3600.0
 
+            # SIC interval tables (notably data_range for mech_vent) produce
+            # dur_var in seconds.  It is an interval, not an absolute offset,
+            # so it deliberately stays out of the magnitude-based conversion
+            # above.  Convert an undeclared producer duration exactly once and
+            # declare the resulting unit before the generic duration gate.
+            if (
+                "dur_var" in data.columns
+                and pd.api.types.is_numeric_dtype(data["dur_var"])
+                and not dur_unit
+            ):
+                data["dur_var"] = (
+                    pd.to_numeric(data["dur_var"], errors="coerce") / 3600.0
+                )
+                set_dur_var_unit(data, UNIT_HOURS)
+                dur_unit = UNIT_HOURS
+
+            _normalize_duration_to_hours(data)
+            if index_column and index_column in data.columns:
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                )
+
+                event_hours = pd.to_numeric(
+                    data[index_column], errors="coerce"
+                )
+                invalid_time = event_hours.notna() & (
+                    event_hours.abs() > ICU_TIME_FALLBACK_LIMIT_HOURS
+                )
+                excluded = int(invalid_time.sum())
+                if excluded:
+                    logger.warning(
+                        "dropping %d SIC row(s) outside the 366-day "
+                        "source-time sanity bound",
+                        excluded,
+                    )
+                    data = data.loc[~invalid_time].copy()
             return data
         
         # Early return checks (no verbose output for performance)
@@ -5458,10 +6067,12 @@ class ConceptResolver:
             # computation hit pd.to_datetime four times per call, so we
             # drop it entirely. If a future caller actually needs ICU
             # window length, read it off self._icustays_cache directly.
-            # Convert dur_var from minutes to hours (same as datetime path at L4388)
-            # Callbacks like hirid_vent produce dur_var in minutes; index is already in hours
-            if 'dur_var' in data.columns and pd.api.types.is_numeric_dtype(data['dur_var']):
-                data['dur_var'] = data['dur_var'] / 60.0
+            # Normalise dur_var to hours so the index and the duration share a
+            # unit. Which conversion applies depends on what the producer
+            # declared — hirid_vent emits minutes, ts_to_win_tbl on a numeric
+            # index already emits hours, and blindly dividing both by 60 made
+            # the second case 60x too short.
+            _normalize_duration_to_hours(data)
             return data
         
         # 检查时间列是否是有效的datetime类型
@@ -5570,15 +6181,15 @@ class ConceptResolver:
             
             # 注意：不过滤负时间（入ICU前）或超过outtime的数据，匹配 R ricu 行为
             
-            # Convert dur_var from minutes to hours (dur_is_end outputs minutes)
-            if 'dur_var' in data.columns and pd.api.types.is_numeric_dtype(data['dur_var']):
-                data['dur_var'] = data['dur_var'] / 60.0
+            _normalize_duration_to_hours(data)
             
             # Drop the temporary alignment columns
             drop_cols = ['intime']
             if 'outtime' in data.columns:
                 drop_cols.append('outtime')
             data = data.drop(columns=drop_cols)
+            if dur_unit and "dur_var" in data.columns:
+                set_dur_var_unit(data, dur_unit)
             
         except Exception:
             # If alignment fails, return original data silently
@@ -5908,6 +6519,7 @@ class ConceptResolver:
                         dur_col,
                     )
                 result.data[dur_col] = result.data[dur_col].dt.total_seconds() / 3600.0
+                _declare_dur_var_hours(result.data)
 
         # R代码中，递归概念的回调返回结果就是最终结果，不需要再次聚合
         # aggregate参数已经在加载子概念时应用了
@@ -5952,6 +6564,7 @@ class ConceptResolver:
                         if pd.api.types.is_timedelta64_dtype(result.data[dur_col]):
                             # timedelta 转换为小时数
                             result.data[dur_col] = result.data[dur_col].dt.total_seconds() / 3600.0
+                            _declare_dur_var_hours(result.data)
                         elif pd.api.types.is_datetime64_any_dtype(result.data[dur_col]):
                             # 如果是 datetime（不应该，但保险起见），记录警告
                             print(f"   ⚠️  警告: WinTbl 的 dur_var '{dur_col}' 是 datetime 类型，预期是 timedelta")
@@ -5977,6 +6590,7 @@ class ConceptResolver:
                     if dur_col and dur_col in result.data.columns:
                         if pd.api.types.is_timedelta64_dtype(result.data[dur_col]):
                             result.data[dur_col] = result.data[dur_col].dt.total_seconds() / 3600.0
+                            _declare_dur_var_hours(result.data)
             
             # CRITICAL: Expand WinTbl to time series before applying interval aggregation
             # WinTbl represents time windows (start_time, duration) and must be expanded
@@ -6125,7 +6739,10 @@ class ConceptResolver:
         if merged_df is None or merged_df.empty:
             return None
 
-        result = merged_df
+        # Add columns without mutating the producer-owned wide frame.  A
+        # shallow copy keeps the dense value blocks shared until a new column
+        # is assigned.
+        result = merged_df.copy(deep=False)
         id_col = result.columns[0]
         if 'charttime' not in result.columns:
             return None
@@ -6157,51 +6774,104 @@ class ConceptResolver:
             remaining_frames.append(frame)
 
         if remaining_frames:
-            # 🚀 Hash-based vectorized merge: avoid pd.merge entirely for 98%+ of rows
-            # Build combined int64 key for O(1) hash lookup. Most remaining keys overlap
-            # with batch (13.2M batch → 13.4M final = only ~1.5% extra rows).
-            # This replaces N sequential merges (16.4s) + 1 big merge (4.2s) = 20.6s
-            # with hash-build (~0.5s) + N get_indexer (~1.5s) = ~2s total.
-            id_vals = result[id_col].values.astype(np.int64)
-            time_vals = result[merge_keys[1]].values.astype(np.int64)
-            time_min = int(time_vals.min()) if len(time_vals) > 0 else 0
-            stride = int(time_vals.max()) - time_min + 2
-            batch_key = id_vals * stride + (time_vals - time_min)
-            # Hash table for O(1) key → row_index lookup
-            batch_idx_map = pd.Index(batch_key)
+            # Exact key matching is mandatory here. ``charttime`` is an
+            # ICU-relative floating-point hour and valid sources can have
+            # different within-hour phases (for example -0.3833 and 0.0).
+            # The former fast path cast times to int64 before hashing, which
+            # truncated those values into the same integer hour and silently
+            # attached measurements to another concept's timestamp.  It also
+            # made the key index non-unique whenever two fractional times fell
+            # in one hour.  A MultiIndex preserves the exact (id, charttime)
+            # pair while retaining vectorized lookup.
+            batch_idx_map = pd.MultiIndex.from_frame(
+                result.loc[:, merge_keys],
+                names=merge_keys,
+            )
+            if not batch_idx_map.is_unique:
+                return None
 
-            extra_frames = []
-            remaining_names = []
+            prepared_frames = []
             for frame in remaining_frames:
                 name = [c for c in frame.columns if c not in merge_keys][0]
-                remaining_names.append(name)
-                fid = frame[id_col].values.astype(np.int64)
-                ftime = frame[merge_keys[1]].values.astype(np.int64)
-                fkey = fid * stride + (ftime - time_min)
-
-                indexer = batch_idx_map.get_indexer(fkey)
+                if name in result.columns:
+                    return None
+                source = frame[name]
+                # This low-allocation path supports the numeric/boolean
+                # concepts it was designed for.  Text/category semantics need
+                # the normal merge fallback rather than a lossy numeric cast.
+                if not (
+                    pd.api.types.is_numeric_dtype(source.dtype)
+                    or pd.api.types.is_bool_dtype(source.dtype)
+                ):
+                    return None
+                frame_idx = pd.MultiIndex.from_frame(
+                    frame.loc[:, merge_keys],
+                    names=merge_keys,
+                )
+                if not frame_idx.is_unique:
+                    return None
+                indexer = batch_idx_map.get_indexer(frame_idx)
                 matched = indexer >= 0
+                prepared_frames.append((name, frame, indexer, matched))
 
-                # Assign matched values directly (no merge needed)
-                col_data = np.full(len(result), np.nan)
-                col_data[indexer[matched]] = pd.to_numeric(
-                    frame[name].iloc[np.where(matched)[0]], errors='coerce'
-                ).values
-                result[name] = col_data
+            extra_frames = []
+            for name, frame, indexer, matched in prepared_frames:
+                source = frame[name]
+                if pd.api.types.is_bool_dtype(source.dtype):
+                    aligned = pd.Series(
+                        pd.NA,
+                        index=pd.RangeIndex(len(result)),
+                        dtype="boolean",
+                    )
+                elif pd.api.types.is_integer_dtype(source.dtype):
+                    bits = max(8, int(getattr(source.dtype, "itemsize", 8)) * 8)
+                    prefix = (
+                        "UInt"
+                        if pd.api.types.is_unsigned_integer_dtype(source.dtype)
+                        else "Int"
+                    )
+                    aligned = pd.Series(
+                        pd.NA,
+                        index=pd.RangeIndex(len(result)),
+                        dtype=f"{prefix}{bits}",
+                    )
+                else:
+                    try:
+                        aligned = pd.Series(
+                            np.nan,
+                            index=pd.RangeIndex(len(result)),
+                            dtype=source.dtype,
+                        )
+                    except (TypeError, ValueError):
+                        aligned = pd.Series(
+                            np.nan,
+                            index=pd.RangeIndex(len(result)),
+                            dtype="float64",
+                        )
+                matched_source_positions = np.flatnonzero(matched)
+                aligned.iloc[indexer[matched]] = source.iloc[
+                    matched_source_positions
+                ].to_numpy(copy=False)
+                result[name] = aligned.array
 
-                # Collect unmatched rows for append
                 if not matched.all():
-                    extra_frames.append(frame.iloc[np.where(~matched)[0]])
+                    extra_frames.append(
+                        frame.iloc[np.flatnonzero(~matched)].reset_index(drop=True)
+                    )
 
-            # Handle extra rows (keys not in batch) — typically < 2% of data
+            # Unmatched keys are normally a small minority.  Merge only those
+            # exact-key fragments, then append them once to the large frame.
             if extra_frames:
-                extras = pd.concat(extra_frames, ignore_index=True)
-                # Merge extra rows together (small: ~200K rows)
-                extra_names = [c for c in extras.columns if c not in merge_keys]
-                if len(extra_names) > 1:
-                    # Multiple extra columns — need to consolidate duplicates
-                    extras = extras.groupby(merge_keys, sort=False).first().reset_index()
-                result = pd.concat([result, extras], ignore_index=True)
+                extras = extra_frames[0]
+                for extra in extra_frames[1:]:
+                    extras = extras.merge(
+                        extra,
+                        on=merge_keys,
+                        how="outer",
+                        sort=False,
+                        validate="one_to_one",
+                    )
+                result = pd.concat([result, extras], ignore_index=True, sort=False)
 
         final_cols = [id_col, 'charttime']
         final_cols.extend([name for name in concept_names if name in result.columns])
@@ -7953,6 +8623,8 @@ class ConceptResolver:
         concept_names: List[str],
         interval: Optional[pd.Timedelta] = None,
         data_source: Optional['ICUDataSource'] = None,  # 🔧 FIX 2025-01-31: 添加数据源参数
+        materialize_missing_concepts: bool = True,
+        consume_sources: bool = False,
     ) -> pd.DataFrame:
         """
         将多个概念表以ricu风格合并，实现完整的时间网格对齐和窗口展开
@@ -7968,6 +8640,9 @@ class ConceptResolver:
             concept_names: 概念名称列表（保持顺序）
             interval: 时间间隔，默认1小时
             data_source: 数据源，用于确定默认ID列
+            consume_sources: 内部顶层提取路径在所有概念均加载完毕后可转移
+                输入帧所有权并清除不再需要的 resolver/data-source 缓存。默认
+                ``False``，因此直接调用该兼容方法不会改变传入映射。
             
         Returns:
             ricu风格的宽格式DataFrame
@@ -8005,9 +8680,20 @@ class ConceptResolver:
         # 🚀 优化：不再 .copy()。merge_concepts_r_style 的 rename/drop_duplicates 
         # 都会创建新对象，不会修改原始 DataFrame。缓存在顶层 finally 中清空。
         concept_data: Dict[str, pd.DataFrame] = {}
+        # Preserve producer-owned time metadata while unwrapping ICUTable /
+        # TsTbl objects.  Falling back only to a hand-maintained list of column
+        # names made valid event concepts look static whenever a source used a
+        # less common index name (for example eICU ``drugoffset`` for
+        # phenytoin, AUMC ``registeredat`` for sampling, or MIMIC
+        # ``chartdate``).  Those concepts then created a synthetic null-time
+        # row during the outer merge.  The table metadata is the authoritative
+        # time binding and must travel with the frame until names are aligned.
+        declared_time_columns: Dict[str, str] = {}
         for name, table in tables.items():
             if isinstance(table, ICUTable):
                 df = table.data
+                if table.index_column and table.index_column in df.columns:
+                    declared_time_columns[name] = table.index_column
                 # 重命名值列为概念名
                 if name not in df.columns:
                     # 查找可能的值列 - 优先使用 ICUTable 元数据中的 value_column
@@ -8023,6 +8709,9 @@ class ConceptResolver:
             elif hasattr(table, 'data') and isinstance(table.data, pd.DataFrame):
                 # Handle WinTbl/TsTbl/IdTbl which have .data but don't inherit from ICUTable
                 df = table.data
+                declared_index = getattr(table, 'index_column', None) or getattr(table, 'index_var', None)
+                if declared_index and declared_index in df.columns:
+                    declared_time_columns[name] = declared_index
                 if name not in df.columns:
                     # For WinTbl, try index_var as value column candidate
                     value_candidates = ['value', 'valuenum']
@@ -8044,6 +8733,24 @@ class ConceptResolver:
         
         if not concept_data:
             return pd.DataFrame(columns=list(concept_names))
+
+        if consume_sources:
+            # All source reads and recursive callbacks have completed before
+            # this merge starts.  Retaining resolver/data-source caches and
+            # the ICUTable mapping until after the final wide concat kept
+            # several aliases to every large concept frame alive at the exact
+            # eICU respiratory peak.  ``concept_data`` now owns the frames
+            # required below, so the other references can be released safely.
+            with self._cache_lock:
+                self._concept_cache.clear()
+                self._concept_data_cache.clear()
+                self._raw_concept_cache.clear()
+                self._table_cache.clear()
+                self._drop_cache_accounting()
+            if data_source is not None:
+                data_source.clear_cache()
+            if isinstance(tables, MutableMapping):
+                tables.clear()
         
         # 检测ID列和时间列
         id_col = None
@@ -8053,6 +8760,9 @@ class ConceptResolver:
                      'Offset', 'offset',  # SICdb: Offset (uppercase)
                      'nursingchartoffset', 'labresultoffset', 'observationoffset',
                      'respchartoffset', 'intakeoutputoffset', 'infusionoffset']
+        for declared_time in declared_time_columns.values():
+            if declared_time not in _time_candidates:
+                _time_candidates.append(declared_time)
         for df in concept_data.values():
             if df is None or df.empty:
                 continue
@@ -8080,9 +8790,34 @@ class ConceptResolver:
             df = concept_data[name]
             if df is None or df.empty:
                 continue
+            # The table's declared index is authoritative.  Multi-source
+            # concepts can retain an auxiliary column whose name happens to
+            # equal the time key selected from an earlier concept.  For
+            # example, eICU ``rrt`` declares ``charttime`` after coalescing
+            # treatment/intake-output sources but can also retain a boolean
+            # ``intakeoutputoffset`` helper column.  Treating that helper as
+            # the merge time collapses every RRT event to hour zero.
+            declared_time = declared_time_columns.get(name)
+            if (
+                declared_time
+                and declared_time != time_col
+                and declared_time in df.columns
+            ):
+                if time_col in df.columns:
+                    df = df.drop(columns=[time_col])
+                concept_data[name] = df.rename(
+                    columns={declared_time: time_col}
+                )
+                continue
             if time_col in df.columns:
                 continue
-            for cand in _time_candidates:
+            candidates = [
+                declared_time_columns.get(name),
+                *_time_candidates,
+            ]
+            for cand in candidates:
+                if not cand:
+                    continue
                 if cand in df.columns:
                     concept_data[name] = df.rename(columns={cand: time_col})
                     break
@@ -8093,8 +8828,13 @@ class ConceptResolver:
             id_col=id_col,
             time_col=time_col,
             interval_hours=interval_hours,
+            consume_input=consume_sources,
         )
-        result = self._ensure_requested_concept_columns(result, concept_names)
+        result = self._ensure_requested_concept_columns(
+            result,
+            concept_names,
+            materialize_missing=materialize_missing_concepts,
+        )
         
         # 确保概念列按请求的顺序排列
         final_cols = [id_col, time_col]

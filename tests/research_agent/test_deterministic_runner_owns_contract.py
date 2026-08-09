@@ -1,9 +1,4 @@
-"""Deterministic auxiliaries never own or waive a primary estimand contract.
-
-Primary causal, survival, and association methods remain agent-owned. Historical
-runner labels in resumed manifests cannot demote a missing-output error merely
-because a summary contains an estimate-shaped value.
-"""
+"""Only a receipt-bound registered primary owner may waive its own shape error."""
 
 from __future__ import annotations
 
@@ -48,6 +43,17 @@ def test_historical_survival_runner_never_owns_flat_or_nested_estimate():
     assert not _primary_runner_core_estimate_present(
         "survival_primary_cox", {"status": "ok", "hazard_ratio": 0.83}
     )
+
+
+def test_current_host_survival_owner_binds_its_primary_estimate():
+    assert _primary_runner_core_estimate_present(
+        "survival_primary_cox",
+        {
+            "status": "ok",
+            "receipt_issuer": "easyicu.host.survival_primary_cox_v1",
+            "hazard_ratio": 0.83,
+        },
+    )
     assert not _primary_runner_core_estimate_present(
         "survival_primary_cox",
         {"status": "ok", "primary_model": {"hazard_ratio": 0.83}},
@@ -91,6 +97,21 @@ def test_historical_survival_runner_cannot_demote_step_contract_errors():
         step_record, summary, [_contract_error()]
     )
     assert out[0].severity == "error"
+
+
+def test_current_host_survival_owner_cannot_waive_an_untyped_shape_error():
+    step_record = {"deterministic_standard_analysis": "survival_primary_cox"}
+    summary = {
+        "status": "ok",
+        "receipt_issuer": "easyicu.host.survival_primary_cox_v1",
+        "hazard_ratio": 0.83,
+    }
+    out = _demote_step_contract_for_primary_runner(
+        step_record, summary, [_contract_error(), _integrity_error()]
+    )
+    by_validator = {finding.validator: finding.severity for finding in out}
+    assert by_validator["step_contract"] == "error"
+    assert by_validator["primary_exposure_overadjustment"] == "error"
 
 
 def test_integrity_findings_are_never_demoted():

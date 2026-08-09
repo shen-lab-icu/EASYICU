@@ -23,6 +23,68 @@ def _duckdb_path(p) -> str:
     return str(p).replace('\\', '/')
 
 
+def _duckdb_sql_literal(value: Any) -> str:
+    """Return one safely quoted scalar for an internal DuckDB predicate."""
+
+    if value is None:
+        return "NULL"
+    if isinstance(value, (bool, np.bool_)):
+        return "TRUE" if bool(value) else "FALSE"
+    if isinstance(value, (int, np.integer)) and not isinstance(value, bool):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        numeric = float(value)
+        if not np.isfinite(numeric):
+            raise ValueError("non-finite values cannot be used in DuckDB filters")
+        return repr(numeric)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _aumc_admissions_relation_sql(data_source: Any) -> str:
+    """Return a DuckDB relation for AUMC's ICU admission clock origin.
+
+    AUMC event timestamps are measured on a database-wide millisecond clock.
+    Hourly aggregation therefore needs ``admittedat`` before it can choose a
+    bucket.  Prefer the configured/resolved table when available, while also
+    supporting the CSV-only layout distributed by AmsterdamUMCdb.
+    """
+    base_path = Path(data_source.base_path)
+    candidates: List[Path] = []
+
+    try:
+        resolved = data_source._resolve_loader_from_disk("admissions")
+    except (AttributeError, KeyError, TypeError, ValueError):
+        resolved = None
+    if isinstance(resolved, (str, Path)):
+        candidates.append(Path(resolved))
+
+    candidates.extend(
+        [
+            base_path / "admissions.parquet",
+            base_path / "admissions.csv",
+            base_path / "admissions.csv.gz",
+        ]
+    )
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if not candidate.is_file():
+            continue
+        sql_path = _duckdb_path(candidate).replace("'", "''")
+        if candidate.suffix.lower() in {".parquet", ".pq"}:
+            return f"read_parquet('{sql_path}')"
+        if candidate.name.lower().endswith((".csv", ".csv.gz")):
+            return f"read_csv_auto('{sql_path}', header=true)"
+
+    raise FileNotFoundError(
+        "AUMC relative-time aggregation requires admissions.parquet, "
+        "admissions.csv, or admissions.csv.gz under the data source path"
+    )
+
+
 def _is_valid_parquet_name(name: str) -> bool:
     """Whether a filename should be treated as a real parquet file.
 
@@ -171,6 +233,39 @@ logger = logging.getLogger(__name__)
 import threading as _threading
 _duckdb_local = _threading.local()
 
+
+def _default_duckdb_threads() -> int:
+    """Bound one DuckDB connection by the effective-memory worker policy."""
+
+    import os
+
+    raw = os.environ.get("EASYICU_DUCKDB_THREADS")
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            logger.warning("Ignoring invalid EASYICU_DUCKDB_THREADS=%r", raw)
+    try:
+        from easyicu.runtime.parallel_config import get_global_config
+
+        return max(1, min(8, int(get_global_config().max_workers)))
+    except Exception:
+        return 1
+
+
+def _default_duckdb_memory_limit_gb() -> float:
+    """Size DuckDB buffers from process-effective, not host, free memory."""
+
+    try:
+        from easyicu.runtime.memory_manager import get_effective_memory_info
+
+        available_gb = (
+            get_effective_memory_info().effective_available_mb / 1024.0
+        )
+        return max(1.0, min(available_gb * 0.15, 4.0))
+    except Exception:
+        return 1.0
+
 def _get_duckdb_connection():
     """获取当前线程的 DuckDB 连接（复用已有连接）"""
     import duckdb
@@ -183,24 +278,18 @@ def _get_duckdb_connection():
         # 🚀 性能优化: 支持通过环境变量限制 DuckDB 线程数
         # 并行模式下 6 个进程 × 默认线程数(half cores) → 严重过度订阅
         import os
-        _max_threads = os.environ.get('EASYICU_DUCKDB_THREADS')
-        if _max_threads:
-            con.execute(f"SET threads = {int(_max_threads)}")
+        con.execute(f"SET threads = {_default_duckdb_threads()}")
         # 🚀 限制 DuckDB 内存使用，防止在大内存服务器上分配过多缓冲区
         # 默认值为系统内存的 75%（1.5TB 服务器上约 1.1TB），严重浪费
-        # 使用保守自适应: min(available * 0.15, 4GB), 下限 2GB
-        # 配合患者分批加载，每次查询只处理部分患者，2-4GB 足够
+        # 使用保守自适应: min(effective available * 0.15, 4GB),
+        # 下限 1GB。配合患者分批和 spill，避免 8GB 工作站上
+        # DuckDB 缓冲区与 Pandas/Arrow 嵌套工作集争抢内存。
         _mem_limit = os.environ.get('EASYICU_DUCKDB_MEMORY_LIMIT')
         if _mem_limit:
             con.execute(f"SET memory_limit = '{_mem_limit}'")
         else:
-            try:
-                import psutil
-                _avail_gb = psutil.virtual_memory().available / (1024 ** 3)
-                _duck_gb = max(2.0, min(_avail_gb * 0.15, 4.0))
-                con.execute(f"SET memory_limit = '{_duck_gb:.1f}GB'")
-            except Exception:
-                con.execute("SET memory_limit = '2GB'")
+            _duck_gb = _default_duckdb_memory_limit_gb()
+            con.execute(f"SET memory_limit = '{_duck_gb:.1f}GB'")
         # 磁盘溢出目录：**纯 opt-in**，默认不动 DuckDB 原生行为（普通用户数据在
         # 本地盘，默认 spill 就够用，无需额外设置）。只有当用户显式设了
         # EASYICU_DUCKDB_TEMP_DIR（例如数据放在慢速外置/USB 盘、想把 spill 落到
@@ -718,8 +807,10 @@ class ICUDataSource:
 
             # 提取 patient_ids 过滤器用于分区预过滤
             patient_ids_filter = None
-            # 🚀 HiRID 大表优化：提取 sub_var/ids 过滤器用于 DuckDB 精确过滤
-            # 这确保加载 hr 时只查询 variableid=200，而不是全局白名单的 198 个 ID
+            # 🚀 大表精确 selector 下推：提取除患者 ID 以外的
+            # sub_var/ids IN 过滤器，在 DuckDB/PyArrow 读取层就缩小数据。
+            # 这不能依赖列名白名单：eICU 的 nursingchartvalue、
+            # respchartvaluelabel 等字符串 selector 同样来自已审计的概念字典。
             concept_itemid_filter = None  # (column_name, set_of_ids)
             
             # 🚀 优化：对于缺少 stay_id 的表（如 labevents），如果过滤条件是 stay_id，
@@ -736,23 +827,6 @@ class ICUDataSource:
                                  'patientunitstayid',  # eICU
                                  'patientid',  # HiRID
                                  'CaseID', 'caseid']  # 🔧 FIX 2026-01-26: 添加 SICdb CaseID
-                    
-                    # 🚀 检测 sub_var/ids 过滤器（用于 HiRID observations 等大表）
-                    # 这些过滤器应该在 DuckDB 层应用，而不是内存中应用
-                    # 🔧 FIX 2026-01-26: 添加 SICdb DataID, LaboratoryID, DrugID
-                    sub_var_columns = ['variableid', 'itemid', 'nursingchartcelltypevalname',
-                                       'DataID', 'LaboratoryID', 'DrugID']
-                    if spec.op == FilterOp.IN and spec.column in sub_var_columns:
-                        # 提取概念特定的 itemid 过滤器
-                        ids = spec.value
-                        if isinstance(ids, (list, tuple)):
-                            ids = set(ids)
-                        elif not isinstance(ids, set):
-                            ids = {ids}
-                        concept_itemid_filter = (spec.column, ids)
-                        if DEBUG_MODE:
-                            logger.info(f"🎯 概念特定过滤器: {spec.column} IN {len(ids)} 个 ID")
-                        continue  # 继续处理，找 patient_id 过滤器
                     
                     # 🚀 VALUE-TO-ITEMID 映射优化：处理 sub_var: value 类型的概念
                     # 例如 ett_gcs 使用 value='No Response-ETT'，我们将其转换为 itemid=223900
@@ -777,6 +851,27 @@ class ICUDataSource:
                                 # 注意：仍需在内存中应用 value 过滤（因为 itemid 可能包含多种 value）
                                 # 这个过滤会在后面的 filters 循环中应用
                                 continue
+
+                    # 概念 resolver 在这里只会产生 patient selector 与
+                    # source.sub_var selector。患者列在下方单独处理；其他
+                    # exact-IN selector 均可以无损前移，不应因新数据库
+                    # 使用了新 sub_var 列名而退化为整批载入 Pandas。
+                    # ``value`` 的已知 value→itemid 快路径必须先运行；仅当
+                    # 没有映射时才直接下推原始 value selector。
+                    if spec.op == FilterOp.IN and spec.column not in id_columns:
+                        ids = spec.value
+                        if isinstance(ids, (list, tuple, set, frozenset)):
+                            ids = set(ids)
+                        elif not isinstance(ids, set):
+                            ids = {ids}
+                        concept_itemid_filter = (spec.column, ids)
+                        if DEBUG_MODE:
+                            logger.info(
+                                "🎯 概念精确 selector: %s IN %d 个值",
+                                spec.column,
+                                len(ids),
+                            )
+                        continue  # 继续处理，找 patient_id 过滤器
                     
                     if spec.op == FilterOp.IN and spec.column in id_columns:
                         patient_ids_filter = spec
@@ -2328,14 +2423,15 @@ class ICUDataSource:
             if not filter_ids:
                 return pd.DataFrame(columns=list(columns) if columns else [])
             # 检查是否为字符串类型的 ID（如 eICU nursecharting）
-            is_string_ids = any(isinstance(x, str) for x in filter_ids)
-            if is_string_ids:
-                # 字符串 ID 需要加引号
-                id_str = ", ".join(f"'{x}'" for x in sorted(filter_ids))
-            else:
-                # 数字 ID
-                id_str = ", ".join(map(str, sorted(filter_ids)))
-            where_conditions.append(f"{filter_col} IN ({id_str})")
+            ordered_filter_ids = sorted(
+                filter_ids,
+                key=lambda item: (type(item).__name__, str(item)),
+            )
+            id_str = ", ".join(
+                _duckdb_sql_literal(value) for value in ordered_filter_ids
+            )
+            escaped_filter_col = str(filter_col).replace('"', '""')
+            where_conditions.append(f'"{escaped_filter_col}" IN ({id_str})')
             if DEBUG_MODE:
                 logger.info("Large-table optimization: filtering %s to %d IDs", filter_col, len(filter_ids))
         
@@ -2422,13 +2518,31 @@ class ICUDataSource:
                 partitioning=None,
                 exclude_invalid_files=True
             )
+            schema_names = list(dataset.schema.names)
+            schema_by_lower = {
+                str(name).lower(): str(name) for name in schema_names
+            }
+            requested_columns = list(columns) if columns else None
+            actual_columns = None
+            actual_to_requested = {}
+            if requested_columns is not None:
+                actual_columns = []
+                for requested in requested_columns:
+                    actual = schema_by_lower.get(str(requested).lower())
+                    if actual is None:
+                        continue
+                    if actual not in actual_columns:
+                        actual_columns.append(actual)
+                    actual_to_requested[actual] = str(requested)
             
             # 构建过滤表达式（支持多个条件）
             filter_exprs = []
             
             # 患者 ID 过滤
             if patient_ids_filter:
-                id_col = patient_ids_filter.column
+                id_col = schema_by_lower.get(
+                    str(patient_ids_filter.column).lower()
+                )
                 values = patient_ids_filter.value
                 if isinstance(values, (list, tuple, set)):
                     value_list = list(values)
@@ -2441,8 +2555,16 @@ class ICUDataSource:
                         value_list = [values]
 
                 if not value_list:
-                    wanted_cols = list(columns) if columns else dataset.schema.names
+                    wanted_cols = requested_columns or schema_names
                     return pd.DataFrame(columns=wanted_cols)
+                if id_col is None:
+                    logger.warning(
+                        "Partitioned read cannot apply patient filter: "
+                        "column %s is absent from %s",
+                        patient_ids_filter.column,
+                        directory,
+                    )
+                    return pd.DataFrame(columns=requested_columns or schema_names)
 
                 try:
                     filter_exprs.append(ds.field(id_col).isin(value_list))
@@ -2453,9 +2575,18 @@ class ICUDataSource:
             if itemid_filter_config:
                 try:
                     filter_col, filter_ids = itemid_filter_config
-                    filter_exprs.append(ds.field(filter_col).isin(list(filter_ids)))
+                    actual_filter_col = schema_by_lower.get(
+                        str(filter_col).lower()
+                    )
+                    if actual_filter_col is None:
+                        return pd.DataFrame(
+                            columns=requested_columns or schema_names
+                        )
+                    filter_exprs.append(
+                        ds.field(actual_filter_col).isin(list(filter_ids))
+                    )
                     if DEBUG_MODE:
-                        logger.info("Large-table optimization (PyArrow): filtering %s to %d IDs", filter_col, len(filter_ids))
+                        logger.info("Large-table optimization (PyArrow): filtering %s to %d IDs", actual_filter_col, len(filter_ids))
                 except Exception:
                     pass
             
@@ -2466,33 +2597,61 @@ class ICUDataSource:
                 for expr in filter_exprs[1:]:
                     filter_expr = filter_expr & expr
 
-            # 批量读取，启用多线程（优化大规模提取）
-            # 🚀 优化：为90000+患者提取增加线程池
-            # 🚀 线程数自适应：32 线程在大内存多核服务器上最优，但在 16GB 笔记本上
-            # （提取时已有多个 concept-worker 线程并发，每个又开 32 个 Arrow 线程 →
-            # 上百线程严重过度订阅 + 每线程各自分配读缓冲抬高峰值内存）。默认取
-            # min(cpu, 8)，服务器可用 EASYICU_ARROW_THREADS 调回高值。
+            # 批量读取，启用受控的 PyArrow 全局 CPU 线程池。
+            #
+            # Dataset.to_table(use_threads=...) 接受的是 bool，不是线程数。旧代码
+            # 把整数 ``thread_count`` 直接传进去；任何正整数都会变成 True，因此
+            # 在 384 核服务器上实际放开了整个 Arrow CPU 池，而不是预期的 8 个
+            # 线程。这会在大分区扫描时造成明显的短时内存尖峰。先显式限制全局
+            # Arrow CPU 池，再用 bool 控制本次扫描，才能让
+            # EASYICU_ARROW_THREADS 在 Windows/macOS/Linux 上真正生效。
             import os as _os
+            import pyarrow as _pa
+            from easyicu.runtime.parallel_config import get_global_config
+
             _env_at = _os.environ.get('EASYICU_ARROW_THREADS')
             if _env_at:
-                thread_count = max(1, int(_env_at))
+                try:
+                    thread_count = max(1, int(_env_at))
+                except ValueError:
+                    logger.warning(
+                        "Ignoring invalid EASYICU_ARROW_THREADS=%r",
+                        _env_at,
+                    )
+                    thread_count = min(
+                        (_os.cpu_count() or 4),
+                        8,
+                        get_global_config().max_workers,
+                    )
             else:
-                thread_count = min((_os.cpu_count() or 4), 8)
-            
-            if columns:
+                thread_count = min(
+                    (_os.cpu_count() or 4),
+                    8,
+                    get_global_config().max_workers,
+                )
+
+            if _pa.cpu_count() != thread_count:
+                _pa.set_cpu_count(thread_count)
+            use_arrow_threads = thread_count > 1
+
+            if requested_columns is not None:
                 table = dataset.to_table(
-                    columns=list(columns), 
+                    columns=actual_columns,
                     filter=filter_expr,
-                    use_threads=thread_count  # 明确线程数
+                    use_threads=use_arrow_threads,
                 )
             else:
                 table = dataset.to_table(
                     filter=filter_expr,
-                    use_threads=True
+                    use_threads=use_arrow_threads,
                 )
 
             # 转换为 pandas，使用 zero-copy 优化
-            return _arrow_to_pandas_compat(table, split_blocks=True)
+            frame = _arrow_to_pandas_compat(table, split_blocks=True)
+            if requested_columns is not None:
+                frame = frame.rename(columns=actual_to_requested)
+                frame = frame.reindex(columns=requested_columns)
+            return frame
             
         except Exception:
             # 回退到简单方式
@@ -2965,7 +3124,8 @@ def load_bucketed_table_aggregated(
             raw_columns = set()
 
     # 🔧 FIX 2026-05-11: case-insensitive 列存在性检查（同 multi-concept 路径，应对 MIMIC-III 1.4 大写列名）
-    raw_columns_lower = {str(c).lower() for c in raw_columns}
+    raw_columns_by_lower = {str(c).lower(): str(c) for c in raw_columns}
+    raw_columns_lower = set(raw_columns_by_lower)
 
     # 🔧 FIX 2026-05-16: detect VARCHAR-typed numeric value columns (e.g. eicu
     # respiratorycharting.respchartvalue) and rewrite SQL references to use
@@ -3102,14 +3262,16 @@ def load_bucketed_table_aggregated(
     # 应当无条件应用 *0.1 转换为 g/dL，否则后续 filter_bounds 会丢掉所有行。
     if _has_inline_convert and convert_unit_filter:
         _unit_col_name = None
-        if 'unit' in raw_columns:
-            _unit_col_name = 'unit'
+        if 'unit' in raw_columns_by_lower:
+            _unit_col_name = raw_columns_by_lower['unit']
         else:
             try:
                 _table_cfg = data_source.config.get_table(table_name)
                 _configured_unit = getattr(_table_cfg.defaults, 'unit_var', None)
-                if _configured_unit and _configured_unit in raw_columns:
-                    _unit_col_name = _configured_unit
+                if _configured_unit:
+                    _unit_col_name = raw_columns_by_lower.get(
+                        str(_configured_unit).lower()
+                    )
             except Exception:
                 pass
         if _unit_col_name is None:
@@ -3158,25 +3320,44 @@ def load_bucketed_table_aggregated(
     _order_itemid = ""
     
     if db_name == "aumc":
-        # AUMC measuredat是Unix毫秒时间戳，转换为分钟后再取整
-        # NOTE: 这里输出的是分钟(measuredat_minutes)。分钟→小时的归一由 concept.py
-        # 经 time_units.minutes_to_hours_series 单点完成（批量路径或 _align_time_to_admission，
-        # 两者互斥，每列只转一次）。本层只产出分钟，不做单位换算。
-        time_round_expr = (
-            f"FLOOR(({time_col} / 60000.0) / {interval_minutes}) * {interval_minutes}"
+        # AUMC measuredat/admittedat share a database-wide millisecond clock.
+        # The bucket boundary must be chosen *after* subtracting admittedat.
+        # Flooring the absolute clock first shifts every non-hour admission and
+        # can mix observations from adjacent ICU-relative hours.
+        admissions_relation = _aumc_admissions_relation_sql(data_source)
+        relative_bucket_minutes = (
+            f"FLOOR(((o.{time_col} - a.admittedat) / 60000.0) / "
+            f"{interval_minutes}) * {interval_minutes}"
         )
-        # 输出时间列为分钟偏移量（相对于admittedat）
+        # Keep the existing downstream contract: measuredat_minutes remains on
+        # AUMC's absolute minute clock so _align_time_to_admission subtracts the
+        # origin exactly once. Adding a floored relative bucket to admittedat
+        # also preserves FLOOR semantics for negative pre-admission times.
+        time_round_expr = (
+            f"(a.admittedat / 60000.0 + {relative_bucket_minutes})"
+        )
         output_time_expr = f"{time_round_expr} as measuredat_minutes"
-        # 标准查询
+        aumc_where_conditions = [
+            f"o.{itemid_col} IN ({ids_str})",
+            f"o.{value_column} IS NOT NULL",
+            "a.admittedat IS NOT NULL",
+        ]
+        if patient_filter_values:
+            patient_str = ", ".join(str(x) for x in patient_filter_values)
+            aumc_where_conditions.append(
+                f"o.{patient_filter_col} IN ({patient_str})"
+            )
+        aumc_where_clause = "WHERE " + " AND ".join(aumc_where_conditions)
         query = f"""
         SELECT 
-            {id_col},
+            o.{id_col} AS {id_col},
             {output_time_expr}{_select_itemid},
             {_agg_value_expr}{unit_select}
-        FROM read_parquet({glob_pattern}, union_by_name=true)
-        {where_clause}
-        GROUP BY {id_col}, {time_round_expr}{_group_itemid}
-        ORDER BY {id_col}, 2{_order_itemid}
+        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        JOIN {admissions_relation} a ON o.{id_col} = a.admissionid
+        {aumc_where_clause}
+        GROUP BY o.{id_col}, {time_round_expr}{_group_itemid}
+        ORDER BY o.{id_col}, 2{_order_itemid}
         """
     elif db_name == "hirid":
         # 🚀 HiRID 优化: 在 DuckDB 中直接完成时间转换（datetime → 相对入院小时数）
@@ -3359,6 +3540,31 @@ def load_bucketed_table_aggregated(
             _cte_extra_cols = ""
             if _has_inline_convert and convert_unit_filter and _unit_col_name:
                 _cte_extra_cols = f", o.{_unit_col_name}"
+            elif value_transform:
+                # set_val(NA)-style value transforms can reference the configured
+                # unit column even though they are not represented by
+                # convert_unit_op/factor. Hospital-table rolling assignment moves
+                # aggregation to an outer CTE, so that referenced unit must travel
+                # with the event row (D-dimer FEU exclusion is the canonical case).
+                _configured_unit_col = None
+                try:
+                    _configured_unit = getattr(
+                        data_source.config.get_table(table_name).defaults,
+                        "unit_var",
+                        None,
+                    )
+                    if _configured_unit:
+                        _configured_unit_col = raw_columns_by_lower.get(
+                            str(_configured_unit).lower()
+                        )
+                except Exception:
+                    _configured_unit_col = None
+                if (
+                    _configured_unit_col
+                    and str(_configured_unit_col).lower()
+                    in value_transform.lower()
+                ):
+                    _cte_extra_cols = f", o.{_configured_unit_col}"
 
             if patient_ids:
                 # Targeted patient loading: filter hadm_ids by target stay_ids
@@ -3596,7 +3802,7 @@ def load_bucketed_table_aggregated(
             # new pre-aggregation diagnostic counts.
             df = df.loc[df[value_column].notna()].reset_index(drop=True)
         # Downcast float64 value columns to float32 (skip ID/time columns)
-        _skip_cols = {id_col, "charttime", "unit"}
+        _skip_cols = {id_col, "charttime", "measuredat_minutes", "unit"}
         for c in df.columns:
             if c not in _skip_cols and df[c].dtype == np.float64:
                 df[c] = df[c].astype(np.float32)
@@ -3920,12 +4126,24 @@ def load_bucketed_table_multi_aggregated(
 
     elif _base_db == 'aumc':
         p_clause = _patient_clause(id_col, patient_ids)
-        time_round_expr = f"FLOOR((o.{time_col} / 60000.0) / {interval_minutes}) * {interval_minutes}"
+        admissions_relation = _aumc_admissions_relation_sql(data_source)
+        relative_bucket_minutes = (
+            f"FLOOR(((o.{time_col} - a.admittedat) / 60000.0) / "
+            f"{interval_minutes}) * {interval_minutes}"
+        )
+        # Preserve the measuredat_minutes contract consumed by
+        # ConceptResolver._align_time_to_admission while anchoring the bucket
+        # itself to ICU admission rather than the database-wide clock.
+        time_round_expr = (
+            f"(a.admittedat / 60000.0 + {relative_bucket_minutes})"
+        )
         query = f"""
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS measuredat_minutes,
             {select_sql}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
+        JOIN {admissions_relation} a ON o.{id_col} = a.admissionid
         WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
+            AND a.admittedat IS NOT NULL
         GROUP BY o.{id_col}, {time_round_expr}
         ORDER BY o.{id_col}, 2
         """
@@ -3981,6 +4199,54 @@ def load_bucketed_table_multi_aggregated(
     return df
 
 
+def _resolve_wide_column_batch_size(value_count: int) -> int:
+    """Choose how many wide-table median states to aggregate per query."""
+    import os
+
+    if value_count < 1:
+        return 1
+    raw_limit = os.environ.get("EASYICU_WIDE_COLUMN_BATCH_SIZE")
+    if raw_limit:
+        try:
+            return min(value_count, max(1, int(raw_limit)))
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid EASYICU_WIDE_COLUMN_BATCH_SIZE=%r",
+                raw_limit,
+            )
+    try:
+        from .runtime.parallel_config import get_global_config
+
+        if get_global_config().total_memory_gb <= 16:
+            return min(value_count, 2)
+    except Exception:
+        pass
+    return value_count
+
+
+def _release_wide_chunk_memory() -> None:
+    """Release temporary query buffers between constrained wide-column chunks."""
+    import gc
+    import sys
+
+    gc.collect()
+    try:
+        import pyarrow as pa
+
+        pa.default_memory_pool().release_unused()
+    except Exception:
+        pass
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+
+            malloc_trim = getattr(ctypes.CDLL(None), "malloc_trim", None)
+            if malloc_trim is not None:
+                malloc_trim(0)
+        except Exception:
+            pass
+
+
 def load_wide_table_aggregated(
     data_source: "ICUDataSource",
     table_name: str,
@@ -4029,6 +4295,46 @@ def load_wide_table_aggregated(
         id_col = icustay_cfg.id if icustay_cfg else 'patientunitstayid'
     
     time_col = table_cfg.defaults.index_var or 'observationoffset'
+
+    # DuckDB's MEDIAN keeps one aggregate state per output group and value
+    # column.  On a full eICU batch, six simultaneous vital columns exceeded
+    # 16 GiB even with a 2 GB DuckDB memory_limit because complex aggregate
+    # state and result buffers are not all governed by that setting.  Keep the
+    # same patient batch, but scan a bounded number of value columns per query
+    # and reassemble their identical key grids afterwards.
+    column_batch_size = _resolve_wide_column_batch_size(len(value_columns))
+    if len(value_columns) > column_batch_size:
+        combined = None
+        key_columns = [id_col, "charttime"]
+        for start in range(0, len(value_columns), column_batch_size):
+            column_chunk = value_columns[start : start + column_batch_size]
+            chunk = load_wide_table_aggregated(
+                data_source,
+                table_name,
+                column_chunk,
+                interval_hours=interval_hours,
+                patient_ids=patient_ids,
+                agg_func=agg_func,
+                column_bounds=column_bounds,
+            )
+            chunk = chunk.sort_values(
+                key_columns,
+                kind="mergesort",
+                ignore_index=True,
+            )
+            if combined is None:
+                combined = chunk
+                continue
+            if not combined[key_columns].equals(chunk[key_columns]):
+                raise ValueError(
+                    "wide-table column chunks produced different key grids"
+                )
+            for column in column_chunk:
+                if column in chunk.columns:
+                    combined[column] = chunk[column].to_numpy(copy=False)
+            del chunk
+            _release_wide_chunk_memory()
+        return combined if combined is not None else pd.DataFrame()
     
     # 确定数据目录
     table_path = data_source._resolve_loader_from_disk(table_name)

@@ -59,6 +59,19 @@ def test_plan_scope_has_no_orchestration_or_mutation_dependency() -> None:
     )
 
 
+def test_every_public_plan_field_has_exactly_one_authority_class() -> None:
+    classes = (
+        plan_scope._ANALYSIS_PLAN_CORE_SCIENTIFIC_AUTHORITY_FIELDS,
+        plan_scope._ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
+        plan_scope._ANALYSIS_PLAN_STEP_AUTHORITY_FIELDS,
+        plan_scope._ANALYSIS_PLAN_PRESENTATION_ONLY_FIELDS,
+        plan_scope._ANALYSIS_PLAN_RUNTIME_ONLY_FIELDS,
+    )
+    flattened = [field for fields in classes for field in fields]
+    assert set(flattened) == set(AnalysisPlan.model_fields)
+    assert len(flattened) == len(set(flattened))
+
+
 def test_scientific_signature_uses_typed_role_not_intent_role_words() -> None:
     step = AnalysisStep(
         step_id="01_model",
@@ -100,7 +113,7 @@ def test_scientific_signature_changes_only_role_coordinate_for_role_change() -> 
     ] == [6]
 
 
-def test_plan_display_labels_are_part_of_scientific_scope_authority() -> None:
+def test_plan_display_labels_are_presentation_only() -> None:
     base = AnalysisPlan(
         research_question="Estimate an adjusted association.",
         steps=[],
@@ -108,7 +121,35 @@ def test_plan_display_labels_are_part_of_scientific_scope_authority() -> None:
     )
     changed = base.model_copy(update={"display_labels": {"death": "28-day mortality"}})
 
+    assert plan_scope._plan_scientific_scope_signature(base) == (
+        plan_scope._plan_scientific_scope_signature(changed)
+    )
+
+
+def test_plan_endpoint_is_scientific_scope_authority() -> None:
+    from easyicu.research_agent.schema import EndpointSpec
+
+    base = AnalysisPlan(research_question="q", steps=[])
+    changed = base.model_copy(
+        update={
+            "endpoint": EndpointSpec(
+                name="death",
+                kind="binary",
+                absence_semantics="no_absent_rows",
+                levels=[0, 1],
+            )
+        }
+    )
+
     assert plan_scope._plan_scientific_scope_signature(base) != (
+        plan_scope._plan_scientific_scope_signature(changed)
+    )
+
+
+def test_revision_is_runtime_history_not_scientific_scope() -> None:
+    base = AnalysisPlan(research_question="q", steps=[], revision=1)
+    changed = base.model_copy(update={"revision": 2})
+    assert plan_scope._plan_scientific_scope_signature(base) == (
         plan_scope._plan_scientific_scope_signature(changed)
     )
 

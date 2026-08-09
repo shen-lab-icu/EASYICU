@@ -54,6 +54,24 @@ def _load_json(filename: str) -> dict | list:
     return json.loads((DATA_DIR / filename).read_text())
 
 
+def test_eicu_sampling_means_specimen_collected_not_positive_culture() -> None:
+    concept = _load_json("concept-dict.json")
+    for database in ("eicu", "eicu_demo"):
+        source = concept["samp"]["sources"][database][0]
+        assert source["table"] == "microlab"
+        assert source["callback"] == "transform_fun(set_val(TRUE))"
+
+
+def test_mimic_sampling_keeps_negative_cultures_as_collection_events() -> None:
+    concept = _load_json("concept-dict.json")
+    for database in ("miiv", "mimic", "mimic_demo"):
+        source = concept["samp"]["sources"][database][0]
+        assert source["table"] == "microbiologyevents"
+        assert source["callback"] == "mimic_sampling"
+        assert "negative" in source["_comment"]
+        assert "specimen" in source["_comment"]
+
+
 def _data_source_tables() -> dict[str, dict]:
     data_sources = _load_json("data-sources.json")
     return {source["name"]: source["tables"] for source in data_sources}
@@ -130,7 +148,9 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # 2026-07-17: +cvp into the 'vitals' group (was only in concept-dict.json /
     # pulled by a separate cvp_extraction; central venous pressure is a measured
     # vital and now extracts with the vitals module). 280 -> 281.
-    assert len(CONCEPT_DICTIONARY) == 281
+    # 2026-08-08: +7 KDIGO ascertainment-receipt outputs so stage zero can be
+    # distinguished from incomplete observation. 281 -> 288.
+    assert len(CONCEPT_DICTIONARY) == 288
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
@@ -228,6 +248,20 @@ def test_composite_output_sources_are_valid() -> None:
     for output_concept, source_concept in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items():
         assert output_concept in CONCEPT_DICTIONARY
         assert source_concept in dict_concepts or source_concept in special_sources
+
+    assert {
+        "aki_assessable",
+        "aki_ascertainment",
+        "aki_assessment_reason",
+        "observation_window_coverage",
+        "creatinine_ascertainment",
+        "urine_ascertainment",
+        "rrt_ascertainment",
+    } <= {
+        output
+        for output, source in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()
+        if source == "kdigo_aki"
+    }
 
 
 def test_dictionary_source_tables_and_columns_exist() -> None:
@@ -750,26 +784,18 @@ def test_rrt_uses_active_treatment_evidence_not_access_placement() -> None:
         assert miiv_only_active_setting_ids.issubset(chartevent_ids)
         assert {224135, 225126, 225128, 225954}.isdisjoint(chartevent_ids)
 
-        aumc_numeric_ids = set(
-            source_id
-            for source in dictionary["rrt"]["sources"]["aumc"]
-            if source.get("table") == "numericitems"
-            for source_id in source["ids"]
-        )
-        assert {8805, 7666, 7667, 7668, 10736, 12444, 6684, 8806, 8808, 12091}.issubset(
-            aumc_numeric_ids
-        )
-        aumc_procedure_regex = next(
-            source["regex"]
-            for source in dictionary["rrt"]["sources"]["aumc"]
-            if source.get("table") == "procedureorderitems"
-        )
-        assert re.search(aumc_procedure_regex, "CVVH starten", re.I)
-        assert re.search(aumc_procedure_regex, "CVVH stoppen", re.I)
-        assert not re.search(aumc_procedure_regex, "CVVH-lab. afnemen", re.I)
-        assert not re.search(aumc_procedure_regex, "Filter CVVH wisselen", re.I)
-        assert not re.search(aumc_procedure_regex, "Resetten CVVH", re.I)
-        assert not re.search(aumc_procedure_regex, "Citraat-CVVH urine 24 uur", re.I)
+        # AmsterdamUMCdb's official treatment episode source is processitems.
+        # Device pressure/flow measurements and start/stop orders are not the
+        # treatment interval, and mapping a stop order to TRUE reverses its
+        # meaning.  Access-line process items are also not active dialysis.
+        aumc_sources = dictionary["rrt"]["sources"]["aumc"]
+        assert len(aumc_sources) == 1
+        aumc_process = aumc_sources[0]
+        assert aumc_process["table"] == "processitems"
+        assert set(aumc_process["ids"]) == {12465, 16363}
+        assert aumc_process["index_var"] == "start"
+        assert aumc_process["dur_var"] == "stop"
+        assert {9161, 9162, 9163, 16352}.isdisjoint(aumc_process["ids"])
 
         mimic_procedure_ids = set(
             source_id
@@ -846,6 +872,22 @@ def test_miiv_top_level_mechanism_concepts_stay_aligned_with_sofa2() -> None:
     )
     sofa2_mcs_chartevent_ids = set(sofa2["mech_circ_support"]["sources"]["miiv"][0]["ids"])
     assert sofa2_mcs_chartevent_ids.issubset(concept_mcs_chartevent_ids)
+
+
+def test_mimiciii_mechanical_support_excludes_mimiciv_only_items() -> None:
+    """These two labels exist in MIMIC-IV but not MIMIC-III d_items."""
+
+    mimiciv_only = {228866, 229254}
+    for filename in ("concept-dict.json", "sofa2-dict.json"):
+        payload = _load_json(filename)
+        sources = payload["mech_circ_support"]["sources"]
+        miiv_ids = set(sources["miiv"][0]["ids"])
+        mimic_ids = set(sources["mimic"][0]["ids"])
+        mimic_demo_ids = set(sources["mimic_demo"][0]["ids"])
+
+        assert mimiciv_only.issubset(miiv_ids)
+        assert mimiciv_only.isdisjoint(mimic_ids)
+        assert mimic_demo_ids == mimic_ids
 
 
 def test_cross_source_mechanism_concepts_do_not_use_ambiguous_indication_sources() -> None:

@@ -114,8 +114,22 @@ def publication_authorized(
     display_suite_complete: bool,
     article_contract_complete: bool,
     article_figure_strategy_complete: bool,
+    plan_not_truncated: bool = True,
 ) -> bool:
-    """Return the existing fail-closed publication conjunction."""
+    """Return the existing fail-closed publication conjunction.
+
+    ``plan_not_truncated`` closes a gap the other terms cannot see. They all
+    ask whether what the run *did* is sound; none asks whether the run did
+    what it planned. When a plan exceeds ``max_total_steps`` the host drops
+    steps and records a warning, and every remaining step can then complete,
+    bind its evidence and verify its numerics — so a run that quietly lost its
+    calibration figure or its PH diagnostic reaches this conjunction looking
+    exactly like one that never needed them. The dropped products are named in
+    the truncation finding; this is what makes naming them binding.
+
+    It stays out of ``manuscript_ready`` on purpose: a truncated run is still
+    worth reading, iterating on, and diagnosing. It is not a paper.
+    """
 
     return bool(
         manuscript_ready
@@ -124,6 +138,7 @@ def publication_authorized(
         and display_suite_complete
         and article_contract_complete
         and article_figure_strategy_complete
+        and plan_not_truncated
     )
 
 
@@ -145,10 +160,32 @@ def run_completion_axes(
     }
 
 
+def paper_authority_gates(
+    publication_artifacts_ready: bool,
+    execution_paper_eligible: bool,
+    plan_authority_verified: bool,
+    plan_authority_sha256: str | None,
+) -> dict[str, object]:
+    """Bind paper authorization to one verified immutable plan digest."""
+
+    digest = str(plan_authority_sha256 or "").strip().lower()
+    plan_bound = bool(
+        plan_authority_verified and re.fullmatch(r"[0-9a-f]{64}", digest)
+    )
+    return {
+        "plan_authority_verified": plan_bound,
+        "plan_authority_sha256": digest if plan_bound else None,
+        "paper_authorized": bool(
+            publication_artifacts_ready and execution_paper_eligible and plan_bound
+        ),
+    }
+
+
 __all__ = [
     "count_missing_evidence_markers",
     "count_writer_attempts",
     "has_figure_only_output_contract",
+    "paper_authority_gates",
     "publication_authorized",
     "run_completion_axes",
     "step_completion_projection",

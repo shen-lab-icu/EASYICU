@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import List, Optional, Union, Dict, Any, Sequence
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from collections import defaultdict
+import numpy as np
 import pandas as pd
 
 from .datasource import ICUDataSource
@@ -692,7 +693,7 @@ class BaseICULoader:
     )
 
     def _merge_concepts_batched(self, results: Dict[str, pd.DataFrame]):
-        """Single-allocation outer align of all concept frames on shared id+time keys.
+        """Single-allocation outer align of concept values on one shared key grid.
 
         Returns the merged frame, or None to signal the caller should use the original
         sequential merge (whenever any precondition below is not met). Preconditions:
@@ -717,9 +718,17 @@ class BaseICULoader:
                      if c in common_cols and ('time' in c.lower() or c in {'date', 'day', 'offset', 'Offset'})]
         merge_keys = id_keys + [c for c in time_keys if c not in id_keys]
 
-        # every frame must be unique on the keys and contribute non-overlapping value cols
+        # Every frame must be unique on the keys and contribute non-overlapping
+        # value columns.  The former fast path then called ``set_index`` for
+        # every concept and retained every indexed frame until a final
+        # ``concat(axis=1)``.  A 40+ concept module therefore held the source
+        # frames, N MultiIndexes, and the final wide payload at the same time.
+        #
+        # Build the outer key grid once, then place one concept at a time using
+        # a transient source MultiIndex.  Only the two key columns are
+        # concatenated; no per-concept DataFrame or index survives the loop.
         seen_value_cols = set()
-        indexed = []
+        value_columns_by_frame = []
         for concept, df in frames:
             if any(k not in df.columns for k in merge_keys):
                 return None
@@ -729,10 +738,101 @@ class BaseICULoader:
             if seen_value_cols.intersection(value_cols):
                 return None  # column-name collision -> needs suffix semantics; use fallback
             seen_value_cols.update(value_cols)
-            indexed.append(df.set_index(merge_keys, drop=True))
+            value_columns_by_frame.append((df, value_cols))
 
-        merged = pd.concat(indexed, axis=1, join='outer', sort=False, copy=False)
-        merged = merged.reset_index()
+        first_keys = frames[0][1].loc[:, merge_keys]
+        shared_dense_grid = all(
+            len(df) == len(first_keys)
+            and df.loc[:, merge_keys].equals(first_keys)
+            for _, df in frames[1:]
+        )
+        if shared_dense_grid:
+            # Aggregated concepts commonly share an identical hourly grid.
+            # Reuse those two key columns directly: concatenating N identical
+            # key frames merely to drop N-1 copies is both slower and a large
+            # temporary allocation.
+            key_grid = first_keys.reset_index(drop=True).copy(deep=False)
+        else:
+            key_grid = (
+                pd.concat(
+                    [df.loc[:, merge_keys] for _, df in frames],
+                    ignore_index=True,
+                    sort=False,
+                    copy=False,
+                )
+                .drop_duplicates(
+                    subset=merge_keys,
+                    keep="first",
+                    ignore_index=True,
+                )
+            )
+        grid_index = pd.MultiIndex.from_frame(key_grid, names=merge_keys)
+        if not grid_index.is_unique:
+            return None
+
+        merged = key_grid
+        for df, value_cols in value_columns_by_frame:
+            indexer = None
+            if not shared_dense_grid:
+                source_index = pd.MultiIndex.from_frame(
+                    df.loc[:, merge_keys],
+                    names=merge_keys,
+                )
+                indexer = grid_index.get_indexer(source_index)
+                if bool((indexer < 0).any()):
+                    return None
+
+            for column in value_cols:
+                source = df[column]
+                if shared_dense_grid:
+                    merged[column] = source.to_numpy(copy=False)
+                    continue
+                if len(source) == len(merged) and len(indexer) == len(merged):
+                    # The common dense-grid case can preserve the NumPy dtype
+                    # without allocating a nullable intermediary.
+                    source_values = source.to_numpy(copy=False)
+                    if (indexer == np.arange(len(merged))).all():
+                        aligned = source_values
+                    else:
+                        ordered = np.empty_like(source_values)
+                        ordered[indexer] = source_values
+                        aligned = ordered
+                    merged[column] = aligned
+                    continue
+
+                if pd.api.types.is_bool_dtype(source.dtype):
+                    aligned = pd.Series(
+                        pd.NA,
+                        index=pd.RangeIndex(len(merged)),
+                        dtype="boolean",
+                    )
+                elif pd.api.types.is_integer_dtype(source.dtype):
+                    bits = max(8, int(getattr(source.dtype, "itemsize", 8)) * 8)
+                    prefix = (
+                        "UInt"
+                        if pd.api.types.is_unsigned_integer_dtype(source.dtype)
+                        else "Int"
+                    )
+                    aligned = pd.Series(
+                        pd.NA,
+                        index=pd.RangeIndex(len(merged)),
+                        dtype=f"{prefix}{bits}",
+                    )
+                else:
+                    try:
+                        aligned = pd.Series(
+                            pd.NA,
+                            index=pd.RangeIndex(len(merged)),
+                            dtype=source.dtype,
+                        )
+                    except (TypeError, ValueError):
+                        aligned = pd.Series(
+                            None,
+                            index=pd.RangeIndex(len(merged)),
+                            dtype="object",
+                        )
+                aligned.iloc[indexer] = source.to_numpy(copy=False)
+                merged[column] = aligned.array
 
         for concept in results.keys():
             if concept not in merged.columns:

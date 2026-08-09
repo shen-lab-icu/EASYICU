@@ -19,7 +19,8 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 import pandas as pd
 
@@ -36,10 +37,12 @@ from ..contracts.runtime import (
     _PlanPhaseResult,
     _WritePhaseResult,
 )
+from ..contracts.post_analysis import EValueConversionSpec, SubgroupAnalysisSpec
 from ..providers.cost import CostMeter
 from ..providers.factory import provider_authorization_manifest
 from ..authority.evidence_store import EvidenceStore
 from ..authority.execution_identity import execution_identity_for_pipeline
+from ..authority.plan_input_closure import resolve_registered_plan_authority
 from ..methods.multiple_testing import build_multiple_testing_report
 from ..methods.sensitivity import compute_e_value
 from ..replication.report import _literature_provenance_note
@@ -47,18 +50,20 @@ from ..reporting.readiness import render_report, write_readiness_artifacts
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from ..authority.runtime_artifacts import (
     AuditLogger,
+    STEP_ATTEMPT_HISTORY_REF_SCHEMA,
     active_step_evidence_ids,
     build_execution_replay,
     build_workflow_graph,
     capture_code_version,
     current_evidence_records,
+    encode_step_attempt_history_jsonl,
     render_workflow_graph_mermaid,
     verified_run_evidence_path,
     write_json_artifact,
     write_run_checkpoint,
 )
 from ..robustness.panel import PANEL_FILENAME, load_robustness_panel
-from ..schema import AnalysisManifest, PipelineResult, ResearchContext
+from ..schema import AnalysisManifest, AnalysisPlan, PipelineResult, ResearchContext
 from ..learning.store import quarantine_run_lesson
 from ..reporting.side_findings import collect_side_findings, write_side_findings
 
@@ -103,6 +108,244 @@ def _active_step_evidence_ids(
     """
 
     return active_step_evidence_ids(per_step_records)
+
+
+class _EValueBaselineUnresolved(RuntimeError):
+    """Internal: the E-value block has nothing real to convert an OR with."""
+
+    def __init__(self, resolved: "ObservedEventRate") -> None:
+        super().__init__(resolved.reason)
+        self.resolved = resolved
+
+
+@dataclass(frozen=True)
+class ObservedEventRate:
+    """The run's own event rate, or an explicit account of why there is none."""
+
+    value: Optional[float]
+    cause: str  # stable machine reason; "" when resolved
+    reason: str  # one sentence for the finding message
+    candidates: Tuple[float, ...] = ()
+    source_column: str = ""
+    population_column: str = ""
+    baseline_population: str = ""
+
+
+@dataclass(frozen=True)
+class EValueArtifacts:
+    """Digest-registered O23 outputs from current semantic authorities."""
+
+    csv_path: Path
+    markdown_path: Path
+    evidence_id: str
+    row_count: int
+    baseline_prevalence: float
+    baseline_source_column: str
+    baseline_population: str
+    conversion_spec_sha256: str
+
+
+def _subgroup_spec_matches_primary_requirement(
+    plan: AnalysisPlan,
+    spec: SubgroupAnalysisSpec,
+) -> bool:
+    """Bind optional subgroup work to one exact Planner-owned primary model."""
+
+    return any(
+        requirement.requirement_id == spec.primary_model_requirement_id
+        and requirement.exposure_source == spec.predictor
+        and requirement.outcome == spec.outcome
+        and requirement.outcome_type == "binary"
+        for step in plan.steps
+        if step.planned_analysis_role == "primary"
+        for requirement in step.model_requirements
+    )
+
+
+def resolve_observed_event_rate(
+    path: Optional[Path],
+    spec: Optional[EValueConversionSpec],
+) -> ObservedEventRate:
+    """Read the one rate bound to the declared population and evidence schema.
+
+    Every failure mode returns ``value=None`` with a cause. The previous
+    version instead seeded ``baseline_prev = 0.1`` and let each failure fall
+    through to it: a missing product, an unreadable file, an unparseable cell,
+    every one of them silently produced an E-value computed at an invented
+    10% event rate. It also kept the LAST matching cell it saw, so a product
+    with one row per exposure group contributed whichever row happened to sort
+    last.
+
+    Disagreeing candidates are refused rather than reduced. Picking the first,
+    the last, or the mean would each be a different scientific choice about
+    which population the E-value is anchored to, and none of them is stated
+    anywhere the reader can see.
+    """
+
+    if spec is None:
+        return ObservedEventRate(
+            value=None,
+            cause="evalue_conversion_spec_required",
+            reason=(
+                "the plan declares no E-value conversion evidence/population "
+                "contract."
+            ),
+        )
+    if path is None:
+        return ObservedEventRate(
+            value=None,
+            cause="no_outcome_rate_product",
+            reason="this run registered no outcome-rate product.",
+        )
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        return ObservedEventRate(
+            value=None,
+            cause="outcome_rate_unreadable",
+            reason=f"its outcome-rate product could not be read ({error}).",
+        )
+
+    import csv as _csv
+    import io
+
+    candidates: list[float] = []
+    matching_rows = 0
+    for row in _csv.DictReader(io.StringIO(text)):
+        if str(row.get(spec.population_column) or "").strip() != spec.baseline_population:
+            continue
+        matching_rows += 1
+        try:
+            value = float(row[spec.baseline_risk_column])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0.0 < value < 1.0:
+            candidates.append(value)
+
+    if matching_rows == 0:
+        return ObservedEventRate(
+            value=None,
+            cause="baseline_population_not_found",
+            reason=(
+                f"its declared population {spec.baseline_population!r} was not "
+                f"found in column {spec.population_column!r}."
+            ),
+        )
+    if matching_rows == 1 and not candidates:
+        return ObservedEventRate(
+            value=None,
+            cause="baseline_population_rate_invalid",
+            reason=(
+                f"the declared baseline-risk cell {spec.baseline_risk_column!r} "
+                "is absent, non-numeric, or outside (0, 1)."
+            ),
+        )
+    if matching_rows != 1 or len(candidates) != 1:
+        return ObservedEventRate(
+            value=None,
+            cause="baseline_population_rate_ambiguous",
+            reason=(
+                f"its declared population matched {matching_rows} row(s) and "
+                f"yielded {len(candidates)} usable rate(s); exactly one is required."
+            ),
+            candidates=tuple(sorted(set(candidates))),
+        )
+    return ObservedEventRate(
+        value=candidates[0],
+        cause="",
+        reason="",
+        candidates=tuple(candidates),
+        source_column=spec.baseline_risk_column,
+        population_column=spec.population_column,
+        baseline_population=spec.baseline_population,
+    )
+
+
+def _primary_association_evalue_rows(
+    path: Path,
+    *,
+    baseline_prevalence: float,
+) -> List[Dict[str, Any]]:
+    """Convert the verified primary-association CSV into E-value rows.
+
+    The deterministic adjusted-association owner publishes the typed columns
+    ``estimate``, ``ci_low``, ``ci_high`` and ``effect_scale``.  Finalization
+    previously read only legacy column aliases such as ``odds_ratio`` and
+    therefore produced no E-value for the host-owned primary result.  A typed
+    scale declaration takes precedence: only ``effect_scale=odds_ratio`` is
+    converted; another declared scale is never guessed from its magnitude.
+    Legacy alias-shaped agent outputs remain readable only when no typed scale
+    is present.
+    """
+
+    import csv as _csv
+
+    rows_out: List[Dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for row in _csv.DictReader(fh):
+            scale = str(row.get("effect_scale") or "").strip().casefold()
+            scale = scale.replace("-", "_").replace(" ", "_")
+            estimate_keys: Tuple[str, ...]
+            low_keys: Tuple[str, ...]
+            high_keys: Tuple[str, ...]
+            if scale:
+                if scale != "odds_ratio":
+                    continue
+                estimate_keys = ("estimate",)
+                low_keys = ("ci_low",)
+                high_keys = ("ci_high",)
+            else:
+                estimate_keys = ("odds_ratio", "or", "OR")
+                low_keys = ("or_lower", "ci_lower")
+                high_keys = ("or_upper", "ci_upper")
+
+            def _first_finite(keys: Tuple[str, ...]) -> Optional[float]:
+                for key in keys:
+                    value = row.get(key)
+                    if value in (None, "", "nan"):
+                        continue
+                    try:
+                        number = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if number > 0.0 and number not in {float("inf"), float("-inf")}:
+                        return number
+                return None
+
+            odds_ratio = _first_finite(estimate_keys)
+            if odds_ratio is None:
+                continue
+            ci_low = _first_finite(low_keys)
+            ci_high = _first_finite(high_keys)
+            ci = (
+                (ci_low, ci_high)
+                if ci_low is not None and ci_high is not None and ci_low <= ci_high
+                else None
+            )
+            result = compute_e_value(
+                estimate=odds_ratio,
+                ci=ci,
+                estimate_type="or",
+                baseline_prevalence=baseline_prevalence,
+            )
+            rows_out.append(
+                {
+                    "term": row.get("term")
+                    or row.get("variable")
+                    or row.get("predictor")
+                    or row.get("contrast")
+                    or row.get("exposure")
+                    or "",
+                    "odds_ratio": odds_ratio,
+                    "ci_lower": ci[0] if ci else "",
+                    "ci_upper": ci[1] if ci else "",
+                    "baseline_prevalence": baseline_prevalence,
+                    "e_value": result.e_value,
+                    "e_value_lower_bound": result.e_value_lower_bound,
+                    "note": result.note or "",
+                }
+            )
+    return rows_out
 
 
 def _current_verified_semantic_csv(
@@ -155,6 +398,252 @@ def _current_verified_semantic_csv(
     if len(unique) != 1:
         return None
     return next(iter(unique.values()))
+
+
+def _write_primary_association_evalue_artifacts(
+    *,
+    evidence: EvidenceStore,
+    per_step_records: List[Dict[str, Any]],
+    run_dir: Path,
+    spec: Optional[EValueConversionSpec],
+) -> Optional[EValueArtifacts]:
+    """Write O23 from the current primary and outcome-rate authorities.
+
+    This is the finalization boundary, not merely a CSV parser: both inputs
+    must resolve through the current successful-step ledger and pass evidence
+    digest verification before the typed association schema can produce and
+    register ``e_values.csv``.
+    """
+
+    primary_source = _current_verified_semantic_csv(
+        evidence=evidence,
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+        semantic_id="primary_association",
+    )
+    if primary_source is None:
+        return None
+    primary_record, primary_path = primary_source
+    outcome_rate_source = _current_verified_semantic_csv(
+        evidence=evidence,
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+        semantic_id=(
+            spec.baseline_risk_evidence_id if spec is not None else "outcome_rate"
+        ),
+    )
+    resolved = resolve_observed_event_rate(
+        None if outcome_rate_source is None else outcome_rate_source[1],
+        spec,
+    )
+    baseline_prevalence = resolved.value
+    if baseline_prevalence is None:
+        raise _EValueBaselineUnresolved(resolved)
+
+    rows = _primary_association_evalue_rows(
+        primary_path,
+        baseline_prevalence=baseline_prevalence,
+    )
+    if not rows:
+        return None
+
+    import csv as _csv
+
+    csv_path = run_dir / "e_values.csv"
+    markdown_path = run_dir / "e_values.md"
+    with csv_path.open("w", newline="", encoding="utf-8") as fh:
+        writer = _csv.writer(fh)
+        writer.writerow(list(rows[0].keys()))
+        for row in rows:
+            writer.writerow([row[key] for key in rows[0].keys()])
+
+    markdown_lines = [
+        "# E-values for primary effects (O23)",
+        "",
+        f"Baseline event prevalence used: **{baseline_prevalence:.4f}** "
+        f"— read from `{resolved.source_column}` for "
+        f"`{resolved.population_column}={resolved.baseline_population}` in the "
+        "Planner-bound baseline-risk evidence.",
+        "",
+        "| Term | OR | 95% CI | E-value | E-value (CI bound) |",
+        "|---|---|---|---|---|",
+    ]
+    for row in rows:
+        ci_display = (
+            f"{row['ci_lower']:.2f} – {row['ci_upper']:.2f}"
+            if row["ci_lower"] != "" and row["ci_upper"] != ""
+            else "—"
+        )
+        markdown_lines.append(
+            "| {term} | {odds_ratio:.2f} | {ci} | {e_value:.2f} | {bound} |".format(
+                term=str(row["term"])[:40],
+                odds_ratio=row["odds_ratio"],
+                ci=ci_display,
+                e_value=row["e_value"],
+                bound=(
+                    f"{row['e_value_lower_bound']:.2f}"
+                    if row["e_value_lower_bound"] is not None
+                    else "—"
+                ),
+            )
+        )
+    markdown_path.write_text(
+        "\n".join(markdown_lines) + "\n",
+        encoding="utf-8",
+    )
+
+    source_ids = [str(primary_record.evidence_id)]
+    if outcome_rate_source is not None:
+        source_ids.append(str(outcome_rate_source[0].evidence_id))
+    assert spec is not None
+    spec_payload = spec.model_dump(mode="json")
+    spec_sha256 = hashlib.sha256(
+        json.dumps(spec_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    metadata = {
+        "schema_version": "easyicu.evalue_conversion_receipt/1",
+        "conversion_spec": spec_payload,
+        "conversion_spec_sha256": spec_sha256,
+        "oracle_scope": "RR formula only; OR conversion requires this receipt",
+    }
+    csv_record = evidence.register_file(
+        kind="statistic",
+        description="VanderWeele–Ding E-values for every primary effect row (O23).",
+        source_path=csv_path,
+        evidence_id="e_values",
+        inputs=source_ids,
+        producer="pipeline",
+        generation_mode="system",
+        metadata=metadata,
+        on_sha_change="new_id",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Human-readable E-value summary (O23).",
+        source_path=markdown_path,
+        evidence_id="e_values_summary",
+        inputs=source_ids,
+        producer="pipeline",
+        generation_mode="system",
+        metadata=metadata,
+        on_sha_change="new_id",
+    )
+    return EValueArtifacts(
+        csv_path=csv_path,
+        markdown_path=markdown_path,
+        evidence_id=str(csv_record.evidence_id),
+        row_count=len(rows),
+        baseline_prevalence=baseline_prevalence,
+        baseline_source_column=resolved.source_column,
+        baseline_population=resolved.baseline_population,
+        conversion_spec_sha256=spec_sha256,
+    )
+
+
+def _write_subgroup_analysis_artifacts(
+    *,
+    evidence: EvidenceStore,
+    per_step_records: List[Dict[str, Any]],
+    run_dir: Path,
+    cohort_path: Path,
+    plan: AnalysisPlan,
+    spec: SubgroupAnalysisSpec,
+) -> tuple[str, Dict[str, float]]:
+    """Run exactly the declared unadjusted subgroup contract and register it."""
+
+    import csv as _csv
+
+    primary_source = _current_verified_semantic_csv(
+        evidence=evidence,
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+        semantic_id="primary_association",
+    )
+    if primary_source is None:
+        raise ValueError("subgroup_primary_association_unresolved")
+    primary_record, primary_path = primary_source
+    if not _subgroup_spec_matches_primary_requirement(plan, spec):
+        raise ValueError("subgroup_spec_not_bound_to_primary_model_requirement")
+    with primary_path.open("r", encoding="utf-8") as handle:
+        primary_rows = list(_csv.DictReader(handle))
+    matching_primary = any(
+        spec.predictor
+        in {
+            str(row.get(field) or "").strip()
+            for field in ("exposure", "source_variable", "term", "variable", "predictor")
+        }
+        and str(row.get("term_role") or "exposure").strip().casefold()
+        in {"", "exposure", "primary"}
+        and str(row.get("effect_scale") or "").strip().casefold() == spec.effect_scale
+        for row in primary_rows
+    )
+    if not matching_primary:
+        raise ValueError("subgroup_predictor_not_bound_to_primary_association")
+
+    cohort_df = pd.read_parquet(cohort_path)
+    required_columns = {
+        spec.predictor,
+        spec.outcome,
+        *spec.subgroup_columns,
+    }
+    missing = sorted(required_columns - set(cohort_df.columns))
+    if missing:
+        raise ValueError(f"subgroup_declared_columns_missing:{','.join(missing)}")
+
+    from ..methods.fairness import run_subgroup_analysis
+
+    result = run_subgroup_analysis(
+        cohort_df=cohort_df,
+        predictor=spec.predictor,
+        outcome=spec.outcome,
+        subgroup_columns=spec.subgroup_columns,
+        continuous_buckets=spec.continuous_buckets,
+        minimum_axis_n=spec.minimum_axis_n,
+        minimum_stratum_n=spec.minimum_stratum_n,
+        multiplicity_family_id=spec.multiplicity_family_id,
+    )
+    csv_path = run_dir / "fairness_subgroups.csv"
+    markdown_path = run_dir / "fairness_subgroups.md"
+    result.write_csv(csv_path)
+    result.write_markdown(markdown_path)
+    metadata = {
+        "schema_version": "easyicu.subgroup_analysis_receipt/1",
+        "spec": spec.model_dump(mode="json"),
+        "spec_sha256": hashlib.sha256(
+            json.dumps(
+                spec.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "claim_ceiling": "analysis_only",
+    }
+    input_ids = [str(primary_record.evidence_id)]
+    if evidence.get("run_input_capsule") is not None:
+        input_ids.append("run_input_capsule")
+    record = evidence.register_file(
+        kind="statistic",
+        description="Pre-specified unadjusted subgroup analysis (O24).",
+        source_path=csv_path,
+        evidence_id="fairness_subgroups",
+        inputs=input_ids,
+        producer="pipeline",
+        generation_mode="system",
+        metadata=metadata,
+        on_sha_change="new_id",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Human-readable pre-specified subgroup summary (O24).",
+        source_path=markdown_path,
+        evidence_id="fairness_subgroups_summary",
+        inputs=input_ids,
+        producer="pipeline",
+        generation_mode="system",
+        metadata=metadata,
+        on_sha_change="new_id",
+    )
+    return str(record.evidence_id), dict(result.interaction_pvalues)
 
 
 def _register_multiple_testing_outputs(
@@ -307,6 +796,14 @@ def finalise_success(
 
     cost_records_for_manifest = []
     if plan_result.cost_meter is not None:
+        hard_stop_accounting = None
+        provider_hard_stop = getattr(pipeline, "_provider_hard_stop", None)
+        accounting_summary = getattr(provider_hard_stop, "accounting_summary", None)
+        if callable(accounting_summary):
+            hard_stop_accounting = accounting_summary()
+        cost_summary = plan_result.cost_meter.summary(
+            hard_stop_accounting=hard_stop_accounting,
+        )
         cost_records_for_manifest = list(plan_result.cost_meter.records)
         cost_json_path = run_dir / "cost_records.json"
         cost_json_path.write_text(
@@ -320,7 +817,11 @@ def finalise_success(
         )
         cost_md_path = run_dir / "cost_summary.md"
         cost_md_path.write_text(
-            _render_cost_summary(plan_result.cost_meter), encoding="utf-8"
+            _render_cost_summary(
+                plan_result.cost_meter,
+                hard_stop_accounting=hard_stop_accounting,
+            ),
+            encoding="utf-8",
         )
         # Machine-readable aggregate (token totals + estimated USD, by model)
         # so the bench scorer and Fig.3 source-data builder can read cost
@@ -328,7 +829,7 @@ def finalise_success(
         cost_summary_json_path = run_dir / "cost_summary.json"
         cost_summary_json_path.write_text(
             json.dumps(
-                plan_result.cost_meter.summary(),
+                cost_summary,
                 indent=2,
                 ensure_ascii=False,
                 default=str,
@@ -385,6 +886,70 @@ def finalise_success(
             on_sha_change="new_id",
         )
         reproducibility_summary = plan_result.repro_envelope.to_manifest_summary()
+
+    # O24 must run before O22 so every declared stratum/interaction p-value is
+    # part of the family-scoped multiplicity denominator. It is opt-in twice:
+    # the operator enables the feature and the Planner declares exact science.
+    if pipeline._enable_fairness_subgroups:
+        subgroup_spec = plan.subgroup_analysis_spec
+        if subgroup_spec is None:
+            findings.append(
+                ValidationFinding(
+                    validator="fairness_subgroups",
+                    severity="warning",
+                    message=(
+                        "Subgroup analysis was enabled but not computed because "
+                        "AnalysisPlan.subgroup_analysis_spec is absent; the host "
+                        "will not choose a predictor, subgroup axes, binning, or "
+                        "multiplicity family."
+                    ),
+                    detail={"reason": "subgroup_analysis_spec_required"},
+                )
+            )
+        else:
+            try:
+                subgroup_evidence_id, interaction_pvalues = (
+                    _write_subgroup_analysis_artifacts(
+                        evidence=evidence,
+                        per_step_records=per_step_records,
+                        run_dir=run_dir,
+                        cohort_path=cohort_path,
+                        plan=plan,
+                        spec=subgroup_spec,
+                    )
+                )
+                findings.append(
+                    ValidationFinding(
+                        validator="fairness_subgroups",
+                        severity="info",
+                        message=(
+                            "Computed the pre-specified, analysis-only subgroup "
+                            f"contract across {len(subgroup_spec.subgroup_columns)} "
+                            "axis/axes; raw p-values are delegated to O22."
+                        ),
+                        evidence_ids=[subgroup_evidence_id],
+                        detail={
+                            "spec": subgroup_spec.model_dump(mode="json"),
+                            "interaction_pvalues": interaction_pvalues,
+                            "claim_ceiling": "analysis_only",
+                        },
+                    )
+                )
+            except Exception as exc:
+                findings.append(
+                    ValidationFinding(
+                        validator="fairness_subgroups",
+                        severity="warning",
+                        message=(
+                            "Declared subgroup analysis was not computed: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                        detail={
+                            "reason": "subgroup_analysis_contract_failed",
+                            "cause": str(exc),
+                        },
+                    )
+                )
 
     # O22 — Multiple-testing correction. Scan registered table /
     # statistic artefacts for auditable raw p-values and adjust them
@@ -476,162 +1041,63 @@ def finalise_success(
     # O23 — E-values. For every primary-association row, compute
     # VanderWeele–Ding E-value + lower-CI E-value. Writes
     # ``e_values.csv`` + ``e_values.md`` and registers both.
-    # Baseline prevalence defaults to observed outcome rate when
-    # an ``outcome_rate.csv`` was registered.
+    # For odds ratios, baseline risk is read only from the exact evidence,
+    # column and population declared by EValueConversionSpec.
     try:
-        primary_source = _current_verified_semantic_csv(
+        evalue_artifacts = _write_primary_association_evalue_artifacts(
             evidence=evidence,
             per_step_records=per_step_records,
             run_dir=run_dir,
-            semantic_id="primary_association",
+            spec=plan.evalue_conversion_spec,
         )
-        if primary_source is not None:
-            import csv as _csv
-
-            primary_record, primary_path = primary_source
-            baseline_prev = 0.1
-            outcome_rate_source = _current_verified_semantic_csv(
-                evidence=evidence,
-                per_step_records=per_step_records,
-                run_dir=run_dir,
-                semantic_id="outcome_rate",
-            )
-            if outcome_rate_source is not None:
-                try:
-                    _outcome_rate_record, or_path = outcome_rate_source
-                    with or_path.open("r", encoding="utf-8") as fh:
-                        for row in _csv.DictReader(fh):
-                            for key in (
-                                "outcome_rate",
-                                "rate",
-                                "mortality_rate",
-                                "event_rate",
-                            ):
-                                if key in row:
-                                    try:
-                                        cand = float(row[key])
-                                        if 0 < cand < 1:
-                                            baseline_prev = cand
-                                    except (TypeError, ValueError):
-                                        pass
-                except Exception:
-                    pass
-
-            rows_out: List[Dict[str, Any]] = []
-            with primary_path.open("r", encoding="utf-8") as fh:
-                reader = _csv.DictReader(fh)
-                for row in reader:
-                    # Accept OR or odds_ratio column; skip age / intercept etc.
-                    or_val = None
-                    for key in ("odds_ratio", "or", "OR"):
-                        if key in row and row[key] not in (None, "", "nan"):
-                            try:
-                                or_val = float(row[key])
-                                break
-                            except (TypeError, ValueError):
-                                continue
-                    if or_val is None:
-                        continue
-                    try:
-                        ci_lo = float(row.get("or_lower") or row.get("ci_lower") or 0.0)
-                        ci_hi = float(row.get("or_upper") or row.get("ci_upper") or 0.0)
-                        ci = (ci_lo, ci_hi) if ci_lo > 0 and ci_hi > 0 else None
-                    except (TypeError, ValueError):
-                        ci = None
-                    ev = compute_e_value(
-                        estimate=or_val,
-                        ci=ci,
-                        estimate_type="or",
-                        baseline_prevalence=baseline_prev,
-                    )
-                    row_out = {
-                        "term": row.get("term")
-                        or row.get("variable")
-                        or row.get("predictor")
-                        or "",
-                        "odds_ratio": or_val,
-                        "ci_lower": ci[0] if ci else "",
-                        "ci_upper": ci[1] if ci else "",
-                        "baseline_prevalence": baseline_prev,
-                        "e_value": ev.e_value,
-                        "e_value_lower_bound": ev.e_value_lower_bound,
-                        "note": ev.note or "",
-                    }
-                    rows_out.append(row_out)
-
-            if rows_out:
-                ev_csv = run_dir / "e_values.csv"
-                ev_md = run_dir / "e_values.md"
-                with ev_csv.open("w", newline="", encoding="utf-8") as fh:
-                    writer = _csv.writer(fh)
-                    writer.writerow(list(rows_out[0].keys()))
-                    for row in rows_out:
-                        writer.writerow([row[k] for k in rows_out[0].keys()])
-                ev_md_lines = [
-                    "# E-values for primary effects (O23)",
-                    "",
-                    f"Baseline event prevalence used: **{baseline_prev:.3f}**",
-                    "",
-                    "| Term | OR | 95% CI | E-value | E-value (CI bound) |",
-                    "|---|---|---|---|---|",
-                ]
-                for row in rows_out:
-                    ci_disp = (
-                        f"{row['ci_lower']:.2f} – {row['ci_upper']:.2f}"
-                        if row["ci_lower"] != "" and row["ci_upper"] != ""
-                        else "—"
-                    )
-                    ev_md_lines.append(
-                        "| {t} | {orv:.2f} | {ci} | {ev:.2f} | {evb} |".format(
-                            t=str(row["term"])[:40],
-                            orv=row["odds_ratio"],
-                            ci=ci_disp,
-                            ev=row["e_value"],
-                            evb=(
-                                f"{row['e_value_lower_bound']:.2f}"
-                                if row["e_value_lower_bound"] is not None
-                                else "—"
-                            ),
-                        )
-                    )
-                ev_md.write_text("\n".join(ev_md_lines) + "\n", encoding="utf-8")
-                source_ids = [str(primary_record.evidence_id)]
-                if outcome_rate_source is not None:
-                    source_ids.append(str(outcome_rate_source[0].evidence_id))
-                ev_record = evidence.register_file(
-                    kind="statistic",
-                    description=(
-                        "VanderWeele–Ding E-values for every primary "
-                        "effect row (O23)."
+        if evalue_artifacts is not None:
+            findings.append(
+                ValidationFinding(
+                    validator="e_value",
+                    severity="info",
+                    message=(
+                        f"Computed E-values for {evalue_artifacts.row_count} primary "
+                        "effect row(s) at this run's observed event rate "
+                        f"{evalue_artifacts.baseline_prevalence:.4f} for declared "
+                        f"population {evalue_artifacts.baseline_population!r}."
                     ),
-                    source_path=ev_csv,
-                    evidence_id="e_values",
-                    inputs=source_ids,
-                    producer="pipeline",
-                    generation_mode="system",
-                    on_sha_change="new_id",
-                )
-                evidence.register_file(
-                    kind="log",
-                    description="Human-readable E-value summary (O23).",
-                    source_path=ev_md,
-                    evidence_id="e_values_summary",
-                    inputs=source_ids,
-                    producer="pipeline",
-                    generation_mode="system",
-                    on_sha_change="new_id",
-                )
-                findings.append(
-                    ValidationFinding(
-                        validator="e_value",
-                        severity="info",
-                        message=(
-                            f"Computed E-values for {len(rows_out)} primary "
-                            f"effect row(s) (baseline prevalence={baseline_prev:.3f})."
+                    evidence_ids=[evalue_artifacts.evidence_id],
+                    detail={
+                        "baseline_prevalence": (
+                            evalue_artifacts.baseline_prevalence
                         ),
-                        evidence_ids=[ev_record.evidence_id],
-                    )
+                        "baseline_prevalence_source": "observed_outcome_rate",
+                        "baseline_prevalence_column": (
+                            evalue_artifacts.baseline_source_column
+                        ),
+                        "baseline_population": evalue_artifacts.baseline_population,
+                        "conversion_spec_sha256": (
+                            evalue_artifacts.conversion_spec_sha256
+                        ),
+                    },
                 )
+            )
+    except _EValueBaselineUnresolved as exc:
+        # Keep the structured cause instead of collapsing it into the generic
+        # exception handler below: no rate was available, and none was invented.
+        resolved = exc.resolved
+        findings.append(
+            ValidationFinding(
+                validator="e_value",
+                severity="warning",
+                message=(
+                    "E-values were not computed: "
+                    f"{resolved.reason} An odds ratio cannot be converted "
+                    "to a risk ratio without this run's observed event rate, "
+                    "and the host does not substitute one."
+                ),
+                detail={
+                    "reason": "e_value_baseline_prevalence_unresolved",
+                    "cause": resolved.cause,
+                    "candidates": list(resolved.candidates),
+                },
+            )
+        )
     except Exception as exc:
         findings.append(
             ValidationFinding(
@@ -640,138 +1106,6 @@ def finalise_success(
                 message=f"E-value computation failed: {type(exc).__name__}: {exc}",
             )
         )
-
-    # O24 — Fairness / subgroup analysis. Runs when a
-    # ``primary_association`` artefact exists and the cohort has
-    # at least one of (``age``, ``sex``, ``sex_M``, ``race``,
-    # ``insurance``). Pure numpy; no pandas-only helpers so we
-    # stay consistent with the rest of the deterministic layer.
-    if pipeline._enable_fairness_subgroups:
-        try:
-            primary_source = _current_verified_semantic_csv(
-                evidence=evidence,
-                per_step_records=per_step_records,
-                run_dir=run_dir,
-                semantic_id="primary_association",
-            )
-            if primary_source is not None:
-                import csv as _csv
-
-                primary_record, primary_path = primary_source
-                predictor_name: Optional[str] = None
-                outcome_name = context.target_outcome
-                with primary_path.open("r", encoding="utf-8") as fh:
-                    for row in _csv.DictReader(fh):
-                        term = (
-                            row.get("term")
-                            or row.get("variable")
-                            or row.get("predictor")
-                            or ""
-                        )
-                        if term and term.lower() not in {
-                            "intercept",
-                            "const",
-                            "age",
-                            "sex_m",
-                        }:
-                            predictor_name = term
-                            break
-                cohort_df = pd.read_parquet(cohort_path)
-                candidate_subgroups = [
-                    col
-                    for col in ("age", "sex", "sex_M", "race", "insurance")
-                    if col in cohort_df.columns
-                ]
-                if (
-                    predictor_name is not None
-                    and outcome_name
-                    and outcome_name in cohort_df.columns
-                    and candidate_subgroups
-                ):
-                    from ..methods.fairness import run_subgroup_analysis
-
-                    result = run_subgroup_analysis(
-                        cohort_df=cohort_df,
-                        predictor=predictor_name,
-                        outcome=outcome_name,
-                        subgroup_columns=candidate_subgroups,
-                    )
-                    fair_csv = run_dir / "fairness_subgroups.csv"
-                    fair_md = run_dir / "fairness_subgroups.md"
-                    result.write_csv(fair_csv)
-                    result.write_markdown(fair_md)
-                    fair_record = evidence.register_file(
-                        kind="statistic",
-                        description=(
-                            "Subgroup / fairness analysis for the "
-                            "primary effect (O24)."
-                        ),
-                        source_path=fair_csv,
-                        evidence_id="fairness_subgroups",
-                        inputs=[str(primary_record.evidence_id)],
-                        producer="pipeline",
-                        generation_mode="system",
-                        on_sha_change="new_id",
-                    )
-                    evidence.register_file(
-                        kind="log",
-                        description=(
-                            "Human-readable fairness / subgroup summary (O24)."
-                        ),
-                        source_path=fair_md,
-                        evidence_id="fairness_subgroups_summary",
-                        inputs=[str(primary_record.evidence_id)],
-                        producer="pipeline",
-                        generation_mode="system",
-                        on_sha_change="new_id",
-                    )
-                    findings.append(
-                        ValidationFinding(
-                            validator="fairness_subgroups",
-                            severity="info",
-                            message=(
-                                f"Subgroup analysis for {predictor_name} ~ "
-                                f"{outcome_name} across "
-                                f"{len(candidate_subgroups)} axis/axes."
-                            ),
-                            evidence_ids=[fair_record.evidence_id],
-                            detail={
-                                "predictor": predictor_name,
-                                "outcome": outcome_name,
-                                "subgroup_columns": candidate_subgroups,
-                                "interaction_pvalues": result.interaction_pvalues,
-                            },
-                        )
-                    )
-                    # Escalate to warning if any interaction p < 0.05.
-                    sig_cols = [
-                        col for col, p in result.interaction_pvalues.items() if p < 0.05
-                    ]
-                    if sig_cols:
-                        findings.append(
-                            ValidationFinding(
-                                validator="fairness_subgroups",
-                                severity="warning",
-                                message=(
-                                    f"Interaction p < 0.05 on "
-                                    f"{sig_cols}; subgroup heterogeneity "
-                                    "must be discussed."
-                                ),
-                                evidence_ids=[fair_record.evidence_id],
-                                detail={"significant_subgroups": sig_cols},
-                            )
-                        )
-        except Exception as exc:
-            findings.append(
-                ValidationFinding(
-                    validator="fairness_subgroups",
-                    severity="warning",
-                    message=(
-                        f"Subgroup analysis failed: " f"{type(exc).__name__}: {exc}"
-                    ),
-                )
-            )
-
     manifest_notes = notes
     if stop_after_analysis:
         suffix = "paused_after_analysis: manuscript generation skipped by user option."
@@ -813,6 +1147,16 @@ def finalise_success(
     # detail. Keeps the manifest, the bound report, and the reviewer
     # prompt readable without losing audit information.
     findings = dedupe_findings(findings)
+    execution_identity = execution_identity_for_pipeline(pipeline)
+    # Resolve the immutable scientific plan before writing run_status.json.
+    # Otherwise a later authority failure can leave a durable
+    # ``paper_authorized=true`` status even though no final manifest exists.
+    current_plan_authority = resolve_registered_plan_authority(
+        run_dir=run_dir,
+        evidence=evidence,
+        plan=plan,
+        plan_path=plan_result.plan_path,
+    )
 
     readiness, artifact_paths = write_readiness_artifacts(
         context=context,
@@ -826,6 +1170,9 @@ def finalise_success(
         writer_probe_mode=write_result.writer_probe_mode,
         writer_probe_failed_steps=write_result.writer_probe_failed_steps,
         force_diagnostic_only=bool(getattr(pipeline, "_development_diagnostic", False)),
+        execution_paper_eligible=execution_identity.paper_eligible,
+        plan_authority_verified=True,
+        plan_authority_sha256=current_plan_authority.sha256,
     )
 
     report_path.write_text(
@@ -841,22 +1188,51 @@ def finalise_success(
         encoding="utf-8",
     )
 
+    # Flush first so the in-memory append-only attempt ledger includes the
+    # final current snapshots before both durable manifests are serialized.
+    execute_result.flush_partial_manifest()
+    step_attempt_history = list(execute_result.step_attempt_history)
+    step_attempt_history_ref = None
+    if step_attempt_history:
+        history_record = evidence.register_text(
+            kind="log",
+            description=(
+                "Append-only execution and deterministic-revalidation history "
+                "externalized from the finalized run manifest."
+            ),
+            text=encode_step_attempt_history_jsonl(step_attempt_history),
+            filename="step_attempt_history.jsonl",
+            evidence_id="step_attempt_history",
+            producer="pipeline",
+            generation_mode="system",
+            publish_aliases=False,
+            on_sha_change="new_id",
+        )
+        step_attempt_history_ref = {
+            "schema_version": STEP_ATTEMPT_HISTORY_REF_SCHEMA,
+            "format": "jsonl",
+            "evidence_id": history_record.evidence_id,
+            "relative_path": history_record.relative_path,
+            "sha256": history_record.sha256,
+            "record_count": len(step_attempt_history),
+        }
     manifest = AnalysisManifest(
         run_id=run_id,
         research_question=context.research_question,
         started_at=plan_result.started_at,
         finished_at=datetime.now(timezone.utc),
         context_path=str(plan_result.context_path.relative_to(run_dir)),
-        plan_path=str(plan_result.plan_path.relative_to(run_dir)),
+        plan_path=current_plan_authority.relative_path,
+        current_plan_authority=current_plan_authority.to_dict(),
         evidence=evidence.records(),
         findings=findings,
         per_step_records=per_step_records,
+        step_attempt_history=[],
+        step_attempt_history_ref=step_attempt_history_ref,
         cost_records=cost_records_for_manifest,
         reproducibility=reproducibility_summary,
         provider_authorization=provider_authorization_manifest(pipeline._llm),
-        execution_identity=execution_identity_for_pipeline(pipeline).model_dump(
-            mode="json"
-        ),
+        execution_identity=execution_identity.model_dump(mode="json"),
         submission_profile_name=pipeline._submission_profile_name,
         submission_profile_version=pipeline._submission_profile_version,
         submission_profile_locked_at=pipeline._submission_profile_locked_at,
@@ -907,7 +1283,6 @@ def finalise_success(
         notes=manifest_notes,
     )
     manifest_path = run_dir / "manifest.json"
-    execute_result.flush_partial_manifest()
     write_run_checkpoint(manifest_path, manifest.model_dump(mode="json"))
 
     if pipeline._memory is not None:
@@ -1014,6 +1389,7 @@ def finalise_aborted(
         f"# Manuscript scaffold not generated\n\nPipeline aborted: {reason}.\n",
         encoding="utf-8",
     )
+    execution_identity = execution_identity_for_pipeline(pipeline)
     readiness, artifact_paths = write_readiness_artifacts(
         context=context,
         plan=None,
@@ -1023,6 +1399,7 @@ def finalise_aborted(
         run_dir=run_dir,
         manuscript_path=bound_path,
         stop_after_analysis=False,
+        execution_paper_eligible=execution_identity.paper_eligible,
     )
     report_path.write_text(
         render_report(
@@ -1045,9 +1422,7 @@ def finalise_aborted(
         evidence=evidence.records(),
         findings=findings,
         provider_authorization=provider_authorization_manifest(pipeline._llm),
-        execution_identity=execution_identity_for_pipeline(pipeline).model_dump(
-            mode="json"
-        ),
+        execution_identity=execution_identity.model_dump(mode="json"),
         submission_profile_name=pipeline._submission_profile_name,
         submission_profile_version=pipeline._submission_profile_version,
         submission_profile_locked_at=pipeline._submission_profile_locked_at,
@@ -1082,7 +1457,11 @@ def finalise_aborted(
 # ---------------------------------------------------------------------------
 
 
-def _render_cost_summary(meter: "CostMeter") -> str:
+def _render_cost_summary(
+    meter: "CostMeter",
+    *,
+    hard_stop_accounting: Optional[Dict[str, Any]] = None,
+) -> str:
     """Render a markdown view of a :class:`CostMeter` for the run report.
 
     The output has three sections:
@@ -1097,7 +1476,7 @@ def _render_cost_summary(meter: "CostMeter") -> str:
     here is purely presentational — the row-level
     ``cost_records.json`` is the source of truth.
     """
-    summary = meter.summary()
+    summary = meter.summary(hard_stop_accounting=hard_stop_accounting)
     lines: List[str] = ["# LLM cost summary (T3.2)", ""]
     if summary["n_calls"] == 0:
         lines.append("_No LLM calls were recorded for this run._")
@@ -1117,6 +1496,31 @@ def _render_cost_summary(meter: "CostMeter") -> str:
             "(client did not expose `last_usage`). Treat counts as "
             "approximate."
         )
+    accounting = summary.get("usage_accounting") or {}
+    reported = accounting.get("provider_reported") or {}
+    unknown = accounting.get("usage_unknown") or {}
+    upper = accounting.get("conservative_upper_bound") or {}
+    lines.extend(
+        [
+            (
+                "- Provider-reported actual usage: "
+                f"{int(reported.get('n_calls') or 0)} calls, "
+                f"{int(reported.get('total_tokens') or 0):,} tokens, "
+                f"${float(reported.get('estimated_cost_usd') or 0.0):.4f} USD"
+            ),
+            (
+                "- Usage unknown: "
+                f"{int(unknown.get('n_calls') or 0)} calls "
+                f"({json.dumps(unknown.get('states') or {}, sort_keys=True)})"
+            ),
+            (
+                "- Conservative upper bound: "
+                f"{int(upper.get('total_tokens') or 0):,} tokens, "
+                f"${float(upper.get('estimated_cost_usd') or 0.0):.4f} USD "
+                f"(`{upper.get('source') or 'unavailable'}`)"
+            ),
+        ]
+    )
     lines.append("")
     if summary["by_role"]:
         lines.append("## By role")

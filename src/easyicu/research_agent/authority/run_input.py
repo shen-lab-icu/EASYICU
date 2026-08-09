@@ -29,12 +29,7 @@ from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Un
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
-from .filesystem import AnchoredDirectory, AuthorityFilesystemError
-from .evidence_store import EvidenceStore, sha256_of_file
-from .evidence_snapshot import (
-    EvidenceAuthorityIntegrityError,
-    load_current_evidence_snapshot,
-)
+from ..canonical_json import canonical_json_bytes
 from ..intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
@@ -53,6 +48,12 @@ from ..intake.materialized_trajectory import (
 )
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from ..research_context.implementation_identity import metadata_implementation_identity
+from .evidence_snapshot import (
+    EvidenceAuthorityIntegrityError,
+    load_current_evidence_snapshot,
+)
+from .filesystem import AnchoredDirectory, AuthorityFilesystemError
+from .evidence_store import EvidenceStore, sha256_of_file
 from .runtime_artifacts import (
     current_successful_step_records,
     current_step_records,
@@ -298,18 +299,12 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
-def _canonical_json_bytes(value: Any) -> bytes:
-    return json.dumps(
-        _jsonable(value),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
+def _normalized_canonical_json_bytes(value: Any) -> bytes:
+    return canonical_json_bytes(_jsonable(value))
 
 
 def canonical_sha256(value: Any) -> str:
-    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+    return hashlib.sha256(_normalized_canonical_json_bytes(value)).hexdigest()
 
 
 def _scientific_trajectory_envelope(
@@ -363,7 +358,7 @@ def _dataframe_content_sha256(frame: pd.DataFrame) -> str:
         "dtypes": [str(dtype) for dtype in frame.dtypes],
         "n_rows": int(len(frame)),
     }
-    digest.update(_canonical_json_bytes(schema))
+    digest.update(_normalized_canonical_json_bytes(schema))
     try:
         hashed = pd.util.hash_pandas_object(
             frame,
@@ -1465,6 +1460,28 @@ def _register_host_cohort_materialization(
     produced_by_step = (
         cohort_product_step.step_id if cohort_product_step is not None else None
     )
+    # The typed authority reference has to reach BOTH places that assert it:
+    # the checkpoint's inline receipt (built by the caller from this same
+    # ``result``) and this evidence record's metadata, which
+    # ``_host_cohort_materializer_authority_error`` compares against it. The
+    # producer used to write only the first, so a typed materialization sealed
+    # by nobody -- the receipt named an authority the evidence did not bind,
+    # and the checkpoint was refused with exactly that reason. Compile it once
+    # here and hand the same value to both, rather than letting two layers
+    # each reconstruct it.
+    #
+    # Present ONLY on the typed path: the same verifier refuses a legacy
+    # receipt that carries a partial typed authority, so these keys must be
+    # absent whenever the materialization published no authority.
+    cohort_authority_metadata = dict(cohort_metadata)
+    typed_authority_ref = result.get("authority_ref")
+    if typed_authority_ref is not None:
+        cohort_authority_metadata.update(
+            {
+                "materialized_cohort_authority_ref": typed_authority_ref,
+                "cohort_definition_sha256": result.get("cohort_definition_sha256"),
+            }
+        )
     try:
         cohort_record = evidence.register_file(
             kind="table",
@@ -1479,9 +1496,12 @@ def _register_host_cohort_materialization(
             producer="cohort_repair",
             generation_mode="llm",
             prompt_pack_version=prompt_pack_version,
-            metadata=dict(cohort_metadata),
+            metadata=cohort_authority_metadata,
         )
     except ValueError:
+        # A record already registered under this id was bound to whatever
+        # authority the earlier materialization had. The comparison above is
+        # what catches a stale one, so do not overwrite it here.
         cohort_record = evidence.get(_HOST_COHORT_MATERIALIZER_EVIDENCE_ID)
 
     output_files = {"table:analysis_cohort": str(cohort_path.relative_to(run_dir))}

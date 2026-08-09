@@ -233,6 +233,15 @@
   let guidedInitialRender = false;
   let guidedComposerDraft = '';
   let studyParams;   // dynamic params extracted from clarify answers + free text
+  // The user's own words, kept verbatim. `frameFor()` only ever proposes a
+  // rewording — it must never silently become the question we submit, persist
+  // or bind evidence to. `acceptedFrame` records an explicit user acceptance.
+  let userQuestion = '';
+  let acceptedFrame = false;
+  // Typed study-contract proposal read from `userQuestion` by the intent owner
+  // (screens-guided-intent.js). Null until it answers; null also means "we do
+  // not know", never "nothing to configure".
+  let studyContract = null;
 
   const DEFAULT_MODS = ['Demographics', 'Vital signs', 'Lab — Chemistry', 'SOFA-2 scores', 'Sepsis-3 (SOFA-2)', 'Outcome'];
   const GUIDED_EXTRACT_WINDOW_HOURS = 24 * 30;
@@ -283,6 +292,7 @@
     guidedKnownProjectsOpen = false;
     guidedPipelineOpen = false;
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
+    userQuestion = ''; acceptedFrame = false; studyContract = null;
     studyStatus = {}; studyVal = {};
     gen++;
     STUDY.forEach(([id]) => { studyStatus[id] = 'pending'; });
@@ -428,6 +438,73 @@
     if (b === 'predict') return `“Among Sepsis-3 patients, do ${studyParams.window} bedside features predict ${studyParams.outcome.toLowerCase()}, and does adding ${studyParams.exposure} improve it?”`;
     return BRANCH[b].frame;
   }
+  /* Remember the user's own words. Called wherever free text first arrives. */
+  function rememberUserQuestion(text) {
+    const raw = String(text == null ? '' : text).trim();
+    // Chip labels and control tokens are UI affordances, not the research
+    // question — they must not overwrite what the user actually typed.
+    if (!raw || raw.startsWith('@')) return;
+    if (!userQuestion) { userQuestion = raw; refreshStudyContract(); }
+  }
+  /* Ask the intent owner to read the question into a typed contract. Stale
+     answers are dropped via `gen`; a failed read leaves `studyContract` null,
+     which the card renders as "unknown", never as an empty study. */
+  function refreshStudyContract() {
+    studyContract = null;
+    if (!userQuestion || !window.EU_STUDY_INTENT || !window.EU_STUDY_INTENT.extract) return;
+    const myGen = gen;
+    const asked = userQuestion;
+    window.EU_STUDY_INTENT.extract(asked).then(contract => {
+      if (myGen !== gen || asked !== userQuestion) return;
+      studyContract = contract;
+      renderThread(); renderAside();
+    }).catch(() => {});
+  }
+  /* A later correction AMENDS the question of record. It appends rather than
+     replaces: "my outcome is AKI, not death" on its own loses the exposure the
+     user gave in their first sentence, so both are kept and re-read together.
+     Returns true when the question of record actually changed. */
+  function replaceUserQuestion(text) {
+    const raw = String(text == null ? '' : text).trim();
+    if (!raw || raw.startsWith('@') || raw.length < 8) return false;
+    if (raw === userQuestion || (userQuestion && userQuestion.endsWith(raw))) return false;
+    userQuestion = userQuestion ? `${userQuestion} ${raw}` : raw;
+    acceptedFrame = false;
+    extractEntities(raw);
+    refreshStudyContract();
+    return true;
+  }
+  /* The question we are entitled to submit / persist / bind evidence to.
+     Defaults to the user's own wording; a template framing is only used when
+     the user explicitly accepted it, or when they never gave us any words. */
+  function submittedQuestion() {
+    if (userQuestion && !acceptedFrame) return userQuestion;
+    if (acceptedFrame) return stripQuotes(frameFor(branch)) || userQuestion;
+    return userQuestion || stripQuotes(frameFor(branch)) || (BRANCH[branch] ? BRANCH[branch].chip : '');
+  }
+  function stripQuotes(value) {
+    return String(value == null ? '' : value).replace(/^[“"']+|[”"']+$/g, '').trim();
+  }
+  function tg(en, zh) { return window.t ? window.t(en, zh) : en; }
+  /* Slots the template framing filled from its own defaults because nothing in
+     the user's words matched. Naming them is the difference between "here is a
+     tighter framing of your question" and an undisclosed substitution. */
+  function unreadSlots() {
+    const caught = String(studyParams.caught || '');
+    const slots = [];
+    if (branch !== 'predict') return slots;
+    if (!/lactate|SOFA|MAP|creatinine|heart rate|WBC/i.test(caught)) {
+      slots.push([tg('exposure', '暴露'), studyParams.exposure]);
+    }
+    if (!/28-day|ICU mortality/i.test(caught)) {
+      slots.push([tg('outcome', '结局'), studyParams.outcome]);
+    }
+    if (!/first \d+h/i.test(caught)) {
+      slots.push([tg('time window', '时间窗'), studyParams.window]);
+    }
+    slots.push([tg('population', '人群'), 'Sepsis-3']);
+    return slots;
+  }
   /* turn a clarify answer into a real param change (not just a label) */
   function applyClarify(b, detail) {
     const d = detail.toLowerCase();
@@ -567,7 +644,23 @@
   }
 
   /* ============== timed sub-flows ============== */
+  /* Seeded demo animation ONLY. The row states and the `durs` timings here are
+     invented: rows tick on a 380-600ms timer while `durs` claims seconds. In
+     real mode that would assert work the app has not done yet (the caller's
+     real work runs inside `done`), so real mode gets an honest indeterminate
+     state and the work starts immediately instead. */
+  function markTasksIndeterminate(sel) {
+    document.querySelectorAll(sel + ' .gd-task').forEach(r => {
+      r.className = 'gd-task running';
+      r.setAttribute('data-progress-source', 'live-indeterminate');
+      const tk = r.querySelector('.tk');
+      if (tk) tk.innerHTML = '<span class="spin sm accent" style="width:11px;height:11px;"></span>';
+      // No per-row duration: we do not know it, and inventing one is the bug.
+      const d = r.querySelector('.tdur'); if (d) { d.textContent = ''; d.style.color = ''; }
+    });
+  }
   function streamTasks(sel, durs, done, opts) {
+    if (realMode()) { markTasksIndeterminate(sel); done(); return; }
     let i = 0;
     let repaired = false;
     const failAt = opts && opts.failAt != null ? opts.failAt : -1;
@@ -807,7 +900,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       <div class="gd-card" style="max-width:600px;margin-left:39px;">
         <div class="gc-head"><div class="gc-ico">${icon('db', 15)}</div><div class="grow"><div class="gc-t">Detecting schema</div><div class="gc-sub mono">${esc(path)}</div></div></div>
         <div class="gc-body">
-          <div class="gd-prog" id="gdDetect">${tasks.map(t => `<div class="gd-task queued"><span class="tk">${icon('clock', 9)}</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}</div>
+          <div class="gd-prog" id="gdDetect">${tasks.map(t => `<div class="gd-task queued" data-progress-source="${realMode() ? 'live' : 'scripted'}"><span class="tk">${icon('clock', 9)}</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}</div>
           <div class="indet mt-12"></div>
         </div>
       </div>`;
@@ -852,7 +945,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const unavailableToken = guidedRunChannel.start({
         surface: 'guided-legacy',
         study_id: branch || 'guided',
-        question: branch && BRANCH[branch] ? (frameFor(branch) || BRANCH[branch].chip) : '',
+        question: submittedQuestion(),
         source_path: src && src.path,
       });
       failLivePipeline(
@@ -885,7 +978,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
 
   function runLivePipeline(src) {
     const capturedBranch = branch;
-    const capturedQuestion = frameFor(capturedBranch) || BRANCH[capturedBranch].chip;
+    // The run binds evidence to this string, so it must be the user's own
+    // question unless they explicitly accepted a proposed rewording.
+    const capturedQuestion = submittedQuestion();
     let runToken = guidedRunChannel.start({
       surface: 'guided-legacy',
       study_id: capturedBranch || 'guided',
@@ -1037,6 +1132,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function schedule(fn) { const myGen = gen; const t = () => { if (myGen !== gen) return; if (busy) return setTimeout(t, 160); fn(); }; setTimeout(t, 520); }
 
   /* ============== card renderers (one per step) ============== */
+  /* `title` and `sub` are plain text from every caller, and one of them carries
+     the active export's label — which comes from the prepared export's own
+     manifest (`database`), not from anything this app authored. Prepared
+     exports are the artifact researchers hand to each other, so a crafted
+     manifest field would have run in the recipient's page, on an origin that
+     also serves the local filesystem API. Escape at the boundary that renders,
+     so a future caller cannot reintroduce it. `bodyHtml`/`footHtml` are markup
+     by contract and stay raw. */
   function cardShell(step, ico, title, sub, bodyHtml, footHtml) {
     const w = BRANCH[branch].why[step];
     const on = whyOpen[step];
@@ -1044,7 +1147,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     <div class="gd-card" data-card-step="${step}">
       <div class="gc-head">
         <div class="gc-ico">${icon(ico, 15)}</div>
-        <div class="grow"><div class="gc-t">${title}</div><div class="gc-sub">${sub}</div></div>
+        <div class="grow"><div class="gc-t">${esc(title)}</div><div class="gc-sub">${esc(sub)}</div></div>
         ${w ? `<button class="gc-why ${on ? 'on' : ''}" data-why="${step}">${icon('help', 11)} Why${on ? '' : ' this step'}</button>` : ''}
       </div>
       ${w ? `<div class="gd-why" ${on ? '' : 'hidden'}>${w}</div>` : ''}
@@ -1055,15 +1158,42 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
 
   const CARD = {
     question() {
-      const b = BRANCH[branch];
+      const unread = unreadSlots();
+      // The user's own words are the question. The template below is a
+      // proposal; it only becomes the submitted question via @useFrame.
+      const mine = userQuestion
+        ? `<div class="eyebrow" style="margin:0 0 6px;">${tg('Your question', '你的问题')}</div>
+           <p style="font-size:12.5px;color:var(--ink);margin:0 0 12px;line-height:1.5;">${esc(userQuestion)}</p>`
+        : '';
+      const proposalLabel = acceptedFrame
+        ? tg('Wording you accepted', '你已采用的措辞')
+        : tg('Suggested wording (template — not yet applied)', '建议措辞(模板 · 尚未采用)');
+      // Preferred: the typed contract read from the user's own words. It names
+      // what it could not read instead of defaulting, so it replaces the
+      // template-gap warning entirely when present.
+      const contractHtml = (studyContract && window.EU_STUDY_INTENT && window.EU_STUDY_INTENT.cardHtml)
+        ? window.EU_STUDY_INTENT.cardHtml(studyContract, { icon })
+        : '';
+      const gap = contractHtml ? '' : (!acceptedFrame && userQuestion && unread.length)
+        ? `<div class="note warn mt-12" style="padding:9px 11px;"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">
+             ${tg('I could not read these from your words, so the suggestion below uses defaults:', '下面这些我没能从你的话里读出来,建议措辞用的是默认值:')}
+             <strong>${unread.map(([k, v]) => `${esc(k)} = ${esc(v)}`).join(' · ')}</strong>.
+             ${tg('Continuing keeps your own wording.', '继续将保留你自己的表述。')}
+           </div></div></div>`
+        : '';
       return cardShell('question', 'spark', 'Study plan', 'forming', `
+        ${mine}
+        ${contractHtml}
+        <div class="eyebrow" style="margin:${contractHtml ? '14px' : '0'} 0 6px;">${esc(proposalLabel)}</div>
         <p style="font-size:12.5px;color:var(--ink-2);font-style:italic;margin:0 0 12px;line-height:1.5;">${frameFor(branch)}</p>
         <div class="col gap-6" style="font-size:12.25px;">
           ${planFor(branch).map(([k, v]) => `<div class="setup-row"><span class="k">${k}</span><span class="vv">${v}</span></div>`).join('')}
         </div>
+        ${gap}
         <div class="m-cite" style="margin-top:11px;">${icon('shield', 11)} evidence-bound · I won’t assert effect sizes</div>`,
-        `<button class="btn primary sm" data-go="toData">Looks right — continue ${icon('arrow', 13)}</button>
-         <button class="btn sm" data-go="welcome">Reframe</button>`);
+        `<button class="btn primary sm" data-go="toData">${userQuestion && !acceptedFrame ? tg('Continue with my wording', '用我的表述继续') : tg('Looks right — continue', '没问题,继续')} ${icon('arrow', 13)}</button>
+         ${userQuestion && !acceptedFrame ? `<button class="btn sm" data-go="@useFrame">${tg('Use the suggested wording', '改用建议措辞')}</button>` : ''}
+         <button class="btn sm" data-go="welcome">${tg('Reframe', '重新表述')}</button>`);
     },
     data() {
       return cardShell('data', 'folder', 'Connect your data', 'a local folder', `
@@ -1154,7 +1284,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const tasks = ['Normalize source', 'Resolve cohort', 'Map concepts', 'Coverage audit', 'Package frames'];
       return cardShell('extract', 'extract', 'Extracting', dataMode === 'demo' ? 'demo · local-only' : 'local · no uploads', `
         <div class="gd-prog" id="gdExProg">
-          ${tasks.map(t => `<div class="gd-task queued"><span class="tk">${icon('clock', 9)}</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}
+          ${tasks.map(t => `<div class="gd-task queued" data-progress-source="${realMode() ? 'live' : 'scripted'}"><span class="tk">${icon('clock', 9)}</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}
         </div>
         <div class="indet mt-12"></div>`, '');
     },
@@ -1213,13 +1343,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         // row) — not the generic all-green task list that hid which check failed.
         const progRows = live && gateBlocked
           ? guidedGateCheckRows(gateState)
-          : tasks.map(([tk, d]) => `<div class="gd-task done"><span class="tk">${icon('check', 10, 3)}</span><span class="grow">${tk}</span><span class="tdur">${d}</span></div>`).join('');
+          : tasks.map(([tk, d]) => `<div class="gd-task done" data-progress-source="${realMode() ? 'live' : 'scripted'}"><span class="tk">${icon('check', 10, 3)}</span><span class="grow">${tk}</span><span class="tdur">${d}</span></div>`).join('');
         return cardShell('analysis', 'agent', 'Research Agent · run', subTxt, `
           <div class="gd-prog">${progRows}</div>
           <div class="run-strip mt-12" style="padding:8px 10px;"><span class="pill ${pillCls}"><span class="dot"></span>${pillTxt}</span><div class="grow runbar"><div class="runbar-fill" style="width:${barPct}%"></div></div></div>`, '');
       }
       return cardShell('analysis', 'agent', 'Research Agent · run', dataMode !== 'demo' ? 'registry-backed · local preflight' : 'demo pipeline · no tokens', `
-        <div class="gd-prog" id="gdRunProg">${tasks.map(([t]) => `<div class="gd-task queued"><span class="tk">${icon('clock', 9)}</span><span class="tt-cmd">py</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}</div>
+        <div class="gd-prog" id="gdRunProg">${tasks.map(([t]) => `<div class="gd-task queued" data-progress-source="${realMode() ? 'live' : 'scripted'}"><span class="tk">${icon('clock', 9)}</span><span class="tt-cmd">py</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}</div>
         <div class="run-strip mt-12" style="padding:8px 10px;"><span class="pill warn" id="gdRunPill"><span class="dot"></span>Running</span><div class="grow runbar"><div class="runbar-fill" id="gdRunProg-bar" style="width:0%;transition:width .12s linear;"></div></div></div>`, '');
     },
     draft() {
@@ -2018,7 +2148,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const src = activeExportSource() || {};
     const windowLabel = window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.windowLabel(guidedDesign, t) : '';
     return {
-      question: (guidedAgent && guidedAgent.question) || (branch && BRANCH[branch] ? (frameFor(branch) || BRANCH[branch].chip) : ''),
+      question: (guidedAgent && guidedAgent.question) || submittedQuestion(),
       source: {
         path: (guidedExtract && guidedExtract.result && (guidedExtract.result.out_dir || guidedExtract.result.path)) || src.path || '',
         label: src.label || src.database || (dataMode === 'demo' ? 'Demo data' : 'Local EasyICU export'),
@@ -3387,7 +3517,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (t.card) {
         if (t.step === expandedStep) return CARD[t.step] ? CARD[t.step]() : '';
         const s = summaryOf(t.step);
-        return `<div class="gd-collapsed"><span class="cc-mk">${icon('check', 10, 3)}</span><span class="cc-t">${s.t}</span><span class="cc-v">${s.v}</span>${s.edit ? `<button class="cc-edit" data-edit="${t.step}">${icon('sliders', 11)} Edit</button>` : ''}</div>`;
+        return `<div class="gd-collapsed"><span class="cc-mk">${icon('check', 10, 3)}</span><span class="cc-t">${esc(s.t)}</span><span class="cc-v">${esc(s.v)}</span>${s.edit ? `<button class="cc-edit" data-edit="${t.step}">${icon('sliders', 11)} Edit</button>` : ''}</div>`;
       }
       if (t.bot) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble">${htmlOf(t.html)}</div></div></div>`;
       return `<div class="msg user"><div class="m-ava">LK</div><div class="m-body"><div class="m-bubble">${t.html}</div></div></div>`;
@@ -3457,7 +3587,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         : stt === 'locked' ? `<span class="si-state pill warn" style="height:18px;"><span class="dot"></span></span>`
         : stt === 'beyond' ? `<span class="si-state si-opt">${t('optional', '可选')}</span>` : '';
       const clickable = thread.some(t => t.card && t.step === id);
-      const row = `<div class="study-item ${stt}${clickable ? ' nav' : ''}" ${clickable ? `data-study="${id}" role="button" tabindex="0"` : ''}><span class="si-dot">${dot}</span><div class="si-txt"><div class="si-t">${t(label, labelZh || label)}</div>${v ? `<div class="si-v">${v}</div>` : ''}</div>${badge}</div>`;
+      const row = `<div class="study-item ${stt}${clickable ? ' nav' : ''}" ${clickable ? `data-study="${id}" role="button" tabindex="0"` : ''}><span class="si-dot">${dot}</span><div class="si-txt"><div class="si-t">${t(label, labelZh || label)}</div>${v ? `<div class="si-v">${esc(v)}</div>` : ''}</div>${badge}</div>`;
       // draw the finish line right after the goal step (only when stopping short of the full study)
       const fin = (idx === gi && depth !== 'full')
         ? `<div class="study-finishline"><span class="fl-flag">${icon('check', 10, 3)}</span><span class="fl-t">${t('Finish line', '终点线')} · ${DEPTH[depth].label}</span></div>`
@@ -3479,6 +3609,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     // branch selection at welcome
     if (currentId === 'welcome') {
       if (/\b(run|whole|everything|just do|autopilot|for me)\b/.test(t)) return () => autopilot(text);
+      rememberUserQuestion(text);
       branch = pickBranch(text);
       extractEntities(text);
       // if they already pinned the endpoint (or it's not the predict branch), skip the clarify
@@ -3579,7 +3710,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (!result || result.ok === false) {
         throw new Error((result && (result.reason || result.error)) || 'remove_failed');
       }
-      if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) selectedGuidedDraft = null;
+      if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) {
+        selectedGuidedDraft = null;
+        if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
+          window.EU_GUIDED_PI.bindProject(null);
+        }
+      }
       guidedDrafts = { loading: false, error: null, data: result.drafts ? { drafts: result.drafts } : null };
       loadGuidedDrafts(true);
       pushBot(
@@ -3901,6 +4037,29 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return result;
     });
   }
+  function piProjectShellActive() {
+    return !!(
+      window.EU_GUIDED_PI &&
+      window.EU_GUIDED_PI.isActive &&
+      window.EU_GUIDED_PI.isActive()
+    );
+  }
+  function bindProjectToPi(result, row) {
+    const session = result && result.session ? result.session : null;
+    guidedCopilot = { loading: false, error: null, session, last: result || guidedCopilot.last };
+    restoreGuidedSlotsFromSession(session);
+    const projectId = String((session && session.draft_id) || (row && row.id) || '').trim();
+    const projectTitle = String(
+      (session && session.project_title) ||
+      (row && (row.title || row.study_id || row.run_label)) ||
+      projectId
+    ).trim();
+    if (projectId && window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
+      window.EU_GUIDED_PI.bindProject({ id: projectId, title: projectTitle });
+    }
+    renderAside();
+    renderSessions();
+  }
   function continuePendingGuidedGoal() {
     if (!pendingGuidedGoal) return false;
     const pending = pendingGuidedGoal;
@@ -4047,10 +4206,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return;
     }
     document.querySelectorAll('.gd-sess').forEach(s => s.classList.toggle('active', s === el));
+    const usePiSession = piProjectShellActive();
     guidedCopilot = { loading: true, error: null, session: null, last: guidedCopilot.last };
-    thread = [{ typing: true }];
-    chips = [];
-    renderThread(); renderChips();
+    if (!usePiSession) {
+      thread = [{ typing: true }];
+      chips = [];
+      renderThread(); renderChips();
+    }
     window.EU_API.openGuidedProject({
       project_dir: row.project_dir,
       draft_id: row.id || null,
@@ -4058,16 +4220,17 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       mode: 'local',
       context: guidedBackendContext(),
     }).then(result => {
-      thread = thread.filter(item => !item.typing);
+      if (!usePiSession) thread = thread.filter(item => !item.typing);
       if (!result || !result.ok) {
         const reason = result && (result.reason || result.error) ? (result.reason || result.error) : 'unknown error';
         pushBot(`Could not open project memory: <span class="mono">${esc(reason)}</span>`, `无法打开项目记忆：<span class="mono">${esc(reason)}</span>`);
         renderThread();
         return;
       }
-      restoreGuidedProjectThread(result, row, kind);
+      if (usePiSession) bindProjectToPi(result, row);
+      else restoreGuidedProjectThread(result, row, kind);
     }).catch(err => {
-      thread = thread.filter(item => !item.typing);
+      if (!usePiSession) thread = thread.filter(item => !item.typing);
       pushBot(`Could not open project memory: <span class="mono">${esc(err.message || String(err))}</span>`, `无法打开项目记忆：<span class="mono">${esc(err.message || String(err))}</span>`);
       renderThread();
     });
@@ -4280,6 +4443,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedDraftParentDir,
       guidedFolderBrowser,
       guidedKnownProjectsOpen,
+      selectedGuidedDraft,
       pendingGuidedGoal,
       localDraftRows,
       guidedKnownProjectRows,
@@ -4527,7 +4691,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       setGuidedProjectOpenStatus(
         setupBox,
         'ok',
-        `${icon('check', 12)} <span>${t('Project memory opened. Restoring the conversation...', '项目记忆已打开，正在恢复对话...')}</span>`,
+        `${icon('check', 12)} <span>${t('Research project opened.', '研究项目已打开。')}</span>`,
       );
       selectedGuidedDraft = {
         id: result.session && result.session.draft_id,
@@ -4536,7 +4700,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       };
       selectedGuidedRun = null;
       closeGuidedFolderDialog();
-      restoreGuidedProjectThread(result, selectedGuidedDraft, 'draft');
+      if (piProjectShellActive()) bindProjectToPi(result, selectedGuidedDraft);
+      else restoreGuidedProjectThread(result, selectedGuidedDraft, 'draft');
       continuePendingGuidedGoal();
       loadGuidedDrafts(true);
     }).catch(err => {
@@ -4585,6 +4750,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const title = selectedGuidedDraft && selectedGuidedDraft.title ? selectedGuidedDraft.title : text;
       const path = selectedGuidedDraft && selectedGuidedDraft.project_dir ? compactPath(selectedGuidedDraft.project_dir) : '~/easyicu/projects';
       closeGuidedFolderDialog();
+      if (piProjectShellActive() && opened && opened.ok) {
+        bindProjectToPi(opened, selectedGuidedDraft);
+        return;
+      }
       // One-click starter path: keep the goal the user already picked and resume
       // it in the fresh folder, instead of resetting them back to goal cards.
       if (options.continueGoal && pendingGuidedGoal) {
@@ -4753,14 +4922,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             )],
       chips: () => [['Why frame it this way?', '@why'], ['Use my own wording', '@noop']],
       markStep: 'question', markStatus: 'active',
-      val: { question: () => BRANCH[branch].chip },
+      val: { question: () => userQuestion || BRANCH[branch].chip },
     },
     toData: {
       step: 'data', card: true,
       bot: [bi(`How should data enter the workspace?`, `数据要怎样进入工作区？`)],
       chips: () => [['What’s the difference?', '@why']],
       markStep: 'data',
-      val: { question: () => BRANCH[branch].chip },
+      val: { question: () => userQuestion || BRANCH[branch].chip },
     },
     realConfirm: {
       step: 'data',
@@ -4770,7 +4939,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       )],
       chips: () => [['Continue with local data', 'connect'], ['Use demo instead', '@usedemo']],
       markStep: 'data',
-      val: { question: () => BRANCH[branch].chip },
+      val: { question: () => userQuestion || BRANCH[branch].chip },
     },
     connect: {
       step: 'data',
@@ -4884,35 +5053,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   };
 
   function renderSessions() {
-    const host = document.getElementById('gdSessions');
-    if (!host) return;
-    const drafts = localDraftRows();
-    const draftHtml = guidedDrafts.loading
-      ? `<div class="gd-empty-local"><div class="ss-t">${t('Loading study folders', '正在加载研究文件夹')}</div><div class="ss-m">${t('Reading metadata-only Guided folder registry.', '正在读取仅元数据的 Guided 文件夹 registry。')}</div></div>`
-      : guidedDrafts.error
-        ? `<div class="gd-empty-local warn"><div class="ss-t">${t('Study folders unavailable', '研究文件夹不可用')}</div><div class="ss-m">${esc(guidedDrafts.error)}</div></div>`
-        : drafts.length
-          ? drafts.slice(0, 8).map((row, i) => `
-            <div class="gd-sessline">
-              <button class="gd-sess draft ${selectedGuidedDraft && selectedGuidedDraft.id === row.id ? 'active' : ''}" data-localdraft="${i}" title="${t('Open this folder conversation memory', '打开这个文件夹的对话记忆')}">
-                <span class="ss-fold">${icon('file', 15)}</span>
-                <span>
-                  <span class="ss-t">${esc(row.title || 'Guided draft')}</span>
-                  <span class="ss-m">${esc(row.status || 'metadata_only')} · ${esc(row.depth || 'full')} · ${esc(row.data_mode || 'demo')}</span>
-                  <span class="ss-m mono">${row.project_dir ? esc(compactPath(row.project_dir)) : 'legacy registry-only draft'}</span>
-                  <span class="ss-m mono">${esc(fmtRunTime(row.updated_at || row.created_at))}</span>
-                </span>
-              </button>
-              <button class="gd-sess-action danger" type="button" data-remove-localdraft="${i}" title="${t('Remove from Guided draft list', '从草稿列表移除')}" aria-label="${t('Remove from Guided draft list', '从草稿列表移除')}">${icon('close', 12)}</button>
-            </div>`).join('')
-          : `<div class="gd-empty-local">
-              <div class="ss-t">${t('No study folders yet', '还没有研究文件夹')}</div>
-              <div class="ss-m">${t('Use New / open study folder to bind this conversation to a local project folder first.', '先使用“新建/打开研究文件夹”把这条对话绑定到本地项目文件夹。')}</div>
-            </div>`;
-    host.innerHTML = `
-      <div class="gd-rail-sec in-list">${t('Study folders', '研究文件夹')} <button class="gd-refresh-mini" data-refreshdrafts title="${t('Refresh study folders', '刷新研究文件夹')}">${icon('refresh', 10)}</button></div>
-      <div class="gd-rail-note"><strong>${t('Conversation memory', '对话记忆')}</strong><span>${t('Open these to continue setup inside Guided Copilot.', '打开这里可继续研究引导内的配置。')}</span></div>
-      ${draftHtml}`;
+    guidedProjectRenderer('renderProjectRail');
   }
 
   /* ============== screen ============== */
@@ -4945,7 +5086,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         <div class="gd-main threecol">
           <aside class="gd-rail">
             <div class="gd-rail-top" id="gdFolderControls"></div>
-            <div class="gd-rail-sec">Workspace</div>
             <div class="gd-rail-list" id="gdSessions"></div>
             <div class="gd-rail-foot">
               <div class="gd-rail-utils" aria-label="${t('Guided Copilot utilities', '研究引导工具')}">
@@ -4959,20 +5099,26 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             </div>
           </aside>
           <div class="gd-conv">
-            <div class="gd-scroll" id="gdScroll"><div class="gd-thread" id="gdThread" role="log" aria-live="polite" aria-label="Copilot conversation"></div></div>
-            <div class="gd-suggest" id="gdSuggest"></div>
-            <div class="gd-composer-wrap">
-              <div class="gd-composer">
-                <input class="gd-input" id="gdInput" value="${attr(guidedComposerDraft)}" placeholder="${t('Reply, or tap an option above to continue…', '回复，或点击上方选项继续…')}" autocomplete="off" aria-label="${t('Message Guided Copilot', '给研究引导发送消息')}" />
-                <button type="button" class="gd-send" id="gdSend" aria-label="${t('Send message', '发送消息')}">${icon('arrow', 16)}</button>
+            <div class="gd-pi-shell" id="gdPiShell" aria-label="${t('Pi Copilot conversation', 'Pi Copilot 对话')}"></div>
+            <div class="gd-legacy-shell" id="gdLegacyShell">
+              <div class="gd-scroll" id="gdScroll"><div class="gd-thread" id="gdThread" role="log" aria-live="polite" aria-label="Copilot conversation"></div></div>
+              <div class="gd-suggest" id="gdSuggest"></div>
+              <div class="gd-composer-wrap">
+                <div class="gd-composer">
+                  <input class="gd-input" id="gdInput" value="${attr(guidedComposerDraft)}" placeholder="${t('Reply, or tap an option above to continue…', '回复，或点击上方选项继续…')}" autocomplete="off" aria-label="${t('Message Guided Copilot', '给研究引导发送消息')}" />
+                  <button type="button" class="gd-send" id="gdSend" aria-label="${t('Send message', '发送消息')}">${icon('arrow', 16)}</button>
+                </div>
+                <div class="gd-foot-note">${t('Guided Copilot · local first · nothing leaves your machine', '研究引导 · 本地优先 · 数据不离开你的电脑')}</div>
               </div>
-              <div class="gd-foot-note">${t('Guided Copilot · local first · nothing leaves your machine', '研究引导 · 本地优先 · 数据不离开你的电脑')}</div>
             </div>
           </div>
-          <aside class="gd-aside">
-            <div class="gd-aside-head"><div class="eyebrow">${t('Building your study', '正在搭建你的研究')}</div><div class="at">${t('Study workspace', '研究工作区')}</div><div class="asub">${t('Assembles as we talk · edit any step', '随对话逐步组装 · 任意步骤可编辑')}</div></div>
-            <div class="gd-aside-body" id="gdAsideBody"></div>
-            <div class="gd-aside-foot"><div class="note ok" style="padding:9px 11px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:11.5px;">${t('Evidence-bound', '证据绑定')}</div><div class="d" style="font-size:10.5px;">${t('Draft stays gated until checks pass.', '草稿在检查通过前保持受限。')}</div></div></div></div>
+          <aside class="gd-aside" id="gdContextAside">
+            <div class="gd-study-aside" id="gdStudyAside">
+              <div class="gd-aside-head"><div class="eyebrow">${t('Building your study', '正在搭建你的研究')}</div><div class="at">${t('Study workspace', '研究工作区')}</div><div class="asub">${t('Assembles as we talk · edit any step', '随对话逐步组装 · 任意步骤可编辑')}</div></div>
+              <div class="gd-aside-body" id="gdAsideBody"></div>
+              <div class="gd-aside-foot"><div class="note ok" style="padding:9px 11px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:11.5px;">${t('Evidence-bound', '证据绑定')}</div><div class="d" style="font-size:10.5px;">${t('Draft stays gated until checks pass.', '草稿在检查通过前保持受限。')}</div></div></div></div>
+            </div>
+            <div class="gpi-preview-aside" id="gdPreviewAside" hidden></div>
           </aside>
         </div>
         <div id="gdFolderDialogHost"></div>
@@ -4984,8 +5130,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderGuidedFolderControls();
       renderGuidedFolderDialog();
       renderAside();
+      if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.mount) {
+        window.EU_GUIDED_PI_PREVIEW.mount(root.querySelector('#gdPreviewAside'));
+      }
       renderSessions();
       loadGuidedDrafts();
+      if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.mount) {
+        window.EU_GUIDED_PI.mount(root.querySelector('#gdPiShell'));
+        if (selectedGuidedDraft && window.EU_GUIDED_PI.bindProject) {
+          window.EU_GUIDED_PI.bindProject({
+            id: selectedGuidedDraft.id,
+            title: selectedGuidedDraft.title || selectedGuidedDraft.id,
+          });
+        }
+      }
       // The global topbar Demo/Real toggle is the source of truth on entry:
       // sync UP only (demo → real), so a Real-mode user never sees the aside
       // claim "Demo · local". The conversation may still opt into demo
@@ -5007,6 +5165,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           } else {
           go('welcome');
           setTimeout(() => {
+            rememberUserQuestion(b.lastUser || '');
             if (b.branchHint && BRANCH[b.branchHint]) {
               branch = b.branchHint;
               extractEntities(b.lastUser || '');
@@ -5016,7 +5175,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
               handleText(stripTags(b.lastUser));
             } else {
               const routeLabel = b.route && b.route !== 'entry'
-                ? (({extraction:'Data Extraction',patient:'Patient Review',cohort:'Cohort Statistics',crossdb:'Cross-DB Benchmark',agent:'Agent Projects'}[b.route]) || 'the workspace')
+                ? (({extraction:'Data Extraction',patient:'Patient Review',cohort:'Cohort Statistics',crossdb:'Cross-database comparison',agent:'Agent Projects'}[b.route]) || 'the workspace')
                 : '';
               pushBot(
                 `Continuing from the dock${routeLabel ? ` — you were on <strong>${routeLabel}</strong>` : ''}. Want to turn that into a full study?`,
@@ -5096,7 +5255,32 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           if (tok === '@autopilot') { autopilot(label); return; }
           if (tok === '@why') { toggleWhy(expandedStep, true); return; }
           if (tok === '@open') { openWorkspace(); return; }
-          if (tok === '@noop') { pushUser(label); pushBot(`Go ahead — type your own wording in the box and I’ll work from it.`, `可以，直接在输入框里写你的表述，我会基于你的文字继续。`); renderThread(); return; }
+          if (tok === '@useFrame') {
+            pushUser(label);
+            acceptedFrame = true;
+            pushBot(
+              `Switched to the suggested wording. It is now the question I submit and bind evidence to — say “reframe” to go back to your own words.`,
+              `已改用建议措辞。它现在就是我提交并用于证据绑定的问题 —— 说“重新表述”可以换回你自己的说法。`,
+            );
+            renderThread(); renderAside(); renderChips();
+            return;
+          }
+          // "Use my own wording" must actually restore the user's own words,
+          // not just say it will. Anything already accepted is released here.
+          if (tok === '@noop') {
+            pushUser(label);
+            acceptedFrame = false;
+            pushBot(
+              userQuestion
+                ? `Back to your own wording — I’ll submit and bind evidence to: “${esc(userQuestion)}”. Type a new sentence any time to replace it.`
+                : `Go ahead — type your own wording in the box and I’ll work from it.`,
+              userQuestion
+                ? `已换回你自己的表述 —— 我会提交并用于证据绑定的是:“${esc(userQuestion)}”。随时可以再输入一句替换它。`
+                : `可以，直接在输入框里写你的表述，我会基于你的文字继续。`,
+            );
+            renderThread(); renderAside(); renderChips();
+            return;
+          }
           if (tok === '@typemine') { pushUser(label); pushBot(`Of course — type your research question in the box below and I’ll frame it with you.`, `当然可以。请在下面输入你的研究问题，我会帮你整理成可执行框架。`); renderThread(); const inp = document.getElementById('gdInput'); if (inp) inp.focus(); return; }
           if (tok === '@openAgent') { pushUser(label); location.hash = '#agent'; return; }
           if (tok === '@reviewBlocked') { expandedStep = 'analysis'; renderThread(); jumpToStep('analysis'); return; }
@@ -5716,6 +5900,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   /* handle free text (from composer or hint chips) */
   function handleText(v) {
     if (busy) return;
+    rememberUserQuestion(v);
     const conceptCode = findLocalConceptQuery(v);
     if (conceptCode) {
       answerConceptQuestion(v, conceptCode);
@@ -5757,6 +5942,19 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const next = map[currentId];
     if (next) { go(next, v); return; }
     pushUser(v);
+    // Free text we could not route is still the user correcting their own
+    // study. Before the run is bound, it REPLACES the question of record —
+    // echoing "I'll treat that as X" and then discarding it is how an AKI
+    // question silently stayed a mortality question.
+    const bindable = !liveAgentRun && runPhase !== 'done' && STEP_INDEX[expandedStep] <= STEP_INDEX.concepts;
+    if (bindable && replaceUserQuestion(v)) {
+      pushBot(
+        `Updated the question of record to “<em>${esc(userQuestion)}</em>”. That is what I will submit and bind evidence to. I could not map it onto a preset branch, so the suggested wording below may still be off — tap <strong>Reframe</strong> if it is.`,
+        `已把记录在案的研究问题更新为“<em>${esc(userQuestion)}</em>”。我提交并用于证据绑定的就是这一句。我没能把它映射到预设分支，所以下面的建议措辞可能仍不准确 —— 不对就点 <strong>重新表述</strong>。`,
+      );
+      renderThread(); renderAside(); renderChips();
+      return;
+    }
     if (dataMode === 'demo') {
       // Demo pipeline: the shortcut coaching only makes sense inside the seeded demo.
       pushBot(

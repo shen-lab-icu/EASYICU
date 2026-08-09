@@ -1,12 +1,6 @@
-"""Typed configuration object for :class:`ResearchAgentPipeline`.
+"""Typed, immutable configuration for :class:`ResearchAgentPipeline`.
 
-The pipeline's ``__init__`` takes ~60 keyword arguments. They have
-grown organically and are documented by way of the function signature
-alone, which means downstream tooling cannot reason about the
-configuration surface without parsing source code.
-
-:class:`PipelineConfig` mirrors that signature as a frozen-ish
-dataclass so:
+``PipelineConfig`` is the sole declarative source for pipeline behavior:
 
 * IDEs and type-checkers can autocomplete / validate construction;
 * tests can build a baseline config and override only what they care
@@ -14,44 +8,163 @@ dataclass so:
 * configuration can be loaded from YAML / TOML via
   :meth:`PipelineConfig.from_kwargs`, with unknown or misspelled keys
   rejected instead of silently ignored;
-* future refactors that group flags (literature, runner, audits, ...)
-  can add nested config objects without breaking ``__init__``.
+* live collaborators stay out of serialization and are injected separately
+  through :class:`~easyicu.research_agent.orchestration.services.PipelineServices`.
 
-This module is **additive**. The existing ``ResearchAgentPipeline.__init__``
-keyword form continues to work; ``PipelineConfig`` is the recommended
-new-code path. Call ``ResearchAgentPipeline.from_config(config)`` to
-construct a pipeline from a config object, or call
-``config.as_kwargs()`` to feed it back into the legacy ``__init__``.
-
-Why a dataclass and not pydantic? ``schema.py`` already imports
-pydantic for runtime-validated payloads. The pipeline-construction
-surface is consumed by Python code (not by serialised pipelines)
-and benefits more from being a lightweight dataclass that mirrors
-``__init__`` 1:1 than from another validation layer.
+The historical flat ``ResearchAgentPipeline(workdir=..., ...)`` call remains
+as a deprecation adapter. New code should construct ``PipelineConfig`` and
+``PipelineServices`` explicitly.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+import hashlib
+import json
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Sequence, Union
+from types import MappingProxyType
+from typing import Any, Dict, Mapping, Optional, Sequence, Union
+
+from ..authority.secret_redaction import is_sensitive_key, string_contains_secret
+from ..planning.cohort_contract import CohortSelectionMode
+from ..providers.prompt_budget import DEFAULT_MAX_PROMPT_TOKENS
 
 
-@dataclass
+def step_provider_call_entitlement(
+    *,
+    max_code_repair_attempts: int,
+    max_step_llm_repair_attempts: int,
+    llm_concept_audit_enabled: bool,
+) -> int:
+    """Return the provider calls one step may legitimately spend.
+
+    The arithmetic lived only in a comment beside ``max_step_provider_calls``,
+    which is how the three numbers drifted apart before: each is edited for its
+    own reason, and nothing recomputes their sum. This is that sum, in one
+    place, so a change to any term is felt by the other two.
+
+    The generation term was a literal ``1`` while ``coder_generation.py``
+    declares ``MAX_INITIAL_GENERATION_ATTEMPTS = 2`` -- "at most one audited
+    regeneration" -- so the host's own documented happy path could spend two
+    where this sum funded one. That is the same drift this function exists to
+    stop, in its own first term.
+    """
+
+    from ..agents.coder_generation import MAX_INITIAL_GENERATION_ATTEMPTS
+
+    return (
+        MAX_INITIAL_GENERATION_ATTEMPTS  # initial generation, per its own policy
+        + max(0, int(max_code_repair_attempts))
+        + max(0, int(max_step_llm_repair_attempts))
+        # execution/phase.py reserves the final call for the concept audit
+        # (``reserved_final_category``) only when that auditor is enabled.
+        + (1 if llm_concept_audit_enabled else 0)
+    )
+
+
+def assert_step_provider_budget_funds_its_repairs(
+    *,
+    max_step_provider_calls: int,
+    max_code_repair_attempts: int,
+    max_step_llm_repair_attempts: int,
+    llm_concept_audit_enabled: bool,
+    allow_underfunded: bool = False,
+) -> None:
+    """Refuse a budget that cannot pay for the repairs the same config promises.
+
+    A step that exhausts its provider budget mid-repair fails, and it fails the
+    way a scientifically broken step fails — so the run reports an analysis
+    problem that is really an accounting one. Catching it at construction is
+    the only point where the two are still distinguishable.
+
+    Deliberate under-funding stays available through ``allow_underfunded``;
+    what is refused is under-funding nobody decided on.
+    """
+
+    from ..agents.coder_generation import MAX_INITIAL_GENERATION_ATTEMPTS
+
+    granted = max(0, int(max_step_provider_calls))
+    entitled = step_provider_call_entitlement(
+        max_code_repair_attempts=max_code_repair_attempts,
+        max_step_llm_repair_attempts=max_step_llm_repair_attempts,
+        llm_concept_audit_enabled=llm_concept_audit_enabled,
+    )
+    if allow_underfunded or granted >= entitled:
+        return
+    raise ValueError(
+        f"max_step_provider_calls={granted} cannot fund the repair policy this "
+        f"configuration declares: {MAX_INITIAL_GENERATION_ATTEMPTS} initial "
+        f"generation attempt(s) + "
+        f"{max(0, int(max_code_repair_attempts))} code repairs + "
+        f"{max(0, int(max_step_llm_repair_attempts))} LLM repairs"
+        + (" + 1 reserved concept audit" if llm_concept_audit_enabled else "")
+        + f" = {entitled} calls. Raise max_step_provider_calls to at least "
+        f"{entitled}, lower the repair attempts to match, or pass "
+        "allow_underfunded_step_provider_calls=True to declare that the "
+        "shortfall is intended."
+    )
+
+
+def _deep_freeze(value: Any) -> Any:
+    """Return an immutable view of a plain data container, recursively.
+
+    Only the exact builtin containers are converted. A subclass (a pydantic
+    model, a ``defaultdict`` a caller relies on, a numpy array) keeps its
+    identity and behaviour: this exists to stop a shared ``runner_kwargs``
+    dict being edited after the config was hashed, not to re-type the
+    collaborators a run was handed.
+    """
+
+    if type(value) is dict:
+        return MappingProxyType(
+            {key: _deep_freeze(item) for key, item in value.items()}
+        )
+    if type(value) is list:
+        return tuple(_deep_freeze(item) for item in value)
+    if type(value) is set:
+        return frozenset(_deep_freeze(item) for item in value)
+    if type(value) is tuple:
+        frozen = tuple(_deep_freeze(item) for item in value)
+        return frozen if frozen != value else value
+    return value
+
+
+@dataclass(frozen=True)
 class PipelineConfig:
-    """Frozen-ish mirror of ``ResearchAgentPipeline.__init__`` keyword args.
+    """Immutable declarative settings for one pipeline.
 
-    Defaults intentionally match ``__init__`` so
-    ``PipelineConfig(workdir=...)`` and the bare-kwargs form produce
-    identical pipelines.
+    Defaults intentionally match the legacy keyword adapter so both
+    construction paths produce identical behavior.
+
+    The dataclass is frozen: the config is shared across the planner,
+    execution and reporting layers and is hashed into the run's authority
+    digest, so a post-construction mutation would leave the recorded
+    configuration disagreeing with the one that actually ran (and, on resume,
+    reload a different config than the checkpoint was taken under). Use
+    :meth:`with_overrides` to derive a changed copy.
+
+    ``frozen=True`` alone binds only the field *references*, so a caller
+    holding the same ``runner_kwargs`` dict could still mutate the config after
+    it was hashed into the run authority. :meth:`__post_init__` therefore also
+    freezes the plain data containers: every ``dict`` becomes a read-only
+    mapping and every ``list``/``set`` a tuple/frozenset, recursively.
+    Provider clients, factories, adapters, review control planes, and plugin
+    registries belong in ``PipelineServices`` instead.
     """
 
     # --- required -------------------------------------------------------
     workdir: Union[str, Path]
 
-    # --- core LLM / runtime ---------------------------------------------
-    llm: Optional[Any] = None
-    timeout_seconds: float = 300.0
+    # --- core runtime ---------------------------------------------------
+    # One generated-code attempt. The former 300 s was below the honest cost of
+    # the analyses this agent is asked to run — a Cox fit plus PH diagnostics on
+    # a six-figure cohort, a bootstrap stability sweep, a propensity match — so
+    # those steps could never pass on this path however the script was written.
+    # Timeouts are now terminal (see execution/failure_classification.py), which
+    # removes the retry multiplication that used to spend the whole repair
+    # budget re-running the same overlong computation; per-step worst-case wall
+    # clock is lower at 900 s once than it was at 300 s repeated.
+    timeout_seconds: float = 900.0
     # Registered deterministic standards can execute a planner-owned workload
     # (for example, a fixed resampling design) that is intentionally much
     # longer than one generated-code attempt. Keep that bounded workload on a
@@ -65,10 +178,11 @@ class PipelineConfig:
     enable_visual_qa: bool = True
     enable_publication_figure_skill: bool = True
     enable_vlm_visual_qa: Optional[bool] = None
-    vlm_client: Optional[Any] = None
-    visual_qa_adapter: Optional[Any] = None
+    # Uploading a rendered figure is a separate decision from authorizing the
+    # provider: the image can carry per-patient marks, small-cell strata or
+    # local paths that the text outbound projection would have stripped.
+    allow_external_figure_upload: bool = False
     enable_llm_concept_audit: Optional[bool] = None
-    llm_concept_auditor_client: Optional[Any] = None
     enable_memory: bool = True
     enable_latex: bool = True
 
@@ -103,12 +217,38 @@ class PipelineConfig:
     max_step_llm_repair_attempts: int = 2
     # Real coder/concept-audit provider attempts share one crash-safe budget,
     # including initial generation, transport/fallback retries, compatibility
-    # repair, patch, and full-rewrite fallback. Seven supports the normal
-    # fail-closed semantic path: generation + three digest-bound audits + two
-    # minimal patches + one Analyzer call. Successful first-pass steps do not
-    # spend the additional headroom. Full rewrites and transport retries still
-    # consume the same monotonic stop-loss rather than receiving a hidden budget.
-    max_step_provider_calls: int = 7
+    # repair, patch, and full-rewrite fallback. Successful first-pass steps do
+    # not spend the headroom. Full rewrites and transport retries still consume
+    # the same monotonic stop-loss rather than receiving a hidden budget.
+    #
+    # The floor is the sum of what the step is entitled to spend:
+    #   1 generation
+    # + max_code_repair_attempts       (3)
+    # + max_step_llm_repair_attempts   (2)
+    # + 1 reserved final concept audit, when the LLM concept audit is enabled
+    #     (execution/phase.py reserves the last call for that category)
+    #   = 7
+    # At exactly 7 the step is entitled to spend every call it is granted, so a
+    # single structured-retry on a malformed response silently costs a repair
+    # attempt instead of costing headroom. Two spare calls keep transport noise
+    # from being charged to the science.
+    max_step_provider_calls: int = 9
+    # Deliberately running a step on less than its repair policy costs is a
+    # legitimate choice — exercising the stop-loss, or capping spend on a
+    # throwaway run. It must be a choice. Without this flag the shortfall is
+    # invisible until a step fails, and a step that was never funded to finish
+    # is indistinguishable in the record from one whose science failed.
+    allow_underfunded_step_provider_calls: bool = False
+    # How large one outbound prompt is expected to grow, in provider-metered
+    # tokens. This is a *local design ceiling*, not the model's context window:
+    # nothing in this package knows that window, and the current provider does
+    # not report one, so nothing here guesses it. The default clears the
+    # largest prompt this system has ever actually produced (26,040 tokens) and
+    # stays far below any current model, so it catches a runaway projection
+    # without being the routine binding constraint. Raise it when a payload is
+    # legitimately larger; the change lands in the run authority digest because
+    # this config is hashed into it. See providers/prompt_budget.py.
+    max_prompt_tokens_per_call: int = DEFAULT_MAX_PROMPT_TOKENS
     enable_deterministic_code_fallback: bool = False
     enable_deterministic_planner_fallback: bool = False
     enable_deterministic_runner_repair: bool = True
@@ -129,6 +269,18 @@ class PipelineConfig:
     # --- cost / reproducibility ------------------------------------------
     enable_cost_tracking: bool = False
     cost_price_table: Optional[Dict[str, Any]] = None
+    # Optional outer stop-loss. These eight fields are all-or-none and are
+    # enforced by a live ``TaskProviderHardStop`` service. They live in the
+    # declarative config as well so run identity/checkpoints cannot omit the
+    # exact limits or price assumptions used for a paid benchmark.
+    max_provider_attempts_per_run: Optional[int] = None
+    max_provider_attempts_per_batch: Optional[int] = None
+    max_total_tokens_per_run: Optional[int] = None
+    max_total_tokens_per_batch: Optional[int] = None
+    max_estimated_cost_usd_per_batch: Optional[float] = None
+    max_wall_clock_seconds_per_task: Optional[float] = None
+    provider_input_cost_usd_per_million_tokens: Optional[float] = None
+    provider_output_cost_usd_per_million_tokens: Optional[float] = None
     enable_reproducibility_envelope: bool = False
     llm_seed: Optional[int] = None
     execution_data_seed: Optional[int] = None
@@ -149,8 +301,11 @@ class PipelineConfig:
     # Authoritative benchmark task kind used for kind-specific reporting
     # checks. Optional for non-benchmark pipeline runs.
     task_kind: Optional[str] = None
+    # Optional caller-owned population contract. The shared pipeline enforces
+    # the generic typed mode; the caller decides which mode a task requires.
+    required_primary_cohort_selection_mode: Optional[CohortSelectionMode] = None
     enable_reviewer_round: bool = True
-    enable_fairness_subgroups: bool = True
+    enable_fairness_subgroups: bool = False
     enable_hypothesis_generator: bool = False
     hypothesis_generator_top_k: int = 5
     enable_pdf_render: bool = False
@@ -173,11 +328,20 @@ class PipelineConfig:
     # Hard cap on plan size after any replanner revision. The replanner
     # can still revise existing steps in place; it just may not push the
     # total count above this. Set to 0 / None to disable (legacy behaviour).
-    # Default of 12 covers probe + cohort summary + 2-3 primary models +
-    # 2-3 sensitivities + figure + interpretation. Pilot run 20260515 saw
-    # the planner expand a simple SOFA-2 association to 30 steps with 13
-    # revisions before being killed at step 20; this cap prevents that.
-    max_total_steps: int = 12
+    # Pilot run 20260515 saw the planner expand a simple SOFA-2 association to
+    # 30 steps with 13 revisions before being killed at step 20; this cap is
+    # the guard against that, and 16 is still far below where that run went.
+    #
+    # It was 12, which covered probe + cohort summary + 2-3 primary models +
+    # 2-3 sensitivities + figure + interpretation — an association task. It did
+    # not cover the harder families: a task declaring four required products
+    # (prediction, survival, causal, trajectory each do) also needs cohort
+    # definition, missingness, the primary model and robustness before those
+    # four, and truncation is silent — it drops steps with a warning and the
+    # run still completes and still scores. A cap that binds in normal
+    # operation quietly shrinks the science instead of reporting a limit, so
+    # the guard is set where only a runaway reaches it.
+    max_total_steps: int = 16
     # --- replanning convergence guards (2026-06-11) ---------------------
     # The replanner runs after the probe and after every clean step. A
     # verbose model can return cosmetically-different but substantively
@@ -271,16 +435,7 @@ class PipelineConfig:
     runner_image: Optional[str] = None
     runner_network: str = "none"
     host_runner_authorized: bool = False
-    runner_factory: Optional[Callable[..., Any]] = None
     runner_kwargs: Optional[Dict[str, Any]] = None
-
-    # --- case plugins ---------------------------------------------------
-    # Opt-in deterministic-fallback plugins for specific research designs.
-    # Default is empty: a pipeline constructed without case plugins carries
-    # no bias toward any particular paper's column names or fallback scripts.
-    # See ``easyicu.research_agent.fallback.CasePluginRegistry``. No
-    # case-specific plugins are bundled; users supply their own.
-    case_plugin_registry: Optional[Any] = None
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -295,17 +450,118 @@ class PipelineConfig:
         """
         return cls(**kwargs)
 
+    def __post_init__(self) -> None:
+        for field_def in fields(self):
+            value = getattr(self, field_def.name)
+            frozen = _deep_freeze(value)
+            if frozen is not value:
+                object.__setattr__(self, field_def.name, frozen)
+        assert_step_provider_budget_funds_its_repairs(
+            max_step_provider_calls=self.max_step_provider_calls,
+            max_code_repair_attempts=self.max_code_repair_attempts,
+            max_step_llm_repair_attempts=self.max_step_llm_repair_attempts,
+            # `None` means "decide from the client", which a declarative config
+            # cannot see. Count the reserved audit call only when it was asked
+            # for outright; the pipeline re-checks with the resolved flag, so
+            # the stricter number is applied by the layer that knows it.
+            llm_concept_audit_enabled=self.enable_llm_concept_audit is True,
+            allow_underfunded=self.allow_underfunded_step_provider_calls,
+        )
+        hard_stop_values = {
+            "max_provider_attempts_per_run": self.max_provider_attempts_per_run,
+            "max_provider_attempts_per_batch": self.max_provider_attempts_per_batch,
+            "max_total_tokens_per_run": self.max_total_tokens_per_run,
+            "max_total_tokens_per_batch": self.max_total_tokens_per_batch,
+            "max_estimated_cost_usd_per_batch": (self.max_estimated_cost_usd_per_batch),
+            "max_wall_clock_seconds_per_task": self.max_wall_clock_seconds_per_task,
+            "input_cost_usd_per_million_tokens": (
+                self.provider_input_cost_usd_per_million_tokens
+            ),
+            "output_cost_usd_per_million_tokens": (
+                self.provider_output_cost_usd_per_million_tokens
+            ),
+        }
+        if any(value is not None for value in hard_stop_values.values()):
+            if any(value is None for value in hard_stop_values.values()):
+                raise ValueError(
+                    "Provider hard-stop configuration is all-or-none; declare "
+                    "run/batch attempts, tokens, cost, wall clock, and both prices"
+                )
+            from ..authority.provider_hard_stop import ProviderHardStopLimits
+
+            ProviderHardStopLimits(**hard_stop_values)  # type: ignore[arg-type]
+        if self.required_primary_cohort_selection_mode not in {
+            None,
+            "predicate_filtered",
+            "all_input_rows",
+        }:
+            raise ValueError(
+                "required_primary_cohort_selection_mode must be "
+                "'predicate_filtered', 'all_input_rows', or None"
+            )
+
     def with_overrides(self, **overrides: Any) -> "PipelineConfig":
         """Return a new :class:`PipelineConfig` with the given fields
         replaced. Equivalent to ``dataclasses.replace``.
         """
         return replace(self, **overrides)
 
-    def as_kwargs(self) -> Dict[str, Any]:
-        """Return a plain-dict view suitable for the legacy
-        ``ResearchAgentPipeline(**config.as_kwargs())`` form.
+    def _field_values(self) -> Dict[str, Any]:
+        """Return every field by *reference*.
+
+        Deliberately not :func:`dataclasses.asdict`, which recursively copies
+        values and needlessly changes immutable mapping wrappers.
         """
-        return asdict(self)
+
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
+    def as_kwargs(self) -> Dict[str, Any]:
+        """Return the flat declarative settings as a plain dictionary."""
+        return self._field_values()
+
+    def canonical_payload(self) -> Dict[str, Any]:
+        """Return a JSON-safe rendering of every field.
+
+        Secret-bearing string fields are replaced by a digest: the payload is
+        written into run provenance, and an API key in a manifest is a leak
+        even though the key is genuinely part of the configuration.
+        """
+
+        def _render(value: Any, *, key: str = "") -> Any:
+            if (
+                isinstance(value, str)
+                and value
+                and (is_sensitive_key(key) or string_contains_secret(value))
+            ):
+                return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+            if value is None or isinstance(value, (bool, int, float, str)):
+                return value
+            if isinstance(value, Path):
+                return str(value)
+            if isinstance(value, Mapping):
+                return {
+                    str(k): _render(v, key=str(k)) for k, v in sorted(value.items())
+                }
+            if isinstance(value, (list, tuple, set, frozenset)):
+                return [_render(v, key=key) for v in value]
+            return f"<{type(value).__module__}.{type(value).__qualname__}>"
+
+        return {
+            key: _render(value, key=key)
+            for key, value in sorted(self._field_values().items())
+        }
+
+    def canonical_digest(self) -> str:
+        """SHA-256 over :meth:`canonical_payload`, for run provenance."""
+
+        rendered = json.dumps(
+            self.canonical_payload(), sort_keys=True, separators=(",", ":")
+        )
+        return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
-__all__ = ["PipelineConfig"]
+__all__ = [
+    "PipelineConfig",
+    "assert_step_provider_budget_funds_its_repairs",
+    "step_provider_call_entitlement",
+]

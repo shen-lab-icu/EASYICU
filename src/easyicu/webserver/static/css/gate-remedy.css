@@ -1,0 +1,27 @@
+/* Owner styles for the "what clears this" block rendered by gate-remedy.js.
+   Deliberately its own file: this is a cross-screen widget with one owner, not
+   another block appended to a shared bucket. */
+
+.gate-remedy{
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--hair-2, #e6e8ee);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gate-remedy-head{
+  display: flex; align-items: center; gap: 5px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+  color: var(--ink-3, #57607a); text-transform: uppercase;
+}
+.gate-remedy-head svg{ flex: none; }
+.gate-remedy-row{
+  display: flex; align-items: flex-start; gap: 10px;
+  flex-wrap: wrap;
+}
+.gate-remedy-req{
+  flex: 1 1 260px; min-width: 0;
+  font-size: 12px; line-height: 1.45; color: var(--ink-2, #3a4150);
+}
+.gate-remedy-row .btn{ flex: none; }

@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import typing
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -41,14 +42,17 @@ from ..planning.analysis_types import (
     canonical_analysis_family,
     infer_analysis_type,
     locked_analysis_type_guide,
+    CATALOG_DETAIL_LADDER,
     planner_analysis_type_guide,
 )
 from ..planning.primary_result_contract import (
+    family_primary_result_execution_guide,
     primary_result_contract_guide,
     validate_required_primary_result as _validate_required_primary_result,
 )
 from ..trajectory.contract import trajectory_phenotyping_code_contract
 from ..trajectory.plan_contract import (
+    trajectory_context_is_bound,
     trajectory_planner_contract_guide,
     trajectory_role_code_contract,
 )
@@ -56,6 +60,7 @@ from ..execution.method_capabilities import coder_method_capability_block
 from ..resources import ContextBudgetExceeded, bounded_request_metrics
 from ..cohort.schema import (
     ALLOWED_CTAS_AGGREGATIONS,
+    _resolve_predicate_column,
     known_concept_ids,
     validate_plan_typed_bindings_against_context,
 )
@@ -66,7 +71,12 @@ from ..icu_rules import (
 )
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.llm import llm_is_mockish
+from ..providers.prompt_budget import (
+    CONSERVATIVE_BYTES_PER_TOKEN,
+    DEFAULT_MAX_PROMPT_TOKENS,
+)
 from ..providers.factory import authorized_complete
+from ..gates.preflight import audit_mechanical_code_contracts
 from ..repairs.patch import (
     PATCH_FORMAT,
     budgeted_repair_code_excerpt,
@@ -74,16 +84,30 @@ from ..repairs.patch import (
     render_minimal_patch_prompt,
 )
 from ..authority.coder_authority import HostCoderAuthority
+from ..authority.secret_redaction import (
+    debug_capture_enabled,
+    redact_debug_value,
+    redact_text_secrets,
+)
 from ..research_context.prompt_scope import (
-    compact_rendering_coder_guide_for_step,
+    compact_initial_coder_guide_for_step,
     coder_context_requires_method_constraints,
     coder_guide_for_step,
     coder_rewrite_guide_for_step,
     scoped_coder_context,
+    scoped_reporting_context,
 )
 from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
+    primary_analysis_cohort_plan_findings,
     typed_product as _canonical_typed_product,
+)
+from ..contracts.result_envelope import STATISTIC_PAYLOAD_KEY_ALIASES
+from ..planning.robustness_contract import (
+    COMPLETE_CASE_STRATEGY as _COMPLETE_CASE_STRATEGY,
+    COMPLETE_CASE_VARIABLES_KEY as _COMPLETE_CASE_VARIABLES_KEY,
+    RobustnessPlanError,
+    validate_planner_robustness_specs,
 )
 from ..plan_utils import (
     _cohort_predicate_partition_safety_rules,
@@ -96,8 +120,9 @@ from ..authority.provider_budget import (
     StepProviderCallBudget,
     complete_with_provider_budget,
 )
+from ..authority.declared_levels import bind_step_declared_levels
 from ..authority.table_one_binding import bind_table_one_execution_spec
-from ..repairs.coordination import RepairCoordinator
+from ..repairs.coordination import PatchTransportUnavailable, RepairCoordinator
 from ..repairs.reasons import (
     RepairPromptAuthority,
     RepairReason,
@@ -116,8 +141,13 @@ from ..research_context.repair_prompt import format_repair_authority_context
 from ..research_context.outbound import project_outbound_probe
 from ..authority.step_capsule import ContentRef
 from ..schema import (
+    ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
+    ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,
+    COHORT_DEFINITION_COHORT_OUTPUT,
+    COHORT_DEFINITION_FLOW_OUTPUT,
     AgentRuntimeState,
     AnalysisPlan,
+    ArtifactConsumptionContract,
     ClinicalSemanticsResolution,
     AnalysisStep,
     ConceptRef,
@@ -127,40 +157,79 @@ from ..schema import (
     DataExtractionResult,
     EvidenceRef,
     ManuscriptDraftPacket,
+    PlannedModelRequirement,
     ReflectionMemoryEntry,
     ResearchContext,
     StatisticalAnalysisRequest,
     StatisticalAnalysisResult,
+    TableOneSpec,
+    TableOneVariableSpec,
     ValidationFinding,
     VariableRole,
     VisualizationRequest,
     VisualizationResult,
 )
+from ..planning.robustness_contract import RobustnessSpec
 from ..research_context.temporal_semantics import (
     ConceptValidationLayer,
     ICUEpisodeResolver,
     TemporalAlignmentEngine,
 )
+from ..review.step_semantics import decide_step_scientific_review
+from .coder_generation import generate_initial_coder_candidate
+from .plan_payload import (
+    _canonicalise_figure_output_alias,
+    _canonicalise_planned_analysis_role,
+    _declared_field_names,
+    _is_untyped_figure_alias_output,
+    _normalise_plan_payload,
+)
 
 # Compatibility alias for callers/tests that imported the former local helper.
 _format_observed_domain = format_observed_domain
 
+LLM_PARSE_DEBUG_CHARS = 4000
+
 
 def _dump_raw(text: str, tag: str) -> Optional[Path]:
-    """Best-effort save of an LLM response that failed to parse (T1.3).
+    """Optionally save a bounded, redacted parse diagnostic.
 
-    Creates ``research_output/llm_debug/<tag>_<timestamp>.txt`` with the
-    full raw response. Silent on any IO failure so the debug aid never
-    masks the underlying parse error.
+    Capture is disabled unless both ``EASYICU_LLM_DEBUG`` is explicitly true
+    and ``EASYICU_LLM_DEBUG_DIR`` names the operator-selected run-local
+    directory.  The raw response is never written verbatim.
     """
+    if not debug_capture_enabled(os.environ.get("EASYICU_LLM_DEBUG")):
+        return None
+    configured_dir = str(os.environ.get("EASYICU_LLM_DEBUG_DIR") or "").strip()
+    if not configured_dir:
+        return None
     try:
-        log_dir = Path(
-            os.environ.get("EASYICU_LLM_DEBUG_DIR") or "./research_output/llm_debug"
-        )
-        log_dir.mkdir(parents=True, exist_ok=True)
+        log_dir = Path(configured_dir)
+        log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            os.chmod(log_dir, 0o700)
+        except OSError:
+            pass
         ts = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
-        path = log_dir / f"{tag}_{ts}.txt"
-        path.write_text(text or "", encoding="utf-8")
+        safe_tag = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(tag))[:80] or "parse"
+        path = log_dir / f"{safe_tag}_{ts}.json"
+        raw = text or ""
+        payload = redact_debug_value(
+            {
+                "schema_version": "easyicu.llm_parse_debug/1",
+                "tag": safe_tag,
+                "response_head": raw[:LLM_PARSE_DEBUG_CHARS],
+                "response_chars": len(raw),
+                "truncated": len(raw) > LLM_PARSE_DEBUG_CHARS,
+                "note": (
+                    "Redacted, bounded parse diagnostic. Not a replay or "
+                    "scientific evidence artifact."
+                ),
+            }
+        )
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
         return path
     except Exception:
         return None
@@ -199,6 +268,7 @@ def _format_context(
     method_constraint_variable_names: Optional[set[str]] = None,
     include_ctas_aggregation_guidance: bool = True,
     compact_declared_source_companions: bool = False,
+    compact_method_constraints: bool = False,
 ) -> str:
     from ..research_context.outbound import format_outbound_safe_context
 
@@ -213,7 +283,10 @@ def _format_context(
         variable_names=detailed_variable_names,
     )
     if include_method_constraints:
-        from ..gates.method_compatibility import render_variable_constraints
+        from ..gates.method_compatibility import (
+            render_computational_budget_constraints,
+            render_variable_constraints,
+        )
 
         constraint_context = ctx
         if method_constraint_variable_names is not None:
@@ -227,9 +300,16 @@ def _format_context(
                     ]
                 }
             )
-        constraints = render_variable_constraints(constraint_context)
-        if constraints:
-            rendered += "\n\n" + constraints
+        constraint_blocks = [
+            render_variable_constraints(
+                constraint_context,
+                compact=compact_method_constraints,
+            ),
+            render_computational_budget_constraints(constraint_context),
+        ]
+        for constraints in constraint_blocks:
+            if constraints:
+                rendered += "\n\n" + constraints
     return rendered
 
 
@@ -324,10 +404,65 @@ def _outbound_repair_diagnosis(
 # ---------------------------------------------------------------------------
 
 
-def _format_concept_id_allowlist() -> str:
+_COHORT_PREDICATE_AGGREGATIONS = (
+    "max",
+    "min",
+    "first",
+    "last",
+    "mean",
+    "median",
+    "any",
+    "sum",
+    "count",
+)
+
+
+def _bindable_concept_ids(columns: Sequence[str]) -> list[str]:
+    """The concept ids that resolve against THIS run's sealed columns.
+
+    A cohort predicate is checked by ``cohort/schema.py`` against the sealed
+    input, so the dictionary is the wrong set to publish: it is what EasyICU
+    can define, not what this export contains.
+
+    MEASURED on canary12's E3 cohort (104 columns): the prompt published 264
+    ids as "the ONLY values acceptable" and 15 of them bound -- 94.3% of the
+    menu was unusable. The Planner picked ``kdigo_aki``, the scientifically
+    correct concept for an AKI-stage cohort, from the list the host handed it,
+    and the host then refused it for having no bound column; the next attempt
+    improvised ``aki_stage``, which is not a concept at all. Two of five
+    planning attempts spent on a menu that was wrong to begin with.
+    """
+
+    resolve = _resolve_predicate_column
+    names = [str(column) for column in columns if str(column).strip()]
+    if not names:
+        return []
+    return sorted(
+        concept_id
+        for concept_id in known_concept_ids()
+        if any(
+            resolve(names, concept_id, aggregation, column_bindings={}) is not None
+            for aggregation in _COHORT_PREDICATE_AGGREGATIONS
+        )
+    )
+
+
+def _format_concept_id_allowlist(columns: Sequence[str] = ()) -> str:
     """Render legal EasyICU concept ids for CTAS planner prompts."""
 
-    concept_ids = sorted(known_concept_ids())
+    concept_ids = _bindable_concept_ids(columns)
+    scope = (
+        "that bind against this run's sealed export"
+        if concept_ids
+        # No sealed columns to check against -- publish the dictionary rather
+        # than an empty menu, which would make the cohort unwritable. The
+        # binder still refuses an unbound predicate downstream, so this is
+        # permissive in the prompt only.
+        else "in the concept dictionary (this run's sealed columns were not "
+        "available to narrow them)"
+    )
+    if not concept_ids:
+        concept_ids = sorted(known_concept_ids())
     if not concept_ids:
         return (
             "ALLOWED concept_ids — no concept dictionary entries were loaded. "
@@ -335,8 +470,10 @@ def _format_concept_id_allowlist() -> str:
             "dictionary before emitting a CohortDefinition."
         )
     lines = [
-        "ALLOWED concept_ids — the ONLY values acceptable in any "
-        "CohortDefinition or RobustnessSpec.cohort_override.concept_id field. "
+        f"ALLOWED concept_ids — the ONLY values acceptable in any "
+        f"CohortDefinition or RobustnessSpec.cohort_override.concept_id field. "
+        f"This is the set {scope}; a concept EasyICU can define but this "
+        "export does not carry is not on it, however apt it sounds. "
         'Synthesizing new names (e.g. "score_at_admission", '
         '"concept_peak_window", "condition_onset_window") is forbidden — these '
         "are operationalizations, not concepts. To operationalize a concept "
@@ -382,8 +519,14 @@ def _build_planner_user_prompt(
     context: ResearchContext,
     *,
     know_how_context: str = "",
+    planning_contract_context: str = "",
+    catalog_detail: str = "full",
 ) -> str:
-    """Build the planner user prompt with runtime concept-id grounding."""
+    """Build the planner user prompt with runtime concept-id grounding.
+
+    ``catalog_detail`` is chosen by :func:`_planner_prompt_within_budget` from
+    the byte budget alone.  Do not vary it on anything else.
+    """
 
     planner_context = scoped_planner_context(context)
 
@@ -406,7 +549,16 @@ def _build_planner_user_prompt(
         "A step that declares the exact output `table:table_one` MUST also "
         "declare `table_one_spec`: group_by, at least two closed group_levels, "
         "and a variables roster whose name/kind/summary/test/closed levels "
-        "encode the scientific comparison. Table 1 means Overall plus grouped "
+        "encode the scientific comparison. THE COLUMN YOU GROUP ON IS NOT ALSO "
+        "A ROW -- it would report each group as 100% itself. Name it in "
+        "`group_by` or in `variables`, never in both. "
+        "Levels follow the variable kind: a "
+        "'categorical' row summarised 'count_percent' requires at least two "
+        "closed levels; an 'ordinal' row summarised numerically may declare "
+        "its closed levels (a 0-4 organ score, a 0-3 stage) and the host then "
+        "stops the step on any value outside them, or may omit levels "
+        "entirely; a 'continuous' row must leave levels empty. Table 1 means "
+        "Overall plus grouped "
         "columns. Preserve observed scalar types exactly: numeric 0/1 levels "
         "must be JSON numbers, never the strings '0'/'1'. "
         "When the variable catalog withholds categorical literals and supplies "
@@ -414,8 +566,84 @@ def _build_planner_user_prompt(
         "categorical variable's levels. The host will bind them locally to the "
         "digest-verified observed values; never guess a hidden label. "
         "Report per-group missing n (%), one variable-appropriate P value, "
-        "and the test name. If only an ungrouped cohort description is wanted, "
+        "and the test name. Declare `missing_group_policy`: 'fail_closed' "
+        "stops the step if any row's group_by value is missing, and "
+        "'exclude_and_report' removes those rows from the whole table, Overall "
+        "included, and reports how many were removed. Check the variable "
+        "catalog's missingness for the column you group on: a grouping "
+        "variable derived from measurements is rarely observed on every stay, "
+        "and 'fail_closed' on such a column ends the step with no result. "
+        "A step with `table_one_spec` may declare only "
+        "`table:table_one` plus the optional host-audit outputs "
+        "`table:cohort_flow` and `log:source_row_count_reconciliation`; put "
+        "every other result or figure in a separate step. If only an "
+        "ungrouped cohort description is wanted, "
         "emit `table:cohort_summary` instead and omit table_one_spec. "
+        "When a step's purpose is to report counts, events and rates BY "
+        "EXPOSURE LEVEL -- prevalence, absolute risk, or outcome by group -- "
+        "declare the exact output `table:exposure_outcome_distribution` with "
+        "its spec. The host computes that table itself against a fixed "
+        "contract and owns the renderer for it, so its figure can be drawn. "
+        "The same science promised under any other table name is written "
+        "instead by the code generator, with a different shape every run, and "
+        "no host figure can consume it -- measured over the recorded runs, 25 "
+        "of 26 such tables had distinct headers and every figure over them "
+        "failed. Name the step whatever your reader should see; it is the "
+        "declared OUTPUT that decides who computes it.\n\n"
+        "That table holds counts, events and rates for ONE outcome whose "
+        "levels you declare. A summary of a CONTINUOUS variable by the same "
+        "exposure levels -- a median, a mean, quartiles, a distribution -- is "
+        "not part of it and cannot be added to it. Wanting one as well is not "
+        "a reason to give up the product: put the continuous summary in a "
+        "separate step and leave the event/rate table typed. Measured over "
+        "the recorded plans, 10 of the 13 by-level risk tables promised under "
+        "some other name had asked for a continuous summary in the same step, "
+        "against 1 of the 16 that stayed typed -- bundling the second outcome "
+        "is what costs the host-computed table and its figure.\n\n"
+        "A host-drawn figure consumes EXACTLY the typed product it renders and "
+        "nothing else. A figure step that also declares adjusted estimates, a "
+        "robustness matrix or an audit table as inputs is asking for a "
+        "different, composite figure, and no host renderer can draw it -- it "
+        "falls to the code generator, which has no contract for the panel. If "
+        "the reader needs that context, put it in its own figure step or in "
+        "the text; do not add inputs to the step whose figure the host owns.\n\n"
+        "A step that declares the exact output "
+        "`table:exposure_outcome_distribution` MUST also declare "
+        "`exposure_outcome_distribution_spec`, and it must consume exactly one "
+        "typed cohort input. Every field is required: the exposure column and "
+        "its closed exposure_levels; the outcome column and its closed "
+        "outcome_levels; the exact outcome_positive_value, which must be one "
+        "of outcome_levels; a level_match_policy of 'exact_typed' or "
+        "'numeric_string_equivalent'; a denominator_policy of "
+        "'all_declared_rows' or 'observed_outcome_rows'; a "
+        "missing_outcome_policy of 'fail_closed', 'exclude_from_denominator' "
+        "(which requires 'observed_outcome_rows') or "
+        "'structural_absence_is_non_event' (which requires "
+        "'all_declared_rows'); a missing_exposure_policy of 'fail_closed' "
+        "(the default: any stay with no exposure value stops the step) or "
+        "'exclude_from_denominator' (complete-case on the exposure, and the "
+        "count that left travels in the table) -- check the catalog's "
+        "missingness for the exposure column, because 'fail_closed' on a "
+        "column derived from measurements ends the step with no result; and a "
+        "confidence_level. Close outcome_levels "
+        "over every value the source can actually hold: any other observed "
+        "value stops the step, because an undeclared value would otherwise be "
+        "counted as a non-event and silently deflate every rate. Which "
+        "denominator a prevalence or rate is taken over, what an unobserved "
+        "outcome means, and at what coverage an interval is built are parts of "
+        "the study design, not rendering details, so state them. The host will "
+        "not infer the exposure, the outcome, the event value, or any policy "
+        "from column names or from input order. Preserve observed scalar types "
+        "exactly, as for table_one_spec: a boolean column is never matched by "
+        "a numeric level. "
+        "A primary cohort construction/eligibility + attrition step is also a "
+        "strict execution boundary: it must declare exactly one materialised "
+        "closed cohort product (" + _closed_cohort_product_sentence() + ") "
+        "plus only canonical attrition or "
+        "denominator tables. Do not place a baseline/cohort summary, Table 1, "
+        "model, statistic, figure, or other side output in that raw-universe "
+        "step. Put each such output in a downstream step that consumes the "
+        "declared closed cohort product. "
         "Table 1 enum values are exact: `variable_kind` is one of "
         "`continuous`, `categorical`, or `ordinal` (a binary variable is "
         "`categorical`); `summary` is one of `mean_sd`, `median_iqr`, `both`, "
@@ -447,7 +675,20 @@ def _build_planner_user_prompt(
         "or silently excluding rows. Never claim first admission, one stay per "
         "patient, or patient-level deduplication unless a patient identifier and "
         "the required admission chronology are actually available.\n"
-        "Choose step boundaries that make the analysis reviewable. A later step "
+        "Choose step boundaries that make the analysis reviewable. A figure is "
+        "its own step: declaring a `figure:` product in the same step as the "
+        "table or statistic that feeds it asks one executor for two different "
+        "kinds of work, and the host owns those separately -- so a bundled step "
+        "loses the deterministic owner the result table would otherwise have "
+        "had. Declare the result table in one step and the figure that displays "
+        "it in a downstream visualization step that consumes it. "
+        "Within one plan a bare product name is one answer: never declare the "
+        "same name under two kinds, such as `table:x` together with "
+        "`statistic:x`. A table and a scalar are two different answers and need "
+        "two different names; one name declared twice can only be satisfied by "
+        "handing the same artifact over for both, which tells a reader who "
+        "asked for a number to read a table instead. "
+        "A later step "
         "may consume an earlier standardized artifact only when that dependency "
         "is explicit in `inputs` and the producer declares it in "
         "`expected_outputs`; never rely on hidden in-memory state. Do not force "
@@ -459,19 +700,89 @@ def _build_planner_user_prompt(
         "binary/continuous adjusted-association step whose method is exactly "
         "`adjusted_association_models` and whose expected outputs include "
         "`table:adjusted_association_estimates`. For that supported contract, "
-        "record each pre-specified estimand/model in the roster instead of "
-        "leaving the scientific decision only in prose. Each "
+        "record the step's pre-specified estimand in the roster instead of "
+        "leaving the scientific decision only in prose. "
+        "ONE MODEL PER STEP: the roster is that step's own model, so declare "
+        "exactly one entry. A second estimand -- a different outcome, or the "
+        "same one under a different analysis set -- is its own step with its "
+        "own roster entry, and a step declaring two loses the deterministic "
+        "owner its result table would otherwise have had, exactly as a bundled "
+        "figure does. Each "
         "entry has `requirement_id`, `outcome`, `outcome_type` (binary or "
         "continuous), `method_family`, `exposure_source`, `analysis_role` "
         "(primary, secondary, or sensitivity), `analysis_set` (source_aware or "
-        "complete_case), and `required_for_step_success`. You decide this roster; "
-        "the execution layer only verifies it. `method_family` must be a binary "
-        "logistic family or a continuous linear/quantile family matching "
-        "`outcome_type`. Primary and secondary entries must be required for step "
-        "success; only a sensitivity entry may be optional. Leave the array empty "
+        "complete_case), `required_for_step_success`, and `covariates`. You "
+        "decide this roster; "
+        "the execution layer only verifies it. `method_family` is matched "
+        "against an exact set, so here is the set. outcome_type 'binary': "
+        + ", ".join(sorted(ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES))
+        + ". outcome_type 'continuous': "
+        + ", ".join(sorted(ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES))
+        + ". No other label passes, and neither does one from the other list. "
+        "Primary and secondary entries must be required for step "
+        "success; only a sensitivity entry may be optional. "
+        "AN ORDINAL OR CATEGORICAL EXPOSURE is one model with several "
+        "contrasts, not one number. When the exposure has discrete levels -- a "
+        "severity stage, a grade, a pre-specified quantile band -- declare "
+        "`exposure_levels` (the closed level set, in order), "
+        "`exposure_reference_level` (what every contrast is taken against) and "
+        "`primary_contrast_level` (the ONE contrast the manuscript reports). "
+        "All three together or none: with more than two levels the host will "
+        "not choose which contrast is the headline, because the top level "
+        "against the reference and a per-level trend are different scientific "
+        "claims. Leave all three unset for a binary or continuous exposure, "
+        "which is one contrast and one row. Declaring them makes the host fit "
+        "and report every contrast from a single model; omitting them on a "
+        "multi-level exposure fits it as one linear term, which answers a "
+        "different question.\n\n"
+        "`covariates` is the exact adjustment set for that model: list the "
+        "exact analysis column names you intend to condition on, use `[]` to "
+        "declare a deliberately unadjusted model, and omit it only when you "
+        "genuinely have not fixed the adjustment set. The execution layer will "
+        "not reconstruct an adjustment set from the step inputs -- listing "
+        "columns under `inputs` states what the step may read, not what the "
+        "model conditions on, and the difference between those two is a "
+        "scientific decision that is yours. It must not contain the outcome or "
+        "the exposure. Leave the array empty "
         "for survival, prediction, "
         "mixed-effects, clustering, and every other analysis family; those use "
         "their own family-specific planning and validation contracts.\n\n"
+        "For a counting-only measurement/missingness audit step, set "
+        "`measurement_audit_spec.products`: one entry per declared table "
+        "product, each giving the product's exact `product_id` (the declared "
+        "name without its `table:` prefix) and which `audit` it is. Name your "
+        "products whatever your reader should see; the `audit` field is what "
+        "the execution layer reads, so a descriptive name no longer costs the "
+        "step its deterministic executor. Legal audits are "
+        "`measurement_missingness` (was each concept measured at all, and how "
+        "much of its value column is missing), `missingness_profile` (the same "
+        "counts as a plain missing-n/percent profile), `measurement_source` "
+        "(where each value could have come from, including flag/value "
+        "disagreements), `measurement_process` (how often and when each "
+        "concept was observed), `event_timing` (per event-timed concept: "
+        "present, absent, before the declared origin, time missing), "
+        "`component_completeness` (per component of a composite score), "
+        "`analytic_denominators` (rows surviving each analytic filter) and "
+        "`cohort_flow`. Two products may not name the same audit -- that would "
+        "promise a reader two tables and deliver one twice. Declare only "
+        "audits from this list; if the step needs something else, leave "
+        "`measurement_audit_spec` unset rather than mislabelling it.\n\n"
+        "For a step that re-estimates the ALREADY-LOCKED robustness "
+        "specification grid without changing the estimand, set "
+        "`robustness_replay_spec.products`: one entry per declared product, "
+        "each giving the bare `product_id` and which `output` it is. Legal "
+        "outputs are `robustness_matrix` (per locked specification: estimate, "
+        "interval, n), `robustness_summary`, `specification_grid` (the locked "
+        "grid itself), `membership_change` (cohort overlap and attrition "
+        "against the primary set), `outcome_label_executability`, "
+        "`missingness_strategy_notes`, `primary_effect` and `complete_case_n`. "
+        "Two products may not name the same output. Declaring this spec is a "
+        "SCIENTIFIC CLAIM that the step is exactly that replay -- if the step "
+        "introduces new science (a different estimator, a causal-emulation or "
+        "weighting variant, an E-value, a negative control), it is a different "
+        "step and must NOT carry this spec, even though doing so would give it "
+        "a host runner. Name the step and its products whatever your reader "
+        "should see; the `output` field is what the execution layer reads.\n\n"
         "Use `input_consumption_contracts` when a step consumes typed result "
         "tables and cardinality matters. `all_rows` preserves the complete "
         "table; `single_row` is valid only for a true singleton; "
@@ -487,7 +798,12 @@ def _build_planner_user_prompt(
         "they are not aliases for raw step inputs. An upstream logical product "
         "must use its explicit `kind:name` value from a producer's "
         "`expected_outputs`. Never substitute a human label or a plausible "
-        "synonym for a sealed column.\n\n"
+        "synonym for a sealed column. Cohort `id_columns` and `time_columns` "
+        "are HOST NAVIGATION COORDINATES, not executable analysis fields: do "
+        "not list them in step inputs, Table 1, model requirements, or "
+        "robustness fields. Cohort accounting should consume the explicit "
+        "analysis-cohort product and report its denominator; the host owns row "
+        "identity and navigation.\n\n"
         "When a plan requests a manuscript-facing figure, declare a top-level "
         "`display_labels` object for every variable, contrast, endpoint, or "
         "robustness spec id whose human-facing wording matters. Labels are "
@@ -498,7 +814,9 @@ def _build_planner_user_prompt(
         "Keep eligibility separate from exposure: primary-cohort predicates "
         "must preserve every closed level compared by a downstream Table 1 or "
         "required primary estimand, including prevalence denominators.\n\n"
-        + _format_concept_id_allowlist()
+        + _format_concept_id_allowlist(
+            [variable.name for variable in context.variables]
+        )
         + "\n\n"
         + _format_ctas_schema_constraints()
         + "\n\n"
@@ -510,27 +828,103 @@ def _build_planner_user_prompt(
         "pattern for this case; otherwise supply the full five-tuple "
         "predicate. Free-text cohort strings are invalid.\n"
         "If your plan includes any cohort-definition, eligibility, or "
-        "attrition step, `cohort.inclusion` MUST contain at least one "
-        "structured predicate (plus any `exclusion`). An empty cohort there is "
-        "rejected: 纳排 expressed only in step prose cannot be enforced or "
-        "audited, and the analysis would silently run on the full universe.\n\n"
+        "attrition step, choose exactly one population mode: either set "
+        "`cohort.selection_mode='predicate_filtered'` and provide at least one "
+        "structured `inclusion`/`exclusion` predicate, or explicitly set "
+        "`cohort.selection_mode='all_input_rows'` with both predicate arrays "
+        "empty. A default empty cohort is rejected because it cannot distinguish "
+        "an intentional full-input population from omitted free-text 纳排.\n\n"
         "If a cohort-definition or eligibility step also reports attrition, "
         "its `expected_outputs` MUST declare exactly one materialised closed "
-        "primary-cohort product: `artifact:analysis_cohort`, "
-        "`dataset:analysis_cohort`, `table:analysis_cohort`, "
-        "`cohort:analysis_set`, or `cohort:<exact cohort.name>`. A definition, "
+        "primary-cohort product: " + _closed_cohort_product_sentence() + ". "
+        "A definition, "
         "protocol, or status output such as `artifact:cohort_defined` is not a "
         "cohort dataset and cannot replace that product. The other outputs in "
-        "that step may only be canonical attrition/flow tables.\n\n"
+        "that step may only be canonical attrition/flow tables. Every "
+        "downstream step consuming that cohort declares the SAME key in its "
+        "`inputs`; a step whose row authority is the closed cohort product but "
+        "which spells it any other way is executed by nobody.\n\n"
+        # The wide vocabulary above is legal but only one pair is EXECUTABLE by
+        # the host, and a Planner given five equally-endorsed spellings picked
+        # a non-executable one in 64 of 282 recorded plans.
+        #
+        # This paragraph was ~2.8 KB when first written, carrying its measured
+        # motivation ("127 of 127", "59% of every cascade") at full length. On
+        # a synthetic minimal context that left 29 KB of headroom and looked
+        # free; on the real typed contexts it is not. h1 died at 80,071 bytes
+        # against an 80,000 limit -- 71 over, from an addition of 2,819. The
+        # Planner needs the INSTRUCTION; the evidence for it belongs in the
+        # commit message and the tests, which is where it now lives. Measure
+        # any further addition against a REAL large context, never a minimal
+        # one.
+        "Of those spellings, exactly one lets the HOST perform this step "
+        "rather than the code generator: `expected_outputs` is exactly "
+        + _host_executed_cohort_step_sentence()
+        + " and nothing else. The cohort is already materialised and "
+        "digest-bound, so under that declaration the host reads the bound "
+        "rows, writes the attrition table and emits the identity receipt "
+        "itself. Any other spelling of the same two products, or a third "
+        "output beside them, goes to the code generator -- the most expensive "
+        "place in the system to lose the host.\n\n"
+        "When that step has no exclusion left to apply -- the bound cohort IS "
+        "the analysis set -- also declare `cohort_definition_spec`: "
+        "`identity_column` (the row key the receipt hashes; the host will not "
+        "guess it) and one `eligibility_criteria` entry per attrition row, "
+        "each a `criterion_id` plus a `description`. Those entries DOCUMENT "
+        "eligibility the bound cohort already satisfies, so a criterion that "
+        "still has rows to remove does not belong there; a step that must "
+        "genuinely exclude rows omits the spec.\n\n"
         "When robustness is required, pre-specify one or more executable, "
         "task-supported `robustness_specs`; never invent an unsupported axis, "
-        "endpoint, or variable. Add an auxiliary post-primary step with "
+        "endpoint, or variable. "
+        # "Never invent an unsupported axis" was already here, and the closed
+        # set it refers to was not. A real Planner guessed 'model' on one run
+        # and 'functional_form' on the next, each costing an attempt. Read the
+        # vocabulary off the contract so publishing it cannot drift from
+        # enforcing it. A design that needs a different axis belongs in its own
+        # analysis step, not in a widened robustness axis.
+        "`axis` is closed: use exactly one of "
+        + ", ".join(f"'{value}'" for value in _robustness_axis_vocabulary())
+        + ". A sensitivity that does not fit one of these (for example an "
+        "alternative model form or link function) is a separate analysis "
+        "step, not a new axis value. "
+        # Published because it was enforced and never stated: the worked
+        # example below used to show `{"strategy": "complete_case"}` with no
+        # variable list, and half of all recorded complete-case specs copied
+        # it and were refused at execution. Which variables are held complete
+        # is a scientific choice, so the host asks rather than infers.
+        f"A `missing_override` whose `strategy` is '{_COMPLETE_CASE_STRATEGY}' "
+        f"MUST also carry `{_COMPLETE_CASE_VARIABLES_KEY}`: the exact list of "
+        "column names whose completeness defines the analysed set -- normally "
+        "the exposure, the outcome and every covariate of the primary model. "
+        "The host will not infer them from the model, because restricting on a "
+        "narrower or wider set than the model uses is a different analysis, and "
+        "a spec without them is refused. "
+        "Add an auxiliary post-primary step with "
         "`method='robustness_sensitivity'` producing "
         "`table:robustness_matrix` and `statistic:robustness_summary`. "
-        "Variants must not change the primary analysis.\n\n"
+        "Variants must not change the primary analysis. "
+        # The step this sentence asks for IS the step that re-estimates the
+        # locked grid, and saying so here is the whole point: a real run
+        # declared the grid, created this step, left robustness_replay_spec
+        # unset because that field is described ninety lines earlier behind a
+        # warning about new science, and ended with "locked robustness
+        # specifications that no step estimated" -- blank panel rows and a step
+        # that blocked itself with n_converged_variants=0 after producing every
+        # other output. Generic refitting is deliberately disabled, so the
+        # declaration is the ONLY route to an estimate.
+        "THAT STEP MUST CARRY `robustness_replay_spec`: declaring "
+        "`robustness_specs` obliges exactly one step to re-estimate them, and "
+        "with no such declaration the locked grid is reported as estimated by "
+        "nobody and the step fails. Its `products[*].product_id` are this "
+        "step's OWN declared output names with the `kind:` prefix removed "
+        "(declare `table:robustness_matrix`, write `product_id` "
+        "'robustness_matrix'), which is a different field from `output` -- "
+        "naming an `output` value the step does not itself declare is "
+        "refused.\n\n"
         + locked_analysis_type_guide(infer_analysis_type(context))
         + "\n\n"
-        + planner_analysis_type_guide()
+        + planner_analysis_type_guide(detail=catalog_detail)
         + "\n\n"
         + trajectory_planner_contract_guide(
             context=context,
@@ -561,9 +955,39 @@ def _build_planner_user_prompt(
         "    ],\n"
         '    "exclusion": []\n'
         "  },\n"
+        # ResearchContext is the unique endpoint authority.  The plan keeps a
+        # projection only so old persisted plans remain readable; asking the
+        # Planner to fill the shape independently would create a second source
+        # of truth.
+        '  "endpoint": null,\n'
         '  "steps": [\n'
+        # The cohort-definition step is shown first because it IS first in
+        # every recorded plan, and because prose alone did not convey the
+        # nested criterion objects -- the same lesson the distribution spec
+        # below already paid for. The two product names are literal, not
+        # placeholders: this exact pair is what the host executes.
+        # Only the fields this step's shape actually turns on: the two literal
+        # product names and the nested criterion object. The other keys are
+        # already demonstrated by the two steps below, and every byte here is
+        # a byte taken from the typed context.
         "    {\n"
-        '      "step_id": "01_table_one",\n'
+        '      "step_id": "01_define_analysis_cohort",\n'
+        '      "planned_analysis_role": "auxiliary",\n'
+        '      "intent": "<one sentence>",\n'
+        '      "inputs": [],\n'
+        '      "expected_outputs": ["' + COHORT_DEFINITION_COHORT_OUTPUT + '", '
+        '"' + COHORT_DEFINITION_FLOW_OUTPUT + '"],\n'
+        '      "method": "cohort_definition_and_attrition",\n'
+        '      "cohort_definition_spec": {\n'
+        '        "identity_column": "<exact id column from the cohort roster>",\n'
+        '        "eligibility_criteria": [\n'
+        '          {"criterion_id": "<flow-table row key>", '
+        '"description": "<what it required>"}\n'
+        "        ]\n"
+        "      }\n"
+        "    },\n"
+        "    {\n"
+        '      "step_id": "02_table_one",\n'
         '      "planned_analysis_role": "auxiliary",\n'
         '      "intent": "<one sentence>",\n'
         '      "inputs": ["<variable names from context>"],\n'
@@ -585,7 +1009,48 @@ def _build_planner_user_prompt(
         "          }\n"
         "        ]\n"
         "      },\n"
-        '      "trajectory_stability_spec": null\n'
+        '      "trajectory_stability_spec": null,\n'
+        '      "exposure_outcome_distribution_spec": null,\n'
+        '      "cohort_definition_spec": null\n'
+        "    },\n"
+        # A second example step exists for one reason: the distribution spec
+        # was described in prose only, and a real Planner then guessed its
+        # shape four different ways in five attempts -- `exposure_column`
+        # instead of `exposure`, and twice an `{"column": ..., "levels": ...}`
+        # object where a plain column name belongs. Prose is enough to convey
+        # which choices are the Planner's; it is not enough to convey a key
+        # name or whether a field nests. Show the shape, as table_one_spec
+        # already does.
+        "    {\n"
+        '      "step_id": "03_exposure_outcome_distribution",\n'
+        '      "planned_analysis_role": "auxiliary",\n'
+        '      "intent": "<one sentence>",\n'
+        # Exactly one typed input (the cohort artifact, which carries the
+        # digest and product contract), plus the exposure and outcome column
+        # names as bare inputs -- the schema requires both spec columns to be
+        # explicit step inputs, and a bare name is not a second typed input.
+        '      "inputs": ["artifact:analysis_cohort", '
+        '"<declared exposure column name>", '
+        '"<declared outcome column name>"],\n'
+        '      "expected_outputs": ["table:exposure_outcome_distribution"],\n'
+        '      "method": "descriptive",\n'
+        '      "icu_rule_refs": [],\n'
+        '      "model_requirements": [],\n'
+        '      "input_consumption_contracts": [],\n'
+        '      "table_one_spec": null,\n'
+        '      "trajectory_stability_spec": null,\n'
+        '      "exposure_outcome_distribution_spec": {\n'
+        '        "exposure": "<declared exposure column name>",\n'
+        '        "exposure_levels": ["<closed level 1>", "<closed level 2>"],\n'
+        '        "outcome": "<declared outcome column name>",\n'
+        '        "outcome_levels": ["<closed level 1>", "<closed level 2>"],\n'
+        '        "outcome_positive_value": "<exactly one of outcome_levels>",\n'
+        '        "level_match_policy": "exact_typed",\n'
+        '        "denominator_policy": "all_declared_rows",\n'
+        '        "missing_outcome_policy": "structural_absence_is_non_event",\n'
+        '        "confidence_level": 0.95\n'
+        "      },\n"
+        '      "cohort_definition_spec": null\n'
         "    }\n"
         "  ],\n"
         '  "robustness_specs": [\n'
@@ -614,17 +1079,48 @@ def _build_planner_user_prompt(
         '      "axis": "missing",\n'
         '      "description": "Use complete-case handling for required variables.",\n'
         '      "cohort_override": null,\n'
-        '      "missing_override": {"strategy": "complete_case"},\n'
+        '      "missing_override": {"strategy": "complete_case", '
+        + f'"{_COMPLETE_CASE_VARIABLES_KEY}": '
+        + '["<exposure column>", "<outcome column>", "<each covariate>"]},\n'
         '      "outcome_override": null\n'
         "    }\n"
         "  ],\n"
+        '  "evalue_conversion_spec": null,\n'
+        '  "subgroup_analysis_spec": null,\n'
         '  "rationale": "<one paragraph>"\n'
         "}\n\n"
+        # Kept to what the Planner cannot get from the key names above. The
+        # longer explanation of why the censoring rule decides which study this
+        # is lives in the `endpoint_contract` finding, which is rendered on the
+        # retry -- exactly when it is needed, at zero fixed cost to every task.
+        "ENDPOINT: ResearchContext.endpoint is sealed HOST authority. Copy it "
+        "exactly into the compatibility projection; do not infer, repair, or "
+        "redefine it. A required missing endpoint blocks execution.\n\n"
+        "OPTIONAL POST-ANALYSIS: leave `evalue_conversion_spec` null unless an "
+        "odds-ratio E-value is requested and the baseline-risk evidence id, "
+        "rate column, population column, and exact population are declared. "
+        "Leave `subgroup_analysis_spec` null unless subgroup analysis is "
+        "explicitly requested; then bind one primary model requirement id and "
+        "declare its predictor, outcome, subgroup "
+        "columns, quantile buckets, minimum sample sizes, effect scale, an "
+        "empty adjustment roster for the current unadjusted kernel, and one "
+        "multiplicity family. These are scientific choices, never host guesses.\n\n"
         "RESEARCH CONTEXT:\n"
-        + _format_context(planner_context, include_materialized_input_facts=True)
+        + _format_context(
+            planner_context,
+            include_materialized_input_facts=True,
+            compact_method_constraints=True,
+        )
         + "\n\n"
         + planner_variable_catalog(context, planner_context)
     )
+    if planning_contract_context:
+        prompt += (
+            "\n\nHOST-DERIVED PRE-PLAN DESIGN PROFILE "
+            "(provisional until you select a valid analysis_type; generated "
+            "from the typed study context and resealed for the selected family):\n"
+            + planning_contract_context
+        )
     if know_how_context:
         prompt += (
             "\n\nKNOW-HOW DECISION OUTPUT CONTRACT:\n"
@@ -681,9 +1177,92 @@ def _validate_table_one_observed_levels(
 
     for step in plan.steps:
         bind_table_one_execution_spec(step, context)
+        bind_step_declared_levels(step, context)
 
 
-_PLANNER_PROMPT_BYTE_LIMIT = 80_000
+# The Planner's plan-generation call is the largest prompt this system builds,
+# and it is the one budgeted role ``PromptBudgetClient`` does not wrap (only the
+# Coder transports are, in execution/phase.py). So this constant is that call's
+# ONLY ceiling -- not a second opinion layered on a transport check.
+#
+# It used to be a hard-coded 80,000. That number predates the review written
+# down in ``providers/prompt_budget.py``, which asked exactly this question for
+# every other consumer and answered it: a guard meant to catch runaway assembly
+# belongs ABOVE normal traffic, not inside it, so every declared consumer gets
+# ``DEFAULT_MAX_PROMPT_TOKENS``. Under the same conservative estimator 80,000
+# bytes is ~26,700 tokens -- two thirds of that reviewed envelope -- and the
+# module that raised the others names byte-written ceilings as precisely the
+# thing that "kept tripping, and why past work went into shrinking prompts to
+# fit rather than questioning the number."
+#
+# MEASURED on the full nine-task benchmark, 2026-08-02, from each run's own
+# ``planner_prompt_metrics.json`` (see 项目进度/benchmark实验/
+# measure_planner_prompt_headroom.py): of the seven tasks that reached a
+# Planner call, FOUR had already spent the entire catalog ladder, and h3
+# cleared 80,000 by 189 bytes. Two more -- m2 (82,987) and h2 -- were refused
+# outright and produced zero steps for zero cost. A guard that seven of nine
+# real tasks graze and two cross is inside normal traffic by definition. The
+# transport never imposed 80,000 either: a 101,878-byte Planner prompt was
+# delivered successfully in a recorded E1 replay.
+#
+# Deriving it keeps ONE reviewed number where there were two, so the next
+# revision of the envelope moves both together. This raises the ceiling; it
+# does not license a fatter directive. The fixed-cost ratchet in
+# ``test_the_planner_prompt_leaves_room_for_the_context.py`` is untouched and
+# still binds the part that is ours to control.
+_PLANNER_PROMPT_BYTE_LIMIT = int(
+    DEFAULT_MAX_PROMPT_TOKENS * CONSERVATIVE_BYTES_PER_TOKEN
+)
+_PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 9_000
+
+
+def _planner_prompt_within_budget(
+    context: ResearchContext,
+    *,
+    know_how_context: str = "",
+    planning_contract_context: str = "",
+) -> Tuple[str, str]:
+    """Return ``(user_prompt, catalog_detail)``, shortening the menu before failing.
+
+    MEASURED 2026-07-30 across a nine-task offline fixture: the four that planned
+    successfully sat at 85.8%, 92.9%, 94.5% and **97.8%** of the 80,000-byte
+    limit; two larger tasks reached 83,622 bytes and were refused outright,
+    producing zero steps.  Those two were only 6.9% larger than the largest
+    success.  With both context segments marked ``required=True`` the assembler
+    had nothing to evict, so a 4.5% overflow cost two entire tasks.
+
+    The only part of that prompt that is pure menu is the analysis-type catalog:
+    47% is this task's typed context (drop it and the Planner invents columns),
+    32% is the plan schema (drop it and the Planner cannot fill the form -- three
+    other tasks already died that way), and the catalog's remaining share is the
+    same 8,046 bytes for every task.  Shortening it costs detail on families the
+    Planner might switch to; the inferred family's modules and guardrails are
+    restated in full by ``locked_analysis_type_guide`` either way.
+
+    So the ladder is descended only under budget pressure, never as a routing
+    decision -- a catalog that varied with an inferred family would put a hidden
+    guess between the Planner and its options, and the inference is known to
+    disagree with the Planner's own declaration.  The chosen rung is returned so
+    the caller can record it; a shortened menu must never be silent.
+    """
+
+    prompt = ""
+    for detail in CATALOG_DETAIL_LADDER:
+        prompt = _build_planner_user_prompt(
+            context,
+            know_how_context=know_how_context,
+            planning_contract_context=planning_contract_context,
+            catalog_detail=detail,
+        )
+        total = len((_SYSTEM_GUIDE + _PRINCIPLES_GUIDE).encode("utf-8")) + len(
+            prompt.encode("utf-8")
+        )
+        if total <= _PLANNER_PROMPT_BYTE_LIMIT:
+            return prompt, detail
+    # Still over at the shortest rung: return it and let the budget check raise,
+    # so an over-budget request stays an explicit failure rather than a silent
+    # truncation of the typed context.
+    return prompt, CATALOG_DETAIL_LADDER[-1]
 
 
 class PlannerPromptBudgetError(RuntimeError):
@@ -692,6 +1271,175 @@ class PlannerPromptBudgetError(RuntimeError):
 
 class PlannerArticleContractError(ValueError):
     """The parsed Planner response omits a required article-level role."""
+
+
+def describe_article_contract_family_switch(*, shown: Any, judged: Any) -> str:
+    """Say that the declared family replaced the published contract, and publish it.
+
+    The article contract shown to the Planner is compiled from the family the
+    host *inferred* from the research context. The contract that judges the
+    plan is recompiled from the family the plan *declared*. When those differ,
+    every required role is decided by a document the Planner never saw.
+
+    Measured on 2026-07-29: E1's context infers ``survival``
+    (``diagnostics``/``survival_effect``/``temporal_absolute_risk``), and the
+    Planner declared ``association_study`` -- the right label for a binary
+    in-hospital-mortality outcome, and what the previously accepted plan
+    declared. It was then judged on ``primary_estimand`` and ``robustness``,
+    which had never been published to it, and one attempt was told to produce
+    ``table:survival_curve`` for a binary outcome. Five attempts, five distinct
+    violations, nothing executed.
+
+    Which side is right is genuinely open -- the inference read a time-to-event
+    *sensitivity* as the whole design, and the Planner was arguably closer --
+    so this does not pick a winner. It removes the part that is indefensible
+    either way: discovering a contract one missing role per paid attempt. The
+    judging family's whole required set is stated here so a single retry can
+    satisfy it, or reconsider the declaration knowing what it costs.
+
+    Returns ``""`` when the families agree, so the ordinary rejection is not
+    padded with a switch that did not happen.
+    """
+
+    shown_family = str(getattr(shown, "source_analysis_type", "") or "")
+    judged_family = str(getattr(judged, "source_analysis_type", "") or "")
+    if not shown_family or not judged_family or shown_family == judged_family:
+        return ""
+    required = ", ".join(str(role) for role in judged.required_roles)
+    return (
+        f" NOTE: the article contract you were shown was compiled for "
+        f"analysis_type={shown_family}; your plan declares "
+        f"analysis_type={judged_family}, which REPLACED it. The full required "
+        f"role set for {judged_family} is: {required}. Either cover all of "
+        f"them, or declare analysis_type={shown_family} and cover the contract "
+        "you were shown -- do not alternate between the two."
+    )
+
+
+def _planner_retry_response_projection(raw: str) -> str:
+    """Keep prior Planner structure without replaying its long prose."""
+
+    text = str(raw or "").strip()
+    if "```" in text:
+        text = _strip_code_fence(text)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        match = _first_json_block(text)
+        if match is None:
+            return ""
+        try:
+            payload = json.loads(match)
+        except json.JSONDecodeError:
+            return ""
+    if not isinstance(payload, dict):
+        return ""
+
+    step_keys = (
+        "step_id",
+        "planned_analysis_role",
+        "inputs",
+        "expected_outputs",
+        "method",
+        "icu_rule_refs",
+        "model_requirements",
+        "family_primary_result_requirement",
+        "input_consumption_contracts",
+        "table_one_spec",
+        "trajectory_stability_spec",
+        "exposure_outcome_distribution_spec",
+        # Omitted here, a spec the previous attempt got right is dropped from
+        # the projection and has to be rediscovered on the retry.
+        "cohort_definition_spec",
+    )
+    raw_steps = payload.get("steps")
+    steps = raw_steps if isinstance(raw_steps, list) else []
+    raw_robustness_specs = payload.get("robustness_specs")
+    robustness_specs = (
+        raw_robustness_specs if isinstance(raw_robustness_specs, list) else []
+    )
+    projected_steps = [
+        {key: step[key] for key in step_keys if key in step}
+        for step in steps
+        if isinstance(step, dict)
+    ]
+    projection = {
+        "analysis_type": payload.get("analysis_type"),
+        "cohort": payload.get("cohort"),
+        # Echoed for the same reason as `cohort`: a plan rejected for anything
+        # else must not silently lose a declaration it already got right, and a
+        # plan rejected FOR its endpoint has to see what it actually sent.
+        "endpoint": payload.get("endpoint"),
+        "steps": projected_steps,
+        "robustness_specs": robustness_specs,
+    }
+    for optional_science in ("evalue_conversion_spec", "subgroup_analysis_spec"):
+        if optional_science in payload:
+            projection[optional_science] = payload[optional_science]
+
+    def render(value: object) -> str:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    rendered = render(projection)
+    if len(rendered.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+        return rendered
+
+    minimal_step_keys = (
+        "step_id",
+        "planned_analysis_role",
+        "inputs",
+        "expected_outputs",
+        "method",
+        "model_requirements",
+        "family_primary_result_requirement",
+    )
+    projection["steps"] = [
+        {key: step[key] for key in minimal_step_keys if key in step}
+        for step in projected_steps
+    ]
+    robustness_keys = (
+        "spec_id",
+        "axis",
+        "cohort_override",
+        "missing_override",
+        "outcome_override",
+    )
+    projection["robustness_specs"] = [
+        {key: spec[key] for key in robustness_keys if key in spec}
+        for spec in robustness_specs
+        if isinstance(spec, dict)
+    ]
+    rendered = render(projection)
+    if len(rendered.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+        return rendered
+
+    compact_step_keys = (
+        "step_id",
+        "planned_analysis_role",
+        "inputs",
+        "expected_outputs",
+        "method",
+    )
+    projection["steps"] = [
+        {key: step[key] for key in compact_step_keys if key in step}
+        for step in projected_steps
+    ]
+    projection["robustness_specs"] = [
+        {key: spec[key] for key in ("spec_id", "axis") if key in spec}
+        for spec in robustness_specs
+        if isinstance(spec, dict)
+    ]
+    rendered = render(projection)
+    if len(rendered.encode("utf-8")) > _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+        raise PlannerPromptBudgetError(
+            "Planner retry structure exceeds its bounded projection envelope"
+        )
+    return rendered
 
 
 class PlannerAgent:
@@ -715,17 +1463,17 @@ class PlannerAgent:
         context: ResearchContext,
         *,
         know_how_context: str = "",
+        planning_contract_context: str = "",
     ) -> list[LLMMessage]:
         """Build the exact initial Planner request used by ``run``."""
+        user_prompt, _ = _planner_prompt_within_budget(
+            context,
+            know_how_context=know_how_context,
+            planning_contract_context=planning_contract_context,
+        )
         return [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE),
-            LLMMessage(
-                role="user",
-                content=_build_planner_user_prompt(
-                    context,
-                    know_how_context=know_how_context,
-                ),
-            ),
+            LLMMessage(role="user", content=user_prompt),
         ]
 
     @classmethod
@@ -734,13 +1482,26 @@ class PlannerAgent:
         context: ResearchContext,
         *,
         know_how_context: str = "",
+        planning_contract_context: str = "",
     ) -> Dict[str, Any]:
+        _, catalog_detail = _planner_prompt_within_budget(
+            context,
+            know_how_context=know_how_context,
+            planning_contract_context=planning_contract_context,
+        )
         try:
-            return bounded_request_metrics(
+            metrics = bounded_request_metrics(
                 system_content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE,
-                base_user_content=_build_planner_user_prompt(context),
+                base_user_content=_build_planner_user_prompt(
+                    context,
+                    planning_contract_context=planning_contract_context,
+                    catalog_detail=catalog_detail,
+                ),
                 full_user_content=_build_planner_user_prompt(
-                    context, know_how_context=know_how_context
+                    context,
+                    know_how_context=know_how_context,
+                    planning_contract_context=planning_contract_context,
+                    catalog_detail=catalog_detail,
                 ),
                 max_bytes=_PLANNER_PROMPT_BYTE_LIMIT,
             )
@@ -748,6 +1509,10 @@ class PlannerAgent:
             raise PlannerPromptBudgetError(
                 f"Planner prompt transport budget exceeded: {exc}"
             ) from exc
+        # A shortened menu is recorded, never silent: the run artifact must say
+        # which rung produced the plan it carries.
+        metrics["analysis_type_catalog_detail"] = catalog_detail
+        return metrics
 
     def run(
         self,
@@ -756,19 +1521,35 @@ class PlannerAgent:
         allowed_know_how_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
         know_how_context: str = "",
         enforce_article_contract: bool = False,
+        article_contract_context: Optional[ResearchContext] = None,
+        planning_contract_context: str = "",
     ) -> AnalysisPlan:
         if bool(allowed_know_how_decisions) != bool(know_how_context):
             raise ValueError(
                 "Planner know-how decision authority and structured context must "
                 "be supplied together"
             )
+        resolved_planning_contract_context = planning_contract_context
+        if enforce_article_contract and not resolved_planning_contract_context:
+            from ..reporting.article_contract import (
+                build_article_analysis_contract,
+                render_article_analysis_contract_for_prompt,
+            )
+
+            resolved_planning_contract_context = (
+                render_article_analysis_contract_for_prompt(
+                    build_article_analysis_contract(article_contract_context or context)
+                )
+            )
         messages = self.request_messages(
             context,
             know_how_context=know_how_context,
+            planning_contract_context=resolved_planning_contract_context,
         )
         self.last_prompt_metrics = self.request_metrics(
             context,
             know_how_context=know_how_context,
+            planning_contract_context=resolved_planning_contract_context,
         )
         if self.last_prompt_metrics["total_bytes"] > _PLANNER_PROMPT_BYTE_LIMIT:
             raise PlannerPromptBudgetError(
@@ -788,22 +1569,30 @@ class PlannerAgent:
                 context,
                 allowed_know_how_decisions=allowed_know_how_decisions,
                 enforce_article_contract=enforce_article_contract,
+                article_contract_context=article_contract_context,
             ),
             role="planner",
             max_retries=PLANNER_MAX_RETRIES,
             max_tokens=4096,
             temperature=0.2,
+            failed_response_transform=_planner_retry_response_projection,
             format_reminder=(
                 "The JSON must be a single object with keys: "
-                "research_question (string), cohort (object or null), optional "
+                "research_question (string), optional analysis_type (string), "
+                "cohort (object or null), optional display_labels (object), "
+                "robustness_specs (array; non-empty when the binding contract "
+                "requires robustness), optional "
                 "know_how_decisions (claim-level adopted/rejected/unresolved/"
                 "requires_confirmation records using exact retrieved version, SHA, "
                 "claim_id, and citation_ids), "
                 "steps (array of objects "
                 "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
                 "method, icu_rule_refs, optional model_requirements, optional "
-                "input_consumption_contracts, optional table_one_spec, and optional "
-                "trajectory_stability_spec), "
+                "family_primary_result_requirement, optional "
+                "input_consumption_contracts, optional table_one_spec, optional "
+                "trajectory_stability_spec, optional "
+                "exposure_outcome_distribution_spec, and optional "
+                "cohort_definition_spec), "
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
@@ -817,6 +1606,7 @@ class PlannerAgent:
         *,
         allowed_know_how_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
         enforce_article_contract: bool = False,
+        article_contract_context: Optional[ResearchContext] = None,
     ) -> AnalysisPlan:
         text = raw.strip()
         # Strip a fenced block anywhere in the response (already
@@ -829,18 +1619,23 @@ class PlannerAgent:
             # Last-ditch: try to recover a JSON block from inside the response.
             match = _first_json_block(text)
             if match is None:
-                # T1.3 — be loud about exactly what came back. Dump the
-                # whole raw response so the user can hand it to a human
-                # debugger or back to Claude for prompt iteration.
-                _dump_raw(raw, "planner_unparseable")
-                head = (raw or "").strip().replace("\n", " ⏎ ")[:600]
+                diagnostic_path = _dump_raw(raw, "planner_unparseable")
+                head = redact_text_secrets((raw or "")[:LLM_PARSE_DEBUG_CHARS]).strip()
+                head = head.replace("\n", " ⏎ ")[:600]
+                diagnostic_note = (
+                    f"Redacted diagnostic written to {diagnostic_path}."
+                    if diagnostic_path is not None
+                    else (
+                        "No raw response was written. Set EASYICU_LLM_DEBUG=1 "
+                        "and EASYICU_LLM_DEBUG_DIR=<run_dir>/llm_debug to write "
+                        "a bounded, redacted diagnostic."
+                    )
+                )
                 raise ValueError(
                     f"Planner LLM did not return parseable JSON "
                     f"(len={len(raw or '')}). "
-                    f"First 600 chars: {head!r}. "
-                    "Full raw response written to "
-                    "research_output/llm_debug/planner_unparseable_*.txt; "
-                    "set EASYICU_LLM_DEBUG=1 to also capture every LLM call."
+                    f"Redacted first 600 chars: {head!r}. "
+                    f"{diagnostic_note}"
                 )
             data = json.loads(match)
         if not isinstance(data, dict):
@@ -860,15 +1655,45 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
+        # What only *Planner output* must satisfy, asked where the Planner can
+        # still answer.  A complete-case robustness spec has to name the
+        # variables whose completeness defines the set, because a model fitted
+        # on one adjustment set and a restriction taken over another are
+        # different analyses and the host must not infer which was meant.  This
+        # is deliberately not in ``AnalysisPlan`` itself: that constructor also
+        # loads recorded plans and re-reads locks, and neither can revise.
+        # Replanning cannot introduce a fresh spec -- any change is projected
+        # back onto the plan-time lock -- so this is the single point of entry.
+        # Guarded on a non-empty list, exactly as the schema was: whether a plan
+        # must carry robustness at all is the article contract's call, not this
+        # one's.  Dropping that guard when the check moved here turned "declared
+        # none" into "declared badly" and rejected five planner attempts for a
+        # rule about specs the plan never had.
+        if plan.robustness_specs:
+            try:
+                validate_planner_robustness_specs(plan.robustness_specs)
+            except RobustnessPlanError as exc:
+                raise ValueError(str(exc)) from exc
         if enforce_article_contract:
             from ..reporting.article_contract import (
                 build_article_analysis_contract,
+                empty_primary_lineage_reason,
+                hinted_typed_products,
                 validate_plan_against_article_contract,
             )
 
             contract = build_article_analysis_contract(
-                context,
+                article_contract_context or context,
                 analysis_type=plan.analysis_type,
+            )
+            # The contract the Planner was *shown* is compiled without an
+            # analysis_type, so it describes the family the host inferred. The
+            # one above is compiled with the family the plan declared. When
+            # those differ, the plan is being judged by a contract nobody
+            # published, and the rejection below would otherwise reveal it one
+            # missing role per paid attempt.
+            shown_contract = build_article_analysis_contract(
+                article_contract_context or context
             )
             contract_findings = validate_plan_against_article_contract(
                 plan=plan,
@@ -885,6 +1710,16 @@ class PlannerAgent:
             if "robustness" in contract.required_roles and not plan.robustness_specs:
                 missing_roles = sorted({*missing_roles, "robustness_specs"})
             if missing_roles:
+                # A missing headline-owned role is not fixed by declaring the
+                # product anywhere: roles_covered_by_plan credits it only from
+                # the primary lineage. Naming the product without saying that
+                # sends the Planner back to add the same off-lineage display
+                # step it already wrote, which is how one recorded
+                # survival-plan fixture spent its attempts.
+                headline_roles = set(contract.planner_owned_result_roles)
+                missing_headline = [
+                    role for role in missing_roles if role in headline_roles
+                ]
                 completion_hints: list[str] = []
                 for role in missing_roles:
                     if role == "robustness_specs":
@@ -897,9 +1732,11 @@ class PlannerAgent:
                     if not module_ids:
                         continue
                     typed_examples = ", ".join(
-                        f"'table:{module_id}'" for module_id in module_ids[:3]
+                        f"{product!r}"
+                        for product in hinted_typed_products(role, module_ids)[:3]
                     )
-                    completion_hints.append(f"{role} -> {typed_examples}")
+                    marker = " (headline_owned)" if role in headline_roles else ""
+                    completion_hints.append(f"{role}{marker} -> {typed_examples}")
                 hint_text = (
                     " Required typed step examples: "
                     + "; ".join(completion_hints)
@@ -907,11 +1744,41 @@ class PlannerAgent:
                     if completion_hints
                     else ""
                 )
+                if missing_headline:
+                    # Cause before advice. While the lineage is empty no
+                    # declaration anywhere can credit a headline role, so the
+                    # generic "declare it in the primary step" is work the
+                    # Planner may already have done -- canary5 spent 2 of 5
+                    # attempts on exactly that.
+                    lineage_reason = empty_primary_lineage_reason(plan)
+                    if lineage_reason:
+                        hint_text += (
+                            " The reason none of these can be credited is "
+                            "structural, not a missing product: "
+                            + lineage_reason
+                            + ". Fix that first; declaring the product "
+                            "elsewhere cannot help until it is fixed."
+                        )
+                    hint_text += (
+                        " These are headline_owned and are credited only on the "
+                        "primary lineage: "
+                        + ", ".join(missing_headline)
+                        + ". Declare each in the single "
+                        "planned_analysis_role='primary' step's expected_outputs "
+                        "beside its non-rendering scientific result, or in a step "
+                        "whose inputs include a typed product only a lineage step "
+                        "produces. A second primary step is refused, and a step "
+                        "reading only the cohort does not join the lineage."
+                    )
                 raise PlannerArticleContractError(
                     "Planner plan is missing required article contract role(s): "
                     + ", ".join(missing_roles)
                     + "."
                     + hint_text
+                    + describe_article_contract_family_switch(
+                        shown=shown_contract,
+                        judged=contract,
+                    )
                     + " Add explicit typed analysis steps and, when robustness "
                     "is required, at least one task-supported robustness spec plus "
                     "a method='robustness_sensitivity' step producing "
@@ -954,6 +1821,22 @@ class PlannerAgent:
                     f"every retrieved card: {undecided_cards!r}"
                 )
         _validate_table_one_observed_levels(plan, context)
+        missing_distribution_specs = [
+            step.step_id
+            for step in plan.steps
+            if "table:exposure_outcome_distribution" in step.expected_outputs
+            and step.exposure_outcome_distribution_spec is None
+        ]
+        if missing_distribution_specs and not llm_is_mockish(
+            getattr(self, "llm", None)
+        ):
+            raise ValueError(
+                "Planner exposure/outcome distribution steps must declare "
+                "exposure_outcome_distribution_spec; missing for "
+                f"{missing_distribution_specs!r}. The exposure, outcome, event "
+                "value and denominator policy are scientific choices and are not "
+                "inferred from column names or input order."
+            )
         missing_table_one_specs = [
             step.step_id
             for step in plan.steps
@@ -984,6 +1867,36 @@ class PlannerAgent:
                 )
             plan.analysis_type = canonical_family
         validate_plan_typed_bindings_against_context(plan=plan, context=context)
+        primary_cohort_findings = primary_analysis_cohort_plan_findings(plan=plan)
+        if primary_cohort_findings:
+            violations = [
+                {
+                    "step_id": finding.detail.get("step_id"),
+                    "issue": finding.detail.get("issue"),
+                    "expected_outputs": list(
+                        next(
+                            (
+                                step.expected_outputs
+                                for step in plan.steps
+                                if step.step_id == finding.detail.get("step_id")
+                            ),
+                            [],
+                        )
+                    ),
+                }
+                for finding in primary_cohort_findings
+            ]
+            raise ValueError(
+                "Planner primary-cohort output contract is not executable. "
+                "Violations: "
+                + json.dumps(violations, ensure_ascii=False, default=str)
+                + ". Move side outputs to downstream steps that consume the "
+                "closed cohort product. A primary cohort construction/"
+                "eligibility + attrition "
+                "step must uniquely own exactly one materialised closed cohort "
+                "product and may otherwise emit only canonical attrition/"
+                "denominator tables."
+            )
         _validate_required_primary_result(plan=plan, context=context)
         return plan
 
@@ -1137,6 +2050,7 @@ class ReplannerAgent(PlannerAgent):
             if directive
             else ""
         )
+        replanner_context = scoped_planner_context(context)
         messages = [
             LLMMessage(
                 role="system",
@@ -1160,12 +2074,25 @@ class ReplannerAgent(PlannerAgent):
                     f"COMPLETED STEP RECORDS:\n{json.dumps(completed, ensure_ascii=False, default=str)}\n\n"
                     "RESEARCH CONTEXT:\n"
                     + _format_context(
-                        context,
+                        replanner_context,
                         include_materialized_input_facts=True,
+                        compact_method_constraints=True,
                     )
+                    + "\n\n"
+                    + planner_variable_catalog(context, replanner_context)
                 ),
             ),
         ]
+        replanner_bytes = sum(
+            len(str(message.content or "").encode("utf-8")) for message in messages
+        )
+        if replanner_bytes > _PLANNER_PROMPT_BYTE_LIMIT:
+            raise PlannerPromptBudgetError(
+                "Replanner prompt transport budget exceeded: "
+                f"{replanner_bytes} > {_PLANNER_PROMPT_BYTE_LIMIT} bytes. "
+                "No plan, completed-step evidence, or scientific coordinate was "
+                "truncated; reduce the scoped discovery catalog."
+            )
         from ..providers.structured_retry import call_llm_with_structured_retry
 
         def parse_revised(raw: str) -> AnalysisPlan:
@@ -1500,21 +2427,26 @@ class CriticAgent:
         evidence_refs: Sequence[EvidenceRef],
         findings: Sequence[str],
     ) -> CritiqueReport:
-        concerns = [msg for msg in findings if msg]
-        status: str = "pass"
-        if not evidence_refs:
-            status = "blocked"
-            concerns.append("No evidence refs were registered for this step.")
-        elif concerns:
-            status = "needs_revision"
+        decision = decide_step_scientific_review(
+            step_summary=step_summary,
+            deterministic_findings=tuple(findings),
+            evidence_present=bool(evidence_refs),
+        )
+        suggested_repairs = list(decision.semantic_repairs)
+        if decision.status != "pass":
+            suggested_repairs.extend(
+                _suggest_repairs_for(step_summary, decision.concerns)
+            )
         return CritiqueReport(
-            status=status,  # type: ignore[arg-type]
+            status=decision.status,
             reviewer="CriticAgent",
-            concerns=concerns,
+            concerns=list(decision.concerns),
             unsupported_claims=[],
             missing_evidence_refs=[] if evidence_refs else [step.step_id],
             suggested_repairs=(
-                [] if status == "pass" else _suggest_repairs_for(step_summary, concerns)
+                []
+                if decision.status == "pass"
+                else list(dict.fromkeys(suggested_repairs))
             ),
             related_evidence_refs=list(evidence_refs),
         )
@@ -1735,16 +2667,21 @@ _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS = 2
 # 8192 roughly doubles the headroom. If truncation recurs at this cap, add a
 # finish_reason=="length" continuation rather than raising it blindly.
 _CODER_MAX_TOKENS = 8192
-_CODER_INITIAL_PROMPT_BYTE_LIMIT = 42_000
 _CODER_INITIAL_PROMPT_TARGET_BYTES = 38_000
 _CODER_PATCH_PROMPT_BYTE_LIMIT = 30_000
-_CODER_REWRITE_PROMPT_BYTE_LIMIT = 65_000
 _CODER_TYPED_PATCH_DIAGNOSTIC_BYTE_LIMIT = 768
 _CODER_PATCH_MAX_EXCERPT_CHARS = 5_500
 
 
-class CoderPromptBudgetError(RuntimeError):
-    """The lossless Coder prompt exceeds its provider transport envelope."""
+class CoderPromptBudgetError(PatchTransportUnavailable, RuntimeError):
+    """The lossless Coder prompt exceeds its provider transport envelope.
+
+    Raised from the *patch* preflight, so it means the minimal patch could not
+    be posed -- not that the repair is impossible. It is a
+    ``PatchTransportUnavailable`` so the coordinator falls through to the
+    full-rewrite transport instead of spending the attempt on a prompt that
+    was never sent.
+    """
 
     def __init__(self, *, mode: str, actual_bytes: int, limit_bytes: int) -> None:
         self.mode = str(mode)
@@ -1803,6 +2740,46 @@ def _cohort_predicate_partition_safety_contract(step: AnalysisStep) -> str:
     )
 
 
+def _declared_statistic_products(step: AnalysisStep) -> tuple[str, ...]:
+    """The step's own ``statistic:<name>`` products, in declared order."""
+
+    seen: list[str] = []
+    for item in step.expected_outputs or ():
+        text = str(item or "").strip()
+        if text.startswith("statistic:") and text not in seen:
+            seen.append(text)
+    return tuple(seen)
+
+
+def _statistic_payload_shape_directive(products: Sequence[str]) -> str:
+    """Publish the reader for a statistic file, not a description of it.
+
+    A real run wrote ``[{"name": ..., "value": 445, ...}]`` -- the right object
+    wrapped in a one-element list, the same shape it writes every table in --
+    and the canonical normalizer refused it with ``invalid_statistic_shape``
+    after the step had produced every other output correctly.  Nothing in any
+    host prompt had ever said a statistic file must be an object, so the shape
+    was only learnable by dying.  The aliases are rendered from the reader's own
+    mapping so a new one reaches the model instead of drifting away from it.
+    """
+
+    aliases = "; ".join(
+        f"{field} from {'/'.join(keys)}"
+        for field, keys in STATISTIC_PAYLOAD_KEY_ALIASES.items()
+    )
+    return (
+        "- Write each declared `statistic:<name>` product as a single JSON "
+        "OBJECT, never a list and never a bare number: "
+        '`{"name": "<name>", "value": <number>}`. A one-element list of that '
+        "same object is refused as invalid_statistic_shape and kills the step "
+        "after every other output is already correct. An included `name` (or "
+        "`statistic`) must equal the declared product name. The host reads "
+        f"{aliases}; it also reads effect_scale/effect_measure/scale and "
+        "unit/units. Any other key is kept but is not read as one of those "
+        "fields. Declared here: " + ", ".join(products) + "."
+    )
+
+
 def _declared_output_scope_contract(step: AnalysisStep) -> str:
     """Keep code generation inside the plan's typed product boundary.
 
@@ -1827,6 +2804,9 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
         "requirements are part of the method contract. The inferred analysis family "
         "is context only and cannot authorize additional scientific products.",
     ]
+    statistic_products = _declared_statistic_products(step)
+    if statistic_products:
+        lines.append(_statistic_payload_shape_directive(statistic_products))
     if effect_authorized:
         lines.append(
             "- Effect authorization does not widen scope: emit effect estimates or "
@@ -1857,12 +2837,62 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _declares_no_measurement_provenance_pair(step: AnalysisStep) -> bool:
+    """Whether the preflight gate will refuse any provenance call in this step.
+
+    Computed with the gate's own rule rather than restated: a pair needs two
+    BARE column names in ``step.inputs`` -- a measured column and its companion
+    count. A step consuming typed products (``table:x``) therefore has no pair
+    at all, which is every figure step.
+
+    That mattered because the negative sentence below used to be emitted only
+    when the step declared NO inputs whatsoever. Every real figure step has
+    inputs, so no figure step was ever told, while the coder prompt says in
+    bold that "every result step declaring a measured/count pair must call the
+    host ``measurement_provenance_receipt`` ... this requirement is not limited
+    to a component-QC step". Measured on canary9's E3: the Coder called it, and
+    the gate quarantined the step before it ran, for a rule the host had
+    demanded in general and exempted only in a branch that never fired.
+    """
+
+    from ..icu_rules import companion_count_column_for_measured
+
+    bare = {
+        str(value).strip()
+        for value in step.inputs or []
+        if ":" not in str(value) and str(value).strip()
+    }
+    return not any(
+        (companion := companion_count_column_for_measured(name)) and companion in bare
+        for name in bare
+    )
+
+
+_NO_PROVENANCE_PAIR_RULE = (
+    "- No measured/count provenance pair is declared for this step. Do not "
+    "read those companions, call `measurement_provenance_receipt`, or "
+    "hand-roll an equivalent audit. A pair is two bare column names in this "
+    "step's inputs; a step consuming typed products (`table:...`) has none, "
+    "so a rendering-only figure never calls it -- it draws the values its "
+    "digest-bound inputs already carry.\n"
+)
+
+
 def _typed_input_scope_contract(step: AnalysisStep) -> str:
     """Bind Planner-owned consumer scope to run-authoritative input files."""
 
     declared_inputs = list(step.inputs or [])
     if not declared_inputs:
-        return ""
+        return (
+            "DECLARED INPUT SCOPE (binding):\n"
+            "- This step has no Planner-declared typed or raw-variable inputs. "
+            "Do not infer executable columns from ResearchContext, dataframe "
+            "schema, naming conventions, dtypes, or related concept companions.\n"
+            "- A separately attached host-owned execution receipt may authorize "
+            "only the exact coordinates it enumerates. It does not authorize "
+            "related `*_measured`, `*_n`, status, timing, or sibling-summary "
+            "columns.\n" + _NO_PROVENANCE_PAIR_RULE
+        )
     typed_inputs = []
     raw_inputs = []
     typed_cohort_inputs = []
@@ -1897,20 +2927,44 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
             "table because an unused nullable field is blank. Never drop such rows or "
             "replace semantic missingness with zero merely to pass validation.\n"
         )
+    # Emitted whenever the gate would refuse a provenance call, which is every
+    # step without a bare measured/count pair -- not only the steps with no
+    # inputs at all. See _declares_no_measurement_provenance_pair.
+    no_provenance_pair_contract = (
+        _NO_PROVENANCE_PAIR_RULE
+        if _declares_no_measurement_provenance_pair(step)
+        else ""
+    )
     raw_input_contract = ""
     if raw_inputs:
         raw_input_contract = (
             "- manifest['raw_input_contracts']['contracts'] is the unique "
-            "host-generated executable metadata for untyped Planner inputs. Use "
+            "host-generated executable metadata for untyped Planner inputs. It "
+            "is a JSON object keyed by the exact resolved column, already in "
+            "by-column form: read `contracts.get(column)` and never assert it "
+            "is a list, iterate it as a list of records, or rebuild a by-column "
+            "mapping from it. Use "
             "exact allowed_values and analysis_plausibility_range + "
-            "plausibility_policy; do not rediscover them from prompt prose or "
-            "ResearchContext.\n"
+            "plausibility_policy. `analysis_plausibility_range` is a JSON object "
+            "with `minimum` and `maximum` keys; either bound may be null, so "
+            "apply only non-null bounds and never index it as a list or use "
+            "`lower`/`upper` aliases. "
+            "`plausibility_policy.out_of_range_action` is binding, not a "
+            "suggestion: `retain_and_flag` means keep every such row and "
+            "record a flag column or count -- never drop, clip, impute, or "
+            "raise on it. A non-null range plus that action creates the receipt; follow "
+            "the host-owned FLAG-ONLY PLAUSIBILITY RECEIPT SCOPE, omit `plausibility_audit` when empty, and fail only where the policy says so. "
+            "Do not rediscover metadata from prompt "
+            "prose or ResearchContext.\n"
         )
     return (
         "TYPED INPUT BINDING (binding):\n"
         "- EASYICU_RESOLVED_INPUTS_JSON is a filesystem path to a JSON document; "
         "read the file, then parse its contents. This applies even when the step "
-        "declares only untyped raw-variable inputs. "
+        "declares only untyped raw-variable inputs. The current schema may be "
+        "unwrapped while archived inputs may contain a `manifest` wrapper: "
+        "normalize exactly as `manifest = document.get('manifest', document)`; "
+        "never use an empty-object fallback that discards unwrapped authority. "
         "manifest['planner_declared_inputs'] is the exact Planner-owned consumer "
         "scope: kind:name entries are products and all others are the only eligible "
         "raw-variable or column coordinates.\n"
@@ -1942,18 +2996,37 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "an exposure, outcome, method, cohort, estimand, or role. Select only exact "
         "declared columns; fail closed instead of using positional/dtype fallbacks.\n"
         "- A typed product without product_contract.columns is non-tabular. "
-        "Load its digest-bound representation by suffix; never invent a table schema.\n"
+        "Load its digest-bound representation by suffix; never invent a table schema. "
+        "For JSON, a present product_contract.json_structure is the exact "
+        "host-observed structural receipt: follow its JSON Pointer paths and "
+        "object_item_keys instead of converting the root object to a DataFrame, "
+        "guessing aliases, or scanning arbitrary nested values. The receipt "
+        "contains no scientific role assignments or data values.\n"
         "- Do not glob EASYICU_EVIDENCE_DIR, choose a file by mtime or basename, "
         "or reconstruct a declared upstream product from COHORT_PARQUET.\n"
         "- In step_summary.json, record one input_bindings row per typed input "
         "consumed with exact input_key/evidence_id/sha256, loaded, and for each "
-        "loaded tabular input, its row_count.\n"
+        "loaded tabular input, its row_count. This receipt list is exclusively "
+        "for exact keys in manifest['inputs']; raw Planner columns are already "
+        "bound by the execution-cohort and raw-input contracts, so never invent "
+        "a `raw:<column>` input_key. When the exact typed-input list is empty, "
+        "omit input_bindings or write an empty list.\n"
         "- If a block claims status='checked' for a subset reconciliation between "
         "typed tables, name both input keys, key_columns, and every shared non-key "
         "column checked; set value_mismatch_n=0 only after comparison. The host "
         "repeats that key-and-value comparison.\n"
         "- Use `strict_numeric_input(original).values` for result-bearing numeric "
-        "input. Capture/report any raw non-finite mask before calling it.\n"
+        "input. Capture/report any raw non-finite mask before calling it. Source "
+        "missingness is separate: count non-finite only where the converted "
+        "source value is nonmissing (`values.notna() & ~np.isfinite(values)`); "
+        "never count NaN introduced or retained for missingness as non-finite.\n"
+        "- Stable descriptive-helper APIs are exact: "
+        "`closed_categorical_counts(series, declared_levels=levels).table` "
+        "returns columns `level` and `count`; "
+        "`measurement_provenance_receipt(frame, measured_column=..., "
+        "count_column=...)` uses one positional frame and two keyword-only "
+        "column names. Never inspect helper signatures, pass `*args`/`**kwargs`, "
+        "add label keywords, or build compatibility adapters.\n"
         f"{typed_numeric_null_contract}"
         "- Import `strict_numeric_input` and, for every exact Planner-declared "
         "measured/count pair, `measurement_provenance_receipt` from "
@@ -1961,9 +3034,12 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "replacements with those names. "
         "Run each receipt on the exact analysis frame before output, preserve its "
         "mapping, and let errors propagate. Do not pre-coerce, duplicate, or "
-        "hand-roll validation of the same pair.\n"
+        "hand-roll validation of the same pair. A measured/count receipt checks "
+        "`measured == (count > 0)`; it does not require the related value column "
+        "to be non-missing. Never compare value availability with the companion "
+        "pair or add it to provenance discordance.\n"
         f"{typed_cohort_contract}"
-        f"- Exact Planner-declared inputs for this step: {declared_inputs}\n"
+        f"{no_provenance_pair_contract}"
         f"- Exact typed inputs for this step: {typed_inputs}\n"
     )
 
@@ -2009,7 +3085,10 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         "TYPED INPUT BINDING (binding): minimal patch",
         "- EASYICU_RESOLVED_INPUTS_JSON is a filesystem path to a JSON document; "
         "read the file, then parse its contents. This applies even when the step "
-        "declares only untyped raw-variable inputs.",
+        "declares only untyped raw-variable inputs. Normalize current unwrapped "
+        "and archived wrapped forms exactly as "
+        "`manifest = document.get('manifest', document)`; never use an "
+        "empty-object fallback that discards unwrapped authority.",
         "- manifest['planner_declared_inputs'] is the exact Planner-owned "
         "consumer scope and the only eligible raw-variable or column coordinates. "
         "manifest['inputs'] contains only host-bound typed products.",
@@ -2033,19 +3112,37 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         "another executable input contract.",
         "- Record one input_bindings row per typed input attempted; it must be "
         "truthful and include exact input_key/evidence_id/sha256, loaded, and, for each "
-        "loaded tabular input, its row_count. Any checked subset reconciliation "
-        "must name artifacts, keys, every shared non-key column actually compared, "
-        "and zero mismatches. The host repeats that key-and-value comparison.",
+        "loaded tabular input, its row_count. This list may contain only exact keys "
+        "from manifest['inputs']; never invent a `raw:<column>` input_key. When the "
+        "exact typed-input list is empty, omit input_bindings or write an empty list. "
+        "Any checked subset reconciliation must name artifacts, keys, every shared "
+        "non-key column actually compared, and zero mismatches. The host repeats "
+        "that key-and-value comparison.",
         "- Numeric coercion is fail-closed: count original nonmissing values "
         "newly coerced to missing and raise when positive before any domain "
-        "check or output.",
+        "check or output. Keep missingness distinct from non-finite values: a "
+        "non-finite mask must require the converted source value to be nonmissing; "
+        "never count NaN introduced or retained for missingness as non-finite.",
     ]
     if raw_inputs:
         lines.append(
             "- manifest['raw_input_contracts']['contracts'] is unique host-generated "
-            "executable metadata for untyped inputs: use exact allowed_values and "
-            "analysis_plausibility_range + plausibility_policy; never rediscover "
-            "them from prompt prose or ResearchContext."
+            "executable metadata for untyped inputs. It is a JSON object keyed by "
+            "the exact resolved column, already in by-column form: read "
+            "`contracts.get(column)` and never assert it is a list, iterate it as "
+            "a list of records, or rebuild a by-column mapping from it. Use "
+            "exact allowed_values and "
+            "analysis_plausibility_range + plausibility_policy. The range is a "
+            "JSON object with `minimum` and `maximum` keys; either may be null, "
+            "so apply only non-null bounds and never index it as a list or use "
+            "`lower`/`upper` aliases. "
+            "`plausibility_policy.out_of_range_action` is binding, not a "
+            "suggestion: `retain_and_flag` means keep every such row and "
+            "record a flag column or count -- never drop, clip, impute, or "
+            "raise on it. A non-null range plus that action creates the receipt; follow "
+            "the host-owned FLAG-ONLY PLAUSIBILITY RECEIPT SCOPE, omit `plausibility_audit` when empty, and fail only where the policy says so. "
+            "Never rediscover metadata from prompt prose "
+            "or ResearchContext."
         )
     if effect_authorized:
         lines.append(
@@ -2149,6 +3246,13 @@ class CoderAgent:
             for value in (requirement.outcome, requirement.exposure_source)
             if str(value or "").strip()
         )
+        if step.family_primary_result_requirement is not None:
+            detailed_variable_names.update(
+                {
+                    step.family_primary_result_requirement.exposure_source.lower(),
+                    step.family_primary_result_requirement.outcome.lower(),
+                }
+            )
         user_content = (
             f"Write the Python CODE for STEP {step.step_id}.\n"
             f"Analysis-family context: {_family.key} ({_family.name}). "
@@ -2161,17 +3265,24 @@ class CoderAgent:
             f"Expected outputs: {step.expected_outputs}\n"
             "Model requirements: "
             f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
+            "Family primary-result requirement: "
+            f"{json.dumps(step.family_primary_result_requirement.model_dump(mode='json') if step.family_primary_result_requirement is not None else None, ensure_ascii=False)}\n"
             f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
             + _declared_output_scope_contract(step)
             + _primary_analysis_cohort_output_contract(step)
             + _cohort_predicate_partition_safety_contract(step)
             + _typed_input_scope_contract(step)
+            + family_primary_result_execution_guide(step)
             + coder_method_capability_block()
             + trajectory_phenotyping_code_contract(
                 context=context,
                 step=step,
             )
-            + trajectory_role_code_contract(context=context, step=step)
+            + trajectory_role_code_contract(
+                context=context,
+                step=step,
+                applies=trajectory_context_is_bound(context),
+            )
             + "\n\n"
             "OUTPUT FORMAT — VERY IMPORTANT:\n"
             "Return *only* a complete, runnable Python script. A "
@@ -2204,13 +3315,8 @@ class CoderAgent:
             ),
             LLMMessage(role="user", content=user_content),
         ]
-        if _coder_prompt_payload_bytes(
-            messages
-        ) > _CODER_INITIAL_PROMPT_TARGET_BYTES and _step_expects_figure(step):
-            scoped_guide = compact_rendering_coder_guide_for_step(
-                _CODER_GUIDE,
-                step,
-            )
+        if _coder_prompt_payload_bytes(messages) > _CODER_INITIAL_PROMPT_TARGET_BYTES:
+            scoped_guide = compact_initial_coder_guide_for_step(_CODER_GUIDE, step)
             messages = [
                 *_coder_system_messages(
                     scoped_guide=scoped_guide,
@@ -2218,79 +3324,21 @@ class CoderAgent:
                 ),
                 LLMMessage(role="user", content=user_content),
             ]
-        _enforce_coder_prompt_budget(
-            messages,
-            mode="initial_generation",
-            limit_bytes=_CODER_INITIAL_PROMPT_BYTE_LIMIT,
+        code = generate_initial_coder_candidate(
+            messages=messages,
+            provider_call=lambda candidate_messages: authorized_complete(
+                self.llm,
+                candidate_messages,
+                max_tokens=_CODER_MAX_TOKENS,
+                temperature=0.1,
+            ),
+            response_parser=lambda raw: _strip_code_fence(raw.strip()),
+            provider_budget=provider_budget,
+            initial_generation_binding=initial_generation_binding,
+            persist_candidate=persist_candidate,
+            on_initial_reserved=on_initial_reserved,
+            on_initial_candidate=on_initial_candidate,
         )
-        initial_transport_id: Optional[str] = None
-        if provider_budget is not None and initial_generation_binding is not None:
-            initial_transport_id = provider_budget.reserve_initial_generation(
-                initial_generation_binding
-            )
-            binding_sha256 = hashlib.sha256(
-                json.dumps(
-                    dict(initial_generation_binding),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
-            if on_initial_reserved is not None:
-                on_initial_reserved(initial_transport_id, binding_sha256)
-        try:
-            raw = complete_with_provider_budget(
-                budget=provider_budget,
-                category="initial_generation",
-                call=lambda: authorized_complete(
-                    self.llm,
-                    messages,
-                    max_tokens=_CODER_MAX_TOKENS,
-                    temperature=0.1,
-                ),
-            )
-            code = _strip_code_fence(raw.strip())
-            if not looks_like_executable_python(code):
-                raise ValueError(
-                    "Initial coder response is not a complete executable Python "
-                    "script; refusing to persist or seal it as candidate authority."
-                )
-            initial_ref = (
-                persist_candidate(code) if persist_candidate is not None else None
-            )
-            if initial_transport_id is not None:
-                if initial_ref is None:
-                    raise RuntimeError(
-                        "initial-generation transport requires persisted code bytes"
-                    )
-                assert provider_budget is not None
-                provider_budget.complete_initial_generation_transport(
-                    provider_transport_id=initial_transport_id,
-                    after_code_sha256=initial_ref.sha256,
-                    after_code_size_bytes=initial_ref.size_bytes,
-                )
-            if (
-                initial_ref is not None
-                and initial_transport_id is not None
-                and on_initial_candidate is not None
-            ):
-                on_initial_candidate(initial_ref, initial_transport_id)
-        except BaseException as exc:
-            if initial_transport_id is not None and provider_budget is not None:
-                if provider_budget.initial_generation_resume_status() == "pending":
-                    provider_budget.fail_initial_generation_transport(
-                        provider_transport_id=initial_transport_id,
-                        error_type=type(exc).__name__,
-                    )
-                elif provider_budget.initial_generation_resume_status() in {
-                    "unpaid_pending",
-                    "paid_pending",
-                }:
-                    provider_budget.fail_initial_generation_transport(
-                        provider_transport_id=initial_transport_id,
-                        error_type=type(exc).__name__,
-                    )
-            raise
 
         # Patch C: post-codegen pre-execution compatibility enforcement.
         # Loops up to _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS times; each
@@ -2458,6 +3506,8 @@ class CoderAgent:
             # here consumed transport budget without adding authority.
             "Model requirements: "
             f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
+            "Family primary-result requirement: "
+            f"{json.dumps(step.family_primary_result_requirement.model_dump(mode='json') if step.family_primary_result_requirement is not None else None, ensure_ascii=False)}\n"
             f"Method: {step.method or '(unspecified)'}\n\n"
         )
         mechanical_guardrails = (
@@ -2485,10 +3535,15 @@ class CoderAgent:
         shared_contract = (
             step_contract_header
             + _compact_repair_scope_contract(step)
+            + family_primary_result_execution_guide(step)
             + _primary_analysis_cohort_output_contract(step)
             + _cohort_predicate_partition_safety_contract(step)
             + trajectory_phenotyping_code_contract(context=context, step=step)
-            + trajectory_role_code_contract(context=context, step=step)
+            + trajectory_role_code_contract(
+                context=context,
+                step=step,
+                applies=trajectory_context_is_bound(context),
+            )
             + mechanical_guardrails
         )
         from ..research_context.outbound import (
@@ -2584,6 +3639,32 @@ class CoderAgent:
                 persisted_ref = persist_candidate(candidate)
             return persisted_ref
 
+        def _patch_candidate_rejection_reason(candidate: str) -> Optional[str]:
+            candidate_for_audit = (
+                restore_outbound_safe_script(step, candidate)
+                if external_repair_transport
+                else candidate
+            )
+            errors = [
+                finding
+                for finding in audit_mechanical_code_contracts(
+                    candidate_for_audit,
+                    step,
+                )
+                if finding.severity == "error"
+            ]
+            if not errors:
+                return None
+            details = " | ".join(
+                f"{finding.message} detail={json.dumps(finding.detail or {}, ensure_ascii=False, sort_keys=True)}"
+                for finding in errors[:4]
+            )
+            return (
+                "minimal patch failed deterministic mechanical preflight; "
+                "fix the original diagnosis without leaving an unexecutable "
+                f"script: {details}"
+            )[:2_500]
+
         repair_result = RepairCoordinator(
             provider_budget=provider_budget,
             provider_category=provider_category,
@@ -2607,11 +3688,7 @@ class CoderAgent:
                 max_tokens=min(2048, _CODER_MAX_TOKENS),
                 temperature=0.0,
             ),
-            full_rewrite_preflight=lambda reason: _enforce_coder_prompt_budget(
-                _full_rewrite_messages(reason),
-                mode="full_rewrite",
-                limit_bytes=_CODER_REWRITE_PROMPT_BYTE_LIMIT,
-            ),
+            patch_candidate_rejection_reason=_patch_candidate_rejection_reason,
             full_rewrite_call=_full_rewrite,
             logical_repair_attempt_id=logical_repair_attempt_id,
             persist_result=(_persist_result if persist_candidate is not None else None),
@@ -2665,6 +3742,36 @@ def _repair_specialization(
             "the exact typed-input digest and product-schema checks, preserve all "
             "registered aggregate values, and do not reconstruct a cohort, "
             "reinterpret companion columns, or change any statistic.\n"
+        )
+    if "measurement_provenance_pair_undeclared" in structured_reasons:
+        guidance.append(
+            "- DIAGNOSED UNDECLARED PROVENANCE-SCOPE REPAIR (binding): remove "
+            "every reported `measurement_provenance_receipt` call and every "
+            "custom measured/count/value audit that is not backed by one exact "
+            "Planner-declared measured/count pair in this step's inputs. Do not "
+            "add raw inputs, infer companions from ResearchContext, or widen the "
+            "Planner plan to preserve generated code. When a host cohort "
+            "execution receipt separately authorizes predicate columns, use "
+            "only those exact predicate coordinates and its recorded flow; it "
+            "does not authorize sibling `*_measured` or `*_n` columns. Preserve "
+            "the cohort predicates, ordered attrition, denominators, outputs, "
+            "and all other scientific choices unchanged.\n"
+        )
+    if structured_reasons & {
+        "host_helper_call_signature_invalid",
+        "host_helper_runtime_introspection",
+    }:
+        guidance.append(
+            "- DIAGNOSED HOST-HELPER API REPAIR (binding): use the stable APIs "
+            "directly and exactly: "
+            "`closed_categorical_counts(series, declared_levels=levels).table` "
+            "with output columns `level` and `count`, and "
+            "`measurement_provenance_receipt(frame, measured_column=..., "
+            "count_column=...)`. Preserve the already-authored series, frame, "
+            "levels, and column-name expressions. Remove label-only keywords, "
+            "`inspect.signature`, `*args`/`**kwargs`, try/except adapters, and "
+            "schema guessing around these helpers; do not add inputs or choose "
+            "new levels.\n"
         )
     if standard_helper_in_script or RepairRoute.SPARSE_EVENT in repair_routes:
         metadata_candidates = []
@@ -2960,6 +4067,25 @@ def _repair_specialization(
             "do not rename, stringify, or fabricate an upstream source merely to "
             "evade trace validation. Preserve plotted values, denominators, source "
             "row indices, source table names, and the FigureContract unchanged.\n"
+            "  ONE PANEL PER FILE when panels read different upstream columns. "
+            "A single parent feeding several panels that each draw a DIFFERENT "
+            "upstream column cannot be stacked into one long `value` column: "
+            "that column then alternates between the parent's columns row by "
+            "row, so no single upstream vector matches it and every column "
+            "arrives unverified -- including the ones that would have verified "
+            "on their own. Split the bundle so each exported table is "
+            "row-aligned against exactly one upstream column, and keep the "
+            "upstream column's own name. If the figure plots a rescaled or "
+            "standardized version of a value, export the upstream raw value "
+            "row-aligned; the rescaling is a rendering choice reproducible from "
+            "it and does not belong in the bundle as a second value column.\n"
+            "  SCALAR STATISTIC EXCEPTION: when a bound `statistic:<product>` "
+            "parent's exact JSON product contract declares the root keys "
+            "`name` and `value`, preserve those exact keys in its one-row source "
+            "CSV (with the bound product identity). The generic `value` name is "
+            "then the upstream schema, not an invented replacement column. Do "
+            "not rename it to `estimate`, `score`, or another guessed alias; do "
+            "not mix that scalar row with table-derived value vectors.\n"
         )
 
     if RepairRoute.STRUCTURAL_ACCOUNTING in repair_routes:
@@ -3028,6 +4154,40 @@ def _repair_specialization(
 # ---------------------------------------------------------------------------
 
 
+_ANALYZER_PROMPT_BYTE_LIMIT = 48_000
+_WRITER_PROMPT_BYTE_LIMIT = 64_000
+
+
+class ReportingPromptBudgetError(RuntimeError):
+    """A lossless Analyzer/Writer request exceeds its transport envelope."""
+
+    def __init__(self, *, role: str, actual_bytes: int, limit_bytes: int) -> None:
+        self.role = str(role)
+        self.actual_bytes = int(actual_bytes)
+        self.limit_bytes = int(limit_bytes)
+        super().__init__(
+            f"{self.role} prompt transport budget exceeded: "
+            f"{self.actual_bytes} > {self.limit_bytes} bytes. "
+            "No evidence digest or binding scientific coordinate was truncated; "
+            "reduce the role-scoped projection or split the evidence digest."
+        )
+
+
+def _enforce_reporting_prompt_budget(
+    messages: Sequence[LLMMessage],
+    *,
+    role: str,
+    limit_bytes: int,
+) -> None:
+    actual_bytes = _coder_prompt_payload_bytes(messages)
+    if actual_bytes > int(limit_bytes):
+        raise ReportingPromptBudgetError(
+            role=role,
+            actual_bytes=actual_bytes,
+            limit_bytes=limit_bytes,
+        )
+
+
 class AnalyzerAgent:
     """Turns step outputs into a short, evidence-grounded interpretation."""
 
@@ -3046,6 +4206,11 @@ class AnalyzerAgent:
         from ..research_context.outbound import project_outbound_step_summary
 
         safe_step_summary = project_outbound_step_summary(step_summary)
+        reporting_context = scoped_coder_context(
+            context,
+            step,
+            max_variables=20,
+        )
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE),
             LLMMessage(
@@ -3061,10 +4226,19 @@ class AnalyzerAgent:
                     "in the form {evidence:<id>}.\n"
                     "- Do not introduce numbers that are not in the summary.\n"
                     "- 4 sentences max. No clinical recommendations.\n\n"
-                    "RESEARCH CONTEXT:\n" + _format_context(context)
+                    "RESEARCH CONTEXT:\n"
+                    + _format_context(
+                        reporting_context,
+                        include_method_constraints=False,
+                    )
                 ),
             ),
         ]
+        _enforce_reporting_prompt_budget(
+            messages,
+            role="Analyzer",
+            limit_bytes=_ANALYZER_PROMPT_BYTE_LIMIT,
+        )
         return complete_with_provider_budget(
             budget=provider_budget,
             category="analyzer",
@@ -3085,7 +4259,7 @@ class WriterAgent:
     problem where small models truncate Introduction / Discussion.
 
     Each section call gets:
-    - the full research context (variables, cohort, question),
+    - a role-scoped research context (study coordinates, not every source column),
     - the machine evidence digest (numbers to cite),
     - the list of available evidence ids,
     - a section-specific instruction with word-count target.
@@ -3113,6 +4287,7 @@ class WriterAgent:
         evidence_list = (
             ", ".join(str(eid) for eid in evidence_ids) if evidence_ids else "(none)"
         )
+        reporting_context = scoped_reporting_context(context)
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _WRITER_GUIDE),
             LLMMessage(
@@ -3155,10 +4330,18 @@ class WriterAgent:
                     "MACHINE EVIDENCE DIGEST:\n"
                     + (evidence_digest or "(none)")
                     + "\n\nRESEARCH CONTEXT:\n"
-                    + _format_context(context)
+                    + _format_context(
+                        reporting_context,
+                        include_method_constraints=False,
+                    )
                 ),
             ),
         ]
+        _enforce_reporting_prompt_budget(
+            messages,
+            role="Writer",
+            limit_bytes=_WRITER_PROMPT_BYTE_LIMIT,
+        )
         raw = authorized_complete(
             self.llm, messages, max_tokens=max_tokens, temperature=0.3
         ).strip()
@@ -3470,350 +4653,63 @@ def _first_json_block(text: str) -> Optional[str]:
     return None
 
 
-def _canonicalise_figure_output_alias(token: object) -> object:
-    """Rewrite a colon-typed figure-kind output alias to canonical ``figure:``.
+def _robustness_axis_vocabulary() -> tuple:
+    """Return the closed robustness axes, read off the contract that enforces them.
 
-    The typed-product parser already treats ``fig`` / ``plot`` / ``chart`` /
-    ``heatmap`` / ``figure`` as one figure kind, but many downstream *raw*
-    detection sites string-match ``startswith("figure:")`` directly (the
-    execution-phase runner-owner guards, the figure skill, table-one ownership,
-    the mock matcher).  A ``fig:`` / ``plot:`` / ``chart:`` / ``heatmap:``
-    output slips past those guards, so a figure step can be mis-routed.
-    Canonicalising the alias once, at plan acceptance, keeps every layer on the
-    same identity.  Kind semantics are read from the shared
-    ``_canonical_typed_product`` so no private alias set can drift from the
-    ``plan_utils`` / ``declared_product`` copies.
-
-    Only a colon-typed figure token is rewritten; the product name after the
-    first colon is preserved verbatim (no suffix stripping).  Non-string,
-    non-``kind:name``, and non-figure tokens are returned unchanged.  The
-    no-colon ``fig_x`` form is deliberately NOT reinterpreted here — it is
-    rejected by :func:`_is_untyped_figure_alias_output` at acceptance so the
-    Planner re-emits the typed form instead of the engine guessing a name.
+    Published to the Planner rather than transcribed, so the sentence telling
+    it not to invent an axis cannot fall out of step with the set that would
+    reject one.
     """
 
-    if not isinstance(token, str):
-        return token
-    parsed = _canonical_typed_product(token)
-    if parsed is None or parsed[0] != "figure":
-        return token
-    _kind, _separator, name = token.partition(":")
-    return f"figure:{name.strip()}"
+    axis = typing.get_type_hints(RobustnessSpec)["axis"]
+    values = typing.get_args(axis)
+    if not values:
+        raise TypeError(
+            "RobustnessSpec.axis is no longer a closed Literal, so its "
+            "vocabulary cannot be published to the Planner; state the allowed "
+            "values explicitly at their new source instead of guessing."
+        )
+    return values
 
 
-def _is_untyped_figure_alias_output(token: object) -> bool:
-    """True for a no-colon output that names a figure kind with ``_`` (``fig_x``).
+def _closed_cohort_product_sentence() -> str:
+    """List the closed-cohort spellings, read off the predicate enforcing them.
 
-    ``fig_stage_outcomes`` / ``fig_adjusted_associations`` / ``fig_robustness``
-    (the exact malformed forms E3's planner emitted) have no ``kind:name``
-    separator, so ``typed_product`` returns ``None`` and every typed consumer
-    ignores them — the declared figure never binds and the step silently drops a
-    display role.  We refuse them at plan acceptance and require the ``figure:``
-    typed form rather than guessing the intended name.  A legitimate bare image
-    export (``x.png``) is not a malformed alias.  The figure-kind test reuses
-    ``_canonical_typed_product`` so no private alias set is introduced.
+    Two directives used to transcribe this list, one of them incompletely, and
+    the ownership predicate accepted a narrower set than either. A step is
+    executed deterministically only when its typed row authority is a key that
+    predicate can read, so a spelling the Planner is offered but the predicate
+    refuses sends the step to the Coder with nobody told why. Rendering the
+    sentence from the same object removes the possibility.
     """
 
-    if not isinstance(token, str):
-        return False
-    text = token.strip()
-    if not text or ":" in text:
-        return False
-    if text.lower().endswith((".png", ".svg", ".pdf", ".tif", ".tiff")):
-        return False
-    head, separator, _rest = text.partition("_")
-    if not separator:
-        return False
-    probe = _canonical_typed_product(f"{head}:probe")
-    return probe is not None and probe[0] == "figure"
+    from ..execution.runners.typed_input_binding import (
+        closed_cohort_product_vocabulary,
+    )
+
+    spellings = [f"`{value}`" for value in closed_cohort_product_vocabulary()]
+    return ", ".join(spellings[:-1]) + f", or {spellings[-1]}"
 
 
-def _canonicalise_planned_analysis_role(
-    value: object,
-    *,
-    method: object,
-) -> object:
-    """Normalize representation-only Planner role variants.
+def _host_executed_cohort_step_sentence() -> str:
+    """Name the one output pair the host can execute this step under.
 
-    Canonical role tokens tolerate casing and surrounding whitespace.  The
-    otherwise-invalid ``robustness`` alias is safe to compile to
-    ``sensitivity`` only for the exact registered robustness/sensitivity
-    method; it remains invalid everywhere else so the host never guesses a
-    scientific role from prose.
+    Same failure as the sentence above, one layer along: the vocabulary of
+    legal closed-cohort spellings is deliberately wide, but the predicate that
+    decides whether the HOST performs the cohort-definition step accepts one
+    exact pair and nothing else. Measured over 282 recorded plans, 142 first
+    steps declared that pair and 64 more declared an equally legal spelling
+    that silently sent the step to the code generator. Rendering the sentence
+    from the constants the schema and the predicate share means the offer and
+    the enforcement cannot drift.
     """
 
-    if not isinstance(value, str):
-        return value
-    token = value.strip().casefold()
-    if token in {"primary", "secondary", "sensitivity", "auxiliary"}:
-        return token
-    method_token = str(method or "").strip().casefold()
-    if token == "robustness" and method_token == "robustness_sensitivity":
-        return "sensitivity"
-    return value
+    from ..schema import (
+        COHORT_DEFINITION_COHORT_OUTPUT,
+        COHORT_DEFINITION_FLOW_OUTPUT,
+    )
 
-
-def _normalise_plan_payload(
-    data: Dict[str, Any],
-) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
-    """Drop hosted-model extras before validating the strict schema.
-
-    Returns both the normalized payload and a structured summary of the
-    keys that were discarded so the pipeline can surface them in the
-    manifest instead of silently suppressing them.
-    """
-    allowed_plan = {
-        "research_question",
-        "analysis_type",
-        "cohort",
-        "steps",
-        "robustness_specs",
-        "display_labels",
-        "know_how_decisions",
-        "rationale",
-        "revision",
-    }
-    allowed_step = {
-        "step_id",
-        "planned_analysis_role",
-        "intent",
-        "inputs",
-        "expected_outputs",
-        "method",
-        "icu_rule_refs",
-        "model_requirements",
-        "input_consumption_contracts",
-        "table_one_spec",
-        "trajectory_stability_spec",
-    }
-    allowed_model_requirement = {
-        "requirement_id",
-        "outcome",
-        "outcome_type",
-        "method_family",
-        "exposure_source",
-        "analysis_role",
-        "analysis_set",
-        "required_for_step_success",
-    }
-    allowed_consumption_contract = {
-        "schema_version",
-        "input_key",
-        "mode",
-        "role_column",
-        "expected_roles",
-    }
-    allowed_table_one_spec = {
-        "schema_version",
-        "group_by",
-        "group_levels",
-        "variables",
-        "include_overall",
-        "missing_group_policy",
-        "missingness_display",
-        "p_values_required",
-        "p_value_adjustment",
-    }
-    allowed_table_one_variable = {
-        "name",
-        "variable_kind",
-        "summary",
-        "test",
-        "levels",
-    }
-    allowed_robustness_spec = {
-        "spec_id",
-        "axis",
-        "description",
-        "cohort_override",
-        "missing_override",
-        "outcome_override",
-    }
-    dropped: Dict[str, List[str]] = {
-        "top_level": [],
-        "steps": [],
-        "model_requirements": [],
-        "input_consumption_contracts": [],
-        "table_one_spec": [],
-        "robustness_specs": [],
-    }
-    out = {}
-    for key, value in data.items():
-        if key in allowed_plan:
-            out[key] = value
-        else:
-            dropped["top_level"].append(str(key))
-    steps = []
-    for idx, raw_step in enumerate(out.get("steps", []) or []):
-        if isinstance(raw_step, dict):
-            step_payload = {}
-            for key, value in raw_step.items():
-                if key in allowed_step:
-                    step_payload[key] = value
-                else:
-                    step_id = raw_step.get("step_id") or f"step[{idx}]"
-                    dropped["steps"].append(f"{step_id}:{key}")
-            if "planned_analysis_role" in step_payload:
-                step_payload["planned_analysis_role"] = (
-                    _canonicalise_planned_analysis_role(
-                        step_payload["planned_analysis_role"],
-                        method=step_payload.get("method"),
-                    )
-                )
-            requirements = []
-            for req_idx, raw_requirement in enumerate(
-                step_payload.get("model_requirements", []) or []
-            ):
-                if not isinstance(raw_requirement, dict):
-                    requirements.append(raw_requirement)
-                    continue
-                requirement_payload = {}
-                requirement_id = (
-                    raw_requirement.get("requirement_id")
-                    or f"step[{idx}].model_requirements[{req_idx}]"
-                )
-                for key, value in raw_requirement.items():
-                    if key in allowed_model_requirement:
-                        requirement_payload[key] = value
-                    else:
-                        dropped["model_requirements"].append(f"{requirement_id}:{key}")
-                if "analysis_role" in requirement_payload:
-                    requirement_payload["analysis_role"] = (
-                        _canonicalise_planned_analysis_role(
-                            requirement_payload["analysis_role"],
-                            method=step_payload.get("method"),
-                        )
-                    )
-                requirements.append(requirement_payload)
-            if "model_requirements" in step_payload:
-                step_payload["model_requirements"] = requirements
-            consumption_contracts = []
-            for contract_idx, raw_contract in enumerate(
-                step_payload.get("input_consumption_contracts", []) or []
-            ):
-                if not isinstance(raw_contract, dict):
-                    consumption_contracts.append(raw_contract)
-                    continue
-                contract_payload = {}
-                contract_id = (
-                    raw_contract.get("input_key")
-                    or f"step[{idx}].input_consumption_contracts[{contract_idx}]"
-                )
-                for key, value in raw_contract.items():
-                    if key in allowed_consumption_contract:
-                        contract_payload[key] = value
-                    else:
-                        dropped["input_consumption_contracts"].append(
-                            f"{contract_id}:{key}"
-                        )
-                # An optional contract written entirely with unsupported keys
-                # has no executable meaning after normalization.  Treat it as
-                # omitted instead of manufacturing an empty object that burns
-                # a Provider retry on required fields.
-                if contract_payload:
-                    consumption_contracts.append(contract_payload)
-                else:
-                    dropped["input_consumption_contracts"].append(
-                        f"{contract_id}:empty_after_normalization"
-                    )
-            if "input_consumption_contracts" in step_payload:
-                step_payload["input_consumption_contracts"] = consumption_contracts
-            raw_table_one = step_payload.get("table_one_spec")
-            if isinstance(raw_table_one, dict):
-                table_one_payload = {
-                    key: value
-                    for key, value in raw_table_one.items()
-                    if key in allowed_table_one_spec
-                }
-                for key in raw_table_one:
-                    if key not in allowed_table_one_spec:
-                        dropped["table_one_spec"].append(f"step[{idx}]:{key}")
-                variables = []
-                for variable_index, raw_variable in enumerate(
-                    table_one_payload.get("variables", []) or []
-                ):
-                    if not isinstance(raw_variable, dict):
-                        variables.append(raw_variable)
-                        continue
-                    variable_payload = {
-                        key: value
-                        for key, value in raw_variable.items()
-                        if key in allowed_table_one_variable
-                    }
-                    for key in raw_variable:
-                        if key not in allowed_table_one_variable:
-                            dropped["table_one_spec"].append(
-                                f"step[{idx}].variables[{variable_index}]:{key}"
-                            )
-                    variables.append(variable_payload)
-                table_one_payload["variables"] = variables
-                step_payload["table_one_spec"] = table_one_payload
-            raw_outputs = step_payload.get("expected_outputs")
-            if isinstance(raw_outputs, list):
-                step_id = step_payload.get("step_id") or f"step[{idx}]"
-                normalised_outputs: List[Any] = []
-                for item in raw_outputs:
-                    if _is_untyped_figure_alias_output(item):
-                        suggested = str(item).strip().partition("_")[2]
-                        raise ValueError(
-                            f"Planner step {step_id!r} declares figure output "
-                            f"{item!r} with an underscore instead of the typed "
-                            "'figure:' separator; re-emit it as "
-                            f"'figure:{suggested}' so the declared figure binds "
-                            "to an exact output file."
-                        )
-                    normalised_outputs.append(_canonicalise_figure_output_alias(item))
-                # Collision is judged on the shared canonical ``(kind, product)``
-                # identity from ``_canonical_typed_product`` -- NOT on the raw
-                # ``figure:`` string -- so a case-only difference
-                # (``figure:Forest`` vs ``figure:forest``) or a file-suffix
-                # difference (``figure:forest`` vs ``figure:forest.svg`` /
-                # ``.png``) that collapses to the same physical figure is
-                # rejected as one product declared twice.  A raw string compare
-                # missed both classes.
-                figure_identity_aliases: Dict[Tuple[str, str], List[str]] = {}
-                for candidate in normalised_outputs:
-                    if not isinstance(candidate, str):
-                        continue
-                    identity = _canonical_typed_product(candidate)
-                    if identity is None or identity[0] != "figure":
-                        continue
-                    figure_identity_aliases.setdefault(identity, []).append(candidate)
-                collisions = {
-                    identity: aliases
-                    for identity, aliases in figure_identity_aliases.items()
-                    if len(aliases) > 1
-                }
-                if collisions:
-                    detail = "; ".join(
-                        f"figure:{product} declared as {sorted(set(aliases))}"
-                        for (_kind, product), aliases in sorted(collisions.items())
-                    )
-                    raise ValueError(
-                        f"Planner step {step_id!r} declares the same figure "
-                        f"product under more than one output alias "
-                        f"({detail}); declare each figure exactly once "
-                        "as 'figure:<name>'."
-                    )
-                step_payload["expected_outputs"] = normalised_outputs
-            steps.append(step_payload)
-    out["steps"] = steps
-    specs = []
-    for idx, raw_spec in enumerate(out.get("robustness_specs", []) or []):
-        if not isinstance(raw_spec, dict):
-            specs.append(raw_spec)
-            continue
-        spec_payload = {}
-        spec_id = raw_spec.get("spec_id") or f"robustness_specs[{idx}]"
-        for key, value in raw_spec.items():
-            if key in allowed_robustness_spec:
-                spec_payload[key] = value
-            else:
-                dropped["robustness_specs"].append(f"{spec_id}:{key}")
-        specs.append(spec_payload)
-    if "robustness_specs" in out:
-        out["robustness_specs"] = specs
-    return out, dropped
+    return f"`{COHORT_DEFINITION_COHORT_OUTPUT}` and `{COHORT_DEFINITION_FLOW_OUTPUT}`"
 
 
 def _coerce_primary_estimate(

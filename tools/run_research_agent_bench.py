@@ -89,7 +89,21 @@ class _JSONLObjectDecodeError(ValueError):
     """Raised when one benchmark JSONL row is not a strict JSON object."""
 
 
+class _CohortMetadataError(ValueError):
+    """Raised when bounded cohort metadata inspection cannot prove its shape."""
+
+
 _FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE = 3
+# A run that did not finish its plan. Distinct from paper-acceptance (3) so a
+# development diagnostic, which is never paper-accepted, still reports the
+# difference between "ran and was not authorized" and "did not finish running".
+_EXECUTION_INCOMPLETE_EXIT_CODE = 4
+# An item the bench never started. Distinct from 4 on purpose: 4 says a run
+# began and stopped short, 5 says the item never entered the pipeline at all
+# (missing fields, missing cohort, an authority marker that would not load).
+# Both used to exit 0, so a JSONL whose every row was rejected at intake read
+# as a clean pass -- `scores=0, pending=1, exit=0`.
+_PENDING_ITEMS_EXIT_CODE = 5
 
 
 def _is_figure2_task_id(value: object) -> bool:
@@ -101,12 +115,17 @@ def _is_figure2_task_id(value: object) -> bool:
 
 
 def _operational_exposure_for_item(item: object) -> object:
-    """Resolve the execution exposure once without laundering falsey values."""
+    """Resolve the execution exposure once without laundering invalid values."""
 
     declared = getattr(item, "operational_exposure", None)
     if declared is not None:
         return declared
-    return getattr(item, "primary_predictor", None)
+    legacy_predictor = getattr(item, "primary_predictor", None)
+    # Historical multi-input rows encode an absent predictor as ``""``.  The
+    # run-input capsule and posthoc evaluator require that absence to be an
+    # explicit JSON null.  Preserve every other non-null value so whitespace,
+    # false booleans, and other malformed coordinates still fail closed.
+    return None if legacy_predictor == "" else legacy_predictor
 
 
 def _reject_jsonl_duplicate_pairs(
@@ -793,6 +812,14 @@ def _figure2_canary_passed(score: Mapping[str, Any]) -> bool:
     aware = score.get("aware")
     if not isinstance(aware, Mapping):
         return False
+    requires_scientific_closure = "e1_scientific_closure" in str(
+        score.get("protocol_version") or ""
+    )
+    scientific_acceptance = aware.get("scientific_acceptance")
+    scientific_acceptance_ok = (
+        isinstance(scientific_acceptance, Mapping)
+        and scientific_acceptance.get("status") == "accepted"
+    )
     evaluation = aware.get("figure2_evaluation_attempt")
     paper_tristate: Optional[str] = None
     if isinstance(evaluation, Mapping):
@@ -813,12 +840,16 @@ def _figure2_canary_passed(score: Mapping[str, Any]) -> bool:
             if isinstance(parsed_scorecard, Mapping):
                 paper_tristate = str(parsed_scorecard.get("tristate") or "")
     return bool(
-        aware.get("publication_ready")
+        aware.get("publication_artifacts_ready")
+        and aware.get("execution_paper_eligible")
+        and aware.get("paper_authorized")
+        and aware.get("publication_ready")
         and aware.get("manuscript_ready")
         and int(aware.get("n_errors") or 0) == 0
         and isinstance(evaluation, Mapping)
         and evaluation.get("status") == "valid"
         and paper_tristate == "gate_reportable"
+        and (not requires_scientific_closure or scientific_acceptance_ok)
     )
 
 
@@ -949,6 +980,183 @@ def _figure2_evaluation_attempt(*, run_dir: Path, item) -> Dict[str, Any]:
         ).model_dump(mode="json")
 
 
+def _ensure_formal_figure2_safety_and_rescore(
+    *,
+    score: Dict[str, Any],
+    item: Any,
+    provider_environment: Optional[Mapping[str, str]],
+    request_timeout: float,
+) -> None:
+    """Close the evaluator-only safety chain for one formal aware-arm run.
+
+    Development runs intentionally keep the missing-receipt diagnostic.  The
+    authorized batch path calls this function after Agent execution and before
+    the E1 canary decision, so the Agent never sees the rubric and the paper
+    scorer never runs against an implicitly trusted model response.
+    """
+
+    aware = score.get("aware")
+    if not isinstance(aware, dict):
+        return
+    attempt = aware.get("figure2_evaluation_attempt")
+    if not isinstance(attempt, dict):
+        return
+    if attempt.get("status") == "valid":
+        return
+    reason_codes = set(attempt.get("invalid_reason_codes") or ())
+    if "SAFETY_ADJUDICATION_MISSING" not in reason_codes:
+        return
+    workdir = aware.get("workdir")
+    task_id = str(getattr(item, "key", "") or "")
+    if not isinstance(workdir, str) or not workdir or not task_id:
+        return
+
+    from benchmarks.figure2_canonical9.evaluator.safety_runner import (
+        Figure2SafetyAdjudicationError,
+        LocalOpenAICompatibleSafetyTransport,
+        ensure_figure2_safety_receipt,
+    )
+
+    environment = dict(provider_environment or {})
+    api_key = str(environment.get("OPENAI_API_KEY") or "")
+    diagnostic: Dict[str, str] | None = None
+    try:
+        transport = LocalOpenAICompatibleSafetyTransport(
+            api_key=api_key,
+            timeout_seconds=float(request_timeout),
+        )
+        ensure_figure2_safety_receipt(
+            Path(workdir),
+            task_id=task_id,
+            transport=transport,
+        )
+    except Figure2SafetyAdjudicationError as exc:
+        diagnostic = {
+            "code": exc.code,
+            "stage": exc.stage,
+            "detail": str(exc)[:1800],
+        }
+    except Exception as exc:
+        diagnostic = {
+            "code": "SAFETY_TRANSPORT_CONFIG_INVALID",
+            "stage": "transport_config",
+            "detail": f"{type(exc).__name__}: {exc}"[:1800],
+        }
+    if diagnostic is not None:
+        aware["figure2_safety_adjudication_error"] = diagnostic
+        print(
+            "[figure2-safety] "
+            f"{task_id} blocked at {diagnostic['stage']}: {diagnostic['code']}"
+        )
+    aware["figure2_evaluation_attempt"] = _figure2_evaluation_attempt(
+        run_dir=Path(workdir),
+        item=item,
+    )
+
+
+def _failed_step_ids(readiness: Mapping[str, Any]) -> List[str]:
+    """Return the step ids the run itself recorded as failed."""
+
+    failed: List[str] = []
+    for entry in readiness.get("failed_steps") or []:
+        step_id = entry.get("step_id") if isinstance(entry, Mapping) else entry
+        if step_id:
+            failed.append(str(step_id))
+    return failed
+
+
+def _arm_execution_succeeded(arm: Any) -> bool:
+    """Return whether one arm actually executed its plan to completion.
+
+    This is deliberately NOT a paper-authority check. A development diagnostic
+    ends ``status='diagnostic_only'`` and ``paper_authorized=false`` by design,
+    and that is a legitimate completed execution. What is never a completed
+    execution is a run whose own ``run_status.json`` reports unfinished or
+    failed steps -- exactly the state that previously reported
+    ``completed_tasks=1, failed_or_blocked_tasks=0`` and exit 0.
+    """
+
+    if not isinstance(arm, Mapping):
+        return False
+    scientific_acceptance = arm.get("scientific_acceptance")
+    scientific_acceptance_ok = (
+        not isinstance(scientific_acceptance, Mapping)
+        or scientific_acceptance.get("status") == "accepted"
+    )
+    return bool(
+        arm.get("execution_complete")
+        and arm.get("step_scientific_requirements_complete")
+        and not arm.get("failed_step_ids")
+        and not arm.get("missing_step_ids")
+        and scientific_acceptance_ok
+    )
+
+
+def _score_execution_failures(score: Any) -> List[str]:
+    """Return a reason per arm that did not finish executing."""
+
+    if not isinstance(score, Mapping):
+        return ["benchmark item produced no score payload"]
+    arms = [
+        (label, score.get(label))
+        for label in ("aware", "naive")
+        if isinstance(score.get(label), Mapping)
+    ]
+    if not arms:
+        return ["benchmark item produced no scored arm"]
+    reasons: List[str] = []
+    for label, arm in arms:
+        if _arm_execution_succeeded(arm):
+            continue
+        assert isinstance(arm, Mapping)
+        failed = list(arm.get("failed_step_ids") or [])
+        missing = list(arm.get("missing_step_ids") or [])
+        detail = []
+        if failed:
+            detail.append(f"failed steps {failed}")
+        if missing:
+            detail.append(f"missing steps {missing}")
+        if not arm.get("step_scientific_requirements_complete") and not detail:
+            detail.append("step scientific requirements incomplete")
+        scientific_acceptance = arm.get("scientific_acceptance")
+        if (
+            isinstance(scientific_acceptance, Mapping)
+            and scientific_acceptance.get("status") != "accepted"
+        ):
+            reason_codes = [
+                str(issue.get("reason_code"))
+                for issue in scientific_acceptance.get("issues") or []
+                if isinstance(issue, Mapping) and issue.get("reason_code")
+            ]
+            detail.append(
+                "scientific acceptance rejected"
+                + (f" ({', '.join(reason_codes[:5])})" if reason_codes else "")
+            )
+        if not detail:
+            detail.append("execution_complete is false")
+        completed = arm.get("completed_step_count")
+        required = arm.get("required_step_count")
+        position = (
+            f" ({completed}/{required} steps)"
+            if isinstance(completed, int) and isinstance(required, int) and required
+            else ""
+        )
+        reasons.append(
+            f"{label} arm did not complete execution{position}: " + "; ".join(detail)
+        )
+    return reasons
+
+
+def _finish_task_on_execution_outcome(task_hard_stop: Any, score: Any) -> None:
+    """Close the ledger task on what the run did, not on the call returning."""
+
+    failures = _score_execution_failures(score)
+    if failures:
+        task_hard_stop.finish(score=score, error="; ".join(failures)[:1800])
+        return
+    task_hard_stop.finish(score=score)
+
+
 def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
     manifest = _load_manifest(run_dir)
     historical_error_count = sum(
@@ -993,8 +1201,31 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         # the gate story should be quantitative in the bench report, not
         # only visible inside each run's run_status.json).
         "gate_status": _gate_ladder(run_dir, readiness),
+        # The execution axis, surfaced explicitly at the benchmark boundary.
+        # A development-diagnostic run is expected to end paper_authorized=false,
+        # but it must still have RUN: without these fields the only signal the
+        # outer driver had was "the call returned", which reports a run that
+        # failed two steps as a completed task.
+        "execution_complete": bool(readiness.get("execution_complete")),
+        "step_scientific_requirements_complete": bool(
+            readiness.get("step_scientific_requirements_complete")
+        ),
+        "required_step_count": int(readiness.get("required_step_count") or 0),
+        "completed_step_count": int(readiness.get("completed_step_count") or 0),
+        "failed_step_ids": _failed_step_ids(readiness),
+        "missing_step_ids": [
+            str(step_id) for step_id in (readiness.get("missing_steps") or [])
+        ],
         "manuscript_ready": bool(readiness.get("manuscript_ready")),
         "publication_ready": bool(readiness.get("publication_ready")),
+        # Keep the three independent completion axes visible at the benchmark
+        # boundary.  ``publication_ready`` describes artifact completeness; it
+        # must never be interpreted as paper authority on its own.
+        "publication_artifacts_ready": bool(
+            readiness.get("publication_artifacts_ready")
+        ),
+        "execution_paper_eligible": bool(readiness.get("execution_paper_eligible")),
+        "paper_authorized": bool(readiness.get("paper_authorized")),
         "writer_attempts": _writer_attempts(run_dir, readiness),
         "superseded_error_count": (
             int(readiness.get("superseded_error_count") or 0)
@@ -1018,6 +1249,22 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         result["figure2_evaluation_attempt"] = _figure2_evaluation_attempt(
             run_dir=run_dir,
             item=item,
+        )
+    scientific_contract = getattr(item, "scientific_acceptance_contract", None)
+    if isinstance(scientific_contract, Mapping):
+        from benchmarks.figure2_canonical9.e1_scientific_acceptance import (
+            write_e1_scientific_acceptance_receipt,
+        )
+
+        scientific_receipt, scientific_receipt_path = (
+            write_e1_scientific_acceptance_receipt(
+                run_dir=run_dir,
+                contract=scientific_contract,
+            )
+        )
+        result["scientific_acceptance"] = scientific_receipt
+        result["scientific_acceptance_receipt"] = str(
+            scientific_receipt_path
         )
     return result
 
@@ -1106,104 +1353,129 @@ def _run_one_arm(
     resume_from_step_id: Optional[str] = None,
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
+    provider_hard_stop: Optional[Any] = None,
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
-    from easyicu.research_agent.cohort.schema import register_cohort_concept_ids
+    from easyicu.research_agent.cohort.schema import cohort_concept_id_scope
     from easyicu.research_agent.reporting.reporting_checklist import (
         checklist_names_for_kind,
+    )
+    from benchmarks.figure2_canonical9.protocol_prompt import (
+        task_protocol_note_for_item,
+        task_protocol_preferences_for_item,
     )
 
     # The provided cohort is already materialised; let the planner reference any
     # of its columns in a CTAS predicate without tripping the static dictionary
     # check ("unknown concept_id: <derived column>").
-    register_cohort_concept_ids(
+    #
+    # SCOPED, not registered. This function runs once PER CASE and the whole
+    # batch shares one process, so a permanent registration accumulated every
+    # earlier case's cohort columns: case N's planner could name a column only
+    # case N-1 materialised, pass validation against the leaked registry, and
+    # fail at execution -- after the provider calls were already paid for. The
+    # scope restores the exact prior set on exit, including on failure, so each
+    # case validates against its own cohort and nothing else.
+    with cohort_concept_id_scope(
         list(getattr(item, "cohort_columns", None) or getattr(cohort, "columns", []))
-    )
+    ):
 
-    workdir.mkdir(parents=True, exist_ok=True)
-    # Force the kind-matched reporting checklist(s) so the EMITTED file matches
-    # what the scorecard READS by task kind (single source of truth:
-    # ``checklist_names_for_kind``). Without this the pipeline falls back to
-    # free-text analysis-family inference, which emitted STROBE for the
-    # mortality_prediction task while the scorecard expected TRIPOD+AI — so
-    # reporting_completeness was silently NA on a run that did reach the write
-    # phase (detector/emitter contract mismatch, G-2). ``setdefault`` lets an
-    # explicit pipeline_options override win.
-    opts = dict(pipeline_options or {})
-    opts.setdefault(
-        "reporting_checklist_names",
-        list(checklist_names_for_kind(getattr(item, "kind", None))),
-    )
-    # The authoritative task kind lets the internal phenotype checklist decide
-    # trajectory-item applicability by kind (cross-sectional clustering vs
-    # longitudinal) instead of fragile manuscript wording (M3 false-open).
-    opts.setdefault("task_kind", getattr(item, "kind", None))
-    pipeline = ResearchAgentPipeline(
-        workdir=workdir,
-        llm=llm,
-        disable_icu_context=disable_icu_context,
-        **opts,
-    )
-    resolved_resume_run_id = _resolve_resume_run_id(
-        workdir=workdir,
-        reuse_existing=reuse_existing,
-        resume_run_id=resume_run_id,
-    )
-    if resolved_resume_run_id:
-        mode = "selected" if resume_run_id else "interrupted"
-        print(
-            f"[research_agent] resuming {mode} run {resolved_resume_run_id} "
-            f"(step-level checkpoint) for {item.key}/{label}"
+        workdir.mkdir(parents=True, exist_ok=True)
+        # Force the kind-matched reporting checklist(s) so the EMITTED file matches
+        # what the scorecard READS by task kind (single source of truth:
+        # ``checklist_names_for_kind``). Without this the pipeline falls back to
+        # free-text analysis-family inference, which emitted STROBE for the
+        # mortality_prediction task while the scorecard expected TRIPOD+AI — so
+        # reporting_completeness was silently NA on a run that did reach the write
+        # phase (detector/emitter contract mismatch, G-2). ``setdefault`` lets an
+        # explicit pipeline_options override win.
+        opts = dict(pipeline_options or {})
+        opts.setdefault(
+            "reporting_checklist_names",
+            list(checklist_names_for_kind(getattr(item, "kind", None))),
         )
-    started = time.monotonic()
-    database = str(getattr(item, "database", "") or "bench").strip() or "bench"
-    operational_exposure = _operational_exposure_for_item(item)
-    exposure_display_name = getattr(item, "primary_predictor", None) or None
-    normalized_question = re.sub(
-        r"[^a-z0-9]+", "_", str(item.research_question or "").lower()
-    ).strip("_")
-    normalized_display_name = re.sub(
-        r"[^a-z0-9]+", "_", str(exposure_display_name or "").lower()
-    ).strip("_")
-    display_name_is_question_exposed = bool(
-        normalized_display_name
-        and re.search(
-            rf"(?:^|_){re.escape(normalized_display_name)}(?:_|$)",
-            normalized_question,
+        # The authoritative task kind lets the internal phenotype checklist decide
+        # trajectory-item applicability by kind (cross-sectional clustering vs
+        # longitudinal) instead of fragile manuscript wording (M3 false-open).
+        opts.setdefault("task_kind", getattr(item, "kind", None))
+        scientific_contract = getattr(item, "scientific_acceptance_contract", None)
+        if isinstance(scientific_contract, Mapping):
+            required_cohort_mode = str(
+                scientific_contract.get("primary_cohort_selection_mode") or ""
+            ).strip()
+            if required_cohort_mode:
+                opts.setdefault(
+                    "required_primary_cohort_selection_mode",
+                    required_cohort_mode,
+                )
+        pipeline = ResearchAgentPipeline(
+            workdir=workdir,
+            llm=llm,
+            provider_hard_stop=provider_hard_stop,
+            disable_icu_context=disable_icu_context,
+            **opts,
         )
-    )
-    concept_descriptions = (
-        {str(operational_exposure): str(exposure_display_name)}
-        if operational_exposure
-        and exposure_display_name
-        and display_name_is_question_exposed
-        else None
-    )
-    result = pipeline.run(
-        question=item.research_question,
-        cohort=cohort,
-        cohort_authority_path=getattr(item, "cohort_authority_path", None),
-        cohort_authority_ref=getattr(item, "cohort_authority_ref", None),
-        trajectory_path=getattr(item, "trajectory_path", None),
-        trajectory_authority_path=getattr(item, "trajectory_authority_path", None),
-        trajectory_authority_ref=getattr(item, "trajectory_authority_ref", None),
-        cohort_name=f"bench_{item.key}",
-        database=database,
-        target_outcome=item.target_outcome,
-        primary_exposure=operational_exposure,
-        concept_descriptions=concept_descriptions,
-        inclusion_criteria=item.inclusion_criteria,
-        id_columns=(getattr(item, "id_columns", None) or None),
-        notes=getattr(item, "notes", None),
-        resume_run_id=resolved_resume_run_id,
-        resume_from_step_id=resume_from_step_id,
-        stop_after_step_id=stop_after_step_id,
-        force_writer_probe=bool(force_writer_probe),
-    )
-    elapsed = time.monotonic() - started
-    score = _score_arm(run_dir=Path(result.workdir), item=item, label=label)
-    score["elapsed_seconds"] = round(elapsed, 2)
-    return score
+        resolved_resume_run_id = _resolve_resume_run_id(
+            workdir=workdir,
+            reuse_existing=reuse_existing,
+            resume_run_id=resume_run_id,
+        )
+        if resolved_resume_run_id:
+            mode = "selected" if resume_run_id else "interrupted"
+            print(
+                f"[research_agent] resuming {mode} run {resolved_resume_run_id} "
+                f"(step-level checkpoint) for {item.key}/{label}"
+            )
+        started = time.monotonic()
+        database = str(getattr(item, "database", "") or "bench").strip() or "bench"
+        operational_exposure = _operational_exposure_for_item(item)
+        exposure_display_name = getattr(item, "primary_predictor", None) or None
+        normalized_question = re.sub(
+            r"[^a-z0-9]+", "_", str(item.research_question or "").lower()
+        ).strip("_")
+        normalized_display_name = re.sub(
+            r"[^a-z0-9]+", "_", str(exposure_display_name or "").lower()
+        ).strip("_")
+        display_name_is_question_exposed = bool(
+            normalized_display_name
+            and re.search(
+                rf"(?:^|_){re.escape(normalized_display_name)}(?:_|$)",
+                normalized_question,
+            )
+        )
+        concept_descriptions = (
+            {str(operational_exposure): str(exposure_display_name)}
+            if operational_exposure
+            and exposure_display_name
+            and display_name_is_question_exposed
+            else None
+        )
+        result = pipeline.run(
+            question=item.research_question,
+            cohort=cohort,
+            cohort_authority_path=getattr(item, "cohort_authority_path", None),
+            cohort_authority_ref=getattr(item, "cohort_authority_ref", None),
+            trajectory_path=getattr(item, "trajectory_path", None),
+            trajectory_authority_path=getattr(item, "trajectory_authority_path", None),
+            trajectory_authority_ref=getattr(item, "trajectory_authority_ref", None),
+            cohort_name=f"bench_{item.key}",
+            database=database,
+            target_outcome=item.target_outcome,
+            primary_exposure=operational_exposure,
+            concept_descriptions=concept_descriptions,
+            inclusion_criteria=item.inclusion_criteria,
+            id_columns=(getattr(item, "id_columns", None) or None),
+            user_preferences=task_protocol_preferences_for_item(item),
+            notes=task_protocol_note_for_item(item),
+            resume_run_id=resolved_resume_run_id,
+            resume_from_step_id=resume_from_step_id,
+            stop_after_step_id=stop_after_step_id,
+            force_writer_probe=bool(force_writer_probe),
+        )
+        elapsed = time.monotonic() - started
+        score = _score_arm(run_dir=Path(result.workdir), item=item, label=label)
+        score["elapsed_seconds"] = round(elapsed, 2)
+        return score
 
 
 def _run_one_item(
@@ -1219,6 +1491,7 @@ def _run_one_item(
     resume_from_step_id: Optional[str] = None,
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
+    provider_hard_stop: Optional[Any] = None,
 ) -> Dict[str, Any]:
     if verbose:
         print(f"\n=== {item.key} — {item.name} ===")
@@ -1240,6 +1513,7 @@ def _run_one_item(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
     if "aware" in selected:
         aware = _run_one_arm(
@@ -1254,6 +1528,7 @@ def _run_one_item(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
     payload = {
         "item_key": item.key,
@@ -1635,6 +1910,7 @@ def _run_one_item_with_reuse(
     resume_from_step_id: Optional[str] = None,
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
+    provider_hard_stop: Optional[Any] = None,
 ) -> Dict[str, Any]:
     if verbose:
         print(f"\n=== {item.key} — {item.name} ===")
@@ -1679,6 +1955,7 @@ def _run_one_item_with_reuse(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
     if "aware" in selected and not _arm_was_run(aware):
         aware = _run_one_arm(
@@ -1693,6 +1970,7 @@ def _run_one_item_with_reuse(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
 
     payload = {
@@ -2051,6 +2329,9 @@ def _make_llm(
     model: str,
     request_timeout: float,
     reasoning_effort_profile: str = "provider_default",
+    transport_max_attempts: int = 1,
+    stream_enabled: bool = False,
+    provider_environment: Optional[Mapping[str, str]] = None,
 ):
     _bootstrap_imports()
     from easyicu.research_agent import (  # type: ignore
@@ -2075,6 +2356,10 @@ def _make_llm(
                 request_timeout=request_timeout,
                 title="EasyICU research-agent benchmark",
                 client_cls=OpenAIClient,
+                environment=provider_environment,
+                max_retries=int(transport_max_attempts),
+                stream_enabled=bool(stream_enabled),
+                allow_environment_overrides=False,
             )
         clients_by_effort = {
             effort: build_provider_client(
@@ -2083,7 +2368,11 @@ def _make_llm(
                 request_timeout=request_timeout,
                 title="EasyICU research-agent benchmark",
                 client_cls=OpenAIClient,
+                environment=provider_environment,
                 extra_body={"reasoning": {"effort": effort}},
+                max_retries=int(transport_max_attempts),
+                stream_enabled=bool(stream_enabled),
+                allow_environment_overrides=False,
             )
             for effort in sorted(set(effort_by_role.values()))
         }
@@ -2123,13 +2412,144 @@ def _resolve_backend_base_url(provider: str) -> str:
     return resolve_provider_base_url(provider)
 
 
+def _provider_environment_snapshot(
+    *, provider: str, provider_base_url: str
+) -> Dict[str, str]:
+    """Freeze endpoint semantics while retaining only required credentials."""
+
+    keys = {
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "EASYICU_ALLOW_EXTERNAL_LLM",
+        "EASYICU_TRUST_LOOPBACK_PROXY_KEY",
+    }
+    snapshot = {key: os.environ[key] for key in keys if key in os.environ}
+    if provider == "openai":
+        snapshot["OPENAI_BASE_URL"] = str(provider_base_url)
+    elif provider == "openrouter":
+        snapshot["OPENROUTER_BASE_URL"] = str(provider_base_url)
+    return snapshot
+
+
+def _provider_hard_stop_limits(
+    pipeline_options: Mapping[str, Any],
+):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLimits,
+    )
+
+    required = {
+        "max_provider_attempts_per_run",
+        "max_provider_attempts_per_batch",
+        "max_total_tokens_per_run",
+        "max_total_tokens_per_batch",
+        "max_estimated_cost_usd_per_batch",
+        "max_wall_clock_seconds_per_task",
+        "provider_input_cost_usd_per_million_tokens",
+        "provider_output_cost_usd_per_million_tokens",
+    }
+    present = required.intersection(pipeline_options)
+    if not present:
+        return None
+    if present != required:
+        missing = ", ".join(sorted(required - present))
+        raise ValueError(f"Incomplete Provider hard-stop options: {missing}")
+    return ProviderHardStopLimits(
+        max_provider_attempts_per_run=int(
+            pipeline_options["max_provider_attempts_per_run"]
+        ),
+        max_provider_attempts_per_batch=int(
+            pipeline_options["max_provider_attempts_per_batch"]
+        ),
+        max_total_tokens_per_run=int(
+            pipeline_options["max_total_tokens_per_run"]
+        ),
+        max_total_tokens_per_batch=int(
+            pipeline_options["max_total_tokens_per_batch"]
+        ),
+        max_estimated_cost_usd_per_batch=float(
+            pipeline_options["max_estimated_cost_usd_per_batch"]
+        ),
+        max_wall_clock_seconds_per_task=float(
+            pipeline_options["max_wall_clock_seconds_per_task"]
+        ),
+        input_cost_usd_per_million_tokens=float(
+            pipeline_options["provider_input_cost_usd_per_million_tokens"]
+        ),
+        output_cost_usd_per_million_tokens=float(
+            pipeline_options["provider_output_cost_usd_per_million_tokens"]
+        ),
+    )
+
+
+def _bind_benchmark_cost_price_table(
+    pipeline_options: Optional[Mapping[str, Any]],
+    *,
+    provider: str,
+    model: str,
+) -> Dict[str, Any]:
+    """Bind the benchmark's reviewed token prices to its selected model.
+
+    Provider hard-stop accounting already uses the two explicit per-million
+    rates.  CostMeter needs the same rates keyed by model; otherwise an
+    unlisted gateway alias records exact tokens but silently reports ``$0``.
+    Mock runs remain unpriced, and an explicit conflicting table fails closed.
+    """
+
+    options = dict(pipeline_options or {})
+    if not bool(options.get("enable_cost_tracking")) or provider == "mock":
+        return options
+    input_price = options.get("provider_input_cost_usd_per_million_tokens")
+    output_price = options.get("provider_output_cost_usd_per_million_tokens")
+    if input_price is None and output_price is None:
+        return options
+    if input_price is None or output_price is None:
+        raise ValueError("Benchmark cost tracking requires both Provider prices")
+    selected_model = str(model or "").strip()
+    if not selected_model:
+        raise ValueError("Benchmark cost tracking requires a selected model")
+    selected_prices = (float(input_price), float(output_price))
+    raw_table = options.get("cost_price_table")
+    if raw_table is None:
+        price_table: Dict[str, Any] = {}
+    elif isinstance(raw_table, Mapping):
+        price_table = dict(raw_table)
+    else:
+        raise ValueError("cost_price_table must be a model-to-price mapping")
+    existing = price_table.get(selected_model)
+    if existing is not None:
+        try:
+            existing_prices = tuple(float(value) for value in existing)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid cost_price_table entry for {selected_model!r}"
+            ) from exc
+        if existing_prices != selected_prices:
+            raise ValueError(
+                "CostMeter prices conflict with Provider hard-stop prices for "
+                f"{selected_model!r}"
+            )
+    price_table[selected_model] = selected_prices
+    options["cost_price_table"] = price_table
+    return options
+
+
 def _benchmark_pipeline_options(
     *,
     max_total_steps: Optional[int],
     disable_replanning: bool,
     max_code_repair_attempts: Optional[int],
     max_step_llm_repair_attempts: Optional[int] = None,
-    timeout_seconds: float = 300.0,
+    max_step_provider_calls: int = 9,
+    max_provider_attempts_per_run: int = 192,
+    max_provider_attempts_per_batch: int = 1_728,
+    max_total_tokens_per_run: int = 2_000_000,
+    max_total_tokens_per_batch: int = 18_000_000,
+    max_estimated_cost_usd_per_batch: float = 100.0,
+    max_wall_clock_seconds_per_task: float = 21_600.0,
+    provider_input_cost_usd_per_million_tokens: float = 10.0,
+    provider_output_cost_usd_per_million_tokens: float = 30.0,
+    timeout_seconds: float = 900.0,
     standard_executor_timeout_seconds: float = 3_600.0,
     enable_repro_envelope: bool = True,
     enable_cost_tracking: bool = True,
@@ -2191,6 +2611,27 @@ def _benchmark_pipeline_options(
         options["max_code_repair_attempts"] = int(max_code_repair_attempts)
     if max_step_llm_repair_attempts is not None:
         options["max_step_llm_repair_attempts"] = int(max_step_llm_repair_attempts)
+    options["max_step_provider_calls"] = int(max_step_provider_calls)
+    options["max_provider_attempts_per_run"] = int(
+        max_provider_attempts_per_run
+    )
+    options["max_provider_attempts_per_batch"] = int(
+        max_provider_attempts_per_batch
+    )
+    options["max_total_tokens_per_run"] = int(max_total_tokens_per_run)
+    options["max_total_tokens_per_batch"] = int(max_total_tokens_per_batch)
+    options["max_estimated_cost_usd_per_batch"] = float(
+        max_estimated_cost_usd_per_batch
+    )
+    options["max_wall_clock_seconds_per_task"] = float(
+        max_wall_clock_seconds_per_task
+    )
+    options["provider_input_cost_usd_per_million_tokens"] = float(
+        provider_input_cost_usd_per_million_tokens
+    )
+    options["provider_output_cost_usd_per_million_tokens"] = float(
+        provider_output_cost_usd_per_million_tokens
+    )
     if strict_evidence:
         options["evidence_enforcement_mode"] = "strict"
     if enable_repro_envelope:
@@ -2204,6 +2645,11 @@ def _benchmark_pipeline_options(
         # cost_summary.{md,json} and ``manifest.cost_records`` — the token
         # totals + estimated USD that become Fig.3 / cost-table source data.
         options["enable_cost_tracking"] = True
+    # Benchmark runs never make an implicit second Provider channel merely
+    # because a model name happens to look vision-capable. Deterministic visual
+    # QA remains enabled; paid image upload requires a separate, explicitly
+    # reviewed experiment outside Canonical9.
+    options["enable_vlm_visual_qa"] = False
     if writer_digest_widened:
         options["writer_digest_widened"] = True
     if llm_seed is not None:
@@ -2376,18 +2822,43 @@ def _run_suite(
     force_writer_probe: bool = False,
     allow_mock_aware: bool = False,
     reasoning_effort_profile: str = "provider_default",
+    transport_max_attempts: int = 1,
+    stream_enabled: bool = False,
+    provider_environment: Optional[Mapping[str, str]] = None,
+    provider_base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
+    pipeline_options = _bind_benchmark_cost_price_table(
+        pipeline_options,
+        provider=provider,
+        model=model,
+    )
     selected_arms = _normalize_arms(arms)
     _enforce_mock_aware_provider(
         selected_arms,
         provider=provider,
         allow_mock_aware=allow_mock_aware,
     )
+    hard_stop_ledger = None
+    hard_stop_limits = _provider_hard_stop_limits(pipeline_options or {})
+    if hard_stop_limits is not None:
+        from easyicu.research_agent.authority.provider_hard_stop import (
+            ProviderHardStopLedger,
+        )
+
+        hard_stop_ledger = ProviderHardStopLedger(
+            path=(out_root / "bench_progress.json").resolve(),
+            task_ids=[str(item.key) for item in items],
+            limits=hard_stop_limits,
+            resume_existing=bool(reuse_existing),
+        )
     llm = _make_llm(
         provider=provider,
         model=model,
         request_timeout=request_timeout,
         reasoning_effort_profile=reasoning_effort_profile,
+        transport_max_attempts=transport_max_attempts,
+        stream_enabled=stream_enabled,
+        provider_environment=provider_environment,
     )
     from easyicu.research_agent import (  # type: ignore
         default_icu_agent_bench_suite,
@@ -2396,8 +2867,13 @@ def _run_suite(
 
     scores: List[Dict[str, Any]] = []
     for item in items:
-        scores.append(
-            _run_one_item_with_reuse(
+        task_hard_stop = (
+            hard_stop_ledger.start_task(str(item.key))
+            if hard_stop_ledger is not None
+            else None
+        )
+        try:
+            score = _run_one_item_with_reuse(
                 item=item,
                 seed=seed,
                 out_root=out_root,
@@ -2410,8 +2886,17 @@ def _run_suite(
                 stop_after_step_id=stop_after_step_id,
                 force_writer_probe=force_writer_probe,
                 verbose=verbose,
+                provider_hard_stop=task_hard_stop,
             )
-        )
+        except BaseException as exc:
+            if task_hard_stop is not None:
+                task_hard_stop.finish(
+                    error=f"{type(exc).__name__}: {str(exc)[:1800]}"
+                )
+            raise
+        scores.append(score)
+        if task_hard_stop is not None:
+            _finish_task_on_execution_outcome(task_hard_stop, score)
 
     totals = _aggregate(scores)
     payload = {
@@ -2422,7 +2907,11 @@ def _run_suite(
         "provider": provider,
         "model": model,
         "reasoning_effort_profile": reasoning_effort_profile,
-        "backend_base_url": _resolve_backend_base_url(provider),
+        "backend_base_url": (
+            str(provider_base_url)
+            if provider_base_url is not None
+            else _resolve_backend_base_url(provider)
+        ),
         "arms": selected_arms,
         "case_registration": case_registration,
         "force_writer_probe": bool(force_writer_probe),
@@ -2523,7 +3012,7 @@ def _canonical_execution_config_from_args(args):
 
     return build_canonical_execution_config(
         seed=int(getattr(args, "seed", 7)),
-        timeout_seconds=float(getattr(args, "timeout", 300.0)),
+        timeout_seconds=float(getattr(args, "timeout", 900.0)),
         standard_executor_timeout_seconds=float(
             getattr(args, "standard_executor_timeout", 3600.0)
         ),
@@ -2535,6 +3024,41 @@ def _canonical_execution_config_from_args(args):
         max_code_repair_attempts=getattr(args, "max_code_repair_attempts", None),
         max_step_llm_repair_attempts=getattr(
             args, "max_step_llm_repair_attempts", None
+        ),
+        max_step_provider_calls=int(
+            getattr(args, "max_step_provider_calls", 9)
+        ),
+        max_provider_attempts_per_run=int(
+            getattr(args, "max_provider_attempts_per_run", 192)
+        ),
+        max_provider_attempts_per_batch=int(
+            getattr(args, "max_provider_attempts_per_batch", 1_728)
+        ),
+        max_total_tokens_per_run=int(
+            getattr(args, "max_total_tokens_per_run", 2_000_000)
+        ),
+        max_total_tokens_per_batch=int(
+            getattr(args, "max_total_tokens_per_batch", 18_000_000)
+        ),
+        max_estimated_cost_usd_per_batch=float(
+            getattr(args, "max_estimated_cost_usd_per_batch", 100.0)
+        ),
+        max_wall_clock_seconds_per_task=float(
+            getattr(args, "max_wall_clock_seconds_per_task", 21_600.0)
+        ),
+        provider_input_cost_usd_per_million_tokens=float(
+            getattr(
+                args,
+                "provider_input_cost_usd_per_million_tokens",
+                10.0,
+            )
+        ),
+        provider_output_cost_usd_per_million_tokens=float(
+            getattr(
+                args,
+                "provider_output_cost_usd_per_million_tokens",
+                30.0,
+            )
         ),
         enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
         enable_cost_tracking=not bool(getattr(args, "no_cost_tracking", False)),
@@ -2548,6 +3072,14 @@ def _canonical_execution_config_from_args(args):
         reasoning_effort_profile=str(
             getattr(args, "reasoning_effort_profile", "provider_default")
         ),
+        transport_max_attempts=int(
+            getattr(args, "transport_max_attempts", 1)
+        ),
+        provider_base_url=(
+            str(getattr(args, "provider_base_url", "") or "").strip()
+            or _resolve_backend_base_url(str(getattr(args, "provider", "mock")))
+        ),
+        llm_stream_enabled=bool(getattr(args, "llm_stream", False)),
     )
 
 
@@ -2728,7 +3260,8 @@ def _figure2_realrun_authorization_gate(args):
                 "[realrun-authority] a Canonical9 / paper-acceptance run REQUIRES "
                 "--figure2-realrun-authorization (plus "
                 "--figure2-expected-execution-identity and "
-                "--figure2-production-input-authority); refusing to launch.",
+                "--figure2-production-input-authority and "
+                "--figure2-scientific-protocol-authority); refusing to launch.",
                 file=sys.stderr,
             )
             return 2, None
@@ -2745,6 +3278,11 @@ def _figure2_realrun_authorization_gate(args):
 
     repo_root = Path(__file__).resolve().parents[1]
     production = getattr(args, "figure2_production_input_authority", None)
+    scientific_protocols = getattr(
+        args,
+        "figure2_scientific_protocol_authority",
+        None,
+    )
 
     # Effective model + runner, exactly as the launcher will resolve them downstream.
     provider = str(getattr(args, "provider", "mock"))
@@ -2796,6 +3334,9 @@ def _figure2_realrun_authorization_gate(args):
         ),
         invocation=invocation,
         production_input_authority_path=(Path(production) if production else None),
+        scientific_protocol_authority_path=(
+            Path(scientific_protocols) if scientific_protocols else None
+        ),
     )
     authorization = verify_realrun_authorization(request)
     print(authorization.model_dump_json(indent=2))
@@ -2815,6 +3356,9 @@ def _figure2_realrun_authorization_gate(args):
         batch_id=authorization.batch_id,
         declaration_sha256=authorization.declaration_sha256,
         input_authority_digest=authorization.input_authority_digest,
+        scientific_protocol_authority_digest=(
+            authorization.scientific_protocol_authority_digest
+        ),
         frozen_input_by_task=authorization.frozen_input_by_task,
     )
     try:
@@ -2877,6 +3421,16 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--allow-pending-import",
+        action="store_true",
+        help=(
+            "Exit 0 even when JSONL items were rejected at intake and never "
+            "ran. Without this the bench exits 5, because an import whose rows "
+            "all failed to load otherwise reports the same success as one that "
+            "ran and passed."
+        ),
+    )
+    parser.add_argument(
         "--model",
         default=os.environ.get(
             "EASYICU_HOSTED_DEFAULT_MODEL", "openai/gpt-oss-120b:free"
@@ -2896,6 +3450,85 @@ def main() -> int:
         help="Per-request timeout for real LLM providers.",
     )
     parser.add_argument(
+        "--transport-max-attempts",
+        type=int,
+        default=1,
+        help=(
+            "Maximum raw transport attempts for one logical Provider call "
+            "(default: 1; retries are charged to the same global ledger)."
+        ),
+    )
+    parser.add_argument(
+        "--provider-base-url",
+        default=None,
+        help=(
+            "Explicit non-secret Provider endpoint for a frozen run. When "
+            "omitted, it is resolved once from the Provider environment."
+        ),
+    )
+    parser.add_argument(
+        "--llm-stream",
+        action="store_true",
+        help=(
+            "Use streaming transport. Off by default and frozen into Canonical9 "
+            "execution authority; EASYICU_LLM_STREAM cannot override it."
+        ),
+    )
+    parser.add_argument(
+        "--max-step-provider-calls",
+        type=int,
+        default=9,
+        help="Maximum Provider transport attempts charged to one analysis step.",
+    )
+    parser.add_argument(
+        "--max-provider-attempts-per-run",
+        type=int,
+        default=192,
+        help="Hard Provider transport-attempt ceiling for one benchmark task.",
+    )
+    parser.add_argument(
+        "--max-provider-attempts-per-batch",
+        type=int,
+        default=1_728,
+        help="Hard Provider transport-attempt ceiling for the complete batch.",
+    )
+    parser.add_argument(
+        "--max-total-tokens-per-run",
+        type=int,
+        default=2_000_000,
+        help="Hard reserved/reported token ceiling for one benchmark task.",
+    )
+    parser.add_argument(
+        "--max-total-tokens-per-batch",
+        type=int,
+        default=18_000_000,
+        help="Hard reserved/reported token ceiling for the complete batch.",
+    )
+    parser.add_argument(
+        "--max-estimated-cost-usd-per-batch",
+        type=float,
+        default=100.0,
+        help="Hard estimated USD ceiling for the complete batch.",
+    )
+    parser.add_argument(
+        "--max-wall-clock-seconds-per-task",
+        type=float,
+        default=21_600.0,
+        help="Hard wall-clock ceiling for one task (default: 6 hours).",
+    )
+    parser.add_argument(
+        "--provider-input-cost-usd-per-million-tokens",
+        type=float,
+        default=10.0,
+        help="Frozen conservative input-token price used by the pre-call stop-loss.",
+    )
+    parser.add_argument(
+        "--provider-output-cost-usd-per-million-tokens",
+        type=float,
+        default=30.0,
+        help="Frozen conservative output-token price used by the pre-call stop-loss.",
+    )
+    parser.add_argument(
         "--reasoning-effort-profile",
         choices=["provider_default", "adaptive_v1"],
         default="provider_default",
@@ -2909,10 +3542,10 @@ def main() -> int:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=300.0,
+        default=900.0,
         help=(
             "Per-attempt timeout in seconds for ordinary model-generated "
-            "analysis code. This does not change the LLM request timeout or "
+            "analysis code (default: 900). This does not change the LLM request timeout or "
             "the registered standard-executor timeout."
         ),
     )
@@ -3201,6 +3834,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--figure2-scientific-protocol-authority",
+        default=None,
+        help=(
+            "Absolute path to the operator-pinned, digest-bound E2/H2/H3 "
+            "clinical-and-methods protocol authority. Missing or invalid review "
+            "evidence blocks before any cohort data is read."
+        ),
+    )
+    parser.add_argument(
         "--force-writer-probe",
         action="store_true",
         help=(
@@ -3221,9 +3863,19 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    # Resolve once. The authorization digest and every subsequently created
+    # client receive this exact endpoint; later environment mutation is inert.
+    args.provider_base_url = (
+        str(args.provider_base_url or "").strip()
+        or _resolve_backend_base_url(str(args.provider))
+    )
     _realrun_gate_rc, _figure2_batch_binding = _figure2_realrun_authorization_gate(args)
     if _realrun_gate_rc is not None:
         return _realrun_gate_rc
+    provider_environment = _provider_environment_snapshot(
+        provider=str(args.provider),
+        provider_base_url=str(args.provider_base_url),
+    )
     case_registration = _register_case_patterns(args.case)
     submission_profile = (
         _resolve_submission_profile(args.profile)
@@ -3283,6 +3935,23 @@ def main() -> int:
         disable_replanning=bool(args.disable_replanning),
         max_code_repair_attempts=args.max_code_repair_attempts,
         max_step_llm_repair_attempts=max_step_llm_repair_attempts,
+        max_step_provider_calls=int(args.max_step_provider_calls),
+        max_provider_attempts_per_run=int(args.max_provider_attempts_per_run),
+        max_provider_attempts_per_batch=int(args.max_provider_attempts_per_batch),
+        max_total_tokens_per_run=int(args.max_total_tokens_per_run),
+        max_total_tokens_per_batch=int(args.max_total_tokens_per_batch),
+        max_estimated_cost_usd_per_batch=float(
+            args.max_estimated_cost_usd_per_batch
+        ),
+        max_wall_clock_seconds_per_task=float(
+            args.max_wall_clock_seconds_per_task
+        ),
+        provider_input_cost_usd_per_million_tokens=float(
+            args.provider_input_cost_usd_per_million_tokens
+        ),
+        provider_output_cost_usd_per_million_tokens=float(
+            args.provider_output_cost_usd_per_million_tokens
+        ),
         timeout_seconds=float(args.timeout),
         standard_executor_timeout_seconds=float(args.standard_executor_timeout),
         enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
@@ -3367,6 +4036,7 @@ def main() -> int:
                 stop_after_step_id=stop_after_step_id,
                 force_writer_probe=bool(args.force_writer_probe),
                 allow_mock_aware=bool(args.allow_mock_aware),
+                allow_pending=bool(args.allow_pending_import),
                 require_figure2_paper_acceptance=bool(
                     args.require_figure2_paper_acceptance
                 ),
@@ -3377,6 +4047,11 @@ def main() -> int:
                 ),
                 batch_binding=_figure2_batch_binding,
                 reasoning_effort_profile=str(args.reasoning_effort_profile),
+                transport_max_attempts=int(args.transport_max_attempts),
+                stream_enabled=bool(args.llm_stream),
+                provider_environment=provider_environment,
+                provider_base_url=str(args.provider_base_url),
+                items=args.items,
             )
 
         if n_repeat == 1:
@@ -3451,6 +4126,10 @@ def main() -> int:
             force_writer_probe=bool(args.force_writer_probe),
             allow_mock_aware=bool(args.allow_mock_aware),
             reasoning_effort_profile=str(args.reasoning_effort_profile),
+            transport_max_attempts=int(args.transport_max_attempts),
+            stream_enabled=bool(args.llm_stream),
+            provider_environment=provider_environment,
+            provider_base_url=str(args.provider_base_url),
         )
         all_runs.append(payload)
         totals = payload["totals"]
@@ -3494,7 +4173,36 @@ def main() -> int:
         )
         print(f"  -> {out_root / 'bench_model_matrix.json'}")
         print(f"  -> {out_root / 'bench_model_matrix.md'}")
+    # The rule/analysis suites reach the same false green as the JSONL path:
+    # scoring a run that stopped mid-plan still returns a payload, and an
+    # unconditional exit 0 here reports a partially executed item as a passing
+    # benchmark. Both entry points must answer the same question.
+    incomplete = _incomplete_suite_items(all_runs)
+    if incomplete:
+        print(
+            "[execution] items that did not complete execution: "
+            + ", ".join(incomplete)
+        )
+        return _EXECUTION_INCOMPLETE_EXIT_CODE
     return 0
+
+
+def _incomplete_suite_items(all_runs: Sequence[Mapping[str, Any]]) -> List[str]:
+    """Name every scored suite item whose run never finished executing."""
+
+    incomplete: List[str] = []
+    for payload in all_runs:
+        if not isinstance(payload, Mapping):
+            continue
+        model = str(payload.get("model") or "")
+        for score in payload.get("scores") or []:
+            if not _score_execution_failures(score):
+                continue
+            key = str(
+                (score.get("item_key") if isinstance(score, Mapping) else None) or "?"
+            )
+            incomplete.append(f"{key} ({model})" if model else key)
+    return incomplete
 
 
 def _ehrflow_item_done(item_root: Path) -> bool:
@@ -3825,6 +4533,14 @@ def _external_item_from_row(
                 "source_field": operational_source,
             }
         )
+        if operational_source is not None:
+            raise ValueError(
+                "declared operational exposure must be an exact sealed cohort "
+                f"column before Provider launch: task={key!r}, "
+                f"field={operational_source!r}, value={operational_exposure!r}. "
+                "Keep a conceptual/scoring label in primary_predictor and put "
+                "the executable raw column in operational_exposure."
+            )
 
     try:
         expected_direction = int(row.get("expected_or_direction") or 0)
@@ -3971,6 +4687,11 @@ def _external_item_from_row(
         interpretation_note=(str(row.get("interpretation_note") or "").strip() or None),
         protocol_version=(str(row.get("protocol_version") or "").strip() or None),
         rubric_version=(str(row.get("rubric_version") or "").strip() or None),
+        scientific_acceptance_contract=(
+            dict(row.get("scientific_acceptance_contract") or {})
+            if isinstance(row.get("scientific_acceptance_contract"), Mapping)
+            else None
+        ),
         protocol_adapter=protocol_adapter,
         cohort_size=int(cohort_size),
         cohort_columns=[str(column) for column in cohort_columns],
@@ -3986,6 +4707,58 @@ def _external_item_from_row(
             else None
         ),
     )
+
+
+def _cohort_shape_without_materialization(path: Path) -> tuple[int, List[str]]:
+    """Read cohort row/column metadata without loading the full table.
+
+    Parquet exposes exact shape in its footer.  Delimited files need one
+    bounded pass for the row count, but only the first column is ever held in
+    memory.  The pipeline remains the sole owner of full cohort loading.
+    """
+
+    suffix = path.suffix.lower()
+    if suffix in {".parquet", ".pq"}:
+        try:
+            import pyarrow.parquet as pq
+
+            parquet = pq.ParquetFile(path)
+            metadata = parquet.metadata
+            return int(metadata.num_rows), [
+                str(name) for name in parquet.schema_arrow.names
+            ]
+        except Exception as exc:  # noqa: BLE001 - normalize the I/O boundary
+            raise _CohortMetadataError(
+                f"Parquet footer inspection failed for {path}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+    if suffix in {".csv", ".tsv"}:
+        import pandas as pd
+
+        separator = "\t" if suffix == ".tsv" else ","
+        try:
+            header = pd.read_csv(path, sep=separator, nrows=0)
+            columns = [str(column) for column in header.columns]
+            if not columns:
+                raise ValueError("cohort has no declared columns")
+            row_count = sum(
+                len(chunk)
+                for chunk in pd.read_csv(
+                    path,
+                    sep=separator,
+                    usecols=[0],
+                    chunksize=100_000,
+                )
+            )
+            return int(row_count), columns
+        except Exception as exc:  # noqa: BLE001 - normalize the I/O boundary
+            raise _CohortMetadataError(
+                f"Delimited cohort inspection failed for {path}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+    raise _CohortMetadataError(f"Unsupported cohort format: {path.suffix or '<none>'}")
 
 
 def _run_ehrflowbench_jsonl(
@@ -4004,14 +4777,23 @@ def _run_ehrflowbench_jsonl(
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
     allow_mock_aware: bool = False,
+    allow_pending: bool = False,
     require_figure2_paper_acceptance: bool = False,
     expected_execution_identity_path: Path | None = None,
     batch_binding: Optional[Any] = None,
     reasoning_effort_profile: str = "provider_default",
+    transport_max_attempts: int = 1,
+    stream_enabled: bool = False,
+    provider_environment: Optional[Mapping[str, str]] = None,
+    provider_base_url: Optional[str] = None,
+    items: Optional[Sequence[str]] = None,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
-    import pandas as pd
-
+    pipeline_options = _bind_benchmark_cost_price_table(
+        pipeline_options,
+        provider=provider,
+        model=model,
+    )
     # An authorized real-run batch carries its per-task frozen input map + identity.
     frozen_input_authority_by_task: Optional[Mapping[str, str]] = (
         batch_binding.frozen_input_by_task if batch_binding is not None else None
@@ -4069,6 +4851,43 @@ def _run_ehrflowbench_jsonl(
                     "line": line_number,
                 }
             )
+    if items:
+        # ``--items`` is applied on the built-in bench path but was never
+        # threaded here, so it read as accepted and did nothing.  On
+        # 2026-07-30 a launch that asked for one canary task started all nine
+        # against a real provider; it was noticed only because the run folders
+        # named tasks nobody had asked for.  A selector that silently widens
+        # its own scope is worse than no selector, so an unknown key is fatal
+        # rather than an empty selection.
+        wanted = {str(value).strip() for value in items if str(value).strip()}
+        available = {
+            str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
+            for idx, row in enumerate(rows)
+        }
+        unknown = sorted(wanted - available)
+        if unknown:
+            raise SystemExit(
+                "--items names no row in this EHRFlowBench JSONL: "
+                + ", ".join(unknown)
+                + ". Available: "
+                + ", ".join(sorted(available))
+            )
+        kept: List[Dict[str, Any]] = []
+        kept_invalid: set[int] = set()
+        for index, row in enumerate(rows):
+            key = str(row.get("key") or row.get("id") or f"ehrflowbench_{index:03d}")
+            if key not in wanted:
+                continue
+            if index in invalid_row_indices:
+                kept_invalid.add(len(kept))
+            kept.append(row)
+        rows = kept
+        invalid_row_indices = kept_invalid
+        print(
+            f"[items] running {len(rows)} of {len(available)} rows: "
+            + ", ".join(sorted(wanted)),
+            flush=True,
+        )
     if resume_run_id and len(rows) != 1:
         raise SystemExit(
             "--resume-run-id requires a one-row EHRFlowBench JSONL file so the "
@@ -4081,6 +4900,42 @@ def _run_ehrflowbench_jsonl(
         str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
         for idx, row in enumerate(rows)
     ]
+    hard_stop_limits = _provider_hard_stop_limits(pipeline_options or {})
+    if batch_binding is not None and hard_stop_limits is None:
+        raise ValueError(
+            "A formal Canonical9 batch requires frozen run/batch Provider ceilings"
+        )
+    hard_stop_ledger = None
+    if hard_stop_limits is not None:
+        from easyicu.research_agent.authority.provider_hard_stop import (
+            ProviderHardStopLedger,
+        )
+
+        hard_stop_ledger = ProviderHardStopLedger(
+            path=(
+                out_root
+                / (
+                    "figure2_batch_progress.json"
+                    if batch_binding is not None
+                    else "ehrflowbench_progress.json"
+                )
+            ).resolve(),
+            task_ids=input_task_ids,
+            limits=hard_stop_limits,
+            batch_id=(
+                str(batch_binding.batch_id)
+                if batch_binding is not None
+                else None
+            ),
+            declaration_sha256=(
+                str(batch_binding.declaration_sha256)
+                if batch_binding is not None
+                else None
+            ),
+            resume_existing=bool(
+                (reuse_existing or resume_run_id) and batch_binding is None
+            ),
+        )
     formal_canary_task_id: Optional[str] = None
     if batch_binding is not None:
         from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
@@ -4092,8 +4947,37 @@ def _run_ehrflowbench_jsonl(
             raise ValueError(
                 "A formal Canonical9 batch must start with its locked E1 canary."
             )
+    task_hard_stops: Dict[str, Any] = {}
+
+    def _sync_pending_hard_stops() -> None:
+        if hard_stop_ledger is None:
+            return
+        statuses = {
+            str(task.get("task_id")): str(task.get("status"))
+            for task in hard_stop_ledger.snapshot().get("tasks", [])
+            if isinstance(task, Mapping)
+        }
+        for entry in pending:
+            pending_key = str(entry.get("key") or "")
+            if statuses.get(pending_key) != "running":
+                continue
+            handle = task_hard_stops.get(pending_key)
+            if handle is not None:
+                handle.finish(error=str(entry.get("status") or "pending"))
+
     for idx, row in enumerate(rows):
+        _sync_pending_hard_stops()
         key = str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
+        task_hard_stop = (
+            hard_stop_ledger.start_task(
+                key,
+                reopen_terminal=bool(resume_run_id and batch_binding is None),
+            )
+            if hard_stop_ledger is not None
+            else None
+        )
+        if task_hard_stop is not None:
+            task_hard_stops[key] = task_hard_stop
         if idx in invalid_row_indices:
             pending.append({"key": key, **row})
             continue
@@ -4202,18 +5086,24 @@ def _run_ehrflowbench_jsonl(
                     }
                 )
                 continue
-        if path.suffix.lower() in {".parquet", ".pq"}:
-            cohort = pd.read_parquet(path)
-        elif path.suffix.lower() in {".csv", ".tsv"}:
-            cohort = pd.read_csv(
-                path, sep=("\t" if path.suffix.lower() == ".tsv" else ",")
-            )
-        else:
+        if path.suffix.lower() not in {".parquet", ".pq", ".csv", ".tsv"}:
             pending.append(
                 {
                     "key": key,
                     "status": "unsupported_cohort_format",
                     "cohort_path": str(path),
+                }
+            )
+            continue
+        try:
+            cohort_size, cohort_columns = _cohort_shape_without_materialization(path)
+        except _CohortMetadataError as exc:
+            pending.append(
+                {
+                    "key": key,
+                    "status": "cohort_metadata_unreadable",
+                    "cohort_path": str(path),
+                    "error": f"{type(exc).__name__}: {exc}",
                 }
             )
             continue
@@ -4340,8 +5230,8 @@ def _run_ehrflowbench_jsonl(
             key=key,
             question=str(question),
             target=(str(target) if target else None),
-            cohort_size=int(len(cohort)),
-            cohort_columns=list(cohort.columns),
+            cohort_size=cohort_size,
+            cohort_columns=cohort_columns,
             cohort_authority_path=cohort_authority_path,
             cohort_authority_ref=(
                 cohort_authority_ref.to_dict()
@@ -4390,8 +5280,33 @@ def _run_ehrflowbench_jsonl(
                 stop_after_step_id=stop_after_step_id,
                 force_writer_probe=force_writer_probe,
                 reasoning_effort_profile=reasoning_effort_profile,
+                transport_max_attempts=transport_max_attempts,
+                stream_enabled=stream_enabled,
+                provider_environment=provider_environment,
+                provider_hard_stop=task_hard_stop,
             )
+            if batch_binding is not None:
+                _ensure_formal_figure2_safety_and_rescore(
+                    score=score,
+                    item=item,
+                    provider_environment=provider_environment,
+                    request_timeout=request_timeout,
+                )
             scores.append(score)
+            # An execution failure is NOT recorded in ``pending``.  ``pending``
+            # means one thing -- the item never entered the pipeline -- and the
+            # exit code says so out loud (5 vs 4), the printed line says so, and
+            # the offered waiver (``--allow-pending-import``) is an *import*
+            # waiver.  This item reached ``_run_one_item_from_cohort`` and came
+            # back with a score, so filing it here made the run report "never
+            # entered the pipeline" for something that ran, return 5 where 4 is
+            # true, count it as both runnable and pending, and tell the operator
+            # to accept an execution failure with an import flag.  The failure
+            # is already reported from ``scores`` through the same predicate
+            # (``incomplete``), which is where it belongs; this append was the
+            # earlier way of exiting non-zero and outlived the split.
+            if task_hard_stop is not None:
+                _finish_task_on_execution_outcome(task_hard_stop, score)
             if formal_canary_task_id is not None and key == formal_canary_task_id:
                 canary_passed = _figure2_canary_passed(score)
                 _write_figure2_canary_gate(
@@ -4415,6 +5330,12 @@ def _run_ehrflowbench_jsonl(
                         }
                         for later_key in input_task_ids[idx + 1 :]
                     )
+                    if hard_stop_ledger is not None:
+                        for later_key in input_task_ids[idx + 1 :]:
+                            hard_stop_ledger.mark_task_blocked(
+                                later_key,
+                                blocked_by=key,
+                            )
                     break
         except Exception as exc:  # noqa: BLE001 — keep batch alive on 502/etc.
             import traceback as _tb
@@ -4438,6 +5359,10 @@ def _run_ehrflowbench_jsonl(
                     "error": f"{type(exc).__name__}: {str(exc)[:300]}",
                 }
             )
+            if task_hard_stop is not None:
+                task_hard_stop.finish(
+                    error=f"{type(exc).__name__}: {str(exc)[:1800]}"
+                )
             if formal_canary_task_id is not None and key == formal_canary_task_id:
                 _write_figure2_canary_gate(
                     out_root=out_root,
@@ -4454,9 +5379,16 @@ def _run_ehrflowbench_jsonl(
                     }
                     for later_key in input_task_ids[idx + 1 :]
                 )
+                if hard_stop_ledger is not None:
+                    for later_key in input_task_ids[idx + 1 :]:
+                        hard_stop_ledger.mark_task_blocked(
+                            later_key,
+                            blocked_by=key,
+                        )
                 break
             continue
 
+    _sync_pending_hard_stops()
     totals = _aggregate(scores) if scores else {"naive": {}, "aware": {}}
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -4464,6 +5396,11 @@ def _run_ehrflowbench_jsonl(
         "seed": seed,
         "arms": _normalize_arms(arms),
         "reasoning_effort_profile": reasoning_effort_profile,
+        "backend_base_url": (
+            str(provider_base_url)
+            if provider_base_url is not None
+            else _resolve_backend_base_url(provider)
+        ),
         "pipeline_options": dict(pipeline_options or {}),
         "force_writer_probe": bool(force_writer_probe),
         "items": input_task_ids,
@@ -4495,6 +5432,59 @@ def _run_ehrflowbench_jsonl(
         for p in pending:
             md.append(f"- `{p['key']}` — {p['status']}")
     (out_root / "ehrflowbench_results.md").write_text("\n".join(md), encoding="utf-8")
+    batch_authority_issues: list[tuple[str, str, str | None]] = []
+    if batch_binding is not None:
+        # Verify the batch-to-child authority before publishing the
+        # paper-facing acceptance artifact.  The previous order could write
+        # `accepted` and only then discover that the batch ledger was
+        # incomplete, leaving a contradictory terminal file on disk.
+        from benchmarks.figure2_canonical9.realrun_authority import (
+            build_batch_ledger,
+            verify_results_frozen_input_authority,
+            write_batch_ledger,
+        )
+
+        try:
+            ledger = build_batch_ledger(payload, out_root, batch_binding)
+            ledger_path = write_batch_ledger(ledger, out_root)
+            print(f"  -> {ledger_path}")
+            input_authority_mismatches = verify_results_frozen_input_authority(
+                payload, batch_binding.frozen_input_by_task
+            )
+            for task_id, reason in input_authority_mismatches:
+                print(
+                    "[realrun-authority] POST-RUN input authority mismatch for "
+                    f"{task_id}: {reason}"
+                )
+                batch_authority_issues.append(
+                    (
+                        "BATCH_INPUT_AUTHORITY_INVALID",
+                        str(reason)[:2048],
+                        str(task_id),
+                    )
+                )
+            if not ledger.get("complete"):
+                detail = (
+                    "not every Canonical9 child run mapped back to the "
+                    "authorized batch declaration"
+                )
+                print(
+                    "[realrun-authority] POST-RUN batch ledger incomplete: "
+                    f"{detail}."
+                )
+                batch_authority_issues.append(
+                    ("BATCH_LEDGER_INVALID", detail, None)
+                )
+        except Exception as exc:  # fail closed into the terminal receipt
+            detail = f"{type(exc).__name__}: {exc}"[:2048]
+            print(
+                "[realrun-authority] POST-RUN batch ledger verification "
+                f"failed: {detail}"
+            )
+            batch_authority_issues.append(
+                ("BATCH_LEDGER_INVALID", detail, None)
+            )
+
     acceptance_status: str | None = None
     if require_figure2_paper_acceptance or any(
         _is_figure2_task_id(task_id) for task_id in input_task_ids
@@ -4528,6 +5518,28 @@ def _run_ehrflowbench_jsonl(
                     ),
                 ),
             )
+        if batch_authority_issues:
+            acceptance = acceptance.model_copy(
+                update={
+                    "status": "invalid",
+                    "issues": acceptance.issues
+                    + tuple(
+                        Figure2AcceptanceIssue(
+                            code=code,
+                            detail=detail,
+                            task_id=task_id,
+                        )
+                        for code, detail, task_id in batch_authority_issues
+                    ),
+                }
+            )
+            # `model_copy` is intentionally cheap and does not revalidate.
+            # Round-trip once so the terminal artifact obeys the same strict
+            # contract as an ordinary acceptance evaluation.
+            acceptance = Figure2PaperAcceptance.model_validate_json(
+                acceptance.model_dump_json(),
+                strict=True,
+            )
         acceptance_path = out_root / "figure2_paper_acceptance.json"
         acceptance_path.write_text(
             json.dumps(
@@ -4544,37 +5556,42 @@ def _run_ehrflowbench_jsonl(
         print(f"  -> {acceptance_path}")
     print(f"  -> {results_path}")
     print(f"  -> {out_root / 'ehrflowbench_results.md'}")
-    if batch_binding is not None:
-        # Post-run: each written aware manifest must carry ITS task's frozen input
-        # authority (the evaluator, being scorer-tree-locked, only checks presence),
-        # and every Canonical9 child run must map back to the batch in a final
-        # ledger (child run_id + manifest sha + identity + input digest).
-        from benchmarks.figure2_canonical9.realrun_authority import (
-            build_batch_ledger,
-            verify_results_frozen_input_authority,
-            write_batch_ledger,
-        )
-
-        ledger = build_batch_ledger(payload, out_root, batch_binding)
-        ledger_path = write_batch_ledger(ledger, out_root)
-        print(f"  -> {ledger_path}")
-        input_authority_mismatches = verify_results_frozen_input_authority(
-            payload, batch_binding.frozen_input_by_task
-        )
-        if input_authority_mismatches or not ledger.get("complete"):
-            for task_id, reason in input_authority_mismatches:
-                print(
-                    "[realrun-authority] POST-RUN input authority mismatch for "
-                    f"{task_id}: {reason}"
-                )
-            if not ledger.get("complete"):
-                print(
-                    "[realrun-authority] POST-RUN batch ledger incomplete: not every "
-                    "Canonical9 child run mapped back to the declaration."
-                )
-            return 2
+    if batch_authority_issues:
+        return 2
     if require_figure2_paper_acceptance and acceptance_status != "accepted":
         return _FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE
+    # A scored item whose run never finished executing is not a success, even in
+    # a development diagnostic where paper authority is expected to be withheld.
+    # Reporting exit 0 here is what let a 7/12-step run read as a completed task.
+    incomplete = [
+        str(score.get("item_key") or "")
+        for score in scores
+        if _score_execution_failures(score)
+    ]
+    # An item that never started is the same failure one stage earlier, and it
+    # was the quieter of the two: it produces no score to inspect, so nothing
+    # downstream could notice it. Report both lists before returning, so a run
+    # with both problems does not hide one behind the other's exit code.
+    if pending:
+        print(
+            "[pending] items that never entered the pipeline: "
+            + ", ".join(
+                f"{entry.get('key')} ({entry.get('status')})" for entry in pending
+            )
+        )
+    if incomplete:
+        print(
+            "[execution] items that did not complete execution: "
+            + ", ".join(incomplete)
+        )
+    if pending and not allow_pending:
+        print(
+            "[pending] pass --allow-pending-import to accept an import whose "
+            "items are knowingly not runnable."
+        )
+        return _PENDING_ITEMS_EXIT_CODE
+    if incomplete:
+        return _EXECUTION_INCOMPLETE_EXIT_CODE
     return 0
 
 
@@ -4595,9 +5612,18 @@ def _run_one_item_from_cohort(
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
     reasoning_effort_profile: str = "provider_default",
+    transport_max_attempts: int = 1,
+    stream_enabled: bool = False,
+    provider_environment: Optional[Mapping[str, str]] = None,
+    provider_hard_stop: Optional[Any] = None,
 ) -> Dict[str, Any]:
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
+    pipeline_options = _bind_benchmark_cost_price_table(
+        pipeline_options,
+        provider=provider,
+        model=model,
+    )
     bound_pipeline_options = _bind_benchmark_execution_input(
         pipeline_options,
         cohort=cohort,
@@ -4634,6 +5660,9 @@ def _run_one_item_from_cohort(
             model=model,
             request_timeout=request_timeout,
             reasoning_effort_profile=reasoning_effort_profile,
+            transport_max_attempts=transport_max_attempts,
+            stream_enabled=stream_enabled,
+            provider_environment=provider_environment,
         )
         if run_naive or run_aware
         else None
@@ -4652,6 +5681,7 @@ def _run_one_item_from_cohort(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
     if run_aware:
         aware = _run_one_arm(
@@ -4667,6 +5697,7 @@ def _run_one_item_from_cohort(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
     cohort_size = getattr(item, "cohort_size", None)
     if cohort_size is None:

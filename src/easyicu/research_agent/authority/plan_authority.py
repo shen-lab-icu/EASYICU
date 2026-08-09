@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from ..plan_utils import (
-    _augment_measurement_companion_inputs,
     _augment_report_typed_product_inputs,
     _cap_plan_preserving_figure_steps,
     _preserve_figure_steps_after_replan,
@@ -27,7 +26,9 @@ from ..robustness.panel import (
 from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from ..trajectory.plan_contract import augment_trajectory_plan_products
+from .declared_levels import bind_step_declared_levels
 from .table_one_binding import bind_table_one_execution_spec
+from .plan_input_closure import close_measurement_companion_inputs
 from .plan_scope import _plan_scientific_scope_signature, _plan_signature
 from .planned_role import verified_planned_analysis_role
 
@@ -200,18 +201,35 @@ def _preserve_completed_step_snapshots_after_replan(
         preserved = AnalysisPlan.model_validate(payload)
     except (TypeError, ValueError) as exc:
         return current_plan, [_invalid_authority_projection_finding(exc)]
+    # Say which of the two things actually happened. The single sentence
+    # claiming both used to be emitted whenever EITHER fired, so a run whose
+    # step snapshots were left changed still reported that they had been
+    # restored -- h1 and h2 each recorded exactly that, with
+    # restored_changed_step_ids=[] one line below the claim, and each then lost
+    # every downstream step to producer_plan_snapshot_mismatch on the step the
+    # message said was protected. A guard that reports work it did not do sends
+    # the next reader somewhere else entirely.
+    restored_steps = sorted(set(changed_ids))
+    parts = ["Replanner attempted to change completed execution authority;"]
+    if restored_steps or reinserted_ids:
+        parts.append(
+            "restored the host-recorded step snapshots "
+            f"({len(restored_steps)} changed, {len(reinserted_ids)} reinserted)"
+        )
+    else:
+        parts.append("no completed step snapshot needed restoring")
+    if restored_plan_scope:
+        parts.append("and restored plan-level scientific scope")
+    parts.append(
+        "so registered evidence remains bound to immutable scientific requests."
+    )
     return preserved, [
         ValidationFinding(
             validator="replanner",
             severity="warning",
-            message=(
-                "Replanner attempted to change completed execution authority; "
-                "restored the host-recorded step snapshots and plan-level "
-                "scientific scope so registered evidence remains bound to "
-                "immutable scientific requests."
-            ),
+            message=" ".join(parts),
             detail={
-                "restored_changed_step_ids": sorted(set(changed_ids)),
+                "restored_changed_step_ids": restored_steps,
                 "reinserted_step_ids": reinserted_ids,
                 "restored_plan_scope": restored_plan_scope,
                 "restored_plan_scope_fields": restored_plan_scope_fields,
@@ -332,7 +350,7 @@ def normalize_replan_candidate(
         context=context,
     )
     findings.extend(trajectory_findings)
-    revised, companion_findings = _augment_measurement_companion_inputs(
+    revised, companion_findings = close_measurement_companion_inputs(
         plan=revised,
         context=context,
     )
@@ -356,6 +374,7 @@ def normalize_replan_candidate(
         revised = AnalysisPlan.model_validate(revised.model_dump(mode="json"))
         for revised_step in revised.steps:
             bind_table_one_execution_spec(revised_step, context)
+            bind_step_declared_levels(revised_step, context)
     except (TypeError, ValueError) as exc:
         findings.append(_invalid_authority_projection_finding(exc))
         return NormalizedPlanCandidate(

@@ -9,7 +9,6 @@ successful.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-import hashlib
 from importlib import metadata as importlib_metadata
 import json
 import os
@@ -22,13 +21,18 @@ from typing import Any, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
 
-from .coder_authority import HostCoderAuthority
+from ..canonical_json import (
+    canonical_json_bytes as _canonical_json_bytes,
+    canonical_sha256 as _canonical_sha256,
+    sha256_bytes as _sha256,
+)
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
+    FINGERPRINT_ONLY_DISTRIBUTIONS,
     OPTIONAL_BASELINE_PACKAGES,
 )
-from ..contracts.runtime import RunResult
+from ..contracts.execution_result import RunResult
 from ..gates.semantics import blocking_validator_findings
 from .provider_budget import ProviderCallBudgetReceiptState
 from ..authority.runtime_artifacts import (
@@ -37,6 +41,7 @@ from ..authority.runtime_artifacts import (
 )
 from ..schema import ResearchContext, ValidationFinding
 from ..research_context.typed import parse_research_context
+from .coder_authority import HostCoderAuthority
 from .step_capsule import (
     CandidateOrigin,
     ConceptAuditSeal,
@@ -60,24 +65,6 @@ from .step_capsule import (
 
 class StepAuthorityRuntimeError(RuntimeError):
     """A checkpoint, receipt, capsule, or replay boundary is inconsistent."""
-
-
-def _canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-
-
-def _sha256(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _canonical_sha256(value: object) -> str:
-    return _sha256(_canonical_json_bytes(value))
 
 
 @dataclass(frozen=True)
@@ -606,9 +593,7 @@ def current_execution_runtime_sha256() -> str:
         for package in (*BASELINE_PACKAGES, *OPTIONAL_BASELINE_PACKAGES)
     }
     distribution_names.update(package.pip_name for package in CURATED_METHOD_PACKAGES)
-    # statsmodels formula processing depends on patsy even though Coders are not
-    # invited to import it directly.
-    distribution_names.add("patsy")
+    distribution_names.update(FINGERPRINT_ONLY_DISTRIBUTIONS)
     package_versions: dict[str, str] = {}
     for package in sorted(distribution_names):
         try:

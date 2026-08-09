@@ -12,19 +12,32 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+)
 from easyicu.research_agent.cohort.schema import (
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,
     cohort_definition_sha,
 )
+from easyicu.research_agent.execution.runners import (
+    deterministic_robustness as robustness_module,
+)
 from easyicu.research_agent.execution.runners.deterministic_robustness import (
     robustness_sensitivity_preflight_code,
+)
+from easyicu.research_agent.gates.plausibility_obligation import (
+    flag_only_plausibility_obligation_findings,
+)
+from easyicu.research_agent.gates.plausibility_receipt import (
+    plausibility_audit_receipt_findings,
 )
 from easyicu.research_agent.robustness.panel import (
     RobustnessSpec,
     robustness_specs_sha,
 )
+from easyicu.research_agent.schema import AnalysisStep
 
 
 def _predicate(concept_id: str, op: str, value: object) -> ConceptPredicate:
@@ -248,6 +261,146 @@ def _run_generated(
         )
     code = robustness_sensitivity_preflight_code()
     exec(compile(code, "<robustness-preflight>", "exec"), {})
+
+
+def test_preflight_binds_plausibility_receipt_to_exact_scope(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    step = AnalysisStep(
+        step_id="06_robustness_sensitivity",
+        planned_analysis_role="sensitivity",
+        intent="Replay the locked sensitivity analysis.",
+        inputs=["artifact:analysis_cohort", "age"],
+        expected_outputs=["table:robustness_matrix"],
+        method="robustness_sensitivity",
+    )
+    raw_contracts: dict[str, object] = {
+        "schema_version": "easyicu.resolved_raw_input_contracts/1",
+        "authority_scope": (
+            "host_verified_physical_representation_and_domain_constraints"
+        ),
+        "scientific_ownership": "Planner retains scientific decisions",
+        "contracts": {
+            "age": {
+                "column": "age",
+                "analysis_plausibility_range": {
+                    "minimum": 0.0,
+                    "maximum": 100.0,
+                },
+                "plausibility_policy": {
+                    "range_policy": "flag_only",
+                    "out_of_range_action": "retain_and_flag",
+                },
+            }
+        },
+    }
+    contracts_sha256 = hashlib.sha256(
+        json.dumps(
+            raw_contracts,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    raw_contracts["contracts_sha256"] = contracts_sha256
+    scope = FlagOnlyPlausibilityScope(
+        step_id=step.step_id,
+        expected_columns=("age",),
+        source_contracts_sha256=contracts_sha256,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    run_dir = tmp_path / "run"
+    out_dir = run_dir / "steps" / step.step_id / "outputs"
+    out_dir.mkdir(parents=True)
+    cohort_path = run_dir / "cohort.parquet"
+    universe_path = run_dir / "universe.parquet"
+    pd.DataFrame({"age": [20.0, 50.0]}).to_parquet(cohort_path, index=False)
+    pd.DataFrame({"age": [-1.0, 50.0, 101.0]}).to_parquet(
+        universe_path,
+        index=False,
+    )
+    resolved_path = run_dir / "resolved_inputs.json"
+    resolved_path.write_text(
+        json.dumps(
+            {
+                "step_id": step.step_id,
+                "raw_input_contracts": raw_contracts,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
+    monkeypatch.setenv("EASYICU_UNIVERSE_PARQUET", str(universe_path))
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(resolved_path))
+
+    def _write_robustness_summary() -> None:
+        (out_dir / "step_summary.json").write_text(
+            json.dumps({"status": "ok"}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        robustness_module,
+        "_run_robustness_preflight_from_env",
+        _write_robustness_summary,
+    )
+    code = robustness_sensitivity_preflight_code(
+        step,
+        plausibility_scope=scope,
+    )
+    assert (
+        flag_only_plausibility_obligation_findings(
+            None,
+            script_text=code,
+            step=step,
+            scope=scope,
+        )
+        == []
+    )
+
+    exec(compile(code, "<robustness-preflight>", "exec"), {})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text("utf-8"))
+    receipt = summary["plausibility_audit"]["age"]
+    assert set(summary["plausibility_audit"]) == {"age"}
+    assert receipt["policy"] == "retain_and_flag"
+    assert receipt["below_minimum_n"] == 1
+    assert receipt["above_maximum_n"] == 1
+    assert receipt["out_of_range_n"] == 2
+    # The denominator is what separates "2 of many were out of range" from a
+    # column that was never observed and reports 0 for both.
+    assert receipt["compared_n"] >= receipt["out_of_range_n"]
+    assert receipt["compared_n"] > 0
+    assert (
+        plausibility_audit_receipt_findings(
+            step_summary=summary,
+            step=step,
+            script_text=code,
+            scope=scope,
+        )
+        == []
+    )
+
+
+def test_preflight_scope_requires_its_exact_step() -> None:
+    step = AnalysisStep(
+        step_id="06_robustness_sensitivity",
+        intent="Replay robustness.",
+        method="robustness_sensitivity",
+    )
+    scope = FlagOnlyPlausibilityScope(
+        step_id=step.step_id,
+        expected_columns=("age",),
+        source_contracts_sha256="0" * 64,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    with pytest.raises(ValueError, match="requires an exact analysis step"):
+        robustness_sensitivity_preflight_code(plausibility_scope=scope)
 
 
 def test_preflight_emits_renderer_contract_and_nonindependent_scalar_outcomes(
@@ -559,7 +712,8 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
     source_outputs.mkdir(parents=True)
     source_script = source_step / "analysis.py"
     source_script.write_text(
-        textwrap.dedent("""
+        textwrap.dedent(
+            """
             import json, math, os
             from pathlib import Path
             import pandas as pd
@@ -643,13 +797,22 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
                 "primary_ci_high": primary_or + 0.1,
                 "primary_model_n": n_full,
                 "model_contracts": contracts,
+                # Named the way a producer names it. This fixture used to
+                # publish the companion only under `output_files.coefficients`
+                # -- a key the reader never consulted -- and passed anyway,
+                # because the reader assumed a fixed `coefficients.csv` when no
+                # companion was declared. No recorded run has ever written a
+                # file by that name, so the assumption resolved to nothing in
+                # production while this test stayed green.
+                "coefficient_table": "coefficients.csv",
                 "output_files": {
                     "coefficients": "coefficients.csv",
                     "model_summaries": "model_summaries.csv",
                 },
             }
             (out / "step_summary.json").write_text(json.dumps(summary))
-            """),
+            """
+        ),
         encoding="utf-8",
     )
     base_env = os.environ.copy()
@@ -841,7 +1004,16 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
     assert all(item["status"] == "ok" for item in replay_index["variants"])
 
 
-def _write_structured_source_authority(run_dir: Path):
+def _write_structured_source_authority(
+    run_dir: Path,
+    *,
+    coefficient_filename: str = "coefficients.csv",
+    diagnostic_reference: object | None = None,
+    include_primary_model_id: bool = True,
+    include_headline: bool = True,
+    model_n: int = 100,
+    analysis_covariates: list[str] | None = None,
+):
     step_id = "01_primary_model"
     step_dir = run_dir / "steps" / step_id
     outputs_dir = step_dir / "outputs"
@@ -849,7 +1021,7 @@ def _write_structured_source_authority(run_dir: Path):
     outputs_dir.mkdir(parents=True)
     evidence_dir.mkdir(parents=True)
     script_path = step_dir / "analysis.py"
-    coefficient_path = outputs_dir / "coefficients.csv"
+    coefficient_path = outputs_dir / coefficient_filename
     script_path.write_text("print('registered primary model')\n", encoding="utf-8")
     coefficient_path.write_text(
         "model_id,term,term_role,source_variable,odds_ratio,ci_low,ci_high,std_error\n"
@@ -858,12 +1030,8 @@ def _write_structured_source_authority(run_dir: Path):
     )
     summary = {
         "status": "ok",
-        "primary_model_id": "primary",
         "primary_exposure": "exposure",
-        "primary_or": 1.4,
-        "primary_ci_low": 1.1,
-        "primary_ci_high": 1.8,
-        "primary_model_n": 100,
+        "primary_model_n": model_n,
         "model_contracts": [
             {
                 "model_id": "primary",
@@ -872,21 +1040,50 @@ def _write_structured_source_authority(run_dir: Path):
                 "exposure_source": "exposure",
                 "exposure_expression": "exposure",
                 "analysis_set": "source_aware",
-                "n": 100,
-                "event_n": 20,
+                "n": model_n,
+                "event_n": min(20, model_n),
                 "fit_status": "fitted",
                 "converged": True,
                 "fit_method": "registered_test_model",
             }
         ],
     }
+    if analysis_covariates is not None:
+        summary["analysis_definition"] = {
+            "exposure": "exposure",
+            "outcome": "outcome",
+            "covariates": list(analysis_covariates),
+        }
+    if include_headline:
+        summary.update(
+            {
+                "primary_or": 1.4,
+                "primary_ci_low": 1.1,
+                "primary_ci_high": 1.8,
+            }
+        )
+    if include_primary_model_id:
+        summary["primary_model_id"] = "primary"
+    if diagnostic_reference is not None:
+        summary["diagnostic_companions"] = {
+            "coefficients": diagnostic_reference,
+        }
+    else:
+        summary["diagnostic_companions"] = {
+            "coefficients": coefficient_filename,
+        }
+    # A summary that names its companion badly is refused outright, so this
+    # sibling never rescues the malformed case above -- it is here so that the
+    # ordinary fixture declares the file the way a producer does, instead of
+    # relying on a default filename no run has ever written.
+    summary["coefficient_table"] = coefficient_filename
     summary_path = outputs_dir / "step_summary.json"
     summary_path.write_text(json.dumps(summary), encoding="utf-8")
     script_sha = hashlib.sha256(script_path.read_bytes()).hexdigest()
     coefficient_sha = hashlib.sha256(coefficient_path.read_bytes()).hexdigest()
     summary_sha = hashlib.sha256(summary_path.read_bytes()).hexdigest()
     code_copy = evidence_dir / "code_primary__analysis.py"
-    coefficient_copy = evidence_dir / "table_coefficients__coefficients.csv"
+    coefficient_copy = evidence_dir / f"table_coefficients__{coefficient_filename}"
     summary_copy = evidence_dir / "stat_primary__step_summary.json"
     code_copy.write_bytes(script_path.read_bytes())
     coefficient_copy.write_bytes(coefficient_path.read_bytes())
@@ -979,6 +1176,171 @@ def test_structured_source_uses_latest_step_record_and_registered_code_sha(
     )
 
     script_path.write_text("print('mutated after execution')\n", encoding="utf-8")
+    assert (
+        _find_structured_primary_model_source(
+            records=[record],
+            run_dir=run_dir,
+            evidence_records=evidence,
+        )
+        is None
+    )
+
+
+def test_structured_source_uses_sealed_diagnostic_coefficient_companion(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _find_structured_primary_model_source,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, _script_path = _write_structured_source_authority(
+        run_dir,
+        coefficient_filename="adjusted_association_coefficients.csv",
+        include_primary_model_id=False,
+    )
+
+    source = _find_structured_primary_model_source(
+        records=[record],
+        run_dir=run_dir,
+        evidence_records=evidence,
+    )
+
+    assert source is not None
+    assert source["coefficient_path"].name == "adjusted_association_coefficients.csv"
+    assert source["primary_contract"]["model_id"] == "primary"
+
+
+def test_structured_primary_allows_table_only_headline_authority(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _find_structured_primary_model_source,
+        _structured_primary_effect_payload,
+    )
+    from easyicu.research_agent.robustness.primary_effect import (
+        _extract_primary_effect_payload_from_records,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, _script_path = _write_structured_source_authority(
+        run_dir,
+        coefficient_filename="adjusted_association_coefficients.csv",
+        include_primary_model_id=False,
+        include_headline=False,
+    )
+    source = _find_structured_primary_model_source(
+        records=[record],
+        run_dir=run_dir,
+        evidence_records=evidence,
+    )
+    assert source is not None
+    reported = _extract_primary_effect_payload_from_records(
+        [record],
+        preferred_predictor="exposure",
+    )
+
+    payload, errors = _structured_primary_effect_payload(
+        source=source,
+        reported_payload=reported,
+        preferred_predictor="exposure",
+    )
+
+    assert errors == []
+    assert payload is not None
+    assert payload["primary_or"] == 1.4
+    assert payload["sample_size"] == 100
+
+
+def test_complete_case_equivalence_requires_identical_locked_membership(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _find_structured_primary_model_source,
+        _verified_complete_case_equivalence,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, _script_path = _write_structured_source_authority(
+        run_dir,
+        coefficient_filename="adjusted_association_coefficients.csv",
+        include_primary_model_id=False,
+        include_headline=False,
+        model_n=4,
+        analysis_covariates=["age"],
+    )
+    source = _find_structured_primary_model_source(
+        records=[record],
+        run_dir=run_dir,
+        evidence_records=evidence,
+    )
+    assert source is not None
+    spec = RobustnessSpec(
+        spec_id="complete_case",
+        axis="missing",
+        description="Use complete cases for every primary model input.",
+        missing_override={
+            "strategy": "complete_case",
+            "variables": ["exposure", "outcome", "age"],
+        },
+    )
+    complete = pd.DataFrame(
+        {
+            "exposure": [0.0, 1.0, 0.0, 1.0],
+            "outcome": [0, 1, 0, 1],
+            "age": [50.0, 60.0, 70.0, 80.0],
+        }
+    )
+
+    row, coefficient_rows, contract, error = _verified_complete_case_equivalence(
+        spec=spec,
+        source=source,
+        primary_data=complete,
+    )
+
+    assert error is None
+    assert row.converged is True
+    assert row.n == 4
+    assert contract is not None
+    assert contract["analysis_set"] == "complete_case"
+    assert contract["source_analysis_set"] == "source_aware"
+    assert contract["replay_mode"] == "verified_complete_case_equivalence"
+    assert coefficient_rows[0]["analysis_set"] == "complete_case"
+
+    incomplete = complete.copy()
+    incomplete.loc[0, "age"] = None
+    blocked, _rows, _contract, error = _verified_complete_case_equivalence(
+        spec=spec,
+        source=source,
+        primary_data=incomplete,
+    )
+    assert blocked.converged is False
+    assert "complete_case_n=3, model_n=4" in str(error)
+
+
+@pytest.mark.parametrize(
+    "diagnostic_reference",
+    [
+        "../coefficients.csv",
+        "/tmp/coefficients.csv",
+        "coefficients.json",
+        17,
+    ],
+)
+def test_structured_source_rejects_malformed_diagnostic_companion_path(
+    tmp_path: Path,
+    diagnostic_reference: object,
+) -> None:
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _find_structured_primary_model_source,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, _script_path = _write_structured_source_authority(
+        run_dir,
+        diagnostic_reference=diagnostic_reference,
+    )
+
     assert (
         _find_structured_primary_model_source(
             records=[record],
@@ -1217,7 +1579,8 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
     source_outputs.mkdir(parents=True)
     source_script = source_dir / "analysis.py"
     source_script.write_text(
-        textwrap.dedent("""
+        textwrap.dedent(
+            """
             import json, os
             from pathlib import Path
             import pandas as pd
@@ -1250,9 +1613,15 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
             }]).to_csv(out / "coefficients.csv", index=False)
             (out / "step_summary.json").write_text(json.dumps({
                 "primary_model_id": "primary",
+                # The decoy is wrong about ONE thing -- it ignores the locked
+                # membership -- so it must be well formed everywhere else, or
+                # the replay refuses it for the wrong reason and this test
+                # stops testing membership.
+                "coefficient_table": "coefficients.csv",
                 "model_contracts": [contract],
             }))
-            """),
+            """
+        ),
         encoding="utf-8",
     )
     primary_contract = {
@@ -1305,3 +1674,111 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
     assert replay["index"]["status"] == "blocked"
     assert replay["row"].converged is False
     assert "model_n=4, input_n=2" in replay["error"]
+
+
+def test_exact_replay_uses_declared_coefficient_companion_without_primary_id(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _replay_primary_model_for_cohort,
+    )
+
+    source_dir = tmp_path / "source_step"
+    source_outputs = source_dir / "outputs"
+    source_outputs.mkdir(parents=True)
+    source_script = source_dir / "analysis.py"
+    source_script.write_text(
+        textwrap.dedent(
+            """
+            import json, os
+            from pathlib import Path
+            import pandas as pd
+
+            frame = pd.read_parquet(os.environ["COHORT_PARQUET"])
+            out = Path(os.environ["STEP_OUT_DIR"])
+            out.mkdir(parents=True, exist_ok=True)
+            contract = {
+                "model_id": "primary",
+                "exposure_source": "exposure",
+                "exposure_expression": "exposure",
+                "exposure_role": "primary",
+                "analysis_role": "primary",
+                "analysis_set": "source_aware",
+                "n": int(len(frame)),
+                "event_n": int(frame["outcome"].sum()),
+                "fit_status": "fitted",
+                "converged": True,
+                "fit_method": "registered_test_model",
+            }
+            coefficient_name = "adjusted_association_coefficients.csv"
+            pd.DataFrame([{
+                "model_id": "primary",
+                "term": "exposure",
+                "term_role": "exposure",
+                "source_variable": "exposure",
+                "odds_ratio": 1.5,
+                "ci_low": 1.1,
+                "ci_high": 2.0,
+            }]).to_csv(out / coefficient_name, index=False)
+            (out / "step_summary.json").write_text(json.dumps({
+                "model_contracts": [contract],
+                "diagnostic_companions": {"coefficients": coefficient_name},
+            }))
+            """
+        ),
+        encoding="utf-8",
+    )
+    primary_contract = {
+        "model_id": "primary",
+        "exposure_source": "exposure",
+        "exposure_expression": "exposure",
+        "exposure_role": "primary",
+        "analysis_role": "primary",
+        "analysis_set": "source_aware",
+        "n": 4,
+        "event_n": 2,
+        "fit_status": "fitted",
+        "converged": True,
+        "fit_method": "registered_test_model",
+    }
+    source = {
+        "primary_contract": primary_contract,
+        "script_path": source_script,
+        "step_id": "01_primary_model",
+        "script_sha256": hashlib.sha256(source_script.read_bytes()).hexdigest(),
+        "outputs_dir": source_outputs,
+    }
+    spec = RobustnessSpec(
+        spec_id="older_adults",
+        axis="cohort",
+        description="Restrict the replay to two older adults.",
+        cohort_override=CohortDefinition(
+            name="older_adults",
+            inclusion=[_predicate("age", ">=", 50)],
+        ),
+    )
+    data = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "age": [20, 30, 60, 70],
+            "exposure": [0.0, 1.0, 0.0, 1.0],
+            "outcome": [0, 1, 0, 1],
+        }
+    )
+
+    replay = _replay_primary_model_for_cohort(
+        spec=spec,
+        source=source,
+        data=data,
+        context=SimpleNamespace(),
+        out_dir=tmp_path / "robustness_outputs",
+    )
+
+    assert replay["index"]["status"] == "ok"
+    assert replay["index"]["input_n"] == 2
+    assert replay["row"].converged is True
+    assert replay["row"].n == 2
+    assert replay["row"].point_estimate == 1.5
+    assert replay["contracts"][0]["model_id"] == "primary"

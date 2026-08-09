@@ -5,6 +5,32 @@ on:
   pull_request:
 
 jobs:
+  portability:
+    name: portability (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install EasyICU and portability test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,webapp]"
+
+      - name: Run conversion and extraction portability regressions
+        run: |
+          pytest -q tests/test_arrow_converter.py tests/test_converter_optimizations.py tests/test_data_converter_hirid.py tests/test_derived_concept_callbacks.py tests/test_concept_outcome_fail_closed.py tests/test_extract_chunk_cap.py tests/test_extract_module_grouping.py
+          pytest -q tests/test_cross_layer_safety_regressions.py -k "p0_2_known_source_end_before_start_is_quarantined or p0_2_corrupt_duration_fails_closed"
+
   test:
     name: tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -15,6 +41,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # The full-six release sealer proves that runtime commits descend
+          # from the minimum harmonized-semantics commit.  A depth-1 checkout
+          # cannot make that fail-closed ancestry decision.
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -30,6 +61,22 @@ jobs:
       - name: Run lint gate
         run: ruff check src tests
 
+      - name: Enforce architecture and dependency boundaries
+        run: |
+          # Deptry's configured DEP002 exception means this proves missing,
+          # transitive and misplaced dependency hygiene; intentionally unused
+          # optional/dev declarations remain outside this gate.
+          lint-imports --no-cache
+          python -m deptry src/easyicu --no-ansi
+
+      - name: Report high-confidence dead-code candidates
+        run: |
+          # Vulture exit code 3 means it found reportable candidates. This is
+          # intentionally report-only until each dynamic registration is
+          # reviewed; configuration/runtime failures still fail the job.
+          python -m vulture src/easyicu --min-confidence 100 --sort-by-size \
+            || test "$?" -eq 3
+
       - name: Run test suite
         run: |
           # Exercise fail-closed backend selection without development overrides.
@@ -38,3 +85,51 @@ jobs:
           EASYICU_TEST_RUNNER_KIND=subprocess \
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
             pytest -q --ignore=tests/research_agent/test_runner.py
+
+  packaging:
+    name: wheel + sdist install
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build pytest
+
+      # An editable install cannot catch missing package-data: the files are
+      # still on disk either way. Only a real wheel proves that the Docker
+      # runner build context DockerRunner documents actually ships.
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: Install the built wheel into a clean environment
+        run: |
+          python -m venv /tmp/clean-env
+          /tmp/clean-env/bin/pip install --upgrade pip
+          /tmp/clean-env/bin/pip install dist/*.whl
+          /tmp/clean-env/bin/pip check
+
+      - name: Verify shipped package data
+        run: |
+          /tmp/clean-env/bin/python - <<'PY'
+          from importlib.resources import files
+          root = files("easyicu.research_agent") / "runner_image"
+          names = sorted(p.name for p in root.iterdir())
+          for required in ("Dockerfile", "requirements.lock", "README.md"):
+              assert required in names, f"{required} missing from the wheel: {names}"
+          print("runner_image ships:", ", ".join(names))
+          PY
+
+      - name: Install the sdist into a clean environment
+        run: |
+          python -m venv /tmp/sdist-env
+          /tmp/sdist-env/bin/pip install --upgrade pip
+          /tmp/sdist-env/bin/pip install dist/*.tar.gz
+          /tmp/sdist-env/bin/pip check

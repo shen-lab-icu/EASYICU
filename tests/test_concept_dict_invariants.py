@@ -101,15 +101,9 @@ def test_incompatible_unit_mix_has_a_conversion(concept_dict):
     diverging source converts* (etco2 does exactly this, via convert_unit on AUMC).
     What is forbidden is declaring the mix and converting nothing.
     """
-    KNOWN_UNRESOLVED = {
-        # d_dimer pools ng/mL (DDU) with 'ng/mL FEU' (~2x) *within* MIMIC itemids
-        # 50915/51196. FEU/DDU is calibration-dependent, so a constant factor would
-        # be wrong; this needs a valueuom-aware callback. Tracked, not silently ok.
-        "d_dimer",
-    }
     violations = []
     for name, block in concept_dict.items():
-        if not isinstance(block, dict) or name in KNOWN_UNRESOLVED:
+        if not isinstance(block, dict):
             continue
         units = block.get("unit")
         if not isinstance(units, list) or len(units) < 2:
@@ -121,6 +115,55 @@ def test_incompatible_unit_mix_has_a_conversion(concept_dict):
         "these concepts pool incompatible scales with nothing converting them:\n  "
         + "\n  ".join(violations)
     )
+
+
+def test_ambiguous_cross_database_mappings_are_not_exported(concept_dict):
+    """Semantic uncertainty must become explicit unavailability, not plausible data."""
+    assert "aumc" not in concept_dict["adh_rate"]["sources"]
+    assert "aumc" not in concept_dict["d_dimer"]["sources"]
+    assert "hirid" not in concept_dict["neut"]["sources"]
+    assert "hirid" not in concept_dict["lymph"]["sources"]
+
+    for dataset in ("miiv", "mimic", "mimic_demo"):
+        source = concept_dict["d_dimer"]["sources"][dataset][0]
+        assert source["callback"] == "convert_unit(set_val(NA), 'ng/mL', 'FEU')"
+
+
+def test_aumc_hba1c_scales_are_harmonised_before_pooling(concept_dict):
+    sources = concept_dict["hba1c"]["sources"]["aumc"]
+    by_itemid = {source["ids"]: source for source in sources}
+
+    assert set(by_itemid) == {11812, 16166}
+    assert by_itemid[11812]["callback"] == (
+        "convert_unit(binary_op(`*`, 1), '%', 'Geen|%')"
+    )
+    callback = by_itemid[16166]["callback"]
+    assert "binary_op(`*`, 0.09148)" in callback
+    assert "binary_op(`+`, 2.152)" in callback
+    assert concept_dict["hba1c"]["unit"] == "%"
+    assert concept_dict["hba1c"]["min"] == 2
+    assert concept_dict["hba1c"]["max"] == 25
+
+
+def test_hirid_mchc_is_converted_from_g_per_litre_to_g_per_dl(concept_dict):
+    source = concept_dict["mchc"]["sources"]["hirid"][0]
+
+    assert source["ids"] == 24000170
+    assert source["callback"] == (
+        "convert_unit(binary_op(`*`, 0.1), 'g/dL')"
+    )
+
+
+def test_vasopressor_durations_are_non_negative_hours(concept_dict):
+    """Export one explicit duration contract across all databases.
+
+    Source systems occasionally contain end times before start times.  Without
+    a lower bound those records survive as plausible numeric exposures, while
+    the missing unit leaves downstream clients unable to compare databases.
+    """
+    for name in ("dobu_dur", "dopa_dur", "epi_dur", "norepi_dur"):
+        assert concept_dict[name]["unit"] == "hours"
+        assert concept_dict[name]["min"] == 0
 
 
 def test_declared_component_concepts_exist(concept_dict):

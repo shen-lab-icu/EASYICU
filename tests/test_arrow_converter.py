@@ -147,6 +147,34 @@ def test_mixed_type_column_preserved_as_string(tmp_path, monkeypatch):
     assert tbl.num_rows == 120
 
 
+def test_aumc_latin1_arrow_path_keeps_numericitems_value_numeric(tmp_path):
+    """Latin-1 is not a reason to send AUMC's 80GB table through pandas."""
+
+    csv = tmp_path / "numericitems.csv"
+    csv.write_bytes(
+        (
+            "admissionid,itemid,item,value,unit,registeredby\n"
+            "1,6640,Température,38.5,°C,Système\n"
+        ).encode("latin1")
+    )
+    converter = _make_converter(tmp_path, database="aumc")
+    shard_dir = tmp_path / "numericitems"
+    shard_dir.mkdir()
+
+    assert converter._arrow_csv_enabled(csv)
+    result = converter._convert_with_row_partitioning_arrow(
+        csv,
+        shard_dir,
+        {"file": csv.name, "status": "PENDING", "row_count": 0, "shards": 0},
+    )
+
+    assert result["status"] == "completed"
+    table = pq.read_table(shard_dir / "1.parquet")
+    assert table.column("item").to_pylist() == ["Température"]
+    assert table.column("value").to_pylist() == [38.5]
+    assert pa.types.is_floating(table.column("value").type)
+
+
 # ---------------------------------------------------------------------------
 # Threaded batch iterator: must not deadlock when the consumer raises
 # while the producer queue is full.

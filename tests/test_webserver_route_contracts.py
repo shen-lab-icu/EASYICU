@@ -13,6 +13,12 @@ from easyicu.webserver.patient_drilldown import eligibility as patient_eligibili
 from easyicu.webserver.routes.agent import artifact_router as agent_artifact_router
 from easyicu.webserver.routes.agent import control_router as agent_control_router
 from easyicu.webserver.routes.copilot import router as copilot_router
+from easyicu.webserver.routes.demo_sources import (
+    catalog_router as demo_source_catalog_router,
+)
+from easyicu.webserver.routes.demo_sources import (
+    submission_router as demo_source_submission_router,
+)
 from easyicu.webserver.routes.extraction import router as extraction_router
 from easyicu.webserver.routes.guided import router as guided_router
 from easyicu.webserver.routes.ideas import router as ideas_router
@@ -20,6 +26,7 @@ from easyicu.webserver.routes.jobs import lifecycle_router as job_lifecycle_rout
 from easyicu.webserver.routes.jobs import submission_router as job_submission_router
 from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
+from easyicu.webserver.routes.pi_copilot import router as pi_copilot_router
 from easyicu.webserver.routes.reviews import router as reviews_router
 from easyicu.webserver.routes.study_contexts import router as study_contexts_router
 from easyicu.webserver.routes.system import router as system_router
@@ -71,10 +78,58 @@ EXPECTED_GUIDED_ROUTES = [
 ]
 
 EXPECTED_COPILOT_ROUTES = [
+    ("POST", "/api/copilot/study-intent", "post_copilot_study_intent"),
     ("POST", "/api/copilot/sessions", "post_copilot_session"),
     ("POST", "/api/copilot/message", "post_copilot_message"),
     ("POST", "/api/copilot/action", "post_copilot_action"),
     ("POST", "/api/copilot/sessions/list", "post_copilot_sessions_list"),
+]
+
+EXPECTED_PI_COPILOT_ROUTES = [
+    ("GET", "/api/copilot/pi/status", "get_pi_copilot_status"),
+    (
+        "POST",
+        "/api/copilot/pi/provider-config",
+        "post_pi_copilot_provider_config",
+    ),
+    ("POST", "/api/copilot/pi/sessions", "post_pi_copilot_session"),
+    (
+        "POST",
+        "/api/copilot/pi/projects/initialize",
+        "post_pi_copilot_project_initialize",
+    ),
+    (
+        "GET",
+        "/api/copilot/pi/projects/{project_id}/workspace/file",
+        "get_pi_copilot_workspace_file",
+    ),
+    (
+        "GET",
+        "/api/copilot/pi/projects/{project_id}/workspace/preview",
+        "get_pi_copilot_workspace_preview",
+    ),
+    (
+        "GET",
+        "/api/copilot/pi/projects/{project_id}/runs/{run_id}/artifacts/{artifact_name}",
+        "get_pi_copilot_research_artifact",
+    ),
+    ("GET", "/api/copilot/pi/sessions", "get_pi_copilot_sessions"),
+    ("GET", "/api/copilot/pi/sessions/{session_id}", "get_pi_copilot_session"),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/message",
+        "post_pi_copilot_message",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/rebind",
+        "post_pi_copilot_rebind",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/abort",
+        "post_pi_copilot_abort",
+    ),
 ]
 
 EXPECTED_PAGE_GUIDE_ROUTES = [
@@ -149,6 +204,7 @@ EXPECTED_REVIEW_ROUTES = [
         "/api/patient-review/table-preview",
         "patient_review_table_preview",
     ),
+    ("POST", "/api/patient-review/feature", "patient_review_feature"),
     ("POST", "/api/patient-review/sources", "patient_review_sources"),
     ("POST", "/api/cohort-review/summary", "cohort_review_summary"),
     ("POST", "/api/crossdb-review/summary", "crossdb_review_summary"),
@@ -179,6 +235,18 @@ EXPECTED_EXTRACTION_ROUTES = [
         "POST",
         "/api/extraction/filter-preview",
         "extraction_filter_preview",
+    ),
+]
+
+EXPECTED_DEMO_SOURCE_CATALOG_ROUTES = [
+    ("GET", "/api/demo-sources", "get_demo_sources"),
+]
+
+EXPECTED_DEMO_SOURCE_SUBMISSION_ROUTES = [
+    (
+        "POST",
+        "/api/jobs/demo-source-prepare",
+        "jobs_demo_source_prepare",
     ),
 ]
 
@@ -321,6 +389,10 @@ def test_copilot_route_method_path_and_operation_name_snapshot() -> None:
     _assert_router_contract(copilot_router, EXPECTED_COPILOT_ROUTES)
 
 
+def test_pi_copilot_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(pi_copilot_router, EXPECTED_PI_COPILOT_ROUTES)
+
+
 def test_page_guide_route_method_path_and_operation_name_snapshot() -> None:
     _assert_router_contract(
         page_guide_router,
@@ -350,6 +422,15 @@ def test_review_route_method_path_and_operation_name_snapshot() -> None:
 
 def test_extraction_route_method_path_and_operation_name_snapshot() -> None:
     _assert_router_contract(extraction_router, EXPECTED_EXTRACTION_ROUTES)
+
+
+def test_demo_source_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(
+        demo_source_catalog_router, EXPECTED_DEMO_SOURCE_CATALOG_ROUTES
+    )
+    _assert_router_contract(
+        demo_source_submission_router, EXPECTED_DEMO_SOURCE_SUBMISSION_ROUTES
+    )
 
 
 def test_job_submission_route_method_path_and_operation_name_snapshot() -> None:
@@ -391,6 +472,9 @@ def test_route_owner_boundaries() -> None:
     extraction_source = (package_root / "routes" / "extraction.py").read_text(
         encoding="utf-8"
     )
+    demo_source = (package_root / "routes" / "demo_sources.py").read_text(
+        encoding="utf-8"
+    )
     jobs_source = (package_root / "routes" / "jobs.py").read_text(encoding="utf-8")
     agent_source = (package_root / "routes" / "agent.py").read_text(encoding="utf-8")
     study_context_source = (package_root / "routes" / "study_contexts.py").read_text(
@@ -410,6 +494,8 @@ def test_route_owner_boundaries() -> None:
     assert "/api/cohort-review/" not in app_source
     assert "/api/crossdb-review/" not in app_source
     assert "/api/extraction/" not in app_source
+    assert "/api/demo-sources" not in app_source
+    assert '"/api/jobs/demo-source-prepare"' not in app_source
     assert '"/api/jobs/convert"' not in app_source
     assert '"/api/jobs/extract"' not in app_source
     assert '"/api/jobs/crossdb-raw-distribution"' not in app_source
@@ -451,6 +537,10 @@ def test_route_owner_boundaries() -> None:
     assert "-review/" not in extraction_source
     assert "/api/workspaces/" not in extraction_source
     assert "/api/jobs/" not in extraction_source
+    assert "/api/demo-sources" in demo_source
+    assert '"/api/jobs/demo-source-prepare"' in demo_source
+    assert '"/api/jobs/convert"' not in demo_source
+    assert '"/api/jobs/{job_id}' not in demo_source
     assert '"/api/jobs/convert"' in jobs_source
     assert '"/api/jobs/extract"' in jobs_source
     assert '"/api/jobs/crossdb-raw-distribution"' in jobs_source
@@ -476,6 +566,7 @@ def test_route_owner_boundaries() -> None:
     assert "easyicu.webserver.app" not in workspaces_source
     assert "easyicu.webserver.app" not in reviews_source
     assert "easyicu.webserver.app" not in extraction_source
+    assert "easyicu.webserver.app" not in demo_source
     assert "easyicu.webserver.app" not in jobs_source
     assert "easyicu.webserver.app" not in agent_source
     assert "easyicu.webserver.app" not in study_context_source
@@ -516,10 +607,13 @@ def test_root_static_mount_stays_last() -> None:
         < _router_registration_index(extraction_router)
         < _router_registration_index(workspaces_router)
         < _router_registration_index(study_contexts_router)
+        < _router_registration_index(demo_source_catalog_router)
         < _router_registration_index(job_submission_router)
+        < _router_registration_index(demo_source_submission_router)
         < _router_registration_index(agent_control_router)
         < _router_registration_index(guided_router)
         < _router_registration_index(copilot_router)
+        < _router_registration_index(pi_copilot_router)
         < _router_registration_index(page_guide_router)
         < _router_registration_index(ideas_router)
         < _router_registration_index(agent_artifact_router)

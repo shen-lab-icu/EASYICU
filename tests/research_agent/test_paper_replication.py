@@ -93,7 +93,7 @@ def test_pipeline_reproduce_paper_writes_replication_artefacts(
     }
 
 
-def test_pipeline_reproduce_paper_emits_showcase_manuscript_when_requested(
+def test_manuscript_mode_does_not_override_an_unreportable_scientific_capability(
     ra, synthetic_cohort, tmp_path: Path
 ):
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
@@ -106,11 +106,10 @@ def test_pipeline_reproduce_paper_emits_showcase_manuscript_when_requested(
 
     run_dir = Path(result.workdir)
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["readiness"]["showcase_manuscript_ready"] is True
-    showcase = (run_dir / "manuscript_ready.md").read_text(encoding="utf-8")
-    assert "EasyICU-based replication manuscript" in showcase
-    assert "replication study" in showcase.lower()
-    assert "original paper reported" not in showcase.lower() or "original paper" in showcase.lower()
+    readiness = manifest["readiness"]
+    assert readiness["scientific_capability_claim_ceiling_allows_reportable"] is False
+    assert readiness["showcase_manuscript_ready"] is False
+    assert not (run_dir / "manuscript_ready.md").exists()
 
 
 def test_pipeline_reproduce_paper_fail_closed_for_unsupported_source(
