@@ -44,6 +44,18 @@ def test_sepsis3_is_the_cohort_not_the_outcome():
     assert values["outcome"] == "death"
     assert values["exposure"] == "lact"
     assert values["analysis_family"] == "prediction"
+    readings = {concept for concept, _phrase in study_intent._match_concept(result["question"])}
+    assert "sep3" in readings
+    assert "sep3_sofa2" not in readings
+
+
+def test_sofa2_sepsis_sensitivity_requires_an_explicit_sofa2_phrase():
+    result = study_intent.deterministic_intent(
+        "In an explicit SOFA-2 sepsis sensitivity analysis, describe mortality."
+    )
+
+    readings = {concept for concept, _phrase in study_intent._match_concept(result["question"])}
+    assert "sep3_sofa2" in readings
 
 
 def test_length_of_stay_is_an_outcome_not_a_population():

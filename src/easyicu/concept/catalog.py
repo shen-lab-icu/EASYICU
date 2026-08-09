@@ -195,7 +195,7 @@ CONCEPT_DICTIONARY = {
 
     # Sepsis 诊断
     'sep3_sofa1': ('Sepsis-3 (SOFA-1 based)', 'Sepsis-3诊断 (基于传统SOFA)', 'boolean'),
-    'sep3_sofa2': ('Sepsis-3 (SOFA-2 based)', 'Sepsis-3诊断 (基于SOFA-2, 2025新标准)', 'boolean'),
+    'sep3_sofa2': ('Experimental Sepsis sensitivity (SOFA-2 based)', '实验性脓毒症敏感性定义（基于SOFA-2）', 'boolean'),
     'susp_inf': ('Suspected Infection (ICD or Abx+Culture timing)', '疑似感染 (ICD诊断码或抗生素+培养时间窗)', 'boolean'),
     'infection_icd': ('ICD Infection Diagnosis (eICU only, Angus 2001)', 'ICD感染诊断 (仅eICU, Angus标准)', 'boolean'),
 
@@ -366,11 +366,11 @@ CONCEPT_DESCRIPTIONS = {
     'sofa2_coag': ('Coagulation: platelet count with updated thresholds (≤50→4, ≤80→3, ≤100→2, ≤150→1)', '凝血系统：基于血小板计数，使用更新的阈值（≤50→4分，≤80→3分，≤100→2分，≤150→1分）'),
     'sofa2_liver': ('Liver: bilirubin with relaxed 1-point threshold (>1.2 mg/dL instead of >1.9)', '肝脏：基于胆红素，1分阈值放宽（>1.2 mg/dL，原为>1.9）'),
     'sofa2_cardio': ('Cardiovascular: combined NE+Epi dose, other vasopressors/inotropes, or mechanical circulatory support (IABP/LVAD/Impella)', '心血管：基于去甲肾+肾上腺素联合剂量、其他血管活性药物或机械循环支持'),
-    'sofa2_cns': ('Neurological: GCS score, with delirium (CAM-ICU+ or treatment) adding 1 point if GCS=15', '神经系统：基于GCS评分，若GCS=15但有谵妄（CAM-ICU阳性或接受治疗）则加1分'),
+    'sofa2_cns': ('Neurological: GCS score; drugs required to treat delirium add 1 point if GCS=15', '神经系统：基于GCS评分；GCS=15时，需使用药物治疗谵妄才计1分'),
     'sofa2_renal': ('Renal: creatinine and urine output (6h/12h/24h windows), score 4 for RRT or meeting RRT criteria', '肾脏：基于肌酐和尿量（6h/12h/24h窗口），接受RRT或满足RRT标准则为4分'),
 
     # Sepsis
-    'sep3_sofa2': ('Sepsis-3 diagnosis: suspected infection + SOFA-2 ≥2 point increase from baseline', '基于SOFA-2的Sepsis-3诊断：疑似感染 + SOFA-2较基线升高≥2分'),
+    'sep3_sofa2': ('Experimental sensitivity phenotype: suspected infection + SOFA-2 ≥2 point increase; not canonical Sepsis-3', '实验性敏感性定义：疑似感染 + SOFA-2较基线升高≥2分；并非标准Sepsis-3定义'),
     'sep3_sofa1': ('Sepsis-3 diagnosis: suspected infection + traditional SOFA ≥2 point increase', '基于传统SOFA的Sepsis-3诊断：疑似感染 + SOFA较基线升高≥2分'),
     'susp_inf': ('Suspected infection: (1) ICD infection diagnosis codes (eICU only) OR (2) antibiotics started within 72h of culture OR culture within 24h of antibiotics. Combines infection_icd, abx, and samp concepts.', '疑似感染：(1) ICD感染诊断码（仅eICU可用）或 (2) 培养后72小时内开始抗生素 或 抗生素后24小时内进行培养。由infection_icd、abx和samp概念组合而成'),
     'infection_icd': ('Infection diagnosis based on Angus 2001 ICD criteria (explicit infection codes). ONLY available in eICU database.', '基于Angus 2001 ICD标准的感染诊断（显性感染编码）。仅eICU数据库可用'),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -123,6 +124,40 @@ def test_project_workspace_rejects_projects_directory_symlink(tmp_path: Path) ->
     assert list(outside.iterdir()) == []
 
 
+@pytest.mark.parametrize(
+    ("occupied_level", "expected_code"),
+    [
+        ("base", "pi_workspace_base_root_not_directory"),
+        ("projects", "pi_workspace_projects_root_not_directory"),
+        ("project", "pi_workspace_project_root_not_directory"),
+    ],
+)
+def test_project_workspace_normalizes_directory_occupied_by_file(
+    tmp_path: Path,
+    occupied_level: str,
+    expected_code: str,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    if occupied_level == "base":
+        workspace_root.write_text("occupied", encoding="utf-8")
+    else:
+        workspace_root.mkdir()
+        projects_root = workspace_root / "projects"
+        if occupied_level == "projects":
+            projects_root.write_text("occupied", encoding="utf-8")
+        else:
+            projects_root.mkdir()
+            (projects_root / project_workspace_id("project-a")).write_text(
+                "occupied", encoding="utf-8"
+            )
+
+    workspace = ProjectWorkspace(workspace_root)
+    with pytest.raises(PiCopilotError) as raised:
+        workspace.project_root("project-a")
+
+    assert raised.value.code == expected_code
+
+
 def test_project_workspace_rejects_workspace_root_symlink(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -169,6 +204,31 @@ def test_project_workspace_rejects_retargeted_ancestor_symlink(tmp_path: Path) -
         workspace.project_root("project-a")
 
     assert caught.value.code == "pi_workspace_base_root_changed"
+    assert not (second / "workspace").exists()
+
+
+def test_project_workspace_read_returns_one_text_and_digest_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = ProjectWorkspace(tmp_path / "workspace")
+    workspace.write_file("project-a", "notes.md", "first")
+    target = workspace.project_root("project-a") / "notes.md"
+    original_read_text = Path.read_text
+
+    def mutate_after_text_read(path: Path, *args, **kwargs) -> str:
+        text = original_read_text(path, *args, **kwargs)
+        if path == target:
+            path.write_text("second", encoding="utf-8")
+        return text
+
+    monkeypatch.setattr(Path, "read_text", mutate_after_text_read)
+
+    snapshot = workspace.read_file("project-a", "notes.md")
+
+    assert snapshot["sha256"] == hashlib.sha256(
+        snapshot["text"].encode("utf-8")
+    ).hexdigest()
 
 
 def test_project_workspace_write_is_create_only_and_edit_requires_current_digest(

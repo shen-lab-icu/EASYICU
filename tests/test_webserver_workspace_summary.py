@@ -92,6 +92,69 @@ def test_project_artifact_governance_fails_closed_without_readiness() -> None:
         "error": "run_artifact_governance_readiness_invalid",
     }
 
+
+def test_agent_run_signoff_is_stale_when_a_new_artifact_appears() -> None:
+    signed = {
+        "signed_artifacts": [
+            {"name": "quality_gate.json", "sha256": "a" * 64, "bytes": 10}
+        ]
+    }
+    current = [
+        {"name": "quality_gate.json", "sha256": "a" * 64, "bytes": 10},
+        {"name": "figure_gallery.json", "sha256": "b" * 64, "bytes": 20},
+    ]
+
+    integrity = agent_runs._signoff_integrity(signed, current)
+
+    assert integrity["signoff_stale"] is True
+    assert integrity["status"] == "stale"
+    assert integrity["unexpected_artifacts"] == ["figure_gallery.json"]
+
+
+def test_agent_run_artifact_reader_rejects_symlinked_whitelisted_file(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"gate": {"status": "analysis_only"}}', encoding="utf-8")
+    (run_dir / "quality_gate.json").symlink_to(outside)
+
+    loaded = agent_runs.read_run_artifact(str(run_dir), "quality_gate.json")
+
+    assert loaded == {
+        "ok": False,
+        "error": "artifact_path_unsafe",
+        "artifact": "quality_gate.json",
+    }
+
+
+def test_project_artifact_governance_checks_the_selected_signed_artifact() -> None:
+    review = {
+        "ok": True,
+        "gate": {"status": "analysis_only"},
+        "readiness": {
+            "status": "signed_analysis_only",
+            "signed": True,
+            "signoff_stale": False,
+            "reportable": False,
+        },
+        "signoff": {
+            "signed_artifacts": [
+                {"name": "quality_gate.json", "sha256": "a" * 64, "bytes": 10}
+            ]
+        },
+    }
+
+    governance = agent_runs.project_artifact_governance(
+        review,
+        artifact={"name": "quality_gate.json", "sha256": "b" * 64, "bytes": 10},
+    )
+
+    assert governance["artifact_integrity"] == "mismatch"
+    assert governance["human_signoff"] == "stale"
+    assert governance["claim_ceiling"] == "unsupported"
+
 AGENT_PREFLIGHT_ARTIFACTS = {
     "run_context.json",
     "cohort_summary.json",

@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to **6 major public ICU databases**, automated extraction of **200+ standardized clinical concepts** (the canonical web-side catalog exposes **224** — 204 dictionary concepts plus 20 special concepts: 17 KDIGO AKI staging and ascertainment outputs, 2 circulatory-failure indicators, and the Sepsis-3 SOFA-1 diagnosis, all loadable through the same `load_concepts(...)` call), and a **web-based interface** for cohort definition, feature review, visualization, and export.
+EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to the supported public ICU databases, automated extraction of hundreds of standardized clinical concepts, and a **web-based interface** for cohort definition, feature review, visualization, and export. Exact current counts are generated from the shipped registries in [the catalog summary](docs/catalog_summary.md), rather than copied into prose.
 
 ## Why EasyICU
 

@@ -2964,6 +2964,14 @@ def _apply_callback(
     # Used for lymphocytes, neutrophils, etc.
     if expr.strip() == "blood_cell_ratio":
         DEBUG_CALLBACK = False  # Toggle for debugging (set to True for trace)
+        assessment_column = f"{concept_name}_assessment_reason"
+
+        def unavailable(reason: str) -> pd.DataFrame:
+            result = frame.copy()
+            result[concept_name] = pd.Series(np.nan, index=result.index, dtype=float)
+            result[assessment_column] = reason
+            return result
+
         if DEBUG_CALLBACK:
             print(f"  [CALLBACK DEBUG] {concept_name} blood_cell_ratio 开始")
             print(f"    frame.shape = {frame.shape}, columns = {list(frame.columns)}")
@@ -2973,10 +2981,7 @@ def _apply_callback(
         if resolver is None:
             if DEBUG_CALLBACK:
                 print("    [SKIP] resolver is None")
-            # Cannot convert without resolver to load WBC, return as-is
-            if concept_name in frame.columns:
-                frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
-            return frame
+            return unavailable("missing_wbc_resolver")
         
         # Determine ID column based on database
         # AUMC uses 'admissionid', MIMIC uses 'stay_id', eICU uses 'patientunitstayid'
@@ -2990,9 +2995,7 @@ def _apply_callback(
         if id_col is None:
             if DEBUG_CALLBACK:
                 print("    [SKIP] id_col is None")
-            if concept_name in frame.columns:
-                frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
-            return frame
+            return unavailable("missing_patient_identifier")
         
         if DEBUG_CALLBACK:
             print(f"    id_col = {id_col}")
@@ -3016,9 +3019,7 @@ def _apply_callback(
             if data_source is None:
                 if DEBUG_CALLBACK:
                     print("    [SKIP] data_source is None")
-                if concept_name in frame.columns:
-                    frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
-                return frame
+                return unavailable("missing_data_source")
             
             if DEBUG_CALLBACK:
                 print("    加载 WBC (使用缓存)...")
@@ -3036,9 +3037,7 @@ def _apply_callback(
             if 'wbc' not in wbc_result or wbc_result['wbc'].data.empty:
                 if DEBUG_CALLBACK:
                     print("    [SKIP] WBC 为空或不存在")
-                if concept_name in frame.columns:
-                    frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
-                return frame
+                return unavailable("missing_wbc_measurement")
             
             wbc_df = wbc_result['wbc'].data.copy()
             if DEBUG_CALLBACK:
@@ -3082,9 +3081,7 @@ def _apply_callback(
             if id_col not in wbc_df.columns:
                 if DEBUG_CALLBACK:
                     print(f"    [SKIP] id_col {id_col} not in wbc_df")
-                if concept_name in frame.columns:
-                    frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
-                return frame
+                return unavailable("wbc_patient_identifier_missing")
             
             # Ensure numeric types
             frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
@@ -3224,6 +3221,10 @@ def _apply_callback(
                         100 * frame_merged.loc[valid_mask, concept_name] / 
                         frame_merged.loc[valid_mask, 'wbc']
                     )
+                    frame_merged.loc[~valid_mask, concept_name] = np.nan
+                    frame_merged[assessment_column] = np.where(
+                        valid_mask, "calculated_from_wbc", "missing_wbc_measurement"
+                    )
                     if DEBUG_CALLBACK:
                         print(f"    计算后值: {frame_merged[concept_name].values}")
                     # Set unit to %
@@ -3234,6 +3235,8 @@ def _apply_callback(
                 else:
                     if DEBUG_CALLBACK:
                         print("    [WARNING] 'wbc' not in frame_merged.columns!")
+                    frame_merged[concept_name] = np.nan
+                    frame_merged[assessment_column] = "missing_wbc_measurement"
                 
                 # CRITICAL: Convert time back to original format (minutes) for AUMC
                 # The subsequent processing will apply the minutes->hours conversion again
@@ -3258,6 +3261,10 @@ def _apply_callback(
                     100 * frame.loc[valid_mask, concept_name] / 
                     frame.loc[valid_mask, 'wbc']
                 )
+                frame.loc[~valid_mask, concept_name] = np.nan
+                frame[assessment_column] = np.where(
+                    valid_mask, "calculated_from_wbc", "missing_wbc_measurement"
+                )
                 if unit_column and unit_column in frame.columns:
                     frame.loc[valid_mask, unit_column] = '%'
                 frame = frame.drop(columns=['wbc'])
@@ -3269,10 +3276,7 @@ def _apply_callback(
                 print(f"    [EXCEPTION] {type(e).__name__}: {e}")
                 import traceback
                 traceback.print_exc()
-            # On error, return frame as-is with numeric conversion
-            if concept_name in frame.columns:
-                frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
-            return frame
+            return unavailable("wbc_ratio_calculation_failed")
 
     raise NotImplementedError(
         f"Callback '{callback}' is not yet supported."

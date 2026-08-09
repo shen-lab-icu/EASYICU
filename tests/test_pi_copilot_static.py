@@ -22,8 +22,8 @@ def _read(relative: str) -> str:
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260809-workspace-security1" in index
-    assert "css/guided-pi-preview.css?v=20260809-workspace-final1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260809-workspace-final1" in index
+    assert "css/guided-pi-preview.css?v=20260809-scientific-trust1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260809-scientific-trust1" in index
     assert "js/screens-guided-pi.js?v=20260809-workspace-security1" in index
     assert "js/api.js?v=20260808-pi-research-flow1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
@@ -197,6 +197,22 @@ def test_pi_frontend_javascript_parses() -> None:
         )
 
 
+def test_research_artifact_renderer_rejects_attribute_xss_and_non_png_data_urls() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    subprocess.run(
+        [
+            node,
+            str(Path(__file__).resolve().parent / "js" / "agent_render_security.test.js"),
+            str(STATIC / "js" / "screens-agent-render.js"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox() -> None:
     preview = _read("js/screens-guided-pi-preview.js")
     assert "authority_class: 'workspace_artifact'" in preview
@@ -208,6 +224,7 @@ def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox()
     assert 'sandbox="allow-scripts"' in preview
     assert 'referrerpolicy="no-referrer"' in preview
     assert "EasyICU run artifact · Analysis-only" in preview
+    assert "EasyICU run artifact · Reportable" not in preview
     assert "Human sign-off required" in preview
     assert "state.governance" in preview
 
@@ -231,5 +248,8 @@ def test_workspace_security_workflow_covers_sidecar_and_browser_helper_dependenc
     ).read_text(encoding="utf-8")
     assert '"tools/qa_native_fastapi_patient_drilldown.py"' in workflow
     assert "tests/test_pi_copilot_install.py" in workflow
+    assert '"src/easyicu/webserver/agent_runs.py"' in workflow
+    assert '"src/easyicu/webserver/static/js/screens-agent-render.js"' in workflow
+    assert '"tests/js/agent_render_security.test.js"' in workflow
     for sidecar in ("main.mjs", "event-projection.mjs", "shell-budget.mjs"):
         assert f"node --check src/easyicu/webserver/pi_copilot/node_app/src/{sidecar}" in workflow

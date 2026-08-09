@@ -15,6 +15,15 @@ import pandas as pd
 from .utils.common_utils import SeriesUtils
 from .table import IdTbl
 
+
+class UnsupportedClinicalScoreError(RuntimeError):
+    """Stable fail-closed error for a named score without a complete contract."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 # Import missing callbacks
 def _standardize_fio2_units(fio2_df: pd.DataFrame, database: str) -> pd.DataFrame:
     """将FiO2标准化为百分比形式（0-100）以实现跨数据库兼容性
@@ -817,17 +826,18 @@ def sofa2_cns(
     - Score 4: GCS 3-5 (or extension/no response to pain, myoclonus)
     - Score 3: GCS 6-8 (or flexion to pain)
     - Score 2: GCS 9-12 (or withdrawal to pain)
-    - Score 1: GCS 13-14 (or localizing to pain) OR delirium treatment/positive CAM-ICU
-    - Score 0: GCS 15 (unless on delirium treatment or positive CAM-ICU)
+    - Score 1: GCS 13-14 (or localizing to pain) OR delirium treatment
+    - Score 0: GCS 15 (unless on delirium treatment)
     
     Special rules:
-    - If receiving delirium treatment OR has positive CAM-ICU and GCS=15, score 1 point
+    - If receiving delirium treatment and GCS=15, score 1 point
     - Motor response scale can substitute full GCS if unavailable
     
     Args:
         gcs: Glasgow Coma Scale (3-15)
         delirium_tx: Receiving delirium treatment (haloperidol, etc.)
-        delirium_positive: CAM-ICU assessment positive for delirium (itemid 228332)
+        delirium_positive: CAM-ICU metadata retained for sensitivity analyses;
+            it does not score without treatment
         motor_response: GCS Motor component (1-6) for alternative scoring
         
     Returns:
@@ -857,14 +867,11 @@ def sofa2_cns(
     score[valid & (g >= 3) & (g <= 5)] = 4
     
     # SOFA-2 NEW: Delirium rule
-    # If receiving delirium treatment OR has positive CAM-ICU and GCS==15, upgrade to 1pt
+    # If receiving delirium treatment and GCS==15, upgrade to 1pt.
     has_delirium = pd.Series(False, index=idx)
     
     if delirium_tx is not None:
         has_delirium = has_delirium | _is_true_safe(delirium_tx)
-    
-    if delirium_positive is not None:
-        has_delirium = has_delirium | _is_true_safe(delirium_positive)
     
     if has_delirium.any():
         mask = (g == 15) & has_delirium
@@ -972,51 +979,19 @@ def apache_ii_score(
     wbc: Optional[pd.Series] = None,
     gcs: Optional[pd.Series] = None,
 ) -> pd.Series:
-    """Calculate APACHE II score (simplified version).
+    """Fail closed until the complete APACHE II contract is implemented.
 
-    Note: This is a simplified implementation. Full APACHE II requires
-    additional chronic health and admission diagnosis information.
-
-    Args:
-        age: Age in years
-        temp: Temperature (°C)
-        map_val: Mean arterial pressure
-        hr: Heart rate
-        resp: Respiratory rate
-        pao2: PaO2 (optional)
-        ph: Arterial pH (optional)
-        na: Sodium (optional)
-        k: Potassium (optional)
-        crea: Creatinine (optional)
-        hct: Hematocrit (optional)
-        wbc: White blood cell count (optional)
-        gcs: Glasgow Coma Score (optional)
-
-    Returns:
-        Series with APACHE II scores
+    APACHE II requires all 12 acute physiology variables plus age and chronic
+    health points. The historical function implemented only age and
+    temperature, so returning that value under the APACHE II name was unsafe.
+    The signature remains import-compatible while callers receive a stable,
+    attributable error instead of a clinically invalid partial score.
     """
-    score = pd.Series(0, index=age.index, dtype=float)
-    
-    # Age points
-    score[age >= 45] += 2
-    score[age >= 55] += 3
-    score[age >= 65] += 5
-    score[age >= 75] += 6
-    
-    # Temperature
-    score[temp >= 41] += 4
-    score[(temp >= 39) & (temp < 41)] += 3
-    score[(temp >= 38.5) & (temp < 39)] += 1
-    score[(temp >= 36) & (temp < 38.5)] += 0
-    score[(temp >= 34) & (temp < 36)] += 1
-    score[(temp >= 32) & (temp < 34)] += 2
-    score[(temp >= 30) & (temp < 32)] += 3
-    score[temp < 30] += 4
-    
-    # Additional components would be added here...
-    # This is a placeholder for demonstration
-    
-    return score.astype(int)
+    raise UnsupportedClinicalScoreError(
+        "apache_ii_not_implemented",
+        "APACHE II is unavailable: the complete acute physiology, age, and "
+        "chronic health contract has not been implemented and validated.",
+    )
 
 def news_score(
     resp: pd.Series,
@@ -1444,9 +1419,18 @@ def safi(
     else:
         raise ValueError(f"Unknown mode: {mode}")
     
-    # Fix missing FiO2 (assume room air = 21%)
+    result['fio2_observed'] = result['fio2'].notna()
+    result['fio2_imputed'] = False
+    result['fio2_assessment_reason'] = np.where(
+        result['fio2_observed'], 'observed', 'missing_fio2'
+    )
+
+    # Fix missing FiO2 (assume room air = 21%) and preserve that assumption.
     if fix_na_fio2:
-        result.loc[result['fio2'].isna(), 'fio2'] = 21.0
+        missing_fio2 = result['fio2'].isna()
+        result.loc[missing_fio2, 'fio2'] = 21.0
+        result.loc[missing_fio2, 'fio2_imputed'] = True
+        result.loc[missing_fio2, 'fio2_assessment_reason'] = 'room_air_assumption'
     
     # Convert to numeric, handling None and string values
     result['o2sat'] = pd.to_numeric(result['o2sat'], errors='coerce')

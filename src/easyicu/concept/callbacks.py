@@ -2646,14 +2646,17 @@ def _callback_sofa_component(
             if "unsupported operand type" in str(e) and "NoneType" in str(e):
                 # Handle the case where callback functions receive None values due to missing data sources
                 # This happens when concepts don't have mappings for the current database
+                data_source = getattr(ctx, "data_source", None)
+                config = getattr(data_source, "config", None)
                 logger.warning(
                     f"SOFA component '{ctx.concept_name}' encountered missing data for database "
-                    f"{getattr(ctx.data_source.config, 'name', 'unknown')}. Returning zeros."
+                    f"{getattr(config, 'name', 'unknown')}. Returning missing values."
                 )
 
-                # Create a result Series with zeros (same index as data if available)
+                # Missing dependencies are not evidence of a zero organ score.
                 if data is not None and not data.empty and index_column:
-                    result = pd.Series(0.0, index=data.index, name=ctx.concept_name)
+                    result = pd.Series(np.nan, index=data.index, name=ctx.concept_name)
+                    result.attrs["assessment_reason"] = "missing_callback_dependency"
                 else:
                     # Fallback: create empty series with concept name
                     result = pd.Series([], name=ctx.concept_name, dtype=float)
@@ -2664,7 +2667,7 @@ def _callback_sofa_component(
         if isinstance(result, pd.Series):
             # Align index with data
             if not result.index.equals(data.index):
-                result = result.reindex(data.index, fill_value=0.0)
+                result = result.reindex(data.index)
         
         # NOTE: ricu uses merge(all=TRUE) which produces all time points from both tables.
         # Even if urine24 values are NA, the time points are preserved in the merged result.
@@ -2682,13 +2685,13 @@ def _callback_sofa_component(
                 kwargs_no_urine = {k: v for k, v in kwargs.items() if k != 'urine24'}
                 result = func(**kwargs_no_urine)
                 if isinstance(result, pd.Series) and not result.index.equals(data.index):
-                    result = result.reindex(data.index, fill_value=0.0)
+                    result = result.reindex(data.index)
             elif isinstance(urine24_val, pd.Series) and urine24_val.isna().all():
                 # All NaN, remove from kwargs and call again
                 kwargs_no_urine = {k: v for k, v in kwargs.items() if k != 'urine24'}
                 result = func(**kwargs_no_urine)
                 if isinstance(result, pd.Series) and not result.index.equals(data.index):
-                    result = result.reindex(data.index, fill_value=0.0)
+                    result = result.reindex(data.index)
         
         # CRITICAL: Replicate ricu_code's rm_cols behavior - remove input concept columns
         # In ricu_code: rm_cols(dat, cnc, by_ref = TRUE) removes the input concept columns

@@ -272,6 +272,22 @@ def test_unknown_callback_raises_not_implemented():
         )
 
 
+def test_blood_cell_ratio_without_wbc_fails_closed_instead_of_returning_numerator():
+    frame = pd.DataFrame(
+        {"stay_id": [1], "charttime": [0.0], "lymph": [2.0]}
+    )
+
+    result = _apply_callback(
+        frame,
+        _src("blood_cell_ratio", value_var="lymph", index_var="charttime"),
+        concept_name="lymph",
+        resolver=None,
+    )
+
+    assert result["lymph"].isna().all()
+    assert result["lymph_assessment_reason"].tolist() == ["missing_wbc_resolver"]
+
+
 # ---------------------------------------------------------------------------
 # Dispatch-survey tripwire — every callback in the shipped dictionary
 # must be recognised by _apply_callback. This is the **strongest single

@@ -22,6 +22,10 @@ docker build \
     .
 ```
 
+The default base image is digest-pinned in both `Dockerfile` and
+`base-image.lock`. Updating it requires reviewing the new upstream manifest,
+running the image smoke job, and regenerating the uploaded CycloneDX SBOM.
+
 The public default downloads from official PyPI. On a slow route, select a
 trusted mirror at build time without changing the locked package set:
 
@@ -65,7 +69,7 @@ spending an LLM call.
 
 The image pins:
 
-* Python 3.11-slim
+* Python 3.11-slim, pinned by multi-platform OCI digest
 The direct scientific stack is pinned in `requirements.lock`. It includes the
 baseline numpy/pandas/pyarrow/scipy/statsmodels/scikit-learn/matplotlib stack and
 the curated optional method packages declared in

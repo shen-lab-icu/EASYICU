@@ -1119,18 +1119,25 @@ class PiCopilotService:
 
     @staticmethod
     def _browser_artifact_payload(value: Any) -> Any:
-        """Remove host-only paths while retaining bounded structured results."""
+        """Remove host-only paths while retaining bounded structured results.
+
+        ``relative_path`` is the only path-shaped browser field. Future artifact
+        schemas therefore fail closed instead of relying on an ever-growing
+        blacklist of host path key names.
+        """
 
         if isinstance(value, Mapping):
             projected: Dict[str, Any] = {}
             for key, child in value.items():
                 normalized = str(key).strip().lower().replace("-", "_")
-                if normalized in {"project_dir", "source_path"}:
+                if normalized in {"project_dir", "source_path", "cwd"}:
                     continue
-                if normalized == "path" and isinstance(child, str):
-                    candidate = Path(child).expanduser()
-                    if candidate.is_absolute():
-                        continue
+                path_shaped = (
+                    normalized in {"path", "directory", "dir", "root", "file"}
+                    or normalized.endswith(("_path", "_directory", "_dir", "_root", "_file"))
+                )
+                if path_shaped and normalized != "relative_path":
+                    continue
                 projected[str(key)] = PiCopilotService._browser_artifact_payload(
                     child
                 )
@@ -1212,7 +1219,10 @@ class PiCopilotService:
                 status_code=409,
                 details={"artifact": clean_artifact},
             )
-        governance = agent_runs.project_artifact_governance(review)
+        governance = agent_runs.project_artifact_governance(
+            review,
+            artifact=loaded.get("artifact") or {},
+        )
         if not governance.get("ok"):
             raise PiCopilotError(
                 str(

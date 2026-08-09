@@ -6,6 +6,7 @@ from easyicu.scores.kdigo_aki import (
     KDIGOComponentCalculationError,
     KDIGOComponentLoadError,
     KDIGOComponentSchemaError,
+    _calc_aki_stage_creat,
     _calculate_uo_rates_simple,
     get_aki_incidence,
     kdigo_stages,
@@ -13,6 +14,18 @@ from easyicu.scores.kdigo_aki import (
     load_kdigo_aki,
     summarize_aki,
 )
+
+
+@pytest.mark.clinical_conformance
+def test_kdigo_stage3_absolute_threshold_uses_each_current_creatinine_value() -> None:
+    """MIT-LCP KDIGO SQL: current >= 4 and >= 0.3 above 48-hour low."""
+    stage = _calc_aki_stage_creat(
+        pd.Series([4.5, 4.0, 4.0]),
+        pd.Series([4.0, 3.7, 3.71]),
+        pd.Series([4.0, 3.0, 3.0]),
+    )
+
+    assert stage.tolist() == [3, 3, 0]
 
 
 def test_kdigo_uo_requires_minimum_documented_window_hours():

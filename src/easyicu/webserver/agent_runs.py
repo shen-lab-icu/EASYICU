@@ -14,7 +14,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
+import stat
 import time
 import zipfile
 from datetime import datetime, timezone
@@ -61,6 +63,7 @@ _SIGNOFF_CONFIRMATIONS = {
     "no_patient_rows_persisted",
 }
 _AGENT_PREFLIGHT_FULL_SCAN_ROW_LIMIT = 1_000_000
+_MAX_RUN_ARTIFACT_BYTES = 2 * 1024 * 1024
 
 
 def make_agent_run_runner(
@@ -467,7 +470,11 @@ def make_agent_run_runner(
     return runner
 
 
-def project_artifact_governance(review: Mapping[str, Any]) -> Dict[str, Any]:
+def project_artifact_governance(
+    review: Mapping[str, Any],
+    *,
+    artifact: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     """Project one run review into the browser-safe artifact authority contract."""
 
     readiness = review.get("readiness")
@@ -481,6 +488,11 @@ def project_artifact_governance(review: Mapping[str, Any]) -> Dict[str, Any]:
     readiness_status = str(readiness.get("status") or "unknown")
     signed = bool(readiness.get("signed"))
     signoff_stale = bool(readiness.get("signoff_stale"))
+    artifact_integrity = None
+    if artifact is not None:
+        artifact_integrity = _signed_artifact_integrity(review.get("signoff"), artifact)
+        if signed and artifact_integrity != "verified":
+            signoff_stale = True
     reportable = bool(readiness.get("reportable"))
     if signoff_stale:
         human_signoff = "stale"
@@ -493,11 +505,12 @@ def project_artifact_governance(review: Mapping[str, Any]) -> Dict[str, Any]:
     claim_ceiling = "reportable" if reportable else "unsupported"
     if (
         not reportable
+        and not signoff_stale
         and gate.get("status") == "analysis_only"
         and readiness_status in {"awaiting_human_signoff", "signed_analysis_only"}
     ):
         claim_ceiling = "analysis_only"
-    return {
+    projection = {
         "ok": True,
         "authority_class": "easyicu_run_artifact",
         "gate_status": gate.get("status"),
@@ -506,6 +519,9 @@ def project_artifact_governance(review: Mapping[str, Any]) -> Dict[str, Any]:
         "reportable": reportable,
         "claim_ceiling": claim_ceiling,
     }
+    if artifact_integrity is not None:
+        projection["artifact_integrity"] = artifact_integrity
+    return projection
 
 
 def read_run_review(project_dir: str) -> Dict[str, Any]:
@@ -692,18 +708,23 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     run_dir = _resolve_run_dir(project_dir)
     if run_dir is None:
         return {"ok": False, "error": "project_dir_required"}
-    artifact_path = _safe_artifact_path(run_dir, artifact_name)
-    if artifact_path is None:
-        return {"ok": False, "error": "artifact_not_allowed", "artifact": artifact_name}
-    if not artifact_path.exists() or not artifact_path.is_file():
+    artifact_path, raw, path_error = _read_safe_artifact_bytes(
+        run_dir, artifact_name
+    )
+    if artifact_path is None or raw is None:
         return {
             "ok": False,
-            "error": "artifact_not_found",
-            "project_dir": str(run_dir),
+            "error": path_error or "artifact_not_allowed",
             "artifact": artifact_name,
         }
     try:
-        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        payload = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        return {
+            "ok": False,
+            "error": "artifact_json_invalid_encoding",
+            "artifact": artifact_name,
+        }
     except json.JSONDecodeError as exc:
         return {
             "ok": False,
@@ -721,7 +742,7 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     return {
         "ok": True,
         "project_dir": str(run_dir),
-        "artifact": _artifact(artifact_path, run_dir),
+        "artifact": _artifact_from_raw(artifact_path, run_dir, raw),
         "payload": _public_single_artifact_payload(artifact_path.name, payload),
         "privacy_scan": privacy_scan,
     }
@@ -731,15 +752,19 @@ def read_run_artifact_bytes(project_dir: str, artifact_name: str) -> Dict[str, A
     run_dir = _resolve_run_dir(project_dir)
     if run_dir is None:
         return {"ok": False, "error": "project_dir_required"}
-    artifact_path = _safe_artifact_path(run_dir, artifact_name)
-    if artifact_path is None:
-        return {"ok": False, "error": "artifact_not_allowed", "artifact": artifact_name}
-    if not artifact_path.exists() or not artifact_path.is_file():
-        return {"ok": False, "error": "artifact_not_found", "artifact": artifact_name}
+    artifact_path, raw, path_error = _read_safe_artifact_bytes(
+        run_dir, artifact_name
+    )
+    if artifact_path is None or raw is None:
+        return {
+            "ok": False,
+            "error": path_error or "artifact_not_allowed",
+            "artifact": artifact_name,
+        }
     return {
         "ok": True,
         "name": artifact_path.name,
-        "content": artifact_path.read_bytes(),
+        "content": raw,
         "media_type": "application/json",
     }
 
@@ -758,9 +783,9 @@ def build_run_bundle(project_dir: str) -> Dict[str, Any]:
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for artifact in artifacts:
             name = str(artifact.get("name") or "")
-            path = _safe_artifact_path(run_dir, name)
-            if path is not None and path.exists() and path.is_file():
-                zf.writestr(name, path.read_bytes())
+            _path, raw, _path_error = _read_safe_artifact_bytes(run_dir, name)
+            if raw is not None:
+                zf.writestr(name, raw)
     filename = f"{run_dir.name}_artifacts.zip"
     return {
         "ok": True,
@@ -1151,34 +1176,93 @@ def _resolve_run_dir(project_dir: str) -> Optional[Path]:
     return Path(text).expanduser().resolve()
 
 
-def _safe_artifact_path(run_dir: Path, artifact_name: str) -> Optional[Path]:
+def _safe_artifact_path(
+    run_dir: Path,
+    artifact_name: str,
+) -> tuple[Optional[Path], Optional[str]]:
     name = str(artifact_name or "").strip()
     if name not in _RUN_ARTIFACT_NAMES:
-        return None
+        return None, "artifact_not_allowed"
     if Path(name).name != name:
-        return None
-    return run_dir / name
+        return None, "artifact_not_allowed"
+    candidate = run_dir / name
+    try:
+        metadata = candidate.lstat()
+    except FileNotFoundError:
+        return candidate, None
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        return None, "artifact_path_unsafe"
+    if metadata.st_size > _MAX_RUN_ARTIFACT_BYTES:
+        return None, "artifact_too_large"
+    try:
+        resolved_root = run_dir.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(resolved_root)
+    except (FileNotFoundError, ValueError):
+        return None, "artifact_path_unsafe"
+    return resolved, None
+
+
+def _read_safe_artifact_bytes(
+    run_dir: Path,
+    artifact_name: str,
+) -> tuple[Optional[Path], Optional[bytes], Optional[str]]:
+    """Open one allowed regular artifact without following a replacement link."""
+
+    path, path_error = _safe_artifact_path(run_dir, artifact_name)
+    if path is None:
+        return None, None, path_error
+    if not path.exists():
+        return None, None, "artifact_not_found"
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return None, None, "artifact_not_found"
+    except OSError:
+        return None, None, "artifact_path_unsafe"
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            return None, None, "artifact_path_unsafe"
+        if metadata.st_size > _MAX_RUN_ARTIFACT_BYTES:
+            return None, None, "artifact_too_large"
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = -1
+            raw = handle.read(_MAX_RUN_ARTIFACT_BYTES + 1)
+        if len(raw) > _MAX_RUN_ARTIFACT_BYTES:
+            return None, None, "artifact_too_large"
+        return path, raw, None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _run_artifacts(run_dir: Path) -> List[Dict[str, Any]]:
     artifacts = []
     for name in _RUN_ARTIFACT_NAMES:
-        path = run_dir / name
-        if path.exists() and path.is_file():
-            artifacts.append(_artifact(path, run_dir))
+        path, raw, _path_error = _read_safe_artifact_bytes(run_dir, name)
+        if path is not None and raw is not None:
+            artifacts.append(_artifact_from_raw(path, run_dir, raw))
     return artifacts
 
 
 def _load_run_artifacts(run_dir: Path) -> Dict[str, Any]:
     payloads: Dict[str, Dict[str, Any]] = {}
     for name in _RUN_ARTIFACT_NAMES:
-        path = run_dir / name
-        if not path.exists():
+        path, raw, path_error = _read_safe_artifact_bytes(run_dir, name)
+        if path_error == "artifact_not_found":
             continue
-        if not path.is_file():
-            return {"ok": False, "error": "artifact_path_not_file", "artifact": name}
+        if path is None or raw is None:
+            return {"ok": False, "error": path_error, "artifact": name}
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            return {
+                "ok": False,
+                "error": "artifact_json_invalid_encoding",
+                "artifact": name,
+            }
         except json.JSONDecodeError as exc:
             return {
                 "ok": False,
@@ -1255,6 +1339,7 @@ def _signoff_integrity(
             "checked_artifacts": 0,
             "tampered_artifacts": [],
             "missing_artifacts": [],
+            "unexpected_artifacts": [],
         }
     signed = signoff.get("signed_artifacts")
     if not isinstance(signed, list) or not signed:
@@ -1265,6 +1350,7 @@ def _signoff_integrity(
             "checked_artifacts": 0,
             "tampered_artifacts": [],
             "missing_artifacts": [],
+            "unexpected_artifacts": [],
         }
     current = {
         str(item.get("name")): item
@@ -1295,14 +1381,47 @@ def _signoff_integrity(
                     "current_bytes": current_item.get("bytes"),
                 }
             )
-    stale = bool(tampered or missing)
+    signed_names = {
+        str(item.get("name") or "") for item in signed if isinstance(item, dict)
+    }
+    unexpected = sorted(name for name in current if name not in signed_names)
+    stale = bool(tampered or missing or unexpected)
     return {
         "status": "stale" if stale else "verified",
         "signoff_stale": stale,
         "checked_artifacts": checked,
         "tampered_artifacts": tampered,
         "missing_artifacts": missing,
+        "unexpected_artifacts": unexpected,
     }
+
+
+def _signed_artifact_integrity(
+    signoff: Any,
+    artifact: Mapping[str, Any],
+) -> str:
+    if not isinstance(signoff, Mapping):
+        return "unsigned"
+    signed = signoff.get("signed_artifacts")
+    if not isinstance(signed, list):
+        return "unsigned"
+    name = str(artifact.get("name") or "")
+    signed_item = next(
+        (
+            item
+            for item in signed
+            if isinstance(item, Mapping) and str(item.get("name") or "") == name
+        ),
+        None,
+    )
+    if signed_item is None:
+        return "unsigned"
+    if (
+        str(signed_item.get("sha256") or "") == str(artifact.get("sha256") or "")
+        and int(signed_item.get("bytes") or -1) == int(artifact.get("bytes") or -2)
+    ):
+        return "verified"
+    return "mismatch"
 
 
 def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
@@ -1786,8 +1905,12 @@ def _artifact_payload(
     return out
 
 
-def _artifact(path: Path, root: Path, summary: Any = None) -> Dict[str, Any]:
-    raw = path.read_bytes()
+def _artifact_from_raw(
+    path: Path,
+    root: Path,
+    raw: bytes,
+    summary: Any = None,
+) -> Dict[str, Any]:
     out = {
         "name": path.name,
         "path": str(path),
@@ -1799,6 +1922,10 @@ def _artifact(path: Path, root: Path, summary: Any = None) -> Dict[str, Any]:
     if summary is not None:
         out["summary"] = summary
     return out
+
+
+def _artifact(path: Path, root: Path, summary: Any = None) -> Dict[str, Any]:
+    return _artifact_from_raw(path, root, path.read_bytes(), summary)
 
 
 def _slug(value: str) -> str:

@@ -82,9 +82,7 @@
       return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('EasyICU run artifact · Governance pending', 'EasyICU 运行产物 · 治理状态待确认'))}</strong><span>${esc(tr('Loading Host gate status…', '正在加载 Host 运行闸状态…'))}</span></div>`;
     }
     const ceiling = governance.claim_ceiling;
-    const title = ceiling === 'reportable'
-      ? tr('EasyICU run artifact · Reportable', 'EasyICU 运行产物 · 可报告')
-      : ceiling === 'analysis_only'
+    const title = ceiling === 'analysis_only'
         ? tr('EasyICU run artifact · Analysis-only', 'EasyICU 运行产物 · 仅供分析')
         : tr('EasyICU run artifact · Governance pending', 'EasyICU 运行产物 · 治理状态待确认');
     const signoff = governance.human_signoff;

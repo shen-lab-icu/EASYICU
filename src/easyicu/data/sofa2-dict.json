@@ -4,7 +4,13 @@
    "sofa2",
    "susp_inf"
   ],
-  "description": "sepsis-3 criterion based on SOFA-2",
+  "description": "experimental Sepsis-3 sensitivity phenotype using SOFA-2; not the canonical 2016 definition",
+  "clinical_status": "experimental",
+  "canonical_definition": false,
+  "requires_explicit_opt_in": true,
+  "definition_source": "SOFA-2 Table 2 + Sepsis-3 sensitivity adaptation",
+  "definition_version": "2025-sensitivity-v1",
+  "clinical_contract_id": "sepsis3_sofa2_sensitivity_2025",
   "category": "outcome",
   "callback": "sep3_sofa2",
   "keep_components": [
@@ -23,6 +29,12 @@
    "sofa2_renal"
   ],
   "description": "SOFA-2 (2025) aggregate score",
+  "clinical_status": "validated_definition",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "JAMA 2025 SOFA-2 Table 2",
+  "definition_version": "2025",
+  "clinical_contract_id": "sofa2_aggregate_2025",
   "category": "outcome",
   "callback": "sofa2_score",
   "class_name": "rec_cncpt"
@@ -92,7 +104,13 @@
    "delirium_positive",
    "motor_response"
   ],
-  "description": "SOFA-2 brain component (GCS 15/13-14/9-12/6-8/3-5; delirium treatment or positive CAM-ICU → 1pt even if GCS=15; motor response as GCS alternative)",
+  "description": "SOFA-2 brain component (GCS 15/13-14/9-12/6-8/3-5; drugs required to treat delirium → 1pt even if GCS=15; positive CAM alone does not score)",
+  "clinical_status": "validated_definition",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "JAMA 2025 SOFA-2 Table 2",
+  "definition_version": "2025",
+  "clinical_contract_id": "sofa2_cns_2025",
   "category": "outcome",
   "callback": "sofa2_cns",
   "class_name": "rec_cncpt"

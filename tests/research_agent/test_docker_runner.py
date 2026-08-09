@@ -37,6 +37,37 @@ import pandas as pd
 import pytest
 
 
+def test_runner_release_base_is_digest_pinned_and_matches_lockfile() -> None:
+    root = Path(__file__).resolve().parents[2]
+    image_root = root / "src/easyicu/research_agent/runner_image"
+    dockerfile = (image_root / "Dockerfile").read_text(encoding="utf-8")
+    lock = dict(
+        line.split("=", 1)
+        for line in (image_root / "base-image.lock").read_text(encoding="utf-8").splitlines()
+        if "=" in line
+    )
+    pinned = f'{lock["image"]}@{lock["digest"]}'
+
+    assert f"ARG BASE_IMAGE={pinned}" in dockerfile
+    assert lock["digest"].startswith("sha256:")
+    assert len(lock["digest"]) == 71
+
+
+def test_runner_image_workflow_builds_smokes_and_generates_sbom() -> None:
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github/workflows/research_runner_image_ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "docker build" in workflow
+    assert "--network none" in workflow
+    assert "--read-only" in workflow
+    assert "--cap-drop ALL" in workflow
+    assert "actions/checkout@11d5960a326750d5838078e36cf38b85af677262" in workflow
+    assert "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610" in workflow
+    assert "format: cyclonedx-json" in workflow
+
+
 def _make_cohort(tmp_path: Path) -> Path:
     p = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(p, index=False)

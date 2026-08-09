@@ -65,6 +65,7 @@ _EXPORT_GROUPS: Final[dict[str, tuple[str, ...]]] = {
         "get_concept_info",
     ),
     "easyicu.callbacks": (
+        "UnsupportedClinicalScoreError",
         "sofa_score",
         "sofa_resp",
         "sofa_coag",

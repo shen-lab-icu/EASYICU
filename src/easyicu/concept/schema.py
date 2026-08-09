@@ -142,6 +142,12 @@ class ConceptDefinition:
     levels: Optional[List[object]] = None
     keep_components: Optional[bool] = None
     omop_id: Optional[int] = None
+    clinical_status: Optional[str] = None
+    canonical_definition: Optional[bool] = None
+    requires_explicit_opt_in: Optional[bool] = None
+    definition_source: Optional[str] = None
+    definition_version: Optional[str] = None
+    clinical_contract_id: Optional[str] = None
 
     @classmethod
     def from_name_and_payload(
@@ -197,6 +203,12 @@ class ConceptDefinition:
             levels=payload.get("levels"),
             keep_components=payload.get("keep_components"),
             omop_id=_maybe_int(payload.get("omopid")),
+            clinical_status=payload.get("clinical_status"),
+            canonical_definition=payload.get("canonical_definition"),
+            requires_explicit_opt_in=payload.get("requires_explicit_opt_in"),
+            definition_source=payload.get("definition_source"),
+            definition_version=payload.get("definition_version"),
+            clinical_contract_id=payload.get("clinical_contract_id"),
             family=payload.get("family"),
             depends_on=depends_list,
         )
@@ -292,6 +304,36 @@ class ConceptDictionary:
                     else current.keep_components
                 ),
                 omop_id=incoming.omop_id if incoming.omop_id is not None else current.omop_id,
+                clinical_status=(
+                    incoming.clinical_status
+                    if incoming.clinical_status is not None
+                    else current.clinical_status
+                ),
+                canonical_definition=(
+                    incoming.canonical_definition
+                    if incoming.canonical_definition is not None
+                    else current.canonical_definition
+                ),
+                requires_explicit_opt_in=(
+                    incoming.requires_explicit_opt_in
+                    if incoming.requires_explicit_opt_in is not None
+                    else current.requires_explicit_opt_in
+                ),
+                definition_source=(
+                    incoming.definition_source
+                    if incoming.definition_source is not None
+                    else current.definition_source
+                ),
+                definition_version=(
+                    incoming.definition_version
+                    if incoming.definition_version is not None
+                    else current.definition_version
+                ),
+                clinical_contract_id=(
+                    incoming.clinical_contract_id
+                    if incoming.clinical_contract_id is not None
+                    else current.clinical_contract_id
+                ),
                 family=incoming.family if incoming.family is not None else current.family,
                 depends_on=_pick(incoming.depends_on, current.depends_on, allow_empty=True),
             )
