@@ -38,9 +38,9 @@ ID_COLUMNS = {
 }
 INDEX_COLUMNS = ID_COLUMNS | {"charttime"}
 NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
-CURRENT_QC_SOURCE_RUN_ID = "full6_native_v2_harmonized_e142e66a_20260804_r6"
+CURRENT_QC_SOURCE_RUN_ID = "full6_native_v2_kdigo_outlier_filter_fa013b9d_20260808"
 CURRENT_QC_SOURCE_RUN_METADATA_SHA256 = (
-    "f969fd0c1570da8b97b2d0f9379cae21e3276dbdf21ee0f4816dabe462851200"
+    "8c1f5f0f097bc9f45aa6e84f13eff378f228147b84fd858ad68b0aa91df6dca0"
 )
 
 
@@ -90,7 +90,7 @@ NULL_TIME_CONCEPT_POLICIES: dict[tuple[str, str], dict[str, Any]] = {
 
 
 # Direct source traces for the review-only shifts retained by the sealed
-# 2026-08-03 six-database package.  These records deliberately do not suppress
+# 2026-08-08 six-database package.  These records deliberately do not suppress
 # the anomaly flags: they distinguish a verified source/recording difference
 # from an untraced conversion defect while preserving the signal for
 # database-stratified downstream sensitivity analyses.
@@ -129,7 +129,7 @@ DISTRIBUTION_ADJUDICATIONS: dict[
         "adjudicated_origin": "source_assay_and_reporting_heterogeneity",
         "adjudication_evidence": (
             "Raw eICU Troponin-I rows declare ng/mL (192,317 numeric rows; "
-            "overall median about 0.18), while raw MIMIC-III item 51002 "
+            "overall median about 0.19), while raw MIMIC-III item 51002 "
             "declares ng/ml (5,526 rows; median 2.4); episode-bounded export "
             "medians are 0.2 and 2.8 without an added unit transform."
         ),
@@ -201,7 +201,7 @@ DISTRIBUTION_ADJUDICATIONS: dict[
             "native hourly channels: DataID 2200 input has 1,965,368 "
             "records/27,282 stays (median 82 mL) and DataID 725 urine has "
             "1,691,793 records/22,926 stays (median 50 mL). The resulting "
-            "full-export medians are -50 mL in eICU and +28.33 mL in SIC."
+            "full-export medians are -65 mL in eICU and +28.979 mL in SIC."
         ),
         "required_action": (
             "Do not rescale. Report the source-coverage difference, retain "
@@ -225,7 +225,7 @@ DISTRIBUTION_ADJUDICATIONS: dict[
             "Cumulative balance is the within-stay sum of the audited hourly "
             "balance from ICU hour 0. This identity holds within 0.01 mL for "
             "all 4,571,309 eICU and 2,074,074 SIC cumulative rows. Full-export "
-            "medians are -890 mL and +5,420.54 mL, respectively, so the sign "
+            "medians are -1,480 mL and +5,460.15 mL, respectively, so the sign "
             "difference propagates the verified hourly source-coverage and "
             "recording difference rather than a unit conversion."
         ),
