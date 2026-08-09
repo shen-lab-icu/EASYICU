@@ -467,9 +467,10 @@
   },
   "readiness": {
     "gates": {
-      "analysis_error_count": 1,
+      "analysis_error_count": 2,
       "analysis_errors": [
-        "The run locked robustness specifications that no step estimated, so the panel carries them as blank rows: complete_case_trajectory_inputs. A step re-estimating the locked grid must declare robustness_replay_spec to reach the deterministic replay owner; generic refitting stays disabled here because it would choose an exposure, outcome or method on the plan's behalf."
+        "The run locked robustness specifications that no step estimated, so the panel carries them as blank rows: complete_case_trajectory_inputs. A step re-estimating the locked grid must declare robustness_replay_spec to reach the deterministic replay owner; generic refitting stays disabled here because it would choose an exposure, outcome or method on the plan's behalf.",
+        "scientific_validator_unavailable: The analysis can execute, but no registered deterministic validator establishes its identification claim."
       ],
       "analysis_validated": false,
       "blocked_outcome_not_leaked": true,

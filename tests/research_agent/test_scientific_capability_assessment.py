@@ -112,7 +112,7 @@ def test_ordinary_survival_is_distinguished_from_a_competing_risk_endpoint() -> 
     assert competing.execution_backend_available is None
 
 
-def test_ordinal_association_uses_its_directly_declared_capability() -> None:
+def test_ordinal_association_stays_analysis_only_without_a_validator() -> None:
     context = ResearchContext(
         research_question="Does ordered severity predict mortality?",
         cohort=CohortDescriptor(
@@ -139,7 +139,9 @@ def test_ordinal_association_uses_its_directly_declared_capability() -> None:
     )
 
     assert assessment.capability_id == "association_ordinal_trend_v1"
-    assert assessment.claim_ceiling == "reportable"
+    assert assessment.claim_ceiling == "analysis_only"
+    assert assessment.scientific_validator_available is False
+    assert assessment.issue_code == "scientific_validator_unavailable"
 
 
 def test_ordinal_association_fails_closed_without_a_declared_ordinal_input() -> None:
