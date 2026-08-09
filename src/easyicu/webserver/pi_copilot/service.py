@@ -79,11 +79,11 @@ class PiCopilotService:
         workspace_base = Path(
             getattr(
                 self.gateway,
-                "cwd",
+                "declared_cwd",
                 self.store_path.parent / "pi_project_workspace",
             )
         )
-        self.workspace_root = workspace_base.resolve()
+        self.workspace_root = workspace_base.expanduser().absolute()
         self.workspace = ProjectWorkspace(self.workspace_root)
 
     def _project_initialization_lock(self, project_id: str) -> threading.RLock:
@@ -934,7 +934,7 @@ class PiCopilotService:
                 binding,
                 project_id=record.project_id,
             ),
-            workspace_root=self.workspace_root,
+            workspace=self.workspace,
         )
         with self._lock:
             if record.session_id in self._busy_sessions:
@@ -1212,29 +1212,17 @@ class PiCopilotService:
                 status_code=409,
                 details={"artifact": clean_artifact},
             )
-        gate = review.get("gate")
-        gate = gate if isinstance(gate, Mapping) else {}
-        readiness = review.get("readiness")
-        readiness = readiness if isinstance(readiness, Mapping) else {}
-        readiness_status = str(readiness.get("status") or "unknown")
-        signed = bool(readiness.get("signed"))
-        signoff_stale = bool(readiness.get("signoff_stale"))
-        reportable = bool(readiness.get("reportable"))
-        if signoff_stale:
-            human_signoff = "stale"
-        elif signed:
-            human_signoff = "signed"
-        elif readiness_status == "awaiting_human_signoff":
-            human_signoff = "required"
-        else:
-            human_signoff = "not_signable"
-        claim_ceiling = "reportable" if reportable else "unsupported"
-        if (
-            not reportable
-            and gate.get("status") == "analysis_only"
-            and readiness_status in {"awaiting_human_signoff", "signed_analysis_only"}
-        ):
-            claim_ceiling = "analysis_only"
+        governance = agent_runs.project_artifact_governance(review)
+        if not governance.get("ok"):
+            raise PiCopilotError(
+                str(
+                    governance.get("error")
+                    or "pi_research_artifact_governance_invalid"
+                ),
+                "The EasyICU run governance state is invalid for this artefact.",
+                status_code=409,
+                details={"artifact": clean_artifact},
+            )
         metadata = loaded.get("artifact") or {}
         return {
             "ok": True,
@@ -1249,12 +1237,7 @@ class PiCopilotService:
             "payload": payload,
             "privacy": {"passed": True},
             "governance": {
-                "authority_class": "easyicu_run_artifact",
-                "gate_status": gate.get("status"),
-                "readiness_status": readiness_status,
-                "human_signoff": human_signoff,
-                "reportable": reportable,
-                "claim_ceiling": claim_ceiling,
+                key: value for key, value in governance.items() if key != "ok"
             },
         }
 

@@ -19,7 +19,7 @@ import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from easyicu.webserver import agent_outputs
 from easyicu.webserver import dataio
@@ -465,6 +465,47 @@ def make_agent_run_runner(
         }
 
     return runner
+
+
+def project_artifact_governance(review: Mapping[str, Any]) -> Dict[str, Any]:
+    """Project one run review into the browser-safe artifact authority contract."""
+
+    readiness = review.get("readiness")
+    if not isinstance(readiness, Mapping):
+        return {
+            "ok": False,
+            "error": "run_artifact_governance_readiness_invalid",
+        }
+    gate = review.get("gate")
+    gate = gate if isinstance(gate, Mapping) else {}
+    readiness_status = str(readiness.get("status") or "unknown")
+    signed = bool(readiness.get("signed"))
+    signoff_stale = bool(readiness.get("signoff_stale"))
+    reportable = bool(readiness.get("reportable"))
+    if signoff_stale:
+        human_signoff = "stale"
+    elif signed:
+        human_signoff = "signed"
+    elif readiness_status == "awaiting_human_signoff":
+        human_signoff = "required"
+    else:
+        human_signoff = "not_signable"
+    claim_ceiling = "reportable" if reportable else "unsupported"
+    if (
+        not reportable
+        and gate.get("status") == "analysis_only"
+        and readiness_status in {"awaiting_human_signoff", "signed_analysis_only"}
+    ):
+        claim_ceiling = "analysis_only"
+    return {
+        "ok": True,
+        "authority_class": "easyicu_run_artifact",
+        "gate_status": gate.get("status"),
+        "readiness_status": readiness_status,
+        "human_signoff": human_signoff,
+        "reportable": reportable,
+        "claim_ceiling": claim_ceiling,
+    }
 
 
 def read_run_review(project_dir: str) -> Dict[str, Any]:

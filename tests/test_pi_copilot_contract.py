@@ -27,6 +27,7 @@ from easyicu.webserver.pi_copilot.projections import (
     reject_sensitive_message,
 )
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
+from easyicu.webserver.pi_copilot.gateway import PiGatewayClient
 from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot import service as service_module
 from easyicu.webserver.pi_copilot import tools as tool_module
@@ -89,6 +90,64 @@ class FakeGateway:
     def apply_provider_config(self, config: PiProviderConfig) -> None:
         self.applied_config = config
         self.environ.update(config.as_environment())
+
+
+def test_service_rejects_symlinked_gateway_workspace_root(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    declared_workspace = tmp_path / "workspace"
+    declared_workspace.symlink_to(outside, target_is_directory=True)
+    gateway = PiGatewayClient(
+        app_dir=tmp_path / "pi-app",
+        session_dir=tmp_path / "sessions",
+        cwd=declared_workspace,
+        environ={},
+    )
+
+    with pytest.raises(PiCopilotError) as caught:
+        PiCopilotService(
+            store_path=tmp_path / "pi-sessions.json",
+            gateway=gateway,
+        )
+
+    assert caught.value.code == "pi_workspace_base_root_symlink_blocked"
+
+
+def test_service_workspace_seal_survives_tool_context_composition(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    alias = tmp_path / "easyicu-home"
+    alias.symlink_to(first, target_is_directory=True)
+    gateway = PiGatewayClient(
+        app_dir=tmp_path / "pi-app",
+        session_dir=alias / "sessions",
+        environ={},
+    )
+    service = PiCopilotService(
+        store_path=tmp_path / "pi-sessions.json",
+        gateway=gateway,
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-workspace-seal",
+            project_id="project-a",
+            agent_mode="workspace",
+        ),
+        workspace=service.workspace,
+    )
+
+    alias.unlink()
+    alias.symlink_to(second, target_is_directory=True)
+
+    with pytest.raises(PiCopilotError) as caught:
+        tool_module.execute_tool("easyicu_list_project_files", {}, context)
+
+    assert caught.value.code == "pi_workspace_base_root_changed"
+    assert not (second / "workspace" / "projects").exists()
 
 
 @pytest.fixture

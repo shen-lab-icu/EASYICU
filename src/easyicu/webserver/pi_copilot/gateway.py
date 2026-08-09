@@ -86,16 +86,18 @@ class PiGatewayClient:
             else preferred_app_dir()
         ).resolve()
         self.entrypoint = self.app_dir / "src" / "main.mjs"
-        self.session_dir = (
+        self.declared_session_dir = (
             Path(session_dir)
             if session_dir is not None
             else Path.home() / ".easyicu" / "pi-agent" / "sessions"
-        ).resolve()
-        self.cwd = (
+        ).expanduser().absolute()
+        self.session_dir = self.declared_session_dir.resolve()
+        self.declared_cwd = (
             Path(cwd)
             if cwd is not None
-            else self.session_dir.parent / "workspace"
-        ).resolve()
+            else self.declared_session_dir.parent / "workspace"
+        ).expanduser().absolute()
+        self.cwd = self.declared_cwd.resolve()
         self.provider_store = provider_store or PiProviderConfigStore()
         self._provider_file_enabled = environ is None
         source_environment = os.environ if environ is None else environ

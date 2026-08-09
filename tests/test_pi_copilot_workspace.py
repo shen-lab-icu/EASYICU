@@ -138,6 +138,39 @@ def test_project_workspace_rejects_workspace_root_symlink(tmp_path: Path) -> Non
     assert not (outside / "projects").exists()
 
 
+def test_project_workspace_allows_stable_declared_ancestor_symlink(
+    tmp_path: Path,
+) -> None:
+    relocated = tmp_path / "relocated"
+    relocated.mkdir()
+    alias = tmp_path / "easyicu-home"
+    alias.symlink_to(relocated, target_is_directory=True)
+
+    workspace = ProjectWorkspace(alias / "workspace")
+
+    assert workspace.project_root("project-a").is_dir()
+    assert workspace.base_dir == (relocated / "workspace").resolve()
+
+
+def test_project_workspace_rejects_retargeted_ancestor_symlink(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    alias = tmp_path / "easyicu-home"
+    alias.symlink_to(first, target_is_directory=True)
+    workspace = ProjectWorkspace(alias / "workspace")
+    workspace.project_root("project-a")
+
+    alias.unlink()
+    alias.symlink_to(second, target_is_directory=True)
+
+    with pytest.raises(PiCopilotError) as caught:
+        workspace.project_root("project-a")
+
+    assert caught.value.code == "pi_workspace_base_root_changed"
+
+
 def test_project_workspace_write_is_create_only_and_edit_requires_current_digest(
     tmp_path: Path,
 ) -> None:
