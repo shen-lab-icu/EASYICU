@@ -370,7 +370,7 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
                 "do not infer that authority from covariate balance or positivity."
             ),
         ),
-        task_protocol_version="h2_vasopressor_causal/20260809-v2",
+        task_protocol_version="h2_vasopressor_causal/20260809-v3",
         notes=(
             "Operationalise early vasopressor exposure as any recorded "
             "vasopressor administration in ICU hours 0-24. Absence means no "

@@ -4,7 +4,7 @@
   "card_version": "2.0.0",
   "reviewed_content_sha256": "5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f",
   "case_protocol_path": "benchmarks/figure2_canonical9/protocols/h2_vasopressor_causal_20260809.json",
-  "case_protocol_content_sha256": "3abd1083b604c5d84f2923f0a219845d5fe95f9d5728741c946d3a78a9955305",
+  "case_protocol_content_sha256": "1d92f0de0fa4fd3a191e11f6baf0fca961d036ef9a17987ffafd3121777e281b",
   "status": "ai_pre_review_revisions_complete_formal_attestation_pending",
   "authorization": false,
   "split_rationale": "H2 is a causal-emulation question, not a generic medication association. The protocol must establish a common treatment-decision landmark and distinguish verified non-use from missing medication capture before any effect estimate can be considered.",
@@ -22,11 +22,11 @@
   ],
   "required_signoff": [
     "The reviewer accepts that the current inputevents-derived source proves recorded 0-24-hour administration but not verified non-use, so H2 must return H2_VERIFIED_NON_USE_UNAVAILABLE and must not construct a binary control arm or fit PSM/IPTW.",
-    "The intended target trial freezes eligible population, initiation and non-initiation strategies, ICU-admission time zero, 24-hour grace period with clone-censor-weight handling, 28-day in-hospital mortality follow-up, per-protocol risk-difference/risk-ratio estimands, censoring, and competing events.",
-    "Baseline covariates must precede strategy assignment; a covariate first observed after administration is not baseline.",
-    "The reviewer accepts propensity support [0.05, 0.95], 1st/99th percentile weight truncation, absolute SMD <=0.1, and fail-closed positivity response as the predeclared plan if a future source contract proves verified non-use.",
+    "The intended target trial freezes eligible population, initiation and non-initiation strategies, ICU-admission time zero, 24-hour grace period with clone-censor-weight handling and stabilized inverse-probability-of-censoring weights, 28-day in-hospital mortality follow-up, per-protocol risk-difference/risk-ratio estimands, censoring, and competing events.",
+    "Baseline adjustment variables must be defined at or before ICU-admission time zero. Physiologic or treatment-history information first observed after time zero must not enter baseline adjustment; if used during the 24-hour grace period, it must have a prespecified time-varying role in the adherence or censoring model.",
+    "The reviewer accepts strategy/adherence support [0.05, 0.95], 1st/99th percentile weight truncation, absolute SMD <=0.1, and fail-closed positivity response as the predeclared plan if a future source contract proves verified non-use.",
     "The current formal H2 result is non-identifiability from the available medication-capture contract, not an estimated causal effect.",
-    "The reviewer approves exact case protocol digest 3abd1083b604c5d84f2923f0a219845d5fe95f9d5728741c946d3a78a9955305 together with card digest 5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f."
+    "The reviewer approves exact case protocol digest 1d92f0de0fa4fd3a191e11f6baf0fca961d036ef9a17987ffafd3121777e281b together with card digest 5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f."
   ],
   "attestation_fields_required_after_signoff": [
     "reviewer_owner",
