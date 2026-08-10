@@ -195,10 +195,7 @@ def run_trajectory_scientific_candidate_selection(
             "Deterministic minimum BIC over the signed candidate grid; exact ties "
             "resolve to smaller k."
         ),
-        "candidate_range_boundary_rule": sealed.upper_boundary_action,
-        "candidate_range_boundary_reason_code": sealed.upper_boundary_reason_code,
     }
-    sealed.validate_selection(selection)
     _write_json(out_dir / "cluster_selection.json", selection)
     authority_binding = {
         "schema_version": sealed.schema_version,
@@ -234,6 +231,7 @@ def run_trajectory_scientific_candidate_selection(
         )
         _write_json(out_dir / "step_summary.json", summary)
         return summary
+    sealed.validate_selection(selection)
     labels = labels_by_k[selected_k]
     counts = pd.Series(labels).value_counts().sort_index()
     minimum_fraction = float(counts.min() / len(labels))

@@ -69,6 +69,9 @@
 - native-v2 SOFA-2 producer 正/负/duplicate pairing 两条 backend：`5 passed`。
 - E2/H2/H3 authority → real execution router：`8 passed`（包含 plan drift、deterministic result 与 config pairing）。
 - 完整 research-agent CI 首轮在 `9,789 passed` 后只暴露一条冻结 golden 漂移：新增 H3 scaling manifest 合法增加一个 current evidence/alias，但旧 golden 仍把后端浮点摘要派生的 evidence id 当成跨 Python 稳定身份。golden 现改为验证 claim 的稳定 evidence role/owner join，并保留数值、source field 与 owner 绑定；更新后的 golden 文件本地 `5 passed`。
+- 第二轮主 CI 暴露的 107 条红中，绝大多数是同一个冻结 scorer-tree 摘要级联。根因不是 evaluator/rubric 改动，而是把 H3 专用 candidate-boundary 字段加入了 scorer 树包含的通用 `schema.py`。最终修复把上界规则收回 digest-bound H3 runtime authority：通用 `ClusterSelectionManifest` 和 frozen paper rubric 均保持原字节/原摘要，`scorer_tree_sha256` 恢复并继续等于 `c1702070…e434`；H3 authority 仍逐项验证 exact k grid、minimum-BIC、interior optimum 和稳定 reason code。
+- 同轮剩余两条独立 CI 根因已收口：`research_agent_ci.yml --no-deps` 显式补装直接依赖 `patsy>=0.5.6`；provider-free/patient-data-free resource baseline 通过 append-only 工具登记 know-how registry 源摘要变化，测量 summary limits 不变。
+- scorer/evaluator + E2/H2/H3 authority + dependency/resource 基线联合回归：`314 passed`；通用 trajectory/H3/Golden 相邻回归初跑 `109 passed, 1 golden drift`，受控重生成后 golden 连续两次通过。`arch_measure` 无 lower-is-better regression，冻结 scorer 摘要、Ruff、`git diff --check` 均通过。
 - Ruff、JSON 解析、`git diff --check`：通过。
 - import-linter：7 个 contracts 全部 kept；module-graph diff 通过；deptry 无问题。
 

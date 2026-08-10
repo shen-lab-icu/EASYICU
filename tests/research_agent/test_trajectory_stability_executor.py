@@ -179,8 +179,6 @@ def _write_upstream_bundle(
                     {"n_clusters": n_clusters, "criterion_value": 123.0},
                     {"n_clusters": n_clusters + 1, "criterion_value": 180.0},
                 ],
-                "candidate_range_boundary_rule": "allow_upper_boundary",
-                "candidate_range_boundary_reason_code": None,
             }
         ),
         encoding="utf-8",
@@ -418,16 +416,12 @@ def test_executor_is_case_neutral_and_replayable(
     assert scaling["missing_value_policy"] == (
         "preserve_missing_exclude_from_likelihood"
     )
-    assert [item["coordinate"] for item in scaling["coordinates"]] == list(
-        coordinates
-    )
+    assert [item["coordinate"] for item in scaling["coordinates"]] == list(coordinates)
     for item in scaling["coordinates"]:
         observed = representation[item["coordinate"]].dropna().to_numpy()
         assert item["center"] == pytest.approx(float(observed.mean()))
         assert item["scale"] == pytest.approx(float(observed.std(ddof=0)))
-    assert summary["coordinate_scaling_sha256"] == scaling[
-        "scaling_manifest_sha256"
-    ]
+    assert summary["coordinate_scaling_sha256"] == scaling["scaling_manifest_sha256"]
 
     stability = pd.read_csv(out_dir / "cluster_stability.csv")
     row_assignments = pd.read_csv(out_dir / "cluster_stability_assignments.csv")
@@ -760,51 +754,3 @@ def test_invalid_spec_still_writes_failed_closed_summary(tmp_path: Path) -> None
     assert summary["freeze_status"] == "not_frozen"
     assert "validation" in " ".join(summary["errors"]).lower()
     assert json.loads((out_dir / "step_summary.json").read_text()) == summary
-
-
-def test_upper_candidate_boundary_fails_closed_with_frozen_reason_code(
-    tmp_path: Path,
-) -> None:
-    resolved, _representation, _assignments = _write_upstream_bundle(
-        tmp_path,
-        n_clusters=3,
-        id_column="neutral_id",
-        representation_columns=("feature_alpha", "feature_beta"),
-        assignment_column="reference_partition",
-    )
-    inputs = resolved["inputs"]
-    assert isinstance(inputs, dict)
-    selection_path = tmp_path / "upstream" / "cluster_selection.json"
-    selection = json.loads(selection_path.read_text(encoding="utf-8"))
-    selection.update(
-        {
-            "candidates": [
-                {"n_clusters": 1, "criterion_value": 200.0},
-                {"n_clusters": 2, "criterion_value": 180.0},
-                {"n_clusters": 3, "criterion_value": 123.0},
-            ],
-            "candidate_range_boundary_rule": (
-                "fail_closed_if_selected_at_upper_boundary"
-            ),
-            "candidate_range_boundary_reason_code": (
-                "H3_NO_INTERIOR_BIC_OPTIMUM"
-            ),
-        }
-    )
-    selection_path.write_text(json.dumps(selection), encoding="utf-8")
-    binding = inputs["manifest:cluster_selection"]
-    assert isinstance(binding, dict)
-    binding["sha256"] = _sha256(selection_path)
-
-    summary = run_trajectory_stability(
-        spec=_spec(),
-        out_dir=tmp_path / "step_outputs",
-        run_dir=tmp_path,
-        resolved_inputs=resolved,
-    )
-
-    assert summary["status"] == "failed_closed"
-    assert summary["freeze_status"] == "not_frozen"
-    assert summary["failure_class"] == "scientific_selection_boundary"
-    assert summary["reason_code"] == "H3_NO_INTERIOR_BIC_OPTIMUM"
-    assert "interior optimum" in " ".join(summary["errors"])

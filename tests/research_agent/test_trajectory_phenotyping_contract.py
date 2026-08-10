@@ -375,8 +375,6 @@ def _selection_manifest() -> dict:
             {"n_clusters": 3, "criterion_value": 112.0},
         ],
         "rationale": "Selected the finite minimum among the evaluated candidates.",
-        "candidate_range_boundary_rule": "allow_upper_boundary",
-        "candidate_range_boundary_reason_code": None,
     }
 
 

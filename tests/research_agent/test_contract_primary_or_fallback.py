@@ -333,8 +333,6 @@ def test_clustering_metric_satisfied_by_sibling_clustering_step(ra):
                             {"n_clusters": 2, "criterion_value": 0.32642819634210984},
                         ],
                         "rationale": "Maximum among evaluated candidates.",
-                        "candidate_range_boundary_rule": "allow_upper_boundary",
-                        "candidate_range_boundary_reason_code": None,
                     },
                 },
             }
