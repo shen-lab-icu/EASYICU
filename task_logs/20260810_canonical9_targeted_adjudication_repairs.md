@@ -68,6 +68,7 @@
 - 最终定点与相邻回归：`191 passed`（protocol/authority/launcher/materialization/runner/config/native-v2 producer/materializer/review packet）。
 - native-v2 SOFA-2 producer 正/负/duplicate pairing 两条 backend：`5 passed`。
 - E2/H2/H3 authority → real execution router：`8 passed`（包含 plan drift、deterministic result 与 config pairing）。
+- 完整 research-agent CI 首轮在 `9,789 passed` 后只暴露一条冻结 golden 漂移：新增 H3 scaling manifest 合法增加一个 current evidence/alias，但旧 golden 仍把后端浮点摘要派生的 evidence id 当成跨 Python 稳定身份。golden 现改为验证 claim 的稳定 evidence role/owner join，并保留数值、source field 与 owner 绑定；更新后的 golden 文件本地 `5 passed`。
 - Ruff、JSON 解析、`git diff --check`：通过。
 - import-linter：7 个 contracts 全部 kept；module-graph diff 通过；deptry 无问题。
 
