@@ -37,6 +37,7 @@ import pytest
 from easyicu.research_agent.agents.core import (
     PlannerAgent,
     ReplannerAgent,
+    _PLANNER_OPTIONAL_FIELDS_RETRY_GUIDE,
     _build_planner_user_prompt,
     _host_executed_cohort_step_sentence,
     _planner_retry_response_projection,
@@ -237,6 +238,17 @@ def test_the_retry_format_reminder_publishes_exact_model_term_shape():
         assert required in reminder
     assert "`variable`" in reminder
     assert "`binary_indicator`" in reminder
+
+
+def test_the_retry_reminder_publishes_primary_contract_applicability():
+    reminder = _PLANNER_OPTIONAL_FIELDS_RETRY_GUIDE
+
+    assert "`causal_inference`" in reminder
+    assert "`survival`" in reminder
+    assert "`association_study` must omit" in reminder
+    assert "`model_requirements`" in reminder
+    assert "`know_how_decisions`" in reminder
+    assert "never `null`" in reminder
 
 
 # ---------------------------------------------------------------------------
