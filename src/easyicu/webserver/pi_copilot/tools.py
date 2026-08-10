@@ -1350,7 +1350,28 @@ def _start_extraction(
 
 def _run(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, Any]:
     _require_args(params, allowed=("run_type", "llm_provider"))
-    run_type = str(params.get("run_type") or "preflight").strip().lower()
+    requested_run_type = str(params.get("run_type") or "").strip().lower()
+    # The UI holds the user's one-turn intent outside the model.  When Pi uses
+    # the tool's optional/default form, prefer the strongest action the user
+    # explicitly granted: clicking "full analysis" must not silently become a
+    # preflight and then ask for a second permission.  With no provider grant,
+    # the conservative default remains the deterministic local preflight.
+    provider_run_granted = "provider_run" in context.allowed_actions
+    local_run_granted = "run" in context.allowed_actions
+    run_type = requested_run_type or (
+        "full" if provider_run_granted else "preflight"
+    )
+    if (
+        run_type == "preflight"
+        and provider_run_granted
+        and not local_run_granted
+    ):
+        # Pi does not receive the host-held grant list.  If it conservatively
+        # asks for the default preflight while the user selected *only* the
+        # full-analysis permission, the host intent is unambiguous: run the
+        # authorized full workflow rather than rejecting it for a permission
+        # the user was never expected to select as well.
+        run_type = "full"
     if run_type not in {"preflight", "full"}:
         return _result(
             context,
@@ -1412,6 +1433,11 @@ def _run(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, 
                     "research_agent_pipeline"
                     if run_type == "full"
                     else "native_summary"
+                ),
+                **(
+                    {"credential_source": "pi_verified"}
+                    if run_type == "full"
+                    else {}
                 ),
             }
         )

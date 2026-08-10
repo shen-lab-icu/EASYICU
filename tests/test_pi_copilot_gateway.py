@@ -503,7 +503,21 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
             ]
           }} }} }},
       }});
-      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts }}));
+      const submittedRun = normalizePiEvent({{
+        type: 'tool_execution_end', toolCallId: 'call-6', toolName: 'easyicu_run',
+        result: {{ details: {{ status: 'ok', code: 'easyicu_full_run_submitted',
+          summary: 'Submitted full run', owner: 'easyicu.agent', details: {{
+            job_id: '6a2bf5684685', project_dir: 'must-not-leak'
+          }} }} }},
+      }});
+      const unsafeJob = normalizePiEvent({{
+        type: 'tool_execution_end', toolCallId: 'call-7', toolName: 'easyicu_run',
+        result: {{ details: {{ status: 'ok', code: 'easyicu_full_run_submitted',
+          summary: 'Submitted full run', owner: 'easyicu.agent', details: {{
+            job_id: '../unsafe'
+          }} }} }},
+      }});
+      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts, submittedRun, unsafeJob }}));
     """
     completed = subprocess.run(
         [node, "--input-type=module", "--eval", script],
@@ -547,9 +561,18 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         "label": "Table 1",
         "media_type": "application/json",
     }]
+    assert payload["submittedRun"]["job_id"] == "6a2bf5684685"
+    assert "job_id" not in payload["unsafeJob"]
     assert "raw result must not leak" not in completed.stdout
     assert "project_dir" not in completed.stdout
     assert "must-not-leak" not in completed.stdout
+
+
+def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+    assert "treat that as execution intent rather than a request to inspect an older run" in entrypoint
+    assert "then call easyicu_run" in entrypoint
+    assert "Use easyicu_inspect_run only when the user asks for status" in entrypoint
 
 
 def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:

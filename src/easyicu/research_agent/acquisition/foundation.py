@@ -295,6 +295,7 @@ def acquire_universe_for_question(
     outcome_concepts: Sequence[str],
     required_feature_concepts: Sequence[str] = (),
     static_concepts: Sequence[str] = (),
+    allowed_modules: Sequence[str] = (),
     cohort_window: tuple = (0.0, 24.0),
     database: str = "miiv",
     require_outcome: bool = True,
@@ -314,6 +315,20 @@ def acquire_universe_for_question(
     from ..cohort.materializer import materialize_to_parquet
 
     catalog = build_available_catalog(export_dir)
+    normalized_modules = {
+        str(module).strip().lower()
+        for module in allowed_modules
+        if isinstance(module, str) and str(module).strip()
+    }
+    if normalized_modules:
+        catalog = AvailableCatalog(
+            source=catalog.source,
+            concepts=[
+                concept
+                for concept in catalog.concepts
+                if Path(concept.file_name).stem.lower() in normalized_modules
+            ],
+        )
     selection = DataFoundationAgent(llm).select_concepts(
         question=question, catalog=catalog, target_outcome=target_outcome
     )

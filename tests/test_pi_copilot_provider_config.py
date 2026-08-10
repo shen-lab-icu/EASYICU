@@ -75,6 +75,62 @@ def test_verified_provider_config_is_private_and_never_returns_secret(
     assert "test-private-key" not in json.dumps(restored)
 
 
+def test_verified_provider_config_projects_to_research_memory_only_after_opt_in(
+    tmp_path: Path,
+) -> None:
+    store = PiProviderConfigStore(
+        config_path=tmp_path / "pi-provider.env",
+        receipt_path=tmp_path / "pi-provider-verification.json",
+    )
+    store.verify_and_save(
+        provider="easyicu-local",
+        api_key="test-private-key",
+        base_url="http://127.0.0.1:8317/v1",
+        model="gpt5.6 luna",
+        api_transport="openai-completions",
+        verifier=_models_ok,
+    )
+
+    with pytest.raises(PiCopilotError) as rejected:
+        store.research_agent_environment(external_llm_opt_in=False)
+    assert rejected.value.code == "pi_provider_research_opt_in_required"
+
+    environment = store.research_agent_environment(external_llm_opt_in=True)
+
+    assert environment == {
+        "OPENAI_API_KEY": "test-private-key",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8317/v1",
+        "OPENAI_MODEL": "gpt5.6 luna",
+        "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
+    }
+    assert "test-private-key" not in json.dumps(store.public_status())
+
+
+def test_unverified_provider_config_cannot_unlock_research_agent(
+    tmp_path: Path,
+) -> None:
+    store = PiProviderConfigStore(
+        config_path=tmp_path / "pi-provider.env",
+        receipt_path=tmp_path / "pi-provider-verification.json",
+    )
+
+    with pytest.raises(PiCopilotError) as rejected:
+        store.research_agent_environment(
+            external_llm_opt_in=True,
+            environ={
+                "EASYICU_PI_PROVIDER": "easyicu-local",
+                "EASYICU_PI_API_KEY": "unverified-private-key",
+                "EASYICU_PI_BASE_URL": "http://127.0.0.1:8317/v1",
+                "EASYICU_PI_MODEL": "gpt5.6 luna",
+                "EASYICU_PI_API": "openai-completions",
+            },
+            include_file=False,
+        )
+
+    assert rejected.value.code == "pi_provider_research_configuration_unverified"
+    assert "unverified-private-key" not in json.dumps(rejected.value.detail)
+
+
 def test_failed_verification_does_not_persist_credentials(tmp_path: Path) -> None:
     store = PiProviderConfigStore(
         config_path=tmp_path / "pi-provider.env",

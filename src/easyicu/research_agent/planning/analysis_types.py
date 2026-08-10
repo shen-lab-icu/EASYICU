@@ -1128,7 +1128,7 @@ def infer_analysis_type(
             r"\b(?:do\s+not|don't|not|avoid|without)\b.{0,40}\bcausal(?:ity|ly)?\b"
             r"|\b(?:rather\s+than|instead\s+of|as\s+opposed\s+to)\b"
             r".{0,30}\bcausal(?:ity|ly)?\b"
-            r"|\bnon-?causal\b"
+            r"|\bnon[-_]?causal\b"
             r"|\bcausal\s+(?:claim|conclusion|interpretation)\b.{0,24}\b"
             r"(?:not|unsupported|avoid)\b"
             r"|(?:不(?:作|做|进行|用于|支持|解释为?)|避免|无意).{0,24}因果"

@@ -35,6 +35,11 @@ function safeStableId(value, limit = 160) {
   return /^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(text) ? text : "";
 }
 
+function safeJobId(value) {
+  const text = boundedText(value, 160).trim();
+  return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/.test(text) ? text : "";
+}
+
 function safeArtifactName(value) {
   const name = boundedText(value, 160).trim();
   if (!name || name.includes("/") || name.includes("\\") || !name.endsWith(".json")) return "";
@@ -97,11 +102,13 @@ function toolReceipt(result) {
   const fallback = content.find((item) => item && item.type === "text")?.text || "";
   const resource = projectedResource(details.resource || ownerDetails.resource);
   const resources = projectedResources(details.resources || ownerDetails.resources);
+  const jobId = safeJobId(ownerDetails.job_id || details.job_id);
   return {
     status: boundedText(details.status || "", 40),
     code: boundedText(details.code || "", 160),
     summary: boundedText(details.summary || fallback, 2000),
     owner: boundedText(details.owner || "", 240),
+    ...(jobId ? { job_id: jobId } : {}),
     ...(resource ? { resource } : {}),
     ...(resources.length ? { resources } : {}),
   };

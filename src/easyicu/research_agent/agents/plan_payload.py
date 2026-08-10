@@ -12,7 +12,11 @@ from __future__ import annotations
 import dataclasses
 from typing import Any, Dict, List, Tuple
 
-from ..contracts.declared_product import typed_product as _canonical_typed_product
+from ..contracts.declared_product import (
+    PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
+    RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
+    typed_product as _canonical_typed_product,
+)
 from ..planning.robustness_contract import RobustnessSpec
 from ..schema import (
     AnalysisPlan,
@@ -111,6 +115,50 @@ def _require_exact_scientific_keys(
     unknown = [str(key) for key in raw if key not in allowed]
     if unknown:
         raise PlannerScientificProjectionError(path=path, unknown_keys=unknown)
+
+
+def _require_runtime_supported_product_kinds(
+    *,
+    step_id: str,
+    inputs: object,
+    expected_outputs: object,
+) -> None:
+    """Reject typed product spellings the runtime cannot honour.
+
+    Product *names* and the scientific dependency graph remain Planner-owned.
+    The closed kind vocabulary is a representation/runtime contract: accepting
+    ``text:x`` here only to reject it after the paid probe/replan cycle cannot
+    make the plan more expressive.  A terminal ``report`` is intentionally a
+    valid output but not a consumable input; the writer materialises it after
+    the evidence-producing analysis steps have completed.
+    """
+
+    for field, values, supported in (
+        ("inputs", inputs, RUNTIME_BINDABLE_TYPED_INPUT_KINDS),
+        (
+            "expected_outputs",
+            expected_outputs,
+            PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
+        ),
+    ):
+        if not isinstance(values, list):
+            continue
+        for index, raw in enumerate(values):
+            product = _canonical_typed_product(raw) if isinstance(raw, str) else None
+            if product is None or product[0] in supported:
+                continue
+            terminal_report_note = (
+                " A report product is terminal writer output and cannot be "
+                "consumed by another analysis step."
+                if field == "inputs" and product[0] == "report"
+                else ""
+            )
+            raise ValueError(
+                f"Planner step {step_id!r} declares unsupported typed product "
+                f"kind {product[0]!r} at {field}[{index}]. Supported kinds are "
+                f"{sorted(supported)!r}.{terminal_report_note} Re-emit the same "
+                "scientific plan with a runtime-supported product kind."
+            )
 
 
 def _normalise_plan_payload(
@@ -284,6 +332,25 @@ def _normalise_plan_payload(
                     "declare each figure exactly once as 'figure:<name>'."
                 )
             step_payload["expected_outputs"] = normalised_outputs
+        method_head = (
+            str(step_payload.get("method") or "")
+            .strip()
+            .casefold()
+            .split(" with ", 1)[0]
+        )
+        if method_head == "visualization" and not (
+            step_payload.get("expected_outputs") or []
+        ):
+            raise ValueError(
+                f"Planner step {step_id!r} is a visualization but declares no "
+                "typed figure output; either drop the redundant step or re-emit "
+                "it with exactly the intended 'figure:<name>' product."
+            )
+        _require_runtime_supported_product_kinds(
+            step_id=str(step_id),
+            inputs=step_payload.get("inputs"),
+            expected_outputs=step_payload.get("expected_outputs"),
+        )
         steps.append(step_payload)
     out["steps"] = steps
     specs = []
@@ -305,6 +372,43 @@ def _normalise_plan_payload(
         specs.append(spec_payload)
     if "robustness_specs" in out:
         out["robustness_specs"] = specs
+    analysis_type = str(out.get("analysis_type") or "").strip().casefold()
+    descriptive_robustness_steps = [
+        str(step.get("step_id") or "")
+        for step in steps
+        if str(step.get("method") or "").strip().casefold().split(" with ", 1)[0]
+        == "robustness_sensitivity"
+    ]
+    if analysis_type == "descriptive_epidemiology" and descriptive_robustness_steps:
+        raise ValueError(
+            "A descriptive_epidemiology plan cannot route "
+            f"{descriptive_robustness_steps!r} through method "
+            "'robustness_sensitivity': that executor re-estimates an already "
+            "fitted primary effect with an interval. Re-emit the descriptive "
+            "plan without robustness_specs/robustness_sensitivity, and use "
+            "typed missingness or denominator audits for descriptive "
+            "sensitivity instead."
+        )
+    narrative_execution_steps = [
+        str(step.get("step_id") or "")
+        for step in steps
+        if str(step.get("method") or "").strip().casefold().split(" with ", 1)[0]
+        in {
+            "descriptive_interpretation",
+            "result_interpretation",
+            "report_writing",
+            "manuscript_writing",
+        }
+    ]
+    if narrative_execution_steps:
+        raise ValueError(
+            "Analysis steps cannot execute narrative interpretation or writing "
+            f"methods for {narrative_execution_steps!r}. Re-emit only the "
+            "evidence-producing statistical, audit, and figure steps. The "
+            "gate-bound result interpreter and manuscript writer consume the "
+            "verified products after analysis execution; do not generate "
+            "Python code to narrate or draft them."
+        )
     return out, dropped
 
 

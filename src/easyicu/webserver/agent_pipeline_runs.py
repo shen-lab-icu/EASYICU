@@ -147,6 +147,120 @@ def _cohort_window(study: Mapping[str, Any]) -> tuple[float, float]:
     return (0.0, hours)
 
 
+def _configured_modules(study: Mapping[str, Any]) -> tuple[str, ...]:
+    raw = study.get("modules")
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            str(module).strip().lower()
+            for module in raw
+            if isinstance(module, str) and str(module).strip()
+        )
+    )
+
+
+def _data_foundation_profile(
+    *,
+    export_path: str,
+    study: Mapping[str, Any],
+    target: Optional[str],
+) -> Dict[str, Any]:
+    """Compile StudyContext modules into one typed materialization request."""
+
+    from easyicu.research_agent.acquisition.catalog import build_available_catalog
+
+    modules = _configured_modules(study)
+    if not modules:
+        raise ResearchPipelineRunError(
+            "research_pipeline_modules_required",
+            "A full Research Agent run requires configured feature modules.",
+        )
+    allowed = set(modules)
+    catalog = build_available_catalog(Path(export_path).expanduser())
+    concepts = [
+        concept
+        for concept in catalog.concepts
+        if Path(concept.file_name).stem.lower() in allowed
+    ]
+    by_id = {concept.concept_id: concept for concept in concepts}
+    demographic_values = [
+        concept.concept_id
+        for concept in concepts
+        if Path(concept.file_name).stem.lower() == "demographics"
+        and (not concept.typed_metadata or concept.column_role == "value")
+    ]
+    preferred_base = [
+        concept for concept in ("age", "sex") if concept in demographic_values
+    ]
+    static_concepts = preferred_base or demographic_values[:1]
+    if not static_concepts:
+        raise ResearchPipelineRunError(
+            "research_pipeline_stay_denominator_unavailable",
+            "The configured modules do not provide a stay-level denominator concept.",
+        )
+
+    outcome_concepts: List[str] = []
+    required_feature_concepts: List[str] = []
+    require_outcome = False
+    if target:
+        target_meta = by_id.get(target)
+        if target_meta is None:
+            raise ResearchPipelineRunError(
+                "research_pipeline_target_outside_configured_modules",
+                "The configured outcome is not available in the selected feature modules.",
+            )
+        target_module = Path(target_meta.file_name).stem.lower()
+        if target_meta.column_role == "event_status":
+            outcome_concepts.append(target)
+            require_outcome = True
+        elif target_module in {"demographics", "outcome"}:
+            static_concepts.append(target)
+        else:
+            required_feature_concepts.append(target)
+
+    return {
+        "allowed_modules": modules,
+        "static_concepts": tuple(dict.fromkeys(static_concepts)),
+        "outcome_concepts": tuple(outcome_concepts),
+        "required_feature_concepts": tuple(required_feature_concepts),
+        "require_outcome": require_outcome,
+    }
+
+
+def _research_user_preferences(study: Mapping[str, Any]) -> Dict[str, Any]:
+    """Compile StudyContext into the existing strict preference contract."""
+
+    preferences: Dict[str, Any] = {}
+    purpose = _clean_text(study.get("purpose"), 1_200)
+    analysis_goal = _clean_text(study.get("analysis_goal"), 1_200)
+    comparator = _clean_text(study.get("comparator"), 800)
+    if purpose:
+        preferences["extra_notes"] = purpose
+    if analysis_goal:
+        preferences["must_have_outputs"] = analysis_goal
+    if comparator:
+        preferences["subgroup_sensitivity"] = comparator
+
+    time_window = study.get("time_window")
+    if isinstance(time_window, Mapping) and time_window:
+        preferences["timing_and_design"] = json.dumps(
+            dict(time_window), ensure_ascii=False, sort_keys=True
+        )[:1_000]
+    constraints: Dict[str, Any] = {}
+    cohort = study.get("cohort")
+    confirmations = study.get("confirmations")
+    if isinstance(cohort, Mapping) and cohort:
+        constraints["cohort"] = dict(cohort)
+    if isinstance(confirmations, Mapping) and confirmations:
+        constraints["confirmations"] = dict(confirmations)
+    if constraints:
+        preferences["data_constraints"] = json.dumps(
+            constraints, ensure_ascii=False, sort_keys=True
+        )[:2_400]
+    return preferences
+
+
 def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
     raw = study.get("cohort")
     cohort = raw if isinstance(raw, Mapping) else {}
@@ -771,6 +885,7 @@ def make_research_pipeline_run_runner(
     study_context: Mapping[str, Any],
     project_root: Optional[str],
     provider: Mapping[str, Any],
+    provider_environment: Optional[Mapping[str, str]] = None,
 ) -> Any:
     """Build the JobManager runner for a real, evidence-bound pipeline run."""
 
@@ -788,6 +903,9 @@ def make_research_pipeline_run_runner(
     )
     target = _target_outcome(study)
     window = _cohort_window(study)
+    research_provider_environment = (
+        dict(provider_environment) if provider_environment is not None else None
+    )
 
     def runner(job: Any) -> Dict[str, Any]:
         root = (
@@ -799,7 +917,8 @@ def make_research_pipeline_run_runner(
         wrapper_dir.mkdir(parents=True, exist_ok=True)
         _progress(job, step="provider", label="Research Agent provider authorized")
         client, provider_public = provider_adapter.build_research_agent_provider_client(
-            dict(provider)
+            dict(provider),
+            environ=research_provider_environment,
         )
         try:
             from easyicu.research_agent import ResearchAgentPipeline
@@ -815,6 +934,11 @@ def make_research_pipeline_run_runner(
                 step="data_foundation",
                 label="Selecting concepts and materializing a typed analysis universe",
             )
+            foundation_profile = _data_foundation_profile(
+                export_path=export_path,
+                study=study,
+                target=target,
+            )
             acquisition = acquire_universe_for_question(
                 export_dir=Path(export_path).expanduser(),
                 question=question,
@@ -822,10 +946,15 @@ def make_research_pipeline_run_runner(
                 output_dir=wrapper_dir / "pipeline_input",
                 stem="web_research_universe",
                 target_outcome=target,
-                outcome_concepts=[target] if target else [],
+                outcome_concepts=foundation_profile["outcome_concepts"],
+                required_feature_concepts=foundation_profile[
+                    "required_feature_concepts"
+                ],
+                static_concepts=foundation_profile["static_concepts"],
+                allowed_modules=foundation_profile["allowed_modules"],
                 cohort_window=window,
                 database=database,
-                require_outcome=bool(target),
+                require_outcome=foundation_profile["require_outcome"],
                 emit_trajectory=True,
             )
             if acquisition.blocked or acquisition.universe_path is None:
@@ -846,15 +975,7 @@ def make_research_pipeline_run_runner(
                 config,
                 services=PipelineServices(llm=client),
             )
-            preferences = {
-                "analysis_goal": _clean_text(study.get("analysis_goal"), 1_200),
-                "configured_time_window": json.dumps(
-                    study.get("time_window") or {}, ensure_ascii=False, sort_keys=True
-                )[:1_000],
-                "configured_cohort": json.dumps(
-                    study.get("cohort") or {}, ensure_ascii=False, sort_keys=True
-                )[:2_000],
-            }
+            preferences = _research_user_preferences(study)
             _progress(
                 job,
                 step="research_pipeline",

@@ -61,6 +61,29 @@ from .adjusted_association_figure_executor import (
     adjusted_association_figure_executor_code,
     adjusted_association_figure_executor_owns_step,
 )
+from .audit_panel_executor import (
+    audit_panel_executor_code,
+    audit_panel_executor_owns_step,
+)
+from .cohort_flow_figure_executor import (
+    COHORT_FLOW_INPUT,
+    cohort_flow_figure_executor_code,
+    cohort_flow_figure_executor_owns_step,
+)
+from .descriptive_result_figure_executor import (
+    descriptive_result_figure_executor_code,
+    descriptive_result_figure_executor_owns_step,
+)
+from .descriptive_distribution_executor import (
+    DESCRIPTIVE_DISTRIBUTION_ANALYSIS_KIND,
+    descriptive_distribution_executor_code,
+    descriptive_distribution_executor_owns_step,
+)
+from .descriptive_association_executor import (
+    DESCRIPTIVE_ASSOCIATION_ANALYSIS_KIND,
+    descriptive_association_executor_code,
+    descriptive_association_executor_owns_step,
+)
 from .prevalence_outcome_figure_executor import (
     PREVALENCE_OUTCOME_FIGURE_INPUT,
     prevalence_outcome_figure_executor_code,
@@ -438,6 +461,40 @@ def select_standard_executor(
             )
         )
     _missed("adjusted_association_figure")
+    if cohort_flow_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined("cohort_flow_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="cohort_flow_figure",
+                selection_reason="cohort_flow_figure_contract_preflight",
+                progress_message="Using digest-bound cohort-flow renderer",
+                code=cohort_flow_figure_executor_code(step),
+                consumed_input_keys=(COHORT_FLOW_INPUT,),
+            )
+        )
+    _missed("cohort_flow_figure")
+    if descriptive_result_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined("descriptive_result_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="descriptive_result_figure",
+                selection_reason="descriptive_result_figure_contract_preflight",
+                progress_message=(
+                    "Using digest-bound descriptive result renderer"
+                ),
+                code=descriptive_result_figure_executor_code(step),
+                consumed_input_keys=(step.inputs[0],),
+            )
+        )
+    _missed("descriptive_result_figure")
     if prevalence_mortality_figure_executor_owns_step(step):
         if receipt_required:
             _receipt_declined("prevalence_mortality_figure")
@@ -489,6 +546,52 @@ def select_standard_executor(
         _declined(missingness_declaration_verdict)
     else:
         _missed("missingness_measurement_figure")
+    if audit_panel_executor_owns_step(step):
+        if receipt_required:
+            _receipt_declined("audit_panel")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="audit_panel",
+                selection_reason="framework_audit_panel_contract_preflight",
+                progress_message="Using deterministic audit-panel renderer",
+                code=audit_panel_executor_code(step),
+                consumed_input_keys=(),
+            )
+        )
+    _missed("audit_panel")
+    if descriptive_distribution_executor_owns_step(step):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=DESCRIPTIVE_DISTRIBUTION_ANALYSIS_KIND,
+                selection_reason="grouped_descriptive_distribution_contract_preflight",
+                progress_message=(
+                    "Using planner-scoped grouped descriptive distribution executor"
+                ),
+                code=descriptive_distribution_executor_code(
+                    step,
+                    plausibility_scope=plausibility_scope,
+                ),
+                consumed_input_keys=_consumed_typed_cohort_inputs(step),
+            )
+        )
+    _missed(DESCRIPTIVE_DISTRIBUTION_ANALYSIS_KIND)
+    if descriptive_association_executor_owns_step(step):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=DESCRIPTIVE_ASSOCIATION_ANALYSIS_KIND,
+                selection_reason="descriptive_association_contract_preflight",
+                progress_message=(
+                    "Using planner-scoped descriptive association executor"
+                ),
+                code=descriptive_association_executor_code(
+                    step,
+                    plausibility_scope=plausibility_scope,
+                ),
+                consumed_input_keys=_consumed_typed_cohort_inputs(step),
+            )
+        )
+    _missed(DESCRIPTIVE_ASSOCIATION_ANALYSIS_KIND)
     if table_one_executor_owns_step(step):
         typed_cohort_inputs = _consumed_typed_cohort_inputs(step)
         return _selected(

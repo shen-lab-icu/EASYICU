@@ -829,6 +829,7 @@ def resolve_agent_provider_config(
     llm_provider: str,
     external_llm_opt_in: bool,
     ai_enabled: bool,
+    environ: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     """Resolve the provider boundary without loading credentials or clients."""
     resolved_run_type = normalize_run_type(run_type)
@@ -843,7 +844,10 @@ def resolve_agent_provider_config(
         raise AgentRunConfigError(exc.detail) from exc
     if resolved_run_type == "full" and provider.get("external"):
         try:
-            provider = provider_adapter.require_external_credentials(provider)
+            provider = provider_adapter.require_external_credentials(
+                provider,
+                environ=environ,
+            )
         except provider_adapter.ProviderAdapterError as exc:
             raise AgentRunConfigError(exc.detail) from exc
     return provider

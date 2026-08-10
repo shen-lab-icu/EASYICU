@@ -207,6 +207,62 @@ def test_acquire_proceeds_on_available_subset_when_outcome_present(monkeypatch):
     assert "re-extract" in res.note.lower()
 
 
+def test_acquire_limits_agent_catalog_to_configured_modules(monkeypatch):
+    captured = {}
+    catalog = AvailableCatalog(
+        source="mem",
+        concepts=[
+            CatalogConcept(
+                concept_id="age",
+                file_name="demographics.parquet",
+            ),
+            CatalogConcept(
+                concept_id="death",
+                file_name="outcome.parquet",
+            ),
+            CatalogConcept(
+                concept_id="lact",
+                file_name="blood_gas.parquet",
+            ),
+        ],
+    )
+
+    monkeypatch.setattr(df_mod, "build_available_catalog", lambda _d: catalog)
+    original_select = DataFoundationAgent.select_concepts
+
+    def capture_catalog(self, *, question, catalog, target_outcome):
+        captured["catalog_ids"] = catalog.ids()
+        return original_select(
+            self,
+            question=question,
+            catalog=catalog,
+            target_outcome=target_outcome,
+        )
+
+    monkeypatch.setattr(DataFoundationAgent, "select_concepts", capture_catalog)
+    import easyicu.research_agent.cohort.materializer as cm
+
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **_kwargs: {"parquet": "u.parquet", "provenance": "u.json"},
+    )
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="q",
+        llm=_stub('{"selected_concepts": ["death"]}'),
+        output_dir="/tmp/x",
+        target_outcome="death",
+        outcome_concepts=["death"],
+        static_concepts=["age"],
+        allowed_modules=["demographics", "outcome"],
+    )
+
+    assert result.blocked is False
+    assert captured["catalog_ids"] == ["age", "death"]
+
+
 def test_outcome_free_acquisition_materialises_required_trajectory_concept(
     monkeypatch,
 ):
