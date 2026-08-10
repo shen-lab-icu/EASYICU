@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
+from ...authority.current_case_scientific_runtime import (
+    LandmarkSplineRuntimeAuthority,
+    SourceFeasibilityRuntimeAuthority,
+    load_current_case_scientific_runtime_authority,
+)
 from ...contracts.ownership_verdict import OwnershipVerdict
 from .deterministic_robustness import (
     ROBUSTNESS_REPLAY_ANALYSIS_KIND,
@@ -87,6 +92,16 @@ from .trajectory_scientific_representation_executor import (
     trajectory_scientific_representation_executor_owns_step,
 )
 from .typed_input_binding import sole_typed_cohort_input
+from .landmark_spline_executor import (
+    LANDMARK_SPLINE_ANALYSIS_KIND,
+    landmark_spline_executor_code,
+    landmark_spline_executor_owns_step,
+)
+from .source_feasibility_executor import (
+    SOURCE_FEASIBILITY_ANALYSIS_KIND,
+    source_feasibility_executor_code,
+    source_feasibility_executor_owns_step,
+)
 
 
 def _consumed_typed_cohort_inputs(step: AnalysisStep) -> tuple[str, ...]:
@@ -164,6 +179,7 @@ def select_standard_executor(
     plausibility_scope: FlagOnlyPlausibilityScope | None = None,
     resolved_bindings: Mapping[str, Any] | None = None,
     trajectory_scientific_runtime_authority: Mapping[str, Any] | None = None,
+    current_case_scientific_runtime_authority: Mapping[str, Any] | None = None,
     scientific_runtime_projection_sha256: str | None = None,
     trace: list[StandardExecutorCandidate] | None = None,
 ) -> StandardExecutorSelection | None:
@@ -239,6 +255,60 @@ def select_standard_executor(
         # whether it claimed could not be read as a list of consulted owners.
         _note(owner_key or selection.analysis_kind, True, "selected")
         return selection
+
+    if current_case_scientific_runtime_authority is not None:
+        sealed_current = load_current_case_scientific_runtime_authority(
+            current_case_scientific_runtime_authority
+        )
+        projection_digest = str(scientific_runtime_projection_sha256 or "")
+        if isinstance(sealed_current, LandmarkSplineRuntimeAuthority):
+            if landmark_spline_executor_owns_step(
+                step,
+                plan=plan,
+                authority=sealed_current,
+            ):
+                return _selected(
+                    StandardExecutorSelection(
+                        analysis_kind=LANDMARK_SPLINE_ANALYSIS_KIND,
+                        selection_reason=(
+                            "signed_landmark_spline_contract_preflight"
+                        ),
+                        progress_message=(
+                            "Using signed landmark spline executor"
+                        ),
+                        code=landmark_spline_executor_code(
+                            step,
+                            authority=sealed_current,
+                            runtime_projection_sha256=projection_digest,
+                            plausibility_scope=plausibility_scope,
+                        ),
+                        consumed_input_keys=_consumed_typed_cohort_inputs(step),
+                    )
+                )
+            _missed(LANDMARK_SPLINE_ANALYSIS_KIND)
+        elif isinstance(sealed_current, SourceFeasibilityRuntimeAuthority):
+            if source_feasibility_executor_owns_step(
+                step,
+                plan=plan,
+                authority=sealed_current,
+            ):
+                return _selected(
+                    StandardExecutorSelection(
+                        analysis_kind=SOURCE_FEASIBILITY_ANALYSIS_KIND,
+                        selection_reason=(
+                            "signed_source_feasibility_contract_preflight"
+                        ),
+                        progress_message=(
+                            "Using signed source-feasibility executor"
+                        ),
+                        code=source_feasibility_executor_code(
+                            authority=sealed_current,
+                            runtime_projection_sha256=projection_digest,
+                        ),
+                        consumed_input_keys=(),
+                    )
+                )
+            _missed(SOURCE_FEASIBILITY_ANALYSIS_KIND)
 
     if cohort_summary_executor_owns_step(step):
         # This executor emits the flag-only receipt itself, so a receipt

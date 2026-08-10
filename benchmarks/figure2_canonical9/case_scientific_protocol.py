@@ -15,6 +15,9 @@ from typing import Annotated, Any, Literal, Mapping, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from easyicu.research_agent.schema import TrajectoryStabilitySpec
+from easyicu.research_agent.authority.current_case_scientific_runtime import (
+    build_current_case_scientific_runtime_authority,
+)
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
     build_trajectory_scientific_runtime_authority,
 )
@@ -331,12 +334,19 @@ class RuntimeScientificProjection(_StrictFrozenModel):
             raise ValueError("runtime scientific projection digest mismatch")
         if not self.agent_visible_required_outputs or not self.agent_visible_guardrails:
             raise ValueError("runtime projection must be visible to the Agent")
-        if (self.task_id == "h3_trajectory_clustering") != (
-            self.deterministic_execution_contract is not None
+        if self.deterministic_execution_contract is None:
+            raise ValueError("every governed case requires a deterministic contract")
+        expected_schema = {
+            "e2_lactate_mortality": "easyicu.landmark_spline_runtime_authority/1",
+            "h2_vasopressor_causal": "easyicu.source_feasibility_runtime_authority/1",
+            "h3_trajectory_clustering": (
+                "easyicu.trajectory_scientific_runtime_authority/1"
+            ),
+        }[self.task_id]
+        if self.deterministic_execution_contract.get("schema_version") != (
+            expected_schema
         ):
-            raise ValueError(
-                "only H3 requires the deterministic trajectory execution contract"
-            )
+            raise ValueError("runtime deterministic contract kind does not match task")
         return self
 
 
@@ -461,6 +471,19 @@ def _h3_deterministic_execution_contract(
                     representation.clustering_stage_imputation
                 ),
             },
+            "representation_plan_method": (
+                "signed_fixed_window_trajectory_representation"
+            ),
+            "representation_plan_intent": (
+                "Build the digest-bound fixed-window trajectory representation "
+                "exactly as declared by the scientific runtime authority."
+            ),
+            "representation_plan_inputs": [],
+            "representation_required_outputs": [
+                "artifact:trajectory_representation",
+                "table:trajectory_membership",
+                "manifest:trajectory_representation_schema",
+            ],
             "model_family": "latent_class_diagonal_gaussian_mixture",
             "fit_method": "observed_data_em_diagonal_gaussian_mixture",
             "covariance_type": "diag",
@@ -489,20 +512,101 @@ def _h3_deterministic_execution_contract(
     ).model_dump(mode="json")
 
 
+def _e2_deterministic_execution_contract(
+    protocol: E2ScientificProtocol,
+) -> dict[str, Any]:
+    model = protocol.primary_model
+    return build_current_case_scientific_runtime_authority(
+        {
+            "schema_version": "easyicu.landmark_spline_runtime_authority/1",
+            "authority_kind": "landmark_spline_association",
+            "protocol_content_sha256": case_protocol_content_sha256(protocol),
+            "plan_method": "signed_landmark_restricted_cubic_spline",
+            "plan_intent": (
+                "Execute the signed 24-hour landmark restricted-cubic-spline "
+                "association and its prespecified linear sensitivity."
+            ),
+            "plan_outputs": [
+                "table:e2_landmark_rcs_curve",
+                "table:e2_landmark_rcs_contrasts",
+                "table:e2_linear_sensitivity",
+                "log:e2_scientific_runtime_receipt",
+            ],
+            "exposure_column": "lact_max",
+            "outcome_column": "death",
+            "outcome_time_column": "death_time",
+            "observation_duration_column": "los_icu",
+            "observation_duration_unit": "days",
+            "landmark_hours": protocol.primary_landmark.landmark_hours,
+            "required_adjustment_columns": ["age", "sex", "charlson_first"],
+            "categorical_adjustment_columns": ["sex"],
+            "spline_knot_quantiles": list(model.knot_quantiles),
+            "spline_reference": "median_in_primary_population",
+            "curve_quantile_range": [
+                model.knot_quantiles[0],
+                model.knot_quantiles[2],
+            ],
+            "curve_points": 41,
+            "linear_sensitivity_per_unit": 1.0,
+            "interpretation": protocol.primary_landmark.interpretation,
+        }
+    ).model_dump(mode="json")
+
+
+def _h2_deterministic_execution_contract(
+    protocol: H2ScientificProtocol,
+) -> dict[str, Any]:
+    capture = protocol.current_source_capture
+    return build_current_case_scientific_runtime_authority(
+        {
+            "schema_version": "easyicu.source_feasibility_runtime_authority/1",
+            "authority_kind": "source_feasibility_fail_closed",
+            "protocol_content_sha256": case_protocol_content_sha256(protocol),
+            "plan_method": "signed_source_feasibility_fail_closed",
+            "plan_intent": (
+                "Emit the signed source-specific feasibility result without "
+                "constructing a treatment contrast or effect estimate."
+            ),
+            "plan_outputs": [
+                "table:h2_source_feasibility",
+                "log:h2_scientific_runtime_receipt",
+            ],
+            "source": capture.source,
+            "audited_window_hours": list(capture.audited_window_hours),
+            "decision": capture.decision,
+            "reason_code": capture.reason_code,
+            "verified_non_use_available": capture.verified_non_use_available,
+            "binary_control_arm_authorized": capture.binary_control_arm_authorized,
+            "causal_contrast_authorized": capture.causal_contrast_authorized,
+            "forbidden_plan_tokens": [
+                "propensity_score_matching",
+                "psm",
+                "iptw",
+                "inverse_probability_weighting",
+                "effect_estimate",
+                "causal_effect",
+                "control_arm",
+            ],
+            "future_design_authorized": False,
+        }
+    ).model_dump(mode="json")
+
+
 def _projection_agent_content(
     protocol: E2ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
+    execution_contract: Mapping[str, Any],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Render only typed protocol fields; never maintain a second science source."""
 
     if isinstance(protocol, E2ScientificProtocol):
         landmark = protocol.primary_landmark
         model = protocol.primary_model
+        rule_ref = (
+            "scientific_runtime_contract:"
+            + str(execution_contract["execution_contract_sha256"])
+        )
         return (
-            (
-                "24-hour landmark cohort flow and exposure-opportunity audit",
-                "primary restricted-cubic-spline lactate association with 95% confidence intervals",
-                "prespecified linear and variable-opportunity descriptive sensitivities",
-            ),
+            tuple(execution_contract["plan_outputs"]),
             (
                 f"Primary population rule={landmark.population_rule}; landmark={landmark.landmark_hours}h; "
                 f"follow-up={landmark.followup_start}; outcome={landmark.outcome}.",
@@ -511,17 +615,21 @@ def _projection_agent_content(
                 "Do not treat observation duration or lactate measurement count as ordinary baseline covariates; "
                 "report the variable-opportunity measured-subset analysis only as a secondary descriptive sensitivity.",
                 "The estimand is descriptive/prognostic and must never be described as causal.",
+                "The only primary owner must use method="
+                f"{execution_contract['plan_method']}, intent="
+                f"{execution_contract['plan_intent']!r}, and icu_rule_refs must "
+                f"contain {rule_ref}.",
             ),
         )
     if isinstance(protocol, H2ScientificProtocol):
         capture = protocol.current_source_capture
         unblock = protocol.future_unblock_contract
+        rule_ref = (
+            "scientific_runtime_contract:"
+            + str(execution_contract["execution_contract_sha256"])
+        )
         return (
-            (
-                "source-specific medication capture and negative-evidence audit",
-                f"structured {capture.reason_code} feasibility result",
-                "explicit future source-coverage conditions that could reopen review",
-            ),
+            tuple(execution_contract["plan_outputs"]),
             (
                 f"Current source={capture.source} has pre_icu_treatment_history_authority="
                 f"{str(capture.pre_icu_treatment_history_authority).lower()}, verified_non_use_available="
@@ -531,11 +639,18 @@ def _projection_agent_content(
                 f"The only current unblock route is new per-stay source coverage satisfying "
                 f"{list(unblock.required_source_coverage)} followed by new clinical and methods review.",
                 "The future target-trial design is non-authorizing and must not be executed under the current materialization.",
+                "Declare no primary effect step. The sole current-result owner must "
+                f"use method={execution_contract['plan_method']}, intent="
+                f"{execution_contract['plan_intent']!r}, and icu_rule_refs must "
+                f"contain {rule_ref}.",
             ),
         )
     representation = protocol.representation
     selection = protocol.selection_and_stability
-    execution_contract = _h3_deterministic_execution_contract(protocol)
+    rule_ref = (
+        "scientific_runtime_contract:"
+        + str(execution_contract["execution_contract_sha256"])
+    )
     return (
         (
             "receipt-aware trajectory representation and scaling manifest",
@@ -555,6 +670,11 @@ def _projection_agent_content(
             f"{execution_contract['representation_columns']}; the deterministic runtime "
             "will reject any substituted feature, time bin, or descriptive-only coordinate.",
             "Classify a refit numerical/engine failure separately from a completed stability analysis whose mean ARI is below threshold.",
+            "The representation owner must use method="
+            f"{execution_contract['representation_plan_method']}, intent="
+            f"{execution_contract['representation_plan_intent']!r}, exact inputs="
+            f"{execution_contract['representation_plan_inputs']}, and icu_rule_refs "
+            f"must contain {rule_ref}.",
         ),
     )
 
@@ -566,11 +686,14 @@ def build_runtime_scientific_projection(
 
     protocol_payload = protocol.model_dump(mode="json")
     canonical_protocol_json = _canonical_json_bytes(protocol_payload).decode("utf-8")
-    required_outputs, guardrails = _projection_agent_content(protocol)
-    execution_contract = (
-        _h3_deterministic_execution_contract(protocol)
-        if isinstance(protocol, H3ScientificProtocol)
-        else None
+    if isinstance(protocol, E2ScientificProtocol):
+        execution_contract = _e2_deterministic_execution_contract(protocol)
+    elif isinstance(protocol, H2ScientificProtocol):
+        execution_contract = _h2_deterministic_execution_contract(protocol)
+    else:
+        execution_contract = _h3_deterministic_execution_contract(protocol)
+    required_outputs, guardrails = _projection_agent_content(
+        protocol, execution_contract
     )
     body = {
         "schema_version": "easyicu.figure2_runtime_scientific_projection/1",

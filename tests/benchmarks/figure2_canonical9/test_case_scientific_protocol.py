@@ -123,6 +123,34 @@ def test_runtime_projection_rejects_deterministic_execution_drift() -> None:
         load_runtime_scientific_projection(payload)
 
 
+def test_launcher_cannot_override_a_signed_runtime_execution_contract() -> None:
+    from tools.run_research_agent_bench import (
+        _bind_runtime_scientific_projection_options,
+    )
+
+    projection = build_runtime_scientific_projection(
+        load_default_case_protocol("e2_lactate_mortality")
+    ).model_dump(mode="json")
+    bound = _bind_runtime_scientific_projection_options({}, projection)
+    assert bound["current_case_scientific_runtime_authority"] == (
+        projection["deterministic_execution_contract"]
+    )
+    assert bound["scientific_runtime_projection_sha256"] == (
+        projection["runtime_projection_sha256"]
+    )
+
+    with pytest.raises(ValueError, match="AUTHORITY_OVERRIDE_FORBIDDEN"):
+        _bind_runtime_scientific_projection_options(
+            {"current_case_scientific_runtime_authority": {"forged": True}},
+            projection,
+        )
+    with pytest.raises(ValueError, match="PROJECTION_OVERRIDE_FORBIDDEN"):
+        _bind_runtime_scientific_projection_options(
+            {"scientific_runtime_projection_sha256": "0" * 64},
+            projection,
+        )
+
+
 def test_h3_protocol_rejects_post_hoc_candidate_k_drift(tmp_path) -> None:
     payload = json.loads(
         default_case_protocol_path("h3_trajectory_clustering").read_text("utf-8")

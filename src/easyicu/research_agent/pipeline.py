@@ -1670,6 +1670,18 @@ class ResearchAgentPipeline:
             )
         else:
             self._trajectory_scientific_runtime_authority = None
+        if config.current_case_scientific_runtime_authority is not None:
+            from .authority.current_case_scientific_runtime import (
+                load_current_case_scientific_runtime_authority,
+            )
+
+            self._current_case_scientific_runtime_authority = (
+                load_current_case_scientific_runtime_authority(
+                    config.current_case_scientific_runtime_authority
+                )
+            )
+        else:
+            self._current_case_scientific_runtime_authority = None
         self._scientific_runtime_projection_sha256 = (
             config.scientific_runtime_projection_sha256
         )
@@ -3352,6 +3364,8 @@ class ResearchAgentPipeline:
                 )
         if self._trajectory_scientific_runtime_authority is not None:
             self._trajectory_scientific_runtime_authority.validate_plan(plan)
+        if self._current_case_scientific_runtime_authority is not None:
+            self._current_case_scientific_runtime_authority.validate_plan(plan)
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )

@@ -10,11 +10,155 @@ import pandas as pd
 import pytest
 
 from easyicu.api import extraction as api
+from easyicu.research_agent.cohort import materializer as cohort_materializer
 from easyicu.research_agent.intake.export_package import open_export_package
 
 
 def _completed_result(module: str = "demographics") -> dict[str, object]:
     return {"modules": {module: {"errors": []}}}
+
+
+def test_native_sofa2_receipts_survive_producer_to_trajectory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"sofa2_score": ["sofa2_resp"]},
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 12.0, 24.0],
+            "sofa2_resp": [0.0, 2.0, 2.0],
+            "sofa2_resp_observed": [0, 1, 0],
+            "sofa2_resp_available": [0, 1, 1],
+        }
+    ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sofa2_score"],
+        max_patients=None,
+        result=_completed_result("sofa2_score"),
+    )
+
+    published = pd.read_parquet(tmp_path / "sofa2_score.parquet")
+    assert list(published.columns) == [
+        "stay_id",
+        "charttime",
+        "sofa2_resp",
+        "sofa2_resp_observed",
+        "sofa2_resp_available",
+    ]
+    with open_export_package(tmp_path) as package:
+        assert package.column_metadata_by_file["sofa2_score.parquet"].columns[
+            "sofa2_resp_observed"
+        ].representation_transform == "owner_observed_status"
+
+    trajectory, provenance = cohort_materializer.build_trajectory_long(
+        data_path=tmp_path,
+        database="miiv",
+        concepts=["sofa2_resp"],
+        window=(0.0, 24.0),
+    )
+    assert trajectory["charttime"].tolist() == [12.0, 24.0]
+    assert trajectory["evidence_state"].tolist() == [
+        "direct_observed",
+        "owner_locf_available",
+    ]
+    assert provenance["unavailable_value_rows_excluded"] == {"sofa2_resp": 1}
+
+
+def test_native_sofa2_missing_receipt_fails_closed_after_real_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"sofa2_score": ["sofa2_resp"]},
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sofa2_resp": [0.0],
+            "sofa2_resp_observed": [0],
+        }
+    ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sofa2_score"],
+        max_patients=None,
+        result=_completed_result("sofa2_score"),
+    )
+
+    with pytest.raises(
+        cohort_materializer.MaterializedMetadataError,
+        match="owner.*receipt|finite numeric",
+    ):
+        cohort_materializer.build_trajectory_long(
+            data_path=tmp_path,
+            database="miiv",
+            concepts=["sofa2_resp"],
+            window=(0.0, 24.0),
+        )
+
+
+@pytest.mark.parametrize("pandas_fallback_max_rows", [1, 1_000_000])
+def test_native_sofa2_duplicate_consolidation_keeps_value_receipt_paired(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pandas_fallback_max_rows: int,
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"sofa2_score": ["sofa2_resp"]},
+    )
+    monkeypatch.setattr(
+        api,
+        "_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS",
+        pandas_fallback_max_rows,
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 0.0],
+            # The synthetic unavailable zero must not enter the aggregate paired
+            # with the observed receipt from the second row.
+            "sofa2_resp": [0.0, 4.0],
+            "sofa2_resp_observed": [0, 1],
+            "sofa2_resp_available": [0, 1],
+        }
+    ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sofa2_score"],
+        max_patients=None,
+        result=_completed_result("sofa2_score"),
+    )
+
+    published = pd.read_parquet(tmp_path / "sofa2_score.parquet")
+    assert published["sofa2_resp"].tolist() == [4.0]
+    assert published["sofa2_resp_observed"].tolist() == [True]
+    assert published["sofa2_resp_available"].tolist() == [True]
+    trajectory, _ = cohort_materializer.build_trajectory_long(
+        data_path=tmp_path,
+        database="miiv",
+        concepts=["sofa2_resp"],
+        window=(0.0, 24.0),
+    )
+    assert trajectory["value_num"].tolist() == [4.0]
+    assert trajectory["evidence_state"].tolist() == ["direct_observed"]
 
 
 def test_native_time_axis_uses_los_and_normalises_stay_level_outcomes() -> None:

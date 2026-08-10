@@ -80,6 +80,12 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
     minimum_available_windows: int = Field(ge=1)
     coordinate_scaling: CoordinateScalingAuthority
     evidence_state_policy: EvidenceStateAuthority
+    representation_plan_method: Literal[
+        "signed_fixed_window_trajectory_representation"
+    ]
+    representation_plan_intent: str
+    representation_plan_inputs: tuple[str, ...]
+    representation_required_outputs: tuple[str, ...]
     model_family: Literal["latent_class_diagonal_gaussian_mixture"]
     fit_method: Literal["observed_data_em_diagonal_gaussian_mixture"]
     covariance_type: Literal["diag"]
@@ -150,6 +156,10 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
     def evidence_payload(self) -> dict[str, Any]:
         return self.evidence_state_policy.model_dump(mode="json")
 
+    @property
+    def plan_rule_ref(self) -> str:
+        return f"scientific_runtime_contract:{self.execution_contract_sha256}"
+
     def validate_plan(self, plan: AnalysisPlan) -> None:
         owners: dict[str, list[Any]] = {
             role: [step for step in plan.steps if role in trajectory_step_roles(step)]
@@ -177,6 +187,24 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
             raise TrajectoryScientificAuthorityError(
                 "signed trajectory execution roles are not ordered representation -> "
                 "candidate selection -> stability"
+            )
+        representation_issues: list[str] = []
+        if representation.method != self.representation_plan_method:
+            representation_issues.append("method")
+        if representation.intent != self.representation_plan_intent:
+            representation_issues.append("intent")
+        if tuple(representation.inputs) != self.representation_plan_inputs:
+            representation_issues.append("inputs")
+        if not set(self.representation_required_outputs).issubset(
+            representation.expected_outputs
+        ):
+            representation_issues.append("expected_outputs")
+        if self.plan_rule_ref not in set(representation.icu_rule_refs):
+            representation_issues.append("scientific_runtime_contract")
+        if representation_issues:
+            raise TrajectoryScientificAuthorityError(
+                "trajectory representation plan drifted from signed authority: "
+                + ", ".join(representation_issues)
             )
         if _normalise(candidate.method) != OBSERVED_DATA_DIAG_GMM_METHOD:
             raise TrajectoryScientificAuthorityError(
