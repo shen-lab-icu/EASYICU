@@ -1347,7 +1347,7 @@ def infer_analysis_type(
         # mere presence of an outcome column.  More specialised families have
         # already returned above, so this only prevents the generic descriptive
         # fallback from winning a tie.
-        scores["association_study"] += 2
+        scores["association_study"] += 3
     if primary_predictor and target_outcome:
         scores["association_study"] += 2
     elif target_outcome:

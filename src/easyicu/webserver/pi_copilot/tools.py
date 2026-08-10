@@ -885,6 +885,8 @@ _STUDY_SETUP_FIELDS = frozenset(
         "cohort",
         "modules",
         "outcome",
+        "primary_exposure",
+        "covariates",
         "time_window",
         "comparator",
         "export_format",
@@ -932,11 +934,14 @@ def _update_study_context(
         "question",
         "purpose",
         "outcome",
+        "primary_exposure",
         "comparator",
         "analysis_goal",
     ):
         if patch.get(field):
             reject_sensitive_message(str(patch[field]))
+    for covariate in patch.get("covariates") or []:
+        reject_sensitive_message(str(covariate))
 
     if params.get("bind_active_export"):
         registry = sources.load_registry()

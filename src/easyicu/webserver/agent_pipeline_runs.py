@@ -131,6 +131,23 @@ def _target_outcome(study: Mapping[str, Any]) -> Optional[str]:
     return value or None
 
 
+def _primary_exposure(study: Mapping[str, Any]) -> Optional[str]:
+    return _clean_text(study.get("primary_exposure"), 160) or None
+
+
+def _configured_covariates(study: Mapping[str, Any]) -> tuple[str, ...]:
+    raw = study.get("covariates")
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            _clean_text(value, 160)
+            for value in raw
+            if isinstance(value, str) and _clean_text(value, 160)
+        )
+    )
+
+
 def _cohort_window(study: Mapping[str, Any]) -> tuple[float, float]:
     raw = study.get("time_window")
     window = raw if isinstance(raw, Mapping) else {}
@@ -165,6 +182,8 @@ def _data_foundation_profile(
     export_path: str,
     study: Mapping[str, Any],
     target: Optional[str],
+    primary_exposure: Optional[str] = None,
+    covariates: tuple[str, ...] = (),
 ) -> Dict[str, Any]:
     """Compile StudyContext modules into one typed materialization request."""
 
@@ -219,6 +238,33 @@ def _data_foundation_profile(
         else:
             required_feature_concepts.append(target)
 
+    scientific_inputs = tuple(
+        dict.fromkeys(
+            value
+            for value in (primary_exposure, *covariates)
+            if value and value != target
+        )
+    )
+    for concept_id in scientific_inputs:
+        concept_meta = by_id.get(concept_id)
+        if concept_meta is None:
+            role = (
+                "primary_exposure"
+                if concept_id == primary_exposure
+                else "covariate"
+            )
+            raise ResearchPipelineRunError(
+                f"research_pipeline_{role}_outside_configured_modules",
+                f"The configured {role.replace('_', ' ')} is not available in the selected feature modules.",
+            )
+        concept_module = Path(concept_meta.file_name).stem.lower()
+        if concept_module in {"demographics", "outcome"} and (
+            not concept_meta.typed_metadata or concept_meta.column_role == "value"
+        ):
+            static_concepts.append(concept_id)
+        else:
+            required_feature_concepts.append(concept_id)
+
     return {
         "allowed_modules": modules,
         "static_concepts": tuple(dict.fromkeys(static_concepts)),
@@ -241,6 +287,9 @@ def _research_user_preferences(study: Mapping[str, Any]) -> Dict[str, Any]:
         preferences["must_have_outputs"] = analysis_goal
     if comparator:
         preferences["subgroup_sensitivity"] = comparator
+    covariates = _configured_covariates(study)
+    if covariates:
+        preferences["covariates"] = list(covariates)
 
     time_window = study.get("time_window")
     if isinstance(time_window, Mapping) and time_window:
@@ -902,6 +951,8 @@ def make_research_pipeline_run_runner(
         or "miiv"
     )
     target = _target_outcome(study)
+    primary_exposure = _primary_exposure(study)
+    covariates = _configured_covariates(study)
     window = _cohort_window(study)
     research_provider_environment = (
         dict(provider_environment) if provider_environment is not None else None
@@ -938,6 +989,8 @@ def make_research_pipeline_run_runner(
                 export_path=export_path,
                 study=study,
                 target=target,
+                primary_exposure=primary_exposure,
+                covariates=covariates,
             )
             acquisition = acquire_universe_for_question(
                 export_dir=Path(export_path).expanduser(),
@@ -1000,6 +1053,7 @@ def make_research_pipeline_run_runner(
                 cohort_name=f"web_{_slug(study.get('id'))}",
                 database=database,
                 target_outcome=target,
+                primary_exposure=primary_exposure,
                 inclusion_criteria=_inclusion_criteria(study),
                 user_preferences=preferences,
                 notes=_clean_text(study.get("analysis_goal"), 1_200) or None,

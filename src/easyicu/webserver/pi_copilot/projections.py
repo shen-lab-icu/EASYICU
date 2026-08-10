@@ -144,6 +144,13 @@ def project_study_context(
                 str(item)[:120] for item in (context.get("modules") or [])
             ][:MAX_LIST_ITEMS],
             "outcome": _bounded_text(context.get("outcome"), 500),
+            "primary_exposure": _bounded_text(
+                context.get("primary_exposure"), 160
+            ),
+            "covariates": [
+                _bounded_text(item, 160)
+                for item in (context.get("covariates") or [])
+            ][:MAX_LIST_ITEMS],
             "time_window": dict(context.get("time_window") or {}),
             "comparator": _bounded_text(context.get("comparator"), 500),
             "export_format": _bounded_text(context.get("export_format"), 40),
