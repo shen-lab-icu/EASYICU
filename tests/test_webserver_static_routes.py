@@ -119,7 +119,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260808-pi-research-flow1" in index_html
+    assert "js/api.js?v=20260810-research-workflow1" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -383,7 +383,7 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260808-pi-research-flow1" in index_html
+    assert "js/api.js?v=20260810-research-workflow1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -535,7 +535,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20260808-project-rail1" in index_html
     assert "css/guided-projects.css?v=20260808-workspace-agent1" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260808-pi-research-flow1" in index_html
+    assert "js/api.js?v=20260810-research-workflow1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260808-project-rail1" in index_html
     )
@@ -2225,7 +2225,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260808-pi-research-flow1" in index_html
+    assert "api.js?v=20260810-research-workflow1" in index_html
     assert "screens-dict.js?v=20260712-ux-fixes" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -2488,7 +2488,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260808-pi-research-flow1" in index_html
+    assert "api.js?v=20260810-research-workflow1" in index_html
     assert "screens-guided-projects.js?v=20260808-project-rail1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"

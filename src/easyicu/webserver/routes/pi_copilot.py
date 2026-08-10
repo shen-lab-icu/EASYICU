@@ -79,10 +79,18 @@ class PiMessageRequest(BaseModel):
     project_id: ShortText
     message: MessageText
     allowed_actions: list[
-        Literal["configure", "run", "cancel", "workspace_write"]
+        Literal[
+            "configure",
+            "idea",
+            "extract",
+            "run",
+            "provider_run",
+            "cancel",
+            "workspace_write",
+        ]
     ] = Field(
         default_factory=list,
-        max_length=4,
+        max_length=7,
     )
 
 
@@ -202,6 +210,16 @@ def post_pi_copilot_project_initialize(
             project_id=body.project_id,
             title=body.title,
             confirm_initialization=body.confirm_initialization,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.get("/api/copilot/pi/projects/{project_id}/workflow")
+def get_pi_copilot_project_workflow(project_id: ShortText) -> dict:
+    try:
+        return get_pi_copilot_service().get_project_workflow(
+            project_id=project_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

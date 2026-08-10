@@ -1087,12 +1087,12 @@ def test_control_tools_fail_closed_without_owner_contracts() -> None:
     assert run_block["code"] == "pi_action_authorization_required"
 
     run_grant = ToolExecutionContext(
-        session=session, allowed_actions=frozenset({"run"})
+        session=session, allowed_actions=frozenset({"provider_run"})
     )
     full_block = tool_module.execute_tool(
         "easyicu_run", {"run_type": "full"}, run_grant
     )
-    assert full_block["code"] == "pi_full_run_requires_dedicated_confirmation"
+    assert full_block["code"] == "external_llm_opt_in_required"
 
     resume_block = tool_module.execute_tool("easyicu_resume", {}, no_grant)
     assert resume_block["code"] == "scientific_resume_not_supported"
@@ -1107,6 +1107,7 @@ def test_control_tools_fail_closed_without_owner_contracts() -> None:
 def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
     research_tools = {
         "easyicu_workspace_status",
+        "easyicu_inspect_workflow",
         "easyicu_inspect_context",
         "easyicu_inspect_plan",
         "easyicu_inspect_capability",
@@ -1116,7 +1117,12 @@ def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
         "easyicu_list_artifacts",
         "easyicu_inspect_evidence",
         "easyicu_explain_blocker",
+        "easyicu_inspect_interpretation",
+        "easyicu_inspect_manuscript",
         "easyicu_update_study_context",
+        "easyicu_mine_ideas",
+        "easyicu_prepare_idea_handoff",
+        "easyicu_start_extraction",
         "easyicu_run",
         "easyicu_resume",
         "easyicu_cancel",
