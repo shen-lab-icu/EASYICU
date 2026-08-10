@@ -321,6 +321,21 @@ def _build_jsonl_row(
         "candidate_variables": list(spec.feature_concepts),
         "notes": spec.notes,
     }
+    if task.task_id in {
+        "e2_lactate_mortality",
+        "h2_vasopressor_causal",
+        "h3_trajectory_clustering",
+    }:
+        from benchmarks.figure2_canonical9.case_scientific_protocol import (
+            case_protocol_content_sha256,
+            load_default_case_protocol,
+        )
+
+        case_protocol = load_default_case_protocol(task.task_id)
+        row["case_scientific_protocol"] = case_protocol.model_dump(mode="json")
+        row["case_scientific_protocol_sha256"] = case_protocol_content_sha256(
+            case_protocol
+        )
     if task.task_id == "e1_sepsis3_prevalence_mortality":
         from benchmarks.figure2_canonical9.e1_scientific_acceptance import (
             e1_scientific_acceptance_contract,

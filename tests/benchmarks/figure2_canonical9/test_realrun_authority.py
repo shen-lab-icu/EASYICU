@@ -67,6 +67,11 @@ from benchmarks.figure2_canonical9.scientific_protocol_authority import (
     ScientificProtocolAuthority,
     ScientificProtocolTaskBinding,
 )
+from benchmarks.figure2_canonical9.case_scientific_protocol import (
+    case_protocol_content_sha256,
+    default_case_protocol_path,
+    load_case_scientific_protocol,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REAL_V1 = _REPO_ROOT / "benchmarks/figure2_canonical9/canonical_input_freeze_v1.json"
@@ -189,11 +194,19 @@ def _scientific_protocol_authority(
         payload["review_status"] = "clinical_reviewed"
         payload["review_attestation"] = None
         reviewed_content_sha256 = reviewable_card_content_sha256(payload)
+        protocol_path = card_root / f"{task_id}.protocol.json"
+        protocol_path.write_bytes(default_case_protocol_path(task_id).read_bytes())
+        protocol = load_case_scientific_protocol(
+            protocol_path,
+            expected_task_id=task_id,
+        )
+        protocol_content_sha256 = case_protocol_content_sha256(protocol)
         payload["review_attestation"] = {
             "reviewer_owner": "Synthetic clinical-and-methods test board",
             "review_date": "2026-07-26",
             "card_version": payload["version"],
             "reviewed_content_sha256": reviewed_content_sha256,
+            "protocol_content_sha256": protocol_content_sha256,
             "review_scope": ["clinical protocol", "statistical methods"],
             "literature_search_cutoff": "2026-07-25",
             "clinical_reviewed": True,
@@ -209,6 +222,9 @@ def _scientific_protocol_authority(
                 card_path=str(card_path),
                 card_file_sha256=_sha256_file(card_path),
                 reviewed_content_sha256=reviewed_content_sha256,
+                protocol_path=str(protocol_path),
+                protocol_file_sha256=_sha256_file(protocol_path),
+                protocol_content_sha256=protocol_content_sha256,
             )
         )
     authority = ScientificProtocolAuthority.build(tasks=bindings)

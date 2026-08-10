@@ -1,0 +1,66 @@
+{
+  "schema_version": "easyicu.figure2_h3_scientific_protocol/1",
+  "task_id": "h3_trajectory_clustering",
+  "protocol_version": "h3_trajectory_clustering/20260809-v2",
+  "review_status": "human_attestation_pending",
+  "literature_search_cutoff": "2026-08-09",
+  "supersedes_terminal_protocol": {
+    "protocol_version": "h3_trajectory_clustering/20260722-v1",
+    "model_family": "diagonal_gaussian_mixture",
+    "selected_n_clusters": 6,
+    "n_resamples": 100,
+    "sample_fraction": 0.8,
+    "stability_metric": "mean_adjusted_rand_index",
+    "minimum_mean_stability": 0.7,
+    "observed_mean_stability": 0.5357,
+    "decision": "terminal_failed_closed"
+  },
+  "representation": {
+    "population": "MIMIC-IV ICU stays with at least two observed 12-hour SOFA-2 total windows during ICU hours 0-72; eligibility uses observed support only and is reported against the full materialized cohort.",
+    "time_zero": "icu_admission",
+    "window_hours": [0, 72],
+    "grid_width_hours": 12,
+    "aggregation": "max",
+    "features": ["sofa2", "sofa2_resp", "sofa2_coag", "sofa2_liver", "sofa2_cardio", "sofa2_cns", "sofa2_renal", "lact"],
+    "scaling": "coordinate_wise_z_score_using_observed_values",
+    "minimum_observed_sofa2_windows": 2,
+    "missingness_method": "observed_data_likelihood_no_zero_or_locf_imputation",
+    "trailing_missingness_policy": "retain_and_report_discharge_death_and_measurement_support"
+  },
+  "selection_and_stability": {
+    "model_family": "observed_data_diagonal_gaussian_mixture",
+    "candidate_cluster_counts": [2, 3, 4, 5, 6],
+    "cluster_number_criterion": "minimum_bic",
+    "outcome_blind_selection": true,
+    "minimum_cluster_fraction": 0.05,
+    "cluster_size_failure_action": "no_stable_solution_no_alternate_k",
+    "resampling_method": "subsample_without_replacement",
+    "n_resamples": 100,
+    "sample_fraction": 0.8,
+    "base_seed": 1729,
+    "stability_metric": "mean_adjusted_rand_index",
+    "minimum_successful_resamples": 100,
+    "minimum_mean_stability": 0.7,
+    "stability_failure_action": "no_stable_solution_no_post_hoc_rescue"
+  },
+  "outcome_use": "descriptive_after_frozen_assignment_never_for_model_or_k_selection",
+  "external_reproducibility_rule": "An internally stable MIMIC-IV solution is a local candidate phenotype structure only. It cannot be called transportable or generalizable without external-database reproducibility using the same frozen representation and assignment protocol.",
+  "reportability_rule": "If the BIC-selected candidate violates the minimum cluster fraction, any planned refit fails, or mean adjusted Rand index is below 0.70, the formal result is no stable phenotype solution. Do not try another k, seed, threshold, exclusion, feature set, or imputation rule after seeing the result.",
+  "forbidden_actions": ["reuse_or_relax_terminal_v1_threshold", "change_seed_after_result", "try_alternate_k_after_selected_candidate_fails", "select_clusters_by_mortality_separation", "exclude_stays_to_raise_stability"],
+  "citations": [
+    {
+      "citation_id": "lange_cluster_stability_2004",
+      "title": "Stability-based validation of clustering solutions",
+      "year": 2004,
+      "url": "https://pubmed.ncbi.nlm.nih.gov/15130251/",
+      "doi": "10.1162/089976604773717621"
+    },
+    {
+      "citation_id": "wong_multicenter_phenotypes_2026",
+      "title": "Multicenter Validation of Sepsis Phenotypes in Critically Ill Adults",
+      "year": 2026,
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42223936/",
+      "doi": "10.1001/jamanetworkopen.2026.16134"
+    }
+  ]
+}

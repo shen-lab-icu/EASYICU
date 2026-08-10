@@ -1,0 +1,42 @@
+{
+  "schema_version": "easyicu.figure2_e2_scientific_protocol/1",
+  "task_id": "e2_lactate_mortality",
+  "protocol_version": "e2_lactate_mortality/20260809-v2",
+  "review_status": "human_attestation_pending",
+  "literature_search_cutoff": "2026-08-09",
+  "time_zero": "icu_admission",
+  "exposure_window_hours": [0, 24],
+  "exposure": "maximum_valid_typed_lactate",
+  "exposure_units": "mmol/L",
+  "primary_population": "Eligible ICU stays with at least one valid typed lactate measurement during ICU hours 0-24 and before death or discharge.",
+  "primary_estimand": "The adjusted descriptive association between first-24-hour peak lactate and in-hospital death among lactate-measured eligible ICU stays; this is an association, not a treatment or causal effect.",
+  "adjustment_set": ["age", "sex", "charlson"],
+  "primary_method": "Model lactate continuously with logistic regression, report 95% confidence intervals, and compare a linear specification with a prespecified restricted-cubic-spline specification without choosing the form from outcome significance.",
+  "full_cohort_measurement_audit": ["eligible_stays", "measured_fraction", "unmeasured_fraction", "measured_vs_unmeasured_standardized_differences"],
+  "exposure_opportunity_audit": ["death_before_24h", "discharge_before_24h", "time_under_observation_within_0_24h", "measurement_count_and_first_last_measurement_time"],
+  "reportability_rule": "Report the measured-subset association only together with the full-cohort measurement and exposure-opportunity audits; if measurement state, units, timestamps, death, or discharge alignment cannot be verified, no headline association is reportable.",
+  "forbidden_interpretations": ["causal_effect", "unmeasured_lactate_as_zero", "whole_stay_peak_substitution", "mean_only_summary_for_skewed_lactate"],
+  "citations": [
+    {
+      "citation_id": "ssc_adult_2026",
+      "title": "Surviving Sepsis Campaign International Guidelines for Management of Sepsis and Septic Shock 2026",
+      "year": 2026,
+      "url": "https://www.sccm.org/clinical-resources/guidelines/guidelines/surviving-sepsis-campaign-international-guidelines-for-management-of-sepsis-and-septic-shock-2026",
+      "doi": "10.1097/CCM.0000000000007075"
+    },
+    {
+      "citation_id": "sisk_informative_observation_2021",
+      "title": "Informative presence and observation in routine health data: A review of methodology for clinical risk prediction",
+      "year": 2021,
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7810439/",
+      "doi": "10.1093/jamia/ocaa242"
+    },
+    {
+      "citation_id": "gleiss_landmark_2018",
+      "title": "An unjustified benefit: immortal time bias in the analysis of time-dependent events",
+      "year": 2018,
+      "url": "https://pubmed.ncbi.nlm.nih.gov/29024071/",
+      "doi": "10.1111/tri.13081"
+    }
+  ]
+}

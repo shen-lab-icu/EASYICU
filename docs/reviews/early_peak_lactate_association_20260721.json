@@ -1,9 +1,11 @@
 {
   "schema_version": "easyicu.know_how_review_packet/1",
   "card_id": "early_peak_lactate_association",
-  "card_version": "1.0.0",
-  "reviewed_content_sha256": "5a4d49b1362ce42e9a8c770e46cfdd165d34eb6a1bf84402d8d171aee7593fc7",
-  "status": "methods_evidence_pre_review_complete_formal_attestation_pending",
+  "card_version": "1.1.0",
+  "reviewed_content_sha256": "13be93660e3f46eb95c52c030124379750b0dd03c30e36f22bf0beafd5898f93",
+  "case_protocol_path": "benchmarks/figure2_canonical9/protocols/e2_lactate_mortality_20260809.json",
+  "case_protocol_content_sha256": "2fa81bad5ab217c0fef0af6180e9899218b9cd4bf983817f91aad4f1be6306cb",
+  "status": "ai_pre_review_revisions_complete_formal_attestation_pending",
   "authorization": false,
   "split_rationale": "E2 asks for a descriptive first-24-hour peak-lactate association. The former lactate trajectory card required serial measurements, clearance, landmarking, and trajectory stability, so generic lactate aliases were removed and a peak-specific card was created.",
   "evidence_groups": [
@@ -14,8 +16,8 @@
     },
     {
       "claim_group": "clinical interpretation of lactate",
-      "citation_ids": ["surviving_sepsis_2021"],
-      "pre_review_conclusion": "Lactate requires clinical context; the guideline does not make one window or threshold universal."
+      "citation_ids": ["ssc_adult_2026"],
+      "pre_review_conclusion": "The current adult guideline supports measuring and serially assessing lactate in the appropriate sepsis context; it does not turn this descriptive ICU-wide association into a treatment effect."
     },
     {
       "claim_group": "informative measurement and denominator",
@@ -35,13 +37,14 @@
   ],
   "required_signoff": [
     "The target is a descriptive association, not a treatment effect or deployable prediction.",
-    "Time zero is ICU admission and the primary exposure window is the first 24 hours unless the benchmark owner changes it.",
+    "Time zero is ICU admission and the primary exposure window is ICU hours 0-24.",
     "Values after death or discharge are excluded from the peak.",
-    "The full eligible cohort remains available for measured-versus-unmeasured comparison and unmeasured lactate is never zero-coded.",
+    "The primary association population has at least one valid typed 0-24-hour lactate; the full eligible cohort remains the measured-versus-unmeasured audit denominator and unmeasured lactate is never zero-coded.",
     "Specimen, assay, and unit harmonization are available from the typed data contract.",
     "The primary model reports uncertainty and assesses nonlinearity.",
     "Adjustment variables have prespecified baseline roles rather than being every available column.",
-    "Early deaths and measurement intensity are addressed for the declared estimand."
+    "Early death, early discharge, time under observation, and measurement intensity are reported as exposure-opportunity audits for the declared estimand.",
+    "The reviewer approves exact case protocol digest 2fa81bad5ab217c0fef0af6180e9899218b9cd4bf983817f91aad4f1be6306cb together with card digest 13be93660e3f46eb95c52c030124379750b0dd03c30e36f22bf0beafd5898f93."
   ],
   "attestation_fields_required_after_signoff": [
     "reviewer_owner",
@@ -49,6 +52,7 @@
     "review_scope",
     "literature_search_cutoff",
     "clinical_reviewed",
-    "methods_reviewed"
+    "methods_reviewed",
+    "protocol_content_sha256"
   ]
 }

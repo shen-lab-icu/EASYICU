@@ -1,0 +1,63 @@
+{
+  "schema_version": "easyicu.figure2_h2_scientific_protocol/1",
+  "task_id": "h2_vasopressor_causal",
+  "protocol_version": "h2_vasopressor_causal/20260809-v2",
+  "review_status": "human_attestation_pending",
+  "literature_search_cutoff": "2026-08-09",
+  "current_source_capture": {
+    "source": "mimic_iv_inputevents_derived_typed_vasopressor",
+    "audited_window_hours": [0, 24],
+    "positive_record_semantics": "A typed source record supports recorded administration during ICU hours 0-24.",
+    "absent_record_semantics": "no_recorded_administration_not_verified_non_use",
+    "verified_non_use_available": false,
+    "binary_control_arm_authorized": false,
+    "causal_contrast_authorized": false,
+    "decision": "fail_closed",
+    "reason_code": "H2_VERIFIED_NON_USE_UNAVAILABLE"
+  },
+  "intended_target_trial": {
+    "eligible_population": "Adult ICU stays eligible for either strategy at ICU admission, with source-complete medication capture, valid admission timing, and prespecified baseline covariates available before treatment assignment.",
+    "treatment_strategies": ["initiate_any_vasopressor_within_24h", "do_not_initiate_any_vasopressor_within_24h"],
+    "time_zero": "icu_admission",
+    "grace_period_hours": 24,
+    "grace_period_method": "clone_censor_weight_if_source_contract_becomes_valid",
+    "followup": "From ICU admission through 28 days, in-hospital death, discharge alive, or administrative data end, whichever occurs first.",
+    "outcome": "28-day cumulative incidence of in-hospital death with discharge alive treated as a competing event.",
+    "estimand": "Per-protocol 28-day risk difference and risk ratio for initiation within 24 hours versus verified non-initiation within 24 hours in the overlap-eligible target population.",
+    "censoring_and_competing_events": "Artificially censor strategy deviations under cloning; use inverse-probability-of-censoring weights, treat discharge alive as competing, and report administrative censoring separately.",
+    "baseline_confounder_timing": "Age, sex, comorbidity, admission context, and severity measurements must precede strategy assignment; any variable first observed after recorded initiation is not a baseline confounder.",
+    "adjustment_variables": ["age", "sex", "charlson", "admission_context", "map", "lactate", "mechanical_ventilation", "creatinine", "bilirubin", "platelets", "gcs"],
+    "propensity_method": "stabilized_iptw",
+    "positivity_interval": [0.05, 0.95],
+    "weight_truncation_percentiles": [1.0, 99.0],
+    "balance_threshold_absolute_smd": 0.1,
+    "positivity_failure_action": "fail_closed_no_effect_estimate",
+    "sensitivity_analyses": ["overlap_weighting", "propensity_score_matching", "6h_and_12h_grace_periods", "quantitative_unmeasured_confounding_analysis"]
+  },
+  "current_scientific_result": "treatment_contrast_not_identifiable_from_available_capture_contract",
+  "reportability_rule": "With the current inputevents-derived contract, report the structured H2_VERIFIED_NON_USE_UNAVAILABLE feasibility result and do not emit a treatment-effect estimate. A causal contrast becomes eligible only after a separately reviewed source contract proves both administration capture and verified non-use.",
+  "forbidden_actions": ["convert_missing_vasopressor_record_to_verified_non_use", "construct_binary_control_arm", "fit_psm_or_iptw_before_capture_authority", "interpret_recorded_administration_as_complete_treatment_history"],
+  "citations": [
+    {
+      "citation_id": "target_statement_2025",
+      "title": "The TARGET Statement: a guideline for reporting emulations of target trials",
+      "year": 2025,
+      "url": "https://www.bmj.com/content/390/bmj-2025-087179",
+      "doi": "10.1136/bmj-2025-087179"
+    },
+    {
+      "citation_id": "ssc_adult_2026",
+      "title": "Surviving Sepsis Campaign International Guidelines for Management of Sepsis and Septic Shock 2026",
+      "year": 2026,
+      "url": "https://www.sccm.org/clinical-resources/guidelines/guidelines/surviving-sepsis-campaign-international-guidelines-for-management-of-sepsis-and-septic-shock-2026",
+      "doi": "10.1097/CCM.0000000000007075"
+    },
+    {
+      "citation_id": "mimic_iv_inputevents",
+      "title": "MIMIC-IV ICU inputevents table documentation",
+      "year": 2026,
+      "url": "https://mimic.mit.edu/docs/IV/modules/icu/inputevents.html",
+      "doi": null
+    }
+  ]
+}
