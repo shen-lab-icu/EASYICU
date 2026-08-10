@@ -1408,6 +1408,11 @@ def _run(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, 
                 "run_type": run_type,
                 "llm_provider": provider,
                 "external_llm_opt_in": run_type == "full",
+                "engine": (
+                    "research_agent_pipeline"
+                    if run_type == "full"
+                    else "native_summary"
+                ),
             }
         )
     except HTTPException as exc:
@@ -1446,6 +1451,7 @@ def _run(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, 
                 "status",
                 "study_context_id",
                 "study_context_revision",
+                "engine",
             )
             if submitted.get(key) is not None
         },
@@ -1455,7 +1461,93 @@ def _run(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, 
 
 
 def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, Any]:
-    _require_args(params, allowed=("job_id", "run_id"))
+    _require_args(
+        params,
+        allowed=("job_id", "run_id", "decision", "reviewer", "note"),
+    )
+    decision = str(params.get("decision") or "").strip().lower()
+    if decision:
+        if decision not in {"approved", "rejected"}:
+            return _result(
+                context,
+                status="blocked",
+                code="research_pipeline_review_decision_invalid",
+                summary="Choose approved or rejected for the pending Research Agent plan.",
+                owner="easyicu.research_agent.pipeline",
+            )
+        grant_block = _consume_action(context, "provider_run")
+        if grant_block is not None:
+            return grant_block
+        if not context.session.external_llm_opt_in:
+            return _result(
+                context,
+                status="blocked",
+                code="external_llm_opt_in_required",
+                summary="Resuming a provider-backed Research Agent run requires explicit external-model authorization.",
+                owner="easyicu.webserver.provider_gate",
+            )
+        study = _bound_context(context.session.binding)
+        run_id = str(
+            params.get("run_id") or context.session.binding.run_id or ""
+        ).strip()
+        if not study or not study.get("id") or not run_id:
+            return _result(
+                context,
+                status="blocked",
+                code="research_pipeline_review_coordinates_required",
+                summary="The pending plan and its bound research project are required before review can resume.",
+                owner="easyicu.research_agent.pipeline",
+            )
+        from easyicu.webserver.routes.agent import jobs_agent_run_review
+
+        try:
+            submitted = jobs_agent_run_review(
+                {
+                    "study_context_id": study["id"],
+                    "run_id": run_id,
+                    "decision": decision,
+                    "reviewer": params.get("reviewer") or "local_web_reviewer",
+                    "note": params.get("note") or "",
+                    "external_llm_opt_in": True,
+                }
+            )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            return _result(
+                context,
+                status="blocked",
+                code=str(
+                    detail.get("error") or "research_pipeline_review_resume_blocked"
+                ),
+                summary="The Research Agent review owner rejected this resume request.",
+                owner="easyicu.webserver.routes.agent",
+                details={
+                    key: detail.get(key)
+                    for key in ("error", "reason", "job_id")
+                    if detail.get(key) is not None
+                },
+            )
+        context.invalidate_authority("research_pipeline_review_submitted")
+        return _result(
+            context,
+            status="ok",
+            code="research_pipeline_review_submitted",
+            summary=f"Submitted the {decision} plan decision; EasyICU job {submitted.get('job_id')} owns the continuation.",
+            owner="easyicu.webserver.routes.agent",
+            details={
+                key: submitted.get(key)
+                for key in (
+                    "job_id",
+                    "kind",
+                    "status",
+                    "engine",
+                    "review_run_id",
+                    "study_context_id",
+                    "study_context_revision",
+                )
+                if submitted.get(key) is not None
+            },
+        )
     job_id = str(
         params.get("job_id") or context.session.binding.active_job_id or ""
     ).strip()

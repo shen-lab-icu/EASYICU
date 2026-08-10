@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -10,6 +12,7 @@ import pytest
 from easyicu.research_agent.reporting.result_card import (
     build_result_interpretation_card,
 )
+from easyicu.webserver import agent_pipeline_runs, provider_adapter
 from easyicu.webserver.pi_copilot import tools as tool_module
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
@@ -66,6 +69,32 @@ def test_workflow_projection_advances_only_from_owner_receipts() -> None:
         active_job=None,
         latest_run={
             "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "analysis_only",
+            "artifact_names": [
+                "agent_plan.json",
+                "evidence_ledger.json",
+                "result_tables.json",
+                "manuscript_draft.json",
+                "source_run_manifest.json",
+            ],
+        },
+    )
+    by_id = {row.id: row for row in finished.stages}
+    assert by_id["analysis"].status == "complete"
+    assert by_id["interpretation"].status == "review_required"
+    assert by_id["manuscript"].status == "review_required"
+    assert finished.next_action_code == "human_review_and_reporting"
+
+
+def test_legacy_full_scaffold_does_not_claim_scientific_analysis_complete() -> None:
+    snapshot = build_research_workflow_snapshot(
+        study=_complete_study(),
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_type": "full",
+            "engine": "native_summary",
             "gate_status": "analysis_only",
             "artifact_names": [
                 "agent_plan.json",
@@ -75,11 +104,12 @@ def test_workflow_projection_advances_only_from_owner_receipts() -> None:
             ],
         },
     )
-    by_id = {row.id: row for row in finished.stages}
-    assert by_id["analysis"].status == "complete"
-    assert by_id["interpretation"].status == "review_required"
-    assert by_id["manuscript"].status == "review_required"
-    assert finished.next_action_code == "human_review_and_reporting"
+
+    by_id = {row.id: row for row in snapshot.stages}
+    assert by_id["analysis"].status == "ready"
+    assert by_id["analysis"].reason_code == "research_pipeline_required"
+    assert by_id["interpretation"].status == "blocked"
+    assert by_id["manuscript"].status == "blocked"
 
 
 def test_result_interpretation_card_reuses_agent_claims_without_new_numbers() -> None:
@@ -245,5 +275,307 @@ def test_full_run_delegates_to_research_agent_provider_gate(
             "run_type": "full",
             "llm_provider": "openai",
             "external_llm_opt_in": True,
+            "engine": "research_agent_pipeline",
         }
     ]
+
+
+def _write_real_pipeline_fixture(run_dir: Path, *, manuscript: str) -> None:
+    (run_dir / "evidence").mkdir(parents=True)
+    (run_dir / "results").mkdir()
+    readiness = {
+        "execution_complete": True,
+        "analysis_validated": True,
+        "evidence_complete": True,
+        "numeric_verified": True,
+        "manuscript_ready": True,
+    }
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"readiness": readiness}),
+        encoding="utf-8",
+    )
+    (run_dir / "run_status.json").write_text("{}", encoding="utf-8")
+    (run_dir / "analysis_plan.json").write_text(
+        json.dumps({"steps": [{"id": "model", "title": "Fit specified model"}]}),
+        encoding="utf-8",
+    )
+    (run_dir / "manuscript_scaffold_bound.md").write_text(
+        manuscript,
+        encoding="utf-8",
+    )
+    (run_dir / "claim_ledger.csv").write_text(
+        "claim_id,claim_text,evidence_refs,status,note\n"
+        "c1,The registered aggregate estimate passed validation,ev-table,analysis_only,Review required\n",
+        encoding="utf-8",
+    )
+    (run_dir / "results" / "aggregate.csv").write_text(
+        "metric,estimate,lower,upper\nassociation,1.2,1.1,1.3\n",
+        encoding="utf-8",
+    )
+    (run_dir / "results" / "identifier_rows.csv").write_text(
+        "stay_id,value\n123,8\n",
+        encoding="utf-8",
+    )
+    (run_dir / "evidence" / "evidence_index.json").write_text(
+        json.dumps(
+            [
+                {
+                    "kind": "table",
+                    "evidence_id": "ev-table",
+                    "description": "Aggregate model result",
+                    "relative_path": "results/aggregate.csv",
+                },
+                {
+                    "kind": "table",
+                    "evidence_id": "ev-sensitive",
+                    "description": "Identifier rows",
+                    "relative_path": "results/identifier_rows.csv",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "figure_gallery.json").write_text(
+        json.dumps({"status": "no_figures", "figures": []}),
+        encoding="utf-8",
+    )
+
+
+def _acquisition_receipt() -> SimpleNamespace:
+    return SimpleNamespace(
+        selection=SimpleNamespace(selected_concepts=["heart_rate", "mortality"]),
+        materialized_concepts=["heart_rate", "mortality"],
+        coverage=SimpleNamespace(sufficient=True),
+    )
+
+
+def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "real-run"
+    _write_real_pipeline_fixture(
+        run_dir,
+        manuscript="# Results\nThe registered aggregate estimate is analysis-only.",
+    )
+    wrapper = tmp_path / "web-projection"
+
+    result = agent_pipeline_runs._write_projection(
+        wrapper_dir=wrapper,
+        study=_complete_study(),
+        provider={"provider": "openai", "model": "test-model"},
+        acquisition=_acquisition_receipt(),
+        run_dir=run_dir,
+    )
+
+    assert result["engine"] == "easyicu.research_agent.pipeline"
+    assert result["gate"]["status"] == "analysis_only"
+    tables = json.loads((wrapper / "result_tables.json").read_text(encoding="utf-8"))
+    assert tables["table_count"] == 1
+    assert tables["tables"][0]["evidence_id"] == "ev-table"
+    assert tables["skipped_identifier_tables"] == 1
+    manuscript = json.loads(
+        (wrapper / "manuscript_draft.json").read_text(encoding="utf-8")
+    )
+    assert manuscript["claims"][0]["evidence_ids"] == ["ev-table"]
+    ledger = json.loads((wrapper / "evidence_ledger.json").read_text(encoding="utf-8"))
+    assert ledger["privacy"]["projection_scan_passed"] is True
+    assert ledger["privacy"]["path_values_returned"] is False
+
+
+def test_pipeline_projection_fails_closed_when_source_contains_a_host_path(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "unsafe-run"
+    _write_real_pipeline_fixture(
+        run_dir,
+        manuscript="The source was loaded from /Users/example/private/source.csv.",
+    )
+    wrapper = tmp_path / "withheld-projection"
+
+    result = agent_pipeline_runs._write_projection(
+        wrapper_dir=wrapper,
+        study=_complete_study(),
+        provider={"provider": "openai", "model": "test-model"},
+        acquisition=_acquisition_receipt(),
+        run_dir=run_dir,
+    )
+
+    assert result["gate"]["status"] == "blocked"
+    assert result["gate"]["reason"] == "research_pipeline_projection_privacy_blocked"
+    assert not (wrapper / "manuscript_draft.json").exists()
+    gate = json.loads((wrapper / "quality_gate.json").read_text(encoding="utf-8"))
+    assert gate["privacy"]["payloads_withheld"] is True
+    assert "/Users/example" not in json.dumps(result)
+
+
+def test_provider_bridge_keeps_private_key_out_of_public_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_key = "test-private-provider-key"
+    monkeypatch.setattr(
+        provider_adapter,
+        "_load_external_credentials",
+        lambda *_args, **_kwargs: {
+            "provider": "openai",
+            "api_key": private_key,
+            "base_url": "http://127.0.0.1:8317/v1/chat/completions",
+            "model": "test-local-model",
+            "api_key_env": "OPENAI_API_KEY",
+            "base_url_env": "OPENAI_BASE_URL",
+            "model_env": "OPENAI_MODEL",
+        },
+    )
+    captured: dict[str, Any] = {}
+    import easyicu.research_agent.providers as providers
+
+    def fake_builder(**kwargs: Any) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(providers, "build_provider_client", fake_builder)
+
+    _client, public = provider_adapter.build_research_agent_provider_client(
+        {"provider": "openai", "external": True},
+    )
+
+    assert captured["environment"]["OPENAI_API_KEY"] == private_key
+    assert captured["environment"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8317/v1"
+    assert captured["environment"]["EASYICU_TRUST_LOOPBACK_PROXY_KEY"] == "1"
+    assert private_key not in json.dumps(public)
+    assert public["secrets_returned"] is False
+
+
+def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    submitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        tool_module,
+        "_bound_context",
+        lambda binding: _complete_study(),
+    )
+    from easyicu.webserver.routes import agent as agent_route
+
+    def submit(body: dict[str, Any]) -> dict[str, Any]:
+        submitted.append(dict(body))
+        return {
+            "job_id": "resume-job-1",
+            "kind": "agent-run",
+            "status": "running",
+            "engine": "research_agent_pipeline",
+            "review_run_id": "pipeline-run-1",
+            "study_context_id": "study-workflow",
+            "study_context_revision": 5,
+        }
+
+    monkeypatch.setattr(agent_route, "jobs_agent_run_review", submit)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-review",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(
+                study_context_id="study-workflow",
+                study_revision=4,
+                run_id="pipeline-run-1",
+            ),
+        ),
+        allowed_actions={"provider_run"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_resume",
+        {"decision": "approved", "reviewer": "local reviewer"},
+        context,
+    )
+
+    assert result["code"] == "research_pipeline_review_submitted"
+    assert submitted == [
+        {
+            "study_context_id": "study-workflow",
+            "run_id": "pipeline-run-1",
+            "decision": "approved",
+            "reviewer": "local reviewer",
+            "note": "",
+            "external_llm_opt_in": True,
+        }
+    ]
+    with pytest.raises(PiCopilotError) as stale:
+        context.assert_authority_fresh()
+    assert stale.value.code == "pi_session_authority_stale"
+
+
+def test_web_runner_delegates_to_research_agent_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actual_run = tmp_path / "actual-pipeline-run"
+    _write_real_pipeline_fixture(
+        actual_run,
+        manuscript="# Results\nThe pipeline-owned aggregate result is analysis-only.",
+    )
+    universe = tmp_path / "universe.parquet"
+    universe.write_bytes(b"typed-universe-placeholder")
+    acquisition = _acquisition_receipt()
+    acquisition.blocked = False
+    acquisition.universe_path = universe
+    acquisition.cohort_authority_path = None
+    acquisition.cohort_authority_ref = None
+    acquisition.trajectory_path = None
+    acquisition.trajectory_authority_path = None
+    acquisition.trajectory_authority_ref = None
+    calls: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        provider_adapter,
+        "build_research_agent_provider_client",
+        lambda provider: (object(), {"provider": "openai", "model": "test-model"}),
+    )
+    import easyicu.research_agent as research_agent
+    from easyicu.research_agent.acquisition import foundation
+
+    def fake_acquire(**kwargs: Any) -> SimpleNamespace:
+        calls["acquire"] = kwargs
+        return acquisition
+
+    class FakePipeline:
+        def run(self, **kwargs: Any) -> SimpleNamespace:
+            calls["run"] = kwargs
+            return SimpleNamespace(manifest_path=actual_run / "manifest.json")
+
+    def fake_from_config(config: Any, *, services: Any) -> FakePipeline:
+        calls["config"] = config
+        calls["services"] = services
+        return FakePipeline()
+
+    monkeypatch.setattr(foundation, "acquire_universe_for_question", fake_acquire)
+    monkeypatch.setattr(
+        research_agent.ResearchAgentPipeline,
+        "from_config",
+        fake_from_config,
+    )
+
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(tmp_path / "export"),
+        study_context=_complete_study(),
+        project_root=str(tmp_path / "projects"),
+        provider={"provider": "openai", "external": True},
+    )
+
+    class Job:
+        id = "job-real-pipeline"
+        cancel_requested = False
+        events: list[dict[str, Any]] = []
+
+        def emit(self, event: dict[str, Any]) -> None:
+            self.events.append(dict(event))
+
+    result = runner(Job())
+
+    assert calls["acquire"]["question"] == _complete_study()["question"]
+    assert calls["run"]["cohort"] == universe
+    assert calls["run"]["question"] == _complete_study()["question"]
+    assert calls["config"].evidence_enforcement_mode == "strict"
+    assert calls["config"].enable_reproducibility_envelope is True
+    assert result["engine"] == "easyicu.research_agent.pipeline"
+    assert result["gate"]["status"] == "analysis_only"
+    assert any(event["step"] == "research_pipeline" for event in Job.events)

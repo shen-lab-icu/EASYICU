@@ -118,11 +118,13 @@ def build_research_workflow_snapshot(
         str(item) for item in (run_row.get("artifact_names") or []) if item
     }
     run_type = str(run_row.get("run_type") or "")
+    run_engine = str(run_row.get("engine") or "")
     has_plan = "agent_plan.json" in artifact_names
     has_evidence = "evidence_ledger.json" in artifact_names
     has_outputs = bool(
         artifact_names
         & {
+            "result_tables.json",
             "table1_summary.json",
             "missingness_audit.json",
             "roc_curve.json",
@@ -132,9 +134,23 @@ def build_research_workflow_snapshot(
     )
     has_manuscript = "manuscript_draft.json" in artifact_names
     full_run = run_type == "full"
-    analysis_complete = bool(full_run and has_plan and has_evidence and has_outputs)
+    pipeline_run = run_engine == "easyicu.research_agent.pipeline"
+    pipeline_receipt = "source_run_manifest.json" in artifact_names
     gate_status = str(run_row.get("gate_status") or "")
     run_blocked = gate_status == "blocked"
+    analysis_complete = bool(
+        full_run
+        and pipeline_run
+        and pipeline_receipt
+        and has_plan
+        and has_evidence
+        and has_outputs
+        and gate_status == "analysis_only"
+    )
+    pipeline_attempt_blocked = bool(
+        full_run and pipeline_run and pipeline_receipt and run_blocked
+    )
+    legacy_full_scaffold = bool(full_run and not pipeline_run and has_plan)
 
     stages = [
         ResearchWorkflowStage(
@@ -217,7 +233,7 @@ def build_research_workflow_snapshot(
                 "complete"
                 if analysis_complete and not run_blocked
                 else "review_required"
-                if analysis_complete and run_blocked
+                if pipeline_attempt_blocked
                 else "running"
                 if analysis_running
                 else "ready"
@@ -229,7 +245,9 @@ def build_research_workflow_snapshot(
                 "validated_analysis_ready"
                 if analysis_complete and not run_blocked
                 else "analysis_gate_blocked"
-                if analysis_complete and run_blocked
+                if pipeline_attempt_blocked
+                else "research_pipeline_required"
+                if legacy_full_scaffold
                 else "analysis_running"
                 if analysis_running
                 else "analysis_ready"
@@ -251,11 +269,13 @@ def build_research_workflow_snapshot(
         ResearchWorkflowStage(
             id="manuscript",
             label="Manuscript",
-            status="review_required" if full_run and has_manuscript else "blocked",
+            status=(
+                "review_required" if analysis_complete and has_manuscript else "blocked"
+            ),
             owner="easyicu.research_agent.reporting",
             reason_code=(
                 "manuscript_draft_ready_for_review"
-                if full_run and has_manuscript
+                if analysis_complete and has_manuscript
                 else "full_agent_manuscript_required"
             ),
         ),
