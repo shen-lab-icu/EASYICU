@@ -69,6 +69,7 @@ Pi 自动读取最新 run、`quality_gate.json`、`evidence_ledger.json` 和白�
 - 聚焦/邻接回归：`156 passed, 3 warnings`。
 - 推送后的 Research Agent CI 在测试前正确拦截两项本轮回归：`agents/core.py` 比架构基线增长 30 行、固定 Planner 提示达到 53,826 bytes（预算 51,600）。`edffda4` 未更新基线或抬高预算，而是把新增指导归还 `agents/plan_payload.py`，并只向 `descriptive_epidemiology` 投影描述性执行合同；`agents/core.py` 回到 4,933 行基线。
 - CI 修复后的联合回归：`312 passed, 3 warnings`；其中 architecture + fixed-prompt budget 42/42，计划投影/类型/预算/owner 与 Web/Pi 组合均通过。
+- 精确 HEAD 主 CI 随后只在离线资源上下文基线守卫失败：三种 Python 版本均为同一项 `test_checked_in_resource_context_baseline_has_no_drift`，其余完整套件为 `12653 passed, 196 skipped`。差异来自 `edffda4` 将通用描述性 Planner 指引移入 typed plan-payload owner：E1 获得条件投影，其余八题各减少 2 bytes，全局最大上下文也减少 2 bytes。已用零 Provider、零患者数据的基线生成器追加审议原因和 source digest 历史；未抬高任何预算或修改 Canonical9 科学协议。资源基线、静态架构及全部提示词预算聚焦回归 `194 passed`。
 - Ruff：全部本轮 Python 生产文件和测试 `All checks passed!`。
 - Node syntax：`event-projection.mjs`、`main.mjs`、`screens-guided-pi.js` 全部通过。
 - `git diff --check`：通过。
