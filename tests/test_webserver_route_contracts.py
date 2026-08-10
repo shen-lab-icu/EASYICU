@@ -273,6 +273,7 @@ EXPECTED_JOB_LIFECYCLE_ROUTES = [
 
 EXPECTED_AGENT_CONTROL_ROUTES = [
     ("POST", "/api/jobs/agent-run", "jobs_agent_run"),
+    ("POST", "/api/jobs/agent-run-review", "jobs_agent_run_review"),
     (
         "GET",
         "/api/agent-runs/provider-status",

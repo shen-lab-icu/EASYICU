@@ -333,6 +333,7 @@
       'benchmark_scorecard.json': t('Benchmark scorecard', 'Benchmark 记分卡'),
       'workflow_graph.json': t('Workflow graph', '工作流图谱'),
       'figure_gallery.json': t('Figure gallery', '图件画廊'),
+      'result_tables.json': t('Research result tables', '科研结果表'),
       'source_run_manifest.json': t('Source run manifest', '原始运行清单'),
       'human_signoff.json': t('Human sign-off', '人工签署'),
     };
@@ -342,6 +343,7 @@
   function artifactCategory(name) {
     const n = String(name || '').toLowerCase();
     if (n === 'figure_gallery.json') return t('Figures', '图件');
+    if (n === 'result_tables.json') return t('Result tables', '结果表');
     if (n.includes('scorecard')) return t('Scorecard', '记分卡');
     if (n.includes('workflow')) return t('Workflow', '流程');
     if (n.includes('ledger')) return t('Evidence', '证据');
@@ -357,6 +359,7 @@
     const n = String(name || '').toLowerCase();
     const labels = {
       'figure_gallery.json': t('Task-specific figures rendered from this completed run.', '这道问题已渲染出的任务特异图件。'),
+      'result_tables.json': t('Bounded aggregate table previews from registered Research Agent evidence.', '来自 Research Agent 已登记证据的有界聚合表格预览。'),
       'benchmark_scorecard.json': t('Plan, code, evidence binding, and safety scores for the question.', '这道问题的计划、代码、证据绑定与安全评分。'),
       'workflow_graph.json': t('Agent steps and handoffs from question to evidence review.', '从研究问题到证据审阅的 Agent 步骤与交接。'),
       'evidence_ledger.json': t('Artifact hashes, evidence ids, and privacy-audit status.', '产物哈希、证据 ID 与隐私审计状态。'),
@@ -372,6 +375,7 @@
   function artifactRank(name) {
     const order = [
       'figure_gallery.json',
+      'result_tables.json',
       'benchmark_scorecard.json',
       'workflow_graph.json',
       'quality_gate.json',
@@ -539,6 +543,27 @@
         figs.map(row => [row.label || row.name || 'figure', row.relative_path || row.path || row.name || '', row.status || t('available', '可用')]),
         t('No figures were embedded in this artifact.', '这个产物没有嵌入图件。')
       ));
+    }
+    if (n.includes('result_tables')) {
+      const tables = Array.isArray(p.tables) ? p.tables.slice(0, 8) : [];
+      tables.forEach((table, index) => {
+        const headers = Array.isArray(table.headers) ? table.headers.slice(0, 12) : [];
+        const rows = Array.isArray(table.rows) ? table.rows.slice(0, 30) : [];
+        sections.push(artifactTable(
+          table.label || `${t('Result table', '结果表')} ${index + 1}`,
+          headers,
+          rows,
+          t('This evidence table has no previewable aggregate rows.', '这个证据表没有可预览的聚合行。')
+        ));
+      });
+      if (!tables.length) {
+        sections.push(artifactTable(
+          t('Research result tables', '科研结果表'),
+          [t('Status', '状态')],
+          [],
+          t('No aggregate result tables passed the bounded preview policy.', '没有聚合结果表通过有界预览策略。')
+        ));
+      }
     }
     if (n.includes('scorecard')) {
       const dims =

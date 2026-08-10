@@ -1395,6 +1395,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
             "run_type": "preflight",
             "llm_provider": "mock",
             "external_llm_opt_in": False,
+            "engine": "native_summary",
         }
     ]
 

@@ -60,6 +60,99 @@ def require_external_credentials(
     return updated
 
 
+def build_research_agent_provider_client(
+    provider_meta: Dict[str, Any],
+    *,
+    request_timeout: float = 240.0,
+    environ: Optional[Mapping[str, str]] = None,
+) -> tuple[Any, Dict[str, Any]]:
+    """Construct the governed Research Agent client without exposing a key.
+
+    The native Web provider file and the Research Agent provider factory have
+    deliberately separate responsibilities.  This adapter is their only
+    bridge: it revalidates the private credential and endpoint, passes them
+    directly to the factory in memory, and returns only the live client plus
+    non-secret provenance metadata.  Callers must never serialize the client.
+    """
+
+    if not provider_meta.get("external"):
+        raise ProviderAdapterError(
+            {
+                "error": "research_agent_external_provider_required",
+                "secrets_returned": False,
+            }
+        )
+    credentials = _load_external_credentials(
+        str(provider_meta.get("provider") or ""), environ=environ
+    )
+    provider = str(credentials.get("provider") or "").strip().lower()
+    if provider not in {"openai", "openrouter"}:
+        raise ProviderAdapterError(
+            {
+                "error": "research_agent_provider_unsupported",
+                "provider": provider,
+                "secrets_returned": False,
+            }
+        )
+    endpoint = str(credentials["base_url"])
+    suffix = "/chat/completions"
+    base_url = endpoint[: -len(suffix)] if endpoint.endswith(suffix) else endpoint
+    if provider == "openai":
+        key_name = "OPENAI_API_KEY"
+        base_name = "OPENAI_BASE_URL"
+    else:
+        key_name = "OPENROUTER_API_KEY"
+        base_name = "OPENROUTER_BASE_URL"
+    provider_environment = {
+        key_name: credentials["api_key"],
+        base_name: base_url,
+        "EASYICU_ALLOW_EXTERNAL_LLM": "1",
+    }
+    try:
+        from easyicu.research_agent.providers import build_provider_client
+        from easyicu.research_agent.providers.factory import (
+            TRUST_LOOPBACK_PROXY_KEY_ENV,
+            is_loopback_openai_base_url,
+        )
+        from easyicu.research_agent.providers.llm import OpenAIClient
+
+        if provider == "openai" and is_loopback_openai_base_url(base_url):
+            # The endpoint and credential were both loaded from the server-owned
+            # provider configuration after explicit Web opt-in. Tell the shared
+            # factory this one configured loopback proxy is allowed to receive
+            # its own authentication token rather than the no-auth dummy key.
+            provider_environment[TRUST_LOOPBACK_PROXY_KEY_ENV] = "1"
+        client = build_provider_client(
+            provider=provider,
+            model=credentials["model"],
+            request_timeout=float(request_timeout),
+            title="EasyICU Web Research Agent",
+            client_cls=OpenAIClient,
+            environment=provider_environment,
+            max_retries=0,
+        )
+    except Exception as exc:
+        raise ProviderAdapterError(
+            {
+                "error": "research_agent_provider_client_failed",
+                "provider": provider,
+                "reason": type(exc).__name__,
+                "secrets_returned": False,
+            }
+        ) from exc
+    public = dict(provider_meta)
+    public.update(_credential_public_metadata(credentials))
+    public.update(
+        {
+            "client": "easyicu.research_agent.providers.OpenAIClient",
+            "client_constructed": True,
+            "provider_gate": "research_agent_provider_ready",
+            "secrets_returned": False,
+        }
+    )
+    return client, public
+
+
 def generate_bound_provider_payload(
     *,
     provider_meta: Dict[str, Any],

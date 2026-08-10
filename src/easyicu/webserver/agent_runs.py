@@ -52,6 +52,7 @@ _RUN_ARTIFACT_NAMES = [
     "benchmark_scorecard.json",
     "workflow_graph.json",
     "figure_gallery.json",
+    "result_tables.json",
     "source_run_manifest.json",
     "evidence_ledger.json",
     "human_signoff.json",
@@ -559,6 +560,7 @@ def read_run_review(project_dir: str) -> Dict[str, Any]:
         "run_type": ledger.get("run_type") or "preflight",
         "study_id": run_context.get("study_id"),
         "mode": run_context.get("mode"),
+        "engine": run_context.get("engine"),
         "gate": gate,
         "readiness": readiness,
         "signed": bool(signoff),
@@ -1434,6 +1436,7 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         "run_label": str(review.get("run_id") or run_dir.name).replace("_", " "),
         "study_id": review.get("study_id"),
         "mode": review.get("mode"),
+        "engine": review.get("engine"),
         "run_type": review.get("run_type"),
         "project_dir": review.get("project_dir"),
         "gate_status": gate.get("status"),
@@ -1462,6 +1465,7 @@ def _public_review_payloads(
             "run_id": row.get("run_id"),
             "study_id": row.get("study_id"),
             "mode": row.get("mode"),
+            "engine": row.get("engine"),
             "question": row.get("question"),
             "summary": row.get("summary"),
             "local_first": row.get("local_first"),
@@ -1493,11 +1497,14 @@ def _public_review_payloads(
             "question": row.get("question"),
             "claims": row.get("claims", []),
             "sentences": row.get("sentences", []),
+            "markdown_preview": row.get("markdown_preview"),
+            "source": row.get("source"),
         }
     for name in (
         "benchmark_scorecard.json",
         "workflow_graph.json",
         "figure_gallery.json",
+        "result_tables.json",
         "source_run_manifest.json",
     ):
         if name in payloads:

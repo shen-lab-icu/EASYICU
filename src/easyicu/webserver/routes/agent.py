@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from easyicu.webserver import agent_runs
+from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import capabilities
 from easyicu.webserver import dataio
 from easyicu.webserver import provider_adapter
@@ -33,9 +34,9 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
 
     The default run is deterministic and local: it consumes the active export
     summary, writes bounded artifacts, and stops at an evidence gate. The
-    optional ``run_type=full`` path can use either the offline mock provider or
-    a configured external provider after canonical AI opt-in, per-run opt-in,
-    and credential checks.
+    optional ``run_type=full`` path can use either the legacy bounded summary
+    profile or the real ResearchAgentPipeline engine after canonical AI
+    opt-in, per-run opt-in, and credential checks.
     """
     path = str(body.get("path") or "")
     if not path:
@@ -72,6 +73,22 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
     run_type = str(
         body.get("run_type") or ("full" if body_bool(body, "full_run") else "preflight")
     )
+    engine = str(body.get("engine") or "native_summary").strip().lower()
+    if engine not in {"native_summary", "research_agent_pipeline"}:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "unsupported_agent_run_engine", "engine": engine},
+        )
+    if engine == "research_agent_pipeline" and run_type != "full":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "research_pipeline_requires_full_run"},
+        )
+    if engine == "research_agent_pipeline" and study_context is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "research_pipeline_study_context_required"},
+        )
     llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
     external_llm_opt_in = body_bool(body, "external_llm_opt_in")
     settings = settings_store.load_settings()
@@ -79,7 +96,7 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
     if not compute.get("ok"):
         raise HTTPException(status_code=400, detail=compute)
     try:
-        agent_runs.validate_agent_run_config(
+        provider_meta = agent_runs.resolve_agent_provider_config(
             run_type=run_type,
             llm_provider=llm_provider,
             external_llm_opt_in=external_llm_opt_in,
@@ -98,23 +115,38 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
                 export_path=path,
                 request_question=body.get("question"),
             )
-        base_runner = agent_runs.make_agent_run_runner(
-            export_path=path,
-            study_id=str(
-                (study_context or {}).get("id") or body.get("study_id") or "study"
-            ),
-            mode=str(body.get("mode") or "analysis"),
-            question=body.get("question"),
-            project_root=body.get("project_root")
-            or _agent_seed_run_root(project_seed_dir),
-            run_type=run_type,
-            llm_provider=llm_provider,
-            external_llm_opt_in=external_llm_opt_in,
-            ai_enabled=bool(settings.get("ai_enabled")),
-            study_context=study_context,
+        project_root = body.get("project_root") or _agent_seed_run_root(
+            project_seed_dir
         )
+        if engine == "research_agent_pipeline":
+            base_runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+                export_path=path,
+                study_context=study_context or {},
+                project_root=project_root,
+                provider=provider_meta,
+            )
+        else:
+            base_runner = agent_runs.make_agent_run_runner(
+                export_path=path,
+                study_id=str(
+                    (study_context or {}).get("id") or body.get("study_id") or "study"
+                ),
+                mode=str(body.get("mode") or "analysis"),
+                question=body.get("question"),
+                project_root=project_root,
+                run_type=run_type,
+                llm_provider=llm_provider,
+                external_llm_opt_in=external_llm_opt_in,
+                ai_enabled=bool(settings.get("ai_enabled")),
+                study_context=study_context,
+            )
     except context_store.StudyContextError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
+    except agent_pipeline_runs.ResearchPipelineRunError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": exc.code, "message": str(exc)},
+        ) from exc
     start_gate = threading.Event()
     start_abort: Dict[str, Any] = {}
 
@@ -206,6 +238,7 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
             {
                 "job_id": job.id,
                 "run_type": run_type,
+                "engine": engine,
                 "llm_provider": llm_provider,
                 "compute_target": compute.get("compute_target"),
                 "study_context_id": study_context_id or None,
@@ -224,11 +257,144 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
         "job_id": job.id,
         "kind": job.kind,
         "status": job.status,
+        "engine": engine,
         "study_context_id": study_context_id or None,
         "study_context_revision": (
             int(synced_context.get("revision") or 0) if synced_context else None
         ),
         "audit_warning": audit_warning,
+    }
+
+
+@control_router.post("/api/jobs/agent-run-review")
+def jobs_agent_run_review(body: Dict[str, Any]) -> dict:
+    """Resume one same-process digest-bound Research Agent plan review."""
+
+    run_id = str(body.get("run_id") or "").strip()
+    study_context_id = str(body.get("study_context_id") or "").strip()
+    decision = str(body.get("decision") or "").strip().lower()
+    if not run_id or not study_context_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "research_pipeline_review_coordinates_required"},
+        )
+    if decision not in {"approved", "rejected"}:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "research_pipeline_review_decision_invalid"},
+        )
+    if not body_bool(body, "external_llm_opt_in"):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "research_pipeline_review_external_opt_in_required"},
+        )
+    if not bool(settings_store.load_settings().get("ai_enabled")):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "ai_not_enabled"},
+        )
+    pending = agent_pipeline_runs.pending_review(run_id)
+    if not pending:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "research_pipeline_review_not_resumable"},
+        )
+    if pending.get("study_id") != study_context_id:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "research_pipeline_review_study_mismatch"},
+        )
+    if not pending.get("resumable_here"):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "research_pipeline_review_not_resumable_here"},
+        )
+    try:
+        study_context = context_store.get_context(study_context_id)
+    except context_store.StudyContextError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+    if study_context is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "study_context_not_found"},
+        )
+    start_gate = threading.Event()
+    start_abort: Dict[str, Any] = {}
+
+    def runner(job: Any) -> dict:
+        start_gate.wait()
+        if start_abort:
+            raise RuntimeError(
+                "agent_review_start_blocked:"
+                + str(start_abort.get("error") or "study_context_sync_failed")
+            )
+        result: Dict[str, Any] | None = None
+        terminal_stage = "agent_failed"
+        try:
+            result = agent_pipeline_runs.resume_research_pipeline(
+                run_id=run_id,
+                study_context_id=study_context_id,
+                decision=decision,
+                reviewer=str(body.get("reviewer") or "local_web_reviewer"),
+                note=str(body.get("note") or ""),
+                job=job,
+            )
+            terminal_stage = (
+                "review_blocked"
+                if (result.get("gate") or {}).get("status") == "blocked"
+                else "review"
+            )
+            return result
+        finally:
+            try:
+                cleanup = context_store.clear_active_job_if(
+                    study_context_id,
+                    job.id,
+                    current_stage=terminal_stage,
+                    last_route="agent",
+                )
+                if isinstance(result, dict):
+                    result["study_context_revision"] = int(
+                        cleanup["context"].get("revision") or 0
+                    )
+            except Exception:
+                pass
+
+    job = submit_job("agent-run", runner)
+    synced_context = None
+    try:
+        synced_context = context_store.handoff_context(
+            study_context_id,
+            current_stage="analyze",
+            last_route="agent",
+            active_job_id=job.id,
+            expected_revision=int(study_context.get("revision") or 0),
+        )
+    except context_store.StudyContextError as exc:
+        start_abort.update(exc.detail)
+    except Exception as exc:
+        start_abort.update(
+            {
+                "error": "study_context_active_job_sync_failed",
+                "reason": type(exc).__name__,
+            }
+        )
+    finally:
+        start_gate.set()
+    if start_abort:
+        error = str(start_abort.get("error") or "study_context_sync_failed")
+        raise HTTPException(
+            status_code=409 if error.startswith("study_context_revision_") else 500,
+            detail={**start_abort, "job_id": job.id, "job_started": False},
+        )
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "engine": "research_agent_pipeline",
+        "review_run_id": run_id,
+        "study_context_id": study_context_id,
+        "study_context_revision": int(synced_context.get("revision") or 0),
     }
 
 

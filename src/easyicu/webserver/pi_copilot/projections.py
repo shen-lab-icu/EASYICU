@@ -228,6 +228,7 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
                 "study_id",
                 "mode",
                 "run_type",
+                "engine",
                 "gate_status",
                 "readiness_status",
                 "signed",
