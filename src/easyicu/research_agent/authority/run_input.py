@@ -1516,6 +1516,39 @@ def _register_host_cohort_materialization(
             raise RunInputIdentityError(
                 "host cohort materializer did not publish its attrition ledger"
             )
+        # The host cohort materializer is a real planned producer even though
+        # it does not execute inside a step runner. Downstream typed-input
+        # validation resolves its sealed EvidenceStore copy, while figure
+        # lineage additionally requires the producing step's immutable output
+        # copy. Publish that standard step output here from the same canonical
+        # ledger; do not make the figure validator special-case a host producer
+        # or accept a weaker evidence path.
+        flow_step_output = (
+            run_dir
+            / "steps"
+            / cohort_product_step.step_id
+            / "outputs"
+            / _HOST_COHORT_FLOW_SOURCE_NAME
+        )
+        flow_step_output.parent.mkdir(parents=True, exist_ok=True)
+        flow_digest = sha256_of_file(flow_path)
+        if flow_step_output.exists():
+            if (
+                flow_step_output.is_symlink()
+                or not flow_step_output.is_file()
+                or sha256_of_file(flow_step_output) != flow_digest
+            ):
+                raise RunInputIdentityError(
+                    "host cohort materializer found a conflicting immutable "
+                    "cohort-flow step output"
+                )
+        else:
+            shutil.copyfile(flow_path, flow_step_output)
+            if sha256_of_file(flow_step_output) != flow_digest:
+                raise RunInputIdentityError(
+                    "host cohort materializer could not verify its cohort-flow "
+                    "step output"
+                )
         try:
             flow_record = evidence.register_file(
                 kind="table",

@@ -47,6 +47,7 @@ from ..planning.analysis_types import (
 )
 from ..planning.primary_result_contract import (
     family_primary_result_execution_guide,
+    model_terms_retry_guide,
     primary_result_contract_guide,
     validate_required_primary_result as _validate_required_primary_result,
 )
@@ -1600,6 +1601,8 @@ class PlannerAgent:
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
+                "\n\n"
+                + model_terms_retry_guide()
             ),
         )
 
@@ -2137,6 +2140,8 @@ class ReplannerAgent(PlannerAgent):
                 "know_how_decisions when present. Every step must include "
                 "planned_analysis_role. Keep completed step_ids "
                 "from the CURRENT PLAN unchanged; only revise the remaining steps."
+                "\n\n"
+                + model_terms_retry_guide()
             ),
         )
         if revised.revision <= current_plan.revision:

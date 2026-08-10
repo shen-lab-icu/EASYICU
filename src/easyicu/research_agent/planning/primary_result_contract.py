@@ -61,6 +61,34 @@ def primary_result_contract_guide() -> str:
     )
 
 
+def model_terms_retry_guide() -> str:
+    """Return the exact case-neutral model-term shape for structured retries.
+
+    The full Planner directive is deliberately kept under a fixed-cost ratchet.
+    This compact reminder is therefore attached only after the validator has
+    identified an incomplete adjusted-association declaration. It publishes
+    the typed contract without choosing any case's variables, levels, or
+    reference category for the Planner.
+    """
+
+    return (
+        "For every adjusted-association model_requirements entry, `model_terms` "
+        "must be an array with exactly one term per modeled variable. Every "
+        "term uses the exact keys `name`, `role`, `coding`, `levels`, "
+        "`reference_level`, and `transform` (never aliases such as `variable` "
+        "or `binary_indicator`). `role` is `exposure` or `covariate`; `coding` "
+        "is `continuous`, `binary`, `categorical`, or `ordinal_linear`. A "
+        "continuous term uses `transform: identity`, `levels: null`, and "
+        "`reference_level: null`. Binary/categorical terms use `transform: "
+        "treatment_contrast`, explicit string `levels`, and a "
+        "`reference_level` contained in those levels (binary has exactly two). "
+        "An ordinal_linear term uses `transform: declared_level_index`, ordered "
+        "string `levels`, and `reference_level: null`. Declare exactly one "
+        "exposure term whose name equals `exposure_source`; covariate terms and "
+        "their order must exactly equal `covariates`."
+    )
+
+
 def validate_required_primary_result(
     *,
     plan: AnalysisPlan,
@@ -311,6 +339,7 @@ def family_primary_result_execution_guide(step: AnalysisStep) -> str:
 
 __all__ = [
     "family_primary_result_execution_guide",
+    "model_terms_retry_guide",
     "primary_result_contract_guide",
     "validate_required_primary_result",
 ]
