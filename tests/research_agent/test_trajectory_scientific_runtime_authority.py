@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.execution.runners.trajectory_scientific_candidate_executor import (
     run_trajectory_scientific_candidate_selection,
@@ -16,7 +17,10 @@ from easyicu.research_agent.execution.runners.trajectory_scientific_representati
 from easyicu.research_agent.execution.runners.trajectory_stability_executor import (
     run_trajectory_stability,
 )
-from easyicu.research_agent.schema import TrajectoryStabilitySpec
+from easyicu.research_agent.execution.runners.selection import (
+    select_standard_executor,
+)
+from easyicu.research_agent.schema import AnalysisPlan, TrajectoryStabilitySpec
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
     build_trajectory_scientific_runtime_authority,
 )
@@ -41,6 +45,8 @@ def _authority():
         "lact__h0_12",
         "lact__h12_24",
     )
+
+
     spec = TrajectoryStabilitySpec(
         n_resamples=2,
         sample_fraction=0.75,
@@ -77,6 +83,19 @@ def _authority():
                 "unavailable": "exclude",
                 "additional_clustering_stage_imputation": "none",
             },
+            "representation_plan_method": (
+                "signed_fixed_window_trajectory_representation"
+            ),
+            "representation_plan_intent": (
+                "Build the digest-bound fixed-window trajectory representation "
+                "exactly as declared by the scientific runtime authority."
+            ),
+            "representation_plan_inputs": [],
+            "representation_required_outputs": [
+                "artifact:trajectory_representation",
+                "table:trajectory_membership",
+                "manifest:trajectory_representation_schema",
+            ],
             "model_family": "latent_class_diagonal_gaussian_mixture",
             "fit_method": "observed_data_em_diagonal_gaussian_mixture",
             "covariance_type": "diag",
@@ -101,6 +120,110 @@ def _authority():
             "stability_spec": spec.model_dump(mode="json"),
         }
     )
+
+
+def _signed_plan(authority) -> AnalysisPlan:
+    return AnalysisPlan.model_validate(
+        {
+            "research_question": "Assess fixed-window trajectory phenotypes.",
+            "analysis_type": "trajectory_clustering",
+            "steps": [
+                {
+                    "step_id": "01_representation",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": authority.representation_plan_intent,
+                    "inputs": list(authority.representation_plan_inputs),
+                    "expected_outputs": [
+                        *authority.representation_required_outputs,
+                        "table:feature_availability",
+                    ],
+                    "method": authority.representation_plan_method,
+                    "icu_rule_refs": [authority.plan_rule_ref],
+                },
+                {
+                    "step_id": "02_candidates",
+                    "planned_analysis_role": "primary",
+                    "intent": "Fit every signed candidate and select by BIC.",
+                    "inputs": [
+                        "artifact:trajectory_representation",
+                        "manifest:trajectory_representation_schema",
+                    ],
+                    "expected_outputs": [
+                        "artifact:candidate_cluster_assignments",
+                        "manifest:cluster_selection",
+                        "manifest:candidate_cluster_solution_schema",
+                    ],
+                    "method": (
+                        "observed_data_diagonal_gaussian_mixture_candidate_selection"
+                    ),
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "03_stability",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Execute the signed stability design.",
+                    "inputs": [
+                        "artifact:trajectory_representation",
+                        "artifact:candidate_cluster_assignments",
+                        "manifest:cluster_selection",
+                        "manifest:trajectory_representation_schema",
+                        "manifest:candidate_cluster_solution_schema",
+                    ],
+                    "expected_outputs": [
+                        "artifact:stability_freeze",
+                        "artifact:cluster_assignments",
+                        "manifest:cluster_stability_spec",
+                        "manifest:trajectory_missingness_policy",
+                        "table:cluster_assignments",
+                        "table:cluster_stability",
+                        "table:cluster_stability_assignments",
+                        "table:cluster_assignment_provenance",
+                    ],
+                    "method": "trajectory_cluster_stability",
+                    "icu_rule_refs": [],
+                    "trajectory_stability_spec": authority.stability_spec.model_dump(
+                        mode="json"
+                    ),
+                },
+            ],
+        }
+    )
+
+
+def test_signed_plan_rejects_representation_inputs_and_intent_drift() -> None:
+    authority = _authority()
+    plan = _signed_plan(authority)
+    authority.validate_plan(plan)
+
+    representation = plan.steps[0].model_copy(
+        update={
+            "inputs": ["sofa2", "sofa2_resp"],
+            "intent": "Use total plus one component, 24h means, and zero imputation.",
+        }
+    )
+    drifted = plan.model_copy(update={"steps": [representation, *plan.steps[1:]]})
+    with pytest.raises(ValueError, match="representation plan drifted"):
+        authority.validate_plan(drifted)
+
+
+def test_signed_trajectory_contract_owns_all_three_real_execution_steps() -> None:
+    authority = _authority()
+    plan = _signed_plan(authority)
+    expected_kinds = (
+        "trajectory_signed_representation",
+        "trajectory_signed_candidate_selection",
+        "trajectory_cluster_stability",
+    )
+    for step, expected_kind in zip(plan.steps, expected_kinds):
+        selected = select_standard_executor(
+            step,
+            plan=plan,
+            trajectory_scientific_runtime_authority=authority,
+            scientific_runtime_projection_sha256="2" * 64,
+        )
+        assert selected is not None
+        assert selected.analysis_kind == expected_kind
+        assert authority.execution_contract_sha256 in selected.code
 
 
 def test_signed_representation_excludes_owner_unavailable_zero(tmp_path: Path) -> None:

@@ -149,7 +149,12 @@ def test_e1_materialized_item_receives_only_its_case_protocol_overlay(tmp_path):
     assert e2_row["case_scientific_protocol"]["task_id"] == "e2_lactate_mortality"
     assert len(e2_row["case_scientific_protocol_sha256"]) == 64
     assert e2_row["runtime_scientific_projection_sha256"]
-    assert any("24-hour landmark" in item for item in e2_row["expected_outputs"])
+    assert e2_row["expected_outputs"] == [
+        "table:e2_landmark_rcs_curve",
+        "table:e2_landmark_rcs_contrasts",
+        "table:e2_linear_sensitivity",
+        "log:e2_scientific_runtime_receipt",
+    ]
     assert any("descriptive/prognostic" in item for item in e2_row["semantic_guardrails"])
 
 

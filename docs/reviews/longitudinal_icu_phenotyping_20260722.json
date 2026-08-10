@@ -5,7 +5,8 @@
   "reviewed_content_sha256": "2b776ed3206297937bb9a7613c4e2380eae6bc264c394aa22c5a4b010df9d0d4",
   "case_protocol_path": "benchmarks/figure2_canonical9/protocols/h3_trajectory_clustering_20260809.json",
   "case_protocol_content_sha256": "6c3d46d0db23770826b494845670ae5319d862e5e8ffbbc664bc130b507f3fc7",
-  "runtime_scientific_projection_sha256": "1fac6cd1224f408fbe0b98f149b30f2696a1155dec777d009ba54e25e2a21109",
+  "runtime_scientific_projection_sha256": "2b8e1926097aa74128b9b6c9c12abf8739ad46da66e6fc9efcec58a01c30ff85",
+  "deterministic_execution_contract_sha256": "304f74d726eaa7523e2b8ab5b643ffe045b04d0228d3bb0878b46255593f2130",
   "status": "unsigned_targeted_adjudication_repairs_complete",
   "authorization": false,
   "split_rationale": "H3 is a longitudinal phenotyping question. It cannot be rescued by changing random seeds, cluster counts, thresholds, or exclusions after a stability failure; any new design needs a separately reviewed protocol before execution.",
@@ -35,7 +36,7 @@
     "The model family is observed-data diagonal Gaussian mixture, candidate k is 2-6, and minimum BIC selects without outcomes. If the minimum BIC is at k=6, execution returns H3_NO_INTERIOR_BIC_OPTIMUM rather than claiming an identified optimum or expanding k post hoc; a selected cluster below 5% yields no stable solution without trying another k.",
     "Stability uses exactly 100 80%-subsample refits from base seed 1729 and requires all 100 to succeed. Numerical/refit failure is an engine failure, while a completed mean ARI below 0.70 is scientific instability and the formal no-stable-phenotype result.",
     "Outcome comparisons occur only after frozen assignment and remain descriptive; MIMIC-IV discovery is not transportable without external reproduction under the identical protocol.",
-    "The reviewer approves exact case protocol digest 6c3d46d0db23770826b494845670ae5319d862e5e8ffbbc664bc130b507f3fc7 and runtime projection digest 1fac6cd1224f408fbe0b98f149b30f2696a1155dec777d009ba54e25e2a21109 together with card digest 2b776ed3206297937bb9a7613c4e2380eae6bc264c394aa22c5a4b010df9d0d4."
+    "The reviewer approves exact case protocol digest 6c3d46d0db23770826b494845670ae5319d862e5e8ffbbc664bc130b507f3fc7, runtime projection digest 2b8e1926097aa74128b9b6c9c12abf8739ad46da66e6fc9efcec58a01c30ff85, and deterministic execution-contract digest 304f74d726eaa7523e2b8ab5b643ffe045b04d0228d3bb0878b46255593f2130 together with card digest 2b776ed3206297937bb9a7613c4e2380eae6bc264c394aa22c5a4b010df9d0d4."
   ],
   "attestation_fields_required_after_signoff": [
     "reviewer_owner",

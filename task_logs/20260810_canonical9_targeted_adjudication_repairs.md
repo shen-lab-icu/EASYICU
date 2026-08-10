@@ -31,27 +31,33 @@
 - 单一科学真源：`benchmarks/figure2_canonical9/case_scientific_protocol.py`
 - runtime/launch 双摘要门：`benchmarks/figure2_canonical9/scientific_protocol_authority.py`、`benchmarks/figure2_canonical9/realrun_authority.py`
 - materialization 与 Agent-visible projection：`benchmarks/figure2_canonical9/materialization_plan.py`、`benchmarks/figure2_canonical9/protocol_prompt.py`、`tools/materialize_canonical9_miiv.py`
-- H3 native-export owner receipt：`src/easyicu/concept/export_metadata.py`、`src/easyicu/research_agent/cohort/materializer.py`；`*_observed` / `*_available` 由 producer typed metadata 授权，缺一即 fail closed
+- H3 native-export owner receipt：`src/easyicu/api/extraction.py`、`src/easyicu/concept/export_metadata.py`、`src/easyicu/research_agent/cohort/materializer.py`；真实 native-v2 producer 保留 `*_observed` / `*_available`，duplicate-grain consolidation 只用 owner-available value 聚合，缺一即 fail closed
+- E2/H2 current-run authority：`src/easyicu/research_agent/authority/current_case_scientific_runtime.py`；E2 唯一 24 h landmark/RCS primary 与 H2 唯一 current-source feasibility-only plan 绑定 execution digest
+- E2/H2 deterministic executors：`src/easyicu/research_agent/execution/runners/landmark_spline_executor.py`、`src/easyicu/research_agent/execution/runners/source_feasibility_executor.py`
 - H3 digest-bound execution contract：`src/easyicu/research_agent/trajectory/scientific_runtime_authority.py`
 - H3 exact seven-coordinate representation：`src/easyicu/research_agent/execution/runners/trajectory_scientific_representation_executor.py`
 - H3 pre-BIC scaling / candidate k / BIC selection：`src/easyicu/research_agent/execution/runners/trajectory_scientific_candidate_executor.py`
 - H3 stability replay and digest verification：`src/easyicu/research_agent/execution/runners/trajectory_stability_executor.py`
-- pipeline/runner binding：`src/easyicu/research_agent/pipeline.py`、`src/easyicu/research_agent/execution/phase.py`、`src/easyicu/research_agent/execution/runners/selection.py`、`tools/run_research_agent_bench.py`
+- pipeline/runner binding：`src/easyicu/research_agent/pipeline.py`、`src/easyicu/research_agent/execution/phase.py`、`src/easyicu/research_agent/execution/runners/selection.py`、`tools/run_research_agent_bench.py`；caller 对 execution contract 或 projection digest 的覆盖在 Provider 前 fail closed
 
 当前 normalized digests：
 
-| Case | Protocol content SHA-256 | Runtime projection SHA-256 |
-|---|---|---|
-| E2 | `a3213192320226ddfd7c767885686551fca63e1df0ecfb863279233e52286a86` | `49731a5fb044677fa0b104d7a46d1d46634e4da12a6474f6ac5e03f80583c752` |
-| H2 | `8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c` | `8a3ea27108df3a9f986c00b3d39dc710d0622191a5221050c5ca7ef6def2e3ca` |
-| H3 | `6c3d46d0db23770826b494845670ae5319d862e5e8ffbbc664bc130b507f3fc7` | `1fac6cd1224f408fbe0b98f149b30f2696a1155dec777d009ba54e25e2a21109` |
+| Case | Protocol content SHA-256 | Runtime projection SHA-256 | Execution contract SHA-256 |
+|---|---|---|---|
+| E2 | `a3213192320226ddfd7c767885686551fca63e1df0ecfb863279233e52286a86` | `1a267cd6e03452c2bbf5cf71d7281837f7d9529ba91f15901bbf9f6b39fcdd23` | `ea104a6245672106b75eaa568bf1d10db2c97774df9de9152061f8215f947f90` |
+| H2 | `8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c` | `ac990d62490906436fd234eb6fc780def048bf8eb60aba8e7edb7599519752a2` | `28967edb8e689ff734aa8115471e75001bd12f18315849f3a6c6d39c370c7a0d` |
+| H3 | `6c3d46d0db23770826b494845670ae5319d862e5e8ffbbc664bc130b507f3fc7` | `2b8e1926097aa74128b9b6c9c12abf8739ad46da66e6fc9efcec58a01c30ff85` | `304f74d726eaa7523e2b8ab5b643ffe045b04d0228d3bb0878b46255593f2130` |
 
 ## 负向回归
 
 - human attestation 之后只篡改 Agent-visible runtime guardrail，即使同时重算 JSONL 自声明摘要、协议版本和协议内容不变，real-run launcher 仍在 Provider 前 `PRODUCTION_INPUT_AUTHORITY_INVALID`。
 - owner-unavailable SOFA-2 synthetic zero 不进入 H3 trajectory；provenance 仍计入 `unavailable` 分母。
 - native ExportPackage 未授权或缺失任一 SOFA-2 owner receipt 时 materializer fail closed；不会回退为 `direct_observed`。
+- native ExportPackage 同一 stay/time 同时存在 unavailable synthetic zero 与 owner-observed value 时，pandas 与 bounded DuckDB 两条 producer 路径均只聚合 owner-available value，不会把 receipt 与错误数值拼接。
 - H3 Agent 将 feature/k/stability 声明改成另一组时，plan validator 或 deterministic executor 在科学结果前 fail closed；签署 projection 不再只是提示词/provenance。
+- E2 Agent 改写 landmark primary method/intent/input/output/digest 时 plan validator fail closed；真实 execution router 只能选择签署的 deterministic RCS owner。
+- H2 plan 只能包含一个签署的 feasibility-only owner；增加 PSM/IPTW/control/effect step 即 fail closed，deterministic output 的 effect estimate 恒为 null。
+- launcher 收到 caller-supplied scientific authority 或 projection digest 时，只接受与签署 projection 完全一致的值；任何覆盖尝试均在 pipeline/Provider 前拒绝。
 - seven-coordinate matrix 只由 six SOFA-2 components + lactate 的 0–72 h / 12 h maximum grid 构建；SOFA-2 total 不进入 clustering coordinates。
 - pooled observed-value z-score 在 candidate BIC 前只计算一次；candidate-selection 与 stability 必须共享同一个 scaling manifest/digest。
 - H3 minimum BIC 落在 k=6 时输出 `H3_NO_INTERIOR_BIC_OPTIMUM`，不冻结 phenotype、不扩大候选范围。
@@ -59,10 +65,10 @@
 
 ## 本地验证
 
-- 第二阶段定点与相邻回归：`299 passed`（protocol/authority/launcher/materialization/runner/config/native-export/materializer）；trajectory pipeline success/terminal 隔离回归另 `10 passed`。
-- 扩大 Research Agent 集合：初次 `463 passed, 2 failed`；两条均为旧测试夹具缺少新增的通用 boundary declaration。修正夹具后两条各自复测 `2 passed`。
-- owner receipt/materialized trajectory 追加复测：`22 passed`。
-- Ruff lint：通过。
-- `git diff --check`：通过。
+- 最终定点与相邻回归：`191 passed`（protocol/authority/launcher/materialization/runner/config/native-v2 producer/materializer/review packet）。
+- native-v2 SOFA-2 producer 正/负/duplicate pairing 两条 backend：`5 passed`。
+- E2/H2/H3 authority → real execution router：`8 passed`（包含 plan drift、deterministic result 与 config pairing）。
+- Ruff、JSON 解析、`git diff --check`：通过。
+- import-linter：7 个 contracts 全部 kept；module-graph diff 通过；deptry 无问题。
 
 注意：上面的本地扩大回归不是 exact-head GitHub full CI 的替代品。新 SHA 推送后仍须等待主 CI、research-agent CI、Pi security、runner trust 与 portability 全绿；之后才在仓库外生成新的 `UNSIGNED / NON-AUTHORIZING` 真人双签包，并只对上述 finding 做一次独立 AI 定点复核。

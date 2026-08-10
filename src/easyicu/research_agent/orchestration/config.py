@@ -309,6 +309,10 @@ class PipelineConfig:
     # numerical rules, while plan validation and deterministic executors bind
     # them to this immutable, run-hashed configuration.
     trajectory_scientific_runtime_authority: Optional[Dict[str, Any]] = None
+    # Optional caller-reviewed current-run authority for non-trajectory cases.
+    # It is mutually exclusive with the trajectory authority and is consumed
+    # by a typed plan gate plus its deterministic owner runner.
+    current_case_scientific_runtime_authority: Optional[Dict[str, Any]] = None
     scientific_runtime_projection_sha256: Optional[str] = None
     enable_reviewer_round: bool = True
     enable_fairness_subgroups: bool = False
@@ -505,12 +509,24 @@ class PipelineConfig:
                 "required_primary_cohort_selection_mode must be "
                 "'predicate_filtered', 'all_input_rows', or None"
             )
-        if (self.trajectory_scientific_runtime_authority is None) != (
+        authority_count = sum(
+            value is not None
+            for value in (
+                self.trajectory_scientific_runtime_authority,
+                self.current_case_scientific_runtime_authority,
+            )
+        )
+        if authority_count > 1:
+            raise ValueError(
+                "trajectory and current-case scientific authorities are mutually "
+                "exclusive"
+            )
+        if (authority_count == 0) != (
             self.scientific_runtime_projection_sha256 is None
         ):
             raise ValueError(
-                "trajectory scientific authority and runtime projection digest "
-                "must be configured together"
+                "scientific authority and runtime projection digest must be "
+                "configured together"
             )
         if self.trajectory_scientific_runtime_authority is not None:
             from ..trajectory.scientific_runtime_authority import (
@@ -520,6 +536,15 @@ class PipelineConfig:
             load_trajectory_scientific_runtime_authority(
                 self.trajectory_scientific_runtime_authority
             )
+        if self.current_case_scientific_runtime_authority is not None:
+            from ..authority.current_case_scientific_runtime import (
+                load_current_case_scientific_runtime_authority,
+            )
+
+            load_current_case_scientific_runtime_authority(
+                self.current_case_scientific_runtime_authority
+            )
+        if authority_count:
             digest = str(self.scientific_runtime_projection_sha256 or "")
             if len(digest) != 64 or any(
                 character not in "0123456789abcdef" for character in digest

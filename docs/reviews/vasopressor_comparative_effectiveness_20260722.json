@@ -5,7 +5,8 @@
   "reviewed_content_sha256": "5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f",
   "case_protocol_path": "benchmarks/figure2_canonical9/protocols/h2_vasopressor_causal_20260809.json",
   "case_protocol_content_sha256": "8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c",
-  "runtime_scientific_projection_sha256": "8a3ea27108df3a9f986c00b3d39dc710d0622191a5221050c5ca7ef6def2e3ca",
+  "runtime_scientific_projection_sha256": "ac990d62490906436fd234eb6fc780def048bf8eb60aba8e7edb7599519752a2",
+  "deterministic_execution_contract_sha256": "28967edb8e689ff734aa8115471e75001bd12f18315849f3a6c6d39c370c7a0d",
   "status": "unsigned_targeted_adjudication_repairs_complete",
   "authorization": false,
   "split_rationale": "H2 is a causal-emulation question, not a generic medication association. The protocol must establish a common treatment-decision landmark and distinguish verified non-use from missing medication capture before any effect estimate can be considered.",
@@ -26,7 +27,7 @@
     "This blocker is source-specific and may be reopened only by a per-stay source-coverage contract with prespecified pre-ICU lookback that distinguishes true initiator, prevalent user, and verified non-user, followed by new clinical and methods review.",
     "Any future target-trial design is non-authorizing under the current materialization; mandatory future diagnostics include overall and arm-specific ESS, ESS/N, weight distribution, overlap, balance, and extreme weights, without inventing a universal numeric ESS reportability cutoff.",
     "The current formal H2 result is non-identifiability from the available medication-capture contract, not an estimated causal effect.",
-    "The reviewer approves exact case protocol digest 8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c and runtime projection digest 8a3ea27108df3a9f986c00b3d39dc710d0622191a5221050c5ca7ef6def2e3ca together with card digest 5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f."
+    "The reviewer approves exact case protocol digest 8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c, runtime projection digest ac990d62490906436fd234eb6fc780def048bf8eb60aba8e7edb7599519752a2, and deterministic execution-contract digest 28967edb8e689ff734aa8115471e75001bd12f18315849f3a6c6d39c370c7a0d together with card digest 5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f."
   ],
   "attestation_fields_required_after_signoff": [
     "reviewer_owner",

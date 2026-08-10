@@ -6736,6 +6736,7 @@ def run_execute_phase(
             plausibility_scope=plausibility_authority.scope,
             resolved_bindings=resolved_input_bindings,
             trajectory_scientific_runtime_authority=getattr(pipeline, "_trajectory_scientific_runtime_authority", None),
+            current_case_scientific_runtime_authority=getattr(pipeline, "_current_case_scientific_runtime_authority", None),
             scientific_runtime_projection_sha256=getattr(pipeline, "_scientific_runtime_projection_sha256", None),
             trace=standard_executor_trace,
         )

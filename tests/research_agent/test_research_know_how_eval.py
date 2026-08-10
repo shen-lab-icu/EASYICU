@@ -237,8 +237,12 @@ def test_canonical9_review_packet_is_bound_to_exact_card_content(
     assert packet["case_protocol_content_sha256"] == case_protocol_content_sha256(
         protocol
     )
+    projection = build_runtime_scientific_projection(protocol)
     assert packet["runtime_scientific_projection_sha256"] == (
-        build_runtime_scientific_projection(protocol).runtime_projection_sha256
+        projection.runtime_projection_sha256
+    )
+    assert packet["deterministic_execution_contract_sha256"] == (
+        projection.deterministic_execution_contract["execution_contract_sha256"]
     )
     assert packet["attestation_fields_required_after_signoff"] == [
         "reviewer_owner",

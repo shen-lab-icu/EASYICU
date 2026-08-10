@@ -105,6 +105,64 @@ _EXECUTION_INCOMPLETE_EXIT_CODE = 4
 # as a clean pass -- `scores=0, pending=1, exit=0`.
 _PENDING_ITEMS_EXIT_CODE = 5
 
+_SCIENTIFIC_RUNTIME_AUTHORITY_OPTIONS = (
+    "trajectory_scientific_runtime_authority",
+    "current_case_scientific_runtime_authority",
+)
+
+
+def _bind_runtime_scientific_projection_options(
+    pipeline_options: Optional[Mapping[str, Any]],
+    runtime_projection: object,
+) -> Dict[str, Any]:
+    """Bind a reviewed runtime projection without permitting an override."""
+
+    options = dict(pipeline_options or {})
+    if not isinstance(runtime_projection, Mapping):
+        return options
+    execution_contract = runtime_projection.get("deterministic_execution_contract")
+    if not isinstance(execution_contract, Mapping):
+        return options
+    projection_digest = str(
+        runtime_projection.get("runtime_projection_sha256") or ""
+    ).strip()
+    schema_version = str(execution_contract.get("schema_version") or "")
+    authority_option_by_schema = {
+        "easyicu.trajectory_scientific_runtime_authority/1": (
+            "trajectory_scientific_runtime_authority"
+        ),
+        "easyicu.landmark_spline_runtime_authority/1": (
+            "current_case_scientific_runtime_authority"
+        ),
+        "easyicu.source_feasibility_runtime_authority/1": (
+            "current_case_scientific_runtime_authority"
+        ),
+    }
+    try:
+        authority_option = authority_option_by_schema[schema_version]
+    except KeyError as exc:
+        raise ValueError(
+            "SCIENTIFIC_RUNTIME_AUTHORITY_SCHEMA_UNSUPPORTED: "
+            f"{schema_version or '<missing>'}"
+        ) from exc
+
+    expected_contract = dict(execution_contract)
+    for option_name in _SCIENTIFIC_RUNTIME_AUTHORITY_OPTIONS:
+        if option_name not in options:
+            continue
+        supplied = options[option_name]
+        if option_name != authority_option or supplied != expected_contract:
+            raise ValueError(
+                "SCIENTIFIC_RUNTIME_AUTHORITY_OVERRIDE_FORBIDDEN: "
+                f"{option_name}"
+            )
+    supplied_digest = options.get("scientific_runtime_projection_sha256")
+    if supplied_digest is not None and str(supplied_digest) != projection_digest:
+        raise ValueError("SCIENTIFIC_RUNTIME_PROJECTION_OVERRIDE_FORBIDDEN")
+    options[authority_option] = expected_contract
+    options["scientific_runtime_projection_sha256"] = projection_digest
+    return options
+
 
 def _is_figure2_task_id(value: object) -> bool:
     """Return True only for an exact frozen Canonical9 identifier."""
@@ -1387,9 +1445,11 @@ def _run_one_arm(
         # free-text analysis-family inference, which emitted STROBE for the
         # mortality_prediction task while the scorecard expected TRIPOD+AI — so
         # reporting_completeness was silently NA on a run that did reach the write
-        # phase (detector/emitter contract mismatch, G-2). ``setdefault`` lets an
-        # explicit pipeline_options override win.
-        opts = dict(pipeline_options or {})
+        # phase (detector/emitter contract mismatch, G-2).
+        opts = _bind_runtime_scientific_projection_options(
+            pipeline_options,
+            getattr(item, "runtime_scientific_projection", None),
+        )
         opts.setdefault(
             "reporting_checklist_names",
             list(checklist_names_for_kind(getattr(item, "kind", None))),
@@ -1398,23 +1458,6 @@ def _run_one_arm(
         # trajectory-item applicability by kind (cross-sectional clustering vs
         # longitudinal) instead of fragile manuscript wording (M3 false-open).
         opts.setdefault("task_kind", getattr(item, "kind", None))
-        runtime_projection = getattr(item, "runtime_scientific_projection", None)
-        if isinstance(runtime_projection, Mapping):
-            execution_contract = runtime_projection.get(
-                "deterministic_execution_contract"
-            )
-            projection_digest = str(
-                runtime_projection.get("runtime_projection_sha256") or ""
-            ).strip()
-            if isinstance(execution_contract, Mapping):
-                opts.setdefault(
-                    "trajectory_scientific_runtime_authority",
-                    dict(execution_contract),
-                )
-                opts.setdefault(
-                    "scientific_runtime_projection_sha256",
-                    projection_digest,
-                )
         scientific_contract = getattr(item, "scientific_acceptance_contract", None)
         if isinstance(scientific_contract, Mapping):
             required_cohort_mode = str(
