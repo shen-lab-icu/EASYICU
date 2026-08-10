@@ -532,23 +532,42 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
             item["description"],
         ),
     )
-    claim_authority = sorted(
-        [
+    claim_authority: list[dict[str, Any]] = []
+    for claim in claims:
+        if claim.step_id not in _PLAN_STEP_IDS:
+            continue
+        evidence_record = current_by_id.get(claim.evidence_id)
+        assert evidence_record is not None, (
+            "an authoritative numeric claim is not bound to current evidence"
+        )
+        claim_authority.append(
             {
-                "evidence_id": claim.evidence_id,
+                # Evidence ids include the exact step-summary bytes.  The new
+                # scaling receipt deliberately records backend float tails, so
+                # that content-derived id is not a cross-Python semantic
+                # identity.  Keep the owner join explicit while projecting the
+                # stable evidence role, just as the alias oracle above excludes
+                # content-derived self-alias names.
+                "evidence_authority": {
+                    "kind": evidence_record.kind,
+                    "produced_by_step": evidence_record.produced_by_step,
+                    "description": evidence_record.description,
+                    "producer": evidence_record.producer,
+                    "generation_mode": evidence_record.generation_mode,
+                },
                 "step_id": claim.step_id,
                 "source_field": claim.source_field,
                 "value": claim.value,
                 "canonical": claim.canonical,
             }
-            for claim in claims
-            if claim.step_id in _PLAN_STEP_IDS
-        ],
+        )
+    claim_authority.sort(
         key=lambda item: (
             item["step_id"],
-            item["evidence_id"],
+            item["evidence_authority"]["kind"],
+            item["evidence_authority"]["description"],
             item["source_field"],
-        ),
+        )
     )
     finding_authority = _finding_bundle(
         manifest=authority,
