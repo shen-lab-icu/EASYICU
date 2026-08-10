@@ -259,6 +259,15 @@ _CODER_AUTHORITY_PRECEDENCE = (
 
 PLANNER_MAX_RETRIES = 4
 
+_PLANNER_OPTIONAL_FIELDS_RETRY_GUIDE = (
+    "Contract applicability is exact: `family_primary_result_requirement` is "
+    "legal only on the primary step when `analysis_type` is `causal_inference` "
+    "or `survival`. An `association_study` must omit that field and declare its "
+    "supported adjusted model through `model_requirements`. Optional collection "
+    "fields, including `know_how_decisions`, must be omitted or encoded as JSON "
+    "arrays (`[]` when explicitly empty), never `null`."
+)
+
 
 def _format_context(
     ctx: ResearchContext,
@@ -1603,6 +1612,8 @@ class PlannerAgent:
                 "do not use special Unicode whitespace inside values."
                 "\n\n"
                 + model_terms_retry_guide()
+                + "\n\n"
+                + _PLANNER_OPTIONAL_FIELDS_RETRY_GUIDE
             ),
         )
 
@@ -2142,6 +2153,8 @@ class ReplannerAgent(PlannerAgent):
                 "from the CURRENT PLAN unchanged; only revise the remaining steps."
                 "\n\n"
                 + model_terms_retry_guide()
+                + "\n\n"
+                + _PLANNER_OPTIONAL_FIELDS_RETRY_GUIDE
             ),
         )
         if revised.revision <= current_plan.revision:
