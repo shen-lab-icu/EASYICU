@@ -36,6 +36,7 @@ import pytest
 
 from easyicu.research_agent.agents.core import (
     PlannerAgent,
+    ReplannerAgent,
     _build_planner_user_prompt,
     _host_executed_cohort_step_sentence,
     _planner_retry_response_projection,
@@ -207,6 +208,35 @@ def test_the_retry_format_reminder_lists_the_optional_spec():
     roster = source[source.index(marker) :][:900]
 
     assert "cohort_definition_spec" in roster
+
+
+def test_the_retry_format_reminder_publishes_exact_model_term_shape():
+    """A rejected model roster must be repairable without guessing aliases."""
+
+    source = inspect.getsource(PlannerAgent.run)
+    assert "model_terms_retry_guide()" in source
+    assert "model_terms_retry_guide()" in inspect.getsource(ReplannerAgent.run)
+
+    from easyicu.research_agent.planning.primary_result_contract import (
+        model_terms_retry_guide,
+    )
+
+    reminder = model_terms_retry_guide()
+    for required in (
+        "`name`",
+        "`role`",
+        "`coding`",
+        "`levels`",
+        "`reference_level`",
+        "`transform`",
+        "treatment_contrast",
+        "declared_level_index",
+        "exposure_source",
+        "covariates",
+    ):
+        assert required in reminder
+    assert "`variable`" in reminder
+    assert "`binary_indicator`" in reminder
 
 
 # ---------------------------------------------------------------------------
