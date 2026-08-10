@@ -1,7 +1,7 @@
 {
-  "schema_version": "easyicu.figure2_h2_scientific_protocol/1",
+  "schema_version": "easyicu.figure2_h2_scientific_protocol/2",
   "task_id": "h2_vasopressor_causal",
-  "protocol_version": "h2_vasopressor_causal/20260809-v3",
+  "protocol_version": "h2_vasopressor_causal/20260810-v4",
   "review_status": "human_attestation_pending",
   "literature_search_cutoff": "2026-08-09",
   "current_source_capture": {
@@ -9,35 +9,30 @@
     "audited_window_hours": [0, 24],
     "positive_record_semantics": "A typed source record supports recorded administration during ICU hours 0-24.",
     "absent_record_semantics": "no_recorded_administration_not_verified_non_use",
+    "pre_icu_treatment_history_authority": false,
+    "initiator_status_authorized": false,
+    "prevalent_user_status_authorized": false,
     "verified_non_use_available": false,
     "binary_control_arm_authorized": false,
     "causal_contrast_authorized": false,
     "decision": "fail_closed",
     "reason_code": "H2_VERIFIED_NON_USE_UNAVAILABLE"
   },
-  "intended_target_trial": {
-    "eligible_population": "Adult ICU stays eligible for either strategy at ICU admission, with source-complete medication capture, valid admission timing, and prespecified baseline covariates defined at or before ICU-admission time zero.",
-    "treatment_strategies": ["initiate_any_vasopressor_within_24h", "do_not_initiate_any_vasopressor_within_24h"],
-    "time_zero": "icu_admission",
-    "grace_period_hours": 24,
-    "grace_period_method": "clone_censor_weight_if_source_contract_becomes_valid",
-    "followup": "From ICU admission through 28 days, in-hospital death, discharge alive, or administrative data end, whichever occurs first.",
-    "outcome": "28-day cumulative incidence of in-hospital death with discharge alive treated as a competing event.",
-    "estimand": "Per-protocol 28-day risk difference and risk ratio for initiation within 24 hours versus verified non-initiation within 24 hours in the overlap-eligible target population.",
-    "censoring_and_competing_events": "Artificially censor strategy deviations under cloning; estimate stabilized inverse-probability-of-censoring weights using prespecified baseline and time-varying adherence information, treat discharge alive as competing, and report artificial and administrative censoring separately.",
-    "baseline_adjustment_timing": "at_or_before_icu_admission_time_zero",
-    "baseline_adjustment_variables": ["age", "sex", "charlson", "admission_context", "map", "lactate", "mechanical_ventilation", "creatinine", "bilirubin", "platelets", "gcs"],
-    "grace_period_time_varying_variables": ["map", "lactate", "mechanical_ventilation", "creatinine", "bilirubin", "platelets", "gcs", "vasopressor_administration_history"],
-    "post_time_zero_variable_role": "time_varying_information_for_prespecified_grace_period_adherence_or_censoring_model_only",
-    "estimation_method": "clone_censor_weight_with_stabilized_inverse_probability_censoring_weights",
-    "positivity_interval": [0.05, 0.95],
-    "weight_truncation_percentiles": [1.0, 99.0],
-    "balance_threshold_absolute_smd": 0.1,
-    "positivity_failure_action": "fail_closed_no_effect_estimate",
-    "sensitivity_analyses": ["overlap_weighting", "propensity_score_matching", "6h_and_12h_grace_periods", "quantitative_unmeasured_confounding_analysis"]
+  "current_formal_scope": "source_specific_fail_closed_feasibility_only_no_effect_estimation",
+  "future_unblock_contract": {
+    "status": "future_design_only_not_executable_under_current_materialization",
+    "required_source_coverage": [
+      "complete linked medication-administration capture across the prespecified pre-ICU lookback and ICU hours 0-24",
+      "per-stay coverage receipts for ED, operating-room, ward, and ICU medication sources",
+      "time-resolved evidence that distinguishes treatment initiation, prevalent use, and verified non-use"
+    ],
+    "coverage_unit": "per_icu_stay",
+    "pre_icu_lookback_must_be_prespecified": true,
+    "must_distinguish": ["true_initiator", "prevalent_user", "verified_non_user"],
+    "new_clinical_and_methods_review_required": true
   },
   "current_scientific_result": "treatment_contrast_not_identifiable_from_available_capture_contract",
-  "reportability_rule": "With the current inputevents-derived contract, report the structured H2_VERIFIED_NON_USE_UNAVAILABLE feasibility result and do not emit a treatment-effect estimate. A causal contrast becomes eligible only after a separately reviewed source contract proves both administration capture and verified non-use.",
+  "reportability_rule": "With the selected MIMIC-IV inputevents-derived ICU capture, report the structured H2_VERIFIED_NON_USE_UNAVAILABLE feasibility result and do not emit a control arm or treatment-effect estimate. A future causal contrast requires a separately reviewed per-stay source/coverage contract spanning prespecified pre-ICU and ICU medication history and distinguishing initiators, prevalent users, and verified non-users.",
   "forbidden_actions": ["convert_missing_vasopressor_record_to_verified_non_use", "construct_binary_control_arm", "fit_psm_or_iptw_before_capture_authority", "interpret_recorded_administration_as_complete_treatment_history"],
   "citations": [
     {

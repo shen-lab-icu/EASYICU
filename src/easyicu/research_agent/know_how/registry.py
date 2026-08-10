@@ -253,6 +253,7 @@ class KnowHowReviewAttestation(BaseModel):
     card_version: str
     reviewed_content_sha256: str
     protocol_content_sha256: Optional[str] = None
+    runtime_projection_sha256: Optional[str] = None
     review_scope: list[str] = Field(min_length=1, max_length=12)
     literature_search_cutoff: str = Field(pattern=r"^20[0-9]{2}-[0-9]{2}-[0-9]{2}$")
     clinical_reviewed: bool
@@ -271,7 +272,11 @@ class KnowHowReviewAttestation(BaseModel):
             raise ValueError("card_version must be semantic x.y.z")
         return value
 
-    @field_validator("reviewed_content_sha256", "protocol_content_sha256")
+    @field_validator(
+        "reviewed_content_sha256",
+        "protocol_content_sha256",
+        "runtime_projection_sha256",
+    )
     @classmethod
     def _valid_content_sha(cls, value: Optional[str]) -> Optional[str]:
         if value is None:

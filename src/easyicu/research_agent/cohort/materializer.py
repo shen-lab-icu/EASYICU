@@ -620,6 +620,11 @@ def _load_concept(
                 database=database,
                 data_path=str(root),
                 patient_ids=patient_ids,
+                # SOFA-2 component owners issue observed/available receipts only
+                # on their component-preserving projection.  A longitudinal
+                # trajectory must retain those receipts so an unavailable
+                # missing-as-normal zero cannot masquerade as an observation.
+                keep_components=str(concept).startswith("sofa2"),
             )
         )
     except ExportPackageError:
@@ -1396,7 +1401,7 @@ def build_trajectory_long(
     prefer_existing: bool = True,
     bounds_violation_policy: str = "reject",
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """Long-format trajectory ``(stay_id, charttime, concept, value_num, value_str)``.
+    """Long-format trajectory with concept-owner evidence receipts.
 
     The wide per-stay summary in :func:`materialize_cohort` decides the temporal
     aggregation (max/min/first over a fixed window) up front, BEFORE the agent
@@ -1407,10 +1412,13 @@ def build_trajectory_long(
     construct those temporal features itself in-sandbox, instead of being forced
     through the baseline-summary lens.
 
-    Only rows with a recorded (non-null) value are kept. ``value_num`` is the
-    numeric view (NaN when the concept is categorical/unparseable); ``value_str``
-    preserves the raw value. ``window`` (hours from ICU admission) bounds the
-    series; ``None`` keeps the full available trajectory.
+    Only rows with an owner-available recorded value are kept. ``value_num`` is
+    the numeric view (NaN when the concept is categorical/unparseable),
+    ``value_str`` preserves the raw value, and ``evidence_state`` distinguishes
+    direct observation from an owner-authorized LOCF state.  Owner-unavailable
+    synthetic values are excluded and counted in provenance. ``window`` (hours
+    from ICU admission) bounds the series; ``None`` keeps the full available
+    trajectory.
     """
     source_mode, root = _resolve_source(data_path, prefer_existing)
     common = dict(
@@ -1465,6 +1473,9 @@ def _build_trajectory_long_from_resolved_source(
     bounds_violation_counts: dict[str, int] = {}
     unavailable: List[str] = []
     available_unobserved: List[str] = []
+    receipt_aware: List[str] = []
+    evidence_state_counts: dict[str, dict[str, int]] = {}
+    unavailable_value_rows_excluded: dict[str, int] = {}
     frames: List[pd.DataFrame] = []
     materialized: List[str] = []
     for concept in dict.fromkeys(concepts):
@@ -1512,10 +1523,79 @@ def _build_trajectory_long_from_resolved_source(
                 unavailable.append(concept)
             continue
         w = _window(df, window[0], window[1]) if window is not None else df
-        sub = w.loc[w[concept].notna(), [ID_COL, TIME_COL, concept]]
+        observed_name = f"{concept}_observed"
+        available_name = f"{concept}_available"
+        has_observed = observed_name in w.columns
+        has_available = available_name in w.columns
+        if has_observed != has_available:
+            raise MaterializedMetadataError(
+                f"trajectory concept {concept!r} has an incomplete owner evidence receipt"
+            )
+        if has_observed:
+            observed = _require_finite_numeric(
+                pd.to_numeric(w[observed_name], errors="coerce"),
+                original=w[observed_name],
+                concept=concept,
+                purpose="trajectory observed receipt",
+            )
+            available = _require_finite_numeric(
+                pd.to_numeric(w[available_name], errors="coerce"),
+                original=w[available_name],
+                concept=concept,
+                purpose="trajectory available receipt",
+            )
+            if bool((~observed.isin([0, 1])).any()) or bool(
+                (~available.isin([0, 1])).any()
+            ):
+                raise MaterializedMetadataError(
+                    f"trajectory concept {concept!r} owner receipts are not binary"
+                )
+            if bool(((observed == 1) & (available != 1)).any()):
+                raise MaterializedMetadataError(
+                    f"trajectory concept {concept!r} is observed but unavailable"
+                )
+            if bool(((available == 1) & w[concept].isna()).any()):
+                raise MaterializedMetadataError(
+                    f"trajectory concept {concept!r} is available without a value"
+                )
+            retained = (available == 1) & w[concept].notna()
+            unavailable_value_rows_excluded[concept] = int(
+                ((available == 0) & w[concept].notna()).sum()
+            )
+            evidence_state = pd.Series(
+                np.where(
+                    available.eq(0),
+                    "unavailable",
+                    np.where(
+                        observed.eq(1),
+                        "direct_observed",
+                        "owner_locf_available",
+                    ),
+                ),
+                index=w.index,
+                dtype="string",
+            )
+            evidence_state_counts[concept] = {
+                str(key): int(value)
+                for key, value in evidence_state.value_counts().items()
+            }
+            receipt_aware.append(concept)
+        else:
+            retained = w[concept].notna()
+            observed = pd.Series(1, index=w.index, dtype="int8")
+            available = pd.Series(1, index=w.index, dtype="int8")
+            evidence_state = pd.Series(
+                "direct_observed", index=w.index, dtype="string"
+            )
+        sub = w.loc[retained, [ID_COL, TIME_COL, concept]]
         if sub.empty:
             available_unobserved.append(concept)
             continue
+        states = evidence_state.loc[sub.index]
+        if concept not in evidence_state_counts:
+            evidence_state_counts[concept] = {
+                str(key): int(value) for key, value in states.value_counts().items()
+            }
         frames.append(
             pd.DataFrame(
                 {
@@ -1526,6 +1606,13 @@ def _build_trajectory_long_from_resolved_source(
                         sub[concept], errors="coerce"
                     ).to_numpy(),
                     "value_str": sub[concept].astype("string").to_numpy(),
+                    "evidence_state": states.to_numpy(),
+                    "owner_observed": observed.loc[sub.index]
+                    .astype("int8")
+                    .to_numpy(),
+                    "owner_available": available.loc[sub.index]
+                    .astype("int8")
+                    .to_numpy(),
                 }
             )
         )
@@ -1538,7 +1625,16 @@ def _build_trajectory_long_from_resolved_source(
         )
     else:
         long_df = pd.DataFrame(
-            columns=[ID_COL, TIME_COL, "concept", "value_num", "value_str"]
+            columns=[
+                ID_COL,
+                TIME_COL,
+                "concept",
+                "value_num",
+                "value_str",
+                "evidence_state",
+                "owner_observed",
+                "owner_available",
+            ]
         )
     if export_package is not None and verify_source_package:
         verify_export_package(export_package)
@@ -1552,6 +1648,9 @@ def _build_trajectory_long_from_resolved_source(
         "trajectory_concepts_requested": list(dict.fromkeys(concepts)),
         "trajectory_concepts_materialized": materialized,
         "available_unobserved_concepts": available_unobserved,
+        "owner_receipt_concepts": receipt_aware,
+        "evidence_state_counts": evidence_state_counts,
+        "unavailable_value_rows_excluded": unavailable_value_rows_excluded,
         "unavailable_concepts": unavailable,
         "source_bounds_violation_policy": bounds_violation_policy,
         "source_bounds_exclusions": dict(sorted(bounds_violation_counts.items())),

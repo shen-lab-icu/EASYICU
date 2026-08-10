@@ -1,7 +1,7 @@
 {
-  "schema_version": "easyicu.figure2_h3_scientific_protocol/1",
+  "schema_version": "easyicu.figure2_h3_scientific_protocol/2",
   "task_id": "h3_trajectory_clustering",
-  "protocol_version": "h3_trajectory_clustering/20260809-v2",
+  "protocol_version": "h3_trajectory_clustering/20260810-v3",
   "review_status": "human_attestation_pending",
   "literature_search_cutoff": "2026-08-09",
   "supersedes_terminal_protocol": {
@@ -16,21 +16,30 @@
     "decision": "terminal_failed_closed"
   },
   "representation": {
-    "population": "MIMIC-IV ICU stays with at least two observed 12-hour SOFA-2 total windows during ICU hours 0-72; eligibility uses observed support only and is reported against the full materialized cohort.",
+    "population": "MIMIC-IV ICU stays with at least two 12-hour windows containing owner-available SOFA-2 component evidence during ICU hours 0-72; eligibility and receipt-state support are reported against the full materialized cohort.",
     "time_zero": "icu_admission",
     "window_hours": [0, 72],
     "grid_width_hours": 12,
     "aggregation": "max",
-    "features": ["sofa2", "sofa2_resp", "sofa2_coag", "sofa2_liver", "sofa2_cardio", "sofa2_cns", "sofa2_renal", "lact"],
-    "scaling": "coordinate_wise_z_score_using_observed_values",
-    "minimum_observed_sofa2_windows": 2,
-    "missingness_method": "observed_data_likelihood_no_zero_or_locf_imputation",
+    "features": ["sofa2_resp", "sofa2_coag", "sofa2_liver", "sofa2_cardio", "sofa2_cns", "sofa2_renal", "lact"],
+    "descriptive_only_features": ["sofa2"],
+    "scaling": "pooled_coordinate_wise_z_score_using_owner_available_values",
+    "scaling_ddof": 0,
+    "scaling_zero_variance_action": "fail_closed",
+    "minimum_available_sofa2_windows": 2,
+    "concept_missingness_method": "respect_sofa2_concept_owner_missingness_and_locf_semantics",
+    "evidence_states": ["direct_observed", "owner_locf_available", "unavailable"],
+    "owner_locf_policy": "include_with_explicit_audit",
+    "unavailable_policy": "exclude_from_observed_data_likelihood",
+    "clustering_stage_imputation": "none",
     "trailing_missingness_policy": "retain_and_report_discharge_death_and_measurement_support"
   },
   "selection_and_stability": {
     "model_family": "observed_data_diagonal_gaussian_mixture",
     "candidate_cluster_counts": [2, 3, 4, 5, 6],
     "cluster_number_criterion": "minimum_bic",
+    "candidate_boundary_action": "fail_closed_if_minimum_bic_is_at_upper_boundary",
+    "candidate_boundary_reason_code": "H3_NO_INTERIOR_BIC_OPTIMUM",
     "outcome_blind_selection": true,
     "minimum_cluster_fraction": 0.05,
     "cluster_size_failure_action": "no_stable_solution_no_alternate_k",
@@ -40,12 +49,13 @@
     "base_seed": 1729,
     "stability_metric": "mean_adjusted_rand_index",
     "minimum_successful_resamples": 100,
+    "refit_failure_action": "numerical_engine_failure_not_scientific_instability",
     "minimum_mean_stability": 0.7,
     "stability_failure_action": "no_stable_solution_no_post_hoc_rescue"
   },
   "outcome_use": "descriptive_after_frozen_assignment_never_for_model_or_k_selection",
   "external_reproducibility_rule": "An internally stable MIMIC-IV solution is a local candidate phenotype structure only. It cannot be called transportable or generalizable without external-database reproducibility using the same frozen representation and assignment protocol.",
-  "reportability_rule": "If the BIC-selected candidate violates the minimum cluster fraction, any planned refit fails, or mean adjusted Rand index is below 0.70, the formal result is no stable phenotype solution. Do not try another k, seed, threshold, exclusion, feature set, or imputation rule after seeing the result.",
+  "reportability_rule": "If minimum BIC occurs at the upper candidate boundary k=6, report no interior solution in the prespecified range. If an interior BIC-selected candidate violates the minimum cluster fraction or completed stability mean adjusted Rand index is below 0.70, the formal scientific result is no stable phenotype solution. A numerical/refit engine failure is an execution failure, not a scientific null. Do not try another k, seed, threshold, exclusion, feature set, or imputation rule after seeing the result.",
   "forbidden_actions": ["reuse_or_relax_terminal_v1_threshold", "change_seed_after_result", "try_alternate_k_after_selected_candidate_fails", "select_clusters_by_mortality_separation", "exclude_stays_to_raise_stability"],
   "citations": [
     {

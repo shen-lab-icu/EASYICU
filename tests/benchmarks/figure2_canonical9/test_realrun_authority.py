@@ -68,6 +68,7 @@ from benchmarks.figure2_canonical9.scientific_protocol_authority import (
     ScientificProtocolTaskBinding,
 )
 from benchmarks.figure2_canonical9.case_scientific_protocol import (
+    build_runtime_scientific_projection,
     case_protocol_content_sha256,
     default_case_protocol_path,
     load_case_scientific_protocol,
@@ -139,20 +140,42 @@ def _write_jsonl(path: Path, cohort_paths: dict[str, Path]) -> str:
     lines = []
     for task_id in FIGURE2_TASK_IDS:
         cohort = cohort_paths[task_id]
-        lines.append(
-            json.dumps(
+        row = {
+            "key": task_id,
+            "cohort_path": str(cohort),
+            "cohort_authority_path": str(
+                cohort.parent / f"{cohort.stem}.authority.json"
+            ),
+            "cohort_authority_ref": _cohort_ref(cohort),
+            "question": f"canonical question {task_id}",
+            "target_outcome": "mortality",
+        }
+        if task_id in {task for task, _card in REQUIRED_SCIENTIFIC_PROTOCOLS}:
+            protocol = load_case_scientific_protocol(
+                default_case_protocol_path(task_id), expected_task_id=task_id
+            )
+            projection = build_runtime_scientific_projection(protocol)
+            row.update(
                 {
-                    "key": task_id,
-                    "cohort_path": str(cohort),
-                    "cohort_authority_path": str(
-                        cohort.parent / f"{cohort.stem}.authority.json"
+                    "case_scientific_protocol_sha256": (
+                        projection.protocol_content_sha256
                     ),
-                    "cohort_authority_ref": _cohort_ref(cohort),
-                    "question": f"canonical question {task_id}",
-                    "target_outcome": "mortality",
+                    "runtime_scientific_projection": projection.model_dump(
+                        mode="json"
+                    ),
+                    "runtime_scientific_projection_sha256": (
+                        projection.runtime_projection_sha256
+                    ),
+                    "expected_outputs": list(
+                        projection.agent_visible_required_outputs
+                    ),
+                    "semantic_guardrails": list(
+                        projection.agent_visible_guardrails
+                    ),
+                    "notes": projection.canonical_protocol_json,
                 }
             )
-        )
+        lines.append(json.dumps(row))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return _sha256_file(path)
 
@@ -201,12 +224,16 @@ def _scientific_protocol_authority(
             expected_task_id=task_id,
         )
         protocol_content_sha256 = case_protocol_content_sha256(protocol)
+        runtime_projection_sha256 = build_runtime_scientific_projection(
+            protocol
+        ).runtime_projection_sha256
         payload["review_attestation"] = {
             "reviewer_owner": "Synthetic clinical-and-methods test board",
             "review_date": "2026-07-26",
             "card_version": payload["version"],
             "reviewed_content_sha256": reviewed_content_sha256,
             "protocol_content_sha256": protocol_content_sha256,
+            "runtime_projection_sha256": runtime_projection_sha256,
             "review_scope": ["clinical protocol", "statistical methods"],
             "literature_search_cutoff": "2026-07-25",
             "clinical_reviewed": True,
@@ -225,6 +252,7 @@ def _scientific_protocol_authority(
                 protocol_path=str(protocol_path),
                 protocol_file_sha256=_sha256_file(protocol_path),
                 protocol_content_sha256=protocol_content_sha256,
+                runtime_projection_sha256=runtime_projection_sha256,
             )
         )
     authority = ScientificProtocolAuthority.build(tasks=bindings)
@@ -487,6 +515,38 @@ def test_scientific_protocol_tamper_blocks_before_production_input(
 
     assert auth.status == "blocked"
     assert _codes(auth) == {"SCIENTIFIC_PROTOCOL_AUTHORITY_INVALID"}
+
+
+def test_reviewed_runtime_guardrail_drift_fails_even_when_jsonl_is_repinned(
+    tmp_path,
+) -> None:
+    """Signing the protocol also signs the exact Agent-visible projection."""
+
+    request, paths = _authorized_setup(tmp_path)
+    rows = [
+        json.loads(line)
+        for line in paths["jsonl_path"].read_text(encoding="utf-8").splitlines()
+    ]
+    e2 = next(row for row in rows if row["key"] == "e2_lactate_mortality")
+    e2["semantic_guardrails"][0] = "changed after human review"
+    paths["jsonl_path"].write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    declaration = OperatorFreezeDeclaration.model_validate_json(
+        paths["decl_path"].read_bytes(), strict=True
+    ).model_copy(
+        update={"ehrflowbench_jsonl_sha256": _sha256_file(paths["jsonl_path"])}
+    )
+    paths["decl_path"].write_text(declaration.model_dump_json(), encoding="utf-8")
+
+    authorization = verify_realrun_authorization(request)
+
+    assert authorization.status == "blocked"
+    assert _codes(authorization) == {"PRODUCTION_INPUT_AUTHORITY_INVALID"}
+    assert "Agent-visible scientific projection drifted" in (
+        authorization.issues[0].detail
+    )
 
 
 def test_structural_retrofit_source_never_gains_paper_authority(

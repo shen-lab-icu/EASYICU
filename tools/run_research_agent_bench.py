@@ -4700,6 +4700,15 @@ def _external_item_from_row(
         case_scientific_protocol_sha256=(
             str(row.get("case_scientific_protocol_sha256") or "").strip() or None
         ),
+        runtime_scientific_projection=(
+            dict(row.get("runtime_scientific_projection") or {})
+            if isinstance(row.get("runtime_scientific_projection"), Mapping)
+            else None
+        ),
+        runtime_scientific_projection_sha256=(
+            str(row.get("runtime_scientific_projection_sha256") or "").strip()
+            or None
+        ),
         protocol_adapter=protocol_adapter,
         cohort_size=int(cohort_size),
         cohort_columns=[str(column) for column in cohort_columns],

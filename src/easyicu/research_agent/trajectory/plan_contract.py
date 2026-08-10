@@ -76,7 +76,7 @@ TRAJECTORY_STABILITY_METHOD_HEAD = "trajectory_cluster_stability"
 #: this guide naming a method the Planner is not allowed to use.
 _GENERAL_CLUSTER_STABILITY_METHOD = "cluster_stability"
 
-TRAJECTORY_REPRESENTATION_SCHEMA_VERSION = "easyicu.trajectory_representation_schema/1"
+TRAJECTORY_REPRESENTATION_SCHEMA_VERSION = "easyicu.trajectory_representation_schema/2"
 TRAJECTORY_CANDIDATE_SOLUTION_SCHEMA_VERSION = (
     "easyicu.candidate_cluster_solution_schema/2"
 )
@@ -673,6 +673,29 @@ def _trajectory_representation_schema_findings(
         trailing.get(key) is not value for key, value in required_trailing.items()
     ):
         issues.append("trailing_na_policy is not the structured missingness contract")
+    scaling = payload.get("coordinate_scaling")
+    required_scaling = {
+        "method": "pooled_coordinate_wise_z_score",
+        "ddof": 0,
+        "observed_value_policy": "direct_or_owner_locf_available",
+        "missing_value_policy": "preserve_missing_exclude_from_likelihood",
+        "zero_variance_action": "fail_closed",
+    }
+    if not isinstance(scaling, Mapping) or any(
+        scaling.get(key) != value for key, value in required_scaling.items()
+    ):
+        issues.append("coordinate_scaling is not the frozen z-score contract")
+    evidence = payload.get("evidence_state_policy")
+    required_evidence = {
+        "direct_observed": "include",
+        "owner_locf_available": "include_and_audit",
+        "unavailable": "exclude",
+        "additional_clustering_stage_imputation": "none",
+    }
+    if not isinstance(evidence, Mapping) or any(
+        evidence.get(key) != value for key, value in required_evidence.items()
+    ):
+        issues.append("evidence_state_policy is not the owner-receipt contract")
     for field in (
         "id_column",
         "observation_family",
@@ -739,6 +762,7 @@ def _trajectory_candidate_schema_findings(
         "selected_criterion_value",
         "representation_schema_sha256",
         "candidate_assignments_sha256",
+        "coordinate_scaling",
     ):
         if payload.get(field) in (None, "", []):
             issues.append(f"{field} is missing")
@@ -1932,7 +1956,7 @@ def trajectory_role_code_contract(
             "profile_summary_statistic (mean or median), time_axis='relative_hours', "
             "anchor, anchor_provenance, anchor_source, and trailing_na_policy. "
             "Also write trajectory_representation_schema.json with "
-            "schema_version='easyicu.trajectory_representation_schema/1' and those exact "
+            "schema_version='easyicu.trajectory_representation_schema/2' and those exact "
             "agent-chosen fields plus id_column, representation_columns in model "
             "order, frozen_population_n, and representation_sha256 computed from "
             "the exact representation artifact bytes. This typed manifest is the downstream "
@@ -1942,6 +1966,12 @@ def trajectory_role_code_contract(
             "trailing_na_policy as the object {zero_imputation:false, "
             "eligibility_uses_observed_window_count:true, "
             "profile_summaries_ignore_missing:true}, never as prose. "
+            "Declare coordinate_scaling as {method:'pooled_coordinate_wise_z_score', "
+            "ddof:0, observed_value_policy:'direct_or_owner_locf_available', "
+            "missing_value_policy:'preserve_missing_exclude_from_likelihood', "
+            "zero_variance_action:'fail_closed'} and evidence_state_policy as "
+            "{direct_observed:'include', owner_locf_available:'include_and_audit', "
+            "unavailable:'exclude', additional_clustering_stage_imputation:'none'}. "
             "Do not impute unobserved trajectory cells with zero. This role only "
             "builds the representation: do not fit clusters, select k, freeze "
             "assignments, characterize profiles, or analyze outcomes here."
@@ -1977,7 +2007,10 @@ def trajectory_role_code_contract(
             "typed candidate schema: criterion, selection_rule (minimum or "
             "maximum), direction (minimize or maximize), "
             "selected_n_clusters, at least two finite candidates with "
-            "n_clusters and criterion_value, and rationale. Repeat the exact "
+            "n_clusters and criterion_value, rationale, candidate_range_boundary_rule "
+            "(allow_upper_boundary or fail_closed_if_selected_at_upper_boundary), "
+            "and candidate_range_boundary_reason_code (required only for fail-closed). "
+            "Repeat the exact "
             "object as step_summary.cluster_selection and report n_clusters "
             "and clustering_method. Candidate fit/assignment artifacts used by a "
             "separate stability owner must also preserve the selected method "
@@ -1985,7 +2018,8 @@ def trajectory_role_code_contract(
             "full cluster_selection object), id_column, and candidate assignment "
             "labels. cluster_selection.json is a closed selection-only manifest: "
             "write only criterion, selection_rule, direction, selected_n_clusters, "
-            "candidates, and rationale. Do not add role, id_column, "
+            "candidates, rationale, candidate_range_boundary_rule, and "
+            "candidate_range_boundary_reason_code. Do not add role, id_column, "
             "clustering_method, model_family, fit_method, or selected_model_id to "
             "that manifest. Give every candidate model record a stable model_id; "
             "the exact identifier, method, and selected-model metadata belong in "
@@ -2004,6 +2038,9 @@ def trajectory_role_code_contract(
             "fit_method='observed_data_em_diagonal_gaussian_mixture', and "
             "covariance_type='diag'; median/zero imputation followed by sklearn "
             "GaussianMixture is a different method and is not permitted. "
+            "Copy the exact coordinate_scaling object from the representation "
+            "schema into the candidate solution schema so candidate fitting and "
+            "deterministic refits bind the same scaling contract. "
             "Bind the exact consumed bytes by copying the host-provided SHA-256 "
             "digests into representation_schema_sha256 and "
             "candidate_assignments_sha256; do not predict or reconstruct host "

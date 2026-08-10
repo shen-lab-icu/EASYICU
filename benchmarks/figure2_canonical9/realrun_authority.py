@@ -203,6 +203,12 @@ class CanonicalJsonlRow:
     trajectory_path: str = ""
     trajectory_authority_path: str = ""
     trajectory_authority_ref: Optional[Mapping[str, Any]] = None
+    case_scientific_protocol_sha256: str = ""
+    runtime_scientific_projection: Optional[Mapping[str, Any]] = None
+    runtime_scientific_projection_sha256: str = ""
+    expected_outputs: tuple[str, ...] = ()
+    semantic_guardrails: tuple[str, ...] = ()
+    notes: str = ""
 
 
 def read_canonical_jsonl_rows(path: Path | str) -> tuple[CanonicalJsonlRow, ...]:
@@ -234,6 +240,16 @@ def read_canonical_jsonl_rows(path: Path | str) -> tuple[CanonicalJsonlRow, ...]
         trajectory_path = obj.get("trajectory_path")
         trajectory_authority_path = obj.get("trajectory_authority_path")
         traj_ref = obj.get("trajectory_authority_ref")
+        runtime_projection = obj.get("runtime_scientific_projection")
+
+        def _string_tuple(field: str) -> tuple[str, ...]:
+            value = obj.get(field)
+            if not isinstance(value, list) or any(
+                not isinstance(item, str) or not item.strip() for item in value
+            ):
+                return ()
+            return tuple(item.strip() for item in value)
+
         rows.append(
             CanonicalJsonlRow(
                 task_id=str(key) if key is not None else "",
@@ -257,6 +273,20 @@ def read_canonical_jsonl_rows(path: Path | str) -> tuple[CanonicalJsonlRow, ...]
                 trajectory_authority_ref=(
                     dict(traj_ref) if isinstance(traj_ref, Mapping) else None
                 ),
+                case_scientific_protocol_sha256=str(
+                    obj.get("case_scientific_protocol_sha256") or ""
+                ),
+                runtime_scientific_projection=(
+                    dict(runtime_projection)
+                    if isinstance(runtime_projection, Mapping)
+                    else None
+                ),
+                runtime_scientific_projection_sha256=str(
+                    obj.get("runtime_scientific_projection_sha256") or ""
+                ),
+                expected_outputs=_string_tuple("expected_outputs"),
+                semantic_guardrails=_string_tuple("semantic_guardrails"),
+                notes=str(obj.get("notes") or ""),
             )
         )
     return tuple(rows)
@@ -1034,6 +1064,7 @@ def _verify_production_input_authority(
     request: RealRunAuthorizationRequest,
     declaration: OperatorFreezeDeclaration,
     identity,
+    scientific_protocol_authority,
 ) -> tuple[list, Optional[ProductionInputAuthority]]:
     """The typed production authority + each real cohort/provenance must hold."""
 
@@ -1073,6 +1104,9 @@ def _verify_production_input_authority(
                 request.invocation.ehrflowbench_jsonl_path
             )
         }
+        reviewed_projection_by_task = {
+            task.task_id: task for task in scientific_protocol_authority.tasks
+        }
         cohort_by_task = request.invocation.cohort_by_task()
         for task in authority.tasks:
             cohort_path = cohort_by_task.get(task.task_id)
@@ -1091,6 +1125,48 @@ def _verify_production_input_authority(
             # (b) the typed materialization sidecar(s) must bind to the frozen
             #     per-task provenance digest (a swapped sidecar fails closed here).
             _verify_task_provenance(task, rows_by_task.get(task.task_id))
+            if task.task_id in reviewed_projection_by_task:
+                row = rows_by_task.get(task.task_id)
+                if row is None:
+                    raise ValueError(
+                        f"JSONL is missing scientific runtime row {task.task_id}"
+                    )
+                binding = reviewed_projection_by_task[task.task_id]
+                from .case_scientific_protocol import (
+                    load_runtime_scientific_projection,
+                )
+
+                if row.runtime_scientific_projection is None:
+                    raise ValueError(
+                        f"{task.task_id} JSONL lacks runtime scientific projection"
+                    )
+                projection = load_runtime_scientific_projection(
+                    row.runtime_scientific_projection
+                )
+                if (
+                    projection.task_id != task.task_id
+                    or projection.protocol_content_sha256
+                    != binding.protocol_content_sha256
+                    or projection.runtime_projection_sha256
+                    != binding.runtime_projection_sha256
+                    or row.case_scientific_protocol_sha256
+                    != binding.protocol_content_sha256
+                    or row.runtime_scientific_projection_sha256
+                    != binding.runtime_projection_sha256
+                ):
+                    raise ValueError(
+                        f"{task.task_id} runtime scientific projection differs from human review"
+                    )
+                if (
+                    row.expected_outputs
+                    != projection.agent_visible_required_outputs
+                    or row.semantic_guardrails
+                    != projection.agent_visible_guardrails
+                    or row.notes != projection.canonical_protocol_json
+                ):
+                    raise ValueError(
+                        f"{task.task_id} Agent-visible scientific projection drifted after review"
+                    )
     except Exception as exc:  # noqa: BLE001
         issues.append(
             _issue("PRODUCTION_INPUT_AUTHORITY_INVALID", f"{type(exc).__name__}: {exc}")
@@ -1102,7 +1178,7 @@ def _verify_production_input_authority(
 def _verify_scientific_protocol_authority(
     request: RealRunAuthorizationRequest,
     declaration: OperatorFreezeDeclaration,
-) -> tuple[list[RealRunAuthorizationIssue], Optional[str]]:
+) -> tuple[list[RealRunAuthorizationIssue], Optional[str], object | None]:
     """Verify E2/H2/H3 review authority before any cohort bytes are read."""
 
     if request.scientific_protocol_authority_path is None:
@@ -1112,7 +1188,7 @@ def _verify_scientific_protocol_authority(
                 "no digest-bound, dual-reviewed E2/H2/H3 protocol authority was "
                 "supplied; formal Canonical9 execution remains blocked",
             )
-        ], None
+        ], None, None
     try:
         from .scientific_protocol_authority import (
             load_verified_scientific_protocol_authority,
@@ -1128,14 +1204,14 @@ def _verify_scientific_protocol_authority(
             raise ValueError(
                 "scientific protocol authority digest differs from the operator pin"
             )
-        return [], authority.authority_digest
+        return [], authority.authority_digest, authority
     except Exception as exc:  # noqa: BLE001
         return [
             _issue(
                 "SCIENTIFIC_PROTOCOL_AUTHORITY_INVALID",
                 f"{type(exc).__name__}: {exc}",
             )
-        ], None
+        ], None, None
 
 
 def verify_realrun_authorization(
@@ -1176,7 +1252,11 @@ def verify_realrun_authorization(
     # Scientific decisions are the first post-declaration hard stop.  Missing or
     # tampered E2/H2/H3 review evidence returns immediately so the gate cannot
     # continue into production-cohort digest or sidecar verification.
-    protocol_issues, protocol_digest = _verify_scientific_protocol_authority(
+    (
+        protocol_issues,
+        protocol_digest,
+        scientific_protocol_authority,
+    ) = _verify_scientific_protocol_authority(
         request,
         declaration,
     )
@@ -1285,7 +1365,7 @@ def verify_realrun_authorization(
     #    bound per-task to the real cohorts.  Preserve the verified mapping in the
     #    authorization result so the launcher never re-opens this mutable file.
     authority_issues, production_authority = _verify_production_input_authority(
-        request, declaration, identity
+        request, declaration, identity, scientific_protocol_authority
     )
     issues.extend(authority_issues)
 

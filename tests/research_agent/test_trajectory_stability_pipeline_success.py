@@ -305,7 +305,7 @@ class _HybridTrajectoryRunner:
         self._write_json(
             out_dir / "trajectory_representation_schema.json",
             {
-                "schema_version": "easyicu.trajectory_representation_schema/1",
+                "schema_version": "easyicu.trajectory_representation_schema/2",
                 "id_column": "opaque_id",
                 "representation_columns": ["coordinate_a", "coordinate_b"],
                 "frozen_population_n": len(representation),
@@ -326,6 +326,19 @@ class _HybridTrajectoryRunner:
                     "zero_imputation": False,
                     "eligibility_uses_observed_window_count": True,
                     "profile_summaries_ignore_missing": True,
+                },
+                "coordinate_scaling": {
+                    "method": "pooled_coordinate_wise_z_score",
+                    "ddof": 0,
+                    "observed_value_policy": "direct_or_owner_locf_available",
+                    "missing_value_policy": "preserve_missing_exclude_from_likelihood",
+                    "zero_variance_action": "fail_closed",
+                },
+                "evidence_state_policy": {
+                    "direct_observed": "include",
+                    "owner_locf_available": "include_and_audit",
+                    "unavailable": "exclude",
+                    "additional_clustering_stage_imputation": "none",
                 },
                 "representation_sha256": representation_sha,
             },
@@ -401,6 +414,8 @@ class _HybridTrajectoryRunner:
                 {"n_clusters": 3, "criterion_value": 120.0},
             ],
             "rationale": "The prespecified BIC rule selected k=2.",
+            "candidate_range_boundary_rule": "allow_upper_boundary",
+            "candidate_range_boundary_reason_code": None,
         }
         cluster_selection_path = out_dir / "cluster_selection.json"
         self._write_json(cluster_selection_path, selection)
@@ -433,6 +448,9 @@ class _HybridTrajectoryRunner:
                     bindings["manifest:trajectory_representation_schema"]["sha256"]
                 ),
                 "candidate_assignments_sha256": assignment_sha,
+                "coordinate_scaling": representation_schema[
+                    "coordinate_scaling"
+                ],
             },
         )
         self._write_json(

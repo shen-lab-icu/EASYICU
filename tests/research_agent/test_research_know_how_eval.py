@@ -214,7 +214,7 @@ def test_canonical9_review_packet_is_bound_to_exact_card_content(
     assert packet["card_id"] == card_id
     assert packet["card_version"] == card_payload["version"]
     assert packet["authorization"] is False
-    assert packet["status"].endswith("formal_attestation_pending")
+    assert packet["status"] == "unsigned_targeted_adjudication_repairs_complete"
     assert packet["reviewed_content_sha256"] == reviewable_card_content_sha256(
         card_payload
     )
@@ -224,6 +224,7 @@ def test_canonical9_review_packet_is_bound_to_exact_card_content(
         "longitudinal_icu_phenotyping": "h3_trajectory_clustering",
     }
     from benchmarks.figure2_canonical9.case_scientific_protocol import (
+        build_runtime_scientific_projection,
         case_protocol_content_sha256,
         load_case_scientific_protocol,
     )
@@ -236,6 +237,9 @@ def test_canonical9_review_packet_is_bound_to_exact_card_content(
     assert packet["case_protocol_content_sha256"] == case_protocol_content_sha256(
         protocol
     )
+    assert packet["runtime_scientific_projection_sha256"] == (
+        build_runtime_scientific_projection(protocol).runtime_projection_sha256
+    )
     assert packet["attestation_fields_required_after_signoff"] == [
         "reviewer_owner",
         "review_date",
@@ -244,6 +248,7 @@ def test_canonical9_review_packet_is_bound_to_exact_card_content(
         "clinical_reviewed",
         "methods_reviewed",
         "protocol_content_sha256",
+        "runtime_projection_sha256",
     ]
     cited = {
         citation_id

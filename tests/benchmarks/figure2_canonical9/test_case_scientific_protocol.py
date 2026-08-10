@@ -6,6 +6,7 @@ import pytest
 
 from benchmarks.figure2_canonical9.case_scientific_protocol import (
     ScientificCaseProtocolError,
+    build_runtime_scientific_projection,
     case_protocol_content_sha256,
     default_case_protocol_path,
     load_case_scientific_protocol,
@@ -18,24 +19,33 @@ def test_e2_h2_h3_protocols_are_strict_and_content_digestable() -> None:
     h2 = load_default_case_protocol("h2_vasopressor_causal")
     h3 = load_default_case_protocol("h3_trajectory_clustering")
 
-    assert e2.primary_population.startswith("Eligible ICU stays with at least one")
+    assert e2.primary_landmark.landmark_hours == 24
+    assert e2.primary_model.exposure_form == "restricted_cubic_spline"
+    assert e2.primary_model.knot_quantiles == (0.10, 0.50, 0.90)
     assert "ssc_adult_2026" in {item.citation_id for item in e2.citations}
     assert h2.current_source_capture.reason_code == "H2_VERIFIED_NON_USE_UNAVAILABLE"
     assert h2.current_source_capture.verified_non_use_available is False
     assert h2.current_source_capture.binary_control_arm_authorized is False
-    assert (
-        h2.intended_target_trial.baseline_adjustment_timing
-        == "at_or_before_icu_admission_time_zero"
-    )
-    assert h2.intended_target_trial.estimation_method == (
-        "clone_censor_weight_with_stabilized_inverse_probability_censoring_weights"
-    )
-    assert "lactate" in h2.intended_target_trial.grace_period_time_varying_variables
+    assert h2.current_source_capture.pre_icu_treatment_history_authority is False
+    assert h2.current_source_capture.initiator_status_authorized is False
+    assert h2.future_unblock_contract.status.startswith("future_design_only")
+    assert set(h2.future_unblock_contract.must_distinguish) == {
+        "true_initiator",
+        "prevalent_user",
+        "verified_non_user",
+    }
     assert h3.supersedes_terminal_protocol.observed_mean_stability == 0.5357
     assert h3.selection_and_stability.candidate_cluster_counts == (2, 3, 4, 5, 6)
     assert h3.selection_and_stability.minimum_mean_stability == 0.7
+    assert "sofa2" not in h3.representation.features
+    assert h3.representation.descriptive_only_features == ("sofa2",)
     for protocol in (e2, h2, h3):
         assert len(case_protocol_content_sha256(protocol)) == 64
+        projection = build_runtime_scientific_projection(protocol)
+        assert projection.protocol_content_sha256 == case_protocol_content_sha256(
+            protocol
+        )
+        assert len(projection.runtime_projection_sha256) == 64
 
 
 def test_h2_protocol_rejects_absence_as_verified_non_use(tmp_path) -> None:
@@ -56,26 +66,14 @@ def test_h2_protocol_rejects_absence_as_verified_non_use(tmp_path) -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("field", "invalid_value"),
-    (
-        ("baseline_adjustment_timing", "before_recorded_initiation"),
-        ("estimation_method", "stabilized_iptw"),
-        (
-            "post_time_zero_variable_role",
-            "include_in_baseline_propensity_model_if_before_recorded_initiation",
-        ),
-    ),
-)
-def test_h2_protocol_rejects_time_zero_or_weighting_drift(
-    tmp_path,
-    field: str,
-    invalid_value: str,
-) -> None:
+def test_h2_protocol_rejects_underspecified_future_unblock(tmp_path) -> None:
     payload = json.loads(
         default_case_protocol_path("h2_vasopressor_causal").read_text("utf-8")
     )
-    payload["intended_target_trial"][field] = invalid_value
+    payload["future_unblock_contract"]["must_distinguish"] = [
+        "true_initiator",
+        "verified_non_user",
+    ]
     path = tmp_path / "h2.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -87,6 +85,20 @@ def test_h2_protocol_rejects_time_zero_or_weighting_drift(
             path,
             expected_task_id="h2_vasopressor_causal",
         )
+
+
+def test_runtime_projection_rejects_agent_visible_drift() -> None:
+    protocol = load_default_case_protocol("h3_trajectory_clustering")
+    projection = build_runtime_scientific_projection(protocol)
+    payload = projection.model_dump(mode="json")
+    payload["agent_visible_guardrails"][0] = "silently changed after review"
+
+    with pytest.raises(ValueError, match="projection digest mismatch"):
+        from benchmarks.figure2_canonical9.case_scientific_protocol import (
+            load_runtime_scientific_projection,
+        )
+
+        load_runtime_scientific_projection(payload)
 
 
 def test_h3_protocol_rejects_post_hoc_candidate_k_drift(tmp_path) -> None:
