@@ -32,6 +32,7 @@ const SESSION_DIR = resolve(
 const CWD = resolve(process.env.EASYICU_PI_CWD || process.cwd());
 const RESEARCH_TOOL_NAMES = Object.freeze([
   "easyicu_workspace_status",
+  "easyicu_inspect_workflow",
   "easyicu_inspect_context",
   "easyicu_inspect_plan",
   "easyicu_inspect_capability",
@@ -41,7 +42,12 @@ const RESEARCH_TOOL_NAMES = Object.freeze([
   "easyicu_list_artifacts",
   "easyicu_inspect_evidence",
   "easyicu_explain_blocker",
+  "easyicu_inspect_interpretation",
+  "easyicu_inspect_manuscript",
   "easyicu_update_study_context",
+  "easyicu_mine_ideas",
+  "easyicu_prepare_idea_handoff",
+  "easyicu_start_extraction",
   "easyicu_run",
   "easyicu_resume",
   "easyicu_cancel",
@@ -225,12 +231,13 @@ function resourceLoader(agentMode) {
       "A tool request to save study setup, run, cancel, or replan can be blocked unless the user granted that action for this turn. Do not claim an action happened unless the tool confirms it.",
       "A Pi session is UX history only. EasyICU study revision, run id, plan receipts, and evidence artefacts remain authoritative.",
       "Keep shared guidance case-neutral. Ask for unread study slots rather than filling defaults.",
+      "Start each research request by inspecting the project workflow. Idea Mining is an optional EasyICU stage; study setup, extraction, plan, execution, validation, interpretation, and manuscript review remain receipt-driven stages.",
       workspaceMode
         ? "For a webpage, calculator, dashboard, or interactive artifact: load the web-prototype skill, list files, write or edit the artifact, read it back, run the static check, and prepare its web preview. Label simulated formulas and values as unvalidated demo content."
         : "Treat a scientific question as the start of a governed research workflow. Inspect the typed StudyContext first; map only facts the user actually supplied, ask concise follow-up questions for required missing slots, and save them only with the one-turn configure grant.",
       workspaceMode
         ? "Research tools remain available in workspace mode, but project files never replace EasyICU-owned plans, runs, gates, evidence, or scientific results."
-        : "When the typed setup and active export are ready, start only the authorized deterministic preflight. On later user turns, inspect or resume its status, then inspect validation and evidence and list the real run artifacts. The UI can open projected artifact references in its governed right-side preview.",
+        : "When the typed setup is ready, use the authorized EasyICU extraction tool if no active export exists. Start the deterministic preflight before any full run. A full Research Agent provider run requires its separate one-turn provider-run grant and its existing scientific-provider gate; Pi model credentials alone do not authorize scientific execution. On later turns inspect validation, evidence, evidence-bound interpretation, and the Research Agent manuscript. The UI can open projected artifact references in its governed right-side preview.",
       workspaceMode
         ? "If the requested result needs EasyICU scientific execution, use the research tools instead of fabricating a file-based result."
         : "If the user asks to create code or files, explain that they must open workspace mode; do not paste a pretend substitute artifact.",
@@ -304,6 +311,7 @@ function customTools(sessionId, agentMode) {
   }, { additionalProperties: false });
   const tools = [
     hostTool(sessionId, { name: "easyicu_workspace_status", label: "EasyICU workspace status", description: "Inspect the current EasyICU workspace and authoritative study/run binding without reading patient rows or source paths.", parameters: empty }),
+    hostTool(sessionId, { name: "easyicu_inspect_workflow", label: "Inspect research workflow", description: "Inspect the typed project workflow from scientific question through Idea Mining, setup, extraction, Research Agent analysis, interpretation, and manuscript review.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_inspect_context", label: "Inspect study context", description: "Read the PHI-safe projection of the bound typed StudyContext and its revision.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_inspect_plan", label: "Inspect scientific plan", description: "Read a bounded projection of the current or selected EasyICU plan artefact.", parameters: Type.Object({ run_id: optionalRunId }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_inspect_capability", label: "Inspect capabilities", description: "Inspect the current EasyICU capability policy and availability without credentials or private paths.", parameters: empty }),
@@ -313,6 +321,8 @@ function customTools(sessionId, agentMode) {
     hostTool(sessionId, { name: "easyicu_list_artifacts", label: "List run artefacts", description: "List whitelisted EasyICU artefact names and digests; never return file contents or paths.", parameters: Type.Object({ run_id: optionalRunId }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_inspect_evidence", label: "Inspect evidence", description: "Inspect bounded evidence-ledger and audit status for an EasyICU run.", parameters: Type.Object({ run_id: optionalRunId }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_explain_blocker", label: "Explain blocker", description: "Explain the current stable EasyICU blocker code and its owning boundary.", parameters: Type.Object({ run_id: optionalRunId, job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_inspect_interpretation", label: "Interpret validated results", description: "Organize existing Research Agent claims, gates, limitations, and artifact references into an evidence-bound human-review card. This tool never calculates a new number or invents an explanation.", parameters: Type.Object({ run_id: optionalRunId }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_inspect_manuscript", label: "Inspect manuscript draft", description: "Open the Research Agent-produced, evidence-bound manuscript draft and its governance status. Pi does not author or unlock it.", parameters: Type.Object({ run_id: optionalRunId }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_update_study_context", executionMode: "sequential", label: "Save study setup", description: "Persist typed conversational study slots through the existing StudyContext owner. Requires a host-held one-turn Configure authorization; the conversation host rebinds the session after the turn settles.", parameters: Type.Object({
       title: optionalText(160), question: optionalText(1200), purpose: optionalText(800),
       cohort: Type.Optional(studyCohort), modules: Type.Optional(Type.Array(Type.String({ maxLength: 80 }), { maxItems: 64 })),
@@ -321,7 +331,10 @@ function customTools(sessionId, agentMode) {
       confirmations: Type.Optional(Type.Record(Type.String({ maxLength: 80 }), Type.Boolean())),
       bind_active_export: Type.Optional(Type.Boolean()),
     }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_run", executionMode: "sequential", label: "Start EasyICU run", description: "Submit an existing EasyICU Research Agent run. Requires a host-held one-turn user authorization. Submission invalidates this turn's authority: report the submission receipt, do not call another research tool in the same turn, and let the conversation host rebind after the turn settles.", parameters: Type.Object({ run_type: Type.Optional(Type.Union([Type.Literal("preflight"), Type.Literal("full")])), llm_provider: Type.Optional(Type.String({ maxLength: 80 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_mine_ideas", executionMode: "sequential", label: "Mine research ideas", description: "Create one local, metadata-only Idea Mining candidate from the bound question or a bounded source seed. Requires the one-use Idea Mining grant and never produces a novelty or scientific result claim.", parameters: Type.Object({ topic: optionalText(1200), title: optionalText(220), excerpt: optionalText(1200), journal: optionalText(160), year: Type.Optional(Type.Integer({ minimum: 1800, maximum: 2200 })), doi: optionalText(240), pmid: optionalText(80) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_prepare_idea_handoff", executionMode: "sequential", label: "Prepare idea plan", description: "Create the canonical metadata-only Idea Mining plan/handoff for conversational review. Requires the one-use Idea Mining grant; it does not start analysis or make reportable claims.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: optionalText(160), plan_edits: optionalText(1200) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_start_extraction", executionMode: "sequential", label: "Start feature extraction", description: "Submit the existing EasyICU feature extraction owner using only the bound typed StudyContext. Requires the one-use Extraction grant; raw paths never come from the model.", parameters: empty }),
+    hostTool(sessionId, { name: "easyicu_run", executionMode: "sequential", label: "Start EasyICU run", description: "Submit an EasyICU Research Agent preflight or full analysis. Preflight requires the local-run grant. Full analysis requires the separate provider-run grant and the existing scientific provider gates. Submission invalidates this turn's authority: report the receipt and stop until host rebind.", parameters: Type.Object({ run_type: Type.Optional(Type.Union([Type.Literal("preflight"), Type.Literal("full")])), llm_provider: Type.Optional(Type.String({ maxLength: 80 })) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_resume", label: "Resume EasyICU work", description: "Reattach to an existing active EasyICU job. Scientific crash-resume fails closed until an owner contract exists.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })), run_id: optionalRunId }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_cancel", executionMode: "sequential", label: "Cancel EasyICU job", description: "Request cooperative cancellation of the specifically bound EasyICU job. Requires a host-held one-turn user authorization.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_request_replan", executionMode: "sequential", label: "Request replan", description: "Request re-planning through EasyICU authority. Version 1 returns a typed blocked result until a public replan owner exists.", parameters: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 1200 }) }, { additionalProperties: false }) }),

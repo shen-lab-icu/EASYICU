@@ -9,7 +9,8 @@
     messages: [], loading: true, creating: false, busy: false, jobId: '',
     source: null, error: '', shell: 'pi', draft: '', setupSaving: false,
     showSetup: false, availableModels: [], project: null,
-    projectInitialization: null, agentMode: 'research', pendingAuthorityRebind: false,
+    projectInitialization: null, workflow: null,
+    agentMode: 'research', pendingAuthorityRebind: false,
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -120,10 +121,11 @@
     if (/list_project/.test(tool)) return 'folder';
     if (/load_skill/.test(tool)) return 'wand';
     if (/update|replan/.test(tool)) return 'edit';
-    if (/run$/.test(tool)) return 'play';
+    if (/run$|extraction/.test(tool)) return 'play';
     if (/resume/.test(tool)) return 'refresh';
     if (/cancel/.test(tool)) return 'stop';
-    if (/evidence|validation|blocker/.test(tool)) return 'shield';
+    if (/evidence|validation|blocker|interpretation/.test(tool)) return 'shield';
+    if (/workflow|manuscript|idea/.test(tool)) return 'list';
     if (/artifact|plan|step/.test(tool)) return 'list';
     if (/workspace|capability/.test(tool)) return 'db';
     if (/context/.test(tool)) return 'file';
@@ -171,6 +173,7 @@
   function toolLabel(name, resource) {
     const labels = {
       easyicu_workspace_status: tr('Check workspace status', '检查工作区状态'),
+      easyicu_inspect_workflow: tr('Inspect research workflow', '检查科研流程'),
       easyicu_inspect_context: tr('Inspect study context', '读取研究配置'),
       easyicu_inspect_plan: tr('Inspect scientific plan', '读取科学计划'),
       easyicu_inspect_capability: tr('Inspect capabilities', '检查可用能力'),
@@ -180,7 +183,12 @@
       easyicu_list_artifacts: tr('List run artefacts', '列出运行产物'),
       easyicu_inspect_evidence: tr('Inspect evidence', '读取证据状态'),
       easyicu_explain_blocker: tr('Explain blocker', '解释阻断原因'),
+      easyicu_inspect_interpretation: tr('Interpret validated results', '解读已验证结果'),
+      easyicu_inspect_manuscript: tr('Inspect manuscript draft', '读取论文草稿'),
       easyicu_update_study_context: tr('Save study setup', '保存研究配置'),
+      easyicu_mine_ideas: tr('Mine research ideas', '发掘研究想法'),
+      easyicu_prepare_idea_handoff: tr('Prepare idea plan', '准备想法计划'),
+      easyicu_start_extraction: tr('Start feature extraction', '启动特征提取'),
       easyicu_run: tr('Start EasyICU run', '启动 EasyICU 运行'),
       easyicu_resume: tr('Resume EasyICU work', '恢复 EasyICU 任务'),
       easyicu_cancel: tr('Cancel EasyICU job', '取消 EasyICU 任务'),
@@ -200,6 +208,7 @@
   function completedToolLabel(name, resource) {
     const labels = {
       easyicu_workspace_status: tr('Checked workspace status', '已检查工作区状态'),
+      easyicu_inspect_workflow: tr('Read research workflow', '已读取科研流程'),
       easyicu_inspect_context: tr('Read study setup', '已读取研究配置'),
       easyicu_inspect_plan: tr('Read scientific plan', '已读取科学计划'),
       easyicu_inspect_capability: tr('Checked capabilities', '已检查可用能力'),
@@ -209,7 +218,12 @@
       easyicu_list_artifacts: tr('Listed run artefacts', '已列出运行产物'),
       easyicu_inspect_evidence: tr('Read evidence', '已读取证据状态'),
       easyicu_explain_blocker: tr('Read blocker details', '已读取阻断原因'),
+      easyicu_inspect_interpretation: tr('Organized evidence-bound interpretation', '已整理证据约束的结果解读'),
+      easyicu_inspect_manuscript: tr('Read manuscript draft', '已读取论文草稿'),
       easyicu_update_study_context: tr('Saved study setup', '已保存研究配置'),
+      easyicu_mine_ideas: tr('Mined research ideas', '已发掘研究想法'),
+      easyicu_prepare_idea_handoff: tr('Prepared idea plan', '已准备想法计划'),
+      easyicu_start_extraction: tr('Started feature extraction', '已启动特征提取'),
       easyicu_run: tr('Started EasyICU run', '已启动 EasyICU 运行'),
       easyicu_resume: tr('Resumed EasyICU work', '已恢复 EasyICU 任务'),
       easyicu_cancel: tr('Cancelled EasyICU job', '已取消 EasyICU 任务'),
@@ -531,6 +545,22 @@
     </article>`;
   }
 
+  function workflowHtml() {
+    const workflow = state.workflow || {};
+    const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
+    if (!stages.length) return '';
+    const names = {
+      question: tr('Question', '问题'), idea: tr('Ideas', '想法'),
+      setup: tr('Setup', '配置'), extraction: tr('Extract', '提取'),
+      plan: tr('Plan', '计划'), analysis: tr('Analyze', '分析'),
+      interpretation: tr('Interpret', '解读'), manuscript: tr('Paper', '论文'),
+    };
+    return `<nav class="gpi-workflow" aria-label="${tr('EasyICU research workflow', 'EasyICU 科研流程')}">
+      <div class="gpi-workflow-meta"><strong>${tr('Research workflow', '科研流程')}</strong><span>${esc(workflow.completed_required_stages || 0)}/${esc(workflow.required_stage_count || 7)}</span></div>
+      <ol>${stages.map(stage => `<li class="${esc(stage.status || 'blocked')}" title="${esc(stage.reason_code || '')}" aria-current="${stage.id === workflow.current_stage ? 'step' : 'false'}"><i></i><span>${esc(names[stage.id] || stage.label || stage.id)}</span></li>`).join('')}</ol>
+    </nav>`;
+  }
+
   function sessionPanel() {
     const session = state.session || {};
     const model = session.model || {};
@@ -552,6 +582,7 @@
             <button class="gpi-link" type="button" data-gpi-legacy>${tr('Study setup', '研究配置')}</button>
           </div>
         </header>
+        ${workflowHtml()}
         ${stale ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
         <div class="gpi-log" data-gpi-log>
           ${messages || (workspace
@@ -564,8 +595,11 @@
           <div class="gpi-actions">
             <div class="gpi-grants" title="${tr('Actions are granted only for this message.', '操作权限仅对本条消息有效。')}">
               ${workspace ? `<label class="workspace"><input type="checkbox" data-gpi-grant="workspace_write" ${state.busy ? 'disabled' : ''}> ${tr('Allow project file changes', '允许修改项目文件')}</label>` : ''}
+              <label><input type="checkbox" data-gpi-grant="idea" ${state.busy ? 'disabled' : ''}> ${tr('Allow one idea/plan update', '允许一次想法/计划更新')}</label>
               <label><input type="checkbox" data-gpi-grant="configure" ${state.busy ? 'disabled' : ''}> ${tr('Allow one setup update', '允许一次配置更新')}</label>
+              <label><input type="checkbox" data-gpi-grant="extract" ${state.busy ? 'disabled' : ''}> ${tr('Allow one extraction', '允许一次数据提取')}</label>
               <label><input type="checkbox" data-gpi-grant="run" ${state.busy ? 'disabled' : ''}> ${tr('Allow one local preflight', '允许一次本地预检')}</label>
+              <label><input type="checkbox" data-gpi-grant="provider_run" ${state.busy ? 'disabled' : ''}> ${tr('Allow one full analysis', '允许一次完整分析')}</label>
               <label><input type="checkbox" data-gpi-grant="cancel" ${state.busy ? 'disabled' : ''}> ${tr('Allow job cancel', '允许取消任务')}</label>
             </div>
             ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send ${stale ? 'disabled' : ''}>${tr('Send', '发送')}</button>`}
@@ -739,8 +773,11 @@
         resource: event.resource || null,
         resources: Array.isArray(event.resources) ? event.resources : [],
       });
-      if (['study_context_updated', 'easyicu_run_submitted'].includes(String(event.code || ''))) {
+      if (['study_context_updated', 'easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted'].includes(String(event.code || ''))) {
         state.pendingAuthorityRebind = true;
+      }
+      if (/^(easyicu_(research_workflow_projected|idea_|active_export_reused|extraction_|run_|full_run_|result_|manuscript_))/.test(String(event.code || ''))) {
+        loadWorkflow().then(render).catch(() => {});
       }
     } else if (event.type === 'turn_end') {
       const turn = activity.steps.find(item => item.id === 'turn-' + event.turn_index);
@@ -781,6 +818,18 @@
     }
   }
 
+  async function loadWorkflow() {
+    const expectedProjectId = projectId();
+    if (!runtimeReady() || !expectedProjectId || !api().loadPiCopilotProjectWorkflow) return;
+    try {
+      const payload = await api().loadPiCopilotProjectWorkflow(expectedProjectId);
+      if (expectedProjectId !== projectId()) return;
+      state.workflow = payload && payload.workflow ? payload.workflow : null;
+    } catch (error) {
+      if (expectedProjectId === projectId()) state.workflow = null;
+    }
+  }
+
   async function prepareProject() {
     const expectedProjectId = projectId();
     if (!runtimeReady() || !expectedProjectId) return;
@@ -792,6 +841,7 @@
       });
       if (expectedProjectId !== projectId()) return;
       state.projectInitialization = initialized || { status: 'ready' };
+      await loadWorkflow();
       await loadProjectSessions();
     } catch (error) {
       if (expectedProjectId !== projectId()) return;
@@ -822,6 +872,7 @@
     state.jobId = '';
     state.error = '';
     state.projectInitialization = null;
+    state.workflow = null;
     state.pendingAuthorityRebind = false;
     if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.clearProject) {
       window.EU_GUIDED_PI_PREVIEW.clearProject();
@@ -854,6 +905,7 @@
         if (state.pendingAuthorityRebind && state.session && sessionIsStale()) {
           await rebind();
         }
+        await loadWorkflow();
         state.pendingAuthorityRebind = false;
         render();
       }

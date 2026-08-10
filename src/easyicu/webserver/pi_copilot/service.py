@@ -17,6 +17,7 @@ from easyicu.webserver import (
     jobs,
     provider_gate,
     settings,
+    sources,
     study_contexts,
 )
 
@@ -36,11 +37,20 @@ from .project_authority import (
 from .provider_config import PiProviderConfigStore
 from .projections import reject_sensitive_message
 from .workspace import ProjectWorkspace
+from .workflow import build_research_workflow_snapshot
 
 MAX_SESSIONS = 100
 MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES = 2 * 1024 * 1024
 ALLOWED_TURN_ACTIONS = frozenset(
-    {"configure", "run", "cancel", "workspace_write"}
+    {
+        "configure",
+        "idea",
+        "extract",
+        "run",
+        "provider_run",
+        "cancel",
+        "workspace_write",
+    }
 )
 
 
@@ -1105,6 +1115,36 @@ class PiCopilotService:
             "artifact": self.workspace.read_file(clean, relative_file),
         }
 
+    def get_project_workflow(self, *, project_id: str) -> Dict[str, Any]:
+        """Return the path-free project workflow compiled from owner receipts."""
+
+        clean = self._assert_project_initialized(project_id)
+        study_context_id = self.project_store.resolve(clean)
+        study = (
+            study_contexts.get_context(study_context_id) if study_context_id else None
+        )
+        registry = sources.load_registry()
+        active_job = None
+        if study and study.get("active_job_id"):
+            job = jobs.MANAGER.get(str(study["active_job_id"]))
+            active_job = job.snapshot() if job else None
+        history = agent_runs.list_run_history(
+            study_id=study_context_id,
+            limit=1,
+        )
+        rows = [row for row in (history.get("runs") or []) if isinstance(row, Mapping)]
+        snapshot = build_research_workflow_snapshot(
+            study=study,
+            active_export_present=bool(registry.get("active_path")),
+            active_job=active_job,
+            latest_run=rows[0] if rows else None,
+        )
+        return {
+            "ok": True,
+            "project_id": clean,
+            "workflow": snapshot.model_dump(mode="json"),
+        }
+
     def get_workspace_preview(
         self,
         *,
@@ -1132,15 +1172,18 @@ class PiCopilotService:
                 normalized = str(key).strip().lower().replace("-", "_")
                 if normalized in {"project_dir", "source_path", "cwd"}:
                     continue
-                path_shaped = (
-                    normalized in {"path", "directory", "dir", "root", "file"}
-                    or normalized.endswith(("_path", "_directory", "_dir", "_root", "_file"))
+                path_shaped = normalized in {
+                    "path",
+                    "directory",
+                    "dir",
+                    "root",
+                    "file",
+                } or normalized.endswith(
+                    ("_path", "_directory", "_dir", "_root", "_file")
                 )
                 if path_shaped and normalized != "relative_path":
                     continue
-                projected[str(key)] = PiCopilotService._browser_artifact_payload(
-                    child
-                )
+                projected[str(key)] = PiCopilotService._browser_artifact_payload(child)
             return projected
         if isinstance(value, list):
             return [PiCopilotService._browser_artifact_payload(item) for item in value]
@@ -1214,7 +1257,9 @@ class PiCopilotService:
         review = agent_runs.read_run_review(str(row.get("project_dir") or ""))
         if not review.get("ok"):
             raise PiCopilotError(
-                str(review.get("error") or "pi_research_artifact_governance_unavailable"),
+                str(
+                    review.get("error") or "pi_research_artifact_governance_unavailable"
+                ),
                 "The EasyICU run governance state is unavailable for this artefact.",
                 status_code=409,
                 details={"artifact": clean_artifact},
@@ -1226,8 +1271,7 @@ class PiCopilotService:
         if not governance.get("ok"):
             raise PiCopilotError(
                 str(
-                    governance.get("error")
-                    or "pi_research_artifact_governance_invalid"
+                    governance.get("error") or "pi_research_artifact_governance_invalid"
                 ),
                 "The EasyICU run governance state is invalid for this artefact.",
                 status_code=409,

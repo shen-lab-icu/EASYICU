@@ -21,11 +21,11 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260809-workspace-security1" in index
+    assert "css/guided-pi.css?v=20260810-research-workflow1" in index
     assert "css/guided-pi-preview.css?v=20260809-scientific-trust1" in index
     assert "js/screens-guided-pi-preview.js?v=20260809-scientific-trust1" in index
-    assert "js/screens-guided-pi.js?v=20260809-workspace-security1" in index
-    assert "js/api.js?v=20260808-pi-research-flow1" in index
+    assert "js/screens-guided-pi.js?v=20260810-research-workflow1" in index
+    assert "js/api.js?v=20260810-research-workflow1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-preview.js") < index.index(
         "js/screens-guided-pi.js"
@@ -76,7 +76,10 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "localStorage.setItem('easyicu_pi_api" not in pi_owner
     assert "keyInput.value = ''" in pi_owner
     assert 'data-gpi-grant="configure"' in pi_owner
+    assert 'data-gpi-grant="idea"' in pi_owner
+    assert 'data-gpi-grant="extract"' in pi_owner
     assert 'data-gpi-grant="run"' in pi_owner
+    assert 'data-gpi-grant="provider_run"' in pi_owner
     assert 'data-gpi-grant="cancel"' in pi_owner
     assert 'data-gpi-grant="workspace_write"' in pi_owner
     assert 'data-gpi-resource-file' in pi_owner
@@ -86,6 +89,10 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "agentMode: 'research'" in pi_owner
     assert "pendingAuthorityRebind" in pi_owner
     assert "easyicu_run_submitted" in pi_owner
+    assert "easyicu_full_run_submitted" in pi_owner
+    assert "easyicu_extraction_submitted" in pi_owner
+    assert "loadPiCopilotProjectWorkflow" in pi_owner
+    assert "gpi-workflow" in pi_owner
     assert "Research workflow" in pi_owner
     assert "Used ${toolSteps.length} EasyICU tools" in pi_owner
     assert "gpi-activity-live" in pi_owner
@@ -108,6 +115,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
         "savePiCopilotProviderConfig",
         "createPiCopilotSession",
         "initializePiCopilotProject",
+        "loadPiCopilotProjectWorkflow",
         "loadPiCopilotSessions",
         "loadPiCopilotSession",
         "sendPiCopilotMessage",

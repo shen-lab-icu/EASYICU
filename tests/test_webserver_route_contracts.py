@@ -100,6 +100,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "GET",
+        "/api/copilot/pi/projects/{project_id}/workflow",
+        "get_pi_copilot_project_workflow",
+    ),
+    (
+        "GET",
         "/api/copilot/pi/projects/{project_id}/workspace/file",
         "get_pi_copilot_workspace_file",
     ),

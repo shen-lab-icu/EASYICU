@@ -19,6 +19,19 @@ class FakeService:
     def initialize_project(self, **kwargs) -> dict:
         return {"ok": True, "status": "ready", "received": kwargs}
 
+    def get_project_workflow(self, **kwargs) -> dict:
+        return {
+            "ok": True,
+            "workflow": {
+                "schema_version": "easyicu.pi-research-workflow/1",
+                "current_stage": "setup",
+                "completed_required_stages": 1,
+                "required_stage_count": 7,
+                "stages": [],
+            },
+            "received": kwargs,
+        }
+
     def get_workspace_file(self, **kwargs) -> dict:
         return {
             "ok": True,
@@ -218,6 +231,19 @@ def test_project_workspace_file_and_preview_routes_are_bounded(monkeypatch) -> N
         ).status_code
         == 422
     )
+
+
+def test_project_workflow_route_is_project_scoped(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/copilot/pi/projects/guided-project-2/workflow"
+    )
+    assert response.status_code == 200
+    assert response.json()["received"] == {"project_id": "guided-project-2"}
+    assert response.json()["workflow"]["current_stage"] == "setup"
 
 
 def test_project_research_artifact_route_uses_path_free_identity(monkeypatch) -> None:

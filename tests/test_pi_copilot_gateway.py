@@ -48,6 +48,9 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert 'receipt.status === "failed"' in projection
     for name in (
         "easyicu_update_study_context",
+        "easyicu_mine_ideas",
+        "easyicu_prepare_idea_handoff",
+        "easyicu_start_extraction",
         "easyicu_run",
         "easyicu_cancel",
         "easyicu_request_replan",
@@ -596,11 +599,11 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
     assert runtime["model"] == "gpt5.6 luna"
     assert runtime["built_in_tools_enabled"] == []
     assert state["enabled_tools"] == runtime["custom_tools"]
-    assert len(state["enabled_tools"]) == 15
+    assert len(state["enabled_tools"]) == 21
     assert {"read", "write", "edit", "bash"}.isdisjoint(state["enabled_tools"])
     assert workspace_state["agent_mode"] == "workspace"
     assert workspace_state["enabled_tools"] == runtime["custom_tools_by_mode"]["workspace"]
-    assert len(workspace_state["enabled_tools"]) == 22
+    assert len(workspace_state["enabled_tools"]) == 28
     assert {"read", "write", "edit", "bash"}.isdisjoint(
         workspace_state["enabled_tools"]
     )
