@@ -3,12 +3,7 @@
     "source_digest_changes": [
       "src/easyicu/research_agent/know_how/registry.py"
     ],
-    "summary_changes": {
-      "max_planner_with_resources_bytes": {
-        "now": 61288,
-        "was": 61430
-      }
-    }
+    "summary_changes": {}
   },
   "baseline_history": [
     {
@@ -106,9 +101,16 @@
           "was": 61430
         }
       }
+    },
+    {
+      "reason": "Re-adjudicated the provider-free and patient-data-free Canonical9 resource envelope after digest-bound E2/H2/H3 runtime authority registration; measured summary limits are unchanged and only the know-how registry source digest moved.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/know_how/registry.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "bind E2 H2 H3 scientific protocol revisions",
+  "baseline_reason": "Re-adjudicated the provider-free and patient-data-free Canonical9 resource envelope after digest-bound E2/H2/H3 runtime authority registration; measured summary limits are unchanged and only the know-how registry source digest moved.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -122,7 +124,7 @@
     "src/easyicu/data/sofa2-dict.json": "998a14c70c8a983c71ce6af2da8408fe22063cc042e8cde69f572083880bdaf8",
     "src/easyicu/research_agent/agents/core.py": "b0a80069e0018a71b1c1e5f4c68fbee19205cea6b19af117bab4bf52e522b102",
     "src/easyicu/research_agent/graph.py": "7582775c2f126b72ef6b444edcbe35750c3c309c1e459b878e12bba9eb9933b5",
-    "src/easyicu/research_agent/know_how/registry.py": "952ea1cf708b681c2682bb7c49471b80c0b952cf8dd746069036f146aa5dc569",
+    "src/easyicu/research_agent/know_how/registry.py": "d0e0f233d8f22e76351da6057adde8ca6b87ebdc2ca7c703224716c18c6a72ee",
     "src/easyicu/research_agent/learning/runtime.py": "7f26985154f7f52d3449688ae83070b20d9821fb3f39993cb99195deacf69835",
     "src/easyicu/research_agent/learning/store.py": "de69d5388ed4ec57fbc7a056c4a4472ceeeda0ef5ff69aaa8e7fa8c31bd61c16",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "1a1bec6ac0526a90b235581be6653899290cbc0cb57dba1cda34d6c398282a4e",

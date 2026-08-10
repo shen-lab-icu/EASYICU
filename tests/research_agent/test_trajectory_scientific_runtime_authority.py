@@ -22,6 +22,7 @@ from easyicu.research_agent.execution.runners.selection import (
 )
 from easyicu.research_agent.schema import AnalysisPlan, TrajectoryStabilitySpec
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
+    TrajectoryScientificAuthorityError,
     build_trajectory_scientific_runtime_authority,
 )
 
@@ -45,7 +46,6 @@ def _authority():
         "lact__h0_12",
         "lact__h12_24",
     )
-
 
     spec = TrajectoryStabilitySpec(
         n_resamples=2,
@@ -413,8 +413,20 @@ def test_signed_candidate_and_stability_share_one_scaling_and_selection_contract
 
     selection_path = candidate_out / "cluster_selection.json"
     selection = json.loads(selection_path.read_text("utf-8"))
-    selection["candidate_range_boundary_rule"] = "allow_upper_boundary"
-    selection["candidate_range_boundary_reason_code"] = None
+    upper_selection = json.loads(json.dumps(selection))
+    upper_k = max(authority.candidate_cluster_counts)
+    upper_selection["selected_n_clusters"] = upper_k
+    for candidate in upper_selection["candidates"]:
+        candidate["criterion_value"] = (
+            0.0 if candidate["n_clusters"] == upper_k else 100.0
+        )
+    with pytest.raises(
+        TrajectoryScientificAuthorityError,
+        match="candidate range does not contain an interior optimum",
+    ):
+        authority.validate_selection(upper_selection)
+
+    selection["criterion"] = "aic"
     selection_path.write_text(json.dumps(selection), encoding="utf-8")
     stability_inputs["inputs"]["manifest:cluster_selection"] = _binding(
         run_dir, selection_path, "tampered-cluster-selection"

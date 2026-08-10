@@ -991,23 +991,6 @@ def trajectory_phenotyping_artifact_findings(
         if item.n_clusters == selection.selected_n_clusters
     )
     candidate_values = [item.criterion_value for item in selection.candidates]
-    if (
-        selection.candidate_range_boundary_rule
-        == "fail_closed_if_selected_at_upper_boundary"
-        and selection.selected_n_clusters
-        == max(item.n_clusters for item in selection.candidates)
-    ):
-        return [
-            _contract_error(
-                "candidate_range_does_not_contain_interior_optimum",
-                "The selected criterion optimum is at the frozen candidate-range "
-                "upper boundary, so the solution must fail closed without post-hoc "
-                "range expansion.",
-                step_id=step.step_id,
-                reason_code=selection.candidate_range_boundary_reason_code,
-                selected_n_clusters=selection.selected_n_clusters,
-            )
-        ]
     if selection.selection_rule == "minimum" and not math.isclose(
         selected_value,
         min(candidate_values),

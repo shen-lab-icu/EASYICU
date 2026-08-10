@@ -270,14 +270,38 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
             "criterion": self.selection_criterion,
             "selection_rule": self.selection_rule,
             "direction": "minimize",
-            "candidate_range_boundary_rule": self.upper_boundary_action,
-            "candidate_range_boundary_reason_code": self.upper_boundary_reason_code,
         }
         issues = [
             field for field, value in expected.items() if payload.get(field) != value
         ]
         if candidate_k != self.candidate_cluster_counts:
             issues.append("candidate_cluster_counts")
+        selected = payload.get("selected_n_clusters")
+        if isinstance(selected, bool) or selected not in self.candidate_cluster_counts:
+            issues.append("selected_n_clusters")
+        values: list[float] = []
+        if isinstance(candidates, list):
+            for item in candidates:
+                value = (
+                    item.get("criterion_value") if isinstance(item, Mapping) else None
+                )
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    issues.append("candidate_criterion_values")
+                    break
+                values.append(float(value))
+        if values and selected in self.candidate_cluster_counts:
+            selected_index = self.candidate_cluster_counts.index(selected)
+            expected_index = min(
+                range(len(values)),
+                key=lambda index: (values[index], self.candidate_cluster_counts[index]),
+            )
+            if selected_index != expected_index:
+                issues.append("minimum_bic_selection")
+            if selected == max(self.candidate_cluster_counts):
+                raise TrajectoryScientificAuthorityError(
+                    "candidate range does not contain an interior optimum: "
+                    + self.upper_boundary_reason_code
+                )
         if issues:
             raise TrajectoryScientificAuthorityError(
                 "cluster selection drifted from signed authority: " + ", ".join(issues)

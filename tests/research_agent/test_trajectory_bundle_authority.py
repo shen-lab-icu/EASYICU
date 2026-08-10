@@ -55,8 +55,6 @@ _SELECTION = {
         {"n_clusters": 3, "criterion_value": 12.0},
     ],
     "rationale": "Selected the finite minimum.",
-    "candidate_range_boundary_rule": "allow_upper_boundary",
-    "candidate_range_boundary_reason_code": None,
 }
 
 

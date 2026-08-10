@@ -4660,8 +4660,6 @@ def test_step_contract_findings_accepts_prefixed_clustering_metrics(ra):
                     {"n_clusters": 2, "criterion_value": 0.46},
                 ],
                 "rationale": "Maximum among evaluated candidates.",
-                "candidate_range_boundary_rule": "allow_upper_boundary",
-                "candidate_range_boundary_reason_code": None,
             },
         },
     )

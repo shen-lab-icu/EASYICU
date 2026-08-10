@@ -414,8 +414,6 @@ class _HybridTrajectoryRunner:
                 {"n_clusters": 3, "criterion_value": 120.0},
             ],
             "rationale": "The prespecified BIC rule selected k=2.",
-            "candidate_range_boundary_rule": "allow_upper_boundary",
-            "candidate_range_boundary_reason_code": None,
         }
         cluster_selection_path = out_dir / "cluster_selection.json"
         self._write_json(cluster_selection_path, selection)

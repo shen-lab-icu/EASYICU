@@ -70,14 +70,6 @@ _NATIVE_MATH_THREAD_ENV = (
 )
 
 
-class _ScientificSelectionBoundaryError(ValueError):
-    def __init__(self, reason_code: str) -> None:
-        self.reason_code = reason_code
-        super().__init__(
-            "candidate range does not contain an interior optimum: " + reason_code
-        )
-
-
 class _NumericalRefitFailure(ValueError):
     pass
 
@@ -789,15 +781,6 @@ def _validate_cluster_selection_binding(
             "cluster selection manifest disagrees with candidate solution schema: "
             f"{sorted(mismatches)}"
         )
-    if (
-        selection.candidate_range_boundary_rule
-        == "fail_closed_if_selected_at_upper_boundary"
-        and selection.selected_n_clusters
-        == max(item.n_clusters for item in selection.candidates)
-    ):
-        raise _ScientificSelectionBoundaryError(
-            str(selection.candidate_range_boundary_reason_code)
-        )
 
 
 def _scale_coordinates(
@@ -1471,10 +1454,6 @@ def run_trajectory_stability(
                 "the selected k was not changed, execution failed closed, and a "
                 "new planner revision is required before retrying."
             )
-    except _ScientificSelectionBoundaryError as exc:
-        summary["failure_class"] = "scientific_selection_boundary"
-        summary["reason_code"] = exc.reason_code
-        summary["errors"].append(f"{type(exc).__name__}: {exc}")
     except _NumericalRefitFailure as exc:
         summary["failure_class"] = "numerical_engine_failure"
         summary["reason_code"] = "TRAJECTORY_REFIT_ENGINE_FAILURE"
