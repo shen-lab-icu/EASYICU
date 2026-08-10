@@ -52,6 +52,8 @@ _CONTEXT_FIELDS = {
     "cohort",
     "modules",
     "outcome",
+    "primary_exposure",
+    "covariates",
     "time_window",
     "comparator",
     "export_format",
@@ -66,6 +68,7 @@ _TEXT_LIMITS = {
     "question": 1200,
     "purpose": 800,
     "outcome": 500,
+    "primary_exposure": 160,
     "comparator": 500,
     "export_format": 40,
     "analysis_goal": 1200,
@@ -364,30 +367,34 @@ def _data_source(value: Any) -> Optional[Dict[str, str]]:
 
 
 def _modules(value: Any) -> List[str]:
+    return _text_list(value, field="modules", max_length=80)
+
+
+def _text_list(value: Any, *, field: str, max_length: int) -> List[str]:
     if value is None:
         return []
     if not isinstance(value, list) or len(value) > _MAX_COLLECTION_ITEMS:
         raise StudyContextError(
             {
                 "error": "invalid_study_context_field",
-                "field": "modules",
+                "field": field,
                 "max_items": _MAX_COLLECTION_ITEMS,
             }
         )
-    modules: List[str] = []
+    values: List[str] = []
     for item in value:
         if not isinstance(item, str):
             raise StudyContextError(
                 {
                     "error": "invalid_study_context_field_type",
-                    "field": "modules",
+                    "field": field,
                     "expected": "list[string]",
                 }
             )
-        module = _text(item, field="modules", max_length=80)
-        if module and module not in modules:
-            modules.append(module)
-    return modules
+        text = _text(item, field=field, max_length=max_length)
+        if text and text not in values:
+            values.append(text)
+    return values
 
 
 def _finite_number(value: Any, *, field: str) -> int | float:
@@ -519,6 +526,8 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "cohort": {},
         "modules": [],
         "outcome": "",
+        "primary_exposure": "",
+        "covariates": [],
         "time_window": {},
         "comparator": "",
         "export_format": "",
@@ -553,6 +562,10 @@ def _sanitize_patch(raw: Any) -> Dict[str, Any]:
         patch["data_source"] = _data_source(raw.get("data_source"))
     if "modules" in raw:
         patch["modules"] = _modules(raw.get("modules"))
+    if "covariates" in raw:
+        patch["covariates"] = _text_list(
+            raw.get("covariates"), field="covariates", max_length=160
+        )
     if "cohort" in raw:
         patch["cohort"] = _cohort(raw.get("cohort"))
     if "time_window" in raw:

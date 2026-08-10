@@ -327,7 +327,9 @@ function customTools(sessionId, agentMode) {
     hostTool(sessionId, { name: "easyicu_update_study_context", executionMode: "sequential", label: "Save study setup", description: "Persist typed conversational study slots through the existing StudyContext owner. Requires a host-held one-turn Configure authorization; the conversation host rebinds the session after the turn settles.", parameters: Type.Object({
       title: optionalText(160), question: optionalText(1200), purpose: optionalText(800),
       cohort: Type.Optional(studyCohort), modules: Type.Optional(Type.Array(Type.String({ maxLength: 80 }), { maxItems: 64 })),
-      outcome: optionalText(500), time_window: Type.Optional(studyWindow), comparator: optionalText(500),
+      outcome: optionalText(500), primary_exposure: optionalText(160),
+      covariates: Type.Optional(Type.Array(Type.String({ maxLength: 160 }), { maxItems: 64 })),
+      time_window: Type.Optional(studyWindow), comparator: optionalText(500),
       export_format: optionalText(40), analysis_goal: optionalText(1200),
       confirmations: Type.Optional(Type.Record(Type.String({ maxLength: 80 }), Type.Boolean())),
       bind_active_export: Type.Optional(Type.Boolean()),

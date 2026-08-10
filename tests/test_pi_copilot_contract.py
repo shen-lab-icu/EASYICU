@@ -1291,6 +1291,8 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
         "cohort": {"age_min": 18, "exclude_readmissions": True},
         "modules": ["lactate", "demographics"],
         "outcome": "hospital mortality",
+        "primary_exposure": "lactate",
+        "covariates": ["age", "sex"],
         "time_window": {"hours": 24, "anchor": "ICU admission"},
         "export_format": "parquet",
         "analysis_goal": "Adjusted association",
@@ -1317,6 +1319,8 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
     assert saved["details"]["rebind_required"] is True
     assert saved["details"]["host_rebind_after_turn"] is True
     assert writes[0][0]["id"] == "study-1"
+    assert writes[0][0]["primary_exposure"] == "lactate"
+    assert writes[0][0]["covariates"] == ["age", "sex"]
     assert writes[0][1] == {
         "active": True,
         "expected_revision": 5,
@@ -1462,12 +1466,16 @@ def test_phi_and_projection_boundaries_reject_rows_identifiers_and_paths() -> No
             "id": "study-safe",
             "revision": 1,
             "question": "Aggregate lactate analysis",
+            "primary_exposure": "lactate",
+            "covariates": ["age", "sex"],
             "data_source": {"database": "mimiciv", "path": "/private/export"},
             "cohort": {"cohort_size": 140},
         }
     )
     assert "/private/export" not in json.dumps(projected)
     assert len(projected["data_source"]["path_digest"]) == 32
+    assert projected["primary_exposure"] == "lactate"
+    assert projected["covariates"] == ["age", "sex"]
 
     projected_job = project_job(
         {

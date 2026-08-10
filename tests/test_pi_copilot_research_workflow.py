@@ -39,6 +39,8 @@ def _complete_study() -> dict[str, Any]:
         "cohort": {"preset": "adult_icu", "max_patients": 2000},
         "modules": ["vitals", "outcome"],
         "outcome": "In-hospital mortality",
+        "primary_exposure": "heart_rate",
+        "covariates": ["age", "sex"],
         "time_window": {"hours": 24, "anchor": "ICU admission"},
         "export_format": "parquet",
         "analysis_goal": "Descriptive prognostic association",
@@ -597,6 +599,8 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["acquire"]["static_concepts"] == ("age", "sex")
     assert calls["run"]["cohort"] == universe
     assert calls["run"]["question"] == _complete_study()["question"]
+    assert calls["run"]["primary_exposure"] == "heart_rate"
+    assert calls["run"]["user_preferences"]["covariates"] == ["age", "sex"]
     assert calls["config"].evidence_enforcement_mode == "strict"
     assert calls["config"].enable_reproducibility_envelope is True
     assert result["engine"] == "easyicu.research_agent.pipeline"
@@ -829,6 +833,98 @@ def test_web_data_foundation_profile_keeps_event_outcome_typed(
     assert profile["require_outcome"] is True
 
 
+def test_web_data_foundation_materializes_typed_exposure_and_covariates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id="age",
+                    file_name="demographics.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="sex",
+                    file_name="demographics.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="death",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="event_status",
+                ),
+                CatalogConcept(
+                    concept_id="sep3_sofa2_max",
+                    file_name="sep3_sofa2_max.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+            ],
+        ),
+    )
+
+    profile = agent_pipeline_runs._data_foundation_profile(
+        export_path="/typed/demo",
+        study={
+            "modules": ["demographics", "outcome", "sep3_sofa2_max"],
+        },
+        target="death",
+        primary_exposure="sep3_sofa2_max",
+        covariates=("age", "sex"),
+    )
+
+    assert profile == {
+        "allowed_modules": ("demographics", "outcome", "sep3_sofa2_max"),
+        "static_concepts": ("age", "sex"),
+        "outcome_concepts": ("death",),
+        "required_feature_concepts": ("sep3_sofa2_max",),
+        "require_outcome": True,
+    }
+
+
+def test_web_data_foundation_rejects_unmaterialized_primary_exposure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id="age",
+                    file_name="demographics.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+            ],
+        ),
+    )
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        agent_pipeline_runs._data_foundation_profile(
+            export_path="/typed/demo",
+            study={"modules": ["demographics"]},
+            target=None,
+            primary_exposure="missing_exposure",
+        )
+
+    assert exc.value.code == (
+        "research_pipeline_primary_exposure_outside_configured_modules"
+    )
+
+
 def test_web_study_context_compiles_to_strict_user_preferences() -> None:
     study = {
         **_complete_study(),
@@ -850,6 +946,8 @@ def test_web_study_context_compiles_to_strict_user_preferences() -> None:
         "subgroup_sensitivity",
         "timing_and_design",
         "data_constraints",
+        "covariates",
     }
     assert validated.extra_notes == "Demo-only product validation."
     assert "not_for_manuscript" in str(validated.data_constraints)
+    assert validated.covariates == ["age", "sex"]

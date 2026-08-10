@@ -83,6 +83,8 @@ def test_study_context_api_persists_lists_and_handoffs_metadata(tmp_path: Path) 
             "cohort": {"preset": "adult_first", "age_min": 18},
             "modules": ["demographics", "outcome", "sofa2_score"],
             "outcome": "hospital mortality",
+            "primary_exposure": "sofa2_score",
+            "covariates": ["age", "sex", "age"],
             "time_window": {"hours": 24, "anchor": "icu_admission"},
             "comparator": "lower admission severity",
             "export_format": "parquet",
@@ -98,6 +100,8 @@ def test_study_context_api_persists_lists_and_handoffs_metadata(tmp_path: Path) 
     assert context["current_stage"] == "plan"
     assert context["last_route"] == "entry"
     assert context["revision"] == 1
+    assert context["primary_exposure"] == "sofa2_score"
+    assert context["covariates"] == ["age", "sex"]
 
     active = client.get("/api/study-contexts/active")
     listed = client.get("/api/study-contexts")
@@ -345,6 +349,17 @@ def test_study_context_rejects_bounds_and_row_level_metadata() -> None:
     )
     assert structured_module.status_code == 400
     assert structured_module.json()["detail"]["expected"] == "list[string]"
+
+    structured_covariate = client.post(
+        "/api/study-contexts",
+        json={"covariates": [{"name": "age"}]},
+    )
+    assert structured_covariate.status_code == 400
+    assert structured_covariate.json()["detail"] == {
+        "error": "invalid_study_context_field_type",
+        "field": "covariates",
+        "expected": "list[string]",
+    }
 
 
 def test_extraction_metadata_contract_shape_remains_supported() -> None:

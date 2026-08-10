@@ -66,6 +66,25 @@ def test_bare_word_model_does_not_force_prediction(ra):
     assert str(infer_study_design_family(ctx)) == "association"
 
 
+def test_prevalence_and_association_without_structured_exposure_routes_association(ra):
+    """An explicit association request must beat descriptive fallback ties."""
+
+    ctx = ra.ResearchContext(
+        research_question=(
+            "Estimate syndrome prevalence and its association with in-hospital "
+            "mortality, with a transparent reproducible cohort definition and "
+            "visible denominator."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+
+    assert ra.infer_analysis_type(ctx).key == "association_study"
+
+
 def test_primary_cohort_workflow_boilerplate_does_not_override_scientific_family(ra):
     """One required cohort definition plus data QC is workflow, not sensitivity."""
 
