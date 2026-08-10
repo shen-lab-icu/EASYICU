@@ -5,6 +5,7 @@
 - Task ID：`PI-COPILOT-LIVE-PIPELINE-UAT`
 - 分支：`fix/pi-workspace-review-20260809`
 - 实现提交：`7922951`
+- CI 预算修复：`edffda4`
 - 范围：非 Canonical9、非论文 authority 的通用科研 UAT；未修改 Canonical9、shared prompt 科学内容或 frozen paper rubric，未启动正式 Provider batch。
 
 ## 目标
@@ -66,6 +67,8 @@ Pi 自动读取最新 run、`quality_gate.json`、`evidence_ledger.json` 和白�
 ## 验证
 
 - 聚焦/邻接回归：`156 passed, 3 warnings`。
+- 推送后的 Research Agent CI 在测试前正确拦截两项本轮回归：`agents/core.py` 比架构基线增长 30 行、固定 Planner 提示达到 53,826 bytes（预算 51,600）。`edffda4` 未更新基线或抬高预算，而是把新增指导归还 `agents/plan_payload.py`，并只向 `descriptive_epidemiology` 投影描述性执行合同；`agents/core.py` 回到 4,933 行基线。
+- CI 修复后的联合回归：`312 passed, 3 warnings`；其中 architecture + fixed-prompt budget 42/42，计划投影/类型/预算/owner 与 Web/Pi 组合均通过。
 - Ruff：全部本轮 Python 生产文件和测试 `All checks passed!`。
 - Node syntax：`event-projection.mjs`、`main.mjs`、`screens-guided-pi.js` 全部通过。
 - `git diff --check`：通过。
