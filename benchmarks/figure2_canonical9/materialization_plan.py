@@ -342,7 +342,7 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         # engine hard-codes it.
         trajectory_panel_width_hours=12.0,
         trajectory_panel_aggregate="max",
-        task_protocol_version="h3_trajectory_clustering/20260810-v3",
+        task_protocol_version="h3_trajectory_clustering/20260810-v4",
     ),
 )
 

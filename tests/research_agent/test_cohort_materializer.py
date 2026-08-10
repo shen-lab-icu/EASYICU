@@ -6,6 +6,7 @@ integration on synthetic frames so the logic is covered in CI.
 """
 
 import hashlib
+import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -13,6 +14,7 @@ import pytest
 
 from easyicu.research_agent.cohort import materializer as M
 from easyicu.research_agent.cohort.schema import CohortDefinition, build_cohort
+from easyicu.research_agent.intake import export_package as intake
 
 
 def _sha256(path):
@@ -304,6 +306,83 @@ def test_trajectory_excludes_owner_unavailable_zero_and_preserves_locf_receipt(
     }
     assert provenance["unavailable_value_rows_excluded"] == {"sofa2_resp": 1}
     assert provenance["owner_receipt_concepts"] == ["sofa2_resp"]
+
+
+def _write_native_sofa2_package(tmp_path, *, include_available=True):
+    root = tmp_path / "native_sofa2"
+    root.mkdir()
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 12.0, 24.0],
+            "sofa2_resp": [0.0, 0.0, 2.0],
+            "sofa2_resp_observed": [0, 1, 0],
+            "sofa2_resp_available": [0, 1, 1],
+        }
+    )
+    if not include_available:
+        frame = frame.drop(columns=["sofa2_resp_available"])
+    frame.to_parquet(root / "scores.parquet", index=False)
+    concept_ids = [
+        "sofa2_resp",
+        "sofa2_resp_observed",
+        *(["sofa2_resp_available"] if include_available else []),
+    ]
+    manifest = {
+        "database": "miiv",
+        "format": "parquet",
+        "concept_selection": {
+            "mode": "explicit",
+            "modules": {"scores": concept_ids},
+        },
+        "files": [
+            {
+                "file": "scores.parquet",
+                "module": "scores",
+                "concepts": len(concept_ids),
+                "concept_ids": concept_ids,
+                "rows": len(frame),
+            }
+        ],
+        "feature_definitions": {"included": False},
+    }
+    (root / intake.NATIVE_MANIFEST).write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    return root
+
+
+def test_native_export_trajectory_preserves_owner_receipts(tmp_path):
+    root = _write_native_sofa2_package(tmp_path)
+
+    long_df, provenance = M.build_trajectory_long(
+        data_path=root,
+        database="miiv",
+        concepts=["sofa2_resp"],
+        window=(0.0, 24.0),
+    )
+
+    assert long_df["charttime"].tolist() == [12.0, 24.0]
+    assert long_df["evidence_state"].tolist() == [
+        "direct_observed",
+        "owner_locf_available",
+    ]
+    assert provenance["unavailable_value_rows_excluded"] == {"sofa2_resp": 1}
+    assert provenance["owner_receipt_concepts"] == ["sofa2_resp"]
+
+
+def test_native_export_trajectory_fails_closed_without_complete_owner_receipt(
+    tmp_path,
+):
+    root = _write_native_sofa2_package(tmp_path, include_available=False)
+
+    with pytest.raises(M.MaterializedMetadataError, match="owner.*receipt"):
+        M.build_trajectory_long(
+            data_path=root,
+            database="miiv",
+            concepts=["sofa2_resp"],
+            window=(0.0, 24.0),
+        )
 
 
 def test_build_trajectory_long_respects_window(monkeypatch, tmp_path):

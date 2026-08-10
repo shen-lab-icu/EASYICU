@@ -304,6 +304,12 @@ class PipelineConfig:
     # Optional caller-owned population contract. The shared pipeline enforces
     # the generic typed mode; the caller decides which mode a task requires.
     required_primary_cohort_selection_mode: Optional[CohortSelectionMode] = None
+    # Optional caller-reviewed trajectory execution projection. It remains
+    # case-neutral in the shared engine: the caller supplies exact concepts and
+    # numerical rules, while plan validation and deterministic executors bind
+    # them to this immutable, run-hashed configuration.
+    trajectory_scientific_runtime_authority: Optional[Dict[str, Any]] = None
+    scientific_runtime_projection_sha256: Optional[str] = None
     enable_reviewer_round: bool = True
     enable_fairness_subgroups: bool = False
     enable_hypothesis_generator: bool = False
@@ -499,6 +505,28 @@ class PipelineConfig:
                 "required_primary_cohort_selection_mode must be "
                 "'predicate_filtered', 'all_input_rows', or None"
             )
+        if (self.trajectory_scientific_runtime_authority is None) != (
+            self.scientific_runtime_projection_sha256 is None
+        ):
+            raise ValueError(
+                "trajectory scientific authority and runtime projection digest "
+                "must be configured together"
+            )
+        if self.trajectory_scientific_runtime_authority is not None:
+            from ..trajectory.scientific_runtime_authority import (
+                load_trajectory_scientific_runtime_authority,
+            )
+
+            load_trajectory_scientific_runtime_authority(
+                self.trajectory_scientific_runtime_authority
+            )
+            digest = str(self.scientific_runtime_projection_sha256 or "")
+            if len(digest) != 64 or any(
+                character not in "0123456789abcdef" for character in digest
+            ):
+                raise ValueError(
+                    "scientific_runtime_projection_sha256 must be a SHA-256 digest"
+                )
 
     def with_overrides(self, **overrides: Any) -> "PipelineConfig":
         """Return a new :class:`PipelineConfig` with the given fields

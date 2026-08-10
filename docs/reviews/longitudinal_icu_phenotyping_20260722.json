@@ -4,8 +4,8 @@
   "card_version": "2.0.0",
   "reviewed_content_sha256": "2b776ed3206297937bb9a7613c4e2380eae6bc264c394aa22c5a4b010df9d0d4",
   "case_protocol_path": "benchmarks/figure2_canonical9/protocols/h3_trajectory_clustering_20260809.json",
-  "case_protocol_content_sha256": "49431aee98300dc0f2fc6db6d09d3e69d841129dfed35441704ae74296706fbd",
-  "runtime_scientific_projection_sha256": "4ee5d92c528843c02bc3b891f0bf9236709cc2c482ca6df3bccef8a424d322b5",
+  "case_protocol_content_sha256": "6c3d46d0db23770826b494845670ae5319d862e5e8ffbbc664bc130b507f3fc7",
+  "runtime_scientific_projection_sha256": "1fac6cd1224f408fbe0b98f149b30f2696a1155dec777d009ba54e25e2a21109",
   "status": "unsigned_targeted_adjudication_repairs_complete",
   "authorization": false,
   "split_rationale": "H3 is a longitudinal phenotyping question. It cannot be rescued by changing random seeds, cluster counts, thresholds, or exclusions after a stability failure; any new design needs a separately reviewed protocol before execution.",
@@ -28,13 +28,14 @@
   ],
   "required_signoff": [
     "The v1 diagonal-GMM k=6 protocol with mean ARI 0.5357 below 0.70 remains terminal; no seed, k, threshold, feature, imputation, or exclusion change can rescue it.",
-    "The v3 population and representation are fixed before execution: MIMIC-IV ICU stays with at least two owner-available SOFA-2 windows, ICU admission anchor, hours 0-72, 12-hour maximum grid, six SOFA-2 components plus lactate as clustering coordinates, and SOFA-2 total as descriptive/audit only.",
+    "The v4 population and representation are fixed before execution: MIMIC-IV ICU stays with at least two owner-available SOFA-2 windows, ICU admission anchor, hours 0-72, 12-hour maximum grid, six SOFA-2 components plus lactate as clustering coordinates, and SOFA-2 total as descriptive/audit only.",
+    "The signed runtime projection deterministically compiles those v4 choices into one execution contract. The representation, candidate-selection, and stability executors must verify the exact contract and projection digests; any feature, scaling, k-grid, fit, BIC, boundary, or stability drift fails closed before a scientific result is emitted.",
     "SOFA-2 concept-owner missingness semantics are retained: direct observations and owner-authorized LOCF values are distinguished and audited, owner-unavailable values are excluded, and no additional clustering-stage imputation is permitted.",
     "Coordinates use pooled observed-value z-scores with ddof=0; centers, scales, counts, mask policy, and the scaling digest must be emitted by the deterministic stability executor, and any zero-variance coordinate fails closed.",
     "The model family is observed-data diagonal Gaussian mixture, candidate k is 2-6, and minimum BIC selects without outcomes. If the minimum BIC is at k=6, execution returns H3_NO_INTERIOR_BIC_OPTIMUM rather than claiming an identified optimum or expanding k post hoc; a selected cluster below 5% yields no stable solution without trying another k.",
     "Stability uses exactly 100 80%-subsample refits from base seed 1729 and requires all 100 to succeed. Numerical/refit failure is an engine failure, while a completed mean ARI below 0.70 is scientific instability and the formal no-stable-phenotype result.",
     "Outcome comparisons occur only after frozen assignment and remain descriptive; MIMIC-IV discovery is not transportable without external reproduction under the identical protocol.",
-    "The reviewer approves exact case protocol digest 49431aee98300dc0f2fc6db6d09d3e69d841129dfed35441704ae74296706fbd and runtime projection digest 4ee5d92c528843c02bc3b891f0bf9236709cc2c482ca6df3bccef8a424d322b5 together with card digest 2b776ed3206297937bb9a7613c4e2380eae6bc264c394aa22c5a4b010df9d0d4."
+    "The reviewer approves exact case protocol digest 6c3d46d0db23770826b494845670ae5319d862e5e8ffbbc664bc130b507f3fc7 and runtime projection digest 1fac6cd1224f408fbe0b98f149b30f2696a1155dec777d009ba54e25e2a21109 together with card digest 2b776ed3206297937bb9a7613c4e2380eae6bc264c394aa22c5a4b010df9d0d4."
   ],
   "attestation_fields_required_after_signoff": [
     "reviewer_owner",

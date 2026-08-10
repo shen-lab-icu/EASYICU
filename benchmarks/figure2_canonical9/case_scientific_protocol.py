@@ -14,6 +14,11 @@ from typing import Annotated, Any, Literal, Mapping, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from easyicu.research_agent.schema import TrajectoryStabilitySpec
+from easyicu.research_agent.trajectory.scientific_runtime_authority import (
+    build_trajectory_scientific_runtime_authority,
+)
+
 
 class ScientificCaseProtocolError(ValueError):
     """A tracked case protocol is missing, malformed, or assigned to the wrong task."""
@@ -218,8 +223,20 @@ class H3SelectionAndStability(_StrictFrozenModel):
         "fail_closed_if_minimum_bic_is_at_upper_boundary"
     ]
     candidate_boundary_reason_code: Literal["H3_NO_INTERIOR_BIC_OPTIMUM"]
+    candidate_fit_base_seed: Literal[1729]
+    candidate_fit_max_iter: Literal[200]
+    candidate_fit_tolerance: Literal[1e-6]
+    candidate_fit_regularization: Literal[1e-6]
+    bic_sample_size: Literal["frozen_population_rows"]
+    bic_parameter_count: Literal[
+        "mixture_weights_k_minus_1_plus_2_k_per_coordinate"
+    ]
+    bic_tie_break: Literal["smaller_k"]
     outcome_blind_selection: Literal[True]
     minimum_cluster_fraction: float
+    minimum_cluster_fraction_reason_code: Literal[
+        "H3_MINIMUM_CLUSTER_FRACTION_NOT_MET"
+    ]
     cluster_size_failure_action: Literal["no_stable_solution_no_alternate_k"]
     resampling_method: Literal["subsample_without_replacement"]
     n_resamples: Literal[100]
@@ -297,6 +314,7 @@ class RuntimeScientificProjection(_StrictFrozenModel):
     canonical_protocol_json: str = Field(min_length=2)
     agent_visible_required_outputs: tuple[str, ...]
     agent_visible_guardrails: tuple[str, ...]
+    deterministic_execution_contract: dict[str, Any] | None
     runtime_projection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
@@ -313,6 +331,12 @@ class RuntimeScientificProjection(_StrictFrozenModel):
             raise ValueError("runtime scientific projection digest mismatch")
         if not self.agent_visible_required_outputs or not self.agent_visible_guardrails:
             raise ValueError("runtime projection must be visible to the Agent")
+        if (self.task_id == "h3_trajectory_clustering") != (
+            self.deterministic_execution_contract is not None
+        ):
+            raise ValueError(
+                "only H3 requires the deterministic trajectory execution contract"
+            )
         return self
 
 
@@ -375,6 +399,96 @@ def case_protocol_content_sha256(protocol: BaseModel) -> str:
     ).hexdigest()
 
 
+def _h3_deterministic_execution_contract(
+    protocol: H3ScientificProtocol,
+) -> dict[str, Any]:
+    """Compile the typed H3 protocol into the shared case-neutral executor schema."""
+
+    representation = protocol.representation
+    selection = protocol.selection_and_stability
+    columns = tuple(
+        f"{concept}__h{start}_{start + representation.grid_width_hours}"
+        for concept in representation.features
+        for start in range(
+            representation.window_hours[0],
+            representation.window_hours[1],
+            representation.grid_width_hours,
+        )
+    )
+    stability_spec = TrajectoryStabilitySpec(
+        n_resamples=selection.n_resamples,
+        sample_fraction=selection.sample_fraction,
+        base_seed=selection.base_seed,
+        minimum_successful_resamples=selection.minimum_successful_resamples,
+        refit_max_iter=selection.candidate_fit_max_iter,
+        refit_tolerance=selection.candidate_fit_tolerance,
+        refit_regularization=selection.candidate_fit_regularization,
+        minimum_mean_stability=selection.minimum_mean_stability,
+        decision_mode="minimum_mean_threshold",
+    )
+    return build_trajectory_scientific_runtime_authority(
+        {
+            "schema_version": "easyicu.trajectory_scientific_runtime_authority/1",
+            "protocol_content_sha256": case_protocol_content_sha256(protocol),
+            "coordinate_concepts": list(representation.features),
+            "descriptive_only_concepts": list(
+                representation.descriptive_only_features
+            ),
+            "window_start_hours": representation.window_hours[0],
+            "window_end_hours": representation.window_hours[1],
+            "grid_width_hours": representation.grid_width_hours,
+            "aggregation": representation.aggregation,
+            "representation_columns": list(columns),
+            "minimum_available_windows": (
+                representation.minimum_available_sofa2_windows
+            ),
+            "coordinate_scaling": {
+                "method": "pooled_coordinate_wise_z_score",
+                "ddof": representation.scaling_ddof,
+                "observed_value_policy": "direct_or_owner_locf_available",
+                "missing_value_policy": (
+                    "preserve_missing_exclude_from_likelihood"
+                ),
+                "zero_variance_action": (
+                    representation.scaling_zero_variance_action
+                ),
+            },
+            "evidence_state_policy": {
+                "direct_observed": "include",
+                "owner_locf_available": "include_and_audit",
+                "unavailable": "exclude",
+                "additional_clustering_stage_imputation": (
+                    representation.clustering_stage_imputation
+                ),
+            },
+            "model_family": "latent_class_diagonal_gaussian_mixture",
+            "fit_method": "observed_data_em_diagonal_gaussian_mixture",
+            "covariance_type": "diag",
+            "candidate_cluster_counts": list(selection.candidate_cluster_counts),
+            "selection_criterion": "bic",
+            "selection_rule": "minimum",
+            "candidate_fit_base_seed": selection.candidate_fit_base_seed,
+            "candidate_fit_max_iter": selection.candidate_fit_max_iter,
+            "candidate_fit_tolerance": selection.candidate_fit_tolerance,
+            "candidate_fit_regularization": selection.candidate_fit_regularization,
+            "bic_sample_size": selection.bic_sample_size,
+            "bic_parameter_count": selection.bic_parameter_count,
+            "bic_tie_break": selection.bic_tie_break,
+            "upper_boundary_action": (
+                "fail_closed_if_selected_at_upper_boundary"
+            ),
+            "upper_boundary_reason_code": (
+                selection.candidate_boundary_reason_code
+            ),
+            "minimum_cluster_fraction": selection.minimum_cluster_fraction,
+            "minimum_cluster_fraction_reason_code": (
+                selection.minimum_cluster_fraction_reason_code
+            ),
+            "stability_spec": stability_spec.model_dump(mode="json"),
+        }
+    ).model_dump(mode="json")
+
+
 def _projection_agent_content(
     protocol: E2ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -421,6 +535,7 @@ def _projection_agent_content(
         )
     representation = protocol.representation
     selection = protocol.selection_and_stability
+    execution_contract = _h3_deterministic_execution_contract(protocol)
     return (
         (
             "receipt-aware trajectory representation and scaling manifest",
@@ -436,6 +551,9 @@ def _projection_agent_content(
             "mask policy, and a digest-bound scaling manifest.",
             f"Evaluate candidate k={list(selection.candidate_cluster_counts)} by minimum BIC; if the minimum is "
             f"at the upper boundary, fail closed with {selection.candidate_boundary_reason_code}.",
+            "Emit the exact signed representation columns in this order: "
+            f"{execution_contract['representation_columns']}; the deterministic runtime "
+            "will reject any substituted feature, time bin, or descriptive-only coordinate.",
             "Classify a refit numerical/engine failure separately from a completed stability analysis whose mean ARI is below threshold.",
         ),
     )
@@ -449,6 +567,11 @@ def build_runtime_scientific_projection(
     protocol_payload = protocol.model_dump(mode="json")
     canonical_protocol_json = _canonical_json_bytes(protocol_payload).decode("utf-8")
     required_outputs, guardrails = _projection_agent_content(protocol)
+    execution_contract = (
+        _h3_deterministic_execution_contract(protocol)
+        if isinstance(protocol, H3ScientificProtocol)
+        else None
+    )
     body = {
         "schema_version": "easyicu.figure2_runtime_scientific_projection/1",
         "task_id": protocol.task_id,
@@ -459,6 +582,7 @@ def build_runtime_scientific_projection(
         "canonical_protocol_json": canonical_protocol_json,
         "agent_visible_required_outputs": required_outputs,
         "agent_visible_guardrails": guardrails,
+        "deterministic_execution_contract": execution_contract,
     }
     return RuntimeScientificProjection(
         **body,

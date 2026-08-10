@@ -1658,6 +1658,21 @@ class ResearchAgentPipeline:
         self._required_primary_cohort_selection_mode = (
             config.required_primary_cohort_selection_mode
         )
+        if config.trajectory_scientific_runtime_authority is not None:
+            from .trajectory.scientific_runtime_authority import (
+                load_trajectory_scientific_runtime_authority,
+            )
+
+            self._trajectory_scientific_runtime_authority = (
+                load_trajectory_scientific_runtime_authority(
+                    config.trajectory_scientific_runtime_authority
+                )
+            )
+        else:
+            self._trajectory_scientific_runtime_authority = None
+        self._scientific_runtime_projection_sha256 = (
+            config.scientific_runtime_projection_sha256
+        )
         # O15 — Three-role reviewer round (statistician / clinician /
         # methodologist) driven off already-computed evidence and
         # findings. Deterministic; no extra LLM calls. Default ON.
@@ -3335,6 +3350,8 @@ class ResearchAgentPipeline:
                 raise CohortAuthorityError(
                     "Planner primary cohort selection is not explicit"
                 )
+        if self._trajectory_scientific_runtime_authority is not None:
+            self._trajectory_scientific_runtime_authority.validate_plan(plan)
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )
