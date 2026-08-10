@@ -176,6 +176,7 @@ from ..research_context.temporal_semantics import (
     TemporalAlignmentEngine,
 )
 from ..review.step_semantics import decide_step_scientific_review
+from . import plan_payload as _payload
 from .coder_generation import generate_initial_coder_candidate
 from .plan_payload import (
     _canonicalise_figure_output_alias,
@@ -529,6 +530,7 @@ def _build_planner_user_prompt(
     """
 
     planner_context = scoped_planner_context(context)
+    inferred_analysis_type = infer_analysis_type(context)
 
     prompt = (
         "Produce an ICU-AWARE RESEARCH PLAN as JSON matching the "
@@ -537,20 +539,7 @@ def _build_planner_user_prompt(
         "the available context. The plan must not assume that "
         "every task needs Table 1, outcome incidence, missingness, "
         "or a primary association model. "
-        "Every colon-typed product must use a runtime-supported kind. "
-        "Inputs may use only artifact, dataset, figure, log, manifest, model, "
-        "statistic, or table. Outputs may additionally use audit, test, or "
-        "report. Do not use text:, code:, narrative:, or another invented "
-        "kind. A report: product is terminal writer output: never consume it "
-        "from another analysis step. If an intermediate interpretation or "
-        "audit must be consumed downstream, declare it as log:<name>; keep "
-        "the scientific content and dependency explicit. "
-        "Do not create analysis steps with methods `descriptive_interpretation`, "
-        "`result_interpretation`, `report_writing`, or `manuscript_writing`. "
-        "The gate-bound EasyICU result interpreter and manuscript writer run "
-        "after the evidence-producing plan completes; analysis-step Python "
-        "must never be used merely to narrate results or draft prose. "
-        "That said, a baseline "
+        + "That said, a baseline "
         "characteristics table (Table 1) IS a reporting standard for "
         "observational/association and prediction-model families "
         "(STROBE item 14 / TRIPOD): for those families include a "
@@ -781,21 +770,8 @@ def _build_planner_user_prompt(
         "promise a reader two tables and deliver one twice. Declare only "
         "audits from this list; if the step needs something else, leave "
         "`measurement_audit_spec` unset rather than mislabelling it.\n\n"
-        "Two compact descriptive methods have exact host contracts. For "
-        "`method='descriptive_distribution'`, declare exactly one typed cohort "
-        "input followed by exactly one categorical grouping column and exactly "
-        "one continuous value column, in that order; declare only "
-        "`table:distribution_prevalence`. Do not add a third column or an "
-        "association to that step. For a non-causal two-continuous-variable "
-        "association, use a separate `method='descriptive_association'` step "
-        "with exactly one typed cohort input followed by the predictor and "
-        "outcome columns, in that order, and exactly one "
-        "`statistic:<descriptive_name>` output. This contract computes a "
-        "complete-case Spearman rho without adjustment or imputation. A figure "
-        "of the grouped distribution consumes only the distribution table; a "
-        "figure of the association scalar consumes only its statistic. Never "
-        "bundle the grouped distribution and the association into one step.\n\n"
-        "For a step that re-estimates the ALREADY-LOCKED robustness "
+        + _payload.planner_descriptive_method_guidance(inferred_analysis_type.key)
+        + "For a step that re-estimates the ALREADY-LOCKED robustness "
         "specification grid without changing the estimand, set "
         "`robustness_replay_spec.products`: one entry per declared product, "
         "each giving the bare `product_id` and which `output` it is. Legal "
@@ -949,21 +925,15 @@ def _build_planner_user_prompt(
         "(declare `table:robustness_matrix`, write `product_id` "
         "'robustness_matrix'), which is a different field from `output` -- "
         "naming an `output` value the step does not itself declare is "
-        "refused. This replay contract applies only when a primary fitted "
-        "effect and its uncertainty already exist. For "
-        "`analysis_type='descriptive_epidemiology'`, do NOT declare "
-        "`robustness_specs`, a `robustness_sensitivity` step, effect-style "
-        "products such as `primary_or`, or a robustness forest plot. Use the "
-        "typed measurement/missingness audits above for denominator and "
-        "complete-case availability checks; any additional descriptive "
-        "summary must remain a separately declared descriptive method.\n\n"
-        + locked_analysis_type_guide(infer_analysis_type(context))
+        "refused."
+        + _payload.planner_descriptive_robustness_guidance(inferred_analysis_type.key)
+        + locked_analysis_type_guide(inferred_analysis_type)
         + "\n\n"
         + planner_analysis_type_guide(detail=catalog_detail)
         + "\n\n"
         + trajectory_planner_contract_guide(
             context=context,
-            analysis_type=infer_analysis_type(context).key,
+            analysis_type=inferred_analysis_type.key,
         )
         + "\n\n"
         "OUTPUT FORMAT — VERY IMPORTANT:\n"
