@@ -1399,6 +1399,45 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
         }
     ]
 
+    full_context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-full-test",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(study_context_id="study-1", study_revision=7),
+        ),
+        allowed_actions=frozenset({"provider_run"}),
+    )
+    full_result = tool_module.execute_tool("easyicu_run", {}, full_context)
+
+    assert full_result["code"] == "easyicu_full_run_submitted"
+    assert submitted_bodies[-1] == {
+        "study_context_id": "study-1",
+        "question": "Aggregate association question",
+        "run_type": "full",
+        "llm_provider": "openai",
+        "external_llm_opt_in": True,
+        "engine": "research_agent_pipeline",
+        "credential_source": "pi_verified",
+    }
+
+    conservative_model_context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-conservative-model-test",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(study_context_id="study-1", study_revision=7),
+        ),
+        allowed_actions=frozenset({"provider_run"}),
+    )
+    promoted_result = tool_module.execute_tool(
+        "easyicu_run",
+        {"run_type": "preflight"},
+        conservative_model_context,
+    )
+
+    assert promoted_result["code"] == "easyicu_full_run_submitted"
+    assert submitted_bodies[-1]["run_type"] == "full"
+    assert submitted_bodies[-1]["engine"] == "research_agent_pipeline"
+
 
 def test_phi_and_projection_boundaries_reject_rows_identifiers_and_paths() -> None:
     with pytest.raises(PiCopilotError, match="row-level"):

@@ -47,6 +47,7 @@ class CatalogConcept:
     methodology: str = ""
     resolved_column: str = ""
     typed_metadata: bool = False
+    column_role: str = ""
 
 
 @dataclass
@@ -229,10 +230,12 @@ def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
                 )
             description = binding.metadata.description or ""
             category = binding.metadata.category or ""
+            column_role = binding.metadata.role.value
         else:
             m = meta.get(cid, {})
             description = m.get("description", "")
             category = m.get("category", "")
+            column_role = ""
         concepts.append(
             CatalogConcept(
                 concept_id=cid,
@@ -242,6 +245,7 @@ def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
                 n_rows=int(info.get("rows", 0) or 0),
                 resolved_column=resolved_column,
                 typed_metadata=typed_metadata,
+                column_role=column_role,
                 methodology=_methodology_tag(cid, category),
             )
         )

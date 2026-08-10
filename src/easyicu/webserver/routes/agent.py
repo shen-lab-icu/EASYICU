@@ -6,7 +6,7 @@ import hashlib
 import json
 import threading
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
@@ -21,11 +21,43 @@ from easyicu.webserver import science_workbench
 from easyicu.webserver import sources as source_store
 from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.ideas.mining import EXECUTION_GATE_BLOCKERS
+from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
 from easyicu.webserver.routes.jobs import submit_job
 from easyicu.webserver.routes.request_parsing import body_bool
 
 control_router = APIRouter()
 artifact_router = APIRouter()
+
+
+def _provider_environment_for_agent_run(
+    *,
+    credential_source: str,
+    engine: str,
+    run_type: str,
+    external_llm_opt_in: bool,
+) -> Optional[Mapping[str, str]]:
+    """Resolve one credential authority without returning secret values."""
+
+    source = str(credential_source or "scientific_provider").strip().lower()
+    if source == "scientific_provider":
+        return None
+    if source != "pi_verified":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "agent_provider_credential_source_invalid"},
+        )
+    if engine != "research_agent_pipeline" or run_type != "full":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "pi_provider_research_pipeline_only"},
+        )
+    try:
+        return PiProviderConfigStore().research_agent_environment(
+            external_llm_opt_in=external_llm_opt_in,
+        )
+    except PiCopilotError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
 
 
 @control_router.post("/api/jobs/agent-run")
@@ -91,6 +123,15 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
         )
     llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
     external_llm_opt_in = body_bool(body, "external_llm_opt_in")
+    credential_source = str(
+        body.get("credential_source") or "scientific_provider"
+    ).strip()
+    provider_environment = _provider_environment_for_agent_run(
+        credential_source=credential_source,
+        engine=engine,
+        run_type=run_type,
+        external_llm_opt_in=external_llm_opt_in,
+    )
     settings = settings_store.load_settings()
     compute = capabilities.validate_compute_target(body)
     if not compute.get("ok"):
@@ -101,6 +142,7 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
             llm_provider=llm_provider,
             external_llm_opt_in=external_llm_opt_in,
             ai_enabled=bool(settings.get("ai_enabled")),
+            environ=provider_environment,
         )
     except agent_runs.AgentRunConfigError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
@@ -124,6 +166,7 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
                 study_context=study_context or {},
                 project_root=project_root,
                 provider=provider_meta,
+                provider_environment=provider_environment,
             )
         else:
             base_runner = agent_runs.make_agent_run_runner(

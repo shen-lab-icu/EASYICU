@@ -9,9 +9,11 @@ from typing import Any
 
 import pytest
 
+from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
 from easyicu.research_agent.reporting.result_card import (
     build_result_interpretation_card,
 )
+from easyicu.research_agent.schema import UserPreferences
 from easyicu.webserver import agent_pipeline_runs, provider_adapter
 from easyicu.webserver.pi_copilot import tools as tool_module
 from easyicu.webserver.pi_copilot.contracts import (
@@ -276,6 +278,7 @@ def test_full_run_delegates_to_research_agent_provider_gate(
             "llm_provider": "openai",
             "external_llm_opt_in": True,
             "engine": "research_agent_pipeline",
+            "credential_source": "pi_verified",
         }
     ]
 
@@ -347,6 +350,16 @@ def _acquisition_receipt() -> SimpleNamespace:
         materialized_concepts=["heart_rate", "mortality"],
         coverage=SimpleNamespace(sufficient=True),
     )
+
+
+def _foundation_profile() -> dict[str, Any]:
+    return {
+        "allowed_modules": ("demographics", "outcome"),
+        "static_concepts": ("age", "sex"),
+        "outcome_concepts": ("death",),
+        "required_feature_concepts": (),
+        "require_outcome": True,
+    }
 
 
 def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
@@ -528,7 +541,10 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     monkeypatch.setattr(
         provider_adapter,
         "build_research_agent_provider_client",
-        lambda provider: (object(), {"provider": "openai", "model": "test-model"}),
+        lambda provider, **_kwargs: (
+            object(),
+            {"provider": "openai", "model": "test-model"},
+        ),
     )
     import easyicu.research_agent as research_agent
     from easyicu.research_agent.acquisition import foundation
@@ -548,6 +564,11 @@ def test_web_runner_delegates_to_research_agent_pipeline(
         return FakePipeline()
 
     monkeypatch.setattr(foundation, "acquire_universe_for_question", fake_acquire)
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_data_foundation_profile",
+        lambda **_kwargs: _foundation_profile(),
+    )
     monkeypatch.setattr(
         research_agent.ResearchAgentPipeline,
         "from_config",
@@ -572,6 +593,8 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     result = runner(Job())
 
     assert calls["acquire"]["question"] == _complete_study()["question"]
+    assert calls["acquire"]["allowed_modules"] == ("demographics", "outcome")
+    assert calls["acquire"]["static_concepts"] == ("age", "sex")
     assert calls["run"]["cohort"] == universe
     assert calls["run"]["question"] == _complete_study()["question"]
     assert calls["config"].evidence_enforcement_mode == "strict"
@@ -579,3 +602,254 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert result["engine"] == "easyicu.research_agent.pipeline"
     assert result["gate"]["status"] == "analysis_only"
     assert any(event["step"] == "research_pipeline" for event in Job.events)
+
+
+def test_pi_verified_provider_environment_is_full_pipeline_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver.routes import agent as agent_route
+
+    private_environment = {
+        "OPENAI_API_KEY": "test-private-provider-key",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8317/v1",
+        "OPENAI_MODEL": "test-local-model",
+        "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
+    }
+    calls: list[bool] = []
+
+    def project(self: object, *, external_llm_opt_in: bool) -> dict[str, str]:
+        calls.append(external_llm_opt_in)
+        return dict(private_environment)
+
+    monkeypatch.setattr(
+        agent_route.PiProviderConfigStore,
+        "research_agent_environment",
+        project,
+    )
+
+    resolved = agent_route._provider_environment_for_agent_run(
+        credential_source="pi_verified",
+        engine="research_agent_pipeline",
+        run_type="full",
+        external_llm_opt_in=True,
+    )
+
+    assert resolved == private_environment
+    assert calls == [True]
+
+    with pytest.raises(Exception) as wrong_engine:
+        agent_route._provider_environment_for_agent_run(
+            credential_source="pi_verified",
+            engine="native_summary",
+            run_type="full",
+            external_llm_opt_in=True,
+        )
+    assert getattr(wrong_engine.value, "detail") == {
+        "error": "pi_provider_research_pipeline_only"
+    }
+
+
+def test_research_pipeline_runner_uses_in_memory_provider_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actual_run = tmp_path / "actual-provider-run"
+    _write_real_pipeline_fixture(
+        actual_run,
+        manuscript="# Results\nThe provider-bound result is analysis-only.",
+    )
+    universe = tmp_path / "universe.parquet"
+    universe.write_bytes(b"typed-universe-placeholder")
+    acquisition = _acquisition_receipt()
+    acquisition.blocked = False
+    acquisition.universe_path = universe
+    acquisition.cohort_authority_path = None
+    acquisition.cohort_authority_ref = None
+    acquisition.trajectory_path = None
+    acquisition.trajectory_authority_path = None
+    acquisition.trajectory_authority_ref = None
+    expected_environment = {
+        "OPENAI_API_KEY": "test-private-provider-key",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8317/v1",
+        "OPENAI_MODEL": "test-local-model",
+        "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
+    }
+    captured: dict[str, Any] = {}
+
+    def build_client(
+        provider: dict[str, Any],
+        *,
+        environ: dict[str, str] | None = None,
+    ) -> tuple[object, dict[str, Any]]:
+        captured["provider"] = dict(provider)
+        captured["environment"] = dict(environ or {})
+        return object(), {"provider": "openai", "model": "test-local-model"}
+
+    monkeypatch.setattr(
+        provider_adapter,
+        "build_research_agent_provider_client",
+        build_client,
+    )
+    import easyicu.research_agent as research_agent
+    from easyicu.research_agent.acquisition import foundation
+
+    monkeypatch.setattr(
+        foundation,
+        "acquire_universe_for_question",
+        lambda **_kwargs: acquisition,
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_data_foundation_profile",
+        lambda **_kwargs: _foundation_profile(),
+    )
+
+    class FakePipeline:
+        def run(self, **_kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(manifest_path=actual_run / "manifest.json")
+
+    monkeypatch.setattr(
+        research_agent.ResearchAgentPipeline,
+        "from_config",
+        lambda _config, *, services: FakePipeline(),
+    )
+
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(tmp_path / "export"),
+        study_context=_complete_study(),
+        project_root=str(tmp_path / "projects"),
+        provider={"provider": "openai", "external": True},
+        provider_environment=expected_environment,
+    )
+
+    class Job:
+        id = "job-provider-authority"
+        cancel_requested = False
+        events: list[dict[str, Any]] = []
+
+        def emit(self, event: dict[str, Any]) -> None:
+            self.events.append(dict(event))
+
+    result = runner(Job())
+
+    assert captured["environment"] == expected_environment
+    assert result["provider"]["model"] == "test-local-model"
+    assert "test-private-provider-key" not in json.dumps(result)
+
+
+def test_web_data_foundation_profile_keeps_continuous_outcome_static(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id="age",
+                    file_name="demographics.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="sex",
+                    file_name="demographics.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="los_icu",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="death",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="event_status",
+                ),
+            ],
+        ),
+    )
+
+    profile = agent_pipeline_runs._data_foundation_profile(
+        export_path="/typed/demo",
+        study={"modules": ["demographics", "outcome"]},
+        target="los_icu",
+    )
+
+    assert profile == {
+        "allowed_modules": ("demographics", "outcome"),
+        "static_concepts": ("age", "sex", "los_icu"),
+        "outcome_concepts": (),
+        "required_feature_concepts": (),
+        "require_outcome": False,
+    }
+
+
+def test_web_data_foundation_profile_keeps_event_outcome_typed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id="age",
+                    file_name="demographics.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="death",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="event_status",
+                ),
+            ],
+        ),
+    )
+
+    profile = agent_pipeline_runs._data_foundation_profile(
+        export_path="/typed/demo",
+        study={"modules": ["demographics", "outcome"]},
+        target="death",
+    )
+
+    assert profile["static_concepts"] == ("age",)
+    assert profile["outcome_concepts"] == ("death",)
+    assert profile["require_outcome"] is True
+
+
+def test_web_study_context_compiles_to_strict_user_preferences() -> None:
+    study = {
+        **_complete_study(),
+        "purpose": "Demo-only product validation.",
+        "comparator": "Compare aggregate summaries by sex.",
+        "confirmations": {
+            "demo_only": True,
+            "non_causal": True,
+            "not_for_manuscript": True,
+        },
+    }
+
+    compiled = agent_pipeline_runs._research_user_preferences(study)
+    validated = UserPreferences.model_validate(compiled)
+
+    assert set(compiled) == {
+        "extra_notes",
+        "must_have_outputs",
+        "subgroup_sensitivity",
+        "timing_and_design",
+        "data_constraints",
+    }
+    assert validated.extra_notes == "Demo-only product validation."
+    assert "not_for_manuscript" in str(validated.data_constraints)

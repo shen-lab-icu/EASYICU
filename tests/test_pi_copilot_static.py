@@ -24,7 +24,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi.css?v=20260810-research-workflow1" in index
     assert "css/guided-pi-preview.css?v=20260809-scientific-trust1" in index
     assert "js/screens-guided-pi-preview.js?v=20260809-scientific-trust1" in index
-    assert "js/screens-guided-pi.js?v=20260810-research-workflow1" in index
+    assert "js/screens-guided-pi.js?v=20260810-live-pipeline1" in index
     assert "js/api.js?v=20260810-research-workflow1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-preview.js") < index.index(
@@ -91,6 +91,14 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "easyicu_run_submitted" in pi_owner
     assert "easyicu_full_run_submitted" in pi_owner
     assert "easyicu_extraction_submitted" in pi_owner
+    assert "event.job_id" in pi_owner
+    assert "watchChildJob" in pi_owner
+    assert "childSource" in pi_owner
+    assert "handleChildJobEvent" in pi_owner
+    assert "if (state.session && sessionIsStale()) await rebind();" in pi_owner
+    assert "['tool', 'pipeline', 'retry', 'compaction']" in pi_owner
+    assert "Live progress connection stopped" in pi_owner
+    assert "private chain-of-thought" in pi_owner
     assert "loadPiCopilotProjectWorkflow" in pi_owner
     assert "gpi-workflow" in pi_owner
     assert "Research workflow" in pi_owner

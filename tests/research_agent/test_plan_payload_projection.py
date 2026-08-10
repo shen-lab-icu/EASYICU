@@ -217,3 +217,131 @@ def test_a_type_that_declares_no_fields_is_refused_rather_than_treated_as_empty(
 
     with pytest.raises(TypeError, match="cannot be read"):
         _declared_field_names(NotASchema)
+
+
+@pytest.mark.parametrize(
+    ("field", "product"),
+    [
+        ("expected_outputs", "text:result_interpretation"),
+        ("inputs", "report:intermediate_interpretation"),
+    ],
+)
+def test_unsupported_typed_product_kind_retries_before_execution(
+    field: str,
+    product: str,
+) -> None:
+    payload = {
+        "research_question": "Describe an available cohort.",
+        "steps": [
+            {
+                "step_id": "02_interpret",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Interpret registered aggregate evidence.",
+                "inputs": ["table:descriptive_results"],
+                "expected_outputs": ["log:result_interpretation"],
+                "method": "descriptive_result_interpretation",
+            }
+        ],
+    }
+    payload["steps"][0][field] = [product]
+
+    with pytest.raises(ValueError, match="unsupported typed product kind"):
+        _normalise_plan_payload(payload)
+
+
+def test_terminal_report_output_remains_valid() -> None:
+    payload = {
+        "research_question": "Describe an available cohort.",
+        "steps": [
+            {
+                "step_id": "09_report",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Assemble the terminal evidence-bound report.",
+                "inputs": ["table:descriptive_results"],
+                "expected_outputs": ["report:analysis_results"],
+                "method": "scientific_reporting",
+            }
+        ],
+    }
+
+    normalized, _dropped = _normalise_plan_payload(payload)
+
+    assert normalized["steps"][0]["expected_outputs"] == [
+        "report:analysis_results"
+    ]
+
+
+def test_descriptive_plan_cannot_route_through_effect_robustness_runner() -> None:
+    payload = {
+        "research_question": "Describe an available cohort.",
+        "analysis_type": "descriptive_epidemiology",
+        "steps": [
+            {
+                "step_id": "07_descriptive_sensitivity",
+                "planned_analysis_role": "sensitivity",
+                "intent": "Check complete-case descriptive summaries.",
+                "inputs": ["artifact:analysis_cohort"],
+                "expected_outputs": [
+                    "table:robustness_matrix",
+                    "statistic:robustness_summary",
+                ],
+                "method": "robustness_sensitivity",
+            }
+        ],
+        "robustness_specs": [
+            {
+                "spec_id": "complete_case_descriptive",
+                "axis": "missing",
+                "description": "Complete observed rows.",
+                "missing_override": {
+                    "strategy": "complete_case",
+                    "variables": ["age", "length_of_stay"],
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="descriptive_epidemiology plan cannot route"):
+        _normalise_plan_payload(payload)
+
+
+def test_narrative_or_writing_method_retries_before_analysis_execution() -> None:
+    payload = {
+        "research_question": "Describe the cohort.",
+        "analysis_type": "descriptive_epidemiology",
+        "cohort": {"name": "primary"},
+        "display_labels": {},
+        "rationale": "Keep narrative work after the evidence gate.",
+        "steps": [
+            {
+                "step_id": "09_interpret",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Narrate verified results.",
+                "inputs": ["table:distribution_prevalence"],
+                "expected_outputs": ["log:descriptive_interpretation"],
+                "method": "descriptive_interpretation",
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="gate-bound result interpreter"):
+        _normalise_plan_payload(payload)
+
+
+def test_outputless_visualization_retries_before_execution() -> None:
+    payload = {
+        "research_question": "Describe the cohort.",
+        "steps": [
+            {
+                "step_id": "09_redundant_figure",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Render an undeclared figure.",
+                "inputs": ["table:missingness_data_quality"],
+                "expected_outputs": [],
+                "method": "visualization",
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="declares no typed figure output"):
+        _normalise_plan_payload(payload)

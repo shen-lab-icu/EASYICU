@@ -7,7 +7,7 @@
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
     messages: [], loading: true, creating: false, busy: false, jobId: '',
-    source: null, error: '', shell: 'pi', draft: '', setupSaving: false,
+    source: null, childSource: null, childJobId: '', error: '', shell: 'pi', draft: '', setupSaving: false,
     showSetup: false, availableModels: [], project: null,
     projectInitialization: null, workflow: null,
     agentMode: 'research', pendingAuthorityRebind: false,
@@ -137,6 +137,12 @@
     if (step.kind === 'turn' || step.kind === 'retry') return 'refresh';
     if (step.kind === 'assistant') return 'wand';
     if (step.kind === 'tool') return toolIcon(step.toolName);
+    if (step.kind === 'pipeline') {
+      if (/artifact|report|manuscript/.test(step.step || '')) return 'file';
+      if (/gate|valid|audit|evidence/.test(step.step || '')) return 'shield';
+      if (/plan/.test(step.step || '')) return 'list';
+      return 'play';
+    }
     if (step.kind === 'compaction') return 'layers';
     if (step.kind === 'failed') return 'alert';
     if (step.kind === 'cancelled') return 'stop';
@@ -242,7 +248,7 @@
   }
 
   function activeActivity() {
-    return state.messages.slice().reverse().find(row => row.role === 'activity' && row.status === 'running');
+    return state.messages.slice().reverse().find(row => row.role === 'activity' && !row.childJobId && row.status === 'running');
   }
   function ensureActivity(at) {
     let row = activeActivity();
@@ -292,6 +298,7 @@
       : done
         ? completedToolLabel(step.toolName, step.resource)
         : tr(`Calling ${toolLabel(step.toolName, step.resource)}`, `正在调用 ${toolLabel(step.toolName, step.resource)}`);
+    if (step.kind === 'pipeline') return String(step.label || tr('EasyICU research pipeline updated', 'EasyICU 科研流程已更新'));
     if (step.kind === 'retry') return tr(`Retrying (${step.attempt}/${step.maxAttempts})`, `正在重试（${step.attempt}/${step.maxAttempts}）`);
     if (step.kind === 'compaction') return done ? tr('Context compaction finished', '上下文整理已完成') : tr('Compacting context', '正在整理上下文');
     if (step.kind === 'cancelled') return tr('This turn was stopped', '本轮已停止');
@@ -496,7 +503,7 @@
 
   function messageHtml(row) {
     if (row.role === 'activity') {
-      const visibleSteps = row.steps.filter(step => ['tool', 'retry', 'compaction'].includes(step.kind));
+      const visibleSteps = row.steps.filter(step => ['tool', 'pipeline', 'retry', 'compaction'].includes(step.kind));
       const latest = visibleSteps[visibleSteps.length - 1] || row.steps[row.steps.length - 1];
       const running = row.status === 'running';
       const failed = row.status === 'error' || row.status === 'cancelled';
@@ -504,18 +511,21 @@
         const title = latest && latest.kind !== 'submitted'
           ? activityStepLabel(latest)
           : tr('Pi is preparing the next action', 'Pi 正在准备下一步');
-        const liveToolSteps = visibleSteps.filter(step => step.kind === 'tool');
+        const liveSteps = row.childJobId ? visibleSteps : visibleSteps.filter(step => step.kind === 'tool');
         return `<div class="gpi-activity-running" role="status">
           <div class="gpi-activity-live">
             <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(activityIcon(latest), 15)}</span>
             <span class="gpi-activity-title">${esc(title)}</span>
             <span class="gpi-status-pip" aria-hidden="true"></span>
           </div>
-          ${liveToolSteps.length ? `<ol>${liveToolSteps.map(activityStepRow).join('')}</ol>` : ''}
+          ${liveSteps.length ? `<ol>${liveSteps.map(activityStepRow).join('')}</ol>` : ''}
         </div>`;
       }
       const toolSteps = visibleSteps.filter(step => step.kind === 'tool');
-      const completedTitle = toolSteps.length === 1
+      const pipelineSteps = visibleSteps.filter(step => step.kind === 'pipeline');
+      const completedTitle = row.childJobId
+        ? tr('EasyICU research task finished', 'EasyICU 科研任务已结束')
+        : toolSteps.length === 1
         ? activityStepLabel(toolSteps[0])
         : toolSteps.length === 2
           ? toolSteps.map(step => completedToolLabel(step.toolName, step.resource)).join(tr(' and ', '、'))
@@ -524,9 +534,9 @@
             : tr('Answered without using tools', '仅回答，未执行操作');
       const title = failed ? tr('This turn needs attention', '本轮需要处理') : completedTitle;
       const steps = visibleSteps.map(activityStepRow).join('');
-      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}" ${toolSteps.length ? 'open' : ''}>
+      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}" ${(toolSteps.length || pipelineSteps.length) ? 'open' : ''}>
         <summary>
-          <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(failed ? 'alert' : activityIcon(toolSteps[0] || latest), 15)}</span>
+          <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(failed ? 'alert' : activityIcon(toolSteps[0] || pipelineSteps[0] || latest), 15)}</span>
           <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
           <span class="gpi-activity-title">${esc(title)}</span>
           <span class="gpi-activity-meta">${esc(durationText(row.startedAt, row.endedAt))}</span>
@@ -700,6 +710,7 @@
   async function openSession(sessionId) {
     const expectedProjectId = projectId();
     if (!expectedProjectId) return;
+    closeChildSource();
     state.error = '';
     state.pendingAuthorityRebind = false;
     try {
@@ -727,6 +738,7 @@
     const next = mode === 'research' ? 'research' : 'workspace';
     if (state.busy || next === agentMode()) return;
     closeSource();
+    closeChildSource();
     state.agentMode = next;
     state.session = null;
     state.messages = [];
@@ -770,6 +782,7 @@
         id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name,
         status: event.is_error ? 'error' : 'complete', code: event.code || '',
         owner: event.owner || '', text: event.summary || '', at, endedAt: at,
+        jobId: event.job_id || '',
         resource: event.resource || null,
         resources: Array.isArray(event.resources) ? event.resources : [],
       });
@@ -778,6 +791,9 @@
       }
       if (/^(easyicu_(research_workflow_projected|idea_|active_export_reused|extraction_|run_|full_run_|result_|manuscript_))/.test(String(event.code || ''))) {
         loadWorkflow().then(render).catch(() => {});
+      }
+      if (event.job_id && ['easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted'].includes(String(event.code || ''))) {
+        watchChildJob(String(event.job_id), String(event.code || ''));
       }
     } else if (event.type === 'turn_end') {
       const turn = activity.steps.find(item => item.id === 'turn-' + event.turn_index);
@@ -797,6 +813,112 @@
     render();
   }
   function closeSource() { if (state.source) { state.source.close(); state.source = null; } }
+  function closeChildSource() {
+    if (state.childSource) { state.childSource.close(); state.childSource = null; }
+    state.childJobId = '';
+  }
+  function childActivity(jobId, code) {
+    let activity = state.messages.find(row => row.role === 'activity' && row.childJobId === jobId);
+    if (activity) return activity;
+    const startedAt = Date.now();
+    activity = {
+      id: 'easyicu-job-' + jobId, role: 'activity', status: 'running',
+      startedAt, childJobId: jobId, steps: [],
+    };
+    const label = code === 'easyicu_extraction_submitted'
+      ? tr('EasyICU data extraction submitted', 'EasyICU 数据提取任务已提交')
+      : code === 'easyicu_full_run_submitted'
+        ? tr('EasyICU full research analysis submitted', 'EasyICU 完整科研分析已提交')
+        : tr('EasyICU preflight submitted', 'EasyICU 预检任务已提交');
+    upsertActivityStep(activity, {
+      id: 'pipeline-submitted', kind: 'pipeline', step: 'submitted', label,
+      status: 'complete', at: startedAt, code: jobId, owner: 'EasyICU',
+    });
+    state.messages.push(activity);
+    return activity;
+  }
+  function completeRunningPipelineSteps(activity) {
+    activity.steps.forEach(step => {
+      if (step.kind === 'pipeline' && step.status === 'running') step.status = 'complete';
+    });
+  }
+  function childEventLabel(event) {
+    if (event.label) return String(event.label);
+    if (event.type === 'start') return tr('EasyICU research pipeline started', 'EasyICU 科研流程已启动');
+    if (event.type === 'cancel_requested') return tr('Cancellation requested', '已请求取消任务');
+    return tr('EasyICU research pipeline updated', 'EasyICU 科研流程已更新');
+  }
+  function handleChildJobEvent(jobId, code, event) {
+    if (!event || typeof event !== 'object' || state.childJobId !== jobId) return;
+    const activity = childActivity(jobId, code);
+    if (event.type === 'end') {
+      completeRunningPipelineSteps(activity);
+      const gate = event.result && event.result.gate;
+      const pending = Boolean(event.result && event.result.human_review_pending);
+      const failed = event.status === 'failed' || event.status === 'cancelled';
+      const label = event.status === 'cancelled'
+        ? tr('EasyICU research task cancelled', 'EasyICU 科研任务已取消')
+        : event.status === 'failed'
+          ? tr('EasyICU research task failed', 'EasyICU 科研任务失败')
+          : pending
+            ? tr('Analysis paused for plan review', '分析已暂停，等待计划审核')
+            : gate && gate.reportable === false
+              ? tr('Analysis finished; the scientific gate remains locked', '分析已结束；科学闸门仍保持锁定')
+              : tr('EasyICU research task completed', 'EasyICU 科研任务已完成');
+      upsertActivityStep(activity, {
+        id: 'pipeline-terminal', kind: 'pipeline', step: 'terminal', label,
+        status: failed ? 'error' : 'complete', at: Date.now(),
+        code: String((gate && gate.status) || event.status || ''),
+        owner: String((event.result && event.result.run_id) || ''),
+      });
+      activity.status = failed ? (event.status === 'cancelled' ? 'cancelled' : 'error') : 'complete';
+      activity.endedAt = Date.now();
+      closeChildSource();
+      refreshSession(true)
+        .then(async () => {
+          if (state.session && sessionIsStale()) await rebind();
+          await loadWorkflow();
+          render();
+        })
+        .catch(() => render());
+      return;
+    }
+    if (!['start', 'progress', 'gate', 'artifact', 'cancel_requested'].includes(String(event.type || ''))) return;
+    completeRunningPipelineSteps(activity);
+    const step = String(event.step || event.type || 'pipeline').slice(0, 80);
+    upsertActivityStep(activity, {
+      id: 'pipeline-' + String(event.seq == null ? step : event.seq),
+      kind: 'pipeline', step, label: childEventLabel(event), status: 'running',
+      at: Date.now(), code: step,
+      owner: String(event.run_id || '').slice(0, 160),
+    });
+    render();
+  }
+  function watchChildJob(jobId, code) {
+    closeChildSource();
+    state.childJobId = jobId;
+    childActivity(jobId, code);
+    state.childSource = new EventSource('/api/jobs/' + encodeURIComponent(jobId) + '/events');
+    let ended = false;
+    state.childSource.onmessage = event => {
+      let row = null; try { row = JSON.parse(event.data); } catch (e) { return; }
+      if (row.type === 'end') ended = true;
+      handleChildJobEvent(jobId, code, row);
+    };
+    state.childSource.onerror = () => {
+      if (ended || state.childJobId !== jobId) return;
+      const activity = childActivity(jobId, code);
+      completeRunningPipelineSteps(activity);
+      upsertActivityStep(activity, {
+        id: 'pipeline-stream-error', kind: 'pipeline', step: 'event_stream',
+        label: tr('Live progress connection stopped; the server task may still be running', '实时进度连接已中断；服务端任务可能仍在运行'),
+        status: 'error', at: Date.now(),
+      });
+      activity.status = 'error'; activity.endedAt = Date.now();
+      closeChildSource(); render();
+    };
+    render();
+  }
   async function refreshSession(preserveTimeline) {
     if (!state.session || !projectId()) return;
     try {
@@ -864,6 +986,7 @@
       : null;
     if (projectId() === String((next && next.id) || '')) return;
     closeSource();
+    closeChildSource();
     state.project = next;
     state.session = null;
     state.sessions = [];
@@ -1025,12 +1148,12 @@
   }
   function mount(host) {
     if (!host || state.host === host) return;
-    closeSource(); state.host = host; state.conv = host.closest('.gd-conv'); state.shell = 'pi';
+    closeSource(); closeChildSource(); state.host = host; state.conv = host.closest('.gd-conv'); state.shell = 'pi';
     if (state.conv) state.conv.classList.add('pi-active');
     wire(); loadStatus();
   }
   function unmount() {
-    closeSource(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
+    closeSource(); closeChildSource(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
   }
   window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive };
 })();

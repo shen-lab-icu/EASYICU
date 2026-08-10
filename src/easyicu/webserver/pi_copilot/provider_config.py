@@ -1,9 +1,11 @@
 """Private, verified model-service configuration for Pi Copilot.
 
 This owner is deliberately separate from the scientific-run provider adapter.
-Pi credentials unlock only the conversational shell.  Secret values may cross
-the local browser-to-FastAPI setup request once, but are never returned to the
-browser, copied into session metadata, or exposed to a Pi tool result.
+Pi credentials unlock only the conversational shell by default.  A separately
+authorized full scientific run may request a verified in-memory projection for
+the Research Agent provider; that projection is never persisted to the project,
+returned to the browser, copied into session metadata, or exposed to a Pi tool
+result.
 """
 
 from __future__ import annotations
@@ -226,6 +228,55 @@ class PiProviderConfigStore:
             )
         except PiCopilotError:
             return None
+
+    def research_agent_environment(
+        self,
+        *,
+        external_llm_opt_in: bool,
+        environ: Optional[Mapping[str, str]] = None,
+        include_file: bool = True,
+    ) -> Dict[str, str]:
+        """Project one verified OpenAI-compatible config into run memory.
+
+        This method does not itself authorize a scientific run.  The caller
+        must already hold the distinct, one-turn full-analysis grant and pass
+        its explicit external-model opt-in.  The returned mapping is consumed
+        only by the provider factory and disables the separate legacy provider
+        env file so one run cannot silently mix two credential authorities.
+        """
+
+        if not external_llm_opt_in:
+            raise PiCopilotError(
+                "pi_provider_research_opt_in_required",
+                "A full Research Agent run requires explicit external-model authorization.",
+            )
+        config = self.resolved_config(
+            environ=environ,
+            include_file=include_file,
+        )
+        status = self.public_status(
+            environ=environ,
+            include_file=include_file,
+        )
+        if config is None or not (
+            status.get("connection_verified") and status.get("model_available")
+        ):
+            raise PiCopilotError(
+                "pi_provider_research_configuration_unverified",
+                "Verify the Pi model service before using it for a full Research Agent run.",
+            )
+        if config.api_transport != "openai-completions":
+            raise PiCopilotError(
+                "pi_provider_research_transport_unsupported",
+                "The Research Agent currently requires an OpenAI Chat Completions compatible Pi provider.",
+                details={"api_transport": config.api_transport},
+            )
+        return {
+            "OPENAI_API_KEY": config.api_key,
+            "OPENAI_BASE_URL": config.base_url,
+            "OPENAI_MODEL": config.model,
+            "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
+        }
 
     def public_status(
         self,

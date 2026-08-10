@@ -189,6 +189,7 @@ def test_contrastive_causal_disclaimers_do_not_select_the_causal_family(ra):
         "as observational rather than causal.",
         "Report an associational estimate instead of a causal one.",
         "Summarise the cohort with a non-causal descriptive audit.",
+        "Summarise the cohort with non_causal=true and descriptive outputs.",
         "Describe the exposure-outcome distribution. Do Not draw Causal "
         "conclusions from it.",
     )
