@@ -48,6 +48,8 @@ class Canonical9MaterializationSpec:
     trajectory_panel_aggregate: str = "max"
     identity_mode: str = "stay"
     positive_only_event_concepts: tuple[str, ...] = ()
+    candidate_model_concepts: tuple[str, ...] = ()
+    descriptive_only_concepts: tuple[str, ...] = ()
     additional_expected_outputs: tuple[str, ...] = ()
     additional_semantic_guardrails: tuple[str, ...] = ()
     task_protocol_version: Optional[str] = None
@@ -171,41 +173,7 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         static_concepts=_STATIC_CORE,
         exposure_concept="lactate",
         operational_exposure="lact_max",
-        additional_expected_outputs=(
-            "full eligible-cohort lactate measured/unmeasured audit",
-            "early death/discharge exposure-opportunity audit",
-            "adjusted measured-subset association with nonlinearity assessment",
-        ),
-        additional_semantic_guardrails=(
-            (
-                "The primary estimand is the adjusted descriptive association "
-                "between first-24-hour peak lactate and in-hospital death among "
-                "eligible ICU stays with at least one valid 0-24-hour lactate; "
-                "never describe it as causal."
-            ),
-            (
-                "Retain the full eligible cohort for measured/unmeasured counts, "
-                "fractions, and standardized group differences; never zero-code "
-                "unmeasured lactate."
-            ),
-            (
-                "Audit death before 24 hours, discharge before 24 hours, time "
-                "under observation, and lactate measurement count/timing so "
-                "exposure opportunity is visible."
-            ),
-            (
-                "Use age, sex, and Charlson as the prespecified primary adjustment "
-                "set; report median/IQR and compare linear with prespecified "
-                "nonlinear lactate modelling."
-            ),
-        ),
-        task_protocol_version="e2_lactate_mortality/20260809-v2",
-        notes=(
-            "The operational exposure is lact_max, the maximum typed lact value "
-            "within ICU hours 0-24, in mmol/L. Audit measuredness and skew and "
-            "do not replace this with a whole-stay or mean lactate. The exact "
-            "case protocol is bound in case_scientific_protocol."
-        ),
+        task_protocol_version="e2_lactate_mortality/20260810-v3",
     ),
     Canonical9MaterializationSpec(
         task_id="e3_kdigo_gradient",
@@ -347,45 +315,16 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         emit_trajectory=True,
         trajectory_concepts=(*_VASOPRESSOR_CONCEPTS, "map", "lact"),
         trajectory_window=(0.0, 24.0),
-        additional_expected_outputs=(
-            "source-specific medication capture and negative-evidence audit",
-            "content-bound target-trial protocol table",
-            "structured H2_VERIFIED_NON_USE_UNAVAILABLE feasibility result",
-        ),
-        additional_semantic_guardrails=(
-            (
-                "Do not convert an absent vaso_ind source row to zero for this "
-                "causal task: absence means no recorded administration, not "
-                "verified non-use."
-            ),
-            (
-                "The current MIMIC-IV inputevents-derived capture contract sets "
-                "verified_non_use_available=false and causal_contrast_authorized="
-                "false; report H2_VERIFIED_NON_USE_UNAVAILABLE and do not build a "
-                "binary control arm or fit PSM/IPTW."
-            ),
-            (
-                "Preserve the frozen target-trial coordinates for future use only "
-                "if a separately reviewed source contract proves verified non-use; "
-                "do not infer that authority from covariate balance or positivity."
-            ),
-        ),
-        task_protocol_version="h2_vasopressor_causal/20260809-v3",
-        notes=(
-            "Operationalise early vasopressor exposure as any recorded "
-            "vasopressor administration in ICU hours 0-24. Absence means no "
-            "recorded administration in this audited inputevents-derived source, "
-            "not proof that no unobserved vasopressor was given. The current "
-            "source contract therefore fails closed before a control arm, "
-            "positivity analysis, or effect estimate is constructed."
-        ),
+        task_protocol_version="h2_vasopressor_causal/20260810-v4",
     ),
     Canonical9MaterializationSpec(
         task_id="h3_trajectory_clustering",
         feature_concepts=("sofa2", *_SOFA2_COMPONENTS, "lact"),
+        candidate_model_concepts=(*_SOFA2_COMPONENTS, "lact"),
+        descriptive_only_concepts=("sofa2",),
         static_concepts=("age", "sex", "los_icu"),
         emit_trajectory=True,
-        trajectory_concepts=("sofa2", *_SOFA2_COMPONENTS, "lact"),
+        trajectory_concepts=(*_SOFA2_COMPONENTS, "lact"),
         trajectory_window=(0.0, 72.0),
         # THE COMMON TIME GRID THE NOTE BELOW ASKS FOR, MADE EXECUTABLE.
         #
@@ -403,42 +342,7 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         # engine hard-codes it.
         trajectory_panel_width_hours=12.0,
         trajectory_panel_aggregate="max",
-        additional_expected_outputs=(
-            "frozen candidate-k BIC selection ledger",
-            "100-resample adjusted-Rand stability audit",
-            "formal no-stable-phenotype result when the prespecified gate fails",
-        ),
-        additional_semantic_guardrails=(
-            (
-                "Use the H3 v2 frozen representation: ICU hours 0-72, 12-hour "
-                "max grid, SOFA-2 total plus six components and lactate, with "
-                "observed-data missingness and no zero or LOCF imputation."
-            ),
-            (
-                "Fit observed-data diagonal Gaussian mixtures for candidate k "
-                "2-6, select the minimum-BIC k without outcomes, and do not try "
-                "another k if the selected solution fails cluster-size or "
-                "stability gates."
-            ),
-            (
-                "Run exactly 100 80%-subsample refits from base seed 1729, require "
-                "all 100 and mean adjusted Rand index at least 0.70; otherwise "
-                "report no stable phenotype solution without post-hoc rescue."
-            ),
-            (
-                "Outcome comparisons are descriptive only after assignments are "
-                "frozen; a MIMIC-IV solution is not transportable without external "
-                "reproducibility using the same protocol."
-            ),
-        ),
-        task_protocol_version="h3_trajectory_clustering/20260809-v2",
-        notes=(
-            "Build fixed-anchor ICU-hour trajectories over hours 0-72 from the "
-            "typed long table. Use a common time grid, make missingness explicit, "
-            "and assess cluster-count choice and stability before interpretation. "
-            "The terminal v1 result cannot be reseeded or relaxed; this separately "
-            "versioned v2 may formally conclude that no stable solution exists."
-        ),
+        task_protocol_version="h3_trajectory_clustering/20260810-v3",
     ),
 )
 
@@ -479,6 +383,8 @@ def validate_canonical9_mimic_iv_plan() -> None:
             ("static", spec.static_concepts),
             ("outcome", spec.outcome_concepts),
             ("trajectory", spec.trajectory_concepts),
+            ("candidate model", spec.candidate_model_concepts),
+            ("descriptive only", spec.descriptive_only_concepts),
         ):
             if len(concepts) != len(set(concepts)):
                 raise ValueError(f"{spec.task_id}: {label} concepts repeat")
@@ -499,6 +405,25 @@ def validate_canonical9_mimic_iv_plan() -> None:
         spec = next(item for item in CANONICAL9_MIMIC_IV_PLAN if item.task_id == task_id)
         if spec.task_protocol_version != protocol.protocol_version:
             raise ValueError(f"{task_id}: case protocol version drifted")
+        if spec.additional_expected_outputs or spec.additional_semantic_guardrails:
+            raise ValueError(
+                f"{task_id}: runtime science must come from the signed projection"
+            )
+        if task_id == "h3_trajectory_clustering":
+            representation = protocol.representation
+            if spec.candidate_model_concepts != representation.features:
+                raise ValueError("H3 model concepts drifted from signed protocol")
+            if spec.descriptive_only_concepts != representation.descriptive_only_features:
+                raise ValueError("H3 descriptive-only concepts drifted from protocol")
+            if spec.trajectory_concepts != representation.features:
+                raise ValueError("H3 trajectory inputs drifted from signed protocol")
+            if (
+                spec.trajectory_window != tuple(map(float, representation.window_hours))
+                or spec.trajectory_panel_width_hours
+                != float(representation.grid_width_hours)
+                or spec.trajectory_panel_aggregate != representation.aggregation
+            ):
+                raise ValueError("H3 trajectory grid drifted from signed protocol")
 
 
 __all__ = [

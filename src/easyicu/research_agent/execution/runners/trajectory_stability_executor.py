@@ -66,6 +66,18 @@ _NATIVE_MATH_THREAD_ENV = (
 )
 
 
+class _ScientificSelectionBoundaryError(ValueError):
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(
+            "candidate range does not contain an interior optimum: " + reason_code
+        )
+
+
+class _NumericalRefitFailure(ValueError):
+    pass
+
+
 def _step_contract_is_closed(step: AnalysisStep) -> bool:
     """Validate the local calculator contract without granting DAG ownership."""
 
@@ -607,6 +619,25 @@ def _validate_representation_policy(schema: Mapping[str, Any]) -> None:
         for key, expected in required_trailing.items()
     ):
         raise ValueError("trailing_na_policy does not preserve observed missingness")
+    scaling = schema.get("coordinate_scaling")
+    required_scaling = {
+        "method": "pooled_coordinate_wise_z_score",
+        "ddof": 0,
+        "observed_value_policy": "direct_or_owner_locf_available",
+        "missing_value_policy": "preserve_missing_exclude_from_likelihood",
+        "zero_variance_action": "fail_closed",
+    }
+    if not isinstance(scaling, Mapping) or dict(scaling) != required_scaling:
+        raise ValueError("coordinate_scaling does not match the frozen policy")
+    evidence = schema.get("evidence_state_policy")
+    required_evidence = {
+        "direct_observed": "include",
+        "owner_locf_available": "include_and_audit",
+        "unavailable": "exclude",
+        "additional_clustering_stage_imputation": "none",
+    }
+    if not isinstance(evidence, Mapping) or dict(evidence) != required_evidence:
+        raise ValueError("evidence_state_policy does not preserve owner receipts")
 
 
 def validate_trajectory_stability_schema_pair(
@@ -685,6 +716,12 @@ def validate_trajectory_stability_schema_pair(
         )
     if selected_n_clusters >= frozen_population_n:
         raise ValueError("selected_n_clusters must be smaller than frozen_population_n")
+    if solution_schema.get("coordinate_scaling") != representation_schema.get(
+        "coordinate_scaling"
+    ):
+        raise ValueError(
+            "candidate solution and representation schemas disagree on scaling"
+        )
     return (
         id_column,
         assignment_column,
@@ -734,6 +771,60 @@ def _validate_cluster_selection_binding(
             "cluster selection manifest disagrees with candidate solution schema: "
             f"{sorted(mismatches)}"
         )
+    if (
+        selection.candidate_range_boundary_rule
+        == "fail_closed_if_selected_at_upper_boundary"
+        and selection.selected_n_clusters
+        == max(item.n_clusters for item in selection.candidates)
+    ):
+        raise _ScientificSelectionBoundaryError(
+            str(selection.candidate_range_boundary_reason_code)
+        )
+
+
+def _scale_coordinates(
+    x: np.ndarray,
+    *,
+    columns: list[str],
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Apply the frozen observed-value z-score policy and return its manifest."""
+
+    values = np.asarray(x, dtype=float)
+    stats: list[dict[str, Any]] = []
+    scaled = values.copy()
+    for index, column in enumerate(columns):
+        observed = np.isfinite(values[:, index])
+        count = int(observed.sum())
+        if count == 0:
+            raise ValueError(f"scaling coordinate {column!r} has no observed values")
+        center = float(np.mean(values[observed, index]))
+        scale = float(np.std(values[observed, index], ddof=0))
+        if not math.isfinite(center) or not math.isfinite(scale) or scale <= 0:
+            raise ValueError(
+                f"scaling coordinate {column!r} has zero/non-finite variance"
+            )
+        scaled[observed, index] = (values[observed, index] - center) / scale
+        stats.append(
+            {
+                "coordinate": column,
+                "observed_n": count,
+                "center": center,
+                "scale": scale,
+            }
+        )
+    body = {
+        "schema_version": "easyicu.trajectory_coordinate_scaling/1",
+        "method": "pooled_coordinate_wise_z_score",
+        "ddof": 0,
+        "observed_value_policy": "direct_or_owner_locf_available",
+        "missing_value_policy": "preserve_missing_exclude_from_likelihood",
+        "zero_variance_action": "fail_closed",
+        "coordinates": stats,
+    }
+    digest = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return scaled, {**body, "scaling_manifest_sha256": digest}
 
 
 def validate_trajectory_stability_upstream(
@@ -839,6 +930,8 @@ def run_trajectory_stability(
         "outcome_bindings_received": [],
         "eligibility_reapplied": False,
         "errors": [],
+        "failure_class": None,
+        "reason_code": None,
     }
     try:
         spec = (
@@ -847,6 +940,8 @@ def run_trajectory_stability(
             else TrajectoryStabilitySpec.model_validate(spec)
         )
     except Exception as exc:
+        summary["failure_class"] = "input_or_contract_failure"
+        summary["reason_code"] = "TRAJECTORY_STABILITY_SPEC_INVALID"
         summary["errors"].append(f"{type(exc).__name__}: {exc}")
         _write_json(out_dir / "step_summary.json", summary)
         return summary
@@ -935,6 +1030,17 @@ def run_trajectory_stability(
             selection_payload=selection_manifest,
             solution_schema=solution_schema,
         )
+        x, scaling_manifest = _scale_coordinates(
+            x,
+            columns=representation_columns,
+        )
+        _write_json(
+            out_dir / "trajectory_coordinate_scaling_manifest.json",
+            scaling_manifest,
+        )
+        summary["coordinate_scaling_sha256"] = scaling_manifest[
+            "scaling_manifest_sha256"
+        ]
         _empty_outputs(out_dir, id_column=id_column)
         n_rows = len(representation)
         sample_n = (
@@ -981,6 +1087,7 @@ def run_trajectory_stability(
             "fit_method": solution_schema.get("fit_method"),
             "covariance_type": solution_schema.get("covariance_type"),
             "representation_columns": representation_columns,
+            "coordinate_scaling": scaling_manifest,
             "execution_parallelism": {
                 "method": "ordered_sequential_refits_v1",
                 "max_workers": 1,
@@ -1125,7 +1232,7 @@ def run_trajectory_stability(
                 out_dir / "cluster_stability_refit_failures.json",
                 {"failures": failure_rows},
             )
-            raise ValueError(
+            raise _NumericalRefitFailure(
                 "successful stability refits are below the planner-owned minimum: "
                 f"{len(successful_rows)} < {spec.minimum_successful_resamples}"
             )
@@ -1175,6 +1282,10 @@ def run_trajectory_stability(
             "anchor_provenance": representation_schema.get("anchor_provenance"),
             "anchor_source": representation_schema.get("anchor_source"),
             "trailing_na_policy": representation_schema.get("trailing_na_policy"),
+            "evidence_state_policy": representation_schema.get(
+                "evidence_state_policy"
+            ),
+            "coordinate_scaling": scaling_manifest,
         }
         _write_json(out_dir / "trajectory_missingness_policy.json", policy)
 
@@ -1215,6 +1326,9 @@ def run_trajectory_stability(
                 key: _binding_provenance(inputs, key)
                 for key in sorted(STABILITY_EXECUTOR_INPUTS)
             },
+            "coordinate_scaling_sha256": scaling_manifest[
+                "scaling_manifest_sha256"
+            ],
             "outcome_binding_received_by_executor": False,
             "outcome_bindings_received": [],
             "eligibility_reapplied": False,
@@ -1235,6 +1349,9 @@ def run_trajectory_stability(
             "table:cluster_assignment_provenance": "cluster_assignment_provenance.csv",
             "manifest:trajectory_missingness_policy": "trajectory_missingness_policy.json",
             "manifest:cluster_stability_spec": "cluster_stability_spec.json",
+            "manifest:trajectory_coordinate_scaling": (
+                "trajectory_coordinate_scaling_manifest.json"
+            ),
         }
         summary.update(
             {
@@ -1265,12 +1382,25 @@ def run_trajectory_stability(
             }
         )
         if threshold_passed is False:
+            summary["failure_class"] = "scientific_instability"
+            summary["reason_code"] = "TRAJECTORY_STABILITY_BELOW_THRESHOLD"
             summary["errors"].append(
                 "Mean stability was below the planner-owned threshold; "
                 "the selected k was not changed, execution failed closed, and a "
                 "new planner revision is required before retrying."
             )
+    except _ScientificSelectionBoundaryError as exc:
+        summary["failure_class"] = "scientific_selection_boundary"
+        summary["reason_code"] = exc.reason_code
+        summary["errors"].append(f"{type(exc).__name__}: {exc}")
+    except _NumericalRefitFailure as exc:
+        summary["failure_class"] = "numerical_engine_failure"
+        summary["reason_code"] = "TRAJECTORY_REFIT_ENGINE_FAILURE"
+        summary["errors"].append(f"{type(exc).__name__}: {exc}")
     except Exception as exc:
+        if summary["failure_class"] is None:
+            summary["failure_class"] = "input_or_contract_failure"
+            summary["reason_code"] = "TRAJECTORY_STABILITY_CONTRACT_INVALID"
         summary["errors"].append(f"{type(exc).__name__}: {exc}")
     pending_assignments_path.unlink(missing_ok=True)
     _write_json(out_dir / "step_summary.json", summary)

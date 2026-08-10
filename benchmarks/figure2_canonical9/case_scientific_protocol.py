@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Mapping, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -23,6 +23,16 @@ class _StrictFrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
+def _canonical_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 class ProtocolCitation(_StrictFrozenModel):
     citation_id: str = Field(pattern=r"^[a-z][a-z0-9_]{2,79}$")
     title: str = Field(min_length=1, max_length=400)
@@ -31,8 +41,35 @@ class ProtocolCitation(_StrictFrozenModel):
     doi: str | None = Field(default=None, max_length=160)
 
 
+class E2LandmarkPrimary(_StrictFrozenModel):
+    landmark_hours: Literal[24]
+    population_rule: Literal[
+        "alive_and_under_icu_observation_at_24h_with_valid_0_24h_lactate"
+    ]
+    exposure_opportunity: Literal["complete_icu_0_24h_window"]
+    followup_start: Literal["after_24h_landmark"]
+    outcome: Literal["post_landmark_in_hospital_death"]
+    interpretation: Literal["descriptive_prognostic_association_not_causal"]
+
+
+class E2PrimaryModel(_StrictFrozenModel):
+    family: Literal["logistic_regression"]
+    exposure_form: Literal["restricted_cubic_spline"]
+    knot_quantiles: tuple[float, float, float]
+    reference: Literal["median_lactate_in_primary_population"]
+    interval: Literal["95_percent_confidence_interval"]
+    headline_output: Literal["adjusted_odds_curve_and_prespecified_contrasts"]
+    linear_sensitivity: Literal["per_1_mmol_l_linear_term"]
+
+    @model_validator(mode="after")
+    def _frozen_spline(self) -> "E2PrimaryModel":
+        if self.knot_quantiles != (0.10, 0.50, 0.90):
+            raise ValueError("E2 primary RCS knots must be frozen at 10/50/90 percentiles")
+        return self
+
+
 class E2ScientificProtocol(_StrictFrozenModel):
-    schema_version: Literal["easyicu.figure2_e2_scientific_protocol/1"]
+    schema_version: Literal["easyicu.figure2_e2_scientific_protocol/2"]
     task_id: Literal["e2_lactate_mortality"]
     protocol_version: str
     review_status: Literal["human_attestation_pending"]
@@ -43,8 +80,10 @@ class E2ScientificProtocol(_StrictFrozenModel):
     exposure_units: Literal["mmol/L"]
     primary_population: str
     primary_estimand: str
+    primary_landmark: E2LandmarkPrimary
     adjustment_set: tuple[str, ...]
-    primary_method: str
+    primary_model: E2PrimaryModel
+    secondary_descriptive_sensitivity: str
     full_cohort_measurement_audit: tuple[str, ...]
     exposure_opportunity_audit: tuple[str, ...]
     reportability_rule: str
@@ -53,8 +92,8 @@ class E2ScientificProtocol(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _measurement_and_current_guideline_are_explicit(self) -> "E2ScientificProtocol":
-        if not self.adjustment_set:
-            raise ValueError("E2 adjustment_set must be prespecified")
+        if self.adjustment_set != ("age", "sex", "charlson"):
+            raise ValueError("E2 adjustment_set must be frozen as age/sex/charlson")
         if not {"measured_fraction", "unmeasured_fraction"}.issubset(
             self.full_cohort_measurement_audit
         ):
@@ -69,6 +108,9 @@ class MedicationCaptureContract(_StrictFrozenModel):
     audited_window_hours: tuple[Literal[0], Literal[24]]
     positive_record_semantics: str
     absent_record_semantics: Literal["no_recorded_administration_not_verified_non_use"]
+    pre_icu_treatment_history_authority: Literal[False]
+    initiator_status_authorized: Literal[False]
+    prevalent_user_status_authorized: Literal[False]
     verified_non_use_available: Literal[False]
     binary_control_arm_authorized: Literal[False]
     causal_contrast_authorized: Literal[False]
@@ -76,54 +118,38 @@ class MedicationCaptureContract(_StrictFrozenModel):
     reason_code: Literal["H2_VERIFIED_NON_USE_UNAVAILABLE"]
 
 
-class TargetTrialCoordinates(_StrictFrozenModel):
-    eligible_population: str
-    treatment_strategies: tuple[str, str]
-    time_zero: Literal["icu_admission"]
-    grace_period_hours: Literal[24]
-    grace_period_method: Literal["clone_censor_weight_if_source_contract_becomes_valid"]
-    followup: str
-    outcome: str
-    estimand: str
-    censoring_and_competing_events: str
-    baseline_adjustment_timing: Literal["at_or_before_icu_admission_time_zero"]
-    baseline_adjustment_variables: tuple[str, ...]
-    grace_period_time_varying_variables: tuple[str, ...]
-    post_time_zero_variable_role: Literal[
-        "time_varying_information_for_prespecified_grace_period_adherence_or_censoring_model_only"
+class H2FutureUnblockContract(_StrictFrozenModel):
+    status: Literal[
+        "future_design_only_not_executable_under_current_materialization"
     ]
-    estimation_method: Literal[
-        "clone_censor_weight_with_stabilized_inverse_probability_censoring_weights"
+    required_source_coverage: tuple[str, ...]
+    coverage_unit: Literal["per_icu_stay"]
+    pre_icu_lookback_must_be_prespecified: Literal[True]
+    must_distinguish: tuple[
+        Literal["true_initiator"],
+        Literal["prevalent_user"],
+        Literal["verified_non_user"],
     ]
-    positivity_interval: tuple[float, float]
-    weight_truncation_percentiles: tuple[float, float]
-    balance_threshold_absolute_smd: float
-    positivity_failure_action: Literal["fail_closed_no_effect_estimate"]
-    sensitivity_analyses: tuple[str, ...]
+    new_clinical_and_methods_review_required: Literal[True]
 
     @model_validator(mode="after")
-    def _closed_target_trial_rules(self) -> "TargetTrialCoordinates":
-        if not self.baseline_adjustment_variables:
-            raise ValueError("H2 baseline adjustment variables must be prespecified")
-        if not self.grace_period_time_varying_variables:
-            raise ValueError("H2 grace-period time-varying variables must be prespecified")
-        if self.positivity_interval != (0.05, 0.95):
-            raise ValueError("H2 positivity interval must be frozen at [0.05, 0.95]")
-        if self.weight_truncation_percentiles != (1.0, 99.0):
-            raise ValueError("H2 weight truncation must be frozen at [1, 99]")
-        if self.balance_threshold_absolute_smd != 0.1:
-            raise ValueError("H2 balance threshold must be absolute SMD <= 0.1")
+    def _coverage_is_concrete(self) -> "H2FutureUnblockContract":
+        if len(self.required_source_coverage) < 3:
+            raise ValueError("H2 future unblock contract needs concrete source coverage")
         return self
 
 
 class H2ScientificProtocol(_StrictFrozenModel):
-    schema_version: Literal["easyicu.figure2_h2_scientific_protocol/1"]
+    schema_version: Literal["easyicu.figure2_h2_scientific_protocol/2"]
     task_id: Literal["h2_vasopressor_causal"]
     protocol_version: str
     review_status: Literal["human_attestation_pending"]
     literature_search_cutoff: Literal["2026-08-09"]
     current_source_capture: MedicationCaptureContract
-    intended_target_trial: TargetTrialCoordinates
+    current_formal_scope: Literal[
+        "source_specific_fail_closed_feasibility_only_no_effect_estimation"
+    ]
+    future_unblock_contract: H2FutureUnblockContract
     current_scientific_result: Literal[
         "treatment_contrast_not_identifiable_from_available_capture_contract"
     ]
@@ -161,9 +187,24 @@ class H3Representation(_StrictFrozenModel):
     grid_width_hours: Literal[12]
     aggregation: Literal["max"]
     features: tuple[str, ...]
-    scaling: Literal["coordinate_wise_z_score_using_observed_values"]
-    minimum_observed_sofa2_windows: Literal[2]
-    missingness_method: Literal["observed_data_likelihood_no_zero_or_locf_imputation"]
+    descriptive_only_features: tuple[str, ...]
+    scaling: Literal[
+        "pooled_coordinate_wise_z_score_using_owner_available_values"
+    ]
+    scaling_ddof: Literal[0]
+    scaling_zero_variance_action: Literal["fail_closed"]
+    minimum_available_sofa2_windows: Literal[2]
+    concept_missingness_method: Literal[
+        "respect_sofa2_concept_owner_missingness_and_locf_semantics"
+    ]
+    evidence_states: tuple[
+        Literal["direct_observed"],
+        Literal["owner_locf_available"],
+        Literal["unavailable"],
+    ]
+    owner_locf_policy: Literal["include_with_explicit_audit"]
+    unavailable_policy: Literal["exclude_from_observed_data_likelihood"]
+    clustering_stage_imputation: Literal["none"]
     trailing_missingness_policy: Literal[
         "retain_and_report_discharge_death_and_measurement_support"
     ]
@@ -173,6 +214,10 @@ class H3SelectionAndStability(_StrictFrozenModel):
     model_family: Literal["observed_data_diagonal_gaussian_mixture"]
     candidate_cluster_counts: tuple[int, ...]
     cluster_number_criterion: Literal["minimum_bic"]
+    candidate_boundary_action: Literal[
+        "fail_closed_if_minimum_bic_is_at_upper_boundary"
+    ]
+    candidate_boundary_reason_code: Literal["H3_NO_INTERIOR_BIC_OPTIMUM"]
     outcome_blind_selection: Literal[True]
     minimum_cluster_fraction: float
     cluster_size_failure_action: Literal["no_stable_solution_no_alternate_k"]
@@ -182,6 +227,9 @@ class H3SelectionAndStability(_StrictFrozenModel):
     base_seed: Literal[1729]
     stability_metric: Literal["mean_adjusted_rand_index"]
     minimum_successful_resamples: Literal[100]
+    refit_failure_action: Literal[
+        "numerical_engine_failure_not_scientific_instability"
+    ]
     minimum_mean_stability: Literal[0.7]
     stability_failure_action: Literal["no_stable_solution_no_post_hoc_rescue"]
 
@@ -195,7 +243,7 @@ class H3SelectionAndStability(_StrictFrozenModel):
 
 
 class H3ScientificProtocol(_StrictFrozenModel):
-    schema_version: Literal["easyicu.figure2_h3_scientific_protocol/1"]
+    schema_version: Literal["easyicu.figure2_h3_scientific_protocol/2"]
     task_id: Literal["h3_trajectory_clustering"]
     protocol_version: str
     review_status: Literal["human_attestation_pending"]
@@ -226,6 +274,46 @@ ScientificCaseProtocol = Annotated[
     Union[E2ScientificProtocol, H2ScientificProtocol, H3ScientificProtocol],
     Field(discriminator="task_id"),
 ]
+
+
+class RuntimeScientificProjection(_StrictFrozenModel):
+    """The one human-reviewable projection consumed by Canonical9 runtime.
+
+    It contains the exact normalized protocol bytes plus the deterministic
+    Agent-facing rendering.  Human review and the launcher bind the digest of
+    this object, so editing projection code or Agent-visible wording after
+    sign-off invalidates run authority even when the protocol version is not
+    changed.
+    """
+
+    schema_version: Literal["easyicu.figure2_runtime_scientific_projection/1"]
+    task_id: Literal[
+        "e2_lactate_mortality",
+        "h2_vasopressor_causal",
+        "h3_trajectory_clustering",
+    ]
+    protocol_version: str
+    protocol_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    canonical_protocol_json: str = Field(min_length=2)
+    agent_visible_required_outputs: tuple[str, ...]
+    agent_visible_guardrails: tuple[str, ...]
+    runtime_projection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _exact_content_and_digest(self) -> "RuntimeScientificProjection":
+        if (
+            hashlib.sha256(self.canonical_protocol_json.encode("utf-8")).hexdigest()
+            != self.protocol_content_sha256
+        ):
+            raise ValueError("runtime projection protocol content digest mismatch")
+        body = self.model_dump(mode="json", exclude={"runtime_projection_sha256"})
+        if hashlib.sha256(_canonical_json_bytes(body)).hexdigest() != (
+            self.runtime_projection_sha256
+        ):
+            raise ValueError("runtime scientific projection digest mismatch")
+        if not self.agent_visible_required_outputs or not self.agent_visible_guardrails:
+            raise ValueError("runtime projection must be visible to the Agent")
+        return self
 
 
 _PROTOCOL_FILENAMES = {
@@ -282,14 +370,118 @@ def load_case_scientific_protocol(
 def case_protocol_content_sha256(protocol: BaseModel) -> str:
     """Hash normalized protocol content independently of JSON whitespace."""
 
-    raw = json.dumps(
-        protocol.model_dump(mode="json"),
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+    return hashlib.sha256(
+        _canonical_json_bytes(protocol.model_dump(mode="json"))
+    ).hexdigest()
+
+
+def _projection_agent_content(
+    protocol: E2ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Render only typed protocol fields; never maintain a second science source."""
+
+    if isinstance(protocol, E2ScientificProtocol):
+        landmark = protocol.primary_landmark
+        model = protocol.primary_model
+        return (
+            (
+                "24-hour landmark cohort flow and exposure-opportunity audit",
+                "primary restricted-cubic-spline lactate association with 95% confidence intervals",
+                "prespecified linear and variable-opportunity descriptive sensitivities",
+            ),
+            (
+                f"Primary population rule={landmark.population_rule}; landmark={landmark.landmark_hours}h; "
+                f"follow-up={landmark.followup_start}; outcome={landmark.outcome}.",
+                f"Primary model={model.family}/{model.exposure_form}; knot quantiles="
+                f"{list(model.knot_quantiles)}; reference={model.reference}; linear model is sensitivity only.",
+                "Do not treat observation duration or lactate measurement count as ordinary baseline covariates; "
+                "report the variable-opportunity measured-subset analysis only as a secondary descriptive sensitivity.",
+                "The estimand is descriptive/prognostic and must never be described as causal.",
+            ),
+        )
+    if isinstance(protocol, H2ScientificProtocol):
+        capture = protocol.current_source_capture
+        unblock = protocol.future_unblock_contract
+        return (
+            (
+                "source-specific medication capture and negative-evidence audit",
+                f"structured {capture.reason_code} feasibility result",
+                "explicit future source-coverage conditions that could reopen review",
+            ),
+            (
+                f"Current source={capture.source} has pre_icu_treatment_history_authority="
+                f"{str(capture.pre_icu_treatment_history_authority).lower()}, verified_non_use_available="
+                f"{str(capture.verified_non_use_available).lower()}, and causal_contrast_authorized="
+                f"{str(capture.causal_contrast_authorized).lower()}.",
+                f"Return {capture.reason_code}; do not construct a control arm, PSM/IPTW, or effect estimate.",
+                f"The only current unblock route is new per-stay source coverage satisfying "
+                f"{list(unblock.required_source_coverage)} followed by new clinical and methods review.",
+                "The future target-trial design is non-authorizing and must not be executed under the current materialization.",
+            ),
+        )
+    representation = protocol.representation
+    selection = protocol.selection_and_stability
+    return (
+        (
+            "receipt-aware trajectory representation and scaling manifest",
+            "frozen candidate-k BIC selection ledger with interior-optimum decision",
+            "100-resample stability audit separating engine failure from scientific instability",
+        ),
+        (
+            f"Clustering coordinates are exactly {list(representation.features)}; descriptive-only features "
+            f"{list(representation.descriptive_only_features)} must not enter the model matrix.",
+            f"Respect evidence states {list(representation.evidence_states)} and SOFA-2 concept-owner missingness; "
+            "perform no additional clustering-stage imputation and exclude unavailable values from likelihood.",
+            f"Apply {representation.scaling} with ddof={representation.scaling_ddof}; record centers, scales, "
+            "mask policy, and a digest-bound scaling manifest.",
+            f"Evaluate candidate k={list(selection.candidate_cluster_counts)} by minimum BIC; if the minimum is "
+            f"at the upper boundary, fail closed with {selection.candidate_boundary_reason_code}.",
+            "Classify a refit numerical/engine failure separately from a completed stability analysis whose mean ARI is below threshold.",
+        ),
+    )
+
+
+def build_runtime_scientific_projection(
+    protocol: E2ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
+) -> RuntimeScientificProjection:
+    """Compile the signed protocol into its sole deterministic runtime projection."""
+
+    protocol_payload = protocol.model_dump(mode="json")
+    canonical_protocol_json = _canonical_json_bytes(protocol_payload).decode("utf-8")
+    required_outputs, guardrails = _projection_agent_content(protocol)
+    body = {
+        "schema_version": "easyicu.figure2_runtime_scientific_projection/1",
+        "task_id": protocol.task_id,
+        "protocol_version": protocol.protocol_version,
+        "protocol_content_sha256": hashlib.sha256(
+            canonical_protocol_json.encode("utf-8")
+        ).hexdigest(),
+        "canonical_protocol_json": canonical_protocol_json,
+        "agent_visible_required_outputs": required_outputs,
+        "agent_visible_guardrails": guardrails,
+    }
+    return RuntimeScientificProjection(
+        **body,
+        runtime_projection_sha256=hashlib.sha256(
+            _canonical_json_bytes(body)
+        ).hexdigest(),
+    )
+
+
+def load_runtime_scientific_projection(
+    value: RuntimeScientificProjection | Mapping[str, Any],
+) -> RuntimeScientificProjection:
+    """Strictly validate a JSONL/runtime projection supplied by a caller."""
+
+    if isinstance(value, RuntimeScientificProjection):
+        return value
+    # Validate through JSON so JSON arrays may populate frozen tuple fields while
+    # scalar/object types remain strict.  This is the representation present in a
+    # decoded benchmark JSONL row.
+    return RuntimeScientificProjection.model_validate_json(
+        _canonical_json_bytes(dict(value)),
+        strict=True,
+    )
 
 
 def load_default_case_protocol(
@@ -302,12 +494,15 @@ def load_default_case_protocol(
 
 
 __all__ = [
+    "RuntimeScientificProjection",
     "E2ScientificProtocol",
     "H2ScientificProtocol",
     "H3ScientificProtocol",
     "ScientificCaseProtocolError",
+    "build_runtime_scientific_projection",
     "case_protocol_content_sha256",
     "default_case_protocol_path",
     "load_case_scientific_protocol",
     "load_default_case_protocol",
+    "load_runtime_scientific_projection",
 ]

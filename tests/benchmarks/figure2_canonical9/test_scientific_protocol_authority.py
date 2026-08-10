@@ -18,6 +18,7 @@ from benchmarks.figure2_canonical9.scientific_protocol_authority import (
     load_verified_scientific_protocol_authority,
 )
 from benchmarks.figure2_canonical9.case_scientific_protocol import (
+    build_runtime_scientific_projection,
     case_protocol_content_sha256,
     default_case_protocol_path,
     load_case_scientific_protocol,
@@ -46,12 +47,16 @@ def _reviewed_card(
         expected_task_id=task_id,
     )
     protocol_content_sha256 = case_protocol_content_sha256(protocol)
+    runtime_projection_sha256 = build_runtime_scientific_projection(
+        protocol
+    ).runtime_projection_sha256
     payload["review_attestation"] = {
         "reviewer_owner": "Synthetic clinical-and-methods test board",
         "review_date": "2026-07-26",
         "card_version": payload["version"],
         "reviewed_content_sha256": reviewed_content_sha256,
         "protocol_content_sha256": protocol_content_sha256,
+        "runtime_projection_sha256": runtime_projection_sha256,
         "review_scope": ["clinical protocol", "statistical methods"],
         "literature_search_cutoff": "2026-07-25",
         "clinical_reviewed": True,
@@ -69,6 +74,7 @@ def _reviewed_card(
         protocol_path=str(protocol_path),
         protocol_file_sha256=hashlib.sha256(protocol_path.read_bytes()).hexdigest(),
         protocol_content_sha256=protocol_content_sha256,
+        runtime_projection_sha256=runtime_projection_sha256,
     )
 
 
@@ -159,8 +165,8 @@ def test_authority_rejects_wrong_order_duplicate_json_and_symlink(
 
     duplicate = tmp_path / "duplicate.json"
     duplicate.write_text(
-        '{"schema_version":"easyicu.figure2_scientific_protocol_authority/2",'
-        '"schema_version":"easyicu.figure2_scientific_protocol_authority/2",'
+        '{"schema_version":"easyicu.figure2_scientific_protocol_authority/3",'
+        '"schema_version":"easyicu.figure2_scientific_protocol_authority/3",'
         '"tasks":[],"authority_digest":"' + "0" * 64 + '"}',
         encoding="utf-8",
     )

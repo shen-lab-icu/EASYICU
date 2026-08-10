@@ -106,7 +106,7 @@ def _write_upstream_bundle(
     assignments.to_csv(assignment_path, index=False)
 
     representation_schema = {
-        "schema_version": "easyicu.trajectory_representation_schema/1",
+        "schema_version": "easyicu.trajectory_representation_schema/2",
         "id_column": id_column,
         "representation_columns": list(representation_columns),
         "frozen_population_n": len(representation),
@@ -123,6 +123,19 @@ def _write_upstream_bundle(
             "zero_imputation": False,
             "eligibility_uses_observed_window_count": True,
             "profile_summaries_ignore_missing": True,
+        },
+        "coordinate_scaling": {
+            "method": "pooled_coordinate_wise_z_score",
+            "ddof": 0,
+            "observed_value_policy": "direct_or_owner_locf_available",
+            "missing_value_policy": "preserve_missing_exclude_from_likelihood",
+            "zero_variance_action": "fail_closed",
+        },
+        "evidence_state_policy": {
+            "direct_observed": "include",
+            "owner_locf_available": "include_and_audit",
+            "unavailable": "exclude",
+            "additional_clustering_stage_imputation": "none",
         },
         "representation_sha256": _sha256(representation_path),
     }
@@ -142,6 +155,7 @@ def _write_upstream_bundle(
         "selected_criterion_value": 123.0,
         "representation_schema_sha256": "pending",
         "candidate_assignments_sha256": _sha256(assignment_path),
+        "coordinate_scaling": representation_schema["coordinate_scaling"],
     }
     representation_schema_path = upstream / "opaque_representation_schema.json"
     solution_schema_path = upstream / "opaque_solution_schema.json"
@@ -165,6 +179,8 @@ def _write_upstream_bundle(
                     {"n_clusters": n_clusters, "criterion_value": 123.0},
                     {"n_clusters": n_clusters + 1, "criterion_value": 180.0},
                 ],
+                "candidate_range_boundary_rule": "allow_upper_boundary",
+                "candidate_range_boundary_reason_code": None,
             }
         ),
         encoding="utf-8",
@@ -392,6 +408,26 @@ def test_executor_is_case_neutral_and_replayable(
         for child in np.random.SeedSequence(spec.base_seed).spawn(spec.n_resamples)
     ]
     assert resolved_spec["derived_seeds"] == expected_seeds
+    scaling = json.loads(
+        (out_dir / "trajectory_coordinate_scaling_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert scaling["method"] == "pooled_coordinate_wise_z_score"
+    assert scaling["ddof"] == 0
+    assert scaling["missing_value_policy"] == (
+        "preserve_missing_exclude_from_likelihood"
+    )
+    assert [item["coordinate"] for item in scaling["coordinates"]] == list(
+        coordinates
+    )
+    for item in scaling["coordinates"]:
+        observed = representation[item["coordinate"]].dropna().to_numpy()
+        assert item["center"] == pytest.approx(float(observed.mean()))
+        assert item["scale"] == pytest.approx(float(observed.std(ddof=0)))
+    assert summary["coordinate_scaling_sha256"] == scaling[
+        "scaling_manifest_sha256"
+    ]
 
     stability = pd.read_csv(out_dir / "cluster_stability.csv")
     row_assignments = pd.read_csv(out_dir / "cluster_stability_assignments.csv")
@@ -562,6 +598,8 @@ def test_executor_fails_closed_on_untrusted_input_binding(
     )
 
     assert summary["status"] == "failed_closed"
+    assert summary["failure_class"] == "input_or_contract_failure"
+    assert summary["reason_code"] == "TRAJECTORY_STABILITY_CONTRACT_INVALID"
     assert summary["freeze_status"] == "not_frozen"
     error_text = " ".join(summary["errors"]).lower()
     if violation == "unexpected_outcome":
@@ -627,6 +665,8 @@ def test_executor_fails_closed_when_sampled_reference_has_one_cluster(
     )
 
     assert summary["status"] == "failed_closed"
+    assert summary["failure_class"] == "numerical_engine_failure"
+    assert summary["reason_code"] == "TRAJECTORY_REFIT_ENGINE_FAILURE"
     _assert_complete_input_receipts(
         summary=summary,
         resolved_inputs=resolved,
@@ -689,6 +729,8 @@ def test_threshold_failure_fails_closed_without_changing_selected_solution(
     )
 
     assert summary["status"] == "failed_closed"
+    assert summary["failure_class"] == "scientific_instability"
+    assert summary["reason_code"] == "TRAJECTORY_STABILITY_BELOW_THRESHOLD"
     assert summary["stability_threshold_passed"] is False
     assert summary["freeze_status"] == "not_frozen_stability_threshold_failed"
     assert summary["selected_n_clusters"] == 3
@@ -718,3 +760,51 @@ def test_invalid_spec_still_writes_failed_closed_summary(tmp_path: Path) -> None
     assert summary["freeze_status"] == "not_frozen"
     assert "validation" in " ".join(summary["errors"]).lower()
     assert json.loads((out_dir / "step_summary.json").read_text()) == summary
+
+
+def test_upper_candidate_boundary_fails_closed_with_frozen_reason_code(
+    tmp_path: Path,
+) -> None:
+    resolved, _representation, _assignments = _write_upstream_bundle(
+        tmp_path,
+        n_clusters=3,
+        id_column="neutral_id",
+        representation_columns=("feature_alpha", "feature_beta"),
+        assignment_column="reference_partition",
+    )
+    inputs = resolved["inputs"]
+    assert isinstance(inputs, dict)
+    selection_path = tmp_path / "upstream" / "cluster_selection.json"
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    selection.update(
+        {
+            "candidates": [
+                {"n_clusters": 1, "criterion_value": 200.0},
+                {"n_clusters": 2, "criterion_value": 180.0},
+                {"n_clusters": 3, "criterion_value": 123.0},
+            ],
+            "candidate_range_boundary_rule": (
+                "fail_closed_if_selected_at_upper_boundary"
+            ),
+            "candidate_range_boundary_reason_code": (
+                "H3_NO_INTERIOR_BIC_OPTIMUM"
+            ),
+        }
+    )
+    selection_path.write_text(json.dumps(selection), encoding="utf-8")
+    binding = inputs["manifest:cluster_selection"]
+    assert isinstance(binding, dict)
+    binding["sha256"] = _sha256(selection_path)
+
+    summary = run_trajectory_stability(
+        spec=_spec(),
+        out_dir=tmp_path / "step_outputs",
+        run_dir=tmp_path,
+        resolved_inputs=resolved,
+    )
+
+    assert summary["status"] == "failed_closed"
+    assert summary["freeze_status"] == "not_frozen"
+    assert summary["failure_class"] == "scientific_selection_boundary"
+    assert summary["reason_code"] == "H3_NO_INTERIOR_BIC_OPTIMUM"
+    assert "interior optimum" in " ".join(summary["errors"])

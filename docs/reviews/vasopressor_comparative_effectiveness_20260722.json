@@ -4,8 +4,9 @@
   "card_version": "2.0.0",
   "reviewed_content_sha256": "5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f",
   "case_protocol_path": "benchmarks/figure2_canonical9/protocols/h2_vasopressor_causal_20260809.json",
-  "case_protocol_content_sha256": "1d92f0de0fa4fd3a191e11f6baf0fca961d036ef9a17987ffafd3121777e281b",
-  "status": "ai_pre_review_revisions_complete_formal_attestation_pending",
+  "case_protocol_content_sha256": "8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c",
+  "runtime_scientific_projection_sha256": "2be4275bdc38302e0dc2ec8ba2342cb18fa4fd64132a1edd5cd40cc95787e913",
+  "status": "unsigned_targeted_adjudication_repairs_complete",
   "authorization": false,
   "split_rationale": "H2 is a causal-emulation question, not a generic medication association. The protocol must establish a common treatment-decision landmark and distinguish verified non-use from missing medication capture before any effect estimate can be considered.",
   "evidence_groups": [
@@ -21,12 +22,11 @@
     }
   ],
   "required_signoff": [
-    "The reviewer accepts that the current inputevents-derived source proves recorded 0-24-hour administration but not verified non-use, so H2 must return H2_VERIFIED_NON_USE_UNAVAILABLE and must not construct a binary control arm or fit PSM/IPTW.",
-    "The intended target trial freezes eligible population, initiation and non-initiation strategies, ICU-admission time zero, 24-hour grace period with clone-censor-weight handling and stabilized inverse-probability-of-censoring weights, 28-day in-hospital mortality follow-up, per-protocol risk-difference/risk-ratio estimands, censoring, and competing events.",
-    "Baseline adjustment variables must be defined at or before ICU-admission time zero. Physiologic or treatment-history information first observed after time zero must not enter baseline adjustment; if used during the 24-hour grace period, it must have a prespecified time-varying role in the adherence or censoring model.",
-    "The reviewer accepts strategy/adherence support [0.05, 0.95], 1st/99th percentile weight truncation, absolute SMD <=0.1, and fail-closed positivity response as the predeclared plan if a future source contract proves verified non-use.",
+    "The reviewer accepts that the current selected MIMIC-IV inputevents-derived source proves recorded 0-24-hour administration but lacks sufficient pre-ICU treatment-history authority to distinguish true initiators, prevalent users, and verified non-users; H2 must return H2_VERIFIED_NON_USE_UNAVAILABLE and must not construct a control arm, PSM/IPTW, or any effect estimate.",
+    "This blocker is source-specific and may be reopened only by a per-stay source-coverage contract with prespecified pre-ICU lookback that distinguishes true initiator, prevalent user, and verified non-user, followed by new clinical and methods review.",
+    "Any future target-trial design is non-authorizing under the current materialization; mandatory future diagnostics include overall and arm-specific ESS, ESS/N, weight distribution, overlap, balance, and extreme weights, without inventing a universal numeric ESS reportability cutoff.",
     "The current formal H2 result is non-identifiability from the available medication-capture contract, not an estimated causal effect.",
-    "The reviewer approves exact case protocol digest 1d92f0de0fa4fd3a191e11f6baf0fca961d036ef9a17987ffafd3121777e281b together with card digest 5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f."
+    "The reviewer approves exact case protocol digest 8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c and runtime projection digest 2be4275bdc38302e0dc2ec8ba2342cb18fa4fd64132a1edd5cd40cc95787e913 together with card digest 5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f."
   ],
   "attestation_fields_required_after_signoff": [
     "reviewer_owner",
@@ -35,6 +35,7 @@
     "literature_search_cutoff",
     "clinical_reviewed",
     "methods_reviewed",
-    "protocol_content_sha256"
+    "protocol_content_sha256",
+    "runtime_projection_sha256"
   ]
 }

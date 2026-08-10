@@ -161,7 +161,12 @@ def test_load_concept_uses_public_easyicu_api_after_package_move(monkeypatch, tm
     assert calls == [
         (
             ["lact"],
-            {"database": "miiv", "data_path": str(tmp_path), "patient_ids": None},
+            {
+                "database": "miiv",
+                "data_path": str(tmp_path),
+                "patient_ids": None,
+                "keep_components": False,
+            },
         )
     ]
 
@@ -248,6 +253,9 @@ def test_build_trajectory_long_emits_per_timepoint_series(monkeypatch, tmp_path)
         "concept",
         "value_num",
         "value_str",
+        "evidence_state",
+        "owner_observed",
+        "owner_available",
     }
     # the None MAP row is dropped (not recorded); 3 map + 2 peep = 5 rows
     assert len(long_df) == 5
@@ -257,6 +265,45 @@ def test_build_trajectory_long_emits_per_timepoint_series(monkeypatch, tmp_path)
     s1_map = long_df[(long_df.stay_id == 1) & (long_df.concept == "map")]
     first_low = s1_map[s1_map.value_num < 65].sort_values("charttime").iloc[0]
     assert first_low.charttime == 2.0
+
+
+def test_trajectory_excludes_owner_unavailable_zero_and_preserves_locf_receipt(
+    monkeypatch, tmp_path
+):
+    synthetic = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 12.0, 24.0],
+            "sofa2_resp": [0.0, 0.0, 2.0],
+            "sofa2_resp_observed": [0, 1, 0],
+            "sofa2_resp_available": [0, 1, 1],
+        }
+    )
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+    monkeypatch.setattr(M, "_load_concept", lambda *args: synthetic.copy())
+
+    long_df, provenance = M.build_trajectory_long(
+        data_path=tmp_path,
+        concepts=["sofa2_resp"],
+        window=(0.0, 24.0),
+    )
+
+    assert long_df["charttime"].tolist() == [12.0, 24.0]
+    assert long_df["evidence_state"].tolist() == [
+        "direct_observed",
+        "owner_locf_available",
+    ]
+    assert long_df["owner_observed"].tolist() == [1, 0]
+    assert long_df["owner_available"].tolist() == [1, 1]
+    assert provenance["evidence_state_counts"] == {
+        "sofa2_resp": {
+            "unavailable": 1,
+            "direct_observed": 1,
+            "owner_locf_available": 1,
+        }
+    }
+    assert provenance["unavailable_value_rows_excluded"] == {"sofa2_resp": 1}
+    assert provenance["owner_receipt_concepts"] == ["sofa2_resp"]
 
 
 def test_build_trajectory_long_respects_window(monkeypatch, tmp_path):

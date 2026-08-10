@@ -24,12 +24,13 @@ from easyicu.research_agent.know_how.registry import (
 )
 
 from .case_scientific_protocol import (
+    build_runtime_scientific_projection,
     case_protocol_content_sha256,
     load_case_scientific_protocol,
 )
 
 SCIENTIFIC_PROTOCOL_AUTHORITY_SCHEMA = (
-    "easyicu.figure2_scientific_protocol_authority/2"
+    "easyicu.figure2_scientific_protocol_authority/3"
 )
 REQUIRED_SCIENTIFIC_PROTOCOLS: tuple[tuple[str, str], ...] = (
     ("e2_lactate_mortality", "early_peak_lactate_association"),
@@ -137,6 +138,7 @@ class ScientificProtocolTaskBinding(_StrictFrozenModel):
     protocol_path: str
     protocol_file_sha256: _SHA256
     protocol_content_sha256: _SHA256
+    runtime_projection_sha256: _SHA256
 
     @field_validator("card_path", "protocol_path")
     @classmethod
@@ -150,7 +152,7 @@ class ScientificProtocolTaskBinding(_StrictFrozenModel):
 class ScientificProtocolAuthority(_StrictFrozenModel):
     """Exact ordered E2/H2/H3 protocol bindings selected by the operator."""
 
-    schema_version: Literal["easyicu.figure2_scientific_protocol_authority/2"]
+    schema_version: Literal["easyicu.figure2_scientific_protocol_authority/3"]
     tasks: tuple[ScientificProtocolTaskBinding, ...]
     authority_digest: _SHA256
 
@@ -261,6 +263,16 @@ def _verify_reviewed_card(
     ):
         raise ScientificProtocolAuthorityError(
             f"{binding.task_id} review attestation protocol digest mismatch"
+        )
+    runtime_projection = build_runtime_scientific_projection(protocol)
+    if (
+        runtime_projection.runtime_projection_sha256
+        != binding.runtime_projection_sha256
+        or runtime_projection.runtime_projection_sha256
+        != attestation.runtime_projection_sha256
+    ):
+        raise ScientificProtocolAuthorityError(
+            f"{binding.task_id} review attestation runtime projection digest mismatch"
         )
 
 

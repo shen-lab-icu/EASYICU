@@ -149,6 +149,8 @@ def test_candidate_role_accepts_replayable_agent_selection():
             {"n_clusters": 3, "criterion_value": 100.0},
         ],
         "rationale": "Selected the finite minimum BIC.",
+        "candidate_range_boundary_rule": "allow_upper_boundary",
+        "candidate_range_boundary_reason_code": None,
     }
     findings = declared_product_contract_findings(
         step=_candidate_step(),
@@ -371,6 +373,8 @@ def test_candidate_role_rejects_imputed_sklearn_schema_for_observed_data_method(
             {"n_clusters": 3, "criterion_value": 12.0},
         ],
         "rationale": "Minimum finite BIC.",
+        "candidate_range_boundary_rule": "allow_upper_boundary",
+        "candidate_range_boundary_reason_code": None,
     }
 
     findings = declared_product_contract_findings(

@@ -267,22 +267,41 @@ def _build_jsonl_row(
     trajectory_verified: object | None,
 ) -> dict[str, object]:
     authority_ref = cohort_verified.reference
-    expected_outputs = list(
-        dict.fromkeys(
-            [
-                *task.expected_outputs,
-                *getattr(spec, "additional_expected_outputs", ()),
-            ]
+    runtime_projection = None
+    if task.task_id in {
+        "e2_lactate_mortality",
+        "h2_vasopressor_causal",
+        "h3_trajectory_clustering",
+    }:
+        from benchmarks.figure2_canonical9.case_scientific_protocol import (
+            build_runtime_scientific_projection,
+            load_default_case_protocol,
         )
-    )
-    semantic_guardrails = list(
-        dict.fromkeys(
-            [
-                *task.semantic_guardrails,
-                *getattr(spec, "additional_semantic_guardrails", ()),
-            ]
+
+        runtime_projection = build_runtime_scientific_projection(
+            load_default_case_protocol(task.task_id)
         )
-    )
+        expected_outputs = list(runtime_projection.agent_visible_required_outputs)
+        semantic_guardrails = list(runtime_projection.agent_visible_guardrails)
+        notes = runtime_projection.canonical_protocol_json
+    else:
+        expected_outputs = list(
+            dict.fromkeys(
+                [
+                    *task.expected_outputs,
+                    *getattr(spec, "additional_expected_outputs", ()),
+                ]
+            )
+        )
+        semantic_guardrails = list(
+            dict.fromkeys(
+                [
+                    *task.semantic_guardrails,
+                    *getattr(spec, "additional_semantic_guardrails", ()),
+                ]
+            )
+        )
+        notes = spec.notes
     row: dict[str, object] = {
         "schema_version": _JSONL_SCHEMA,
         "key": task.task_id,
@@ -318,8 +337,13 @@ def _build_jsonl_row(
                 else "stay_id"
             )
         ],
-        "candidate_variables": list(spec.feature_concepts),
-        "notes": spec.notes,
+        "candidate_variables": list(
+            getattr(spec, "candidate_model_concepts", ()) or spec.feature_concepts
+        ),
+        "descriptive_only_concepts": list(
+            getattr(spec, "descriptive_only_concepts", ())
+        ),
+        "notes": notes,
     }
     if task.task_id in {
         "e2_lactate_mortality",
@@ -335,6 +359,13 @@ def _build_jsonl_row(
         row["case_scientific_protocol"] = case_protocol.model_dump(mode="json")
         row["case_scientific_protocol_sha256"] = case_protocol_content_sha256(
             case_protocol
+        )
+        assert runtime_projection is not None
+        row["runtime_scientific_projection"] = runtime_projection.model_dump(
+            mode="json"
+        )
+        row["runtime_scientific_projection_sha256"] = (
+            runtime_projection.runtime_projection_sha256
         )
     if task.task_id == "e1_sepsis3_prevalence_mortality":
         from benchmarks.figure2_canonical9.e1_scientific_acceptance import (

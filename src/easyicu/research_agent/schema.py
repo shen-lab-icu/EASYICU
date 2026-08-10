@@ -433,6 +433,13 @@ class ClusterSelectionManifest(BaseModel):
     selected_n_clusters: int = Field(ge=1)
     candidates: List[ClusterSelectionCandidate] = Field(min_length=2)
     rationale: Optional[str] = None
+    candidate_range_boundary_rule: Literal[
+        "allow_upper_boundary",
+        "fail_closed_if_selected_at_upper_boundary",
+    ]
+    candidate_range_boundary_reason_code: Optional[str] = Field(
+        default=None, pattern=r"^[A-Z][A-Z0-9_]{2,79}$"
+    )
 
     @model_validator(mode="after")
     def _validate_selection_shape(self) -> "ClusterSelectionManifest":
@@ -450,6 +457,17 @@ class ClusterSelectionManifest(BaseModel):
             and not str(self.rationale or "").strip()
         ):
             raise ValueError("elbow/multi_criteria selection requires rationale")
+        if (
+            self.candidate_range_boundary_rule
+            == "fail_closed_if_selected_at_upper_boundary"
+            and self.candidate_range_boundary_reason_code is None
+        ):
+            raise ValueError("fail-closed upper boundary requires a reason code")
+        if (
+            self.candidate_range_boundary_rule == "allow_upper_boundary"
+            and self.candidate_range_boundary_reason_code is not None
+        ):
+            raise ValueError("an allowed upper boundary must not declare a failure code")
         return self
 
 
