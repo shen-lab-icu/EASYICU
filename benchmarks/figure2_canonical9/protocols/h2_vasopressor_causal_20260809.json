@@ -1,7 +1,7 @@
 {
   "schema_version": "easyicu.figure2_h2_scientific_protocol/1",
   "task_id": "h2_vasopressor_causal",
-  "protocol_version": "h2_vasopressor_causal/20260809-v2",
+  "protocol_version": "h2_vasopressor_causal/20260809-v3",
   "review_status": "human_attestation_pending",
   "literature_search_cutoff": "2026-08-09",
   "current_source_capture": {
@@ -16,7 +16,7 @@
     "reason_code": "H2_VERIFIED_NON_USE_UNAVAILABLE"
   },
   "intended_target_trial": {
-    "eligible_population": "Adult ICU stays eligible for either strategy at ICU admission, with source-complete medication capture, valid admission timing, and prespecified baseline covariates available before treatment assignment.",
+    "eligible_population": "Adult ICU stays eligible for either strategy at ICU admission, with source-complete medication capture, valid admission timing, and prespecified baseline covariates defined at or before ICU-admission time zero.",
     "treatment_strategies": ["initiate_any_vasopressor_within_24h", "do_not_initiate_any_vasopressor_within_24h"],
     "time_zero": "icu_admission",
     "grace_period_hours": 24,
@@ -24,10 +24,12 @@
     "followup": "From ICU admission through 28 days, in-hospital death, discharge alive, or administrative data end, whichever occurs first.",
     "outcome": "28-day cumulative incidence of in-hospital death with discharge alive treated as a competing event.",
     "estimand": "Per-protocol 28-day risk difference and risk ratio for initiation within 24 hours versus verified non-initiation within 24 hours in the overlap-eligible target population.",
-    "censoring_and_competing_events": "Artificially censor strategy deviations under cloning; use inverse-probability-of-censoring weights, treat discharge alive as competing, and report administrative censoring separately.",
-    "baseline_confounder_timing": "Age, sex, comorbidity, admission context, and severity measurements must precede strategy assignment; any variable first observed after recorded initiation is not a baseline confounder.",
-    "adjustment_variables": ["age", "sex", "charlson", "admission_context", "map", "lactate", "mechanical_ventilation", "creatinine", "bilirubin", "platelets", "gcs"],
-    "propensity_method": "stabilized_iptw",
+    "censoring_and_competing_events": "Artificially censor strategy deviations under cloning; estimate stabilized inverse-probability-of-censoring weights using prespecified baseline and time-varying adherence information, treat discharge alive as competing, and report artificial and administrative censoring separately.",
+    "baseline_adjustment_timing": "at_or_before_icu_admission_time_zero",
+    "baseline_adjustment_variables": ["age", "sex", "charlson", "admission_context", "map", "lactate", "mechanical_ventilation", "creatinine", "bilirubin", "platelets", "gcs"],
+    "grace_period_time_varying_variables": ["map", "lactate", "mechanical_ventilation", "creatinine", "bilirubin", "platelets", "gcs", "vasopressor_administration_history"],
+    "post_time_zero_variable_role": "time_varying_information_for_prespecified_grace_period_adherence_or_censoring_model_only",
+    "estimation_method": "clone_censor_weight_with_stabilized_inverse_probability_censoring_weights",
     "positivity_interval": [0.05, 0.95],
     "weight_truncation_percentiles": [1.0, 99.0],
     "balance_threshold_absolute_smd": 0.1,

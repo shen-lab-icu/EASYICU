@@ -86,9 +86,15 @@ class TargetTrialCoordinates(_StrictFrozenModel):
     outcome: str
     estimand: str
     censoring_and_competing_events: str
-    baseline_confounder_timing: str
-    adjustment_variables: tuple[str, ...]
-    propensity_method: Literal["stabilized_iptw"]
+    baseline_adjustment_timing: Literal["at_or_before_icu_admission_time_zero"]
+    baseline_adjustment_variables: tuple[str, ...]
+    grace_period_time_varying_variables: tuple[str, ...]
+    post_time_zero_variable_role: Literal[
+        "time_varying_information_for_prespecified_grace_period_adherence_or_censoring_model_only"
+    ]
+    estimation_method: Literal[
+        "clone_censor_weight_with_stabilized_inverse_probability_censoring_weights"
+    ]
     positivity_interval: tuple[float, float]
     weight_truncation_percentiles: tuple[float, float]
     balance_threshold_absolute_smd: float
@@ -97,6 +103,10 @@ class TargetTrialCoordinates(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _closed_target_trial_rules(self) -> "TargetTrialCoordinates":
+        if not self.baseline_adjustment_variables:
+            raise ValueError("H2 baseline adjustment variables must be prespecified")
+        if not self.grace_period_time_varying_variables:
+            raise ValueError("H2 grace-period time-varying variables must be prespecified")
         if self.positivity_interval != (0.05, 0.95):
             raise ValueError("H2 positivity interval must be frozen at [0.05, 0.95]")
         if self.weight_truncation_percentiles != (1.0, 99.0):

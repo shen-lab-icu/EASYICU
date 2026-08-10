@@ -78,7 +78,7 @@ def test_patient_split_and_trajectory_cases_have_explicit_execution_contracts():
     assert h2.trajectory_window == (0.0, 24.0)
     assert "vaso_ind" in h2.trajectory_concepts
     assert h2.positive_only_event_concepts == ()
-    assert "h2_vasopressor_causal/20260809-v2" == h2.task_protocol_version
+    assert "h2_vasopressor_causal/20260809-v3" == h2.task_protocol_version
     assert "H2_VERIFIED_NON_USE_UNAVAILABLE" in " ".join(
         h2.additional_semantic_guardrails
     )
