@@ -6731,8 +6731,7 @@ def run_execute_phase(
         # code still runs through every current execution audit and repair gate.
         standard_executor_trace: list[StandardExecutorCandidate] = []
         standard_executor = select_standard_executor(
-            step,
-            plan=plan,
+            step, plan=plan,
             plausibility_scope=plausibility_authority.scope,
             resolved_bindings=resolved_input_bindings,
             trajectory_scientific_runtime_authority=getattr(pipeline, "_trajectory_scientific_runtime_authority", None),
