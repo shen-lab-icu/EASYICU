@@ -28,6 +28,46 @@ from ..schema import (
 )
 
 
+def planner_descriptive_method_guidance(analysis_type: str) -> str:
+    """Return the exact contracts for compact descriptive host owners."""
+
+    if str(analysis_type).strip().casefold() != "descriptive_epidemiology":
+        return ""
+    return (
+        "Two compact descriptive methods have exact host contracts. For "
+        "`method='descriptive_distribution'`, declare exactly one typed cohort "
+        "input followed by exactly one categorical grouping column and exactly "
+        "one continuous value column, in that order; declare only "
+        "`table:distribution_prevalence`. Do not add a third column or an "
+        "association to that step. For a non-causal two-continuous-variable "
+        "association, use a separate `method='descriptive_association'` step "
+        "with exactly one typed cohort input followed by the predictor and "
+        "outcome columns, in that order, and exactly one "
+        "`statistic:<descriptive_name>` output. This contract computes a "
+        "complete-case Spearman rho without adjustment or imputation. A figure "
+        "of the grouped distribution consumes only the distribution table; a "
+        "figure of the association scalar consumes only its statistic. Never "
+        "bundle the grouped distribution and the association into one step.\n\n"
+    )
+
+
+def planner_descriptive_robustness_guidance(analysis_type: str) -> str:
+    """Keep effect robustness out of descriptive-only analysis families."""
+
+    if str(analysis_type).strip().casefold() != "descriptive_epidemiology":
+        return ""
+    return (
+        " This replay contract applies only when a primary fitted "
+        "effect and its uncertainty already exist. For "
+        "`analysis_type='descriptive_epidemiology'`, do NOT declare "
+        "`robustness_specs`, a `robustness_sensitivity` step, effect-style "
+        "products such as `primary_or`, or a robustness forest plot. Use the "
+        "typed measurement/missingness audits above for denominator and "
+        "complete-case availability checks; any additional descriptive "
+        "summary must remain a separately declared descriptive method.\n\n"
+    )
+
+
 def _canonicalise_figure_output_alias(token: object) -> object:
     """Canonicalize only a colon-typed alias for a declared figure product."""
 
@@ -419,4 +459,6 @@ __all__ = [
     "_is_untyped_figure_alias_output",
     "_normalise_plan_payload",
     "PlannerScientificProjectionError",
+    "planner_descriptive_method_guidance",
+    "planner_descriptive_robustness_guidance",
 ]
