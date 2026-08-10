@@ -23,8 +23,13 @@ from easyicu.research_agent.know_how.registry import (
     reviewable_card_content_sha256,
 )
 
+from .case_scientific_protocol import (
+    case_protocol_content_sha256,
+    load_case_scientific_protocol,
+)
+
 SCIENTIFIC_PROTOCOL_AUTHORITY_SCHEMA = (
-    "easyicu.figure2_scientific_protocol_authority/1"
+    "easyicu.figure2_scientific_protocol_authority/2"
 )
 REQUIRED_SCIENTIFIC_PROTOCOLS: tuple[tuple[str, str], ...] = (
     ("e2_lactate_mortality", "early_peak_lactate_association"),
@@ -34,6 +39,7 @@ REQUIRED_SCIENTIFIC_PROTOCOLS: tuple[tuple[str, str], ...] = (
 
 _MAX_AUTHORITY_BYTES = 256 * 1024
 _MAX_CARD_BYTES = 512 * 1024
+_MAX_PROTOCOL_BYTES = 256 * 1024
 _SHA256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
@@ -120,7 +126,7 @@ def _strict_json_object(raw: bytes, *, label: str) -> dict[str, object]:
 
 
 class ScientificProtocolTaskBinding(_StrictFrozenModel):
-    """One reviewed task protocol pinned by path, file bytes, and card content."""
+    """One reviewed task pinned by card and case-protocol content."""
 
     task_id: str
     card_id: str
@@ -128,20 +134,23 @@ class ScientificProtocolTaskBinding(_StrictFrozenModel):
     card_path: str
     card_file_sha256: _SHA256
     reviewed_content_sha256: _SHA256
+    protocol_path: str
+    protocol_file_sha256: _SHA256
+    protocol_content_sha256: _SHA256
 
-    @field_validator("card_path")
+    @field_validator("card_path", "protocol_path")
     @classmethod
-    def _absolute_card_path(cls, value: str) -> str:
+    def _absolute_review_path(cls, value: str) -> str:
         candidate = Path(str(value or "")).expanduser()
         if not candidate.is_absolute():
-            raise ValueError("reviewed card path must be absolute")
+            raise ValueError("reviewed card and protocol paths must be absolute")
         return str(candidate)
 
 
 class ScientificProtocolAuthority(_StrictFrozenModel):
     """Exact ordered E2/H2/H3 protocol bindings selected by the operator."""
 
-    schema_version: Literal["easyicu.figure2_scientific_protocol_authority/1"]
+    schema_version: Literal["easyicu.figure2_scientific_protocol_authority/2"]
     tasks: tuple[ScientificProtocolTaskBinding, ...]
     authority_digest: _SHA256
 
@@ -223,6 +232,35 @@ def _verify_reviewed_card(
     ):
         raise ScientificProtocolAuthorityError(
             f"{binding.task_id} review attestation content digest mismatch"
+        )
+    protocol_resolved, protocol_raw = _read_regular_file(
+        binding.protocol_path,
+        byte_limit=_MAX_PROTOCOL_BYTES,
+    )
+    if str(protocol_resolved) != str(Path(binding.protocol_path)):
+        raise ScientificProtocolAuthorityError(
+            f"{binding.task_id} reviewed case protocol path changed during resolution"
+        )
+    if hashlib.sha256(protocol_raw).hexdigest() != binding.protocol_file_sha256:
+        raise ScientificProtocolAuthorityError(
+            f"{binding.task_id} reviewed case protocol file digest mismatch"
+        )
+    try:
+        protocol = load_case_scientific_protocol(
+            protocol_resolved,
+            expected_task_id=binding.task_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise ScientificProtocolAuthorityError(
+            f"{binding.task_id} reviewed case protocol is invalid: {exc}"
+        ) from exc
+    protocol_sha256 = case_protocol_content_sha256(protocol)
+    if (
+        protocol_sha256 != binding.protocol_content_sha256
+        or protocol_sha256 != attestation.protocol_content_sha256
+    ):
+        raise ScientificProtocolAuthorityError(
+            f"{binding.task_id} review attestation protocol digest mismatch"
         )
 
 

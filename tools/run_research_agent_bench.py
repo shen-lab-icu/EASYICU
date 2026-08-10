@@ -4692,6 +4692,14 @@ def _external_item_from_row(
             if isinstance(row.get("scientific_acceptance_contract"), Mapping)
             else None
         ),
+        case_scientific_protocol=(
+            dict(row.get("case_scientific_protocol") or {})
+            if isinstance(row.get("case_scientific_protocol"), Mapping)
+            else None
+        ),
+        case_scientific_protocol_sha256=(
+            str(row.get("case_scientific_protocol_sha256") or "").strip() or None
+        ),
         protocol_adapter=protocol_adapter,
         cohort_size=int(cohort_size),
         cohort_columns=[str(column) for column in cohort_columns],

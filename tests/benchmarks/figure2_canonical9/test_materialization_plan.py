@@ -77,12 +77,20 @@ def test_patient_split_and_trajectory_cases_have_explicit_execution_contracts():
     assert h2.emit_trajectory is True
     assert h2.trajectory_window == (0.0, 24.0)
     assert "vaso_ind" in h2.trajectory_concepts
-    assert h2.positive_only_event_concepts == ("vaso_ind",)
+    assert h2.positive_only_event_concepts == ()
+    assert "h2_vasopressor_causal/20260809-v2" == h2.task_protocol_version
+    assert "H2_VERIFIED_NON_USE_UNAVAILABLE" in " ".join(
+        h2.additional_semantic_guardrails
+    )
 
     h3 = by_id["h3_trajectory_clustering"]
     assert h3.emit_trajectory is True
     assert h3.trajectory_window == (0.0, 72.0)
     assert {"sofa2", "lact"}.issubset(h3.trajectory_concepts)
+    assert h3.task_protocol_version == "h3_trajectory_clustering/20260809-v2"
+    assert "no stable phenotype solution" in " ".join(
+        h3.additional_semantic_guardrails
+    )
 
 
 def test_e1_materialized_item_receives_only_its_case_protocol_overlay(tmp_path):
@@ -138,10 +146,10 @@ def test_e1_materialized_item_receives_only_its_case_protocol_overlay(tmp_path):
         "cohort.selection_mode to all_input_rows" in item
         for item in e1_row["semantic_guardrails"]
     )
-    assert e2_row["protocol_version"] == "easyicu_evaluation_protocol_suite/v2"
-    assert not any(
-        "24-hour landmark" in item for item in e2_row["semantic_guardrails"]
-    )
+    assert e2_row["protocol_version"] == "e2_lactate_mortality/20260809-v2"
+    assert e2_row["case_scientific_protocol"]["task_id"] == "e2_lactate_mortality"
+    assert len(e2_row["case_scientific_protocol_sha256"]) == 64
+    assert any("measured/unmeasured" in item for item in e2_row["semantic_guardrails"])
 
 
 def test_materializer_can_select_one_development_case_without_reordering():
