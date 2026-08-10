@@ -611,7 +611,18 @@ def _load_concept(
         if source_mode == "export":
             if isinstance(root, ExportPackage):
                 require_canonical_time_projection(root, concept)
-            return _coerce_int_stay(read_exported_concept(root, concept))
+            extra_columns = (
+                [f"{concept}_observed", f"{concept}_available"]
+                if str(concept).startswith("sofa2")
+                else None
+            )
+            return _coerce_int_stay(
+                read_exported_concept(
+                    root,
+                    concept,
+                    extra_columns=extra_columns,
+                )
+            )
         from ...api import load_concepts  # local import: heavy module
 
         return _coerce_int_stay(
@@ -1530,6 +1541,11 @@ def _build_trajectory_long_from_resolved_source(
         if has_observed != has_available:
             raise MaterializedMetadataError(
                 f"trajectory concept {concept!r} has an incomplete owner evidence receipt"
+            )
+        if str(concept).startswith("sofa2") and not has_observed:
+            raise MaterializedMetadataError(
+                f"trajectory concept {concept!r} requires its owner observed/available "
+                "receipt; refusing to treat a SOFA-2 value as directly observed"
             )
         if has_observed:
             observed = _require_finite_numeric(

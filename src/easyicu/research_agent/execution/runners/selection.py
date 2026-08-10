@@ -77,6 +77,15 @@ from .trajectory_stability_executor import (
     trajectory_stability_executor_code,
     trajectory_stability_executor_owns_step,
 )
+from .trajectory_scientific_candidate_executor import (
+    SCIENTIFIC_CANDIDATE_INPUTS,
+    trajectory_scientific_candidate_executor_code,
+    trajectory_scientific_candidate_executor_owns_step,
+)
+from .trajectory_scientific_representation_executor import (
+    trajectory_scientific_representation_executor_code,
+    trajectory_scientific_representation_executor_owns_step,
+)
 from .typed_input_binding import sole_typed_cohort_input
 
 
@@ -154,6 +163,8 @@ def select_standard_executor(
     plan: AnalysisPlan,
     plausibility_scope: FlagOnlyPlausibilityScope | None = None,
     resolved_bindings: Mapping[str, Any] | None = None,
+    trajectory_scientific_runtime_authority: Mapping[str, Any] | None = None,
+    scientific_runtime_projection_sha256: str | None = None,
     trace: list[StandardExecutorCandidate] | None = None,
 ) -> StandardExecutorSelection | None:
     """Select by exact typed contract, never by prose or benchmark identity.
@@ -472,6 +483,46 @@ def select_standard_executor(
         )
         return _selected(selection, "missingness_audit")
     _missed("missingness_audit")
+    if trajectory_scientific_representation_executor_owns_step(
+        step,
+        plan=plan,
+        authority=trajectory_scientific_runtime_authority,
+    ):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="trajectory_signed_representation",
+                selection_reason="signed_trajectory_representation_authority",
+                progress_message="Using signed trajectory representation executor",
+                code=trajectory_scientific_representation_executor_code(
+                    authority=trajectory_scientific_runtime_authority,
+                    runtime_projection_sha256=str(
+                        scientific_runtime_projection_sha256 or ""
+                    ),
+                ),
+                consumed_input_keys=(),
+            )
+        )
+    _missed("trajectory_signed_representation")
+    if trajectory_scientific_candidate_executor_owns_step(
+        step,
+        plan=plan,
+        authority=trajectory_scientific_runtime_authority,
+    ):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="trajectory_signed_candidate_selection",
+                selection_reason="signed_trajectory_candidate_authority",
+                progress_message="Using signed trajectory candidate selector",
+                code=trajectory_scientific_candidate_executor_code(
+                    authority=trajectory_scientific_runtime_authority,
+                    runtime_projection_sha256=str(
+                        scientific_runtime_projection_sha256 or ""
+                    ),
+                ),
+                consumed_input_keys=tuple(sorted(SCIENTIFIC_CANDIDATE_INPUTS)),
+            )
+        )
+    _missed("trajectory_signed_candidate_selection")
     if trajectory_stability_executor_owns_step(step, plan=plan):
         if receipt_required:
             _receipt_declined("trajectory_cluster_stability")
@@ -483,7 +534,16 @@ def select_standard_executor(
                 progress_message=(
                     "Using planner-specified trajectory stability executor"
                 ),
-                code=trajectory_stability_executor_code(step, plan=plan),
+                code=trajectory_stability_executor_code(
+                    step,
+                    plan=plan,
+                    scientific_runtime_authority=(
+                        trajectory_scientific_runtime_authority
+                    ),
+                    runtime_projection_sha256=(
+                        scientific_runtime_projection_sha256
+                    ),
+                ),
                 consumed_input_keys=tuple(sorted(STABILITY_EXECUTOR_INPUTS)),
             )
         )

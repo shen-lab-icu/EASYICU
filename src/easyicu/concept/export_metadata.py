@@ -160,7 +160,7 @@ def _companion_projection(
 
     escaped = re.escape(concept)
     match = re.fullmatch(
-        rf"{escaped}_(first_time|last_time|measured|count|n|max|min|mean|median|first|last)"
+        rf"{escaped}_(first_time|last_time|measured|observed|available|count|n|max|min|mean|median|first|last)"
         r"(?:_([0-9]+(?:\.[0-9]+)?h))?",
         column,
     )
@@ -176,8 +176,13 @@ def _companion_projection(
     )
     if kind in {"n", "count"}:
         return ConceptColumnRole.COUNT, window, "structural_count"
-    if kind == "measured":
-        return ConceptColumnRole.MEASUREMENT_STATUS, window, "measurement_status"
+    if kind in {"measured", "observed", "available"}:
+        transform = {
+            "measured": "measurement_status",
+            "observed": "owner_observed_status",
+            "available": "owner_available_status",
+        }[kind]
+        return ConceptColumnRole.MEASUREMENT_STATUS, window, transform
     if kind in {"first_time", "last_time"}:
         role = (
             ConceptColumnRole.FIRST_OBSERVATION_TIME

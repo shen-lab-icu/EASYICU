@@ -11,6 +11,7 @@ from benchmarks.figure2_canonical9.case_scientific_protocol import (
     default_case_protocol_path,
     load_case_scientific_protocol,
     load_default_case_protocol,
+    load_runtime_scientific_projection,
 )
 
 
@@ -39,6 +40,17 @@ def test_e2_h2_h3_protocols_are_strict_and_content_digestable() -> None:
     assert h3.selection_and_stability.minimum_mean_stability == 0.7
     assert "sofa2" not in h3.representation.features
     assert h3.representation.descriptive_only_features == ("sofa2",)
+    h3_projection = build_runtime_scientific_projection(h3)
+    h3_execution = h3_projection.deterministic_execution_contract
+    assert h3_execution is not None
+    assert tuple(h3_execution["coordinate_concepts"]) == h3.representation.features
+    assert h3_execution["descriptive_only_concepts"] == ["sofa2"]
+    assert len(h3_execution["representation_columns"]) == 7 * 6
+    assert h3_execution["candidate_cluster_counts"] == [2, 3, 4, 5, 6]
+    assert (
+        h3_execution["upper_boundary_action"]
+        == "fail_closed_if_selected_at_upper_boundary"
+    )
     for protocol in (e2, h2, h3):
         assert len(case_protocol_content_sha256(protocol)) == 64
         projection = build_runtime_scientific_projection(protocol)
@@ -94,10 +106,20 @@ def test_runtime_projection_rejects_agent_visible_drift() -> None:
     payload["agent_visible_guardrails"][0] = "silently changed after review"
 
     with pytest.raises(ValueError, match="projection digest mismatch"):
-        from benchmarks.figure2_canonical9.case_scientific_protocol import (
-            load_runtime_scientific_projection,
-        )
+        load_runtime_scientific_projection(payload)
 
+
+def test_runtime_projection_rejects_deterministic_execution_drift() -> None:
+    protocol = load_default_case_protocol("h3_trajectory_clustering")
+    projection = build_runtime_scientific_projection(protocol)
+    payload = projection.model_dump(mode="json")
+    payload["deterministic_execution_contract"]["candidate_cluster_counts"] = [
+        2,
+        3,
+        4,
+    ]
+
+    with pytest.raises(ValueError, match="projection digest mismatch"):
         load_runtime_scientific_projection(payload)
 
 

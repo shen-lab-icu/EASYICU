@@ -1398,6 +1398,23 @@ def _run_one_arm(
         # trajectory-item applicability by kind (cross-sectional clustering vs
         # longitudinal) instead of fragile manuscript wording (M3 false-open).
         opts.setdefault("task_kind", getattr(item, "kind", None))
+        runtime_projection = getattr(item, "runtime_scientific_projection", None)
+        if isinstance(runtime_projection, Mapping):
+            execution_contract = runtime_projection.get(
+                "deterministic_execution_contract"
+            )
+            projection_digest = str(
+                runtime_projection.get("runtime_projection_sha256") or ""
+            ).strip()
+            if isinstance(execution_contract, Mapping):
+                opts.setdefault(
+                    "trajectory_scientific_runtime_authority",
+                    dict(execution_contract),
+                )
+                opts.setdefault(
+                    "scientific_runtime_projection_sha256",
+                    projection_digest,
+                )
         scientific_contract = getattr(item, "scientific_acceptance_contract", None)
         if isinstance(scientific_contract, Mapping):
             required_cohort_mode = str(

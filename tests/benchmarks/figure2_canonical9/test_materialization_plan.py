@@ -88,7 +88,7 @@ def test_patient_split_and_trajectory_cases_have_explicit_execution_contracts():
     assert {"sofa2_resp", "lact"}.issubset(h3.trajectory_concepts)
     assert "sofa2" not in h3.candidate_model_concepts
     assert h3.descriptive_only_concepts == ("sofa2",)
-    assert h3.task_protocol_version == "h3_trajectory_clustering/20260810-v3"
+    assert h3.task_protocol_version == "h3_trajectory_clustering/20260810-v4"
     assert h3.additional_semantic_guardrails == ()
 
 
