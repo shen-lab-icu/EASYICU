@@ -30,6 +30,22 @@ _MAX_TABLE_ROWS = 30
 _MAX_TABLE_COLUMNS = 12
 _MAX_PENDING = 16
 _PENDING_LOCK = threading.RLock()
+_MATERIALIZED_FEATURE_SUFFIXES = tuple(
+    sorted(
+        (
+            "_first_time",
+            "_last_time",
+            "_measured",
+            "_first",
+            "_mean",
+            "_max",
+            "_min",
+            "_n",
+        ),
+        key=len,
+        reverse=True,
+    )
+)
 _UNSAFE_PROJECTION_PATTERNS = (
     re.compile(
         r"(?:file://|(?<![A-Za-z0-9])/(?:Users|home|private|tmp|var|etc|opt|Volumes)/|\b[A-Za-z]:\\)",
@@ -148,6 +164,23 @@ def _configured_covariates(study: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
+def _source_concept_for_operational_column(
+    column: str,
+    *,
+    by_id: Mapping[str, Any],
+) -> Optional[str]:
+    """Resolve a wide materialized column back to its exported source concept."""
+
+    if column in by_id:
+        return column
+    for suffix in _MATERIALIZED_FEATURE_SUFFIXES:
+        if column.endswith(suffix):
+            source_concept = column[: -len(suffix)]
+            if source_concept in by_id:
+                return source_concept
+    return None
+
+
 def _cohort_window(study: Mapping[str, Any]) -> tuple[float, float]:
     raw = study.get("time_window")
     window = raw if isinstance(raw, Mapping) else {}
@@ -246,8 +279,11 @@ def _data_foundation_profile(
         )
     )
     for concept_id in scientific_inputs:
-        concept_meta = by_id.get(concept_id)
-        if concept_meta is None:
+        source_concept = _source_concept_for_operational_column(
+            concept_id,
+            by_id=by_id,
+        )
+        if source_concept is None:
             role = (
                 "primary_exposure"
                 if concept_id == primary_exposure
@@ -257,13 +293,17 @@ def _data_foundation_profile(
                 f"research_pipeline_{role}_outside_configured_modules",
                 f"The configured {role.replace('_', ' ')} is not available in the selected feature modules.",
             )
+        concept_meta = by_id[source_concept]
         concept_module = Path(concept_meta.file_name).stem.lower()
-        if concept_module in {"demographics", "outcome"} and (
+        if concept_id == source_concept and concept_module in {
+            "demographics",
+            "outcome",
+        } and (
             not concept_meta.typed_metadata or concept_meta.column_role == "value"
         ):
             static_concepts.append(concept_id)
         else:
-            required_feature_concepts.append(concept_id)
+            required_feature_concepts.append(source_concept)
 
     return {
         "allowed_modules": modules,
