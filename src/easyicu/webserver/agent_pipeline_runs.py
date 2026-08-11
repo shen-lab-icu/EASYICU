@@ -23,6 +23,9 @@ from typing import Any, Dict, List, Mapping, Optional
 from easyicu.webserver import provider_adapter
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.literature_projection import load_run_literature_projection
+from easyicu.webserver.scientific_readiness_projection import (
+    build_scientific_readiness_projection,
+)
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_MANUSCRIPT_PREVIEW = 24_000
@@ -613,6 +616,8 @@ def _readiness_axes(run_dir: Path) -> Dict[str, Any]:
             "manuscript_generated",
             "publication_ready",
             "paper_authorized",
+            "display_suite_complete",
+            "display_suite_errors",
             "missing_evidence_count",
             "numeric_error_count",
             "evidence_error_count",
@@ -644,21 +649,29 @@ def _gate_from_axes(axes: Mapping[str, Any], *, pending: bool) -> Dict[str, Any]
             if status == "analysis_only"
             else "research_agent_pipeline_failed_closed"
         )
-    checks = [
-        {
-            "id": key,
-            "label": key.replace("_", " "),
-            "passed": bool(axes.get(key)),
-            "reason": None if axes.get(key) else f"{key}_not_satisfied",
-        }
-        for key in (
-            "execution_complete",
-            "analysis_validated",
-            "evidence_complete",
-            "numeric_verified",
-            "manuscript_ready",
+    check_labels = {
+        "execution_complete": "execution complete",
+        "analysis_validated": "automated analysis validation",
+        "evidence_complete": "evidence references complete",
+        "numeric_verified": "reported numbers verified",
+        # The Research Agent's manuscript_ready axis means that an
+        # evidence-bound draft exists.  It is deliberately not the publication
+        # axis; the old generic label made those two states look equivalent.
+        "manuscript_ready": "evidence-bound draft generated",
+        "publication_ready": "publication package ready",
+        "paper_authorized": "exact-run paper authority granted",
+    }
+    checks = []
+    for key, label in check_labels.items():
+        passed = bool(axes.get(key))
+        checks.append(
+            {
+                "id": key,
+                "label": label,
+                "passed": passed,
+                "reason": None if passed else f"{key}_not_satisfied",
+            }
         )
-    ]
     return {
         "status": status,
         "reason": reason,
@@ -822,7 +835,7 @@ def _write_projection(
         )
         if run_dir
         else {
-            "schema_version": "easyicu.web-literature-evidence/1",
+            "schema_version": "easyicu.web-literature-evidence/2",
             "scope": "research_plan",
             "run_id": run_id,
             "status": "unavailable",
@@ -835,6 +848,13 @@ def _write_projection(
             },
         }
     )
+    scientific_readiness = build_scientific_readiness_projection(
+        run_id=run_id,
+        run_dir=run_dir,
+        axes=axes,
+        literature_evidence=literature_evidence,
+        study=study,
+    ).model_dump(mode="json")
     manuscript_path = run_dir / "manuscript_scaffold_bound.md" if run_dir else None
     manuscript_text = ""
     if manuscript_path is not None:
@@ -898,6 +918,7 @@ def _write_projection(
         "resume_scope": getattr(pending, "resume_scope", None),
         "pending_reviews": pending_requests,
         "readiness": axes,
+        "scientific_readiness_status": scientific_readiness["status"],
         "evidence_count": evidence_count,
         "result_table_count": result_tables.get("table_count", 0),
         "figure_count": len(figure_gallery.get("figures") or []),
@@ -920,6 +941,7 @@ def _write_projection(
         "quality_gate.json": {"gate": gate, "quality": []},
         "agent_plan.json": plan if isinstance(plan, dict) else {},
         "literature_evidence.json": literature_evidence,
+        "scientific_readiness.json": scientific_readiness,
         "manuscript_draft.json": {
             "run_id": run_id,
             "status": "locked_pending_human_review",

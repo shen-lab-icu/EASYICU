@@ -49,6 +49,7 @@ _RUN_ARTIFACT_NAMES = [
     "quality_gate.json",
     "agent_plan.json",
     "literature_evidence.json",
+    "scientific_readiness.json",
     "manuscript_draft.json",
     "benchmark_scorecard.json",
     "workflow_graph.json",
@@ -1508,6 +1509,10 @@ def _public_review_payloads(
         public["agent_plan.json"] = payloads["agent_plan.json"]
     if "literature_evidence.json" in payloads:
         public["literature_evidence.json"] = payloads["literature_evidence.json"]
+    if "scientific_readiness.json" in payloads:
+        public["scientific_readiness.json"] = payloads[
+            "scientific_readiness.json"
+        ]
     if "manuscript_draft.json" in payloads:
         row = payloads["manuscript_draft.json"]
         public["manuscript_draft.json"] = {

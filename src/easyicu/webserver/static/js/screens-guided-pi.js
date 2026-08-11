@@ -779,6 +779,7 @@
     const reasons = {
       question_bound: tr('Question is bound to this project', '科学问题已绑定到当前项目'),
       idea_handoff_accepted: tr('Selected idea is digest-bound', '所选想法已用摘要绑定'),
+      prior_art_authority_not_established: tr('Prior-art authority and novelty are not established', '先前研究权限与新颖性未成立'),
       idea_feasibility_refresh_required: tr('Recheck feasibility against the current data source', '需要按当前数据源重新核验可行性'),
       study_setup_complete: tr('Required study setup is complete', '必需研究配置已完成'),
       active_export_ready: tr('A matching EasyICU export is ready', '同一项目的 EasyICU 数据包已就绪'),
@@ -790,6 +791,9 @@
       validated_analysis_complete: tr('Analysis, validation, and numeric checks are complete', '分析、验证与数值核验已完成'),
       interpretation_complete: tr('Evidence-bounded interpretation is complete', '证据约束的结果解读已完成'),
       human_review_required: tr('Draft is locked pending clinical and methods review', '初稿已锁定，等待临床与方法学审阅'),
+      source_population_scope_open: tr('Prepared data are traceable, but source-population scope is open', '准备数据可追踪，但来源人群范围未闭合'),
+      publication_analysis_incomplete: tr('The executable plan is not a complete publication analysis', '可执行计划不是完整投稿分析'),
+      paper_authority_not_granted: tr('Draft generated; publication authority was not granted', '初稿已生成；未授予论文发表权限'),
       full_agent_manuscript_required: tr('A governed Agent manuscript is required', '需要由受治理的 Agent 生成稿件'),
     };
     const reasonText = stage => reasons[stage && stage.reason_code]

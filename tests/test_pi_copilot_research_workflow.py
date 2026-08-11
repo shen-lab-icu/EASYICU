@@ -364,6 +364,7 @@ def test_plan_literature_projection_keeps_only_bundle_bound_keys() -> None:
                 "sources_enabled": ["pubmed"],
                 "sources_returning": ["pubmed"],
                 "search_conducted": True,
+                "searched_at": "2026-08-11T12:00:00+00:00",
             },
         },
         plan={
@@ -373,13 +374,23 @@ def test_plan_literature_projection_keeps_only_bundle_bound_keys() -> None:
                     "planned_analysis_role": "primary",
                     "intent": "Estimate the primary association.",
                     "literature_citation_keys": ["method_key", "invented_key"],
-                }
+                },
+                {
+                    "step_id": "render",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Render the already-bound estimate.",
+                },
             ]
         },
     )
 
     assert payload["status"] == "searched"
-    assert payload["mapping_status"] == "complete"
+    assert payload["mapping_status"] == "partial"
+    assert payload["scientific_mapping_status"] == "complete"
+    assert payload["scientific_plan_step_count"] == 1
+    assert payload["scientific_mapped_step_count"] == 1
+    assert payload["search"]["searched_at"] == "2026-08-11T12:00:00+00:00"
+    assert payload["citation_year_range"] == {"oldest": None, "newest": None}
     assert payload["step_citation_map"][0]["citation_keys"] == ["method_key"]
     assert payload["integrity"]["unknown_citation_keys_removed"] == ["invented_key"]
     assert (

@@ -28,6 +28,7 @@ import re
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from hashlib import sha1
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -93,6 +94,13 @@ class LiteratureSearchProvenance(BaseModel):
     search_conducted: bool = Field(
         ...,
         description="True only when at least one retrieval source was enabled.",
+    )
+    searched_at: Optional[str] = Field(
+        default=None,
+        description=(
+            "Timezone-aware timestamp of the retrieval attempt. Curated-only "
+            "bundles leave this unset."
+        ),
     )
     note: str = ""
 
@@ -1095,6 +1103,8 @@ class LiteratureAgent:
         curated_seed_count = len(baseline)
         sources_enabled: List[str] = []
         sources_returning: List[str] = []
+        bound_search_timestamp: Optional[str] = None
+        live_retrieval_attempted = False
 
         # A host may have already run an explicitly authorized literature
         # search before the pipeline starts (for example, Web Idea Mining).
@@ -1102,6 +1112,9 @@ class LiteratureAgent:
         # an ambient file or silently repeat the network request here.
         if self.bound_seed is not None:
             seed_provenance = self.bound_seed.search_provenance
+            bound_search_timestamp = (
+                seed_provenance.searched_at if seed_provenance else None
+            )
             seed_sources = list(
                 (
                     seed_provenance.sources_enabled
@@ -1142,6 +1155,7 @@ class LiteratureAgent:
         # 2) PubMed live (T2.2). Errors are swallowed: the bundle is
         #    still useful even if the network is unreachable.
         if self.enable_pubmed:
+            live_retrieval_attempted = True
             sources_enabled.append("pubmed")
             client = self.pubmed_client or PubMedLiteratureClient()
             try:
@@ -1166,6 +1180,7 @@ class LiteratureAgent:
         #    are swallowed for the same reason as PubMed: literature
         #    enrichment must never break an otherwise valid analysis.
         if self.enable_tavily:
+            live_retrieval_attempted = True
             sources_enabled.append("tavily")
             client = self.tavily_client or TavilyLiteratureClient()
             try:
@@ -1190,6 +1205,7 @@ class LiteratureAgent:
 
         # 4) LLM extension (only when a real client is provided).
         if self.llm is not None and not isinstance(self.llm, MockLLMClient):
+            live_retrieval_attempted = True
             sources_enabled.append("llm_extension")
             existing_keys = ", ".join(c.key for c in merged)
             msgs = [
@@ -1247,6 +1263,11 @@ class LiteratureAgent:
             sources_enabled=sources_enabled,
             sources_returning=sources_returning,
             search_conducted=search_conducted,
+            searched_at=(
+                datetime.now(timezone.utc).isoformat()
+                if live_retrieval_attempted
+                else bound_search_timestamp
+            ),
             note=(
                 (
                     "Retrieval ran; PRISMA counts describe the records these "

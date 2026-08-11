@@ -28,9 +28,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-literature.css?v=20260811-literature1" in index
     assert "js/screens-guided-pi-literature.js?v=20260811-literature2" in index
     assert "js/screens-guided-pi-markdown.js?v=20260811-message-links1" in index
-    assert "js/screens-guided-pi-demo.js?v=20260811-product-demo6" in index
-    assert "js/screens-guided-pi-preview.js?v=20260811-product-demo1" in index
-    assert "js/screens-guided-pi.js?v=20260811-product-demo-truth1" in index
+    assert "js/screens-guided-pi-demo.js?v=20260811-science-readiness1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260811-science-readiness1" in index
+    assert "js/screens-guided-pi.js?v=20260811-science-readiness1" in index
     assert "js/api.js?v=20260810-research-workflow1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
@@ -283,9 +283,9 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     pi_owner = _read("js/screens-guided-pi.js")
     preview = _read("js/screens-guided-pi-preview.js")
     assert "帮我从 MIMIC-IV 里找一个关于早期脓毒症和院内死亡" in demo
-    assert "选择第 2 个，使用 MIMIC-IV。" in demo
+    assert "把第 2 个作为工程验证案例继续，使用 MIMIC-IV。" in demo
     assert "可以，继续提取数据。" in demo
-    assert "计划可以，继续分析。" in demo
+    assert "只继续工程验证，所有科学与投稿论断保持阻断。" in demo
     assert "帮我解读结果，并整理成论文初稿。" in demo
     assert "继续 Web E1 工程 UAT" not in demo
     assert "run_type='full'" not in demo
@@ -305,11 +305,23 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "resource.title || resourceLabel(resource)" in pi_owner
     assert "value.kind === 'demo_artifact'" in preview
     assert "Product demo · Real engineering-canary aggregate" in preview
+    assert "Historical run plus independent current audit" in preview
+    assert "state.payload && state.payload.source_authority" in preview
     assert "safe.kind !== 'demo_artifact'" in preview
     assert "literature_evidence.json" in demo
+    assert "scientific_readiness.json" in demo
     assert "result_tables.json" in demo
     assert "figure_gallery.json" in demo
-    assert "打开全部 9 篇文献" in demo
+    assert "打开历史与当前文献审计" in demo
+    assert "search_conducted: false" in demo
+    assert "curated_seed_count: 9" in demo
+    assert "检出'), value: '14'" not in demo
+    assert "去重'), value: '5'" not in demo
+    assert "检索在制定计划前完成" not in demo
+    assert "SOFA-2 versus SOFA-1 for mortality prediction" in demo
+    assert "https://pubmed.ncbi.nlm.nih.gov/41877184/" in demo
+    assert "SCIENTIFIC_REVIEW_MAJOR_REVISION_OPEN" in demo
+    assert "PAPER_AUTHORITY_NOT_GRANTED" in demo
     assert demo.count("step_id: '") == 11
     assert "citation_keys:" in demo
     assert "projection_note:" in demo
@@ -325,6 +337,10 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "validated_analysis_complete" in pi_owner
     assert "interpretation_complete" in pi_owner
     assert "human_review_required" in pi_owner
+    assert "prior_art_authority_not_established" in pi_owner
+    assert "source_population_scope_open" in pi_owner
+    assert "publication_analysis_incomplete" in pi_owner
+    assert "paper_authority_not_granted" in pi_owner
 
 
 def test_complete_research_demo_reuses_the_unchanged_agent_figure() -> None:

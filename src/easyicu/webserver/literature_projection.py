@@ -14,9 +14,10 @@ from typing import Any, Mapping, Sequence
 from urllib.parse import quote, urlparse
 
 
-LITERATURE_EVIDENCE_SCHEMA_VERSION = "easyicu.web-literature-evidence/1"
+LITERATURE_EVIDENCE_SCHEMA_VERSION = "easyicu.web-literature-evidence/2"
 _MAX_CITATIONS = 80
 _MAX_STEPS = 80
+_GOVERNED_SCIENTIFIC_ROLES = {"primary", "secondary", "sensitivity"}
 
 
 def _text(value: Any, limit: int) -> str:
@@ -35,7 +36,12 @@ def _source_url(row: Mapping[str, Any]) -> str | None:
         parsed = urlparse(candidate)
     except ValueError:
         return None
-    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+    ):
         return None
     return candidate
 
@@ -80,12 +86,19 @@ def project_run_literature(
     raw_steps = raw_steps if isinstance(raw_steps, Sequence) else []
     step_map: list[dict[str, Any]] = []
     mapped_steps = 0
+    scientific_step_count = 0
+    scientific_mapped_steps = 0
     unknown_keys: set[str] = set()
     for raw in list(raw_steps)[:_MAX_STEPS]:
         if not isinstance(raw, Mapping):
             continue
         requested = raw.get("literature_citation_keys")
-        requested = requested if isinstance(requested, Sequence) and not isinstance(requested, (str, bytes)) else []
+        requested = (
+            requested
+            if isinstance(requested, Sequence)
+            and not isinstance(requested, (str, bytes))
+            else []
+        )
         keys = []
         for value in requested:
             key = _text(value, 120)
@@ -93,16 +106,25 @@ def project_run_literature(
                 keys.append(key)
         unknown_keys.update(key for key in keys if key not in citation_keys)
         valid_keys = [key for key in keys if key in citation_keys]
+        planned_role = _text(raw.get("planned_analysis_role"), 40)
+        # Typed plans always declare one of the four known roles.  Treat an
+        # absent/unknown role as governed rather than allowing an older or
+        # malformed plan to evade the scientific citation gate.
+        governed_scientific_step = (
+            planned_role in _GOVERNED_SCIENTIFIC_ROLES or not planned_role
+        )
         if valid_keys:
             mapped_steps += 1
+        if governed_scientific_step:
+            scientific_step_count += 1
+            if valid_keys:
+                scientific_mapped_steps += 1
         step_map.append(
             {
                 "step_id": _text(raw.get("step_id") or raw.get("id"), 160),
                 "intent": _text(raw.get("intent") or raw.get("title"), 1_200),
-                "planned_analysis_role": _text(
-                    raw.get("planned_analysis_role"), 40
-                )
-                or None,
+                "planned_analysis_role": planned_role or None,
+                "governed_scientific_step": governed_scientific_step,
                 "citation_keys": valid_keys,
                 "support_status": "bound" if valid_keys else "not_bound",
             }
@@ -111,7 +133,9 @@ def project_run_literature(
     provenance = bundle.get("search_provenance")
     provenance = provenance if isinstance(provenance, Mapping) else {}
     searched = bool(provenance.get("search_conducted"))
-    status = "searched" if searched else ("curated_only" if citations else "unavailable")
+    status = (
+        "searched" if searched else ("curated_only" if citations else "unavailable")
+    )
     if not step_map:
         mapping_status = "not_applicable"
     elif mapped_steps == len(step_map):
@@ -120,6 +144,22 @@ def project_run_literature(
         mapping_status = "partial"
     else:
         mapping_status = "not_bound"
+    if not scientific_step_count:
+        scientific_mapping_status = "not_applicable"
+    elif scientific_mapped_steps == scientific_step_count:
+        scientific_mapping_status = "complete"
+    elif scientific_mapped_steps:
+        scientific_mapping_status = "partial"
+    else:
+        scientific_mapping_status = "not_bound"
+
+    citation_years = sorted(
+        {
+            int(str(row.get("year") or "").strip())
+            for row in citations
+            if str(row.get("year") or "").strip().isdigit()
+        }
+    )
 
     prisma = bundle.get("prisma")
     prisma = prisma if isinstance(prisma, Mapping) else None
@@ -133,6 +173,7 @@ def project_run_literature(
         "status": status,
         "search": {
             "search_conducted": searched,
+            "searched_at": _text(provenance.get("searched_at"), 80) or None,
             "curated_seed_count": int(provenance.get("curated_seed_count") or 0),
             "sources_enabled": [
                 _text(value, 80)
@@ -152,7 +193,14 @@ def project_run_literature(
         "plan_step_count": len(step_map),
         "mapped_step_count": mapped_steps,
         "mapping_status": mapping_status,
+        "scientific_plan_step_count": scientific_step_count,
+        "scientific_mapped_step_count": scientific_mapped_steps,
+        "scientific_mapping_status": scientific_mapping_status,
         "step_citation_map": step_map,
+        "citation_year_range": {
+            "oldest": citation_years[0] if citation_years else None,
+            "newest": citation_years[-1] if citation_years else None,
+        },
         "integrity": {
             "unknown_citation_keys_removed": sorted(unknown_keys),
             "path_values_returned": False,

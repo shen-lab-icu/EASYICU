@@ -128,6 +128,10 @@
     return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(title)}</strong><span>${esc(detail)}</span></div>`;
   }
   function demoProvenance() {
+    const authority = String((state.payload && state.payload.source_authority) || '');
+    if (authority === 'independent_product_audit_20260811') {
+      return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Product demo · Historical run plus independent current audit', '产品演示 · 历史运行与独立当前审计'))}</strong><span>${esc(tr('The current sources adjudicate the historical canary; they were not retroactively inserted into that Agent run.', '当前来源用于裁决历史 canary；并未追溯性写入该 Agent 运行。'))}</span></div>`;
+    }
     return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Product demo · Real engineering-canary aggregate', '产品演示 · 真实工程试跑聚合产物'))}</strong><span>${esc(tr('Read-only and non-reportable; not formal paper evidence.', '只读且不可报告；不是正式论文证据。'))}</span></div>`;
   }
   function render() {
