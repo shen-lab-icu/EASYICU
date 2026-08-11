@@ -17,6 +17,7 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     typed_product as _canonical_typed_product,
 )
+from ..planning.primary_result_contract import model_terms_retry_guide
 from ..planning.robustness_contract import RobustnessSpec
 from ..schema import (
     AnalysisPlan,
@@ -66,6 +67,20 @@ def planner_descriptive_robustness_guidance(analysis_type: str) -> str:
         "complete-case availability checks; any additional descriptive "
         "summary must remain a separately declared descriptive method.\n\n"
     )
+
+
+def planner_science_retry_guide() -> str:
+    """Return schema-owned retry guidance outside the Planner god module."""
+
+    optional_fields = (
+        "Contract applicability is exact: `family_primary_result_requirement` is "
+        "legal only on the primary step when `analysis_type` is `causal_inference` "
+        "or `survival`. An `association_study` must omit that field and declare its "
+        "supported adjusted model through `model_requirements`. Optional collection "
+        "fields, including `know_how_decisions`, must be omitted or encoded as JSON "
+        "arrays (`[]` when explicitly empty), never `null`."
+    )
+    return "\n\n" + model_terms_retry_guide() + "\n\n" + optional_fields
 
 
 def _canonicalise_figure_output_alias(token: object) -> object:
