@@ -21,6 +21,7 @@ def prepare_preplan_literature(
     tavily_api_key: Optional[str],
     tavily_retmax: int,
     tavily_include_domains: Sequence[str],
+    bound_seed: Optional[LiteratureBundle] = None,
 ) -> LiteratureBundle:
     """Retrieve, persist, and register the pre-plan literature authority."""
     bundle = build_preplan_literature_bundle(
@@ -32,6 +33,7 @@ def prepare_preplan_literature(
         tavily_api_key=tavily_api_key,
         tavily_retmax=tavily_retmax,
         tavily_include_domains=tavily_include_domains,
+        bound_seed=bound_seed,
     )
     bundle_path = run_dir / "preplan_literature_bundle.json"
     bundle_path.write_text(bundle.model_dump_json(indent=2), encoding="utf-8")

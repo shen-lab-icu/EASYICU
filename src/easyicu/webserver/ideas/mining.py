@@ -38,6 +38,11 @@ from easyicu.webserver.ideas.handoff import (
     load_validated_canonical_handoff,
     persist_canonical_handoff,
 )
+from easyicu.webserver.ideas.prior_art_receipt import (
+    PriorArtReceiptError,
+    build_prior_art_binding,
+    load_bound_prior_art_literature as _load_bound_prior_art_literature,
+)
 from easyicu.webserver.input_validation import parse_bool
 
 _CONFIG_DIR = Path.home() / ".easyicu"
@@ -80,6 +85,7 @@ _INTERVENTION_PRIORITY = (
     "fluid_balance",
 )
 _SEVERITY_PRIORITY = (
+    "sep3_sofa1",
     "sep3_sofa2",
     "lact",
     "map",
@@ -102,6 +108,16 @@ _EVENT_TRUE_STRINGS = {
     "non-invasive",
 }
 _EVENT_FALSE_STRINGS = {"0", "false", "f", "no", "n", "negative", "absent"}
+_MATERIALIZED_CONCEPT_SUFFIXES = (
+    "_first_time",
+    "_last_time",
+    "_measured",
+    "_first",
+    "_mean",
+    "_max",
+    "_min",
+    "_n",
+)
 
 
 class IdeaMiningWebError(ValueError):
@@ -620,7 +636,23 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
             ),
             "mapped_concepts": [],
         }
-    queries = _prior_art_queries(source, str(idea.get("idea_title") or "ICU idea"))
+    idea_prior_art = (
+        idea.get("prior_art") if isinstance(idea.get("prior_art"), dict) else {}
+    )
+    prespecified_queries = [
+        str(query).strip()
+        for query in idea_prior_art.get("queries_to_run") or []
+        if str(query).strip()
+    ]
+    # Mine once, execute exactly what was shown to the user. Re-inferring the
+    # topic from an Idea title can select a secondary/descriptive concept and
+    # silently search a different scientific question.
+    queries = prespecified_queries[:4] or _prior_art_queries(
+        source,
+        str(idea.get("idea_title") or "ICU idea"),
+        exposure=idea.get("exposure_or_predictor"),
+        outcome=idea.get("outcome"),
+    )
     allow_network = _request_bool(body, "allow_network")
     if not allow_network:
         prior = {
@@ -669,6 +701,45 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
                 json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8"
             )
     return out
+
+
+def prior_art_receipt_binding(run_id: str) -> Optional[Dict[str, Any]]:
+    """Bind the fixed prior-art artifact for an Idea Mining run, if complete."""
+
+    clean_run_id = str(run_id or "").strip()
+    if not clean_run_id:
+        return None
+    try:
+        return build_prior_art_binding(_run_dir(clean_run_id) / "prior_art_check.json")
+    except PriorArtReceiptError as exc:
+        raise IdeaMiningWebError({"error": exc.code, "reason": exc.message}) from exc
+
+
+def load_bound_prior_art_literature(
+    binding: Dict[str, Any],
+    *,
+    research_question: str,
+) -> Optional[Dict[str, Any]]:
+    """Load a verified Agent literature seed from an accepted Idea handoff."""
+
+    if not str(binding.get("prior_art_sha256") or "").strip():
+        return None
+    run_id = str(binding.get("run_id") or "").strip()
+    if not run_id:
+        raise IdeaMiningWebError(
+            {
+                "error": "prior_art_binding_run_required",
+                "reason": "The accepted prior-art binding has no Idea Mining run id.",
+            }
+        )
+    try:
+        return _load_bound_prior_art_literature(
+            _run_dir(run_id) / "prior_art_check.json",
+            binding=binding,
+            research_question=research_question,
+        )
+    except PriorArtReceiptError as exc:
+        raise IdeaMiningWebError({"error": exc.code, "reason": exc.message}) from exc
 
 
 def plan_idea(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -940,9 +1011,7 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
             prior_art_check=prior_art_check,
             run_dir=run_dir,
         )
-        handoff.update(
-            persist_canonical_handoff(canonical_packet, run_dir=run_dir)
-        )
+        handoff.update(persist_canonical_handoff(canonical_packet, run_dir=run_dir))
     except (TypeError, ValueError) as exc:
         raise IdeaMiningWebError(
             {
@@ -1357,6 +1426,89 @@ def _match_concepts(text: str) -> List[Dict[str, Any]]:
     return hits[:24]
 
 
+def _requested_adjustment_concepts(
+    text: str,
+    hits: List[Dict[str, Any]],
+) -> List[str]:
+    """Return only covariates the source explicitly says to adjust for.
+
+    A concept being mentioned in an idea is not evidence that it belongs in an
+    adjusted model.  In particular, severity markers listed for descriptive
+    review must not silently become confounders.  This small parser recognizes
+    bounded Chinese and English adjustment clauses; ambiguous prose yields an
+    empty list and leaves covariate selection to the conversation/human plan
+    gate.
+    """
+
+    source = _clean(text, 2_000)
+    clauses: List[str] = []
+    for pattern in (
+        r"(?:按|依据)\s*([^。；;]{1,120}?)\s*(?:调整|校正|控制)",
+        r"(?:调整|校正|控制)(?:变量|因素)?(?:包括|为|：|:)?\s*([^。；;]{1,120})",
+        r"(?:adjust(?:ed|ing)?\s+for|controlled\s+for|covariates?(?:\s+include|\s+were|\s*:))\s*([^.;]{1,160})",
+    ):
+        clauses.extend(match.group(1) for match in re.finditer(pattern, source, re.I))
+    if not clauses:
+        return []
+
+    selected: List[str] = []
+    for clause in clauses:
+        normalized = _norm_text(clause)
+        for row in hits:
+            concept_id = str(row.get("concept_id") or "").strip()
+            if not concept_id or concept_id in {"death", "los_icu"}:
+                continue
+            label = str(row.get("label") or "")
+            aliases = {concept_id, label, str(row.get("matched_alias") or "")}
+            aliases.update(_extra_aliases(concept_id, label))
+            if (
+                any(alias and _alias_hit(normalized, alias) for alias in aliases)
+                and concept_id not in selected
+            ):
+                selected.append(concept_id)
+    return selected
+
+
+def _requested_exposure_concepts(
+    text: str,
+    hits: List[Dict[str, Any]],
+) -> List[str]:
+    """Return predictors explicitly named as the primary exposure."""
+
+    source = _clean(text, 2_000)
+    clauses: List[str] = []
+    for pattern in (
+        r"(?:主要|核心|首要)?(?:暴露|预测因子|自变量)(?:采用|定义为|为|：|:)?\s*([^。；;，,]{1,140})",
+        r"(?:primary|main)\s+(?:exposure|predictor)(?:\s+is|\s*:)?\s*([^.;,]{1,180})",
+    ):
+        clauses.extend(match.group(1) for match in re.finditer(pattern, source, re.I))
+    if not clauses:
+        return []
+    selected: List[str] = []
+    for clause in clauses:
+        normalized = _norm_text(clause)
+        ranked: List[Tuple[int, str]] = []
+        for row in hits:
+            concept_id = str(row.get("concept_id") or "").strip()
+            if not concept_id or concept_id in {"death", "los_icu"}:
+                continue
+            label = str(row.get("label") or "")
+            aliases = {concept_id, label, str(row.get("matched_alias") or "")}
+            aliases.update(_extra_aliases(concept_id, label))
+            matched = [
+                _norm_text(alias)
+                for alias in aliases
+                if alias and _alias_hit(normalized, alias)
+            ]
+            if matched:
+                ranked.append((max(len(alias) for alias in matched), concept_id))
+        if ranked:
+            concept_id = max(ranked, key=lambda item: (item[0], item[1]))[1]
+            if concept_id not in selected:
+                selected.append(concept_id)
+    return selected
+
+
 def _idea_from_source(
     source: Dict[str, Any],
     text: str,
@@ -1376,7 +1528,7 @@ def _idea_from_source(
     title = _idea_title(source, predictor, outcome, concepts)
     concept_rows = [_concept_feasibility(row, export_index) for row in concepts]
     overall = _overall_feasibility(concept_rows, export_index)
-    novelty = _prior_art(source, title)
+    novelty = _prior_art(source, title, predictor=predictor, outcome=outcome)
     go_no_go = (
         "recommend"
         if overall["tier"] == "executable"
@@ -1404,6 +1556,7 @@ def _idea_from_source(
         "source_quote": source.get("evidence_quote"),
         "rationale": _rationale(text, predictor, outcome, concepts),
         "mapped_concepts": concept_rows,
+        "requested_adjustment_concepts": _requested_adjustment_concepts(text, hits),
         "feasibility": overall,
         "prior_art": novelty,
         "go_no_go": go_no_go,
@@ -2393,7 +2546,13 @@ def _overall_feasibility(
     }
 
 
-def _prior_art(source: Dict[str, Any], title: str) -> Dict[str, Any]:
+def _prior_art(
+    source: Dict[str, Any],
+    title: str,
+    *,
+    predictor: Optional[Dict[str, Any]] = None,
+    outcome: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     return {
         "status": "not_checked_external_search_required",
         "novelty_label": "unknown_until_search",
@@ -2402,7 +2561,13 @@ def _prior_art(source: Dict[str, Any], title: str) -> Dict[str, Any]:
         "reason": "Prior-art interpretation has not been run. Use the source article as inspiration, then run opt-in metadata search before claiming novelty.",
         "opportunity_frame": "Existing trials, reviews, or editorials should shape the ICU-database question: comparator, subgroup, timing window, outcome horizon, and whether the new angle is exploratory rather than already answered.",
         "next_use": "After opt-in, classify the literature as already answered, partially answered, or inspiration for a new ICU exploratory analysis.",
-        "queries_to_run": _prior_art_queries(source, title),
+        "queries_to_run": _prior_art_queries(
+            source,
+            title,
+            exposure=(predictor or {}).get("concept_id")
+            or (predictor or {}).get("label"),
+            outcome=(outcome or {}).get("concept_id") or (outcome or {}).get("label"),
+        ),
     }
 
 
@@ -2871,26 +3036,26 @@ def _seed_gate_runs(
     return runs
 
 
-def _prior_art_queries(source: Dict[str, Any], title: str) -> List[str]:
+def _prior_art_queries(
+    source: Dict[str, Any],
+    title: str,
+    *,
+    exposure: Any = None,
+    outcome: Any = None,
+) -> List[str]:
     title = _clean(title or source.get("title") or "ICU idea", 180)
-    source_title = _clean(source.get("title") or "", 180)
-    source_quote = _clean(source.get("evidence_quote") or "", 220)
-    exploratory_terms = _clean(
-        " ".join(re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", source_quote))[:160], 180
+    scope = _discovery_topic_clause(
+        title,
+        {"exposure": exposure, "outcome": outcome},
     )
     queries = [
-        f'("{title}") AND (ICU OR critical care)',
-        f'("{title}") AND (MIMIC OR eICU OR "public database")',
+        f'({scope}) AND (ICU[Title/Abstract] OR "critical care"[Title/Abstract] OR "intensive care"[Title/Abstract])',
+        f'({scope}) AND (MIMIC[Title/Abstract] OR eICU[Title/Abstract] OR "public database"[Title/Abstract])',
+        f"({scope}) AND (cohort[Title/Abstract] OR observational[Title/Abstract] OR prognosis[Title/Abstract])",
     ]
-    if source_title and source_title != title:
-        queries.append(f'("{source_title}") AND (MIMIC OR eICU OR ICU)')
-    if exploratory_terms:
-        queries.append(
-            f'({exploratory_terms}) AND (subgroup OR timing OR trajectory OR "public database" OR MIMIC OR eICU)'
-        )
     doi = _clean(source.get("doi") or "", 120)
     if doi:
-        queries.append(f'"{doi}"')
+        queries.insert(0, f'"{doi}"[DOI]')
     return queries[:4]
 
 
@@ -2907,14 +3072,90 @@ def _discovery_queries(topic: str, journal: str, body: Dict[str, Any]) -> List[s
             f' AND ("{year_from}"[Date - Publication] : "3000"[Date - Publication])'
         )
     journal_filter = f' AND "{journal}"[Journal]' if journal else ""
-    base = f'({topic}) AND (ICU OR "critical care" OR "intensive care")'
-    review = f"({topic}) AND (review[Publication Type] OR editorial[Publication Type] OR perspective OR commentary)"
-    db = f'({topic}) AND (MIMIC OR eICU OR "public database" OR "critical care database")'
+    scope = _discovery_topic_clause(topic, body)
+    base = f'({scope}) AND (ICU[Title/Abstract] OR "critical care"[Title/Abstract] OR "intensive care"[Title/Abstract])'
+    review = f"({scope}) AND (review[Publication Type] OR systematic review[Title/Abstract] OR guideline[Title/Abstract])"
+    db = f'({scope}) AND (MIMIC[Title/Abstract] OR eICU[Title/Abstract] OR "critical care database"[Title/Abstract])'
     return [
         base + journal_filter + year_filter,
         review + journal_filter + year_filter,
         db + year_filter,
     ]
+
+
+def _discovery_topic_clause(topic: str, body: Dict[str, Any]) -> str:
+    """Compile conversational study text into a bounded PubMed topic clause."""
+
+    exposure = _literature_concept_phrase(body.get("exposure"))
+    outcome = _literature_concept_phrase(body.get("outcome"))
+    clauses = [
+        _pubmed_title_abstract_clause(value) for value in (exposure, outcome) if value
+    ]
+    if clauses:
+        return " AND ".join(clauses[:2])
+
+    hits = _match_concepts(topic)
+    outcome_hit = _pick_outcome(topic, hits)
+    predictor_hit = _pick_predictor(hits, outcome_hit)
+    inferred = [
+        _pubmed_title_abstract_clause(str(row.get("label") or ""))
+        for row in (predictor_hit, outcome_hit)
+        if row and row.get("label")
+    ]
+    if inferred:
+        return " AND ".join(inferred[:2])
+
+    # No dictionary match: retain a small set of literature-bearing English
+    # tokens instead of sending the entire conversational instruction to
+    # PubMed.  The original topic remains in the returned audit payload.
+    tokens = [
+        token
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", topic)
+        if token.lower()
+        not in {
+            "about",
+            "analysis",
+            "database",
+            "find",
+            "help",
+            "idea",
+            "research",
+            "study",
+            "using",
+            "with",
+        }
+    ]
+    compact = " ".join(_dedupe_strings(token.lower() for token in tokens)[:8])
+    return _pubmed_title_abstract_clause(compact or topic[:80])
+
+
+def _literature_concept_phrase(value: Any) -> str:
+    raw = _clean(value or "", 180)
+    if not raw:
+        return ""
+    concept_id = raw
+    for suffix in _MATERIALIZED_CONCEPT_SUFFIXES:
+        if concept_id.endswith(suffix):
+            concept_id = concept_id[: -len(suffix)]
+            break
+    literature_labels = {
+        "sep3_sofa1": "Sepsis-3",
+        "sep3_sofa2": "SOFA-2 sepsis",
+        "death": "mortality",
+        "lact": "lactate",
+    }
+    if concept_id in literature_labels:
+        return literature_labels[concept_id]
+    if concept_id in concept_catalog.CONCEPT_DICTIONARY:
+        return _concept_label(concept_id)
+    return raw
+
+
+def _pubmed_title_abstract_clause(value: str) -> str:
+    phrase = _clean(value, 180).replace('"', "")
+    if not phrase:
+        return ""
+    return f'"{phrase}"[Title/Abstract]'
 
 
 def _dedupe_strings(values: Iterable[str]) -> List[str]:
@@ -3417,7 +3658,7 @@ def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
             ids = _pubmed_esearch(query, limit=5)
             calls += 1
             if ids:
-                rows = _pubmed_esummary(ids)
+                rows = _pubmed_article_records(ids)
                 calls += 1
                 for row in rows:
                     row["query"] = query
@@ -3478,6 +3719,7 @@ def _pubmed_esearch(query: str, limit: int = 5) -> List[str]:
             "term": query,
             "retmode": "json",
             "retmax": max(1, min(limit, 20)),
+            "sort": "relevance",
         }
     )
     url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?" + params
@@ -3577,6 +3819,9 @@ def _select_idea_concepts(
         if not row:
             return
         selected.append({**row, "role": role})
+
+    for concept_id in _requested_exposure_concepts(text, hits)[:1]:
+        add(concept_id, "exposure")
 
     if any(
         tok in low
@@ -3889,9 +4134,22 @@ def _extra_aliases(concept_id: str, label: str) -> set[str]:
         )
     if concept_id == "death":
         aliases.update({"mortality", "death", "survival", "死亡", "病死率"})
-    if concept_id == "sep3_sofa2":
+    if concept_id == "sep3_sofa1":
         aliases.update(
             {"sepsis", "sepsis-3", "septic shock", "suspected infection", "脓毒症"}
+        )
+    if concept_id == "sep3_sofa2":
+        aliases.update(
+            {
+                "sofa-2",
+                "sofa 2",
+                "experimental sepsis sensitivity",
+                "sepsis sensitivity sofa-2",
+                "sepsis-3 sofa-2",
+                "sofa-2 based sepsis",
+                "实验性脓毒症敏感性",
+                "基于sofa-2的脓毒症",
+            }
         )
     if concept_id == "aki":
         aliases.update({"aki", "acute kidney injury", "急性肾损伤"})

@@ -18,6 +18,12 @@ function boundedText(value, limit = MAX_TEXT_CHARS) {
 function modelErrorCode(message) {
   if (!message || message.stopReason !== "error") return "";
   const detail = String(message.errorMessage || "").toLowerCase();
+  if (detail.includes("pi_shell_token_budget_exhausted")) {
+    return "pi_shell_token_budget_exhausted";
+  }
+  if (detail.includes("pi_shell_session_provider_call_budget_exhausted")) {
+    return "pi_shell_session_provider_call_budget_exhausted";
+  }
   if (/context|token.*limit|maximum.*length/.test(detail)) return "pi_model_context_limit";
   if (/rate.?limit|too many requests|quota/.test(detail)) return "pi_model_rate_limited";
   if (/timeout|timed out|connection reset|server_error|internal_server_error|\b5\d\d\b/.test(detail)) {

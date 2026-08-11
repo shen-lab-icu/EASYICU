@@ -19,8 +19,9 @@ This module supplies that missing layer.  It is deliberately:
   record which methodology it planned against, and two runs of the same study
   can be shown to have seen the same guidance.
 
-Identifiers (DOI/PMID) are left unset rather than guessed.  A confidently wrong
-identifier is worse than an absent one: it looks verified.
+Identifiers remain unset unless they were verified against the primary source
+registry.  A confidently wrong identifier is worse than an absent one: it
+looks verified.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ __all__ = [
     "method_literature_pack",
 ]
 
-METHOD_LITERATURE_SCHEMA_VERSION = "easyicu.method_literature_pack/1"
+METHOD_LITERATURE_SCHEMA_VERSION = "easyicu.method_literature_pack/2"
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,9 @@ class MethodCard:
     source_title: str
     source_year: str
     source_venue: str = ""
+    source_pmid: str = ""
+    source_doi: str = ""
+    source_url: str = ""
     # Optional companion sources for the same requirement.
     also_see: tuple[str, ...] = field(default=())
 
@@ -74,6 +78,9 @@ class MethodCard:
             "source_title": self.source_title,
             "source_year": self.source_year,
             "source_venue": self.source_venue,
+            "source_pmid": self.source_pmid,
+            "source_doi": self.source_doi,
+            "source_url": self.source_url,
             "also_see": list(self.also_see),
         }
 
@@ -97,6 +104,9 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         ),
         source_year="2007",
         source_venue="Annals of Internal Medicine / BMJ / Lancet (co-published)",
+        source_pmid="17938396",
+        source_doi="10.7326/0003-4819-147-8-200710160-00010",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/17938396/",
     ),
     MethodCard(
         id="reporting_routinely_collected_data",
@@ -117,6 +127,9 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         ),
         source_year="2015",
         source_venue="PLoS Medicine",
+        source_pmid="26440803",
+        source_doi="10.1371/journal.pmed.1001885",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/26440803/",
     ),
     MethodCard(
         id="time_zero_and_immortal_time",
@@ -212,6 +225,9 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         ),
         source_year="2009",
         source_venue="BMJ",
+        source_pmid="19564179",
+        source_doi="10.1136/bmj.b2393",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/19564179/",
         also_see=("little_rubin_missing_data",),
     ),
     MethodCard(
@@ -268,6 +284,9 @@ def method_literature_citations() -> tuple[dict[str, Any], ...]:
             "year": card.source_year,
             "venue": card.source_venue or None,
             "relevance": f"Methodology: {card.question}",
+            "pmid": card.source_pmid or None,
+            "doi": card.source_doi or None,
+            "url": card.source_url or None,
         }
     return tuple(seen.values())
 

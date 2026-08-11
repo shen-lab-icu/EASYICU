@@ -262,6 +262,11 @@ class PipelineConfig:
     enable_pubmed: bool = False
     pubmed_email: Optional[str] = None
     pubmed_api_key: Optional[str] = None
+    # Optional digest-verified literature metadata supplied by an outer host
+    # that already performed an explicitly authorized search.  The complete
+    # payload is frozen and hashed into run authority; the pipeline validates
+    # it as a LiteratureBundle before exposing any citation key to Planner.
+    bound_preplan_literature: Optional[Dict[str, Any]] = None
     enable_tavily: bool = False
     tavily_api_key: Optional[str] = None
     tavily_retmax: int = 5

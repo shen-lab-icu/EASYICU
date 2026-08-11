@@ -148,6 +148,10 @@ _IDEA_HANDOFF_SCHEMA = {
     "accepted_at": "text",
     "go_no_go": "text",
     "go_no_go_reason": "text",
+    "prior_art_binding_schema_version": "text",
+    "prior_art_sha256": "text",
+    "prior_art_status": "text",
+    "prior_art_result_count": "number",
 }
 
 
@@ -600,6 +604,26 @@ def _sanitize_patch(raw: Any) -> Dict[str, Any]:
                 {
                     "error": "invalid_idea_handoff_digest",
                     "field": "idea_handoff.canonical_handoff_sha256",
+                }
+            )
+        prior_art_digest = str(handoff.get("prior_art_sha256") or "")
+        if prior_art_digest and not re.fullmatch(r"[a-f0-9]{64}", prior_art_digest):
+            raise StudyContextError(
+                {
+                    "error": "invalid_prior_art_handoff_digest",
+                    "field": "idea_handoff.prior_art_sha256",
+                }
+            )
+        prior_art_count = handoff.get("prior_art_result_count")
+        if prior_art_count is not None and (
+            isinstance(prior_art_count, bool)
+            or not isinstance(prior_art_count, int)
+            or prior_art_count < 0
+        ):
+            raise StudyContextError(
+                {
+                    "error": "invalid_prior_art_handoff_count",
+                    "field": "idea_handoff.prior_art_result_count",
                 }
             )
         patch["idea_handoff"] = handoff

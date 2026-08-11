@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 from easyicu.webserver import provider_adapter
+from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.literature_projection import load_run_literature_projection
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
@@ -279,28 +280,30 @@ def _data_foundation_profile(
             if value and value != target
         )
     )
+    primary_exposure_source_concept: Optional[str] = None
     for concept_id in scientific_inputs:
         source_concept = _source_concept_for_operational_column(
             concept_id,
             by_id=by_id,
         )
         if source_concept is None:
-            role = (
-                "primary_exposure"
-                if concept_id == primary_exposure
-                else "covariate"
-            )
+            role = "primary_exposure" if concept_id == primary_exposure else "covariate"
             raise ResearchPipelineRunError(
                 f"research_pipeline_{role}_outside_configured_modules",
                 f"The configured {role.replace('_', ' ')} is not available in the selected feature modules.",
             )
+        if concept_id == primary_exposure:
+            primary_exposure_source_concept = source_concept
         concept_meta = by_id[source_concept]
         concept_module = Path(concept_meta.file_name).stem.lower()
-        if concept_id == source_concept and concept_module in {
-            "demographics",
-            "outcome",
-        } and (
-            not concept_meta.typed_metadata or concept_meta.column_role == "value"
+        if (
+            concept_id == source_concept
+            and concept_module
+            in {
+                "demographics",
+                "outcome",
+            }
+            and (not concept_meta.typed_metadata or concept_meta.column_role == "value")
         ):
             static_concepts.append(concept_id)
         else:
@@ -312,7 +315,25 @@ def _data_foundation_profile(
         "outcome_concepts": tuple(outcome_concepts),
         "required_feature_concepts": tuple(required_feature_concepts),
         "require_outcome": require_outcome,
+        "primary_exposure_source_concept": primary_exposure_source_concept,
     }
+
+
+def _resolve_materialized_primary_exposure(
+    *,
+    configured: Optional[str],
+    source_concept: Optional[str],
+    acquisition: Any,
+) -> Optional[str]:
+    """Resolve only an owner-issued materialized exposure coordinate."""
+
+    if not configured:
+        return None
+    source = source_concept or configured
+    if configured == source:
+        return (getattr(acquisition, "analysis_columns", {}) or {}).get(source)
+    materialized = set(getattr(acquisition, "materialized_columns", ()) or ())
+    return configured if configured in materialized else None
 
 
 def _research_user_preferences(study: Mapping[str, Any]) -> Dict[str, Any]:
@@ -1073,7 +1094,10 @@ def make_research_pipeline_run_runner(
                 output_dir=wrapper_dir / "pipeline_input",
                 stem="web_research_universe",
                 target_outcome=target,
-                primary_exposure_concept=primary_exposure,
+                primary_exposure_concept=(
+                    foundation_profile.get("primary_exposure_source_concept")
+                    or primary_exposure
+                ),
                 outcome_concepts=foundation_profile["outcome_concepts"],
                 required_feature_concepts=foundation_profile[
                     "required_feature_concepts"
@@ -1096,8 +1120,12 @@ def make_research_pipeline_run_runner(
                 )
             resolved_primary_exposure = primary_exposure
             if primary_exposure:
-                resolved_primary_exposure = acquisition.analysis_columns.get(
-                    primary_exposure
+                resolved_primary_exposure = _resolve_materialized_primary_exposure(
+                    configured=primary_exposure,
+                    source_concept=foundation_profile.get(
+                        "primary_exposure_source_concept"
+                    ),
+                    acquisition=acquisition,
                 )
                 if not resolved_primary_exposure:
                     raise ResearchPipelineRunError(
@@ -1105,11 +1133,26 @@ def make_research_pipeline_run_runner(
                         "The configured primary exposure requires an explicit "
                         "analysis aggregation before planning can start.",
                     )
+            try:
+                bound_preplan_literature = idea_mining.load_bound_prior_art_literature(
+                    dict(study.get("idea_handoff") or {}),
+                    research_question=question,
+                )
+            except idea_mining.IdeaMiningWebError as exc:
+                detail = exc.detail
+                raise ResearchPipelineRunError(
+                    str(detail.get("error") or "prior_art_binding_invalid"),
+                    str(
+                        detail.get("reason")
+                        or "The accepted Idea Mining literature receipt is invalid."
+                    ),
+                ) from exc
             config = PipelineConfig(
                 workdir=wrapper_dir / "pipeline",
                 enable_reproducibility_envelope=True,
                 evidence_enforcement_mode="strict",
                 require_human_plan_review=True,
+                bound_preplan_literature=bound_preplan_literature,
             )
             pipeline = ResearchAgentPipeline.from_config(
                 config,

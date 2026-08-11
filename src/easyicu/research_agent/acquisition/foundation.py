@@ -28,7 +28,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from .catalog import (
     AvailableCatalog,
@@ -209,6 +209,7 @@ class AcquisitionResult:
     trajectory_authority_ref: Optional[MaterializedTrajectoryAuthorityRef] = None
     endpoint: Optional[EndpointSpec] = None
     analysis_columns: Dict[str, str] = field(default_factory=dict)
+    materialized_columns: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (self.cohort_authority_path is None) != (self.cohort_authority_ref is None):
@@ -250,6 +251,7 @@ class AcquisitionResult:
                 else None
             ),
             "analysis_columns": dict(self.analysis_columns),
+            "materialized_columns": list(self.materialized_columns),
         }
         if (self.cohort_authority_path is None) != (self.cohort_authority_ref is None):
             raise MaterializedMetadataError(
@@ -404,15 +406,14 @@ def acquire_universe_for_question(
     )
     typed_catalog = any(item.typed_metadata for item in catalog.concepts)
     catalog_by_id = {item.concept_id: item for item in catalog.concepts}
+    event_status_feature_concepts = [
+        concept
+        for concept in feature_concepts
+        if catalog_by_id.get(concept) is not None
+        and catalog_by_id[concept].column_role == "event_status"
+    ]
     positive_only_event_concepts = (
-        []
-        if typed_catalog
-        else [
-            concept
-            for concept in feature_concepts
-            if catalog_by_id.get(concept) is not None
-            and catalog_by_id[concept].column_role == "event_status"
-        ]
+        [] if typed_catalog else event_status_feature_concepts
     )
     if typed_catalog:
         static_coverage = assess_coverage(list(static_concepts), catalog)
@@ -494,7 +495,12 @@ def acquire_universe_for_question(
     for concept in [*outcome_concepts, *effective_static_concepts]:
         if concept in materialized_columns:
             analysis_columns[concept] = concept
-    for concept in positive_only_event_concepts:
+    # Typed exports already carry the event-status semantics used by the
+    # materializer, so they do not need the legacy ``positive_only`` hint.
+    # They still need the same public analysis-column projection after
+    # materialization; otherwise a valid event-status exposure is silently
+    # treated as an unaggregated repeated measure and Web planning stops.
+    for concept in event_status_feature_concepts:
         canonical_event_column = f"{concept}_max"
         if canonical_event_column in materialized_columns:
             # All positive-only summaries encode the same stay-level 0/1 event
@@ -593,4 +599,5 @@ def acquire_universe_for_question(
         selection_model=sel_model,
         endpoint=endpoint,
         analysis_columns=analysis_columns,
+        materialized_columns=tuple(sorted(materialized_columns)),
     )

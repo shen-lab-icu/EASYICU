@@ -276,13 +276,15 @@ def test_pasted_literature_source_flows_to_agent_project_list(
 
     imported = client.post(
         "/api/capabilities/zotero/import",
-        json={"text": """@article{smith2026shock,
+        json={
+            "text": """@article{smith2026shock,
               title={Early Vasopressors in Septic Shock},
               journal={Intensive Care Medicine},
               year={2026},
               doi={10.1000/example},
               abstract={Early vasopressors may define a measurable ICU exposure.}
-            }"""},
+            }"""
+        },
     )
     assert imported.status_code == 200
     source_payload = imported.json()["suggested_payload"]
@@ -430,9 +432,7 @@ def test_idea_plan_stage_precedes_agent_handoff_and_stays_metadata_only(
     assert canonical.analysis_ready is False
     assert frozen["canonical_handoff_path"] == "discovery_handoff.json"
     assert len(frozen["canonical_handoff_sha256"]) == 64
-    assert (
-        idea_mining._run_dir(run["run_id"]) / "discovery_handoff.json"
-    ).is_file()
+    assert (idea_mining._run_dir(run["run_id"]) / "discovery_handoff.json").is_file()
 
 
 def test_web_handoff_adapter_matches_canonical_core_semantics(tmp_path: Path) -> None:
@@ -544,9 +544,7 @@ def test_agent_project_rejects_tampered_canonical_handoff(
         }
     )
     idea = run["idea_ledger"][0]
-    idea_mining.create_handoff(
-        {"run_id": run["run_id"], "idea_id": idea["idea_id"]}
-    )
+    idea_mining.create_handoff({"run_id": run["run_id"], "idea_id": idea["idea_id"]})
     run_dir = idea_mining._run_dir(run["run_id"])
     if tamper_target in {"artifact", "artifact_with_replan"}:
         path = run_dir / "discovery_handoff.json"
@@ -606,9 +604,7 @@ def test_legacy_handoff_refreshes_to_locked_unconfirmed_agent_seed(
     legacy.pop("canonical_handoff")
     legacy.pop("canonical_handoff_path")
     legacy.pop("canonical_handoff_sha256")
-    (run_dir / "idea_handoff.json").write_text(
-        json.dumps(legacy), encoding="utf-8"
-    )
+    (run_dir / "idea_handoff.json").write_text(json.dumps(legacy), encoding="utf-8")
     (run_dir / "discovery_handoff.json").unlink()
 
     result = idea_mining.create_agent_project(
@@ -700,6 +696,144 @@ def test_idea_literature_discovery_blocks_without_network_opt_in(
     assert payload["source_candidates"] == []
     assert payload["idea_candidates"] == []
     assert payload["queries_to_run"]
+
+
+def test_conversational_sepsis_scope_compiles_to_bounded_pubmed_queries() -> None:
+    topic = (
+        "请帮我从 MIMIC-IV 寻找成人首次 ICU 入住后 24 小时内 Sepsis-3 "
+        "与院内死亡的研究机会，并完成数据提取和分析计划。"
+    )
+
+    queries = idea_mining._discovery_queries(
+        topic,
+        "",
+        {"exposure": "sep3_sofa1_max", "outcome": "death"},
+    )
+
+    assert len(queries) == 3
+    assert all('"Sepsis-3"[Title/Abstract]' in query for query in queries)
+    assert all('"mortality"[Title/Abstract]' in query for query in queries)
+    assert all("请帮我" not in query for query in queries)
+
+
+def test_generic_sepsis_maps_to_canonical_sofa1_and_preserves_explicit_adjustment() -> (
+    None
+):
+    text = (
+        "纳入成人首次 ICU stay，采用 Sepsis-3 操作定义，主要结局为院内死亡，"
+        "同时描述 SOFA、乳酸和尿量，初步按年龄和性别调整。"
+    )
+
+    hits = idea_mining._match_concepts(text)
+    concept_ids = {row["concept_id"] for row in hits}
+
+    assert "sep3_sofa1" in concept_ids
+    assert "sep3_sofa2" not in concept_ids
+    assert idea_mining._requested_adjustment_concepts(text, hits) == ["age", "sex"]
+
+    explicit = (
+        "主要暴露采用标准 Sepsis-3（传统 SOFA / sep3_sofa1），主要结局为院内死亡；"
+        "乳酸和尿量仅用于描述，按年龄和性别调整。"
+    )
+    explicit_hits = idea_mining._match_concepts(explicit)
+    assert idea_mining._requested_exposure_concepts(explicit, explicit_hits) == [
+        "sep3_sofa1"
+    ]
+    idea = idea_mining._idea_from_source(
+        {"source_id": "source", "title": "Sepsis study"},
+        explicit,
+        explicit_hits,
+        {
+            "concept_to_file": {
+                concept_id: {"module": row.get("module")}
+                for row in explicit_hits
+                if (concept_id := str(row.get("concept_id") or ""))
+            },
+            "entity_ids": {"1"},
+            "demo_like": False,
+        },
+    )
+    assert idea["idea_title"].startswith("Sepsis-3 (SOFA-1 based)")
+    assert idea["requested_adjustment_concepts"] == ["age", "sex"]
+    assert all(
+        '"Sepsis-3"[Title/Abstract]' in query
+        for query in idea["prior_art"]["queries_to_run"]
+    )
+    assert all(
+        '"mortality"[Title/Abstract]' in query
+        for query in idea["prior_art"]["queries_to_run"]
+    )
+    assert all(
+        '"SOFA Score (Total)"[Title/Abstract]' not in query
+        for query in idea["prior_art"]["queries_to_run"]
+    )
+
+
+def test_prior_art_executes_the_queries_prespecified_by_the_mined_idea(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path)
+    run_id = "idea_prespecified_query"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    queries = [
+        '("Sepsis-3"[Title/Abstract] AND "mortality"[Title/Abstract]) '
+        'AND ICU[Title/Abstract]'
+    ]
+    (run_dir / "idea_mining_run.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "selected_idea_id": "idea_sepsis",
+                "source_evidence": [{"title": "Sepsis idea"}],
+                "idea_ledger": [
+                    {
+                        "idea_id": "idea_sepsis",
+                        # The title contains another mapped concept. It must not
+                        # be allowed to replace the frozen primary query.
+                        "idea_title": "SOFA Score (Total) and mortality",
+                        "prior_art": {"queries_to_run": queries},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    checked = idea_mining.check_prior_art(
+        {"run_id": run_id, "idea_id": "idea_sepsis", "allow_network": False}
+    )
+
+    assert checked["prior_art"]["queries_to_run"] == queries
+
+
+def test_pubmed_esearch_requests_relevance_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[str] = []
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self, limit: int) -> bytes:
+            assert limit > 0
+            return b'{"esearchresult":{"idlist":["26903338"]}}'
+
+    def fake_urlopen(url: str, *, timeout: float) -> Response:
+        assert timeout > 0
+        requested.append(url)
+        return Response()
+
+    monkeypatch.setattr(idea_mining.request, "urlopen", fake_urlopen)
+
+    assert idea_mining._pubmed_esearch("sepsis mortality", limit=5) == [
+        "26903338"
+    ]
+    assert "sort=relevance" in requested[0]
 
 
 def test_pubmed_connector_setting_blocks_idea_discovery_network(

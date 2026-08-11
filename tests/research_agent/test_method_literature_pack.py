@@ -18,7 +18,10 @@ from typing import Any
 
 import pytest
 
-from easyicu.research_agent.literature import build_preplan_literature_bundle
+from easyicu.research_agent.literature import (
+    LiteratureBundle,
+    build_preplan_literature_bundle,
+)
 from easyicu.research_agent.planning.method_literature import (
     METHOD_CARDS,
     MethodCard,
@@ -95,6 +98,46 @@ def test_a_source_that_returns_nothing_is_not_recorded_as_returning() -> None:
     assert "tavily" not in provenance.sources_returning
 
 
+def test_digest_bound_web_search_seed_is_available_to_preplan_planning() -> None:
+    seed = LiteratureBundle.model_validate(
+        {
+            "research_question": "Question",
+            "citations": [
+                {
+                    "key": "idea_pubmed_26903338",
+                    "title": "The Third International Consensus Definitions for Sepsis and Septic Shock",
+                    "year": "2016",
+                    "venue": "JAMA",
+                    "pmid": "26903338",
+                    "url": "https://pubmed.ncbi.nlm.nih.gov/26903338/",
+                }
+            ],
+            "prisma": {
+                "identified": 1,
+                "duplicates_removed": 0,
+                "screened": 1,
+                "eligible": 1,
+                "included": 1,
+            },
+            "search_provenance": {
+                "curated_seed_count": 0,
+                "sources_enabled": ["idea_mining_pubmed"],
+                "sources_returning": ["idea_mining_pubmed"],
+                "search_conducted": True,
+                "note": "Digest-bound Web search.",
+            },
+        }
+    )
+
+    bundle = build_preplan_literature_bundle(_context(), bound_seed=seed)
+
+    assert "idea_pubmed_26903338" in {row.key for row in bundle.citations}
+    assert bundle.search_provenance is not None
+    assert bundle.search_provenance.search_conducted is True
+    assert "idea_mining_pubmed" in bundle.search_provenance.sources_enabled
+    assert bundle.prisma is not None
+
+
 def test_the_methodology_layer_reaches_every_study() -> None:
     """Design guidance is not conditional on which concepts are in scope.
 
@@ -160,18 +203,37 @@ def test_a_card_names_both_the_decision_and_what_to_report() -> None:
 
     for card in METHOD_CARDS:
         assert card.question.endswith("?"), f"{card.id} question is not a question"
-        assert (
-            len(card.requirement) > 80
-        ), f"{card.id} requirement is too thin to act on"
+        assert len(card.requirement) > 80, (
+            f"{card.id} requirement is too thin to act on"
+        )
         assert card.source_key and card.source_title and card.source_year
 
 
-def test_sources_carry_no_guessed_identifiers() -> None:
-    """An invented DOI or PMID is worse than an absent one: it looks checked."""
+def test_sources_expose_only_the_frozen_verified_identifiers() -> None:
+    """Clickable method sources are exact PubMed records, never guessed URLs."""
 
-    for source in method_literature_citations():
-        assert "doi" not in source or source.get("doi") is None
-        assert "pmid" not in source or source.get("pmid") is None
+    sources = {source["key"]: source for source in method_literature_citations()}
+    assert {
+        key: (row.get("pmid"), row.get("doi"), row.get("url"))
+        for key, row in sources.items()
+        if row.get("pmid") or row.get("doi") or row.get("url")
+    } == {
+        "strobe_2007": (
+            "17938396",
+            "10.7326/0003-4819-147-8-200710160-00010",
+            "https://pubmed.ncbi.nlm.nih.gov/17938396/",
+        ),
+        "record_2015": (
+            "26440803",
+            "10.1371/journal.pmed.1001885",
+            "https://pubmed.ncbi.nlm.nih.gov/26440803/",
+        ),
+        "sterne_missing_data_2009": (
+            "19564179",
+            "10.1136/bmj.b2393",
+            "https://pubmed.ncbi.nlm.nih.gov/19564179/",
+        ),
+    }
 
 
 def test_the_pack_digest_is_stable_and_sensitive() -> None:

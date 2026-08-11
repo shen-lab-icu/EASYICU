@@ -33,6 +33,7 @@ from easyicu.webserver.pi_copilot.contracts import (
 from easyicu.webserver.pi_copilot.workflow import (
     active_export_matches_study,
     build_research_workflow_snapshot,
+    registered_export_matches_study,
 )
 
 
@@ -153,9 +154,7 @@ def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
             "engine": "easyicu.research_agent.pipeline",
             "gate_status": "blocked",
             "run_status": "human_review_pending",
-            "pending_review_reason_codes": [
-                "operator_plan_approval_required"
-            ],
+            "pending_review_reason_codes": ["operator_plan_approval_required"],
             "artifact_names": [
                 "agent_plan.json",
                 "evidence_ledger.json",
@@ -174,11 +173,62 @@ def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
     assert by_id["analysis"].reason_code == "operator_plan_approval_required"
 
 
+def test_completed_preflight_advances_to_provider_plan_confirmation() -> None:
+    snapshot = build_research_workflow_snapshot(
+        study=_complete_study(),
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_type": "preflight",
+            "gate_status": "analysis_only",
+            "readiness_status": "awaiting_human_signoff",
+            "artifact_names": [
+                "cohort_summary.json",
+                "quality_gate.json",
+                "evidence_ledger.json",
+            ],
+        },
+    )
+
+    assert snapshot.current_stage == "plan"
+    assert snapshot.next_action_code == "provider_plan_ready"
+    plan = next(row for row in snapshot.stages if row.id == "plan")
+    assert plan.status == "ready"
+    assert plan.reason_code == "provider_plan_ready"
+
+
 def test_active_export_must_belong_to_the_bound_study() -> None:
     study = _complete_study()
     assert active_export_matches_study(study, "/private/prepared/source") is True
     assert active_export_matches_study(study, "/private/another/export") is False
-    assert active_export_matches_study({"id": "study-without-source"}, "/active") is False
+    assert (
+        active_export_matches_study({"id": "study-without-source"}, "/active") is False
+    )
+
+
+def test_project_bound_registered_export_does_not_depend_on_global_active_source() -> (
+    None
+):
+    study = _complete_study()
+    registry = {
+        "active_path": "/private/another/export",
+        "sources": [
+            {
+                "id": "src_project",
+                "path": "/private/prepared/source",
+                "ok": True,
+            },
+            {
+                "id": "src_global",
+                "path": "/private/another/export",
+                "ok": True,
+            },
+        ],
+    }
+
+    assert registered_export_matches_study(study, registry) is True
+    registry["sources"][0]["ok"] = False
+    assert registered_export_matches_study(study, registry) is False
 
 
 def test_legacy_full_scaffold_does_not_claim_scientific_analysis_complete() -> None:
@@ -254,7 +304,9 @@ def test_idea_tool_never_accepts_a_host_path_from_the_model() -> None:
     assert rejected.value.code == "pi_tool_unknown_arguments"
 
 
-def test_curated_literature_projection_is_honest_and_does_not_backfill_plan_links() -> None:
+def test_curated_literature_projection_is_honest_and_does_not_backfill_plan_links() -> (
+    None
+):
     payload = project_run_literature(
         run_id="run-literature-1",
         bundle={
@@ -329,9 +381,7 @@ def test_plan_literature_projection_keeps_only_bundle_bound_keys() -> None:
     assert payload["status"] == "searched"
     assert payload["mapping_status"] == "complete"
     assert payload["step_citation_map"][0]["citation_keys"] == ["method_key"]
-    assert payload["integrity"]["unknown_citation_keys_removed"] == [
-        "invented_key"
-    ]
+    assert payload["integrity"]["unknown_citation_keys_removed"] == ["invented_key"]
     assert (
         payload["citations"][0]["source_url"]
         == "https://pubmed.ncbi.nlm.nih.gov/12345/"
@@ -341,7 +391,9 @@ def test_plan_literature_projection_keeps_only_bundle_bound_keys() -> None:
 def test_literature_search_tool_uses_separate_one_turn_network_grant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: _complete_study())
+    monkeypatch.setattr(
+        tool_module, "_bound_context", lambda binding: _complete_study()
+    )
     monkeypatch.setattr(
         tool_module.idea_mining,
         "discover_literature",
@@ -378,11 +430,163 @@ def test_literature_search_tool_uses_separate_one_turn_network_grant(
     assert consumed["code"] == "pi_action_grant_consumed"
 
 
+def test_literature_search_binds_prior_art_to_an_accepted_idea(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study = _complete_study()
+    study["idea_handoff"] = {
+        "run_id": "idea-run-1",
+        "idea_id": "idea-1",
+        "status": "accepted",
+    }
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: study)
+
+    def fail_discovery(body: dict[str, Any]) -> dict[str, Any]:
+        raise AssertionError("accepted ideas must use their persisted prior-art owner")
+
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "discover_literature",
+        fail_discovery,
+    )
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "check_prior_art",
+        lambda body: {
+            "prior_art": {
+                "status": "searched",
+                "search_performed": True,
+                "network_calls": 2,
+                "queries_to_run": ["sepsis AND mortality"],
+                "results": [
+                    {
+                        "pmid": "26903338",
+                        "title": "Sepsis-3 consensus definitions",
+                        "source": "JAMA",
+                        "pubdate": "2016",
+                        "query": "sepsis AND mortality",
+                        "abstract_excerpt": (
+                            "Sepsis is life-threatening organ dysfunction caused by "
+                            "a dysregulated host response to infection."
+                        ),
+                        "evidence_sentence": (
+                            "The consensus defined Sepsis-3 using organ dysfunction."
+                        ),
+                    }
+                ],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "prior_art_receipt_binding",
+        lambda run_id: {
+            "prior_art_binding_schema_version": "easyicu.idea-prior-art-binding/1",
+            "prior_art_sha256": "a" * 64,
+            "prior_art_status": "searched",
+            "prior_art_result_count": 1,
+        },
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_search_literature",
+        {},
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-bound-literature"),
+            allowed_actions={"literature"},
+        ),
+    )
+
+    literature = result["details"]["literature_search"]
+    assert result["code"] == "easyicu_literature_search_completed"
+    assert literature["idea_handoff_refresh_required"] is True
+    assert literature["bound_idea_run_id"] == "idea-run-1"
+    assert result["details"]["resource"]["pmid"] == "26903338"
+    assert (
+        result["details"]["resource"]["relevance"]
+        == "Sepsis is life-threatening organ dysfunction caused by a dysregulated host response to infection."
+    )
+    assert result["details"]["literature_search"]["articles"] == [
+        {
+            "citation_key": "idea_pubmed_26903338",
+            "title": "Sepsis-3 consensus definitions",
+            "journal": "JAMA",
+            "year": "2016",
+            "pmid": "26903338",
+            "evidence_excerpt": (
+                "Sepsis is life-threatening organ dysfunction caused by a "
+                "dysregulated host response to infection."
+            ),
+        }
+    ]
+    assert "re-accepted" in result["summary"]
+
+
+def test_bound_literature_projection_stays_bounded_with_long_abstracts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study = _complete_study()
+    study["idea_handoff"] = {
+        "run_id": "idea-run-bounded",
+        "idea_id": "idea-bounded",
+        "status": "accepted",
+    }
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: study)
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "check_prior_art",
+        lambda body: {
+            "prior_art": {
+                "status": "searched",
+                "search_performed": True,
+                "network_calls": 2,
+                "queries_to_run": ["sepsis AND mortality"],
+                "results": [
+                    {
+                        "pmid": str(10000 + index),
+                        "title": f"Sepsis paper {index}",
+                        "journal": "Critical Care",
+                        "year": 2025,
+                        "abstract_excerpt": "organ dysfunction " * 180,
+                    }
+                    for index in range(12)
+                ],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "prior_art_receipt_binding",
+        lambda run_id: {
+            "prior_art_binding_schema_version": "easyicu.idea-prior-art-binding/1",
+            "prior_art_sha256": "a" * 64,
+            "prior_art_status": "searched",
+            "prior_art_result_count": 12,
+        },
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_search_literature",
+        {},
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-bounded-literature"),
+            allowed_actions={"literature"},
+        ),
+    )
+
+    assert result["status"] == "ok"
+    assert len(result["details"]["resources"]) == 5
+    assert len(result["details"]["literature_search"]["articles"]) == 5
+    assert all(
+        len(row["evidence_excerpt"]) <= 600
+        for row in result["details"]["literature_search"]["articles"]
+    )
+    assert len(json.dumps(result)) < 20_000
+
+
 def test_literature_source_resource_rejects_unverified_or_unsafe_links() -> None:
     assert (
-        literature_source_resource(
-            {"title": "Unsafe", "url": "javascript:alert(1)"}
-        )
+        literature_source_resource({"title": "Unsafe", "url": "javascript:alert(1)"})
         is None
     )
     assert literature_source_resource({"title": "No identifier"}) is None
@@ -422,12 +626,13 @@ def test_accept_idea_handoff_binds_digest_and_projects_study_fields(
                 "resolved_outcome_concept": "death",
                 "resolved_analysis_concepts": ["lact", "age", "sex"],
                 "selected_ledger_row": {
+                    "requested_adjustment_concepts": ["age", "sex"],
                     "mapped_concepts": [
                         {"concept_id": "lact", "module": "blood_gas"},
                         {"concept_id": "death", "module": "outcome"},
                         {"concept_id": "age", "module": "demographics"},
                         {"concept_id": "sex", "module": "demographics"},
-                    ]
+                    ],
                 },
             },
             "agent_seed": {"question": "Fallback question"},
@@ -482,6 +687,76 @@ def test_accept_idea_handoff_binds_digest_and_projects_study_fields(
     assert stale.value.code == "pi_session_authority_stale"
 
 
+def test_accept_idea_handoff_does_not_turn_every_mentioned_feature_into_a_covariate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = _complete_study()
+    current.update({"revision": 3, "active_job_id": None})
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: current)
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "plan_idea",
+        lambda body: {"plan": {"research_question": "Question"}},
+    )
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "create_handoff",
+        lambda body: {
+            "idea_id": "idea-sepsis",
+            "canonical_handoff_sha256": "c" * 64,
+            "canonical_handoff": {
+                "analysis_family": "association_study",
+                "resolved_predictor_concept": "sep3_sofa1",
+                "resolved_outcome_concept": "death",
+                "resolved_analysis_concepts": [
+                    "sep3_sofa1",
+                    "lact",
+                    "age",
+                    "sex",
+                    "urine",
+                ],
+                "selected_ledger_row": {
+                    "requested_adjustment_concepts": ["age", "sex"],
+                    "mapped_concepts": [
+                        {"concept_id": "sep3_sofa1", "module": "sepsis3_sofa1"},
+                        {"concept_id": "death", "module": "outcome"},
+                        {"concept_id": "lact", "module": "blood_gas"},
+                        {"concept_id": "age", "module": "demographics"},
+                        {"concept_id": "sex", "module": "demographics"},
+                        {"concept_id": "urine", "module": "renal"},
+                    ],
+                },
+            },
+            "go_no_go": "recommend",
+        },
+    )
+
+    def upsert(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        writes.append(dict(body))
+        return {**current, **body, "revision": 4}
+
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
+    result = tool_module.execute_tool(
+        "easyicu_accept_idea_handoff",
+        {"run_id": "idea-run", "idea_id": "idea-sepsis"},
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-adjustment"),
+            allowed_actions={"idea"},
+        ),
+    )
+
+    assert result["code"] == "easyicu_idea_handoff_accepted"
+    assert writes[0]["covariates"] == ["age", "sex"]
+    assert writes[0]["modules"] == [
+        "sepsis3_sofa1",
+        "outcome",
+        "blood_gas",
+        "demographics",
+        "renal",
+    ]
+
+
 def test_accept_idea_handoff_requires_digest_bound_concept_modules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -500,9 +775,7 @@ def test_accept_idea_handoff_requires_digest_bound_concept_modules(
                 "resolved_outcome_concept": "death",
                 "resolved_analysis_concepts": ["lact"],
                 "selected_ledger_row": {
-                    "mapped_concepts": [
-                        {"concept_id": "lact", "module": "blood_gas"}
-                    ]
+                    "mapped_concepts": [{"concept_id": "lact", "module": "blood_gas"}]
                 },
             },
         },
@@ -661,6 +934,39 @@ def test_extraction_uses_bound_study_source_and_returns_no_path(
     assert stale.value.code == "pi_session_authority_stale"
 
 
+def test_extraction_reuses_project_bound_registered_export_even_when_not_global_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tool_module, "_bound_context", lambda binding: _complete_study()
+    )
+    monkeypatch.setattr(
+        tool_module.sources,
+        "load_registry",
+        lambda: {
+            "active_path": "/private/another/export",
+            "sources": [
+                {
+                    "id": "src_project",
+                    "path": "/private/prepared/source",
+                    "database": "mimiciv",
+                    "ok": True,
+                }
+            ],
+        },
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(session_id="pi-extract-reuse"),
+        allowed_actions={"extract"},
+    )
+
+    result = tool_module.execute_tool("easyicu_start_extraction", {}, context)
+
+    assert result["code"] == "easyicu_registered_export_reused"
+    assert result["details"]["active_export"]["source_id"] == "src_project"
+    assert "/private/" not in json.dumps(result)
+
+
 def test_full_run_cannot_use_mock_as_scientific_output() -> None:
     context = ToolExecutionContext(
         session=PiSessionRecord(
@@ -722,6 +1028,7 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
     assert result["code"] == "easyicu_full_run_submitted"
     assert submitted == [
         {
+            "path": "/private/prepared/source",
             "study_context_id": "study-workflow",
             "question": "Bound aggregate scientific question",
             "run_type": "full",
@@ -846,6 +1153,7 @@ def _foundation_profile() -> dict[str, Any]:
         "outcome_concepts": ("death",),
         "required_feature_concepts": (),
         "require_outcome": True,
+        "primary_exposure_source_concept": "heart_rate",
     }
 
 
@@ -884,9 +1192,7 @@ def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
     assert literature["mapping_status"] == "complete"
     assert literature["step_citation_map"][0]["citation_keys"] == ["method_paper"]
     ledger = json.loads((wrapper / "evidence_ledger.json").read_text(encoding="utf-8"))
-    assert "literature_evidence.json" in {
-        row["name"] for row in ledger["artifacts"]
-    }
+    assert "literature_evidence.json" in {row["name"] for row in ledger["artifacts"]}
     assert ledger["privacy"]["projection_scan_passed"] is True
     assert ledger["privacy"]["path_values_returned"] is False
 
@@ -1350,6 +1656,7 @@ def test_web_data_foundation_profile_keeps_continuous_outcome_static(
         "outcome_concepts": (),
         "required_feature_concepts": (),
         "require_outcome": False,
+        "primary_exposure_source_concept": None,
     }
 
 
@@ -1483,7 +1790,40 @@ def test_web_data_foundation_materializes_typed_exposure_and_covariates(
         "outcome_concepts": ("death",),
         "required_feature_concepts": ("sep3_sofa2",),
         "require_outcome": True,
+        "primary_exposure_source_concept": "sep3_sofa2",
     }
+
+
+def test_web_data_foundation_resolves_only_issued_operational_exposure() -> None:
+    acquisition = SimpleNamespace(
+        analysis_columns={"sep3_sofa2": "sep3_sofa2_max"},
+        materialized_columns=("stay_id", "sep3_sofa2_max", "death"),
+    )
+
+    assert (
+        agent_pipeline_runs._resolve_materialized_primary_exposure(
+            configured="sep3_sofa2_max",
+            source_concept="sep3_sofa2",
+            acquisition=acquisition,
+        )
+        == "sep3_sofa2_max"
+    )
+    assert (
+        agent_pipeline_runs._resolve_materialized_primary_exposure(
+            configured="sep3_sofa2",
+            source_concept="sep3_sofa2",
+            acquisition=acquisition,
+        )
+        == "sep3_sofa2_max"
+    )
+    assert (
+        agent_pipeline_runs._resolve_materialized_primary_exposure(
+            configured="sep3_sofa2_mean",
+            source_concept="sep3_sofa2",
+            acquisition=acquisition,
+        )
+        is None
+    )
 
 
 def test_web_data_foundation_rejects_unmaterialized_primary_exposure(

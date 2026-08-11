@@ -27,10 +27,10 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
   function assistantTextHtml(value) {
-    return esc(value)
-      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/\n/g, '<br>');
+    const renderer = window.EU_GUIDED_PI_MARKDOWN;
+    return renderer && typeof renderer.render === 'function'
+      ? renderer.render(value)
+      : esc(value).replace(/\n/g, '<br>');
   }
   function api() { return window.EU_API || {}; }
   function isStaticPreview() { return window.location && window.location.protocol === 'file:'; }
@@ -207,6 +207,7 @@
   function toolLabel(name, resource) {
     const labels = {
       easyicu_workspace_status: tr('Check workspace status', '检查工作区状态'),
+      easyicu_list_data_sources: tr('List registered data sources', '列出已登记数据源'),
       easyicu_inspect_workflow: tr('Inspect research workflow', '检查科研流程'),
       easyicu_inspect_context: tr('Inspect study context', '读取研究配置'),
       easyicu_inspect_plan: tr('Inspect scientific plan', '读取科学计划'),
@@ -245,6 +246,7 @@
   function completedToolLabel(name, resource) {
     const labels = {
       easyicu_workspace_status: tr('Checked workspace status', '已检查工作区状态'),
+      easyicu_list_data_sources: tr('Listed registered data sources', '已列出已登记数据源'),
       easyicu_inspect_workflow: tr('Read research workflow', '已读取科研流程'),
       easyicu_inspect_context: tr('Read study setup', '已读取研究配置'),
       easyicu_inspect_plan: tr('Read scientific plan', '已读取科学计划'),
@@ -573,7 +575,7 @@
             : tr('Answered without using tools', '仅回答，未执行操作');
       const title = failed ? tr('This turn needs attention', '本轮需要处理') : completedTitle;
       const steps = visibleSteps.map(activityStepRow).join('');
-      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}" ${failed ? 'open' : ''}>
+      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}" ${failed || row.expanded ? 'open' : ''}>
         <summary>
           <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(failed ? 'alert' : activityIcon(toolSteps[0] || pipelineSteps[0] || latest), 15)}</span>
           <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
@@ -627,12 +629,26 @@
       note: tr('The Agent may run a local preflight first and will pause again before executing the approved plan.', 'Agent 可以先运行本地预检，并会在执行计划前再次暂停等待批准。'),
       approve: tr('Prepare plan', '生成计划'),
     };
+    if (code === 'provider_plan_ready') return {
+      code, grants: ['provider_run'],
+      message: tr(
+        'I approve the completed local preflight. Start the full Research Agent only to generate the evidence-bound plan, then pause for my plan review.',
+        '我确认本地预检结果。请启动完整 Research Agent 生成证据绑定的分析计划，并停在计划人工审阅门。',
+      ),
+      title: tr('Local preflight passed. Generate the real Research Agent plan?', '本地预检已完成，生成真实 Research Agent 计划吗？'),
+      note: tr('This authorizes one provider planning run. Execution must pause again for your plan approval.', '这会授权一次模型规划；真正执行前必须再次停下等待你的计划批准。'),
+      approve: tr('Generate Agent plan', '生成 Agent 计划'),
+    };
     if (code === 'operator_plan_approval_required') return {
       code, grants: ['provider_run'],
       message: tr('I approve the current evidence-bound plan. Continue the analysis.', '我批准当前证据绑定的计划，请继续分析。'),
       title: tr('The evidence-bound plan is ready. Continue to analysis?', '证据绑定的计划已准备好，是否继续分析？'),
       note: tr('Approving resumes this plan only. Scientific and human-review gates remain in force.', '批准只会继续当前计划；科学闸门和人工审阅门禁仍然有效。'),
       approve: tr('Approve and continue', '批准并继续'),
+      reviewResources: [
+        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'agent_plan.json', label: tr('Open analysis plan', '打开分析计划'), media_type: 'application/json' },
+        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'literature_evidence.json', label: tr('Open literature bindings', '打开文献绑定'), media_type: 'application/json' },
+      ],
     };
     return null;
   }
@@ -640,9 +656,13 @@
   function workflowConfirmationHtml() {
     const confirmation = workflowConfirmation();
     if (state.busy || sessionIsStale() || !confirmation) return '';
+    const reviewResources = (confirmation.reviewResources || [])
+      .filter(resource => resource.run_id)
+      .map(resource => resourceButton(resource, resource.label))
+      .join('');
     return `<section class="gpi-confirmation" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
       <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-      <div><strong>${esc(confirmation.title)}</strong><small>${esc(confirmation.note)}</small></div>
+      <div><strong>${esc(confirmation.title)}</strong><small>${esc(confirmation.note)}</small>${reviewResources ? `<div class="gpi-confirmation-resources">${reviewResources}</div>` : ''}</div>
       <div class="gpi-confirmation-actions">
         <button class="btn sm" type="button" data-gpi-confirm-edit>${tr('Request changes', '提出修改')}</button>
         <button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.approve)}</button>
@@ -716,10 +736,10 @@
     return `<div class="gpi-panel gpi-demo-panel">
       <header class="gpi-head">
         <div><div class="gpi-kicker">PI COPILOT · COMPLETE RESEARCH WORKFLOW</div><div class="gpi-title">${tr('Complete research workflow demo', '完整科研流程演示')} <span class="gpi-live">${tr('read-only', '只读')}</span></div></div>
-        <div class="gpi-head-meta"><span>Sepsis-3 · MIMIC-IV</span><button class="gpi-link" type="button" data-gpi-demo-exit>${tr('Back to my project', '返回我的项目')}</button></div>
+        <div class="gpi-head-meta"><span>${tr('Experimental SOFA-2 sensitivity · MIMIC-IV', '实验性 SOFA-2 敏感性 · MIMIC-IV')}</span><button class="gpi-link" type="button" data-gpi-demo-exit>${tr('Back to my project', '返回我的项目')}</button></div>
       </header>
       ${workflowHtml(workflow)}
-      <div class="gpi-demo-note" role="note">${iconHtml('shield', 16)}<span><strong>${tr('Interactive product demo.', '可交互产品演示。')}</strong> ${tr('The question-and-confirmation transcript is a read-only walkthrough; aggregate data, estimates, gates, and manuscript content come from a real E1 engineering canary. It is not formal paper evidence.', '选题与确认对话为只读流程演示；聚合数据、估计、闸门和稿件内容来自真实 E1 工程试跑，不是正式论文证据。')}</span></div>
+      <div class="gpi-demo-note" role="note">${iconHtml('shield', 16)}<span><strong>${tr('Interactive product demo.', '可交互产品演示。')}</strong> ${tr('The transcript is read-only. Numeric artifacts come from a real historical E1 engineering canary using the experimental sep3_sofa2_max sensitivity indicator—not standard Sepsis-3—and are not formal paper evidence. Current live projects map generic Sepsis-3 to SOFA-1 and use SOFA-2 only when explicitly requested.', '对话为只读演示。数值产物来自真实历史 E1 工程试跑，使用的是实验性 sep3_sofa2_max 敏感性指标，而不是标准 Sepsis-3；这些内容不是正式论文证据。当前真实项目会把通用 Sepsis-3 映射到 SOFA-1，只有用户明确要求时才使用 SOFA-2。')}</span></div>
       <div class="gpi-log" data-gpi-log>${messages}</div>
       <footer class="gpi-demo-footer"><span>${tr('Open any underlined article or artifact in the conversation to inspect it on the right.', '点击对话中带下划线的文章或产物，可在右侧直接审阅。')}</span><button class="btn primary" type="button" data-gpi-demo-exit>${tr('Start my own research', '开始我自己的研究')}</button></footer>
     </div>`;
@@ -764,8 +784,12 @@
       active_export_ready: tr('A matching EasyICU export is ready', '同一项目的 EasyICU 数据包已就绪'),
       plan_ready: tr('Ready to create the analysis plan', '可以生成分析计划'),
       operator_plan_approval_required: tr('Review and approve the digest-bound plan before analysis', '请在分析前审核并批准摘要绑定的计划'),
+      operator_plan_approved: tr('Digest-bound plan approved by the user', '摘要绑定计划已由用户批准'),
       analysis_ready: tr('Ready for analysis after plan approval', '计划确认后可以执行分析'),
       validated_analysis_required: tr('Validated analysis is required first', '需要先完成并验证分析'),
+      validated_analysis_complete: tr('Analysis, validation, and numeric checks are complete', '分析、验证与数值核验已完成'),
+      interpretation_complete: tr('Evidence-bounded interpretation is complete', '证据约束的结果解读已完成'),
+      human_review_required: tr('Draft is locked pending clinical and methods review', '初稿已锁定，等待临床与方法学审阅'),
       full_agent_manuscript_required: tr('A governed Agent manuscript is required', '需要由受治理的 Agent 生成稿件'),
     };
     const reasonText = stage => reasons[stage && stage.reason_code]
@@ -892,6 +916,7 @@
       if (expectedProjectId !== projectId()) return;
       state.session = payload.session; state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || 'research';
+      reconcileSettledSession();
       hydrateProjectedJob(state.workflow && state.workflow.active_job);
       rememberSession(sessionId); setShell('pi');
     } catch (error) { rememberSession(''); state.error = errorText(error); render(); }
@@ -911,6 +936,12 @@
   }
   function modelErrorText(code) {
     const value = String(code || '');
+    if (value === 'pi_shell_token_budget_exhausted' || value === 'pi_shell_session_provider_call_budget_exhausted') {
+      return tr(
+        'This conversation reached its bounded safety budget. Start a new conversation in the same research project; the StudyContext, literature, data source, runs, and evidence remain bound to the project.',
+        '本会话已达到安全预算。请在同一研究项目中新建后续对话；StudyContext、文献、数据源、运行和证据仍保留在项目中。'
+      );
+    }
     if (value === 'pi_model_context_limit') return tr('The model context limit was reached. Start a new conversation or shorten the request.', '模型上下文已达到上限，请新建会话或缩短请求。');
     if (value === 'pi_model_rate_limited') return tr('The model service is temporarily rate-limited. No EasyICU action was executed; retry shortly.', '模型服务暂时限流。本轮没有执行 EasyICU 操作，请稍后重试。');
     if (value === 'pi_model_provider_unavailable') return tr('The model service connection was interrupted. No EasyICU action was executed; retry after connectivity recovers.', '模型服务连接中断。本轮没有执行 EasyICU 操作，连接恢复后可直接重试。');
@@ -1001,6 +1032,13 @@
     render();
   }
   function closeSource() { if (state.source) { state.source.close(); state.source = null; } }
+  function reconcileSettledSession() {
+    if (!state.session || state.session.streaming !== false || !state.busy) return;
+    closeSource();
+    state.busy = false;
+    state.jobId = '';
+    finishActivity('complete', null, 'settled');
+  }
   function closeChildSource() {
     if (state.childSource) { state.childSource.close(); state.childSource = null; }
     state.childJobId = '';
@@ -1147,6 +1185,7 @@
       const payload = await api().loadPiCopilotSession(state.session.session_id, projectId());
       state.session = payload.session;
       if (!preserveTimeline) state.messages = transcriptMessages(state.session);
+      reconcileSettledSession();
     } catch (e) {}
   }
 
