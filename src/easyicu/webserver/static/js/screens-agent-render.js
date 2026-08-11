@@ -516,12 +516,19 @@
       || (payload && payload.workflow && Array.isArray(payload.workflow.steps) && payload.workflow.steps)
       || (payload && payload.agent_plan && Array.isArray(payload.agent_plan.steps) && payload.agent_plan.steps)
       || [];
-    return rows.slice(0, 12).map((row, i) => [
-      row.id || row.step || String(i + 1),
-      row.title || row.name || row.label || row.stage || 'step',
-      row.status || row.state || row.kind || 'planned',
-      Array.isArray(row.evidence_ids) ? row.evidence_ids.join(', ') : (row.evidence || row.output || row.outputs || ''),
-    ]);
+    return rows.slice(0, 12).map((row, i) => {
+      const expectedOutputs = Array.isArray(row.expected_outputs)
+        ? row.expected_outputs.join(', ')
+        : '';
+      const outputs = Array.isArray(row.outputs) ? row.outputs.join(', ') : row.outputs;
+      const evidence = Array.isArray(row.evidence_ids) ? row.evidence_ids.join(', ') : row.evidence;
+      return [
+        row.step_id || row.id || row.step || String(i + 1),
+        row.intent || row.title || row.name || row.label || row.stage || row.method || 'step',
+        row.status || row.state || row.kind || (row.planned_analysis_role ? `planned · ${row.planned_analysis_role}` : 'planned'),
+        expectedOutputs || evidence || row.output || outputs || '',
+      ];
+    });
   }
   function artifactStructuredView(name, payload) {
     const n = String(name || '').toLowerCase();
