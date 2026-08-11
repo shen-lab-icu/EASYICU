@@ -47,7 +47,6 @@ from ..planning.analysis_types import (
 )
 from ..planning.primary_result_contract import (
     family_primary_result_execution_guide,
-    model_terms_retry_guide,
     primary_result_contract_guide,
     validate_required_primary_result as _validate_required_primary_result,
 )
@@ -258,15 +257,6 @@ _CODER_AUTHORITY_PRECEDENCE = (
 )
 
 PLANNER_MAX_RETRIES = 4
-
-_PLANNER_OPTIONAL_FIELDS_RETRY_GUIDE = (
-    "Contract applicability is exact: `family_primary_result_requirement` is "
-    "legal only on the primary step when `analysis_type` is `causal_inference` "
-    "or `survival`. An `association_study` must omit that field and declare its "
-    "supported adjusted model through `model_requirements`. Optional collection "
-    "fields, including `know_how_decisions`, must be omitted or encoded as JSON "
-    "arrays (`[]` when explicitly empty), never `null`."
-)
 
 
 def _format_context(
@@ -548,8 +538,7 @@ def _build_planner_user_prompt(
         "then choose only the steps justified by that family and "
         "the available context. The plan must not assume that "
         "every task needs Table 1, outcome incidence, missingness, "
-        "or a primary association model. "
-        + "That said, a baseline "
+        "or a primary association model. That said, a baseline "
         "characteristics table (Table 1) IS a reporting standard for "
         "observational/association and prediction-model families "
         "(STROBE item 14 / TRIPOD): for those families include a "
@@ -970,10 +959,8 @@ def _build_planner_user_prompt(
         "    ],\n"
         '    "exclusion": []\n'
         "  },\n"
-        # ResearchContext is the unique endpoint authority.  The plan keeps a
-        # projection only so old persisted plans remain readable; asking the
-        # Planner to fill the shape independently would create a second source
-        # of truth.
+        # ResearchContext is the unique endpoint authority. The projection keeps
+        # old plans readable; Planner-authored contents would be a second truth.
         '  "endpoint": null,\n'
         '  "steps": [\n'
         # The cohort-definition step is shown first because it IS first in
@@ -1610,10 +1597,7 @@ class PlannerAgent:
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
-                "\n\n"
-                + model_terms_retry_guide()
-                + "\n\n"
-                + _PLANNER_OPTIONAL_FIELDS_RETRY_GUIDE
+                + _payload.planner_science_retry_guide()
             ),
         )
 
@@ -2151,10 +2135,7 @@ class ReplannerAgent(PlannerAgent):
                 "know_how_decisions when present. Every step must include "
                 "planned_analysis_role. Keep completed step_ids "
                 "from the CURRENT PLAN unchanged; only revise the remaining steps."
-                "\n\n"
-                + model_terms_retry_guide()
-                + "\n\n"
-                + _PLANNER_OPTIONAL_FIELDS_RETRY_GUIDE
+                + _payload.planner_science_retry_guide()
             ),
         )
         if revised.revision <= current_plan.revision:
