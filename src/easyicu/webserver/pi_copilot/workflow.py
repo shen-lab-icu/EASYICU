@@ -163,6 +163,16 @@ def build_research_workflow_snapshot(
     pipeline_receipt = "source_run_manifest.json" in artifact_names
     gate_status = str(run_row.get("gate_status") or "")
     run_blocked = gate_status == "blocked"
+    pending_review_reason_codes = {
+        str(item).strip()
+        for item in (run_row.get("pending_review_reason_codes") or [])
+        if str(item).strip()
+    }
+    plan_review_pending = bool(
+        has_plan
+        and str(run_row.get("run_status") or "") == "human_review_pending"
+        and "operator_plan_approval_required" in pending_review_reason_codes
+    )
     analysis_complete = bool(
         full_run
         and pipeline_run
@@ -248,6 +258,8 @@ def build_research_workflow_snapshot(
             status=(
                 "blocked"
                 if idea_blocks_execution
+                else "review_required"
+                if plan_review_pending
                 else "complete"
                 if has_plan
                 else "running"
@@ -260,6 +272,8 @@ def build_research_workflow_snapshot(
             reason_code=(
                 "idea_feasibility_refresh_required"
                 if idea_blocks_execution
+                else "operator_plan_approval_required"
+                if plan_review_pending
                 else "agent_plan_ready"
                 if has_plan
                 else "analysis_running"
@@ -275,6 +289,8 @@ def build_research_workflow_snapshot(
             status=(
                 "blocked"
                 if idea_blocks_execution
+                else "blocked"
+                if plan_review_pending
                 else "complete"
                 if analysis_complete and not run_blocked
                 else "review_required"
@@ -289,6 +305,8 @@ def build_research_workflow_snapshot(
             reason_code=(
                 "idea_feasibility_refresh_required"
                 if idea_blocks_execution
+                else "operator_plan_approval_required"
+                if plan_review_pending
                 else "validated_analysis_ready"
                 if analysis_complete and not run_blocked
                 else "analysis_gate_blocked"
@@ -332,10 +350,18 @@ def build_research_workflow_snapshot(
     completed = sum(
         1 for row in required if row.status in {"complete", "review_required"}
     )
-    next_stage = next(
-        (row for row in required if row.status not in {"complete", "review_required"}),
-        stages[-1],
-    )
+    if plan_review_pending:
+        completed -= 1
+        next_stage = next(row for row in required if row.id == "plan")
+    else:
+        next_stage = next(
+            (
+                row
+                for row in required
+                if row.status not in {"complete", "review_required"}
+            ),
+            stages[-1],
+        )
     next_action = next_stage.reason_code
     if all(row.status in {"complete", "review_required"} for row in required):
         next_action = "human_review_and_reporting"

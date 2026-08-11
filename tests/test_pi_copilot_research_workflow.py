@@ -14,7 +14,11 @@ from easyicu.research_agent.reporting.result_card import (
     build_result_interpretation_card,
 )
 from easyicu.research_agent.schema import UserPreferences
-from easyicu.webserver import agent_pipeline_runs, provider_adapter
+from easyicu.research_agent.orchestration.workflow import (
+    HumanReviewPending,
+    HumanReviewRequest,
+)
+from easyicu.webserver import agent_pipeline_runs, agent_runs, provider_adapter
 from easyicu.webserver.pi_copilot import tools as tool_module
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
@@ -133,6 +137,37 @@ def test_workflow_projection_advances_only_from_owner_receipts() -> None:
     assert by_id["interpretation"].status == "review_required"
     assert by_id["manuscript"].status == "review_required"
     assert finished.next_action_code == "human_review_and_reporting"
+
+
+def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
+    snapshot = build_research_workflow_snapshot(
+        study=_complete_study(),
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "run_status": "human_review_pending",
+            "pending_review_reason_codes": [
+                "operator_plan_approval_required"
+            ],
+            "artifact_names": [
+                "agent_plan.json",
+                "evidence_ledger.json",
+                "source_run_manifest.json",
+            ],
+        },
+    )
+
+    by_id = {row.id: row for row in snapshot.stages}
+    assert snapshot.current_stage == "plan"
+    assert snapshot.next_action_code == "operator_plan_approval_required"
+    assert snapshot.completed_required_stages == 3
+    assert by_id["plan"].status == "review_required"
+    assert by_id["plan"].reason_code == "operator_plan_approval_required"
+    assert by_id["analysis"].status == "blocked"
+    assert by_id["analysis"].reason_code == "operator_plan_approval_required"
 
 
 def test_active_export_must_belong_to_the_bound_study() -> None:
@@ -672,6 +707,51 @@ def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
     ledger = json.loads((wrapper / "evidence_ledger.json").read_text(encoding="utf-8"))
     assert ledger["privacy"]["projection_scan_passed"] is True
     assert ledger["privacy"]["path_values_returned"] is False
+
+
+def test_pending_plan_reason_survives_projection_and_run_history(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "real-pending-run"
+    _write_real_pipeline_fixture(run_dir, manuscript="")
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Review the digest-bound plan before analysis.",
+        authority_sha256="a" * 64,
+        payload={"reason": "operator_plan_approval_required"},
+    )
+    pending = HumanReviewPending(
+        run_id="run-pending-plan",
+        thread_id="thread-pending-plan",
+        run_dir=str(run_dir),
+        requests=(request,),
+    )
+    project_root = tmp_path / "projects"
+    wrapper = project_root / "study-workflow" / "run_pending_plan"
+
+    agent_pipeline_runs._write_projection(
+        wrapper_dir=wrapper,
+        study=_complete_study(),
+        provider={"provider": "openai", "model": "test-model"},
+        acquisition=_acquisition_receipt(),
+        run_dir=run_dir,
+        pending=pending,
+    )
+
+    manifest = json.loads(
+        (wrapper / "source_run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["pending_reviews"][0]["reason_code"] == (
+        "operator_plan_approval_required"
+    )
+    history = agent_runs.list_run_history(
+        study_id="study-workflow",
+        project_root=str(project_root),
+    )
+    assert history["runs"][0]["run_status"] == "human_review_pending"
+    assert history["runs"][0]["pending_review_reason_codes"] == [
+        "operator_plan_approval_required"
+    ]
 
 
 def test_pipeline_projection_fails_closed_when_source_contains_a_host_path(

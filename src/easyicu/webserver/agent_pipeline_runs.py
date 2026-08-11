@@ -836,6 +836,12 @@ def _write_projection(
             {
                 "review_id": request.review_id,
                 "kind": request.kind,
+                "reason_code": _clean_text(
+                    request.payload.get("reason")
+                    if isinstance(request.payload, Mapping)
+                    else None,
+                    160,
+                ),
                 "summary": request.summary,
                 "authority_sha256": request.authority_sha256,
             }

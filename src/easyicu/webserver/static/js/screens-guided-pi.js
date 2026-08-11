@@ -645,6 +645,7 @@
       study_setup_complete: tr('Required study setup is complete', '必需研究配置已完成'),
       active_export_ready: tr('A matching EasyICU export is ready', '同一项目的 EasyICU 数据包已就绪'),
       plan_ready: tr('Ready to create the analysis plan', '可以生成分析计划'),
+      operator_plan_approval_required: tr('Review and approve the digest-bound plan before analysis', '请在分析前审核并批准摘要绑定的计划'),
       analysis_ready: tr('Ready for analysis after plan approval', '计划确认后可以执行分析'),
       validated_analysis_required: tr('Validated analysis is required first', '需要先完成并验证分析'),
       full_agent_manuscript_required: tr('A governed Agent manuscript is required', '需要由受治理的 Agent 生成稿件'),
@@ -663,7 +664,7 @@
       <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段完成')}</span><span>${tr('One project', '同一项目')}</span></div>
     </div>
     <div class="gd-pipeline-list open" data-gpi-project-workflow-list>${stages.map(stage => {
-      const status = stage.status === 'complete' ? 'done' : stage.status === 'ready' || stage.status === 'running' ? 'active' : 'locked';
+      const status = stage.status === 'complete' ? 'done' : stage.status === 'ready' || stage.status === 'running' || stage.status === 'review_required' ? 'active' : 'locked';
       const marker = status === 'done' ? iconHtml('check', 11) : status === 'locked' ? iconHtml('lock', 10) : iconHtml('dot', 10);
       return `<div class="study-item ${status}" title="${esc(stage.reason_code || '')}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}</div><div class="si-v">${esc(reasonText(stage))}</div></div></div>`;
     }).join('')}</div>`;
