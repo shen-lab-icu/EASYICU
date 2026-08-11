@@ -149,6 +149,7 @@
 .gpi-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.65}
 .gpi-text strong{font-weight:650;color:var(--ink-1)}
 .gpi-text code{padding:1px 4px;border-radius:4px;background:var(--wash);font:500 .88em/1.4 var(--mono)}
+.gpi-model-error{padding:12px 14px;border:1px solid #e8c4c0;border-radius:10px;background:#fff7f5;color:#8f342e}
 
 /* Timeline structure adapted from pi-gui's MIT-licensed timeline-item/timeline.css.
    EasyICU keeps its own event projection, receipt fields, and shared icon catalog. */

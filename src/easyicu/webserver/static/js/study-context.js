@@ -12,8 +12,9 @@
   const EVENT_NAME = 'easyicu:study-context';
   const PERSISTED_FIELDS = [
     'id', 'title', 'question', 'purpose', 'data_source', 'cohort', 'modules',
-    'outcome', 'time_window', 'comparator', 'export_format', 'analysis_goal',
-    'current_stage', 'last_route', 'active_job_id', 'confirmations',
+    'outcome', 'primary_exposure', 'covariates', 'time_window', 'comparator',
+    'export_format', 'analysis_goal', 'current_stage', 'last_route',
+    'active_job_id', 'confirmations', 'idea_handoff',
   ];
   const ROW_LEVEL_KEYS = new Set([
     'tablerows', 'rowdata', 'rows', 'records', 'values', 'observations', 'series',
@@ -50,6 +51,11 @@
   };
   const TIME_WINDOW_SCHEMA = {
     hours: 'number', observation_hours: 'number', anchor: 'text', preset: 'text', label: 'text',
+  };
+  const IDEA_HANDOFF_SCHEMA = {
+    schema_version: 'text', run_id: 'text', idea_id: 'text',
+    canonical_handoff_sha256: 'text', status: 'text', accepted_at: 'text',
+    go_no_go: 'text', go_no_go_reason: 'text',
   };
   const suppliers = {};
   let activeContext = readCache();
@@ -176,11 +182,14 @@
       cohort: cleanSchemaObject(raw.cohort, COHORT_SCHEMA),
       modules: Array.from(new Set(cleanList(raw.modules).slice(0, 64).filter(item => typeof item === 'string').map(item => metadataText(item, 80)).filter(Boolean))),
       outcome: metadataText(raw.outcome, 500),
+      primary_exposure: metadataText(raw.primary_exposure, 160),
+      covariates: Array.from(new Set(cleanList(raw.covariates).slice(0, 64).filter(item => typeof item === 'string').map(item => metadataText(item, 160)).filter(Boolean))),
       time_window: cleanSchemaObject(raw.time_window, TIME_WINDOW_SCHEMA),
       comparator: metadataText(raw.comparator, 500),
       export_format: metadataText(raw.export_format, 40),
       analysis_goal: metadataText(raw.analysis_goal, 1200),
       confirmations: cleanConfirmations(raw.confirmations),
+      idea_handoff: cleanSchemaObject(raw.idea_handoff, IDEA_HANDOFF_SCHEMA),
       current_stage: text(raw.current_stage) || 'study_setup',
       last_route: text(raw.last_route) || 'entry',
       active_job_id: text(raw.active_job_id) || null,

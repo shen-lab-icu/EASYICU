@@ -62,6 +62,7 @@ _CONTEXT_FIELDS = {
     "last_route",
     "active_job_id",
     "confirmations",
+    "idea_handoff",
 }
 _TEXT_LIMITS = {
     "title": 160,
@@ -137,6 +138,16 @@ _TIME_WINDOW_SCHEMA = {
     "anchor": "text",
     "preset": "text",
     "label": "text",
+}
+_IDEA_HANDOFF_SCHEMA = {
+    "schema_version": "text",
+    "run_id": "text",
+    "idea_id": "text",
+    "canonical_handoff_sha256": "text",
+    "status": "text",
+    "accepted_at": "text",
+    "go_no_go": "text",
+    "go_no_go_reason": "text",
 }
 
 
@@ -536,6 +547,7 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "last_route": "entry",
         "active_job_id": None,
         "confirmations": {},
+        "idea_handoff": {},
         "created_at": timestamp,
         "updated_at": timestamp,
     }
@@ -576,6 +588,21 @@ def _sanitize_patch(raw: Any) -> Dict[str, Any]:
         )
     if "confirmations" in raw:
         patch["confirmations"] = _confirmations(raw.get("confirmations"))
+    if "idea_handoff" in raw:
+        handoff = _schema_object(
+            raw.get("idea_handoff"),
+            field="idea_handoff",
+            schema=_IDEA_HANDOFF_SCHEMA,
+        )
+        digest = str(handoff.get("canonical_handoff_sha256") or "")
+        if digest and not re.fullmatch(r"[a-f0-9]{64}", digest):
+            raise StudyContextError(
+                {
+                    "error": "invalid_idea_handoff_digest",
+                    "field": "idea_handoff.canonical_handoff_sha256",
+                }
+            )
+        patch["idea_handoff"] = handoff
     for field, default in (("current_stage", "plan"), ("last_route", "entry")):
         if field in raw:
             patch[field] = _identifier(raw.get(field), field=field, default=default)
@@ -915,6 +942,7 @@ def build_agent_context_binding(
                 "last_route",
                 "active_job_id",
                 "confirmations",
+                "idea_handoff",
             )
         },
     }

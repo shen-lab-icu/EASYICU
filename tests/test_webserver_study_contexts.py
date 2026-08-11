@@ -90,6 +90,16 @@ def test_study_context_api_persists_lists_and_handoffs_metadata(tmp_path: Path) 
             "export_format": "parquet",
             "analysis_goal": "Estimate an adjusted association.",
             "confirmations": {"cohort_reviewed": True},
+            "idea_handoff": {
+                "schema_version": "easyicu.pi-idea-selection/1",
+                "run_id": "idea-run-1",
+                "idea_id": "idea-sepsis",
+                "canonical_handoff_sha256": "c" * 64,
+                "status": "accepted",
+                "accepted_at": "2026-08-11T12:00:00Z",
+                "go_no_go": "recommend",
+                "go_no_go_reason": "Selected export supports the required concepts.",
+            },
         },
     )
 
@@ -102,6 +112,8 @@ def test_study_context_api_persists_lists_and_handoffs_metadata(tmp_path: Path) 
     assert context["revision"] == 1
     assert context["primary_exposure"] == "sofa2_score"
     assert context["covariates"] == ["age", "sex"]
+    assert context["idea_handoff"]["idea_id"] == "idea-sepsis"
+    assert context["idea_handoff"]["go_no_go"] == "recommend"
 
     active = client.get("/api/study-contexts/active")
     listed = client.get("/api/study-contexts")

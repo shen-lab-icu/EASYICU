@@ -37,7 +37,7 @@ from .project_authority import (
 from .provider_config import PiProviderConfigStore
 from .projections import reject_sensitive_message
 from .workspace import ProjectWorkspace
-from .workflow import build_research_workflow_snapshot
+from .workflow import active_export_matches_study, build_research_workflow_snapshot
 
 MAX_SESSIONS = 100
 MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES = 2 * 1024 * 1024
@@ -987,6 +987,27 @@ class PiCopilotService:
                 )
                 refreshed.last_message_job_id = job.id
                 self._save_record(refreshed)
+                transcript = state.get("transcript")
+                if isinstance(transcript, list):
+                    terminal_assistant = next(
+                        (
+                            row
+                            for row in reversed(transcript)
+                            if isinstance(row, dict)
+                            and row.get("role") == "assistant"
+                        ),
+                        None,
+                    )
+                    if (
+                        isinstance(terminal_assistant, dict)
+                        and terminal_assistant.get("stop_reason") == "error"
+                    ):
+                        raise RuntimeError(
+                            str(
+                                terminal_assistant.get("error_code")
+                                or "pi_model_provider_error"
+                            )
+                        )
                 return {
                     "session": self._public_session(refreshed, gateway_state=state),
                     "message_status": "aborted" if job.cancel_requested else "done",
@@ -1135,7 +1156,9 @@ class PiCopilotService:
         rows = [row for row in (history.get("runs") or []) if isinstance(row, Mapping)]
         snapshot = build_research_workflow_snapshot(
             study=study,
-            active_export_present=bool(registry.get("active_path")),
+            active_export_present=active_export_matches_study(
+                study, registry.get("active_path")
+            ),
             active_job=active_job,
             latest_run=rows[0] if rows else None,
         )

@@ -23,6 +23,7 @@ from easyicu.webserver.pi_copilot.contracts import (
     ToolExecutionContext,
 )
 from easyicu.webserver.pi_copilot.workflow import (
+    active_export_matches_study,
     build_research_workflow_snapshot,
 )
 
@@ -67,6 +68,49 @@ def test_workflow_projection_advances_only_from_owner_receipts() -> None:
     ]
     assert next(row for row in empty.stages if row.id == "idea").status == "blocked"
 
+    accepted = build_research_workflow_snapshot(
+        study={
+            **_complete_study(),
+            "idea_handoff": {
+                "schema_version": "easyicu.pi-idea-selection/1",
+                "run_id": "idea-run-1",
+                "idea_id": "idea-lactate",
+                "canonical_handoff_sha256": "a" * 64,
+                "status": "accepted",
+                "go_no_go": "recommend",
+            },
+        },
+        active_export_present=False,
+        active_job=None,
+        latest_run=None,
+    )
+    idea_stage = next(row for row in accepted.stages if row.id == "idea")
+    assert idea_stage.status == "complete"
+    assert idea_stage.reason_code == "idea_handoff_accepted"
+
+    held = build_research_workflow_snapshot(
+        study={
+            **_complete_study(),
+            "idea_handoff": {
+                "schema_version": "easyicu.pi-idea-selection/1",
+                "run_id": "idea-run-hold",
+                "idea_id": "idea-lactate-hold",
+                "canonical_handoff_sha256": "d" * 64,
+                "status": "accepted",
+                "go_no_go": "hold",
+                "go_no_go_reason": "Active export feasibility must be refreshed.",
+            },
+        },
+        active_export_present=True,
+        active_job=None,
+        latest_run=None,
+    )
+    held_by_id = {row.id: row for row in held.stages}
+    assert held_by_id["idea"].status == "review_required"
+    assert held_by_id["plan"].status == "blocked"
+    assert held_by_id["analysis"].status == "blocked"
+    assert held.next_action_code == "idea_feasibility_refresh_required"
+
     finished = build_research_workflow_snapshot(
         study=_complete_study(),
         active_export_present=True,
@@ -89,6 +133,13 @@ def test_workflow_projection_advances_only_from_owner_receipts() -> None:
     assert by_id["interpretation"].status == "review_required"
     assert by_id["manuscript"].status == "review_required"
     assert finished.next_action_code == "human_review_and_reporting"
+
+
+def test_active_export_must_belong_to_the_bound_study() -> None:
+    study = _complete_study()
+    assert active_export_matches_study(study, "/private/prepared/source") is True
+    assert active_export_matches_study(study, "/private/another/export") is False
+    assert active_export_matches_study({"id": "study-without-source"}, "/active") is False
 
 
 def test_legacy_full_scaffold_does_not_claim_scientific_analysis_complete() -> None:
@@ -162,6 +213,105 @@ def test_idea_tool_never_accepts_a_host_path_from_the_model() -> None:
             context,
         )
     assert rejected.value.code == "pi_tool_unknown_arguments"
+
+
+def test_accept_idea_handoff_binds_digest_and_projects_study_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = _complete_study()
+    current.update({"title": "Old study", "revision": 9, "active_job_id": None})
+    writes: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: current)
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "plan_idea",
+        lambda body: {
+            "plan": {
+                "research_question": "Does early lactate predict hospital mortality?",
+                "analysis_family": "prognostic association",
+                "exposure": "peak lactate",
+                "comparator": "per 1 mmol/L",
+                "outcome": "In-hospital mortality",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "create_handoff",
+        lambda body: {
+            "created_at": "2026-08-11T12:00:00Z",
+            "idea_id": "idea-lactate",
+            "candidate_topic": "Early lactate and mortality",
+            "canonical_handoff_sha256": "b" * 64,
+            "agent_seed": {"question": "Fallback question"},
+            "go_no_go": "recommend",
+            "go_no_go_reason": "Concepts are available in the selected export.",
+        },
+    )
+
+    def upsert(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        writes.append((dict(body), dict(kwargs)))
+        return {**current, **body, "revision": 10}
+
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-idea-accept",
+            binding=AuthorityBinding(
+                study_context_id="study-workflow",
+                study_revision=9,
+            ),
+        ),
+        allowed_actions={"idea"},
+    )
+    result = tool_module.execute_tool(
+        "easyicu_accept_idea_handoff",
+        {"run_id": "idea-run-1", "idea_id": "idea-lactate"},
+        context,
+    )
+
+    assert result["code"] == "easyicu_idea_handoff_accepted"
+    assert result["details"]["idea_selection"]["canonical_handoff_sha256"] == "b" * 64
+    patch, options = writes[0]
+    assert patch["question"] == "Does early lactate predict hospital mortality?"
+    assert patch["primary_exposure"] == "peak lactate"
+    assert patch["idea_handoff"] == {
+        "schema_version": "easyicu.pi-idea-selection/1",
+        "run_id": "idea-run-1",
+        "idea_id": "idea-lactate",
+        "canonical_handoff_sha256": "b" * 64,
+        "status": "accepted",
+        "accepted_at": "2026-08-11T12:00:00Z",
+        "go_no_go": "recommend",
+        "go_no_go_reason": "Concepts are available in the selected export.",
+    }
+    assert options["expected_revision"] == 9
+    with pytest.raises(PiCopilotError) as stale:
+        tool_module.execute_tool("easyicu_inspect_workflow", {}, context)
+    assert stale.value.code == "pi_session_authority_stale"
+
+
+def test_accept_idea_handoff_fails_closed_without_canonical_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {**_complete_study(), "revision": 2, "active_job_id": None}
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: current)
+    monkeypatch.setattr(tool_module.idea_mining, "plan_idea", lambda body: {"plan": {}})
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "create_handoff",
+        lambda body: {"idea_id": "idea-lactate", "canonical_handoff_sha256": "bad"},
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(session_id="pi-idea-invalid"),
+        allowed_actions={"idea"},
+    )
+    result = tool_module.execute_tool(
+        "easyicu_accept_idea_handoff",
+        {"run_id": "idea-run-1", "idea_id": "idea-lactate"},
+        context,
+    )
+    assert result["code"] == "canonical_idea_handoff_digest_required"
 
 
 def test_extraction_uses_bound_study_source_and_returns_no_path(

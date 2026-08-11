@@ -1025,6 +1025,50 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
     assert unrelated_abort.value.code == "pi_message_job_mismatch"
 
 
+def test_provider_error_marks_message_job_failed_without_raw_network_detail(
+    tmp_path: Path,
+) -> None:
+    class ProviderErrorGateway(FakeGateway):
+        def request(
+            self, method: str, params: dict[str, Any], **kwargs: Any
+        ) -> dict[str, Any]:
+            state = super().request(method, params, **kwargs)
+            if method == "session.prompt":
+                state["transcript"] = [
+                    {
+                        "role": "assistant",
+                        "content": [],
+                        "stop_reason": "error",
+                        "error_code": "pi_model_provider_unavailable",
+                    }
+                ]
+            return state
+
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=ProviderErrorGateway(),
+    )
+    session_id = service.create_session(
+        project_id="project-provider-error", external_llm_opt_in=True
+    )["session"]["session_id"]
+
+    submitted = service.send_message(
+        session_id,
+        project_id="project-provider-error",
+        message="Retry the confirmed action.",
+    )
+    deadline = time.monotonic() + 3
+    job = None
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    assert job is not None and job.status == "failed"
+    assert job.error == "pi_model_provider_unavailable"
+
+
 def test_session_rejects_overlapping_prompts(
     tmp_path: Path,
     study_state: dict[str, Any],
@@ -1122,6 +1166,7 @@ def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
         "easyicu_update_study_context",
         "easyicu_mine_ideas",
         "easyicu_prepare_idea_handoff",
+        "easyicu_accept_idea_handoff",
         "easyicu_start_extraction",
         "easyicu_run",
         "easyicu_resume",
