@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from easyicu.research_agent.execution.runners.deterministic_robustness import (
@@ -23,6 +25,8 @@ from easyicu.research_agent.execution.runners.deterministic_robustness import (
 )
 from easyicu.research_agent.execution.runners.robustness_figure_executor import (
     ROBUSTNESS_FIGURE_INPUT,
+    ROBUSTNESS_PRIMARY_EFFECT_INPUT,
+    ROBUSTNESS_PRIMARY_ESTIMATE_INPUT,
     robustness_figure_executor_code,
     robustness_figure_executor_owns_step,
     run_robustness_figure,
@@ -146,10 +150,48 @@ def _write_bound_matrix(tmp_path: Path, rows, columns=None):
     return run_dir, manifest
 
 
+def _bind_statistic(run_dir, manifest, input_key, value):
+    product = input_key.split(":", 1)[1]
+    path = run_dir / "inputs" / f"{product}.json"
+    path.write_text(
+        json.dumps({"statistic": product, "value": value}),
+        encoding="utf-8",
+    )
+    manifest["inputs"][input_key] = {
+        "declared_kind": "statistic",
+        "evidence_kind": "statistic",
+        "product": product,
+        "evidence_id": f"ev_{product}",
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "relative_path": str(path.relative_to(run_dir)),
+    }
+
+
 def test_it_claims_a_step_bound_to_the_replay_owners_matrix():
     assert robustness_figure_executor_owns_step(
         _step(), resolved_bindings=_producer_bindings()
     )
+
+
+def test_it_claims_the_normalized_primary_effect_input():
+    step = _step(
+        inputs=[ROBUSTNESS_FIGURE_INPUT, ROBUSTNESS_PRIMARY_EFFECT_INPUT],
+        input_consumption_contracts=[
+            {
+                "schema_version": "easyicu.artifact_consumption/1",
+                "input_key": ROBUSTNESS_FIGURE_INPUT,
+                "mode": "all_rows",
+                "role_column": None,
+                "expected_roles": [],
+            }
+        ],
+    )
+    bindings = {
+        **_producer_bindings(),
+        ROBUSTNESS_PRIMARY_EFFECT_INPUT: {},
+    }
+
+    assert robustness_figure_executor_owns_step(step, resolved_bindings=bindings)
 
 
 def test_the_figure_product_name_does_not_decide_ownership():
@@ -240,6 +282,43 @@ def test_it_renders_the_real_grid_and_labels_what_did_not_converge(tmp_path):
     source = (tmp_path / "out" / "robustness_plot_source_data.csv").read_text()
     assert "alt_missing_complete_case" in source
     assert (tmp_path / "out" / "robustness_plot.png").is_file()
+
+
+def test_it_renders_the_normalized_primary_effect_anchor(tmp_path):
+    run_dir, manifest = _write_bound_matrix(tmp_path, _REAL_ROWS)
+    _bind_statistic(run_dir, manifest, ROBUSTNESS_PRIMARY_EFFECT_INPUT, 1.566)
+
+    summary = run_robustness_figure(
+        out_dir=tmp_path / "out",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id="07_robustness_sensitivity_figure",
+        figure_product="robustness_plot",
+    )
+
+    assert summary["anchor_input_bound"] is True
+    assert summary["anchor_line_drawn"] is True
+    source = pd.read_csv(
+        tmp_path / "out" / "robustness_plot_bound_statistics_source_data.csv"
+    )
+    assert source.to_dict("records") == [
+        {"statistic": "primary_effect", "value": 1.566}
+    ]
+
+
+def test_it_refuses_conflicting_primary_effect_aliases(tmp_path):
+    run_dir, manifest = _write_bound_matrix(tmp_path, _REAL_ROWS)
+    _bind_statistic(run_dir, manifest, ROBUSTNESS_PRIMARY_EFFECT_INPUT, 1.566)
+    _bind_statistic(run_dir, manifest, ROBUSTNESS_PRIMARY_ESTIMATE_INPUT, 9.999)
+
+    with pytest.raises(ValueError, match="bindings disagree"):
+        run_robustness_figure(
+            out_dir=tmp_path / "out",
+            run_dir=run_dir,
+            resolved_inputs=manifest,
+            step_id="07_robustness_sensitivity_figure",
+            figure_product="robustness_plot",
+        )
 
 
 def test_it_refuses_to_draw_a_matrix_the_replay_owner_did_not_write(tmp_path):

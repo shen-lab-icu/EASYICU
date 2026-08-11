@@ -19,7 +19,8 @@ keeps breaking: anchor on what is exclusive to the work, not on its label.
 
 THE EXTRA BINDINGS ARE READ, NOT EXCUSED. Two of the eight steps bind the
 matrix alone; six bind five typed inputs -- the matrix,
-``table:robustness_summary``, and the statistics ``statistic:primary_or``,
+``table:robustness_summary``, and the statistics ``statistic:primary_effect``
+(or its historical OR-specific alias ``statistic:primary_or``),
 ``statistic:complete_case_n`` and ``statistic:robustness_summary``. The first
 draft of this renderer read only the matrix and was refused by
 ``TypedInputCapability`` for the other four, which was the right refusal: a
@@ -133,6 +134,7 @@ def _figure_product(value: Any) -> str | None:
 #: read whenever present -- see the module docstring on why "optional" may
 #: never mean "ignored".
 ROBUSTNESS_PRIMARY_ESTIMATE_INPUT = "statistic:primary_or"
+ROBUSTNESS_PRIMARY_EFFECT_INPUT = "statistic:primary_effect"
 ROBUSTNESS_COMPLETE_CASE_INPUT = "statistic:complete_case_n"
 
 ROBUSTNESS_FIGURE_CAPABILITY = TypedInputCapability(
@@ -141,6 +143,7 @@ ROBUSTNESS_FIGURE_CAPABILITY = TypedInputCapability(
         {
             "table:robustness_summary",
             "statistic:robustness_summary",
+            ROBUSTNESS_PRIMARY_EFFECT_INPUT,
             ROBUSTNESS_PRIMARY_ESTIMATE_INPUT,
             ROBUSTNESS_COMPLETE_CASE_INPUT,
         }
@@ -686,10 +689,30 @@ def run_robustness_figure(
         step_id=step_id,
     )
     rows, effect_scale, has_gap = _validated_rows(frame)
-    anchor_bound, anchor_value = _load_statistic(
+    primary_effect_bound, primary_effect_value = _load_statistic(
+        run_dir=Path(run_dir),
+        inputs=bound_inputs,
+        input_key=ROBUSTNESS_PRIMARY_EFFECT_INPUT,
+    )
+    primary_or_bound, primary_or_value = _load_statistic(
         run_dir=Path(run_dir),
         inputs=bound_inputs,
         input_key=ROBUSTNESS_PRIMARY_ESTIMATE_INPUT,
+    )
+    if (
+        primary_effect_value is not None
+        and primary_or_value is not None
+        and not math.isclose(
+            primary_effect_value,
+            primary_or_value,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+    ):
+        raise ValueError("primary_effect and primary_or bindings disagree")
+    anchor_bound = primary_effect_bound or primary_or_bound
+    anchor_value = (
+        primary_effect_value if primary_effect_value is not None else primary_or_value
     )
     complete_case_bound, complete_case_n = _load_statistic(
         run_dir=Path(run_dir),
@@ -717,7 +740,16 @@ def run_robustness_figure(
         figure_product=figure_product,
         bound_inputs=bound_inputs,
         bound_statistics=(
-            (ROBUSTNESS_PRIMARY_ESTIMATE_INPUT, anchor_bound, anchor_value),
+            (
+                ROBUSTNESS_PRIMARY_EFFECT_INPUT,
+                primary_effect_bound,
+                primary_effect_value,
+            ),
+            (
+                ROBUSTNESS_PRIMARY_ESTIMATE_INPUT,
+                primary_or_bound,
+                primary_or_value,
+            ),
             (ROBUSTNESS_COMPLETE_CASE_INPUT, complete_case_bound, complete_case_n),
         ),
         specification_grid=specification_grid,
