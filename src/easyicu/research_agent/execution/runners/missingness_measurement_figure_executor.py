@@ -57,7 +57,10 @@ __all__ = [
 
 MISSINGNESS_MEASUREMENT_AUDIT_INPUT = "table:missingness_measurement_audit"
 MEASUREMENT_PROCESS_AUDIT_INPUT = "table:measurement_process_audit"
-MEASUREMENT_MISSINGNESS_FIGURE_INPUT = "table:measurement_missingness"
+# The one-panel renderer consumes the same typed audit product as panel A of
+# the two-panel renderer.  Keep a role-specific alias for call-site clarity,
+# but never invent a second Planner input key for the same product.
+MEASUREMENT_MISSINGNESS_FIGURE_INPUT = MISSINGNESS_MEASUREMENT_AUDIT_INPUT
 MISSINGNESS_MEASUREMENT_FIGURE_INPUTS = (
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     MEASUREMENT_PROCESS_AUDIT_INPUT,
@@ -134,12 +137,10 @@ _PROCESS_MEASURES = (
 _PRODUCT_BY_INPUT = {
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT: "missingness_measurement_audit",
     MEASUREMENT_PROCESS_AUDIT_INPUT: "measurement_process_audit",
-    MEASUREMENT_MISSINGNESS_FIGURE_INPUT: "measurement_missingness",
 }
 _COLUMNS_BY_INPUT = {
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT: _AUDIT_COLUMNS,
     MEASUREMENT_PROCESS_AUDIT_INPUT: _PROCESS_COLUMNS,
-    MEASUREMENT_MISSINGNESS_FIGURE_INPUT: _AUDIT_COLUMNS,
 }
 
 

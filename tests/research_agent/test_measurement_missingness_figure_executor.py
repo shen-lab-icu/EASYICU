@@ -64,7 +64,7 @@ def _binding(run_dir: Path) -> tuple[dict, pd.DataFrame]:
         "evidence_id": "table_owner",
         "input_key": MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
         "produced_by_step": "03_measurement_missingness_audit",
-        "product": "measurement_missingness",
+        "product": "missingness_measurement_audit",
         "sha256": digest,
     }
     binding = {
@@ -74,7 +74,7 @@ def _binding(run_dir: Path) -> tuple[dict, pd.DataFrame]:
         "evidence_kind": "table",
         "evidence_id": "table_owner",
         "produced_by_step": "03_measurement_missingness_audit",
-        "product": "measurement_missingness",
+        "product": "missingness_measurement_audit",
         "identity_row": identity,
         "product_contract": {
             "schema_version": "easyicu.host_typed_product.v4",
@@ -93,6 +93,9 @@ def _binding(run_dir: Path) -> tuple[dict, pd.DataFrame]:
 
 
 def test_single_typed_measurement_audit_selects_deterministic_renderer(tmp_path: Path):
+    assert MEASUREMENT_MISSINGNESS_FIGURE_INPUT == (
+        "table:missingness_measurement_audit"
+    )
     step = _step()
     binding, _frame = _binding(tmp_path)
     bindings = {MEASUREMENT_MISSINGNESS_FIGURE_INPUT: binding}
