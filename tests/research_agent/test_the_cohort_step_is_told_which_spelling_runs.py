@@ -37,11 +37,11 @@ import pytest
 from easyicu.research_agent.agents.core import (
     PlannerAgent,
     ReplannerAgent,
-    _PLANNER_OPTIONAL_FIELDS_RETRY_GUIDE,
     _build_planner_user_prompt,
     _host_executed_cohort_step_sentence,
     _planner_retry_response_projection,
 )
+from easyicu.research_agent.agents.plan_payload import planner_science_retry_guide
 from easyicu.research_agent.authority.run_input import (
     _declares_host_cohort_products,
 )
@@ -215,8 +215,10 @@ def test_the_retry_format_reminder_publishes_exact_model_term_shape():
     """A rejected model roster must be repairable without guessing aliases."""
 
     source = inspect.getsource(PlannerAgent.run)
-    assert "model_terms_retry_guide()" in source
-    assert "model_terms_retry_guide()" in inspect.getsource(ReplannerAgent.run)
+    assert "_payload.planner_science_retry_guide()" in source
+    assert "_payload.planner_science_retry_guide()" in inspect.getsource(
+        ReplannerAgent.run
+    )
 
     from easyicu.research_agent.planning.primary_result_contract import (
         model_terms_retry_guide,
@@ -241,7 +243,7 @@ def test_the_retry_format_reminder_publishes_exact_model_term_shape():
 
 
 def test_the_retry_reminder_publishes_primary_contract_applicability():
-    reminder = _PLANNER_OPTIONAL_FIELDS_RETRY_GUIDE
+    reminder = planner_science_retry_guide()
 
     assert "`causal_inference`" in reminder
     assert "`survival`" in reminder
