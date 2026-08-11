@@ -100,6 +100,8 @@ def project_study_context(
     source = source if isinstance(source, Mapping) else {}
     cohort = context.get("cohort")
     cohort = cohort if isinstance(cohort, Mapping) else {}
+    idea_handoff = context.get("idea_handoff")
+    idea_handoff = idea_handoff if isinstance(idea_handoff, Mapping) else {}
     safe_cohort_keys = (
         "preset",
         "label",
@@ -159,6 +161,20 @@ def project_study_context(
             "last_route": context.get("last_route"),
             "active_job_id": context.get("active_job_id"),
             "confirmations": dict(context.get("confirmations") or {}),
+            "idea_handoff": {
+                key: idea_handoff.get(key)
+                for key in (
+                    "schema_version",
+                    "run_id",
+                    "idea_id",
+                    "canonical_handoff_sha256",
+                    "status",
+                    "accepted_at",
+                    "go_no_go",
+                    "go_no_go_reason",
+                )
+                if idea_handoff.get(key) is not None
+            },
         }
     )
 

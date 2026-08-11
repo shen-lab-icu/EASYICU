@@ -194,6 +194,7 @@
       easyicu_update_study_context: tr('Save study setup', '保存研究配置'),
       easyicu_mine_ideas: tr('Mine research ideas', '发掘研究想法'),
       easyicu_prepare_idea_handoff: tr('Prepare idea plan', '准备想法计划'),
+      easyicu_accept_idea_handoff: tr('Accept selected idea', '接受所选想法'),
       easyicu_start_extraction: tr('Start feature extraction', '启动特征提取'),
       easyicu_run: tr('Start EasyICU run', '启动 EasyICU 运行'),
       easyicu_resume: tr('Resume EasyICU work', '恢复 EasyICU 任务'),
@@ -229,6 +230,7 @@
       easyicu_update_study_context: tr('Saved study setup', '已保存研究配置'),
       easyicu_mine_ideas: tr('Mined research ideas', '已发掘研究想法'),
       easyicu_prepare_idea_handoff: tr('Prepared idea plan', '已准备想法计划'),
+      easyicu_accept_idea_handoff: tr('Accepted selected idea', '已接受所选想法'),
       easyicu_start_extraction: tr('Started feature extraction', '已启动特征提取'),
       easyicu_run: tr('Started EasyICU run', '已启动 EasyICU 运行'),
       easyicu_resume: tr('Resumed EasyICU work', '已恢复 EasyICU 任务'),
@@ -366,10 +368,13 @@
         if (activity) upsertActivityStep(activity, toolStep);
       });
       if (text && row.role !== 'user') {
-        messages.push({ id: 'history-' + index, role: row.role || 'assistant', text, complete: true });
+        messages.push({ id: 'history-' + index, role: row.role || 'assistant', text, complete: true, errorCode: row.error_code || '' });
         if (row.role === 'assistant' && activity && !parts.some(p => p && p.type === 'tool_call')) {
           closeHistoryActivity(rowAt);
         }
+      } else if (row.role === 'assistant' && row.error_code) {
+        messages.push({ id: 'history-' + index, role: 'assistant', text: modelErrorText(row.error_code), complete: true, errorCode: row.error_code });
+        closeHistoryActivity(rowAt);
       }
     });
     closeHistoryActivity(lastTimestamp);
@@ -550,7 +555,7 @@
     const cls = row.role === 'user' ? 'user' : 'assistant';
     return `<article class="gpi-message ${cls}">
       <div class="gpi-message-body">
-        ${row.text ? `<div class="gpi-text">${row.role === 'assistant' ? assistantTextHtml(row.text) : esc(row.text)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`}
+        ${row.text ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(row.text) : esc(row.text)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`}
       </div>
     </article>`;
   }
@@ -616,7 +621,52 @@
           </div>
           <div class="gpi-foot">${workspace ? tr('Workspace file contents may be sent to your configured Pi model service. Do not place PHI, patient rows, credentials, or private clinical data here. Click a file or webpage tool step to preview it.', '工作区文件内容可能发送到你配置的 Pi 模型服务。请勿在此放置 PHI、患者行级数据、凭据或私密临床数据。点击文件或网页工具步骤可预览。') : tr('Pi session = conversation history. EasyICU = scientific authority and evidence.', 'Pi 会话 = 对话历史；EasyICU = 科学权威与证据。')}</div>
         </div>
-      </div>`;
+    </div>`;
+  }
+
+  function syncProjectWorkflowAside() {
+    if (state.shell !== 'pi' || !projectId() || !state.workflow) return;
+    const aside = document.getElementById('gdStudyAside');
+    const body = document.getElementById('gdAsideBody');
+    const head = aside && aside.querySelector('.gd-aside-head');
+    if (!aside || !body || !head) return;
+    const workflow = state.workflow;
+    const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
+    const names = {
+      question: tr('Scientific question', '科学问题'), idea: tr('Idea mining', '想法发掘'),
+      setup: tr('Study setup', '研究配置'), extraction: tr('Feature extraction', '特征提取'),
+      plan: tr('Analysis plan', '分析计划'), analysis: tr('Analysis and validation', '分析与验证'),
+      interpretation: tr('Result interpretation', '结果解读'), manuscript: tr('Manuscript', '稿件'),
+    };
+    const reasons = {
+      question_bound: tr('Question is bound to this project', '科学问题已绑定到当前项目'),
+      idea_handoff_accepted: tr('Selected idea is digest-bound', '所选想法已用摘要绑定'),
+      idea_feasibility_refresh_required: tr('Recheck feasibility against the current data source', '需要按当前数据源重新核验可行性'),
+      study_setup_complete: tr('Required study setup is complete', '必需研究配置已完成'),
+      active_export_ready: tr('A matching EasyICU export is ready', '同一项目的 EasyICU 数据包已就绪'),
+      plan_ready: tr('Ready to create the analysis plan', '可以生成分析计划'),
+      analysis_ready: tr('Ready for analysis after plan approval', '计划确认后可以执行分析'),
+      validated_analysis_required: tr('Validated analysis is required first', '需要先完成并验证分析'),
+      full_agent_manuscript_required: tr('A governed Agent manuscript is required', '需要由受治理的 Agent 生成稿件'),
+    };
+    const reasonText = stage => reasons[stage && stage.reason_code]
+      || tr('Waiting for the preceding governed stage', '等待前一受治理阶段完成');
+    const done = Number(workflow.completed_required_stages || 0);
+    const total = Math.max(1, Number(workflow.required_stage_count || 7));
+    const pct = Math.max(0, Math.min(100, Math.round(done / total * 100)));
+    const current = stages.find(stage => stage.id === workflow.current_stage)
+      || stages.find(stage => stage.status !== 'complete') || stages[stages.length - 1];
+    head.innerHTML = `<div class="eyebrow">${tr('One EasyICU workflow', '统一 EasyICU 科研流程')}</div><div class="at">${tr('Project authority', '项目权威状态')}</div><div class="asub">${tr('Conversation, extraction, analysis, and evidence share this projection.', '对话、提取、分析与证据共用这一份状态。')}</div>`;
+    body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
+      <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Current stage', '当前阶段')}</div><strong>${esc(names[current && current.id] || (current && current.label) || tr('Ready', '就绪'))}</strong><div class="gd-pipeline-value">${esc(reasonText(current))}</div></div></div>
+      <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
+      <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段完成')}</span><span>${tr('One project', '同一项目')}</span></div>
+    </div>
+    <div class="gd-pipeline-list open" data-gpi-project-workflow-list>${stages.map(stage => {
+      const status = stage.status === 'complete' ? 'done' : stage.status === 'ready' || stage.status === 'running' ? 'active' : 'locked';
+      const marker = status === 'done' ? iconHtml('check', 11) : status === 'locked' ? iconHtml('lock', 10) : iconHtml('dot', 10);
+      return `<div class="study-item ${status}" title="${esc(stage.reason_code || '')}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}</div><div class="si-v">${esc(reasonText(stage))}</div></div></div>`;
+    }).join('')}</div>`;
   }
 
   function render() {
@@ -625,6 +675,7 @@
     state.host.innerHTML = state.shell === 'legacy'
       ? statusBanner()
       : ((state.showSetup || !runtimeReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel())));
+    syncProjectWorkflowAside();
     requestAnimationFrame(() => {
       const log = state.host && state.host.querySelector('[data-gpi-log]');
       if (log) log.scrollTop = log.scrollHeight;
@@ -734,6 +785,13 @@
     const row = state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
     if (row) { row.complete = true; row.stopReason = stopReason || ''; }
   }
+  function modelErrorText(code) {
+    const value = String(code || '');
+    if (value === 'pi_model_context_limit') return tr('The model context limit was reached. Start a new conversation or shorten the request.', '模型上下文已达到上限，请新建会话或缩短请求。');
+    if (value === 'pi_model_rate_limited') return tr('The model service is temporarily rate-limited. No EasyICU action was executed; retry shortly.', '模型服务暂时限流。本轮没有执行 EasyICU 操作，请稍后重试。');
+    if (value === 'pi_model_provider_unavailable') return tr('The model service connection was interrupted. No EasyICU action was executed; retry after connectivity recovers.', '模型服务连接中断。本轮没有执行 EasyICU 操作，连接恢复后可直接重试。');
+    return tr('The model service could not complete this turn. No EasyICU action should be assumed.', '模型服务未能完成本轮，不能据此认为任何 EasyICU 操作已经执行。');
+  }
   async function switchMode(mode) {
     const next = mode === 'research' ? 'research' : 'workspace';
     if (state.busy || next === agentMode()) return;
@@ -764,9 +822,15 @@
     } else if (event.type === 'text_delta') {
       assistantRow().text += String(event.delta || '');
     } else if (event.type === 'message_end') {
+      let row = state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
+      if (event.error_code) {
+        row = row || assistantRow();
+        row.errorCode = String(event.error_code);
+        if (!row.text) row.text = modelErrorText(row.errorCode);
+      }
       completeLatestAssistant(event.stop_reason);
       const step = activity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
-      if (step) step.status = 'complete';
+      if (step) step.status = event.error_code ? 'error' : 'complete';
     } else if (event.type === 'tool_start') {
       const assistant = activity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
       if (assistant) assistant.status = 'complete';
@@ -1017,7 +1081,9 @@
         closeSource(); state.busy = false;
         if (row.status === 'failed') {
           finishActivity('error', null, 'failed');
-          state.error = String(row.error || tr('Pi message failed.', 'Pi 消息失败。'));
+          state.error = /^pi_model_/.test(String(row.error || ''))
+            ? modelErrorText(row.error)
+            : String(row.error || tr('Pi message failed.', 'Pi 消息失败。'));
         } else if (row.status === 'cancelled') {
           finishActivity('cancelled', null, 'cancelled');
           state.error = tr('Pi message stopped.', 'Pi 消息已停止。');

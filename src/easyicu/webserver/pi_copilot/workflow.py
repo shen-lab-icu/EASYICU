@@ -63,6 +63,19 @@ def _has_mapping(value: Any) -> bool:
     return isinstance(value, Mapping) and bool(value)
 
 
+def active_export_matches_study(
+    study: Optional[Mapping[str, Any]], active_export_path: Any
+) -> bool:
+    """Return whether the source owner's active export belongs to this study."""
+
+    study_row: Mapping[str, Any] = study or {}
+    source = study_row.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    expected = str(source.get("path") or "").strip()
+    active = str(active_export_path or "").strip()
+    return bool(expected and active and expected == active)
+
+
 def _setup_missing(
     study: Mapping[str, Any], *, active_export_present: bool
 ) -> List[str]:
@@ -105,6 +118,18 @@ def build_research_workflow_snapshot(
     job_row: Mapping[str, Any] = active_job or {}
     run_row: Mapping[str, Any] = latest_run or {}
     question_ready = bool(str(study_row.get("question") or "").strip())
+    idea_handoff = study_row.get("idea_handoff")
+    idea_handoff = idea_handoff if isinstance(idea_handoff, Mapping) else {}
+    idea_accepted = bool(
+        idea_handoff.get("status") == "accepted"
+        and str(idea_handoff.get("run_id") or "").strip()
+        and str(idea_handoff.get("idea_id") or "").strip()
+        and len(str(idea_handoff.get("canonical_handoff_sha256") or "")) == 64
+    )
+    idea_recommendation = str(idea_handoff.get("go_no_go") or "").strip()
+    idea_blocks_execution = bool(
+        idea_accepted and idea_recommendation != "recommend"
+    )
     missing = _setup_missing(
         study_row,
         active_export_present=bool(active_export_present),
@@ -163,10 +188,24 @@ def build_research_workflow_snapshot(
         ResearchWorkflowStage(
             id="idea",
             label="Idea mining",
-            status="optional" if question_ready else "blocked",
+            status=(
+                "review_required"
+                if idea_blocks_execution
+                else "complete"
+                if idea_accepted
+                else "optional"
+                if question_ready
+                else "blocked"
+            ),
             owner="easyicu.webserver.ideas.mining",
             reason_code=(
-                "idea_mining_available" if question_ready else "question_required"
+                "idea_feasibility_refresh_required"
+                if idea_blocks_execution
+                else "idea_handoff_accepted"
+                if idea_accepted
+                else "idea_mining_available"
+                if question_ready
+                else "question_required"
             ),
         ),
         ResearchWorkflowStage(
@@ -207,7 +246,9 @@ def build_research_workflow_snapshot(
             id="plan",
             label="Analysis plan",
             status=(
-                "complete"
+                "blocked"
+                if idea_blocks_execution
+                else "complete"
                 if has_plan
                 else "running"
                 if analysis_running
@@ -217,7 +258,9 @@ def build_research_workflow_snapshot(
             ),
             owner="easyicu.research_agent.planning",
             reason_code=(
-                "agent_plan_ready"
+                "idea_feasibility_refresh_required"
+                if idea_blocks_execution
+                else "agent_plan_ready"
                 if has_plan
                 else "analysis_running"
                 if analysis_running
@@ -230,7 +273,9 @@ def build_research_workflow_snapshot(
             id="analysis",
             label="Analysis and validation",
             status=(
-                "complete"
+                "blocked"
+                if idea_blocks_execution
+                else "complete"
                 if analysis_complete and not run_blocked
                 else "review_required"
                 if pipeline_attempt_blocked
@@ -242,7 +287,9 @@ def build_research_workflow_snapshot(
             ),
             owner="easyicu.research_agent.pipeline",
             reason_code=(
-                "validated_analysis_ready"
+                "idea_feasibility_refresh_required"
+                if idea_blocks_execution
+                else "validated_analysis_ready"
                 if analysis_complete and not run_blocked
                 else "analysis_gate_blocked"
                 if pipeline_attempt_blocked
@@ -305,5 +352,6 @@ __all__ = [
     "ResearchWorkflowSnapshot",
     "ResearchWorkflowStage",
     "WorkflowStatus",
+    "active_export_matches_study",
     "build_research_workflow_snapshot",
 ]

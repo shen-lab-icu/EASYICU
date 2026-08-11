@@ -34,7 +34,7 @@ from .projections import (
     stable_code,
 )
 from .workspace import WORKSPACE_ARTIFACT_AUTHORITY, ProjectWorkspace
-from .workflow import build_research_workflow_snapshot
+from .workflow import active_export_matches_study, build_research_workflow_snapshot
 
 READ_TOOLS = frozenset(
     {
@@ -59,6 +59,7 @@ CONTROL_TOOLS = frozenset(
         "easyicu_update_study_context",
         "easyicu_mine_ideas",
         "easyicu_prepare_idea_handoff",
+        "easyicu_accept_idea_handoff",
         "easyicu_start_extraction",
         "easyicu_run",
         "easyicu_cancel",
@@ -351,7 +352,9 @@ def _workflow_snapshot(context: ToolExecutionContext) -> Dict[str, Any]:
     latest_run = project_run_row(rows[0]) if rows else None
     snapshot = build_research_workflow_snapshot(
         study=study,
-        active_export_present=bool(registry.get("active_path")),
+        active_export_present=active_export_matches_study(
+            study, registry.get("active_path")
+        ),
         active_job=active_job,
         latest_run=latest_run,
     )
@@ -1218,6 +1221,9 @@ def _prepare_idea_handoff(
                 "reportable": False,
                 "draft_unlocked": False,
             },
+            "canonical_handoff_sha256": handoff.get(
+                "canonical_handoff_sha256"
+            ),
             "next_step": "Review the draft, then save the agreed fields into StudyContext before extraction or analysis.",
         }
     )
@@ -1232,6 +1238,143 @@ def _prepare_idea_handoff(
         owner="easyicu.webserver.ideas.handoff",
         details={"idea_handoff": details},
     )
+
+
+def _accept_idea_handoff(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Bind one canonical Idea Mining handoff to the current StudyContext."""
+
+    _require_args(
+        params,
+        allowed=("run_id", "idea_id", "plan_edits"),
+        required=("run_id", "idea_id"),
+    )
+    grant_block = _consume_action(context, "idea")
+    if grant_block is not None:
+        return grant_block
+    current = _bound_context(context.session.binding)
+    if not current or not current.get("id"):
+        return _result(
+            context,
+            status="blocked",
+            code="study_context_required",
+            summary="Bind a typed StudyContext before accepting an Idea Mining handoff.",
+            owner="easyicu.webserver.study_contexts",
+        )
+    if current.get("active_job_id"):
+        return _result(
+            context,
+            status="blocked",
+            code="study_context_active_job_conflict",
+            summary="An Idea Mining handoff cannot replace study setup while an authoritative job is active.",
+            owner="easyicu.webserver.study_contexts",
+        )
+    body = {
+        "run_id": str(params.get("run_id") or "").strip(),
+        "idea_id": str(params.get("idea_id") or "").strip(),
+        "plan_edits": str(params.get("plan_edits") or "").strip()[:1200],
+    }
+    try:
+        plan = idea_mining.plan_idea(body)
+        handoff = idea_mining.create_handoff(body)
+    except idea_mining.IdeaMiningWebError as exc:
+        detail = exc.detail
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "idea_handoff_blocked"),
+            summary=str(detail.get("reason") or "Idea handoff acceptance failed."),
+            owner="easyicu.webserver.ideas.handoff",
+        )
+    digest = str(handoff.get("canonical_handoff_sha256") or "").strip().lower()
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        return _result(
+            context,
+            status="blocked",
+            code="canonical_idea_handoff_digest_required",
+            summary="The selected Idea Mining handoff has no valid canonical digest.",
+            owner="easyicu.webserver.ideas.handoff",
+        )
+    plan_body = plan.get("plan") if isinstance(plan.get("plan"), Mapping) else {}
+    agent_seed = (
+        handoff.get("agent_seed")
+        if isinstance(handoff.get("agent_seed"), Mapping)
+        else {}
+    )
+    patch: Dict[str, Any] = {
+        "id": current["id"],
+        "idea_handoff": {
+            "schema_version": "easyicu.pi-idea-selection/1",
+            "run_id": body["run_id"],
+            "idea_id": str(handoff.get("idea_id") or body["idea_id"]),
+            "canonical_handoff_sha256": digest,
+            "status": "accepted",
+            "accepted_at": str(handoff.get("created_at") or ""),
+            "go_no_go": str(handoff.get("go_no_go") or ""),
+            "go_no_go_reason": str(handoff.get("go_no_go_reason") or "")[:500],
+        },
+        "current_stage": "study_setup",
+        "last_route": "guided",
+    }
+    derived_fields = {
+        "title": handoff.get("candidate_topic"),
+        "question": plan_body.get("research_question") or agent_seed.get("question"),
+        "outcome": plan_body.get("outcome"),
+        "primary_exposure": plan_body.get("exposure"),
+        "comparator": plan_body.get("comparator"),
+        "analysis_goal": plan_body.get("analysis_family"),
+    }
+    limits = {
+        "title": 160,
+        "question": 1200,
+        "outcome": 500,
+        "primary_exposure": 160,
+        "comparator": 500,
+        "analysis_goal": 1200,
+    }
+    patch.update(
+        {
+            key: str(value).strip()[: limits[key]]
+            for key, value in derived_fields.items()
+            if str(value or "").strip()
+        }
+    )
+    try:
+        updated = study_contexts.upsert_context(
+            patch,
+            active=True,
+            expected_revision=int(current.get("revision") or 0),
+            require_revision=True,
+            lifecycle_write=False,
+        )
+    except study_contexts.StudyContextError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=str(exc.detail.get("error") or "idea_handoff_binding_blocked"),
+            summary="The StudyContext owner rejected the selected Idea Mining handoff.",
+            owner="easyicu.webserver.study_contexts",
+        )
+    result = _result(
+        context,
+        status="ok",
+        code="easyicu_idea_handoff_accepted",
+        summary=(
+            "Accepted the digest-bound Idea Mining handoff and projected its "
+            "agreed study fields into the current StudyContext. Continue the "
+            "remaining setup in this conversation before extraction."
+        ),
+        owner="easyicu.webserver.study_contexts",
+        details={
+            "idea_selection": updated.get("idea_handoff"),
+            "study": project_study_context(updated),
+            "rebind_required": True,
+            "host_rebind_after_turn": True,
+        },
+    )
+    context.invalidate_authority("idea_handoff_accepted")
+    return result
 
 
 def _start_extraction(
@@ -1255,7 +1398,7 @@ def _start_extraction(
     source = study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     source_path = str(source.get("path") or "").strip()
-    if active_path and (not source_path or active_path == source_path):
+    if active_path and active_path == source_path:
         return _result(
             context,
             status="ok",
@@ -1909,6 +2052,7 @@ _DISPATCH = {
     "easyicu_update_study_context": _update_study_context,
     "easyicu_mine_ideas": _mine_ideas,
     "easyicu_prepare_idea_handoff": _prepare_idea_handoff,
+    "easyicu_accept_idea_handoff": _accept_idea_handoff,
     "easyicu_start_extraction": _start_extraction,
     "easyicu_run": _run,
     "easyicu_resume": _resume,

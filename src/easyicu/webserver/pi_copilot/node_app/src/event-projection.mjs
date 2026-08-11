@@ -15,6 +15,17 @@ function boundedText(value, limit = MAX_TEXT_CHARS) {
   return String(value ?? "").slice(0, limit);
 }
 
+function modelErrorCode(message) {
+  if (!message || message.stopReason !== "error") return "";
+  const detail = String(message.errorMessage || "").toLowerCase();
+  if (/context|token.*limit|maximum.*length/.test(detail)) return "pi_model_context_limit";
+  if (/rate.?limit|too many requests|quota/.test(detail)) return "pi_model_rate_limited";
+  if (/timeout|timed out|connection reset|server_error|internal_server_error|\b5\d\d\b/.test(detail)) {
+    return "pi_model_provider_unavailable";
+  }
+  return "pi_model_provider_error";
+}
+
 function eventTimestamp(event) {
   const value = Number(event?.timestamp ?? event?.message?.timestamp);
   return Number.isFinite(value) && value > 0
@@ -163,10 +174,12 @@ export function normalizePiEvent(event) {
     };
   }
   if (event.type === "message_end" && event.message?.role === "assistant") {
+    const errorCode = modelErrorCode(event.message);
     return {
       type: "message_end",
       at,
       stop_reason: boundedText(event.message.stopReason || "complete", 80),
+      ...(errorCode ? { error_code: errorCode } : {}),
     };
   }
   if (event.type === "turn_end") {
@@ -246,5 +259,8 @@ export function projectTranscriptMessage(message) {
     stop_reason: role === "assistant"
       ? boundedText(message.stopReason || "", 80)
       : undefined,
+    ...(role === "assistant" && modelErrorCode(message)
+      ? { error_code: modelErrorCode(message) }
+      : {}),
   };
 }
