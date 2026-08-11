@@ -95,8 +95,12 @@
 - exact image container smoke：`primary_effect.json` 与 `statistic:primary_effect` capability 均存在
 - 浏览器：Web job `done`、科研流程 `7/7`、Pi 结果解读完成、图件右侧预览打开
 
+### 推送后架构门收口
+
+首次推送后的 push/PR Research Agent CI 同时指出 `agents/core.py.loc` 相对架构棘轮为 `+18`。这不是运行结果或科学合同失败，而是 `26f57cf`/`8f128b1` 的 Planner retry 指导仍留在 orchestration god module。`5383c45` 未刷新架构基线，也未提高提示词预算；它把 schema/retry guidance 移到已有 `agents/plan_payload.py` owner，使 `agents/core.py.loc` 从基线 `+18` 收缩为 `-1`。本地架构 diff 通过，Planner/重规划/固定提示预算相关 175 条回归全绿，Ruff 与 diff-check 通过。
+
 ## 下一步
 
 - 保持本次 run 为 development-only engineering evidence，不写入 Canonical9 正式 ledger 或 Figure 2 score。
-- `21410d2` 的 UNSIGNED package 仍 non-authorizing；由于后续技术 HEAD 已前进到 `e199801`，真人签署前应在新的冻结 exact SHA 上重新生成 digest、CI 和 unsigned package。
+- `21410d2` 的 UNSIGNED package 仍 non-authorizing；由于后续技术 HEAD 已前进到 `5383c45` 及其证据提交，真人签署前应在新的冻结 exact SHA 上重新生成 digest、CI 和 unsigned package。
 - 正式 E1→E9×3 仍等待新的 exact-head scientific package 与真人 clinical+methods 双签；不得因本次 Web canary 成功而提前启动。
