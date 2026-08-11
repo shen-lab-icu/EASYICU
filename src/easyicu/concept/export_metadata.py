@@ -73,11 +73,19 @@ def _catalog_declares_event_semantics(concept_id: str) -> bool:
     return str(unit).strip().lower() == "boolean"
 
 
-def _definition_has_event_semantics(concept_id: str, definition: Any) -> bool:
+def concept_declares_event_status(concept_id: str, definition: Any = None) -> bool:
+    """Return the concept owner's declared event-status semantics.
+
+    Native export metadata and legacy catalog projection must use one policy.
+    The physical dtype is deliberately not consulted: positive-only events can
+    be stored as ``1/null`` and categorical booleans remain ordinary values.
+    """
+
+    class_name = getattr(definition, "class_name", None)
     return (
-        definition.class_name == "lgl_cncpt"
+        class_name == "lgl_cncpt"
         or (
-            definition.class_name != "fct_cncpt"
+            class_name != "fct_cncpt"
             and _catalog_declares_event_semantics(concept_id)
         )
     )
@@ -346,7 +354,7 @@ def build_export_file_metadata_binding(
         if concept in unresolved_columns:
             definition = _metadata_definition_for_export(concept, module, dictionary)
             physical_is_bool = pd.api.types.is_bool_dtype(frame[concept])
-            concept_is_logical = _definition_has_event_semantics(
+            concept_is_logical = concept_declares_event_status(
                 concept, definition
             )
             categorical_boolean = (
@@ -381,7 +389,7 @@ def build_export_file_metadata_binding(
                 concept=concept,
                 column=column,
                 series=frame[column],
-                logical_concept=_definition_has_event_semantics(
+                logical_concept=concept_declares_event_status(
                     concept, definition
                 ),
             )
@@ -473,5 +481,6 @@ def missing_primary_metadata_concepts(
 __all__ = [
     "ExportMetadataError",
     "build_export_file_metadata_binding",
+    "concept_declares_event_status",
     "missing_primary_metadata_concepts",
 ]

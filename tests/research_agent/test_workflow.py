@@ -117,6 +117,24 @@ def test_human_review_pause_requires_digest_bound_approval() -> None:
     assert calls == ["plan", "execute", "write", "finalise"]
 
 
+def test_operator_plan_review_policy_pauses_without_error_findings() -> None:
+    from easyicu.research_agent.orchestration.workflow import (
+        human_review_requests_for_plan,
+    )
+
+    requests = human_review_requests_for_plan(
+        findings=[],
+        plan={"research_question": "Does X predict Y?", "steps": []},
+        require_plan_review=True,
+    )
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.kind == "scientific_stop"
+    assert request.payload["reason"] == "operator_plan_approval_required"
+    assert request.payload["plan_review_authority"]["plan_sha256"]
+
+
 def test_human_review_rejects_duplicate_request_ids_before_pause() -> None:
     request = HumanReviewRequest.create(
         kind="scientific_stop",

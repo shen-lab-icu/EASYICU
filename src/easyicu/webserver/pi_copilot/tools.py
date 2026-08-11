@@ -1296,6 +1296,68 @@ def _accept_idea_handoff(
             summary="The selected Idea Mining handoff has no valid canonical digest.",
             owner="easyicu.webserver.ideas.handoff",
         )
+    canonical = (
+        handoff.get("canonical_handoff")
+        if isinstance(handoff.get("canonical_handoff"), Mapping)
+        else {}
+    )
+    selected_row = (
+        canonical.get("selected_ledger_row")
+        if isinstance(canonical.get("selected_ledger_row"), Mapping)
+        else {}
+    )
+    mapped_concepts = [
+        row
+        for row in selected_row.get("mapped_concepts") or []
+        if isinstance(row, Mapping)
+    ]
+    module_by_concept = {
+        str(row.get("concept_id") or "").strip(): str(
+            row.get("module") or ""
+        ).strip()
+        for row in mapped_concepts
+        if str(row.get("concept_id") or "").strip()
+        and str(row.get("module") or "").strip()
+    }
+    predictor_concept = str(
+        canonical.get("resolved_predictor_concept") or ""
+    ).strip()
+    outcome_concept = str(
+        canonical.get("resolved_outcome_concept")
+        or canonical.get("target_outcome")
+        or ""
+    ).strip()
+    analysis_concepts = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in canonical.get("resolved_analysis_concepts") or []
+            if str(value).strip()
+        )
+    )
+    execution_concepts = list(
+        dict.fromkeys(
+            value
+            for value in (predictor_concept, outcome_concept, *analysis_concepts)
+            if value
+        )
+    )
+    missing_modules = [
+        concept_id
+        for concept_id in execution_concepts
+        if concept_id not in module_by_concept
+    ]
+    if not canonical or not execution_concepts or missing_modules:
+        return _result(
+            context,
+            status="blocked",
+            code="canonical_idea_execution_contract_required",
+            summary=(
+                "The canonical Idea Mining handoff does not contain a complete "
+                "digest-bound concept-to-module execution contract."
+            ),
+            owner="easyicu.webserver.ideas.handoff",
+            details={"missing_concept_modules": missing_modules},
+        )
     plan_body = plan.get("plan") if isinstance(plan.get("plan"), Mapping) else {}
     agent_seed = (
         handoff.get("agent_seed")
@@ -1320,10 +1382,11 @@ def _accept_idea_handoff(
     derived_fields = {
         "title": handoff.get("candidate_topic"),
         "question": plan_body.get("research_question") or agent_seed.get("question"),
-        "outcome": plan_body.get("outcome"),
-        "primary_exposure": plan_body.get("exposure"),
+        "outcome": outcome_concept or plan_body.get("outcome"),
+        "primary_exposure": predictor_concept or plan_body.get("exposure"),
         "comparator": plan_body.get("comparator"),
-        "analysis_goal": plan_body.get("analysis_family"),
+        "analysis_goal": canonical.get("analysis_family")
+        or plan_body.get("analysis_family"),
     }
     limits = {
         "title": 160,
@@ -1340,6 +1403,26 @@ def _accept_idea_handoff(
             if str(value or "").strip()
         }
     )
+    # A comparator belongs to its exposure.  Re-selecting an idea can change
+    # the digest-bound predictor while the new handoff intentionally leaves
+    # comparator selection to the remaining conversational setup.  Retaining
+    # the previous idea's comparator in that case silently creates an invalid
+    # study contract (for example, a per-unit lab contrast on a binary
+    # phenotype).  Clear only this dependent slot; the user can then confirm
+    # the new comparator in the same Copilot conversation.
+    previous_exposure = str(current.get("primary_exposure") or "").strip()
+    if predictor_concept != previous_exposure and not str(
+        plan_body.get("comparator") or ""
+    ).strip():
+        patch["comparator"] = ""
+    patch["modules"] = list(
+        dict.fromkeys(module_by_concept[concept_id] for concept_id in execution_concepts)
+    )
+    patch["covariates"] = [
+        concept_id
+        for concept_id in analysis_concepts
+        if concept_id not in {predictor_concept, outcome_concept}
+    ]
     try:
         updated = study_contexts.upsert_context(
             patch,
@@ -1532,10 +1615,8 @@ def _run(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, 
     grant_block = _consume_action(context, grant_action)
     if grant_block is not None:
         return grant_block
-    provider = str(
-        params.get("llm_provider") or ("openai" if run_type == "full" else "mock")
-    ).strip()
-    if run_type == "full" and is_offline_llm_choice(provider):
+    requested_provider = str(params.get("llm_provider") or "").strip()
+    if run_type == "full" and is_offline_llm_choice(requested_provider):
         return _result(
             context,
             status="blocked",
@@ -1547,6 +1628,14 @@ def _run(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, 
             ),
             owner="easyicu.webserver.provider_gate",
         )
+    # A Pi full run is bound to the provider configuration already verified by
+    # the host.  Provider display labels such as ``local`` or ``easyicu-local``
+    # are not scientific-provider protocol identifiers and must not let model
+    # output select a second credential authority.  The verified bridge above
+    # currently accepts only OpenAI Chat Completions, so compile that transport
+    # deterministically here.  ``llm_provider`` remains accepted only for older
+    # sidecars; the current public tool schema no longer exposes it.
+    provider = "openai" if run_type == "full" else "mock"
     if run_type == "full" and not context.session.external_llm_opt_in:
         return _result(
             context,

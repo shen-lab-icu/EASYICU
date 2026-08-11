@@ -516,6 +516,24 @@ def test_declared_positive_only_event_decodes_structural_absence():
     assert wide["vaso_ind_n"].tolist() == [3, 0]
 
 
+def test_declared_positive_only_event_decodes_nullable_boolean_summary():
+    wide = pd.DataFrame(
+        {
+            "sep3_sofa2_max": pd.Series([True, pd.NA], dtype="boolean"),
+            "sep3_sofa2_mean": pd.Series([True, pd.NA], dtype="boolean"),
+        }
+    )
+
+    normalized = M._normalize_declared_positive_only_event_concepts(
+        wide,
+        concepts=("sep3_sofa2",),
+    )
+
+    assert normalized == ["sep3_sofa2_max", "sep3_sofa2_mean"]
+    assert wide["sep3_sofa2_max"].tolist() == [1, 0]
+    assert wide["sep3_sofa2_mean"].tolist() == [1.0, 0.0]
+
+
 def test_declared_positive_only_event_rejects_nonbinary_values():
     wide = pd.DataFrame({"vaso_ind_max": [2.0]})
 

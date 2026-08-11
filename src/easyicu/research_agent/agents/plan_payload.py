@@ -79,6 +79,12 @@ def planner_science_retry_guide() -> str:
         "supported adjusted model through `model_requirements`. Optional collection "
         "fields, including `know_how_decisions`, must be omitted or encoded as JSON "
         "arrays (`[]` when explicitly empty), never `null`."
+        " `input_consumption_contracts` entries accept only `input_key`, "
+        "`mode`, optional `role_column`, optional `expected_roles`, and optional "
+        "`schema_version`; use `input_key` (not `input`) and `mode` (not "
+        "`cardinality`). `AnalysisPlan.endpoint` is not independent Planner "
+        "authority: omit it or emit null; never invent endpoint keys such as "
+        "`type` or `definition`."
     )
     return "\n\n" + model_terms_retry_guide() + "\n\n" + optional_fields
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import easyicu.research_agent.acquisition.foundation as df_mod
 from easyicu.research_agent.acquisition.catalog import (
     AvailableCatalog,
@@ -205,6 +207,126 @@ def test_acquire_proceeds_on_available_subset_when_outcome_present(monkeypatch):
     assert set(captured["feature_concepts"]) == {"sofa2", "lact"}
     assert res.coverage.missing == ["made_up"]
     assert "re-extract" in res.note.lower()
+
+
+def test_legacy_acquisition_declares_sparse_event_features_before_materialization(
+    monkeypatch,
+):
+    captured = {}
+    catalog = AvailableCatalog(
+        source="legacy",
+        concepts=[
+            CatalogConcept(
+                concept_id="sep3_sofa2",
+                file_name="sepsis3_sofa2.parquet",
+                column_role="event_status",
+            ),
+            CatalogConcept(
+                concept_id="death",
+                file_name="outcome.parquet",
+                column_role="event_status",
+            ),
+            CatalogConcept(concept_id="age", file_name="demographics.parquet"),
+        ],
+    )
+    monkeypatch.setattr(df_mod, "build_available_catalog", lambda _d: catalog)
+    import easyicu.research_agent.cohort.materializer as cm
+
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **kwargs: captured.update(kwargs)
+        or {"parquet": "u.parquet", "provenance": "u.json"},
+    )
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="q",
+        llm=_stub('{"selected_concepts": ["sep3_sofa2", "death"]}'),
+        output_dir="/tmp/x",
+        target_outcome="death",
+        outcome_concepts=["death"],
+        required_feature_concepts=["sep3_sofa2"],
+        static_concepts=["age"],
+    )
+
+    assert result.blocked is False
+    assert captured["feature_concepts"] == ["sep3_sofa2"]
+    assert captured["outcome_concepts"] == ["death"]
+    assert captured["positive_only_event_concepts"] == ["sep3_sofa2"]
+
+
+def test_acquisition_binds_event_endpoint_and_exposure_to_materialized_columns(
+    monkeypatch, tmp_path
+):
+    catalog = AvailableCatalog(
+        source="legacy",
+        concepts=[
+            CatalogConcept(
+                concept_id="sep3_sofa2",
+                file_name="sepsis3_sofa2.parquet",
+                column_role="event_status",
+            ),
+            CatalogConcept(
+                concept_id="death",
+                file_name="outcome.parquet",
+                column_role="event_status",
+            ),
+            CatalogConcept(concept_id="age", file_name="demographics.parquet"),
+        ],
+    )
+    monkeypatch.setattr(df_mod, "build_available_catalog", lambda _d: catalog)
+    import easyicu.research_agent.cohort.materializer as cm
+
+    def materialize(**_kwargs):
+        parquet = tmp_path / "universe.parquet"
+        provenance = tmp_path / "universe_provenance.json"
+        parquet.write_bytes(b"legacy-parquet-placeholder")
+        provenance.write_text(
+            json.dumps(
+                {
+                    "columns": [
+                        "stay_id",
+                        "age",
+                        "sep3_sofa2_max",
+                        "death",
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {"parquet": str(parquet), "provenance": str(provenance)}
+
+    monkeypatch.setattr(cm, "materialize_to_parquet", materialize)
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="q",
+        llm=_stub('{"selected_concepts": ["sep3_sofa2", "death"]}'),
+        output_dir=tmp_path,
+        target_outcome="death",
+        primary_exposure_concept="sep3_sofa2",
+        outcome_concepts=["death"],
+        required_feature_concepts=["sep3_sofa2"],
+        static_concepts=["age"],
+    )
+
+    assert result.analysis_columns == {
+        "age": "age",
+        "death": "death",
+        "sep3_sofa2": "sep3_sofa2_max",
+    }
+    assert result.endpoint is not None
+    assert result.endpoint.model_dump(mode="json") == {
+        "name": "death",
+        "kind": "binary",
+        "absence_semantics": "no_absent_rows",
+        "levels": [0, 1],
+        "event_column": None,
+        "time_column": None,
+        "time_origin": None,
+        "censoring_rule": None,
+    }
 
 
 def test_acquire_limits_agent_catalog_to_configured_modules(monkeypatch):

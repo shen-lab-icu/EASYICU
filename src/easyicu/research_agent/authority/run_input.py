@@ -59,7 +59,7 @@ from .runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
 )
-from ..schema import ResearchContext, TimeWindow
+from ..schema import EndpointSpec, ResearchContext, TimeWindow
 from ..research_context.typed import (
     MaterializedResearchInputs,
     ResearchContextV2,
@@ -471,6 +471,7 @@ def build_scientific_identity(
     cohort_name: str,
     database: str,
     target_outcome: Optional[str],
+    endpoint: Optional[EndpointSpec] = None,
     primary_exposure: Optional[str],
     cross_database_validation: Optional[Sequence[str]],
     inclusion_criteria: Optional[Sequence[str]],
@@ -524,6 +525,11 @@ def build_scientific_identity(
         "source_files": _source_file_identities(source_files),
         "disable_icu_context": bool(disable_icu_context),
     }
+    # Omit the coordinate for archived callers that predate endpoint authority;
+    # fresh declared endpoints are nevertheless part of the scientific input
+    # digest and therefore cannot drift across resume.
+    if endpoint is not None:
+        payload["endpoint"] = endpoint.model_dump(mode="json")
     if development_sampling is not None:
         payload["development_sampling"] = dict(development_sampling)
     if materialized_cohort_authority_ref is not None:

@@ -121,6 +121,76 @@ def test_build_available_catalog_from_export_dir(tmp_path):
     assert "stay_id" not in ids and "charttime" not in ids
 
 
+def test_legacy_catalog_reuses_owner_event_semantics(tmp_path):
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "charttime": [None, 2.0],
+            "death": [None, 1.0],
+            "los_icu": [3.0, 4.0],
+        }
+    ).to_parquet(tmp_path / "outcome.parquet", index=False)
+    (tmp_path / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "database": "miiv",
+                "format": "parquet",
+                "concept_selection": {
+                    "modules": {"outcome": ["death", "los_icu"]}
+                },
+                "files": [
+                    {
+                        "file": "outcome.parquet",
+                        "module": "outcome",
+                        "concepts": 2,
+                        "concept_ids": ["death", "los_icu"],
+                        "rows": 2,
+                    }
+                ],
+                "feature_definitions": {"included": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    by_id = {item.concept_id: item for item in build_available_catalog(tmp_path).concepts}
+
+    assert by_id["death"].typed_metadata is False
+    assert by_id["death"].column_role == "event_status"
+    assert by_id["los_icu"].column_role == ""
+
+
+def test_legacy_catalog_projects_catalog_only_boolean_as_event_status(tmp_path):
+    pd.DataFrame(
+        {"stay_id": [1, 2], "mort_28d": [False, True]}
+    ).to_parquet(tmp_path / "outcome.parquet", index=False)
+    (tmp_path / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "database": "miiv",
+                "format": "parquet",
+                "concept_selection": {"modules": {"outcome": ["mort_28d"]}},
+                "files": [
+                    {
+                        "file": "outcome.parquet",
+                        "module": "outcome",
+                        "concepts": 1,
+                        "concept_ids": ["mort_28d"],
+                        "rows": 2,
+                    }
+                ],
+                "feature_definitions": {"included": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    catalog = build_available_catalog(tmp_path)
+
+    assert catalog.concepts[0].concept_id == "mort_28d"
+    assert catalog.concepts[0].column_role == "event_status"
+
+
 def test_typed_catalog_exposes_source_owner_not_physical_companions(monkeypatch):
     monkeypatch.setattr(
         "easyicu.research_agent.acquisition.catalog.index_export_package",

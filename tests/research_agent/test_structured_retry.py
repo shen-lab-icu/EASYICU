@@ -68,6 +68,36 @@ def test_structured_retry_feeds_error_back_and_succeeds_on_second_attempt():
     assert "must include the key 'value'" in feedback_content
 
 
+def test_structured_retry_projects_safe_attempt_lifecycle_without_model_payload():
+    events = []
+    client = ScriptedMockLLMClient(["not-json", '{"value": 7}'])
+
+    out = call_llm_with_structured_retry(
+        client,
+        [LLMMessage(role="user", content="give json")],
+        parser=lambda raw: json.loads(raw),
+        role="planner",
+        max_retries=1,
+        progress_callback=events.append,
+    )
+
+    assert out == {"value": 7}
+    assert [event.phase for event in events] == [
+        "started",
+        "rejected",
+        "started",
+        "accepted",
+    ]
+    assert [(event.attempt, event.total_attempts) for event in events] == [
+        (1, 2),
+        (1, 2),
+        (2, 2),
+        (2, 2),
+    ]
+    assert events[1].error_class == "JSONDecodeError"
+    assert all(not hasattr(event, "raw_response") for event in events)
+
+
 def test_structured_retry_raises_after_exhausting_retries():
     client = ScriptedMockLLMClient(["bad-1", "bad-2", "bad-3"])
     with pytest.raises(StructuredResponseFailure) as ctx:

@@ -185,6 +185,12 @@ class PipelineConfig:
     enable_llm_concept_audit: Optional[bool] = None
     enable_memory: bool = True
     enable_latex: bool = True
+    # Interactive hosts can require an explicit, digest-bound operator review
+    # of every generated plan even when no scientific validator emitted an
+    # error.  The default remains non-interactive for CLI/benchmark callers;
+    # the Guided Web Copilot enables this because its product contract is
+    # plan -> user confirmation -> execution.
+    require_human_plan_review: bool = False
 
     # --- evidence enforcement -------------------------------------------
     # "soft" (default): unsupported sentences are filtered and unresolved
