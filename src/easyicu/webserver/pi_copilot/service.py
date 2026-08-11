@@ -45,6 +45,7 @@ ALLOWED_TURN_ACTIONS = frozenset(
     {
         "configure",
         "idea",
+        "literature",
         "extract",
         "run",
         "provider_run",

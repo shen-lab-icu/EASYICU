@@ -1350,6 +1350,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "expected_outputs",
         "method",
         "icu_rule_refs",
+        "literature_citation_keys",
         "model_requirements",
         "family_primary_result_requirement",
         "input_consumption_contracts",
@@ -1527,6 +1528,7 @@ class PlannerAgent:
         context: ResearchContext,
         *,
         allowed_know_how_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        allowed_literature_citation_keys: Optional[Sequence[str]] = None,
         know_how_context: str = "",
         enforce_article_contract: bool = False,
         article_contract_context: Optional[ResearchContext] = None,
@@ -1577,6 +1579,7 @@ class PlannerAgent:
                 raw,
                 context,
                 allowed_know_how_decisions=allowed_know_how_decisions,
+                allowed_literature_citation_keys=allowed_literature_citation_keys,
                 enforce_article_contract=enforce_article_contract,
                 article_contract_context=article_contract_context,
             ),
@@ -1597,7 +1600,9 @@ class PlannerAgent:
                 "claim_id, and citation_ids), "
                 "steps (array of objects "
                 "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
-                "method, icu_rule_refs, optional model_requirements, optional "
+                "method, icu_rule_refs, literature_citation_keys (exact keys from "
+                "the supplied literature bundle that support this step), optional "
+                "model_requirements, optional "
                 "family_primary_result_requirement, optional "
                 "input_consumption_contracts, optional table_one_spec, optional "
                 "trajectory_stability_spec, optional "
@@ -1616,6 +1621,7 @@ class PlannerAgent:
         context: ResearchContext,
         *,
         allowed_know_how_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        allowed_literature_citation_keys: Optional[Sequence[str]] = None,
         enforce_article_contract: bool = False,
         article_contract_context: Optional[ResearchContext] = None,
     ) -> AnalysisPlan:
@@ -1666,6 +1672,36 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
+        allowed_citations = {
+            str(value or "").strip()
+            for value in (allowed_literature_citation_keys or [])
+            if str(value or "").strip()
+        }
+        declared_citations = {
+            key for step in plan.steps for key in step.literature_citation_keys
+        }
+        unknown_citations = sorted(declared_citations - allowed_citations)
+        if unknown_citations:
+            raise ValueError(
+                "Planner cited keys outside this run's pre-plan LiteratureBundle: "
+                + ", ".join(unknown_citations)
+            )
+        scientific_steps = [
+            step
+            for step in plan.steps
+            if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
+        ]
+        unbound_scientific_steps = [
+            step.step_id
+            for step in scientific_steps
+            if not step.literature_citation_keys
+        ]
+        if allowed_citations and unbound_scientific_steps:
+            raise ValueError(
+                "Each primary/secondary/sensitivity plan step must bind an exact "
+                "key from the pre-plan LiteratureBundle; unbound steps: "
+                + ", ".join(unbound_scientific_steps)
+            )
         # What only *Planner output* must satisfy, asked where the Planner can
         # still answer.  A complete-case robustness spec has to name the
         # variables whose completeness defines the set, because a model fitted

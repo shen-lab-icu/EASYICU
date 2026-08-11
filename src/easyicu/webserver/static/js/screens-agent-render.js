@@ -329,6 +329,7 @@
       'quality_gate.json': t('Evidence check', '证据核验'),
       'evidence_ledger.json': t('Evidence ledger', '证据账本'),
       'agent_plan.json': t('Agent plan', 'Agent 计划'),
+      'literature_evidence.json': t('Literature evidence', '文献证据'),
       'manuscript_draft.json': t('Locked manuscript draft', '锁定论文草稿'),
       'benchmark_scorecard.json': t('Benchmark scorecard', 'Benchmark 记分卡'),
       'workflow_graph.json': t('Workflow graph', '工作流图谱'),
@@ -347,6 +348,7 @@
     if (n.includes('scorecard')) return t('Scorecard', '记分卡');
     if (n.includes('workflow')) return t('Workflow', '流程');
     if (n.includes('ledger')) return t('Evidence', '证据');
+    if (n.includes('literature')) return t('Literature', '文献');
     if (n.includes('gate')) return t('Quality check', '质量核验');
     if (n.includes('plan')) return t('Plan', '计划');
     if (n.includes('draft')) return t('Claims', '论断');
@@ -365,6 +367,7 @@
       'evidence_ledger.json': t('Artifact hashes, evidence ids, and privacy-audit status.', '产物哈希、证据 ID 与隐私审计状态。'),
       'quality_gate.json': t('Automated checks explaining why the run remains analysis-only.', '自动核验结果，说明为何仍保持 analysis-only。'),
       'agent_plan.json': t('The step-by-step analysis plan used by the Agent.', 'Agent 执行时使用的分步分析计划。'),
+      'literature_evidence.json': t('Search provenance, article metadata, and exact plan-step citation bindings.', '检索溯源、文章元数据以及计划步骤的精确文献绑定。'),
       'manuscript_draft.json': t('Locked claims and evidence ids; not a reportable manuscript.', '锁定论断及其证据 ID；不是可报告论文草稿。'),
       'run_context.json': t('Question, cohort, source run, and local project metadata.', '研究问题、队列、原始运行与本地项目元数据。'),
       'cohort_summary.json': t('Denominator, cohort basis, and outcome availability.', '分母、队列依据与结局可用性。'),
@@ -381,6 +384,7 @@
       'quality_gate.json',
       'evidence_ledger.json',
       'agent_plan.json',
+      'literature_evidence.json',
       'manuscript_draft.json',
       'run_context.json',
       'cohort_summary.json',
@@ -521,7 +525,11 @@
         ? row.expected_outputs.join(', ')
         : '';
       const outputs = Array.isArray(row.outputs) ? row.outputs.join(', ') : row.outputs;
-      const evidence = Array.isArray(row.evidence_ids) ? row.evidence_ids.join(', ') : row.evidence;
+      const literature = Array.isArray(row.literature_citation_keys)
+        ? row.literature_citation_keys.map(key => `literature:${key}`).join(', ')
+        : '';
+      const evidenceIds = Array.isArray(row.evidence_ids) ? row.evidence_ids.join(', ') : '';
+      const evidence = evidenceIds || row.evidence || literature;
       return [
         row.step_id || row.id || row.step || String(i + 1),
         row.intent || row.title || row.name || row.label || row.stage || row.method || 'step',

@@ -1958,6 +1958,24 @@ class AnalysisStep(BaseModel):
         ),
     )
     icu_rule_refs: List[str] = Field(default_factory=list)
+    literature_citation_keys: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Exact keys from this run's pre-plan LiteratureBundle that support "
+            "the step's scientific design or method. Empty means no citation "
+            "was bound; it must not be filled retrospectively by a renderer."
+        ),
+    )
+
+    @field_validator("literature_citation_keys")
+    @classmethod
+    def _validate_literature_citation_keys(cls, values: List[str]) -> List[str]:
+        cleaned = [str(value or "").strip() for value in values]
+        if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}", item) for item in cleaned):
+            raise ValueError("literature_citation_keys must contain stable citation keys")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("literature_citation_keys must be unique")
+        return cleaned
     model_requirements: List[PlannedModelRequirement] = Field(
         default_factory=list,
         description=(

@@ -82,6 +82,7 @@ class PiMessageRequest(BaseModel):
         Literal[
             "configure",
             "idea",
+            "literature",
             "extract",
             "run",
             "provider_run",
@@ -90,7 +91,7 @@ class PiMessageRequest(BaseModel):
         ]
     ] = Field(
         default_factory=list,
-        max_length=7,
+        max_length=8,
     )
 
 

@@ -19,6 +19,10 @@ from easyicu.research_agent.orchestration.workflow import (
     HumanReviewRequest,
 )
 from easyicu.webserver import agent_pipeline_runs, agent_runs, provider_adapter
+from easyicu.webserver.literature_projection import (
+    literature_source_resource,
+    project_run_literature,
+)
 from easyicu.webserver.pi_copilot import tools as tool_module
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
@@ -248,6 +252,140 @@ def test_idea_tool_never_accepts_a_host_path_from_the_model() -> None:
             context,
         )
     assert rejected.value.code == "pi_tool_unknown_arguments"
+
+
+def test_curated_literature_projection_is_honest_and_does_not_backfill_plan_links() -> None:
+    payload = project_run_literature(
+        run_id="run-literature-1",
+        bundle={
+            "research_question": "Does an ICU exposure predict mortality?",
+            "citations": [
+                {
+                    "key": "strobe_2007",
+                    "title": "STROBE statement",
+                    "year": "2007",
+                    "venue": "BMJ",
+                    "relevance": "Observational reporting guidance.",
+                }
+            ],
+            "prisma": None,
+            "search_provenance": {
+                "curated_seed_count": 1,
+                "sources_enabled": [],
+                "sources_returning": [],
+                "search_conducted": False,
+                "note": "No retrieval source was enabled.",
+            },
+        },
+        plan={
+            "steps": [
+                {
+                    "step_id": "01_primary",
+                    "planned_analysis_role": "primary",
+                    "intent": "Fit the prespecified model.",
+                }
+            ]
+        },
+    )
+
+    assert payload["status"] == "curated_only"
+    assert payload["search"]["search_conducted"] is False
+    assert payload["search"]["prisma"] is None
+    assert payload["mapping_status"] == "not_bound"
+    assert payload["step_citation_map"][0]["citation_keys"] == []
+    assert payload["integrity"]["patient_rows_returned"] is False
+
+
+def test_plan_literature_projection_keeps_only_bundle_bound_keys() -> None:
+    payload = project_run_literature(
+        run_id="run-literature-2",
+        bundle={
+            "citations": [
+                {
+                    "key": "method_key",
+                    "title": "A real method paper",
+                    "pmid": "12345",
+                }
+            ],
+            "search_provenance": {
+                "curated_seed_count": 0,
+                "sources_enabled": ["pubmed"],
+                "sources_returning": ["pubmed"],
+                "search_conducted": True,
+            },
+        },
+        plan={
+            "steps": [
+                {
+                    "step_id": "primary",
+                    "planned_analysis_role": "primary",
+                    "intent": "Estimate the primary association.",
+                    "literature_citation_keys": ["method_key", "invented_key"],
+                }
+            ]
+        },
+    )
+
+    assert payload["status"] == "searched"
+    assert payload["mapping_status"] == "complete"
+    assert payload["step_citation_map"][0]["citation_keys"] == ["method_key"]
+    assert payload["integrity"]["unknown_citation_keys_removed"] == [
+        "invented_key"
+    ]
+    assert (
+        payload["citations"][0]["source_url"]
+        == "https://pubmed.ncbi.nlm.nih.gov/12345/"
+    )
+
+
+def test_literature_search_tool_uses_separate_one_turn_network_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: _complete_study())
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "discover_literature",
+        lambda body: {
+            "status": "searched",
+            "search_performed": True,
+            "queries_to_run": ["ICU mortality"],
+            "network_calls": 2,
+            "source_candidates": [
+                {
+                    "citation_key": "paper_12345",
+                    "title": "A source-backed ICU study",
+                    "journal": "Critical Care",
+                    "year": 2025,
+                    "pmid": "12345",
+                    "url": "https://pubmed.ncbi.nlm.nih.gov/12345/",
+                    "evidence_quote": "The abstract describes an ICU cohort.",
+                }
+            ],
+        },
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(session_id="pi-literature"),
+        allowed_actions={"literature"},
+    )
+
+    result = tool_module.execute_tool("easyicu_search_literature", {}, context)
+
+    assert result["code"] == "easyicu_literature_search_completed"
+    assert result["details"]["literature_search"]["search_performed"] is True
+    assert result["details"]["resource"]["kind"] == "literature_source"
+    assert result["details"]["resource"]["pmid"] == "12345"
+    consumed = tool_module.execute_tool("easyicu_search_literature", {}, context)
+    assert consumed["code"] == "pi_action_grant_consumed"
+
+
+def test_literature_source_resource_rejects_unverified_or_unsafe_links() -> None:
+    assert (
+        literature_source_resource(
+            {"title": "Unsafe", "url": "javascript:alert(1)"}
+        )
+        is None
+    )
+    assert literature_source_resource({"title": "No identifier"}) is None
 
 
 def test_accept_idea_handoff_binds_digest_and_projects_study_fields(
@@ -611,7 +749,42 @@ def _write_real_pipeline_fixture(run_dir: Path, *, manuscript: str) -> None:
     )
     (run_dir / "run_status.json").write_text("{}", encoding="utf-8")
     (run_dir / "analysis_plan.json").write_text(
-        json.dumps({"steps": [{"id": "model", "title": "Fit specified model"}]}),
+        json.dumps(
+            {
+                "steps": [
+                    {
+                        "id": "model",
+                        "title": "Fit specified model",
+                        "literature_citation_keys": ["method_paper"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "preplan_literature_bundle.json").write_text(
+        json.dumps(
+            {
+                "research_question": "Does an ICU exposure predict mortality?",
+                "citations": [
+                    {
+                        "key": "method_paper",
+                        "title": "A source-backed method paper",
+                        "year": "2024",
+                        "venue": "Statistics in Medicine",
+                        "pmid": "12345",
+                    }
+                ],
+                "prisma": None,
+                "search_provenance": {
+                    "curated_seed_count": 1,
+                    "sources_enabled": [],
+                    "sources_returning": [],
+                    "search_conducted": False,
+                    "note": "Curated method reference; no retrieval was run.",
+                },
+            }
+        ),
         encoding="utf-8",
     )
     (run_dir / "manuscript_scaffold_bound.md").write_text(
@@ -704,7 +877,16 @@ def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
         (wrapper / "manuscript_draft.json").read_text(encoding="utf-8")
     )
     assert manuscript["claims"][0]["evidence_ids"] == ["ev-table"]
+    literature = json.loads(
+        (wrapper / "literature_evidence.json").read_text(encoding="utf-8")
+    )
+    assert literature["status"] == "curated_only"
+    assert literature["mapping_status"] == "complete"
+    assert literature["step_citation_map"][0]["citation_keys"] == ["method_paper"]
     ledger = json.loads((wrapper / "evidence_ledger.json").read_text(encoding="utf-8"))
+    assert "literature_evidence.json" in {
+        row["name"] for row in ledger["artifacts"]
+    }
     assert ledger["privacy"]["projection_scan_passed"] is True
     assert ledger["privacy"]["path_values_returned"] is False
 
