@@ -23,6 +23,7 @@ from easyicu.webserver.pi_copilot.contracts import (
 from easyicu.webserver.pi_copilot.projections import (
     ensure_safe_projection,
     project_job,
+    project_run_row,
     project_study_context,
     reject_sensitive_message,
 )
@@ -1219,6 +1220,7 @@ def test_control_tools_fail_closed_without_owner_contracts() -> None:
 def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
     research_tools = {
         "easyicu_workspace_status",
+        "easyicu_list_data_sources",
         "easyicu_inspect_workflow",
         "easyicu_inspect_context",
         "easyicu_inspect_plan",
@@ -1265,6 +1267,115 @@ def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
         "easyicu_authorize_paper",
     }
     assert forbidden.isdisjoint(tool_module.ALLOWED_TOOLS)
+
+
+def test_registered_data_source_choices_are_path_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tool_module.sources,
+        "load_registry",
+        lambda: {
+            "active_path": "/private/full-export",
+            "sources": [
+                {
+                    "id": "src_demo",
+                    "path": "/private/demo-export",
+                    "label": "MIMIC-IV Clinical Database Demo v2.2",
+                    "database": "miiv",
+                    "generated": "2026-07-28T00:21:10",
+                    "ok": True,
+                    "modules": ["demographics", "outcome"],
+                    "summary": {
+                        "stays": 140,
+                        "modules": 2,
+                        "file_count": 2,
+                        "total_rows": 1000,
+                    },
+                },
+                {
+                    "id": "src_full",
+                    "path": "/private/full-export",
+                    "label": "MIMIC-IV full export",
+                    "database": "miiv",
+                    "ok": True,
+                    "modules": ["demographics", "outcome", "vitals"],
+                    "summary": {"stays": 94458, "modules": 3},
+                },
+            ],
+        },
+    )
+    context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-sources"))
+
+    result = tool_module.execute_tool("easyicu_list_data_sources", {}, context)
+
+    assert result["code"] == "easyicu_data_sources_listed"
+    assert result["details"]["source_count"] == 2
+    assert result["details"]["sources"][0]["source_id"] == "src_demo"
+    assert result["details"]["sources"][0]["aggregate"]["stays"] == 140
+    assert result["details"]["sources"][1]["active"] is True
+    assert "/private/" not in json.dumps(result)
+
+
+def test_conversational_setup_binds_exact_registered_source_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-source-bind",
+        "revision": 2,
+        "question": "Does an aggregate ICU feature predict mortality?",
+        "active_job_id": None,
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.sources,
+        "load_registry",
+        lambda: {
+            "active_path": "/private/full-export",
+            "sources": [
+                {
+                    "id": "src_demo",
+                    "path": "/private/demo-export",
+                    "label": "MIMIC-IV Clinical Database Demo v2.2",
+                    "database": "miiv",
+                    "ok": True,
+                }
+            ],
+        },
+    )
+
+    def upsert(raw: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        writes.append(dict(raw))
+        return {**current, **raw, "revision": 3}
+
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-source-bind",
+            binding=AuthorityBinding(
+                study_context_id="study-source-bind",
+                study_revision=2,
+            ),
+        ),
+        allowed_actions={"configure"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"bind_source_id": "src_demo", "bind_active_export": True},
+        context,
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["data_source"] == {
+        "path": "/private/demo-export",
+        "label": "MIMIC-IV Clinical Database Demo v2.2",
+        "database": "miiv",
+    }
+    assert result["details"]["study"]["data_source"]["database"] == "miiv"
+    assert len(result["details"]["study"]["data_source"]["path_digest"]) == 32
+    assert "/private/" not in json.dumps(result)
 
 
 def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
@@ -1490,6 +1601,10 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
             "id": "study-1",
             "revision": 7,
             "question": "Aggregate association question",
+            "data_source": {
+                "path": "/private/project-export",
+                "database": "miiv",
+            },
         },
     )
     context = ToolExecutionContext(
@@ -1509,6 +1624,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
     assert result["code"] == "easyicu_run_submitted"
     assert submitted_bodies == [
         {
+            "path": "/private/project-export",
             "study_context_id": "study-1",
             "question": "Aggregate association question",
             "run_type": "preflight",
@@ -1530,6 +1646,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
 
     assert full_result["code"] == "easyicu_full_run_submitted"
     assert submitted_bodies[-1] == {
+        "path": "/private/project-export",
         "study_context_id": "study-1",
         "question": "Aggregate association question",
         "run_type": "full",
@@ -1556,6 +1673,54 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
     assert promoted_result["code"] == "easyicu_full_run_submitted"
     assert submitted_bodies[-1]["run_type"] == "full"
     assert submitted_bodies[-1]["engine"] == "research_agent_pipeline"
+
+
+def test_plan_review_run_projection_cannot_be_mistaken_for_executed_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_row = {
+        "run_id": "run-plan-review",
+        "study_id": "study-1",
+        "gate_status": "blocked",
+        "run_status": "human_review_pending",
+        "pending_review_reason_codes": ["operator_plan_approval_required"],
+        "reportable": False,
+        "artifact_names": [
+            "agent_plan.json",
+            "result_tables.json",
+            "manuscript_draft.json",
+        ],
+    }
+
+    projected = project_run_row(run_row)
+    assert projected["execution_phase"] == "plan_review"
+    assert projected["human_plan_review_pending"] is True
+    assert projected["analysis_executed"] is False
+    assert projected["scientific_results_available"] is False
+    assert (
+        projected["artifact_semantics"]
+        == "plan_stage_placeholders_not_analysis_results"
+    )
+
+    monkeypatch.setattr(tool_module, "_run_rows", lambda _context: [run_row])
+    result = tool_module.execute_tool(
+        "easyicu_inspect_run",
+        {},
+        ToolExecutionContext(
+            session=PiSessionRecord(
+                session_id="pi-plan-review",
+                binding=AuthorityBinding(
+                    study_context_id="study-1",
+                    study_revision=1,
+                    run_id="run-plan-review",
+                ),
+            )
+        ),
+    )
+
+    assert "paused at the human plan-review gate" in result["summary"]
+    assert "analysis has not executed" in result["summary"]
+    assert result["details"]["run"]["analysis_executed"] is False
 
 
 def test_phi_and_projection_boundaries_reject_rows_identifiers_and_paths() -> None:

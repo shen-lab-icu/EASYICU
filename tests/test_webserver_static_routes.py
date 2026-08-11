@@ -34,6 +34,14 @@ def test_native_favicon_request_is_quiet() -> None:
     assert response.status_code == 204
 
 
+def test_copilot_demo_serves_the_agent_produced_publication_figure() -> None:
+    response = TestClient(app).get("/assets/demo/e1-publication-figure.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert len(response.content) == 93_214
+
+
 def test_native_fs_mkdir_creates_local_export_folder(tmp_path: Path) -> None:
     target = tmp_path / "exports" / "new parent"
     client = TestClient(app)

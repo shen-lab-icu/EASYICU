@@ -76,6 +76,26 @@ def active_export_matches_study(
     return bool(expected and active and expected == active)
 
 
+def registered_export_matches_study(
+    study: Optional[Mapping[str, Any]], registry: Optional[Mapping[str, Any]]
+) -> bool:
+    """Return whether the project's exact bound export is still registered."""
+
+    study_row: Mapping[str, Any] = study or {}
+    source = study_row.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    expected = str(source.get("path") or "").strip()
+    if not expected:
+        return False
+    registry_row: Mapping[str, Any] = registry or {}
+    return any(
+        isinstance(row, Mapping)
+        and bool(row.get("ok"))
+        and str(row.get("path") or "").strip() == expected
+        for row in (registry_row.get("sources") or [])
+    )
+
+
 def _setup_missing(
     study: Mapping[str, Any], *, active_export_present: bool
 ) -> List[str]:
@@ -163,6 +183,13 @@ def build_research_workflow_snapshot(
     pipeline_receipt = "source_run_manifest.json" in artifact_names
     gate_status = str(run_row.get("gate_status") or "")
     run_blocked = gate_status == "blocked"
+    preflight_complete = bool(
+        run_type == "preflight"
+        and has_evidence
+        and gate_status == "analysis_only"
+        and str(run_row.get("readiness_status") or "")
+        == "awaiting_human_signoff"
+    )
     pending_review_reason_codes = {
         str(item).strip()
         for item in (run_row.get("pending_review_reason_codes") or [])
@@ -278,6 +305,8 @@ def build_research_workflow_snapshot(
                 if has_plan
                 else "analysis_running"
                 if analysis_running
+                else "provider_plan_ready"
+                if preflight_complete
                 else "plan_ready"
                 if active_export_present and setup_ready
                 else "active_export_or_setup_required"
@@ -379,5 +408,6 @@ __all__ = [
     "ResearchWorkflowStage",
     "WorkflowStatus",
     "active_export_matches_study",
+    "registered_export_matches_study",
     "build_research_workflow_snapshot",
 ]

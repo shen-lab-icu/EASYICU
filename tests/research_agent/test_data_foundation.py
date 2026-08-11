@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import easyicu.research_agent.acquisition.foundation as df_mod
 from easyicu.research_agent.acquisition.catalog import (
     AvailableCatalog,
@@ -256,8 +258,9 @@ def test_legacy_acquisition_declares_sparse_event_features_before_materializatio
     assert captured["positive_only_event_concepts"] == ["sep3_sofa2"]
 
 
+@pytest.mark.parametrize("typed_metadata", [False, True])
 def test_acquisition_binds_event_endpoint_and_exposure_to_materialized_columns(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, typed_metadata
 ):
     catalog = AvailableCatalog(
         source="legacy",
@@ -266,19 +269,28 @@ def test_acquisition_binds_event_endpoint_and_exposure_to_materialized_columns(
                 concept_id="sep3_sofa2",
                 file_name="sepsis3_sofa2.parquet",
                 column_role="event_status",
+                typed_metadata=typed_metadata,
             ),
             CatalogConcept(
                 concept_id="death",
                 file_name="outcome.parquet",
                 column_role="event_status",
+                typed_metadata=typed_metadata,
             ),
-            CatalogConcept(concept_id="age", file_name="demographics.parquet"),
+            CatalogConcept(
+                concept_id="age",
+                file_name="demographics.parquet",
+                typed_metadata=typed_metadata,
+            ),
         ],
     )
     monkeypatch.setattr(df_mod, "build_available_catalog", lambda _d: catalog)
     import easyicu.research_agent.cohort.materializer as cm
 
-    def materialize(**_kwargs):
+    captured = {}
+
+    def materialize(**kwargs):
+        captured.update(kwargs)
         parquet = tmp_path / "universe.parquet"
         provenance = tmp_path / "universe_provenance.json"
         parquet.write_bytes(b"legacy-parquet-placeholder")
@@ -316,6 +328,9 @@ def test_acquisition_binds_event_endpoint_and_exposure_to_materialized_columns(
         "death": "death",
         "sep3_sofa2": "sep3_sofa2_max",
     }
+    assert captured["positive_only_event_concepts"] == (
+        [] if typed_metadata else ["sep3_sofa2"]
+    )
     assert result.endpoint is not None
     assert result.endpoint.model_dump(mode="json") == {
         "name": "death",

@@ -1056,6 +1056,7 @@ class LiteratureAgent:
         self,
         llm: Optional[LLMClient] = None,
         *,
+        bound_seed: Optional[LiteratureBundle] = None,
         enable_pubmed: bool = False,
         pubmed_client: Optional["PubMedLiteratureClient"] = None,
         pubmed_retmax: int = 8,
@@ -1064,6 +1065,7 @@ class LiteratureAgent:
         tavily_retmax: int = 5,
     ) -> None:
         self.llm = llm
+        self.bound_seed = bound_seed
         self.enable_pubmed = bool(enable_pubmed)
         self.pubmed_client = pubmed_client
         self.pubmed_retmax = int(pubmed_retmax)
@@ -1093,6 +1095,49 @@ class LiteratureAgent:
         curated_seed_count = len(baseline)
         sources_enabled: List[str] = []
         sources_returning: List[str] = []
+
+        # A host may have already run an explicitly authorized literature
+        # search before the pipeline starts (for example, Web Idea Mining).
+        # Merge only its validated, config-hashed LiteratureBundle; never read
+        # an ambient file or silently repeat the network request here.
+        if self.bound_seed is not None:
+            seed_provenance = self.bound_seed.search_provenance
+            seed_sources = list(
+                (
+                    seed_provenance.sources_enabled
+                    if seed_provenance and seed_provenance.search_conducted
+                    else []
+                )
+                or []
+            )
+            seed_returning = list(
+                (
+                    seed_provenance.sources_returning
+                    if seed_provenance and seed_provenance.search_conducted
+                    else []
+                )
+                or []
+            )
+            sources_enabled.extend(seed_sources)
+            sources_returning.extend(seed_returning)
+            seed_identified = int(
+                (self.bound_seed.prisma or {}).get("identified")
+                or len(self.bound_seed.citations)
+            )
+            identified += seed_identified
+            duplicates += int(
+                (self.bound_seed.prisma or {}).get("duplicates_removed") or 0
+            )
+            for rec in self.bound_seed.citations:
+                if rec.key in seen_keys or (rec.pmid and rec.pmid in seen_pmids):
+                    duplicates += 1
+                    continue
+                seen_keys.add(rec.key)
+                if rec.pmid:
+                    seen_pmids.add(rec.pmid)
+                if rec.url:
+                    seen_urls.add(rec.url)
+                merged.append(rec)
 
         # 2) PubMed live (T2.2). Errors are swallowed: the bundle is
         #    still useful even if the network is unreachable.
@@ -1194,6 +1239,8 @@ class LiteratureAgent:
                     seen_urls.add(rec.url)
                 merged.append(rec)
 
+        sources_enabled = list(dict.fromkeys(sources_enabled))
+        sources_returning = list(dict.fromkeys(sources_returning))
         search_conducted = bool(sources_enabled)
         provenance = LiteratureSearchProvenance(
             curated_seed_count=curated_seed_count,
@@ -1245,11 +1292,13 @@ def build_preplan_literature_bundle(
     tavily_api_key: Optional[str] = None,
     tavily_retmax: int = 5,
     tavily_include_domains: Optional[Sequence[str]] = None,
+    bound_seed: Optional[LiteratureBundle] = None,
 ) -> LiteratureBundle:
     """Build the source-backed literature bundle consumed before planning."""
 
     return LiteratureAgent(
         None,
+        bound_seed=bound_seed,
         enable_pubmed=enable_pubmed,
         pubmed_client=(
             PubMedLiteratureClient(email=pubmed_email, api_key=pubmed_api_key)

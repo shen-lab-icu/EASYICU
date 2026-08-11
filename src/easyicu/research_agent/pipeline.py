@@ -251,9 +251,7 @@ from .audits.manuscript_claims import (  # noqa: E402,F401
     _extract_percent_claims_near,
 )
 
-_audit_manuscript_numeric_claims = (
-    audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
-)
+_audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
 
 from .authority.evidence_store import (
     EvidenceEnforcementError,
@@ -1564,6 +1562,11 @@ class ResearchAgentPipeline:
         self._enable_pubmed = bool(config.enable_pubmed)
         self._pubmed_email = config.pubmed_email
         self._pubmed_api_key = config.pubmed_api_key
+        self._bound_preplan_literature = (
+            LiteratureBundle.model_validate(config.bound_preplan_literature)
+            if config.bound_preplan_literature is not None
+            else None
+        )
         # O5 — opt-in Tavily web search for preprints/guidelines/trial
         # registries that PubMed may not index. Off by default so CI
         # and offline demos remain deterministic.
@@ -2431,6 +2434,7 @@ class ResearchAgentPipeline:
                     tavily_api_key=self._tavily_api_key,
                     tavily_retmax=self._tavily_retmax,
                     tavily_include_domains=self._tavily_include_domains,
+                    bound_seed=self._bound_preplan_literature,
                 )
                 allowed_literature_citation_keys = [
                     citation.key for citation in preplan_literature.citations
@@ -11292,9 +11296,7 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
         ):
             out.append("clustering_performance")
             if not (artefact.parent / "cluster_characteristics.csv").exists():
-                out.extend(
-                    ["cluster_summary", "cluster_characteristics", "table_one"]
-                )
+                out.extend(["cluster_summary", "cluster_characteristics", "table_one"])
             if not (artefact.parent / "cluster_mortality.csv").exists():
                 out.append("cluster_mortality")
             if not any(

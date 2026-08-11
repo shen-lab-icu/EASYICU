@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 import subprocess
@@ -21,17 +22,21 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260811-demo1" in index
-    assert "css/guided-pi-demo.css?v=20260811-product-demo1" in index
+    assert "css/guided-pi.css?v=20260811-plan-review1" in index
+    assert "css/guided-pi-demo.css?v=20260811-product-demo5" in index
     assert "css/guided-pi-preview.css?v=20260809-scientific-trust1" in index
     assert "css/guided-pi-literature.css?v=20260811-literature1" in index
-    assert "js/screens-guided-pi-literature.js?v=20260811-literature1" in index
-    assert "js/screens-guided-pi-demo.js?v=20260811-product-demo2" in index
+    assert "js/screens-guided-pi-literature.js?v=20260811-literature2" in index
+    assert "js/screens-guided-pi-markdown.js?v=20260811-message-links1" in index
+    assert "js/screens-guided-pi-demo.js?v=20260811-product-demo6" in index
     assert "js/screens-guided-pi-preview.js?v=20260811-product-demo1" in index
-    assert "js/screens-guided-pi.js?v=20260811-product-demo2" in index
+    assert "js/screens-guided-pi.js?v=20260811-product-demo-truth1" in index
     assert "js/api.js?v=20260810-research-workflow1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
+        "js/screens-guided-pi-markdown.js"
+    )
+    assert index.index("js/screens-guided-pi-markdown.js") < index.index(
         "js/screens-guided-pi-demo.js"
     )
     assert index.index("js/screens-guided-pi-demo.js") < index.index(
@@ -59,9 +64,15 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "syncProjectWorkflowAside" in pi_owner
     assert "completed_required_stages" in pi_owner
     assert "operator_plan_approval_required" in pi_owner
+    assert "reviewResources" in pi_owner
+    assert "打开分析计划" in pi_owner
+    assert "打开文献绑定" in pi_owner
+    assert "gpi-confirmation-resources" in pi_owner
     assert "stage.status === 'review_required'" in pi_owner
     assert "data-gpi-project-workflow-aside" in pi_owner
     assert "pi_model_provider_unavailable" in pi_owner
+    assert "pi_shell_token_budget_exhausted" in pi_owner
+    assert "同一研究项目中新建后续对话" in pi_owner
     assert "external_llm_opt_in: true" in pi_owner
     assert pi_owner.count("project_id: projectId()") >= 4
     assert "loadPiCopilotSessions(30, expectedProjectId)" in pi_owner
@@ -111,6 +122,9 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "childSource" in pi_owner
     assert "handleChildJobEvent" in pi_owner
     assert "if (state.session && sessionIsStale()) await rebind();" in pi_owner
+    assert "function reconcileSettledSession()" in pi_owner
+    assert "state.session.streaming !== false" in pi_owner
+    assert pi_owner.count("reconcileSettledSession();") == 2
     assert "['submitted', 'agent', 'turn', 'assistant', 'tool', 'pipeline', 'retry', 'compaction']" in pi_owner
     assert "Live progress connection stopped" in pi_owner
     assert "private chain-of-thought" in pi_owner
@@ -140,6 +154,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "state.demoMode ? demoPanel()" in pi_owner
     assert "extraction_ready" in pi_owner
     assert "plan_ready" in pi_owner
+    assert "provider_plan_ready" in pi_owner
+    assert "生成 Agent 计划" in pi_owner
     assert "operator_plan_approval_required" in pi_owner
     assert "hydrateProjectedJob" in pi_owner
     assert "visibleSteps.length} steps" in pi_owner
@@ -251,6 +267,7 @@ def test_pi_frontend_javascript_parses() -> None:
         "js/screens-guided-pi.js",
         "js/screens-guided-pi-preview.js",
         "js/screens-guided-pi-literature.js",
+        "js/screens-guided-pi-markdown.js",
         "js/screens-guided-pi-demo.js",
     ):
         subprocess.run(
@@ -289,6 +306,34 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "value.kind === 'demo_artifact'" in preview
     assert "Product demo · Real engineering-canary aggregate" in preview
     assert "safe.kind !== 'demo_artifact'" in preview
+    assert "literature_evidence.json" in demo
+    assert "result_tables.json" in demo
+    assert "figure_gallery.json" in demo
+    assert "打开全部 9 篇文献" in demo
+    assert demo.count("step_id: '") == 11
+    assert "citation_keys:" in demo
+    assert "projection_note:" in demo
+    assert "该历史 canary 早于当前运行" in demo
+    assert "e1-publication-figure.png" in demo
+    assert "required_stage_count: 8" in demo
+    assert "实验性 SOFA-2 敏感性指标" in demo
+    assert "不是标准 Sepsis-3" in demo
+    assert "Sepsis-3 indicator present" not in demo
+    assert "tr('Sepsis-3 prevalence', 'Sepsis-3 比例')" not in demo
+    assert "Table 1 · Baseline characteristics by Sepsis-3 indicator" not in demo
+    assert "operator_plan_approved" in pi_owner
+    assert "validated_analysis_complete" in pi_owner
+    assert "interpretation_complete" in pi_owner
+    assert "human_review_required" in pi_owner
+
+
+def test_complete_research_demo_reuses_the_unchanged_agent_figure() -> None:
+    figure = STATIC / "assets" / "demo" / "e1-publication-figure.png"
+    assert figure.is_file()
+    assert figure.stat().st_size == 93_214
+    assert hashlib.sha256(figure.read_bytes()).hexdigest() == (
+        "34a46b54558a6f08cc02434a6958558ecb8077abd59db78713ef8f9dd4172e4b"
+    )
 
 
 def test_complete_research_demo_renderer_escapes_untrusted_values() -> None:
@@ -365,10 +410,49 @@ def test_literature_renderer_escapes_metadata_and_rejects_unsafe_links() -> None
     )
     assert "<img" not in completed.stdout
     assert "<script>" not in completed.stdout
-    assert "javascript:" not in completed.stdout
+    assert 'href="javascript:' not in completed.stdout
     assert "&lt;img" in completed.stdout
     assert 'href="https://pubmed.ncbi.nlm.nih.gov/12345/"' in completed.stdout
     assert 'rel="noopener noreferrer"' in completed.stdout
+
+
+def test_assistant_message_renderer_makes_https_citations_clickable_and_safe() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    literature = _read("js/screens-guided-pi-literature.js")
+    markdown = _read("js/screens-guided-pi-markdown.js")
+    script = f"""
+      global.window = {{ EU_LANG: 'en' }};
+      eval({literature!r});
+      eval({markdown!r});
+      console.log(window.EU_GUIDED_PI_MARKDOWN.render(
+        '[PMID: 26903338](https://pubmed.ncbi.nlm.nih.gov/26903338/)\\n' +
+        '[unsafe](javascript:alert(1)) **strong** *journal* <script>alert(2)</script>'
+      ));
+    """
+    completed = subprocess.run(
+        [node, "--eval", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert 'href="https://pubmed.ncbi.nlm.nih.gov/26903338/"' in completed.stdout
+    assert 'target="_blank"' in completed.stdout
+    assert 'rel="noopener noreferrer"' in completed.stdout
+    assert 'href="javascript:' not in completed.stdout
+    assert "<script>" not in completed.stdout
+    assert "&lt;script&gt;" in completed.stdout
+    assert "<strong>strong</strong>" in completed.stdout
+    assert "<em>journal</em>" in completed.stdout
+
+
+def test_literature_preview_distinguishes_auxiliary_steps_from_scientific_gaps() -> None:
+    literature_owner = _read("js/screens-guided-pi-literature.js")
+
+    assert "个科学决策已绑定" in literature_owner
+    assert "不计作文献决策缺口" in literature_owner
+    assert "该科学决策没有绑定文献，需要审阅" in literature_owner
 
 
 def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox() -> None:

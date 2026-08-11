@@ -56,11 +56,17 @@
   function planMap(payload, indexByKey) {
     const rows = Array.isArray(payload.step_citation_map) ? payload.step_citation_map : [];
     if (!rows.length) return '';
+    const boundCount = rows.filter(row => Array.isArray(row.citation_keys) && row.citation_keys.length).length;
+    const auxiliaryCount = rows.filter(row => {
+      const keys = Array.isArray(row.citation_keys) ? row.citation_keys : [];
+      return !keys.length && String(row.planned_analysis_role || '') === 'auxiliary';
+    }).length;
     return `<section class="gpi-lit-map">
-      <header><h3>${esc(tr('Plan decisions and supporting articles', '计划决策与支持文献'))}</h3><span>${esc(`${Number(payload.mapped_step_count || 0)}/${Number(payload.plan_step_count || rows.length)}`)}</span></header>
+      <header><h3>${esc(tr('Plan decisions and supporting articles', '计划决策与支持文献'))}</h3><span>${esc(tr(`${boundCount} evidence-bound · ${auxiliaryCount} auxiliary`, `${boundCount} 个科学决策已绑定 · ${auxiliaryCount} 个辅助步骤`))}</span></header>
       <div class="gpi-lit-map-list">${rows.map(row => {
         const keys = Array.isArray(row.citation_keys) ? row.citation_keys : [];
         const sources = keys.map(key => indexByKey.get(String(key))).filter(Boolean);
+        const auxiliary = String(row.planned_analysis_role || '') === 'auxiliary';
         return `<article class="gpi-lit-step ${keys.length ? 'bound' : 'unbound'}">
           <div><code>${esc(row.step_id || '')}</code>${row.planned_analysis_role ? `<span>${esc(row.planned_analysis_role)}</span>` : ''}</div>
           <p>${esc(row.intent || '')}</p>
@@ -68,7 +74,9 @@
             const url = safeUrl(source.source_url || source.url);
             const label = esc(source.title || source.key);
             return `<li>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${label}<span aria-hidden="true">↗</span></a>` : `<strong>${label}</strong>`}<small>${esc(source.key || '')}</small></li>`;
-          }).join('')}</ul>` : `<div class="gpi-lit-unbound">${esc(tr('No citation was bound when this plan was generated.', '生成该计划时未绑定对应文献。'))}</div>`}
+          }).join('')}</ul>` : `<div class="gpi-lit-unbound">${esc(auxiliary
+            ? tr('Auxiliary execution or rendering step; it inherits the governed scientific plan and is not counted as a missing literature decision.', '辅助执行或呈现步骤；它继承受治理的科学计划，不计作文献决策缺口。')
+            : tr('A scientific decision has no bound citation and requires review.', '该科学决策没有绑定文献，需要审阅。'))}</div>`}
         </article>`;
       }).join('')}</div>
     </section>`;

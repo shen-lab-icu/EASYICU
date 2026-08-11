@@ -1517,13 +1517,16 @@ def test_idea_mining_real_export_and_prior_art_unlock_agent_run_gate(
     )
     monkeypatch.setattr(
         idea_mining_web,
-        "_pubmed_esummary",
+        "_pubmed_article_records",
         lambda ids: [
             {
                 "pmid": "98765",
                 "title": "Lactate clearance and mortality in public ICU databases",
                 "journal": "Critical Care",
                 "year": 2025,
+                "evidence_sentence": (
+                    "Lactate clearance was evaluated against ICU mortality."
+                ),
             }
         ],
     )

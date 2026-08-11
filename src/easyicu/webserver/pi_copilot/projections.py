@@ -243,8 +243,16 @@ def project_capabilities(payload: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
-    return ensure_safe_projection(
-        {
+    pending_review_reason_codes = [
+        stable_code(item)
+        for item in (row.get("pending_review_reason_codes") or [])
+        if stable_code(item)
+    ][:16]
+    waiting_for_plan_approval = (
+        str(row.get("run_status") or "") == "human_review_pending"
+        and "operator_plan_approval_required" in pending_review_reason_codes
+    )
+    projected = {
             key: row.get(key)
             for key in (
                 "run_id",
@@ -253,6 +261,7 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
                 "run_type",
                 "engine",
                 "gate_status",
+                "run_status",
                 "readiness_status",
                 "signed",
                 "signoff_stale",
@@ -265,7 +274,23 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
             )
             if row.get(key) is not None
         }
-    )
+    if pending_review_reason_codes:
+        projected["pending_review_reason_codes"] = pending_review_reason_codes
+    if waiting_for_plan_approval:
+        # Result/manuscript files are intentionally emitted as governed
+        # placeholders at the plan stage.  Make the execution state explicit
+        # so a conversational model cannot infer that analysis ran merely from
+        # those filenames.
+        projected.update(
+            {
+                "execution_phase": "plan_review",
+                "human_plan_review_pending": True,
+                "analysis_executed": False,
+                "scientific_results_available": False,
+                "artifact_semantics": "plan_stage_placeholders_not_analysis_results",
+            }
+        )
+    return ensure_safe_projection(projected)
 
 
 def project_artifacts(rows: Iterable[Mapping[str, Any]]) -> list[Dict[str, Any]]:

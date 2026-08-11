@@ -691,6 +691,7 @@ def run_write_phase(
                 )
             literature = LiteratureAgent(
                 lit_client,
+                bound_seed=pipeline._bound_preplan_literature,
                 enable_pubmed=pipeline._enable_pubmed,
                 pubmed_client=pubmed_client,
                 enable_tavily=pipeline._enable_tavily,
@@ -1391,8 +1392,7 @@ def run_write_phase(
                         evidence.register_file(
                             kind="log",
                             description=(
-                                f"Compiled manuscript PDF "
-                                f"(engine={pdf_result.engine})."
+                                f"Compiled manuscript PDF (engine={pdf_result.engine})."
                             ),
                             source_path=pdf_result.pdf_path,
                             evidence_id="manuscript_scaffold_pdf",
@@ -1404,7 +1404,7 @@ def run_write_phase(
                             validator="pdf_render",
                             severity="info",
                             message=(
-                                f"Rendered manuscript PDF via " f"{pdf_result.engine}."
+                                f"Rendered manuscript PDF via {pdf_result.engine}."
                             ),
                             evidence_ids=["manuscript_scaffold_pdf"],
                         )
@@ -1733,10 +1733,10 @@ def run_write_phase(
                 severity=severity,
                 message=(
                     f"Simulated reviewers returned `{rec}` "
-                    f"(info={summary['counts'].get('info',0)}, "
-                    f"minor={summary['counts'].get('minor',0)}, "
-                    f"major={summary['counts'].get('major',0)}, "
-                    f"reject={summary['counts'].get('reject',0)})."
+                    f"(info={summary['counts'].get('info', 0)}, "
+                    f"minor={summary['counts'].get('minor', 0)}, "
+                    f"major={summary['counts'].get('major', 0)}, "
+                    f"reject={summary['counts'].get('reject', 0)})."
                 ),
                 evidence_ids=["reviewer_report"],
                 detail=summary,
@@ -1880,8 +1880,7 @@ def run_write_phase(
                 validator="repro_artifacts",
                 severity="warning",
                 message=(
-                    f"Failed to build run.ipynb / lockfile: "
-                    f"{type(exc).__name__}: {exc}"
+                    f"Failed to build run.ipynb / lockfile: {type(exc).__name__}: {exc}"
                 ),
             )
         )

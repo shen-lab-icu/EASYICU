@@ -7,6 +7,7 @@ import json
 import pytest
 
 from easyicu.research_agent.agents.core import PlannerAgent
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 
 
@@ -88,3 +89,25 @@ def test_each_scientific_step_must_bind_a_preplan_source() -> None:
             _context(),
             allowed_literature_citation_keys=["strobe_2007"],
         )
+
+
+def test_planner_receives_exact_preplan_literature_authority() -> None:
+    llm = ScriptedMockLLMClient(
+        [_raw(["invented_internal_label"]), _raw(["strobe_2007"])]
+    )
+    plan = PlannerAgent(llm).run(
+        _context(),
+        allowed_literature_citation_keys=[
+            "strobe_2007",
+            "strobe_2007",
+            "record_2015",
+        ],
+    )
+
+    assert plan.steps[0].literature_citation_keys == ["strobe_2007"]
+    prompt = "\n".join(message.content for message in llm.messages)
+    assert "PRE-PLAN LITERATURE CITATION AUTHORITY (exact, run-bound)" in prompt
+    assert '["strobe_2007", "record_2015"]' in prompt
+    assert "Do not cite an evidence artifact" in prompt
+    assert "Allowed literature_citation_keys for this run are exactly" in prompt
+    assert len(llm.calls) == 2

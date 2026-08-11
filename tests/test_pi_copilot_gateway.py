@@ -527,7 +527,15 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         role: 'assistant', content: [], stopReason: 'error',
         errorMessage: 'dial tcp 203.0.113.1:443: connect: operation timed out'
       }});
-      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts, submittedRun, unsafeJob, providerErrorEvent, providerErrorTranscript }}));
+      const shellBudgetEvent = normalizePiEvent({{
+        type: 'message_end', message: {{ role: 'assistant', stopReason: 'error',
+          errorMessage: 'pi_shell_token_budget_exhausted: bounded session budget reached' }}
+      }});
+      const shellBudgetTranscript = projectTranscriptMessage({{
+        role: 'assistant', content: [], stopReason: 'error',
+        errorMessage: 'pi_shell_token_budget_exhausted: bounded session budget reached'
+      }});
+      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts, submittedRun, unsafeJob, providerErrorEvent, providerErrorTranscript, shellBudgetEvent, shellBudgetTranscript }}));
     """
     completed = subprocess.run(
         [node, "--input-type=module", "--eval", script],
@@ -575,6 +583,8 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
     assert "job_id" not in payload["unsafeJob"]
     assert payload["providerErrorEvent"]["error_code"] == "pi_model_provider_unavailable"
     assert payload["providerErrorTranscript"]["error_code"] == "pi_model_provider_unavailable"
+    assert payload["shellBudgetEvent"]["error_code"] == "pi_shell_token_budget_exhausted"
+    assert payload["shellBudgetTranscript"]["error_code"] == "pi_shell_token_budget_exhausted"
     assert "raw result must not leak" not in completed.stdout
     assert "project_dir" not in completed.stdout
     assert "must-not-leak" not in completed.stdout
@@ -632,6 +642,9 @@ def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> 
     assert "treat that as execution intent rather than a request to inspect an older run" in entrypoint
     assert "then call easyicu_run" in entrypoint
     assert "Use easyicu_inspect_run only when the user asks for status" in entrypoint
+    assert "A persisted run_id is historical evidence, not proof of an active job" in entrypoint
+    assert "Never call easyicu_resume without an approved/rejected decision" in entrypoint
+    assert "an explicit user rerun request must call easyicu_run" in entrypoint
 
 
 def test_research_system_prompt_requires_tool_first_idea_mining() -> None:
@@ -704,11 +717,11 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
     assert runtime["model"] == "gpt5.6 luna"
     assert runtime["built_in_tools_enabled"] == []
     assert state["enabled_tools"] == runtime["custom_tools"]
-    assert len(state["enabled_tools"]) == 24
+    assert len(state["enabled_tools"]) == 25
     assert {"read", "write", "edit", "bash"}.isdisjoint(state["enabled_tools"])
     assert workspace_state["agent_mode"] == "workspace"
     assert workspace_state["enabled_tools"] == runtime["custom_tools_by_mode"]["workspace"]
-    assert len(workspace_state["enabled_tools"]) == 31
+    assert len(workspace_state["enabled_tools"]) == 32
     assert {"read", "write", "edit", "bash"}.isdisjoint(
         workspace_state["enabled_tools"]
     )

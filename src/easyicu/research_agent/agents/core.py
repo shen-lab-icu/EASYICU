@@ -1540,6 +1540,13 @@ class PlannerAgent:
                 "Planner know-how decision authority and structured context must "
                 "be supplied together"
             )
+        allowed_citation_keys = tuple(
+            dict.fromkeys(
+                str(value or "").strip()
+                for value in (allowed_literature_citation_keys or [])
+                if str(value or "").strip()
+            )
+        )
         resolved_planning_contract_context = planning_contract_context
         if enforce_article_contract and not resolved_planning_contract_context:
             from ..reporting.article_contract import (
@@ -1551,6 +1558,25 @@ class PlannerAgent:
                 render_article_analysis_contract_for_prompt(
                     build_article_analysis_contract(article_contract_context or context)
                 )
+            )
+        if allowed_citation_keys:
+            citation_authority = (
+                "PRE-PLAN LITERATURE CITATION AUTHORITY (exact, run-bound):\n"
+                "- allowed_literature_citation_keys: "
+                + json.dumps(list(allowed_citation_keys), ensure_ascii=False)
+                + "\n- Every primary, secondary, and sensitivity step MUST bind "
+                "one or more exact values from this list in "
+                "literature_citation_keys. Do not cite an evidence artifact, "
+                "analysis contract, study-design brief, or invented semantic "
+                "label in that field. Auxiliary steps may use an empty list."
+            )
+            resolved_planning_contract_context = "\n\n".join(
+                value
+                for value in (
+                    resolved_planning_contract_context,
+                    citation_authority,
+                )
+                if value
             )
         messages = self.request_messages(
             context,
@@ -1579,7 +1605,7 @@ class PlannerAgent:
                 raw,
                 context,
                 allowed_know_how_decisions=allowed_know_how_decisions,
-                allowed_literature_citation_keys=allowed_literature_citation_keys,
+                allowed_literature_citation_keys=allowed_citation_keys,
                 enforce_article_contract=enforce_article_contract,
                 article_contract_context=article_contract_context,
             ),
@@ -1611,6 +1637,13 @@ class PlannerAgent:
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
+                + (
+                    " Allowed literature_citation_keys for this run are exactly: "
+                    + json.dumps(list(allowed_citation_keys), ensure_ascii=False)
+                    + "."
+                    if allowed_citation_keys
+                    else ""
+                )
                 + _payload.planner_science_retry_guide()
             ),
         )
