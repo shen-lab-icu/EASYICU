@@ -28,6 +28,18 @@
   }
   function safeResource(value) {
     if (!value || typeof value !== 'object') return null;
+    if (value.kind === 'demo_artifact') {
+      const demo = window.EU_GUIDED_PI_DEMO;
+      const artifact = String(value.artifact || '').trim();
+      if (!/^[A-Za-z0-9_.-]+\.json$/.test(artifact) || artifact.length > 160) return null;
+      if (!demo || typeof demo.hasArtifact !== 'function' || !demo.hasArtifact(artifact)) return null;
+      return {
+        kind: 'demo_artifact', artifact,
+        run_id: String(value.run_id || demo.sourceRunId || '').slice(0, 160),
+        label: String(value.label || (demo.artifactLabel && demo.artifactLabel(artifact)) || artifact).slice(0, 160),
+        media_type: 'application/json', authority_class: 'product_demo_projection',
+      };
+    }
     if (value.kind === 'literature_source') {
       const literature = window.EU_GUIDED_PI_LITERATURE;
       const url = literature && typeof literature.safeUrl === 'function'
@@ -71,6 +83,8 @@
     };
   }
   function isResearchArtifact() { return !!state.resource && state.resource.kind === 'research_artifact'; }
+  function isDemoArtifact() { return !!state.resource && state.resource.kind === 'demo_artifact'; }
+  function isStructuredArtifact() { return isResearchArtifact() || isDemoArtifact(); }
   function isLiteratureSource() { return !!state.resource && state.resource.kind === 'literature_source'; }
   function isHtml() {
     return !!state.resource && (
@@ -113,10 +127,13 @@
           : tr('Current run gate does not permit sign-off.', '当前运行闸不允许签署。');
     return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(title)}</strong><span>${esc(detail)}</span></div>`;
   }
+  function demoProvenance() {
+    return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Product demo · Real engineering-canary aggregate', '产品演示 · 真实工程试跑聚合产物'))}</strong><span>${esc(tr('Read-only and non-reportable; not formal paper evidence.', '只读且不可报告；不是正式论文证据。'))}</span></div>`;
+  }
   function render() {
     if (!state.host || !state.resource) return;
     setAsideOpen(true);
-    const tabs = isLiteratureSource() ? '' : isResearchArtifact() ? `
+    const tabs = isLiteratureSource() ? '' : isStructuredArtifact() ? `
       <div class="gpi-preview-tabs" role="tablist" aria-label="${tr('Artifact views', '产物视图')}">
         <button type="button" role="tab" data-gpi-preview-mode="structured" aria-selected="${state.mode === 'structured'}">${icon('list', 14)} ${tr('Readable', '可读视图')}</button>
         <button type="button" role="tab" data-gpi-preview-mode="code" aria-selected="${state.mode === 'code'}">${icon('file', 14)} JSON</button>
@@ -137,25 +154,28 @@
         : `<div class="gpi-preview-state error">${esc(tr('Literature renderer unavailable', '文献渲染器不可用'))}</div>`;
     } else if (state.mode === 'web' && isHtml()) {
       body = `<iframe class="gpi-preview-frame" src="${esc(previewUrl())}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`;
-    } else if (state.mode === 'structured' && isResearchArtifact()) {
+    } else if (state.mode === 'structured' && isStructuredArtifact()) {
       const renderer = window.AGENT_RENDER;
       const literature = window.EU_GUIDED_PI_LITERATURE;
-      body = state.resource.artifact === 'literature_evidence.json'
+      const demo = window.EU_GUIDED_PI_DEMO;
+      body = isDemoArtifact() && demo && typeof demo.renderArtifact === 'function'
+        ? demo.renderArtifact(state.payload || {})
+        : state.resource.artifact === 'literature_evidence.json'
         && literature && typeof literature.renderArtifact === 'function'
         ? literature.renderArtifact(state.payload || {})
         : renderer && typeof renderer.artifactStructuredView === 'function'
           ? renderer.artifactStructuredView(state.resource.artifact, state.payload || {})
         : `<pre class="gpi-preview-code" tabindex="0"><code>${esc(JSON.stringify(state.payload || {}, null, 2))}</code></pre>`;
     } else {
-      const text = isResearchArtifact()
+      const text = isStructuredArtifact()
         ? JSON.stringify(state.payload || {}, null, 2)
         : (state.artifact && state.artifact.text != null ? state.artifact.text : '');
       body = `<pre class="gpi-preview-code" tabindex="0"><code>${esc(text)}</code></pre>`;
     }
-    const reference = isResearchArtifact()
+    const reference = isStructuredArtifact()
       ? `${state.resource.run_id} · ${state.resource.artifact}`
       : isLiteratureSource() ? state.resource.url : state.resource.file;
-    const provenance = isResearchArtifact() ? researchProvenance() : isLiteratureSource() ? `
+    const provenance = isDemoArtifact() ? demoProvenance() : isResearchArtifact() ? researchProvenance() : isLiteratureSource() ? `
       <div class="gpi-preview-provenance is-research" role="note">
         <strong>${tr('Literature metadata · Search receipt', '文献元数据 · 检索回执')}</strong>
         <span>${tr('Design evidence, separate from patient/result evidence.', '设计依据；与患者/结果证据分开治理。')}</span>
@@ -175,13 +195,22 @@
       <div class="gpi-preview-body">${body}</div>`;
   }
   async function loadResource() {
-    if (!state.resource || !state.projectId || isLiteratureSource()) return;
+    if (!state.resource || isLiteratureSource() || (!state.projectId && !isDemoArtifact())) return;
     const ticket = ++state.request;
     state.loading = true; state.error = ''; render();
     try {
       const api = window.EU_API || {};
       let payload;
-      if (isResearchArtifact()) {
+      if (isDemoArtifact()) {
+        const demo = window.EU_GUIDED_PI_DEMO;
+        if (!demo || typeof demo.artifact !== 'function') throw new Error(tr('The product-demo artifact owner is unavailable.', '产品演示产物 owner 不可用。'));
+        const item = demo.artifact(state.resource.artifact);
+        if (!item) throw new Error(tr('The selected demo artifact does not exist.', '所选演示产物不存在。'));
+        payload = {
+          payload: item,
+          governance: { claim_ceiling: 'analysis_only', reportable: false, human_signoff: 'required' },
+        };
+      } else if (isResearchArtifact()) {
         if (!api.loadPiCopilotResearchArtifact) throw new Error(tr('The research artifact API is unavailable.', '研究产物接口不可用。'));
         payload = await api.loadPiCopilotResearchArtifact(
           state.projectId, state.resource.run_id, state.resource.artifact,
@@ -192,8 +221,8 @@
       }
       if (ticket !== state.request) return;
       state.artifact = payload && payload.artifact ? payload.artifact : null;
-      state.payload = isResearchArtifact() && payload ? (payload.payload || {}) : null;
-      state.governance = isResearchArtifact() && payload ? (payload.governance || null) : null;
+      state.payload = isStructuredArtifact() && payload ? (payload.payload || {}) : null;
+      state.governance = isStructuredArtifact() && payload ? (payload.governance || null) : null;
     } catch (error) {
       if (ticket !== state.request) return;
       state.error = String(error && (error.message || error.code) || error);
@@ -204,14 +233,14 @@
   function open(resource, projectId) {
     const safe = safeResource(resource);
     const project = String(projectId || '').trim();
-    if (!safe || !project) return;
+    if (!safe || (!project && safe.kind !== 'demo_artifact' && safe.kind !== 'literature_source')) return;
     state.resource = safe;
     state.projectId = project;
     state.artifact = null;
     state.payload = null;
     state.governance = null;
     state.error = '';
-    state.mode = safe.kind === 'research_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'));
+    state.mode = safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'));
     render();
     if (state.mode !== 'web' && state.mode !== 'source') loadResource();
   }
