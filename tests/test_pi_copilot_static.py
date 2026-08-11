@@ -260,6 +260,7 @@ def test_workspace_sidecar_requires_digest_for_edit_and_teaches_safe_egress() ->
     assert "expected_sha256" in skill
     assert "may be sent to the\nconfigured Pi model service" in skill
     assert "PHI" in skill
+    assert "llm_provider:" not in sidecar
 
 
 def test_workspace_security_workflow_covers_sidecar_and_browser_helper_dependencies() -> None:

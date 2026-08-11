@@ -38,12 +38,43 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Sequence, TypeVar
+from typing import Any, Callable, List, Literal, Optional, Sequence, TypeVar
 
 from .protocol import LLMMessage
 from .factory import authorized_complete
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class StructuredRetryProgress:
+    """Safe lifecycle projection for one structured model attempt.
+
+    The projection deliberately excludes the model response and validator
+    message.  Product surfaces may show that a role is generating, retrying,
+    accepted, or exhausted without exposing private reasoning or unbounded
+    scientific payloads.
+    """
+
+    role: str
+    phase: Literal["started", "rejected", "accepted"]
+    attempt: int
+    total_attempts: int
+    error_class: Optional[str] = None
+
+
+def _notify_progress(
+    callback: Optional[Callable[[StructuredRetryProgress], None]],
+    event: StructuredRetryProgress,
+) -> None:
+    """Treat UI progress as advisory; it must never change model execution."""
+
+    if callback is None:
+        return
+    try:
+        callback(event)
+    except Exception:  # noqa: BLE001 - observers cannot own retry authority
+        return
 
 
 _DEFAULT_FEEDBACK_PREAMBLE = (
@@ -378,6 +409,7 @@ def call_llm_with_structured_retry(
     failed_response_transform: Optional[Callable[[str], str]] = None,
     feedback_preamble: str = _DEFAULT_FEEDBACK_PREAMBLE,
     feedback_instructions: str = _DEFAULT_FEEDBACK_INSTRUCTIONS,
+    progress_callback: Optional[Callable[[StructuredRetryProgress], None]] = None,
 ) -> T:
     """Call ``llm.complete`` and parse the result; retry with feedback on parse failure.
 
@@ -437,6 +469,16 @@ def call_llm_with_structured_retry(
     current: List[LLMMessage] = list(base_messages)
     last_exc: Optional[BaseException] = None
     for i in range(max_retries + 1):
+        total_attempts = max_retries + 1
+        _notify_progress(
+            progress_callback,
+            StructuredRetryProgress(
+                role=role,
+                phase="started",
+                attempt=i + 1,
+                total_attempts=total_attempts,
+            ),
+        )
         try:
             raw = authorized_complete(
                 llm, current, max_tokens=max_tokens, temperature=temperature
@@ -464,6 +506,16 @@ def call_llm_with_structured_retry(
                     error_class=exc.__class__.__name__,
                     error_message=rendered_failure,
                 )
+            )
+            _notify_progress(
+                progress_callback,
+                StructuredRetryProgress(
+                    role=role,
+                    phase="rejected",
+                    attempt=i + 1,
+                    total_attempts=total_attempts,
+                    error_class=exc.__class__.__name__,
+                ),
             )
             last_exc = exc
             if i >= max_retries:
@@ -556,6 +608,15 @@ def call_llm_with_structured_retry(
                     error_message=None,
                 )
             )
+            _notify_progress(
+                progress_callback,
+                StructuredRetryProgress(
+                    role=role,
+                    phase="accepted",
+                    attempt=i + 1,
+                    total_attempts=total_attempts,
+                ),
+            )
             return value
     # All attempts exhausted.
     failure = StructuredResponseFailure(attempts, role=role)
@@ -566,6 +627,7 @@ def call_llm_with_structured_retry(
 
 __all__ = [
     "StructuredAttempt",
+    "StructuredRetryProgress",
     "StructuredResponseFailure",
     "annotate_with_attempt_history",
     "call_llm_with_structured_retry",

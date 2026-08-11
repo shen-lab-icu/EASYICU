@@ -401,7 +401,12 @@ def _progress(job: Any, *, step: str, label: str, **extra: Any) -> None:
 def _pipeline_progress(job: Any, event: Mapping[str, Any]) -> None:
     _progress(
         job,
-        step=str(event.get("step") or event.get("phase") or "research_pipeline"),
+        step=str(
+            event.get("step")
+            or event.get("stage")
+            or event.get("phase")
+            or "research_pipeline"
+        ),
         label=str(
             event.get("label") or event.get("message") or "Research Agent working"
         ),
@@ -1039,6 +1044,7 @@ def make_research_pipeline_run_runner(
                 output_dir=wrapper_dir / "pipeline_input",
                 stem="web_research_universe",
                 target_outcome=target,
+                primary_exposure_concept=primary_exposure,
                 outcome_concepts=foundation_profile["outcome_concepts"],
                 required_feature_concepts=foundation_profile[
                     "required_feature_concepts"
@@ -1059,10 +1065,22 @@ def make_research_pipeline_run_runner(
                     run_dir=None,
                     blocked_reason="data_foundation_blocked",
                 )
+            resolved_primary_exposure = primary_exposure
+            if primary_exposure:
+                resolved_primary_exposure = acquisition.analysis_columns.get(
+                    primary_exposure
+                )
+                if not resolved_primary_exposure:
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_primary_exposure_aggregation_required",
+                        "The configured primary exposure requires an explicit "
+                        "analysis aggregation before planning can start.",
+                    )
             config = PipelineConfig(
                 workdir=wrapper_dir / "pipeline",
                 enable_reproducibility_envelope=True,
                 evidence_enforcement_mode="strict",
+                require_human_plan_review=True,
             )
             pipeline = ResearchAgentPipeline.from_config(
                 config,
@@ -1093,7 +1111,8 @@ def make_research_pipeline_run_runner(
                 cohort_name=f"web_{_slug(study.get('id'))}",
                 database=database,
                 target_outcome=target,
-                primary_exposure=primary_exposure,
+                endpoint=acquisition.endpoint,
+                primary_exposure=resolved_primary_exposure,
                 inclusion_criteria=_inclusion_criteria(study),
                 user_preferences=preferences,
                 notes=_clean_text(study.get("analysis_goal"), 1_200) or None,

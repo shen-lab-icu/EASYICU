@@ -243,6 +243,20 @@ def test_accept_idea_handoff_binds_digest_and_projects_study_fields(
             "idea_id": "idea-lactate",
             "candidate_topic": "Early lactate and mortality",
             "canonical_handoff_sha256": "b" * 64,
+            "canonical_handoff": {
+                "analysis_family": "association_study",
+                "resolved_predictor_concept": "lact",
+                "resolved_outcome_concept": "death",
+                "resolved_analysis_concepts": ["lact", "age", "sex"],
+                "selected_ledger_row": {
+                    "mapped_concepts": [
+                        {"concept_id": "lact", "module": "blood_gas"},
+                        {"concept_id": "death", "module": "outcome"},
+                        {"concept_id": "age", "module": "demographics"},
+                        {"concept_id": "sex", "module": "demographics"},
+                    ]
+                },
+            },
             "agent_seed": {"question": "Fallback question"},
             "go_no_go": "recommend",
             "go_no_go_reason": "Concepts are available in the selected export.",
@@ -274,7 +288,11 @@ def test_accept_idea_handoff_binds_digest_and_projects_study_fields(
     assert result["details"]["idea_selection"]["canonical_handoff_sha256"] == "b" * 64
     patch, options = writes[0]
     assert patch["question"] == "Does early lactate predict hospital mortality?"
-    assert patch["primary_exposure"] == "peak lactate"
+    assert patch["primary_exposure"] == "lact"
+    assert patch["outcome"] == "death"
+    assert patch["covariates"] == ["age", "sex"]
+    assert patch["modules"] == ["blood_gas", "outcome", "demographics"]
+    assert patch["analysis_goal"] == "association_study"
     assert patch["idea_handoff"] == {
         "schema_version": "easyicu.pi-idea-selection/1",
         "run_id": "idea-run-1",
@@ -289,6 +307,113 @@ def test_accept_idea_handoff_binds_digest_and_projects_study_fields(
     with pytest.raises(PiCopilotError) as stale:
         tool_module.execute_tool("easyicu_inspect_workflow", {}, context)
     assert stale.value.code == "pi_session_authority_stale"
+
+
+def test_accept_idea_handoff_requires_digest_bound_concept_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {**_complete_study(), "revision": 2, "active_job_id": None}
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: current)
+    monkeypatch.setattr(tool_module.idea_mining, "plan_idea", lambda body: {"plan": {}})
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "create_handoff",
+        lambda body: {
+            "idea_id": "idea-lactate",
+            "canonical_handoff_sha256": "d" * 64,
+            "canonical_handoff": {
+                "analysis_family": "association_study",
+                "resolved_predictor_concept": "lact",
+                "resolved_outcome_concept": "death",
+                "resolved_analysis_concepts": ["lact"],
+                "selected_ledger_row": {
+                    "mapped_concepts": [
+                        {"concept_id": "lact", "module": "blood_gas"}
+                    ]
+                },
+            },
+        },
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(session_id="pi-idea-incomplete"),
+        allowed_actions={"idea"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_accept_idea_handoff",
+        {"run_id": "idea-run-1", "idea_id": "idea-lactate"},
+        context,
+    )
+
+    assert result["code"] == "canonical_idea_execution_contract_required"
+    assert result["details"]["missing_concept_modules"] == ["death"]
+
+
+def test_accept_idea_handoff_clears_comparator_when_predictor_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        **_complete_study(),
+        "revision": 2,
+        "active_job_id": None,
+        "primary_exposure": "lact",
+        "comparator": "per 1 mmol/L",
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: current)
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "plan_idea",
+        lambda body: {"plan": {"research_question": "Does phenotype X predict Y?"}},
+    )
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "create_handoff",
+        lambda body: {
+            "idea_id": "idea-phenotype",
+            "candidate_topic": "Phenotype X and mortality",
+            "canonical_handoff_sha256": "e" * 64,
+            "canonical_handoff": {
+                "analysis_family": "association_study",
+                "resolved_predictor_concept": "phenotype_x",
+                "resolved_outcome_concept": "death",
+                "resolved_analysis_concepts": ["phenotype_x", "age"],
+                "selected_ledger_row": {
+                    "mapped_concepts": [
+                        {"concept_id": "phenotype_x", "module": "phenotypes"},
+                        {"concept_id": "death", "module": "outcome"},
+                        {"concept_id": "age", "module": "demographics"},
+                    ]
+                },
+            },
+        },
+    )
+
+    def upsert(body: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        writes.append(dict(body))
+        return {**current, **body, "revision": 3}
+
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-new-predictor",
+            binding=AuthorityBinding(
+                study_context_id="study-workflow",
+                study_revision=2,
+            ),
+        ),
+        allowed_actions={"idea"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_accept_idea_handoff",
+        {"run_id": "idea-run-phenotype", "idea_id": "idea-phenotype"},
+        context,
+    )
+
+    assert result["code"] == "easyicu_idea_handoff_accepted"
+    assert writes[0]["primary_exposure"] == "phenotype_x"
+    assert writes[0]["comparator"] == ""
 
 
 def test_accept_idea_handoff_fails_closed_without_canonical_digest(
@@ -379,7 +504,7 @@ def test_full_run_cannot_use_mock_as_scientific_output() -> None:
     assert result["code"] == "pi_full_mock_not_scientific"
 
 
-def test_full_run_delegates_to_research_agent_provider_gate(
+def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     submitted: list[dict[str, Any]] = []
@@ -417,7 +542,7 @@ def test_full_run_delegates_to_research_agent_provider_gate(
     )
     result = tool_module.execute_tool(
         "easyicu_run",
-        {"run_type": "full", "llm_provider": "openai"},
+        {"run_type": "full", "llm_provider": "local"},
         context,
     )
 
@@ -501,6 +626,8 @@ def _acquisition_receipt() -> SimpleNamespace:
         selection=SimpleNamespace(selected_concepts=["heart_rate", "mortality"]),
         materialized_concepts=["heart_rate", "mortality"],
         coverage=SimpleNamespace(sufficient=True),
+        analysis_columns={"heart_rate": "heart_rate"},
+        endpoint=None,
     )
 
 
@@ -708,6 +835,15 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     class FakePipeline:
         def run(self, **kwargs: Any) -> SimpleNamespace:
             calls["run"] = kwargs
+            kwargs["progress_callback"](
+                {
+                    "stage": "planning",
+                    "message": "Generating plan draft 1/5.",
+                    "current": 1,
+                    "total": 5,
+                    "status": "running",
+                }
+            )
             return SimpleNamespace(manifest_path=actual_run / "manifest.json")
 
     def fake_from_config(config: Any, *, services: Any) -> FakePipeline:
@@ -749,13 +885,23 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["acquire"]["static_concepts"] == ("age", "sex")
     assert calls["run"]["cohort"] == universe
     assert calls["run"]["question"] == _complete_study()["question"]
+    assert calls["acquire"]["primary_exposure_concept"] == "heart_rate"
     assert calls["run"]["primary_exposure"] == "heart_rate"
+    assert calls["run"]["endpoint"] is None
     assert calls["run"]["user_preferences"]["covariates"] == ["age", "sex"]
     assert calls["config"].evidence_enforcement_mode == "strict"
     assert calls["config"].enable_reproducibility_envelope is True
+    assert calls["config"].require_human_plan_review is True
     assert result["engine"] == "easyicu.research_agent.pipeline"
     assert result["gate"]["status"] == "analysis_only"
     assert any(event["step"] == "research_pipeline" for event in Job.events)
+    assert any(
+        event["step"] == "planning"
+        and event["label"] == "Generating plan draft 1/5."
+        and event["current"] == 1
+        and event["total"] == 5
+        for event in Job.events
+    )
 
 
 def test_pi_verified_provider_environment_is_full_pipeline_only(
@@ -974,6 +1120,43 @@ def test_web_data_foundation_profile_keeps_event_outcome_typed(
 
     profile = agent_pipeline_runs._data_foundation_profile(
         export_path="/typed/demo",
+        study={"modules": ["demographics", "outcome"]},
+        target="death",
+    )
+
+    assert profile["static_concepts"] == ("age",)
+    assert profile["outcome_concepts"] == ("death",)
+    assert profile["require_outcome"] is True
+
+
+def test_web_data_foundation_profile_keeps_legacy_owner_declared_event_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="legacy-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id="age",
+                    file_name="demographics.parquet",
+                    typed_metadata=False,
+                ),
+                CatalogConcept(
+                    concept_id="death",
+                    file_name="outcome.parquet",
+                    typed_metadata=False,
+                    column_role="event_status",
+                ),
+            ],
+        ),
+    )
+
+    profile = agent_pipeline_runs._data_foundation_profile(
+        export_path="/legacy/demo",
         study={"modules": ["demographics", "outcome"]},
         target="death",
     )

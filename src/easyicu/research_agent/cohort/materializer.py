@@ -462,7 +462,11 @@ def _normalize_declared_positive_only_event_concepts(
                 f"declared positive-only event {concept!r} has no summary columns"
             )
         for column in summary_columns:
-            numeric = pd.to_numeric(wide[column], errors="coerce")
+            # Nullable boolean keeps its extension dtype through
+            # ``to_numeric``; filling it with ``0.0`` then raises instead of
+            # producing the promised explicit event level.  Convert to the
+            # owner's numeric representation before applying absence semantics.
+            numeric = pd.to_numeric(wide[column], errors="coerce").astype("Float64")
             invalid = wide[column].notna() & numeric.isna()
             if column.endswith("_mean"):
                 outside_domain = numeric.notna() & ((numeric < 0.0) | (numeric > 1.0))
@@ -472,7 +476,12 @@ def _normalize_declared_positive_only_event_concepts(
                 raise MaterializedMetadataError(
                     f"declared positive-only event {concept!r} is outside its domain"
                 )
-            wide[column] = numeric.fillna(0.0)
+            filled = numeric.fillna(0.0)
+            wide[column] = (
+                filled.astype(float)
+                if column.endswith("_mean")
+                else filled.astype("int64")
+            )
             normalized.append(column)
     return normalized
 

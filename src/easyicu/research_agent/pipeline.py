@@ -397,6 +397,7 @@ from .schema import (
     CritiqueReport,
     EvidenceRecord,
     EvidenceRef,
+    EndpointSpec,
     ManuscriptDraftPacket,
     PaperProfile,
     PaperReplicationSpec,
@@ -2149,6 +2150,7 @@ class ResearchAgentPipeline:
         cohort_name: str,
         database: str,
         target_outcome: Optional[str],
+        endpoint: Optional[EndpointSpec],
         primary_exposure: Optional[str],
         cross_database_validation: Optional[Sequence[str]],
         inclusion_criteria: Optional[Sequence[str]],
@@ -2209,6 +2211,7 @@ class ResearchAgentPipeline:
                 cohort_name=cohort_name,
                 database=database,
                 target_outcome=target_outcome,
+                endpoint=endpoint,
                 primary_exposure=primary_exposure,
                 cross_database_validation=cross_database_validation,
                 inclusion_criteria=inclusion_criteria,
@@ -3046,6 +3049,39 @@ class ResearchAgentPipeline:
         else:
             plan_generation_mode = "llm"
             planner = PlannerAgent(role_resolver("planner"))
+
+            def _planner_retry_progress(event: Any) -> None:
+                attempt = int(getattr(event, "attempt", 0) or 0)
+                total = int(getattr(event, "total_attempts", 0) or 0)
+                phase = str(getattr(event, "phase", "") or "")
+                if phase == "started":
+                    label = f"Generating plan draft {attempt}/{total}."
+                    status = "running"
+                elif phase == "rejected":
+                    label = (
+                        f"Plan draft {attempt}/{total} did not satisfy the "
+                        "scientific contract; retrying."
+                        if attempt < total
+                        else (
+                            f"Plan draft {attempt}/{total} did not satisfy the "
+                            "scientific contract."
+                        )
+                    )
+                    status = "running" if attempt < total else "error"
+                elif phase == "accepted":
+                    label = f"Plan draft {attempt}/{total} passed contract validation."
+                    status = "complete"
+                else:
+                    return
+                emit_progress(
+                    "planning",
+                    label,
+                    current=attempt,
+                    total=total,
+                    status=status,
+                    run_id=run_id,
+                )
+
             try:
                 plan = planner.run(
                     agent_context,
@@ -3053,6 +3089,7 @@ class ResearchAgentPipeline:
                     enforce_article_contract=True,
                     article_contract_context=context,
                     planning_contract_context=planning_contract_context,
+                    progress_callback=_planner_retry_progress,
                 )
                 planner_prompt_metrics = know_how_binding.prompt_metrics(
                     planner,
@@ -3792,6 +3829,7 @@ class ResearchAgentPipeline:
         cohort_name: str = "cohort",
         database: str = "miiv",
         target_outcome: Optional[str] = None,
+        endpoint: Optional[EndpointSpec] = None,
         primary_exposure: Optional[str] = None,
         cross_database_validation: Optional[Sequence[str]] = None,
         inclusion_criteria: Optional[Sequence[str]] = None,
@@ -4110,6 +4148,7 @@ class ResearchAgentPipeline:
             cohort_name=cohort_name,
             database=database,
             target_outcome=target_outcome,
+            endpoint=endpoint,
             primary_exposure=primary_exposure,
             cross_database_validation=cross_database_validation,
             inclusion_criteria=inclusion_criteria,
@@ -4363,6 +4402,7 @@ class ResearchAgentPipeline:
                 cohort_name=cohort_name,
                 database=database,
                 target_outcome=target_outcome,
+                endpoint=endpoint,
                 primary_exposure=primary_exposure,
                 cross_database_validation=cross_database_validation,
                 inclusion_criteria=inclusion_criteria,
@@ -4574,6 +4614,7 @@ class ResearchAgentPipeline:
                     findings=plan_result.findings,
                     plan=plan_result.plan,
                     evidence=plan_evidence,
+                    require_plan_review=self._config.require_human_plan_review,
                 )
                 if not requests_without_execution:
                     return requests_without_execution
@@ -4601,6 +4642,7 @@ class ResearchAgentPipeline:
                 plan=plan_result.plan,
                 evidence=plan_evidence,
                 execution_authority=execution_authority,
+                require_plan_review=self._config.require_human_plan_review,
             )
             return requests
 

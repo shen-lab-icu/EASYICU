@@ -50,3 +50,41 @@ Pi/Copilot 现在是同一研究项目的会话编排与交接层，不是 Idea 
 4. 在同一 Web 项目继续：明确提取确认 → extraction receipt/质量报告 → Research Agent preflight → Plan 人工确认 → full analysis → EvidenceStore → 结果解读 → 稿件草稿。
 
 在这些前置满足前，不应通过前端文案、手工改状态或复用其他项目 export 绕过门禁，也不启动 Canonical9 正式 Provider batch。
+
+## 第二阶段：真实 full6 数据基础到 Plan 人工门
+
+同一 Web 项目后续绑定真实 MIMIC-IV full6 export，并使用已验证的本地 provider 进行了非 Canonical9 工程 UAT。本阶段不作为论文证据。
+
+### 实现收口
+
+- legacy/native export 的 concept 角色能够传递到数据目录，positive-only event 不再被普通数值特征误分类。
+- 数据基础把 owner 给出的 event-status outcome 投影为 typed binary endpoint，把重复测量暴露投影为已物化的运行列；新运行实际绑定 `death` 与 `sep3_sofa2_max`。
+- 修复 nullable Boolean event 在 positive-only 汇总中使用 float `fillna` 导致的 materialization 崩溃。
+- structured Planner 重试发出有界生命周期事件：只投影轮次、通过/拒绝和错误类，不投影私有思维或原始响应。Web bridge 保留真实 stage，不再把所有事件写成 `research_pipeline`。
+- Guided Web 运行启用 `require_human_plan_review`；即使自动科学检查没有产生 error finding，完整 Plan 也必须产生与 Plan、Evidence、run capsule 和 pipeline config 绑定的审核请求，审批前不运行任何分析步骤。
+- 重选 Idea 导致 primary exposure 改变、而新 handoff 没有 comparator 时，Copilot 会清空旧暴露的 comparator，避免把“每 1 mmol/L”之类连续对比污染新的二元 phenotype。
+
+### 真实运行证据
+
+- job `91422ead38c6` 在 nullable Boolean event 汇总处失败，直接导出上述 materializer 修复。
+- job `e8ef4ca668c1` 首次证明 data foundation、cohort/audit、typed endpoint/exposure 和 Planner 动态重试可运行；同时暴露出“无 error finding 时会自动越过 Plan 人工确认”的产品门禁缺口。该次运行已硬停，未当作验收成功。
+- 修复后 job `c8aeb2ea9cd1` / run `run_20260811T091733_4f7d45` 完成数据基础和 Planner。Plan 第 1–3 版被合同拒绝，第 4 版通过，每次状态均进入 Web 事件流。终态为 `human_review_pending`，gate reason 为 `human_plan_review_required`，审核请求类型为 `scientific_stop`。
+- 该运行的事件流没有 `Step ... started`，运行目录也没有 execution step 结果；这是“先 Plan 确认、后分析”的正向证据。
+
+### 当前科学裁决
+
+现有 Plan 保持未批准。其主暴露为二元 `sep3_sofa2_max`，但 StudyContext 仍携带旧乳酸暴露的“每升高 1 mmol/L” comparator，且主模型同时调整与暴露定义高度重叠的 SOFA 总分。这两点需要回到 Copilot 配置/重规划，不应直接批准后执行。
+
+### 聚焦验证
+
+按 E1/Web 开发策略，本轮没有运行全套 CI。
+
+- Plan gate / Web workflow / typed config 邻接组合：`50 passed`。
+- Copilot research workflow（含暴露切换时 comparator 清理）：`25 passed`。
+- 本轮累计的 data catalog/foundation、structured retry、materializer 定点组合均通过；Ruff、Python 语法、Node 语法与 `git diff --check` 通过。
+
+## 下一步
+
+1. 在 Copilot 中对当前 Plan 选择“拒绝/要求重规划”，确认 `sep3_sofa2` 是否真是主暴露，并选择与其类型相符的 comparator。
+2. 预先决定 SOFA 总分是否属于暴露定义/中介组成；若是，从主调整集移除，不在看到结果后临时处理。
+3. 用新的 digest-bound Plan 再跑 Web E1；仅在计划本身科学合理且用户明确批准后，才执行分析、解读与稿件。

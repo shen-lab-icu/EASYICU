@@ -721,6 +721,13 @@ def _build_planner_user_prompt(
         + ". outcome_type 'continuous': "
         + ", ".join(sorted(ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES))
         + ". No other label passes, and neither does one from the other list. "
+        "For the host-owned deterministic binary product "
+        "`table:adjusted_association_estimates`, choose "
+        "`method_family='statsmodels_logit_mle'`. The syntactically valid "
+        "`statsmodels_glm_binomial` token has no sealed deterministic executor; "
+        "a design that specifically requires it must use the separately declared "
+        "agent-coded association capability and a different result product, not "
+        "claim the host-owned table. "
         "Primary and secondary entries must be required for step "
         "success; only a sensitivity entry may be optional. "
         "AN ORDINAL OR CATEGORICAL EXPOSURE is one model with several "
@@ -1524,6 +1531,7 @@ class PlannerAgent:
         enforce_article_contract: bool = False,
         article_contract_context: Optional[ResearchContext] = None,
         planning_contract_context: str = "",
+        progress_callback: Optional[Callable[[Any], None]] = None,
     ) -> AnalysisPlan:
         if bool(allowed_know_how_decisions) != bool(know_how_context):
             raise ValueError(
@@ -1577,6 +1585,7 @@ class PlannerAgent:
             max_tokens=4096,
             temperature=0.2,
             failed_response_transform=_planner_retry_response_projection,
+            progress_callback=progress_callback,
             format_reminder=(
                 "The JSON must be a single object with keys: "
                 "research_question (string), optional analysis_type (string), "

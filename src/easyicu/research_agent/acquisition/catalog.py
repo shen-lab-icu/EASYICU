@@ -144,7 +144,7 @@ def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
     malformed dictionary just yields no enrichment.
     """
     try:
-        from ..concept.loader import _load_concept_dict_cached  # heavy import
+        from easyicu.concept.loader import _load_concept_dict_cached
 
         raw = _load_concept_dict_cached()
     except Exception:
@@ -152,6 +152,9 @@ def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
     meta: Dict[str, Dict[str, str]] = {}
     if not isinstance(raw, Mapping):
         return {}
+    from easyicu.concept.export_metadata import concept_declares_event_status
+    from easyicu.concept.schema import ConceptDefinition
+
     for cid, entry in raw.items():
         if not isinstance(entry, Mapping):
             continue
@@ -165,9 +168,18 @@ def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
             or entry.get("unit")
             or ""
         )
+        try:
+            definition = ConceptDefinition.from_name_and_payload(str(cid), entry)
+        except Exception:
+            definition = None
         meta[str(cid)] = {
             "description": str(description),
             "category": str(category),
+            "column_role": (
+                "event_status"
+                if concept_declares_event_status(str(cid), definition)
+                else ""
+            ),
         }
     return meta
 
@@ -235,7 +247,15 @@ def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
             m = meta.get(cid, {})
             description = m.get("description", "")
             category = m.get("category", "")
-            column_role = ""
+            column_role = m.get("column_role", "")
+            if not column_role:
+                from easyicu.concept.export_metadata import (
+                    concept_declares_event_status,
+                )
+
+                column_role = (
+                    "event_status" if concept_declares_event_status(cid) else ""
+                )
         concepts.append(
             CatalogConcept(
                 concept_id=cid,

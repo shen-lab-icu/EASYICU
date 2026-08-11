@@ -339,6 +339,7 @@ def human_review_requests_for_plan(
     plan: Any = None,
     evidence: Any = None,
     execution_authority: ReviewExecutionAuthority | Mapping[str, Any] | None = None,
+    require_plan_review: bool = False,
 ) -> tuple[HumanReviewRequest, ...]:
     """Derive the review requests a completed plan phase implies.
 
@@ -368,7 +369,7 @@ def human_review_requests_for_plan(
             continue
         reviewable.append((finding, reason, kind, detail))
 
-    if not reviewable:
+    if not reviewable and not require_plan_review:
         return ()
 
     requests: list[HumanReviewRequest] = []
@@ -378,6 +379,26 @@ def human_review_requests_for_plan(
         evidence,
         execution_authority,
     )
+    if require_plan_review:
+        payload = {
+            "validator": "operator_plan_review_policy",
+            "severity": "error",
+            "reason": "operator_plan_approval_required",
+            "evidence_ids": [],
+            "capability_request_sha256": None,
+            **plan_authority,
+        }
+        request = HumanReviewRequest.create(
+            kind="scientific_stop",
+            summary=(
+                "Review and explicitly approve the complete digest-bound "
+                "analysis plan before any analysis step executes."
+            ),
+            authority_sha256=_review_digest(payload),
+            payload=payload,
+        )
+        seen.add(request.review_id)
+        requests.append(request)
     for finding, reason, kind, detail in reviewable:
         payload = {
             "validator": getattr(finding, "validator", None),
