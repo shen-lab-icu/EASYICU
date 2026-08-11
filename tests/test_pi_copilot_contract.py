@@ -150,6 +150,74 @@ def test_service_workspace_seal_survives_tool_context_composition(
     assert not (second / "workspace" / "projects").exists()
 
 
+def test_project_workflow_projects_active_job_for_session_timeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    service.project_store.bind("project-a", "study-a")
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "get_context",
+        lambda study_id: {
+            "id": study_id,
+            "question": "A bounded ICU research question",
+            "active_job_id": "job-demo",
+        },
+    )
+    monkeypatch.setattr(
+        service_module.sources,
+        "load_registry",
+        lambda: {"active_path": None},
+    )
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "list_run_history",
+        lambda **kwargs: {"runs": []},
+    )
+
+    class DemoJob:
+        def snapshot(self) -> dict[str, Any]:
+            return {
+                "id": "job-demo",
+                "kind": "agent-run",
+                "status": "running",
+                "events": [
+                    {
+                        "seq": 1,
+                        "type": "progress",
+                        "step": "materialize",
+                        "current": 1,
+                        "total": 4,
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(
+        service_module.jobs.MANAGER,
+        "get",
+        lambda job_id: DemoJob() if job_id == "job-demo" else None,
+    )
+
+    payload = service.get_project_workflow(project_id="project-a")
+
+    assert payload["active_job"]["job_id"] == "job-demo"
+    assert payload["active_job"]["status"] == "running"
+    assert payload["active_job"]["progress"] == [
+        {
+            "seq": 1,
+            "type": "progress",
+            "current": 1,
+            "total": 4,
+            "step": "materialize",
+            "reason_code": None,
+        }
+    ]
+
+
 @pytest.fixture
 def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     current = {

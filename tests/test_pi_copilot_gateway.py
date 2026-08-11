@@ -649,6 +649,14 @@ def test_research_system_prompt_does_not_guess_literature_grant_state() -> None:
     assert "never infer or claim that it is absent before the tool returns" in entrypoint
 
 
+def test_system_prompt_keeps_copilot_replies_concise_while_preserving_blockers() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+    assert "Match the user's language and brevity" in entrypoint
+    assert "use at most two short sentences around tool calls" in entrypoint
+    assert "ask one direct question and stop" in entrypoint
+    assert "Never hide a blocker or weaken its exact stable code" in entrypoint
+
+
 def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
     dependency = (
         APP_DIR
