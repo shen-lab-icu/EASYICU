@@ -1434,6 +1434,16 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
     readiness = review.get("readiness") or {}
     gate = review.get("gate") or {}
     artifacts = review.get("artifacts") or []
+    artifact_payloads = review.get("artifact_payloads") or {}
+    source_manifest = artifact_payloads.get("source_run_manifest.json") or {}
+    pending_reviews = source_manifest.get("pending_reviews") or []
+    pending_reason_codes = sorted(
+        {
+            str(item.get("reason_code") or "").strip()
+            for item in pending_reviews
+            if isinstance(item, Mapping) and str(item.get("reason_code") or "").strip()
+        }
+    )
     updated = max((run_dir / str(a.get("name"))).stat().st_mtime for a in artifacts)
     return {
         "run_id": review.get("run_id") or run_dir.name,
@@ -1444,6 +1454,8 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         "run_type": review.get("run_type"),
         "project_dir": review.get("project_dir"),
         "gate_status": gate.get("status"),
+        "run_status": source_manifest.get("status"),
+        "pending_review_reason_codes": pending_reason_codes,
         "readiness_status": readiness.get("status"),
         "signed": bool(review.get("signed")),
         "signoff_stale": bool(review.get("signoff_stale")),

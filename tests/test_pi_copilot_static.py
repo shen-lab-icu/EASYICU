@@ -24,7 +24,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi.css?v=20260811-integrated-workflow1" in index
     assert "css/guided-pi-preview.css?v=20260809-scientific-trust1" in index
     assert "js/screens-guided-pi-preview.js?v=20260809-scientific-trust1" in index
-    assert "js/screens-guided-pi.js?v=20260811-integrated-workflow1" in index
+    assert "js/screens-guided-pi.js?v=20260811-plan-review2" in index
     assert "js/api.js?v=20260810-research-workflow1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-preview.js") < index.index(
@@ -48,6 +48,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "new EventSource('/api/jobs/'" in pi_owner
     assert "syncProjectWorkflowAside" in pi_owner
     assert "completed_required_stages" in pi_owner
+    assert "operator_plan_approval_required" in pi_owner
+    assert "stage.status === 'review_required'" in pi_owner
     assert "data-gpi-project-workflow-aside" in pi_owner
     assert "pi_model_provider_unavailable" in pi_owner
     assert "external_llm_opt_in: true" in pi_owner
