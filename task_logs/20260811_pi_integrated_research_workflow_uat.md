@@ -90,3 +90,57 @@ Pi/Copilot 现在是同一研究项目的会话编排与交接层，不是 Idea 
 1. 在 Copilot 中对当前 Plan 选择“拒绝/要求重规划”，确认 `sep3_sofa2` 是否真是主暴露，并选择与其类型相符的 comparator。
 2. 预先决定 SOFA 总分是否属于暴露定义/中介组成；若是，从主调整集移除，不在看到结果后临时处理。
 3. 用新的 digest-bound Plan 再跑 Web E1；仅在计划本身科学合理且用户明确批准后，才执行分析、解读与稿件。
+
+## 第三阶段：修正研究口径后的 Plan 审阅入口
+
+产品状态修复提交：`f4b5e81`（`fix(web): project pending plan reviews`）
+
+计划预览修复提交：`703bbc8`（`fix(web): show typed plan steps in preview`）
+
+### 项目配置收口
+
+Copilot 通过 `easyicu_update_study_context` 把 StudyContext revision 20 收口为：
+
+- 主暴露：`sep3_sofa2`，二元比较 `1` 存在 vs `0` 不存在；
+- 结局：`death`，院内死亡；
+- 调整协变量：`lact`、`age`、`sex`；
+- 移除与 SOFA-2 based 暴露定义重叠的 `sofa` 调整项；
+- accepted canonical Idea handoff 及其 digest 未改动。
+
+### exact-checkpoint 工程跑
+
+- `f4b5e81` 上第一次 job `72ebf5a836ab` 的 5 版 structured Planner 草案均因 schema/contract 错误 fail closed，未产生 Plan，也未执行分析。
+- 仅做一次全新重试：job `7bec6bd36fa0` / run `run_20260811T112708_f426bc`，第 1 版草案被拒绝，第 2 版通过。
+- 终态为 `human_review_pending`，pending reason 为 `operator_plan_approval_required`，review id `review-26574bed17344527`，authority digest `0df5b072ddcf7cbe27fbf893ca9ba5375a13847d4af694613fd5b7d758097cf8`。
+- audit log 只有 runtime/context/audit/hypothesis/Planner/review-ready 事件，execution step id 集合为空。
+- Web workflow 投影为当前阶段 `plan`、3/7；Plan 为 `review_required`，Analysis 被同一 reason code 锁定，不再误显示“结果解读 5/7”。
+
+### opaque level 定点裁决
+
+新 Plan 使用 `__easyicu_level_1__/2__`。这些是宿主为不向 Provider 泄露本地分类字面值而发布的占位符，不是执行字面值。以本运行的 `research_context.json` 和 `analysis_plan.json` 实际调用唯一 host binding authority 后：
+
+- 暴露 levels 为 `[0, 1]`；
+- outcome levels 为 `[0, 1]`；
+- death positive value 为 `1`；
+- 主模型 reference 为 `0`，primary contrast 为 `1`。
+
+`test_opaque_level_resolution.py` 与 `test_ordinal_table_one_levels_are_resolved.py` 共 `22 passed`，包含数量不匹配、无法绑定、越界 scalar 和 resume 重绑的 fail-closed 负回归。
+
+### 真实 Web 计划审阅 UAT
+
+Pi 对话中只读调用 `easyicu_inspect_plan`，展示当前运行的暴露、结局、比较、协变量和 12 步计划；没有批准、拒绝、resume 或修改配置。点击对话中的 `agent_plan.json` 资源后，右侧打开受治理预览。
+
+预览首次实测暴露了步骤表的 12 行都显示为泛化 `step`。`703bbc8` 在 artifact renderer owner 中改为显示真实 `step_id`、`intent`、`planned_analysis_role` 和 `expected_outputs`。刷新后浏览器实测已显示：
+
+```text
+06_primary_adjusted_association
+Estimate the primary adjusted association ... using logistic regression ...
+planned · primary
+table:adjusted_association_estimates
+```
+
+直接 Node 渲染合同、XSS 边界和两条静态 owner/cache 门共 `3 passed`；`node --check` 和 `git diff --check` 通过。本阶段按 E1 开发策略未跑全套 CI。
+
+### 当前阻断
+
+计划已可在 Web 对话和右侧预览中审阅，但仍必须由用户明确选择 approved/rejected。未获得该决定前不 resume，不执行分析，不启动 Canonical9 正式 batch。
