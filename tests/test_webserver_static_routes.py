@@ -692,6 +692,9 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     assert "function artifactStructuredView(name, payload)" in render_js
     assert "Readable artifact summary" in render_js
     assert "可读产物摘要" in render_js
+    assert "row.step_id || row.id || row.step" in render_js
+    assert "row.intent || row.title || row.name" in render_js
+    assert "Array.isArray(row.expected_outputs)" in render_js
     assert (
         "Raw JSON is kept for audit, but the default view is table-based." in render_js
     )
@@ -840,7 +843,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260810-research-workflow2" in index_html
+    assert "js/screens-agent-render.js?v=20260811-plan-review3" in index_html
 
 
 def test_native_agent_overview_renders_object_idea_plan_steps() -> None:

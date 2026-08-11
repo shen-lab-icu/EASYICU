@@ -53,4 +53,23 @@ assert.ok(hostileTableChrome.includes('&lt;svg'), 'table title must be rendered 
 assert.ok(hostileTableChrome.includes('&lt;img'), 'empty-state text must be rendered as text');
 assert.ok(!hostileTableChrome.includes('<svg onload='), 'table title must not create markup');
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 5 }));
+const planRows = renderer.stepRowsFrom({
+  steps: [{
+    step_id: '06_primary_adjusted_association',
+    intent: 'Estimate the adjusted binary association.',
+    planned_analysis_role: 'primary',
+    expected_outputs: ['table:adjusted_association_estimates'],
+  }],
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(planRows)),
+  [[
+    '06_primary_adjusted_association',
+    'Estimate the adjusted binary association.',
+    'planned · primary',
+    'table:adjusted_association_estimates',
+  ]],
+  'plan previews must expose the typed step identity, intent, role, and outputs',
+);
+
+process.stdout.write(JSON.stringify({ ok: true, cases: 6 }));
