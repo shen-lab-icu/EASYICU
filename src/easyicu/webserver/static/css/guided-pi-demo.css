@@ -1,0 +1,32 @@
+/* Owner: read-only complete research-demo entry, banner, footer, and artifact view. */
+.gpi-demo-launch{display:inline-flex;align-items:center;gap:6px}
+.gpi-activate>.gpi-demo-launch{width:100%;justify-content:center;margin:0 0 10px}
+.gpi-demo-note{
+  flex:0 0 auto;display:flex;align-items:center;gap:9px;padding:8px 20px;
+  border-bottom:1px solid color-mix(in srgb,#b68538 28%,var(--line));
+  background:color-mix(in srgb,#b68538 7%,var(--paper));color:var(--ink-3);font-size:11px;line-height:1.45
+}
+.gpi-demo-note svg{flex:0 0 auto;color:#8a642a}
+.gpi-demo-note strong{color:var(--ink-2)}
+.gpi-demo-footer{
+  flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:11px clamp(20px,4vw,46px);border-top:1px solid var(--line);background:var(--paper)
+}
+.gpi-demo-footer span{color:var(--ink-4);font-size:11px;line-height:1.45}
+.gpi-demo-footer .btn{flex:0 0 auto}
+.gpi-demo-artifact{display:grid;gap:14px;padding:2px 0 24px}
+.gpi-demo-artifact-intro{padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--wash)}
+.gpi-demo-artifact-intro strong{display:block;color:var(--ink-1);font-size:15px}
+.gpi-demo-artifact-intro p{margin:5px 0 0;color:var(--ink-3);font-size:11.5px;line-height:1.55}
+.gpi-demo-artifact dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0}
+.gpi-demo-artifact dl>div{padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--paper)}
+.gpi-demo-artifact dt{color:var(--ink-4);font-size:9.5px;line-height:1.35}
+.gpi-demo-artifact dd{margin:4px 0 0;color:var(--ink-1);font:650 12px/1.4 var(--font);overflow-wrap:anywhere}
+.gpi-demo-artifact section{padding:0 2px}
+.gpi-demo-artifact h4{margin:0 0 6px;color:var(--ink-2);font-size:11.5px}
+.gpi-demo-artifact ul{display:grid;gap:4px;margin:0;padding-left:17px;color:var(--ink-3);font-size:11.5px;line-height:1.5}
+@media (max-width:720px){
+  .gpi-demo-footer{align-items:stretch;flex-direction:column}
+  .gpi-demo-footer .btn{justify-content:center}
+  .gpi-demo-artifact dl{grid-template-columns:1fr}
+}

@@ -11,6 +11,7 @@
     showSetup: false, availableModels: [], project: null,
     projectInitialization: null, workflow: null,
     agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
+    demoMode: false, demoScrollTopPending: false,
   };
 
   const ACCESS_MODE_GRANTS = Object.freeze({
@@ -170,12 +171,16 @@
   function resourceKey(resource) {
     if (!resource) return '';
     if (resource.kind === 'literature_source') return `literature:${resource.pmid || resource.doi || resource.url || ''}`;
+    if (resource.kind === 'demo_artifact') return `demo:${resource.artifact || ''}`;
     return resource.kind === 'research_artifact'
       ? `research:${resource.run_id || ''}:${resource.artifact || ''}`
       : `${resource.kind || 'file'}:${resource.file || ''}`;
   }
   function resourceLabel(resource) {
     if (!resource) return '';
+    if (resource.kind === 'demo_artifact' && window.EU_GUIDED_PI_DEMO && typeof window.EU_GUIDED_PI_DEMO.artifactLabel === 'function') {
+      return window.EU_GUIDED_PI_DEMO.artifactLabel(resource.artifact || resource.label || '');
+    }
     if (resource.kind === 'research_artifact' && window.AGENT_RENDER && typeof window.AGENT_RENDER.artifactTitle === 'function') {
       return window.AGENT_RENDER.artifactTitle(resource.artifact || resource.label || '');
     }
@@ -183,13 +188,13 @@
   }
   function resourceButton(resource, label) {
     if (!resource) return '';
-    const kind = resource.kind === 'research_artifact' ? 'research_artifact' : (resource.kind === 'literature_source' ? 'literature_source' : (resource.kind === 'webpage' ? 'webpage' : 'file'));
+    const kind = resource.kind === 'demo_artifact' ? 'demo_artifact' : (resource.kind === 'research_artifact' ? 'research_artifact' : (resource.kind === 'literature_source' ? 'literature_source' : (resource.kind === 'webpage' ? 'webpage' : 'file')));
     return `<button class="gpi-resource-link" type="button"
       data-gpi-resource-kind="${esc(kind)}"
       data-gpi-resource-file="${esc(resource.file || '')}"
       data-gpi-resource-run="${esc(resource.run_id || '')}"
       data-gpi-resource-artifact="${esc(resource.artifact || '')}"
-      data-gpi-resource-label="${esc(resource.label || resource.artifact || resource.file || '')}"
+      data-gpi-resource-label="${esc(resource.kind === 'demo_artifact' ? (resource.title || resourceLabel(resource)) : (resource.label || resource.artifact || resource.file || ''))}"
       data-gpi-resource-media="${esc(resource.media_type || 'text/plain')}"
       data-gpi-resource-url="${esc(resource.url || '')}"
       data-gpi-resource-title="${esc(resource.title || resource.label || '')}"
@@ -484,6 +489,7 @@
         <div class="gpi-kicker">PI AGENTSESSION · EASYICU GATEWAY</div>
         <h2>${tr('Start a conversation in this project', '在当前项目中开始对话')}</h2>
         <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc((state.project && state.project.title) || projectId())}</strong></div>
+        <button class="btn gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 16)} ${tr('View the complete research workflow demo', '查看完整科研流程演示')}</button>
         ${state.projectInitialization && state.projectInitialization.required ? `<div class="gpi-config-note warn"><strong>${tr('Study setup confirmation required.', '需要确认研究配置初始化。')}</strong> ${tr('No complete saved setup was found. Activating Pi will create an explicitly acknowledged empty StudyContext and collect the missing fields here in conversation.', '未找到完整的已保存配置。启用 Pi 后会在你明确确认下创建空的 StudyContext，并在当前对话中继续收集缺失字段。')}</div>` : ''}
         <p>${tr('Choose the tool boundary for this conversation. Research mode works with study configuration and evidence; Workspace mode also creates, edits, checks, and previews artifacts inside this project’s isolated folder.', '请选择这段对话的工具边界。研究模式处理研究配置与证据；项目工作区模式还可以在当前项目的隔离目录中创建、编辑、检查并预览产物。')}</p>
         <div class="gpi-mode-picker" role="radiogroup" aria-label="${tr('Agent mode', 'Agent 模式')}">
@@ -509,6 +515,7 @@
         <div class="gpi-kicker">EASYICU PROJECT · PI CONVERSATIONS</div>
         <h2>${tr('Select a research project first', '请先选择研究项目')}</h2>
         <p>${tr('Use the Research projects list on the left, or create a new project. EasyICU keeps study setup, runs, and evidence in that project; Pi keeps its conversation history.', '请从左侧“研究项目”中选择一个项目，或新建项目。EasyICU 在项目中保存研究配置、运行和证据；Pi 保存自己的对话历史。')}</p>
+        <button class="btn primary gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 16)} ${tr('View the complete research workflow demo', '查看完整科研流程演示')}</button>
         <button class="gpi-link" type="button" data-gpi-legacy>${tr('Use the local Guided workflow', '使用本地研究引导流程')}</button>
       </div>`;
   }
@@ -587,8 +594,8 @@
     </article>`;
   }
 
-  function workflowHtml() {
-    const workflow = state.workflow || {};
+  function workflowHtml(workflowOverride) {
+    const workflow = workflowOverride || state.workflow || {};
     const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
     if (!stages.length) return '';
     const names = {
@@ -674,6 +681,7 @@
               <button type="button" data-gpi-mode-switch="workspace" aria-pressed="${workspace}">${tr('Workspace', '工作区')}</button>
             </div>
             <span>${esc(model.id || (state.runtime && state.runtime.model) || 'model')}</span>
+            <button class="btn sm gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 14)} ${tr('Full demo', '完整演示')}</button>
             <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
             <button class="gpi-link" type="button" data-gpi-new>${tr('New', '新会话')}</button>
             <button class="gpi-link" type="button" data-gpi-legacy>${tr('Study setup', '研究配置')}</button>
@@ -698,13 +706,49 @@
     </div>`;
   }
 
+  function demoPanel() {
+    const demo = window.EU_GUIDED_PI_DEMO;
+    if (!demo || typeof demo.messages !== 'function') {
+      return `<div class="gpi-activate"><h2>${tr('Demo unavailable', '演示暂不可用')}</h2><button class="btn" type="button" data-gpi-demo-exit>${tr('Back', '返回')}</button></div>`;
+    }
+    const messages = demo.messages().map(messageHtml).join('');
+    const workflow = demo.workflow();
+    return `<div class="gpi-panel gpi-demo-panel">
+      <header class="gpi-head">
+        <div><div class="gpi-kicker">PI COPILOT · COMPLETE RESEARCH WORKFLOW</div><div class="gpi-title">${tr('Complete research workflow demo', '完整科研流程演示')} <span class="gpi-live">${tr('read-only', '只读')}</span></div></div>
+        <div class="gpi-head-meta"><span>Sepsis-3 · MIMIC-IV</span><button class="gpi-link" type="button" data-gpi-demo-exit>${tr('Back to my project', '返回我的项目')}</button></div>
+      </header>
+      ${workflowHtml(workflow)}
+      <div class="gpi-demo-note" role="note">${iconHtml('shield', 16)}<span><strong>${tr('Interactive product demo.', '可交互产品演示。')}</strong> ${tr('The question-and-confirmation transcript is a read-only walkthrough; aggregate data, estimates, gates, and manuscript content come from a real E1 engineering canary. It is not formal paper evidence.', '选题与确认对话为只读流程演示；聚合数据、估计、闸门和稿件内容来自真实 E1 工程试跑，不是正式论文证据。')}</span></div>
+      <div class="gpi-log" data-gpi-log>${messages}</div>
+      <footer class="gpi-demo-footer"><span>${tr('Open any underlined article or artifact in the conversation to inspect it on the right.', '点击对话中带下划线的文章或产物，可在右侧直接审阅。')}</span><button class="btn primary" type="button" data-gpi-demo-exit>${tr('Start my own research', '开始我自己的研究')}</button></footer>
+    </div>`;
+  }
+
+  function openDemo() {
+    const demo = window.EU_GUIDED_PI_DEMO;
+    if (!demo || typeof demo.messages !== 'function') return;
+    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) window.EU_GUIDED_PI_PREVIEW.close();
+    state.demoMode = true;
+    state.demoScrollTopPending = true;
+    state.error = '';
+    setShell('pi');
+  }
+  function closeDemo() {
+    state.demoMode = false;
+    state.demoScrollTopPending = false;
+    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) window.EU_GUIDED_PI_PREVIEW.close();
+    render();
+  }
+
   function syncProjectWorkflowAside() {
-    if (state.shell !== 'pi' || !projectId() || !state.workflow) return;
+    const demo = state.demoMode && window.EU_GUIDED_PI_DEMO;
+    const workflow = demo && typeof demo.workflow === 'function' ? demo.workflow() : state.workflow;
+    if (state.shell !== 'pi' || (!state.demoMode && !projectId()) || !workflow) return;
     const aside = document.getElementById('gdStudyAside');
     const body = document.getElementById('gdAsideBody');
     const head = aside && aside.querySelector('.gd-aside-head');
     if (!aside || !body || !head) return;
-    const workflow = state.workflow;
     const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
     const names = {
       question: tr('Scientific question', '科学问题'), idea: tr('Idea mining', '想法发掘'),
@@ -731,7 +775,7 @@
     const pct = Math.max(0, Math.min(100, Math.round(done / total * 100)));
     const current = stages.find(stage => stage.id === workflow.current_stage)
       || stages.find(stage => stage.status !== 'complete') || stages[stages.length - 1];
-    head.innerHTML = `<div class="eyebrow">${tr('One EasyICU workflow', '统一 EasyICU 科研流程')}</div><div class="at">${tr('Project authority', '项目权威状态')}</div><div class="asub">${tr('Conversation, extraction, analysis, and evidence share this projection.', '对话、提取、分析与证据共用这一份状态。')}</div>`;
+    head.innerHTML = `<div class="eyebrow">${tr('One EasyICU workflow', '统一 EasyICU 科研流程')}</div><div class="at">${state.demoMode ? tr('Product demo', '产品演示') : tr('Project authority', '项目权威状态')}</div><div class="asub">${state.demoMode ? tr('Read-only walkthrough backed by aggregate engineering-canary artifacts.', '由工程试跑聚合产物支撑的只读流程演示。') : tr('Conversation, extraction, analysis, and evidence share this projection.', '对话、提取、分析与证据共用这一份状态。')}</div>`;
     body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
       <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Current stage', '当前阶段')}</div><strong>${esc(names[current && current.id] || (current && current.label) || tr('Ready', '就绪'))}</strong><div class="gd-pipeline-value">${esc(reasonText(current))}</div></div></div>
       <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
@@ -749,11 +793,14 @@
     state.host.hidden = false;
     state.host.innerHTML = state.shell === 'legacy'
       ? statusBanner()
-      : ((state.showSetup || !runtimeReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel())));
+      : (state.demoMode ? demoPanel() : ((state.showSetup || !runtimeReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel()))));
     syncProjectWorkflowAside();
     requestAnimationFrame(() => {
       const log = state.host && state.host.querySelector('[data-gpi-log]');
-      if (log) log.scrollTop = log.scrollHeight;
+      if (log) {
+        log.scrollTop = state.demoScrollTopPending ? 0 : log.scrollHeight;
+        state.demoScrollTopPending = false;
+      }
     });
   }
 
@@ -1164,6 +1211,8 @@
     if (projectId() === String((next && next.id) || '')) return;
     closeSource();
     closeChildSource();
+    state.demoMode = false;
+    state.demoScrollTopPending = false;
     state.project = next;
     state.session = null;
     state.sessions = [];
@@ -1278,6 +1327,8 @@
     state.host.addEventListener('click', event => {
       const session = event.target.closest('[data-gpi-session]');
       if (session) { openSession(session.dataset.gpiSession); return; }
+      if (event.target.closest('[data-gpi-demo-exit]')) { closeDemo(); return; }
+      if (event.target.closest('[data-gpi-demo]')) { openDemo(); return; }
       const resource = event.target.closest('[data-gpi-resource-kind]');
       if (resource) {
         if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {

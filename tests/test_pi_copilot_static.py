@@ -22,14 +22,19 @@ def _read(relative: str) -> str:
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260811-demo1" in index
+    assert "css/guided-pi-demo.css?v=20260811-product-demo1" in index
     assert "css/guided-pi-preview.css?v=20260809-scientific-trust1" in index
     assert "css/guided-pi-literature.css?v=20260811-literature1" in index
     assert "js/screens-guided-pi-literature.js?v=20260811-literature1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260811-literature1" in index
-    assert "js/screens-guided-pi.js?v=20260811-demo1" in index
+    assert "js/screens-guided-pi-demo.js?v=20260811-product-demo2" in index
+    assert "js/screens-guided-pi-preview.js?v=20260811-product-demo1" in index
+    assert "js/screens-guided-pi.js?v=20260811-product-demo2" in index
     assert "js/api.js?v=20260810-research-workflow1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
+        "js/screens-guided-pi-demo.js"
+    )
+    assert index.index("js/screens-guided-pi-demo.js") < index.index(
         "js/screens-guided-pi-preview.js"
     )
     assert index.index("js/screens-guided-pi-preview.js") < index.index(
@@ -129,6 +134,10 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "workspace file contents may be sent to this configured service" in pi_owner
     assert "Do not place PHI, patient rows, credentials, or private clinical data" in pi_owner
     assert "data-gpi-confirm-action" in pi_owner
+    assert "data-gpi-demo" in pi_owner
+    assert "data-gpi-demo-exit" in pi_owner
+    assert "查看完整科研流程演示" in pi_owner
+    assert "state.demoMode ? demoPanel()" in pi_owner
     assert "extraction_ready" in pi_owner
     assert "plan_ready" in pi_owner
     assert "operator_plan_approval_required" in pi_owner
@@ -157,6 +166,7 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     owner = _read("css/guided-pi.css")
     preview_owner = _read("css/guided-pi-preview.css")
     literature_owner = _read("css/guided-pi-literature.css")
+    demo_owner = _read("css/guided-pi-demo.css")
     assert ".gpi-panel" in owner
     assert ".gpi-activity" in owner
     assert ".gpi-activity-live" in owner
@@ -175,6 +185,9 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     assert ".gpi-resource-list" in owner
     assert ".gpi-lit-card" in literature_owner
     assert ".gpi-lit-step" in literature_owner
+    assert ".gpi-demo-note" in demo_owner
+    assert ".gpi-demo-footer" in demo_owner
+    assert ".gpi-demo-artifact" in demo_owner
     assert "research-artifact preview" in preview_owner
     assert ".gpi-tool" not in owner
     assert "gpi-avatar" not in owner
@@ -185,6 +198,7 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
         assert foreign not in owner
         assert foreign not in preview_owner
         assert foreign not in literature_owner
+        assert foreign not in demo_owner
     for relative in (
         "css/app.css",
         "css/redesign.css",
@@ -221,6 +235,7 @@ def test_pi_css_has_balanced_comments_and_braces() -> None:
         "css/guided-pi.css",
         "css/guided-pi-preview.css",
         "css/guided-pi-literature.css",
+        "css/guided-pi-demo.css",
     ):
         owner = _read(relative)
         assert owner.count("/*") == owner.count("*/")
@@ -236,6 +251,7 @@ def test_pi_frontend_javascript_parses() -> None:
         "js/screens-guided-pi.js",
         "js/screens-guided-pi-preview.js",
         "js/screens-guided-pi-literature.js",
+        "js/screens-guided-pi-demo.js",
     ):
         subprocess.run(
             [node, "--check", str(STATIC / relative)],
@@ -243,6 +259,65 @@ def test_pi_frontend_javascript_parses() -> None:
             capture_output=True,
             text=True,
         )
+
+
+def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
+    demo = _read("js/screens-guided-pi-demo.js")
+    pi_owner = _read("js/screens-guided-pi.js")
+    preview = _read("js/screens-guided-pi-preview.js")
+    assert "帮我从 MIMIC-IV 里找一个关于早期脓毒症和院内死亡" in demo
+    assert "选择第 2 个，使用 MIMIC-IV。" in demo
+    assert "可以，继续提取数据。" in demo
+    assert "计划可以，继续分析。" in demo
+    assert "帮我解读结果，并整理成论文初稿。" in demo
+    assert "继续 Web E1 工程 UAT" not in demo
+    assert "run_type='full'" not in demo
+    assert "11/11 · 绑定证据并核验数值" in demo
+    assert "53 / 140 (37.9%)" in demo
+    assert "8 / 53 (15.1%)" in demo
+    assert "7 / 87 (8.0%)" in demo
+    assert "1.50 (95% CI 0.49–4.60)" in demo
+    assert "run_20260811T030843_4d45a8" in demo
+    assert "engineering_canary_demo_only" in demo
+    assert "reportable: false" in demo
+    assert "不是正式论文证据" in demo
+    assert "https://pubmed.ncbi.nlm.nih.gov/26903338/" in demo
+    assert "kind: 'demo_artifact'" in demo
+    assert "title: item ? item.title : name" in demo
+    assert "resource.kind === 'demo_artifact'" in pi_owner
+    assert "resource.title || resourceLabel(resource)" in pi_owner
+    assert "value.kind === 'demo_artifact'" in preview
+    assert "Product demo · Real engineering-canary aggregate" in preview
+    assert "safe.kind !== 'demo_artifact'" in preview
+
+
+def test_complete_research_demo_renderer_escapes_untrusted_values() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    source = _read("js/screens-guided-pi-demo.js")
+    script = f"""
+      global.window = {{ EU_LANG: 'en' }};
+      eval({source!r});
+      console.log(window.EU_GUIDED_PI_DEMO.renderArtifact({{
+        title: '<img src=x onerror=alert(1)>',
+        summary: '<script>alert(2)</script>',
+        metrics: [{{ label: '<b>label</b>', value: 'javascript:alert(3)' }}],
+        sections: [{{ heading: '<svg onload=alert(4)>', items: ['<iframe>'] }}],
+      }}));
+    """
+    completed = subprocess.run(
+        [node, "--eval", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "<img" not in completed.stdout
+    assert "<script>" not in completed.stdout
+    assert "<svg" not in completed.stdout
+    assert "<iframe" not in completed.stdout
+    assert "&lt;img" in completed.stdout
+    assert "&lt;script" in completed.stdout
 
 
 def test_research_artifact_renderer_rejects_attribute_xss_and_non_png_data_urls() -> None:
