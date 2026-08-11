@@ -124,7 +124,7 @@
     if (/run$|extraction/.test(tool)) return 'play';
     if (/resume/.test(tool)) return 'refresh';
     if (/cancel/.test(tool)) return 'stop';
-    if (/evidence|validation|blocker|interpretation/.test(tool)) return 'shield';
+    if (/literature|evidence|validation|blocker|interpretation/.test(tool)) return 'shield';
     if (/workflow|manuscript|idea/.test(tool)) return 'list';
     if (/artifact|plan|step/.test(tool)) return 'list';
     if (/workspace|capability/.test(tool)) return 'db';
@@ -154,6 +154,7 @@
   }
   function resourceKey(resource) {
     if (!resource) return '';
+    if (resource.kind === 'literature_source') return `literature:${resource.pmid || resource.doi || resource.url || ''}`;
     return resource.kind === 'research_artifact'
       ? `research:${resource.run_id || ''}:${resource.artifact || ''}`
       : `${resource.kind || 'file'}:${resource.file || ''}`;
@@ -167,14 +168,21 @@
   }
   function resourceButton(resource, label) {
     if (!resource) return '';
-    const kind = resource.kind === 'research_artifact' ? 'research_artifact' : (resource.kind === 'webpage' ? 'webpage' : 'file');
+    const kind = resource.kind === 'research_artifact' ? 'research_artifact' : (resource.kind === 'literature_source' ? 'literature_source' : (resource.kind === 'webpage' ? 'webpage' : 'file'));
     return `<button class="gpi-resource-link" type="button"
       data-gpi-resource-kind="${esc(kind)}"
       data-gpi-resource-file="${esc(resource.file || '')}"
       data-gpi-resource-run="${esc(resource.run_id || '')}"
       data-gpi-resource-artifact="${esc(resource.artifact || '')}"
       data-gpi-resource-label="${esc(resource.label || resource.artifact || resource.file || '')}"
-      data-gpi-resource-media="${esc(resource.media_type || 'text/plain')}">${esc(label || resourceLabel(resource))}</button>`;
+      data-gpi-resource-media="${esc(resource.media_type || 'text/plain')}"
+      data-gpi-resource-url="${esc(resource.url || '')}"
+      data-gpi-resource-title="${esc(resource.title || resource.label || '')}"
+      data-gpi-resource-year="${esc(resource.year || '')}"
+      data-gpi-resource-venue="${esc(resource.venue || '')}"
+      data-gpi-resource-relevance="${esc(resource.relevance || '')}"
+      data-gpi-resource-doi="${esc(resource.doi || '')}"
+      data-gpi-resource-pmid="${esc(resource.pmid || '')}">${esc(label || resourceLabel(resource))}</button>`;
   }
   function toolLabel(name, resource) {
     const labels = {
@@ -182,6 +190,7 @@
       easyicu_inspect_workflow: tr('Inspect research workflow', '检查科研流程'),
       easyicu_inspect_context: tr('Inspect study context', '读取研究配置'),
       easyicu_inspect_plan: tr('Inspect scientific plan', '读取科学计划'),
+      easyicu_inspect_literature: tr('Inspect literature evidence', '读取文献证据'),
       easyicu_inspect_capability: tr('Inspect capabilities', '检查可用能力'),
       easyicu_inspect_run: tr('Inspect run status', '读取运行状态'),
       easyicu_inspect_step: tr('Inspect plan step', '读取计划步骤'),
@@ -193,6 +202,7 @@
       easyicu_inspect_manuscript: tr('Inspect manuscript draft', '读取论文草稿'),
       easyicu_update_study_context: tr('Save study setup', '保存研究配置'),
       easyicu_mine_ideas: tr('Mine research ideas', '发掘研究想法'),
+      easyicu_search_literature: tr('Search PubMed literature', '检索 PubMed 文献'),
       easyicu_prepare_idea_handoff: tr('Prepare idea plan', '准备想法计划'),
       easyicu_accept_idea_handoff: tr('Accept selected idea', '接受所选想法'),
       easyicu_start_extraction: tr('Start feature extraction', '启动特征提取'),
@@ -218,6 +228,7 @@
       easyicu_inspect_workflow: tr('Read research workflow', '已读取科研流程'),
       easyicu_inspect_context: tr('Read study setup', '已读取研究配置'),
       easyicu_inspect_plan: tr('Read scientific plan', '已读取科学计划'),
+      easyicu_inspect_literature: tr('Read literature evidence', '已读取文献证据'),
       easyicu_inspect_capability: tr('Checked capabilities', '已检查可用能力'),
       easyicu_inspect_run: tr('Read run status', '已读取运行状态'),
       easyicu_inspect_step: tr('Read plan step', '已读取计划步骤'),
@@ -229,6 +240,7 @@
       easyicu_inspect_manuscript: tr('Read manuscript draft', '已读取论文草稿'),
       easyicu_update_study_context: tr('Saved study setup', '已保存研究配置'),
       easyicu_mine_ideas: tr('Mined research ideas', '已发掘研究想法'),
+      easyicu_search_literature: tr('Searched PubMed literature', '已检索 PubMed 文献'),
       easyicu_prepare_idea_handoff: tr('Prepared idea plan', '已准备想法计划'),
       easyicu_accept_idea_handoff: tr('Accepted selected idea', '已接受所选想法'),
       easyicu_start_extraction: tr('Started feature extraction', '已启动特征提取'),
@@ -611,6 +623,7 @@
             <div class="gpi-grants" title="${tr('Actions are granted only for this message.', '操作权限仅对本条消息有效。')}">
               ${workspace ? `<label class="workspace"><input type="checkbox" data-gpi-grant="workspace_write" ${state.busy ? 'disabled' : ''}> ${tr('Allow project file changes', '允许修改项目文件')}</label>` : ''}
               <label><input type="checkbox" data-gpi-grant="idea" ${state.busy ? 'disabled' : ''}> ${tr('Allow one idea/plan update', '允许一次想法/计划更新')}</label>
+              <label><input type="checkbox" data-gpi-grant="literature" ${state.busy ? 'disabled' : ''}> ${tr('Allow one PubMed search', '允许一次 PubMed 文献检索')}</label>
               <label><input type="checkbox" data-gpi-grant="configure" ${state.busy ? 'disabled' : ''}> ${tr('Allow one setup update', '允许一次配置更新')}</label>
               <label><input type="checkbox" data-gpi-grant="extract" ${state.busy ? 'disabled' : ''}> ${tr('Allow one extraction', '允许一次数据提取')}</label>
               <label><input type="checkbox" data-gpi-grant="run" ${state.busy ? 'disabled' : ''}> ${tr('Allow one local preflight', '允许一次本地预检')}</label>
@@ -1158,6 +1171,13 @@
             artifact: resource.dataset.gpiResourceArtifact,
             label: resource.dataset.gpiResourceLabel,
             media_type: resource.dataset.gpiResourceMedia,
+            url: resource.dataset.gpiResourceUrl,
+            title: resource.dataset.gpiResourceTitle,
+            year: resource.dataset.gpiResourceYear,
+            venue: resource.dataset.gpiResourceVenue,
+            relevance: resource.dataset.gpiResourceRelevance,
+            doi: resource.dataset.gpiResourceDoi,
+            pmid: resource.dataset.gpiResourcePmid,
           }, projectId());
         }
         return;

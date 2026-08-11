@@ -57,8 +57,33 @@ function safeArtifactName(value) {
   return /^[A-Za-z0-9_.-]+$/.test(name) ? name : "";
 }
 
+function safeLiteratureUrl(value) {
+  const text = boundedText(value, 500).trim();
+  return /^https:\/\/pubmed\.ncbi\.nlm\.nih\.gov\/[0-9]{1,12}\/$/.test(text)
+    || /^https:\/\/doi\.org\/10\.[0-9]{4,9}\/[A-Za-z0-9._;()/:+-]+$/.test(text)
+    ? text : "";
+}
+
 function projectedResource(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  if (value.kind === "literature_source") {
+    const url = safeLiteratureUrl(value.url);
+    const title = boundedText(value.title || value.label, 500).trim();
+    if (!url || !title) return undefined;
+    return {
+      kind: "literature_source",
+      url,
+      label: boundedText(value.label || title, 160),
+      title,
+      year: boundedText(value.year, 16),
+      venue: boundedText(value.venue, 240),
+      relevance: boundedText(value.relevance, 1200),
+      doi: boundedText(value.doi, 240),
+      pmid: boundedText(value.pmid, 32),
+      media_type: "text/html",
+      authority_class: "literature_metadata",
+    };
+  }
   if (value.kind === "research_artifact") {
     const runId = safeStableId(value.run_id);
     const artifact = safeArtifactName(value.artifact);

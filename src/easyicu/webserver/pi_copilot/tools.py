@@ -14,6 +14,7 @@ from easyicu.research_agent.reporting.result_card import (
 )
 from easyicu.webserver import agent_runs, capabilities, jobs, sources, study_contexts
 from easyicu.webserver.ideas import mining as idea_mining
+from easyicu.webserver.literature_projection import literature_source_resource
 
 from .contracts import (
     AuthorityBinding,
@@ -42,6 +43,7 @@ READ_TOOLS = frozenset(
         "easyicu_inspect_workflow",
         "easyicu_inspect_context",
         "easyicu_inspect_plan",
+        "easyicu_inspect_literature",
         "easyicu_inspect_capability",
         "easyicu_inspect_run",
         "easyicu_inspect_step",
@@ -58,6 +60,7 @@ CONTROL_TOOLS = frozenset(
     {
         "easyicu_update_study_context",
         "easyicu_mine_ideas",
+        "easyicu_search_literature",
         "easyicu_prepare_idea_handoff",
         "easyicu_accept_idea_handoff",
         "easyicu_start_extraction",
@@ -284,6 +287,7 @@ def _plan_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
                     "status",
                     "depends_on",
                     "evidence_ids",
+                    "literature_citation_keys",
                     "output_type",
                 )
                 if row.get(key) is not None
@@ -477,6 +481,19 @@ def _inspect_plan(
             owner="easyicu.webserver.agent_runs",
         )
     projected = _plan_projection(plan)
+    payloads = review.get("artifact_payloads") or {}
+    resources = [
+        resource
+        for resource in (
+            _artifact_resource(row.get("run_id"), "agent_plan.json"),
+            (
+                _artifact_resource(row.get("run_id"), "literature_evidence.json")
+                if isinstance(payloads.get("literature_evidence.json"), Mapping)
+                else None
+            ),
+        )
+        if resource is not None
+    ]
     return _result(
         context,
         status="ok",
@@ -486,6 +503,70 @@ def _inspect_plan(
         details={
             "plan": projected,
             "resource": _artifact_resource(row.get("run_id"), "agent_plan.json"),
+            "resources": resources,
+        },
+    )
+
+
+def _inspect_literature(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(params, allowed=("run_id",))
+    row = _select_run(context, params.get("run_id"))
+    if not row:
+        return _result(
+            context,
+            status="not_found",
+            code="easyicu_literature_run_not_found",
+            summary="No matching persisted EasyICU run was found.",
+            owner="easyicu.webserver.agent_runs",
+        )
+    review = _run_review(row)
+    literature = (review.get("artifact_payloads") or {}).get(
+        "literature_evidence.json"
+    )
+    if not isinstance(literature, Mapping):
+        return _result(
+            context,
+            status="not_found",
+            code="easyicu_literature_artifact_missing",
+            summary=(
+                f"Run {row.get('run_id')} has no projected literature evidence "
+                "artifact. Do not infer citations from the plan text."
+            ),
+            owner="easyicu.webserver.agent_runs",
+        )
+    search = literature.get("search")
+    search = search if isinstance(search, Mapping) else {}
+    searched = bool(search.get("search_conducted"))
+    count = int(literature.get("citation_count") or 0)
+    mapping = str(literature.get("mapping_status") or "not_bound")
+    source_kind = "retrieved search results" if searched else "curated references"
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_literature_evidence_projected",
+        summary=(
+            f"Loaded {count} {source_kind} for run {row.get('run_id')}; "
+            f"plan-step citation mapping is {mapping}."
+        ),
+        owner="easyicu.webserver.agent_runs",
+        details={
+            "literature": {
+                key: literature.get(key)
+                for key in (
+                    "scope",
+                    "status",
+                    "citation_count",
+                    "plan_step_count",
+                    "mapped_step_count",
+                    "mapping_status",
+                    "search",
+                )
+            },
+            "resource": _artifact_resource(
+                row.get("run_id"), "literature_evidence.json"
+            ),
         },
     )
 
@@ -1155,6 +1236,94 @@ def _mine_ideas(
         ),
         owner="easyicu.webserver.ideas.mining",
         details={"idea_mining": projected},
+    )
+
+
+def _search_literature(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Run the existing PubMed Idea Mining owner after one-turn opt-in."""
+
+    _require_args(params, allowed=("topic", "journal", "limit"))
+    grant_block = _consume_action(context, "literature")
+    if grant_block is not None:
+        return grant_block
+    study = _bound_context(context.session.binding) or {}
+    topic = str(params.get("topic") or study.get("question") or "").strip()
+    if not topic:
+        return _result(
+            context,
+            status="blocked",
+            code="literature_topic_required",
+            summary="Save a scientific question or provide a literature topic first.",
+            owner="easyicu.webserver.ideas.mining",
+        )
+    try:
+        discovered = idea_mining.discover_literature(
+            {
+                "topic": topic,
+                "journal": str(params.get("journal") or "").strip(),
+                "limit": int(params.get("limit") or 8),
+                "allow_network": True,
+            }
+        )
+    except idea_mining.IdeaMiningWebError as exc:
+        detail = exc.detail
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "literature_search_blocked"),
+            summary=str(
+                detail.get("reason") or "Idea Mining rejected the literature search."
+            ),
+            owner="easyicu.webserver.ideas.mining",
+        )
+    candidates = [
+        row
+        for row in list(discovered.get("source_candidates") or [])[:12]
+        if isinstance(row, Mapping)
+    ]
+    resources = [
+        resource
+        for resource in (literature_source_resource(row) for row in candidates)
+        if resource is not None
+    ]
+    status = str(discovered.get("status") or "search_failed")
+    performed = bool(discovered.get("search_performed"))
+    query_count = len(list(discovered.get("queries_to_run") or []))
+    return _result(
+        context,
+        status="ok" if performed else "blocked",
+        code=(
+            "easyicu_literature_search_completed"
+            if performed
+            else "easyicu_literature_search_not_performed"
+        ),
+        summary=(
+            f"PubMed metadata search {status}: {len(candidates)} article(s) "
+            f"from {query_count} prespecified query string(s). No full text, "
+            "patient rows, or external LLM was used."
+        ),
+        owner="easyicu.webserver.ideas.mining",
+        details={
+            "literature_search": {
+                "status": status,
+                "search_performed": performed,
+                "queries": list(discovered.get("queries_to_run") or [])[:6],
+                "result_count": len(candidates),
+                "network_calls": int(discovered.get("network_calls") or 0),
+                "article_keys": [
+                    str(row.get("citation_key") or row.get("pmid") or "")[:120]
+                    for row in candidates
+                ],
+                "evidence_boundary": (
+                    "Metadata/abstract discovery supports Idea Mining and plan "
+                    "rationale; it is not patient/result evidence."
+                ),
+            },
+            "resource": resources[0] if resources else None,
+            "resources": resources,
+        },
     )
 
 
@@ -2129,6 +2298,7 @@ _DISPATCH = {
     "easyicu_inspect_workflow": _inspect_workflow,
     "easyicu_inspect_context": _inspect_context,
     "easyicu_inspect_plan": _inspect_plan,
+    "easyicu_inspect_literature": _inspect_literature,
     "easyicu_inspect_capability": _inspect_capability,
     "easyicu_inspect_run": _inspect_run,
     "easyicu_inspect_step": _inspect_step,
@@ -2140,6 +2310,7 @@ _DISPATCH = {
     "easyicu_inspect_manuscript": _inspect_manuscript,
     "easyicu_update_study_context": _update_study_context,
     "easyicu_mine_ideas": _mine_ideas,
+    "easyicu_search_literature": _search_literature,
     "easyicu_prepare_idea_handoff": _prepare_idea_handoff,
     "easyicu_accept_idea_handoff": _accept_idea_handoff,
     "easyicu_start_extraction": _start_extraction,

@@ -2412,6 +2412,7 @@ class ResearchAgentPipeline:
                     generation_mode="system",
                 )
 
+        allowed_literature_citation_keys: list[str] = []
         if self._enable_literature and skill_obj is None:
             try:
                 emit_progress(
@@ -2431,6 +2432,9 @@ class ResearchAgentPipeline:
                     tavily_retmax=self._tavily_retmax,
                     tavily_include_domains=self._tavily_include_domains,
                 )
+                allowed_literature_citation_keys = [
+                    citation.key for citation in preplan_literature.citations
+                ]
                 # O17 — Front-door hypothesis generation. Opt-in; writes
                 # ``hypothesis_candidates.json`` + ``.md`` so the paper
                 # Methods section can quote "Out of N candidates we
@@ -3086,6 +3090,7 @@ class ResearchAgentPipeline:
                 plan = planner.run(
                     agent_context,
                     **know_how_binding.planner_kwargs,
+                    allowed_literature_citation_keys=allowed_literature_citation_keys,
                     enforce_article_contract=True,
                     article_contract_context=context,
                     planning_contract_context=planning_contract_context,
@@ -3145,6 +3150,7 @@ class ResearchAgentPipeline:
                     retry_plan = planner.run(
                         agent_context,
                         **know_how_binding.planner_kwargs,
+                        allowed_literature_citation_keys=allowed_literature_citation_keys,
                         enforce_article_contract=True,
                         article_contract_context=context,
                         planning_contract_context=planning_contract_context,
@@ -3194,6 +3200,7 @@ class ResearchAgentPipeline:
                     cohort_retry = planner.run(
                         agent_context,
                         **know_how_binding.planner_kwargs,
+                        allowed_literature_citation_keys=allowed_literature_citation_keys,
                         enforce_article_contract=True,
                         article_contract_context=context,
                         planning_contract_context=planning_contract_context,

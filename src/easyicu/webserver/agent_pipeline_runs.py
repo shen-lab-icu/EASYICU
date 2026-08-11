@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 from easyicu.webserver import provider_adapter
+from easyicu.webserver.literature_projection import load_run_literature_projection
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_MANUSCRIPT_PREVIEW = 24_000
@@ -792,6 +793,27 @@ def _write_projection(
         },
     }
     plan = _read_json(run_dir / "analysis_plan.json", {}) if run_dir else {}
+    literature_evidence = (
+        load_run_literature_projection(
+            run_dir=run_dir,
+            run_id=run_id,
+            plan=plan if isinstance(plan, Mapping) else {},
+        )
+        if run_dir
+        else {
+            "schema_version": "easyicu.web-literature-evidence/1",
+            "scope": "research_plan",
+            "run_id": run_id,
+            "status": "unavailable",
+            "citations": [],
+            "step_citation_map": [],
+            "mapping_status": "not_applicable",
+            "integrity": {
+                "path_values_returned": False,
+                "patient_rows_returned": False,
+            },
+        }
+    )
     manuscript_path = run_dir / "manuscript_scaffold_bound.md" if run_dir else None
     manuscript_text = ""
     if manuscript_path is not None:
@@ -876,6 +898,7 @@ def _write_projection(
         "cohort_summary.json": cohort_summary,
         "quality_gate.json": {"gate": gate, "quality": []},
         "agent_plan.json": plan if isinstance(plan, dict) else {},
+        "literature_evidence.json": literature_evidence,
         "manuscript_draft.json": {
             "run_id": run_id,
             "status": "locked_pending_human_review",
@@ -1252,9 +1275,62 @@ def resume_research_pipeline(
     )
 
 
+def refresh_literature_evidence_projection(wrapper_dir: Path) -> Dict[str, Any]:
+    """Backfill the path-free literature projection for one existing Web run.
+
+    This is a development migration for runs produced before the projection was
+    added.  The pipeline's fixed run id selects the only source directory; no
+    model- or browser-supplied path participates.
+    """
+
+    root = Path(wrapper_dir).expanduser().resolve()
+    context = _read_json(root / "run_context.json", {})
+    run_id = _clean_text(context.get("run_id"), 160)
+    plan = _read_json(root / "agent_plan.json", {})
+    if not run_id:
+        raise ResearchPipelineRunError(
+            "research_pipeline_literature_run_id_missing",
+            "The Web projection has no pipeline run id.",
+        )
+    pipeline_run = (root / "pipeline" / run_id).resolve()
+    try:
+        pipeline_run.relative_to((root / "pipeline").resolve())
+    except ValueError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_literature_path_invalid",
+            "The pipeline literature source is outside the bound run.",
+        ) from exc
+    payload = load_run_literature_projection(
+        run_dir=pipeline_run,
+        run_id=run_id,
+        plan=plan if isinstance(plan, Mapping) else {},
+    )
+    if not _projection_privacy_scan({"literature_evidence.json": payload})["passed"]:
+        raise ResearchPipelineRunError(
+            "research_pipeline_literature_projection_privacy_failed",
+            "The literature projection failed the Web privacy boundary.",
+        )
+    target = root / "literature_evidence.json"
+    _write_json(target, payload)
+    ledger_path = root / "evidence_ledger.json"
+    ledger = _read_json(ledger_path, {})
+    if isinstance(ledger, dict):
+        artifacts = [
+            row
+            for row in list(ledger.get("artifacts") or [])
+            if isinstance(row, Mapping)
+            and row.get("name") != "literature_evidence.json"
+        ]
+        artifacts.append(_artifact_record(target))
+        ledger["artifacts"] = artifacts
+        _write_json(ledger_path, ledger)
+    return payload
+
+
 __all__ = [
     "ResearchPipelineRunError",
     "make_research_pipeline_run_runner",
     "pending_review",
+    "refresh_literature_evidence_projection",
     "resume_research_pipeline",
 ]

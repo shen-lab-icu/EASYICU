@@ -21,12 +21,17 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260811-integrated-workflow1" in index
+    assert "css/guided-pi.css?v=20260811-literature2" in index
     assert "css/guided-pi-preview.css?v=20260809-scientific-trust1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260809-scientific-trust1" in index
+    assert "css/guided-pi-literature.css?v=20260811-literature1" in index
+    assert "js/screens-guided-pi-literature.js?v=20260811-literature1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260811-literature1" in index
     assert "js/screens-guided-pi.js?v=20260811-plan-review2" in index
     assert "js/api.js?v=20260810-research-workflow1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
+    assert index.index("js/screens-guided-pi-literature.js") < index.index(
+        "js/screens-guided-pi-preview.js"
+    )
     assert index.index("js/screens-guided-pi-preview.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -146,10 +151,12 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
 def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     owner = _read("css/guided-pi.css")
     preview_owner = _read("css/guided-pi-preview.css")
+    literature_owner = _read("css/guided-pi-literature.css")
     assert ".gpi-panel" in owner
     assert ".gpi-activity" in owner
     assert ".gpi-activity-live" in owner
     assert ".gpi-activity-step-copy>span" in owner
+    assert "grid-template-columns:repeat(8,minmax(0,1fr))" in owner
     assert "pi-gui's MIT-licensed timeline-item/timeline.css" in owner
     assert ".gpi-message{max-width:768px" in owner
     assert ".gpi-activity,.gpi-activity-live,.gpi-activity-running{max-width:768px" in owner
@@ -158,6 +165,8 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     assert ".gpi-preview-code" in preview_owner
     assert ".gpi-preview-provenance" in preview_owner
     assert ".gpi-resource-list" in owner
+    assert ".gpi-lit-card" in literature_owner
+    assert ".gpi-lit-step" in literature_owner
     assert "research-artifact preview" in preview_owner
     assert ".gpi-tool" not in owner
     assert "gpi-avatar" not in owner
@@ -167,6 +176,7 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     for foreign in (".patient-", ".cohort-", ".crossdb-", ".settings-", ".idea-"):
         assert foreign not in owner
         assert foreign not in preview_owner
+        assert foreign not in literature_owner
     for relative in (
         "css/app.css",
         "css/redesign.css",
@@ -199,7 +209,11 @@ def test_pi_gui_adaptation_is_attributed_and_packaged() -> None:
 
 
 def test_pi_css_has_balanced_comments_and_braces() -> None:
-    for relative in ("css/guided-pi.css", "css/guided-pi-preview.css"):
+    for relative in (
+        "css/guided-pi.css",
+        "css/guided-pi-preview.css",
+        "css/guided-pi-literature.css",
+    ):
         owner = _read(relative)
         assert owner.count("/*") == owner.count("*/")
         without_comments = re.sub(r"/\*.*?\*/", "", owner, flags=re.S)
@@ -210,7 +224,11 @@ def test_pi_frontend_javascript_parses() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
-    for relative in ("js/screens-guided-pi.js", "js/screens-guided-pi-preview.js"):
+    for relative in (
+        "js/screens-guided-pi.js",
+        "js/screens-guided-pi-preview.js",
+        "js/screens-guided-pi-literature.js",
+    ):
         subprocess.run(
             [node, "--check", str(STATIC / relative)],
             check=True,
@@ -233,6 +251,41 @@ def test_research_artifact_renderer_rejects_attribute_xss_and_non_png_data_urls(
         capture_output=True,
         text=True,
     )
+
+
+def test_literature_renderer_escapes_metadata_and_rejects_unsafe_links() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    source = _read("js/screens-guided-pi-literature.js")
+    script = f"""
+      global.window = {{ EU_LANG: 'en' }};
+      eval({source!r});
+      const html = window.EU_GUIDED_PI_LITERATURE.renderArtifact({{
+        search: {{ search_conducted: true }},
+        citations: [{{ key: 'safe_key', title: '<img src=x onerror=alert(1)>',
+          source_url: 'javascript:alert(1)', relevance: '<script>alert(2)</script>' }},
+          {{ key: 'linked_key', title: 'Linked design paper',
+             source_url: 'https://pubmed.ncbi.nlm.nih.gov/12345/' }}],
+        plan_step_count: 1,
+        mapped_step_count: 1,
+        step_citation_map: [{{ step_id: 'primary', intent: 'Primary analysis',
+          citation_keys: ['linked_key'] }}],
+      }});
+      console.log(html);
+    """
+    completed = subprocess.run(
+        [node, "--eval", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "<img" not in completed.stdout
+    assert "<script>" not in completed.stdout
+    assert "javascript:" not in completed.stdout
+    assert "&lt;img" in completed.stdout
+    assert 'href="https://pubmed.ncbi.nlm.nih.gov/12345/"' in completed.stdout
+    assert 'rel="noopener noreferrer"' in completed.stdout
 
 
 def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox() -> None:

@@ -49,6 +49,7 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     for name in (
         "easyicu_update_study_context",
         "easyicu_mine_ideas",
+        "easyicu_search_literature",
         "easyicu_prepare_idea_handoff",
         "easyicu_accept_idea_handoff",
         "easyicu_start_extraction",
@@ -580,6 +581,52 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
     assert "203.0.113.1" not in completed.stdout
 
 
+def test_sidecar_projects_only_verified_literature_click_targets() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    projection = (APP_DIR / "src" / "event-projection.mjs").as_uri()
+    script = f"""
+      import {{ normalizePiEvent }} from {json.dumps(projection)};
+      const result = normalizePiEvent({{
+        type: 'tool_execution_end', toolCallId: 'lit-1',
+        toolName: 'easyicu_search_literature', result: {{ details: {{
+          status: 'ok', code: 'easyicu_literature_search_completed',
+          summary: 'Search complete', owner: 'easyicu.ideas', details: {{ resources: [
+            {{ kind: 'literature_source', title: 'Source-backed article',
+               url: 'https://pubmed.ncbi.nlm.nih.gov/12345/', pmid: '12345',
+               venue: 'Critical Care', year: '2025' }},
+            {{ kind: 'literature_source', title: '<img src=x onerror=alert(1)>',
+               url: 'javascript:alert(1)', pmid: '999' }}
+          ] }}
+        }} }} }});
+      console.log(JSON.stringify(result));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert payload["resources"] == [
+        {
+            "kind": "literature_source",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/12345/",
+            "label": "Source-backed article",
+            "title": "Source-backed article",
+            "year": "2025",
+            "venue": "Critical Care",
+            "relevance": "",
+            "doi": "",
+            "pmid": "12345",
+            "media_type": "text/html",
+            "authority_class": "literature_metadata",
+        }
+    ]
+
+
 def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> None:
     entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
     assert "treat that as execution intent rather than a request to inspect an older run" in entrypoint
@@ -593,6 +640,13 @@ def test_research_system_prompt_requires_tool_first_idea_mining() -> None:
     assert "do not author a candidate from general model knowledge" in entrypoint
     assert "call easyicu_mine_ideas before writing the answer" in entrypoint
     assert "use easyicu_accept_idea_handoff with its exact run_id and idea_id" in entrypoint
+
+
+def test_research_system_prompt_does_not_guess_literature_grant_state() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+    assert "call easyicu_search_literature" in entrypoint
+    assert "let the host-held one-turn gate authoritatively allow or block it" in entrypoint
+    assert "never infer or claim that it is absent before the tool returns" in entrypoint
 
 
 def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
@@ -642,11 +696,11 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
     assert runtime["model"] == "gpt5.6 luna"
     assert runtime["built_in_tools_enabled"] == []
     assert state["enabled_tools"] == runtime["custom_tools"]
-    assert len(state["enabled_tools"]) == 22
+    assert len(state["enabled_tools"]) == 24
     assert {"read", "write", "edit", "bash"}.isdisjoint(state["enabled_tools"])
     assert workspace_state["agent_mode"] == "workspace"
     assert workspace_state["enabled_tools"] == runtime["custom_tools_by_mode"]["workspace"]
-    assert len(workspace_state["enabled_tools"]) == 29
+    assert len(workspace_state["enabled_tools"]) == 31
     assert {"read", "write", "edit", "bash"}.isdisjoint(
         workspace_state["enabled_tools"]
     )
