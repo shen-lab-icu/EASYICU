@@ -863,10 +863,10 @@ def test_web_data_foundation_materializes_typed_exposure_and_covariates(
                     column_role="event_status",
                 ),
                 CatalogConcept(
-                    concept_id="sep3_sofa2_max",
-                    file_name="sep3_sofa2_max.parquet",
+                    concept_id="sep3_sofa2",
+                    file_name="sepsis3_sofa2.parquet",
                     typed_metadata=True,
-                    column_role="value",
+                    column_role="event_status",
                 ),
             ],
         ),
@@ -875,7 +875,7 @@ def test_web_data_foundation_materializes_typed_exposure_and_covariates(
     profile = agent_pipeline_runs._data_foundation_profile(
         export_path="/typed/demo",
         study={
-            "modules": ["demographics", "outcome", "sep3_sofa2_max"],
+            "modules": ["demographics", "outcome", "sepsis3_sofa2"],
         },
         target="death",
         primary_exposure="sep3_sofa2_max",
@@ -883,10 +883,10 @@ def test_web_data_foundation_materializes_typed_exposure_and_covariates(
     )
 
     assert profile == {
-        "allowed_modules": ("demographics", "outcome", "sep3_sofa2_max"),
+        "allowed_modules": ("demographics", "outcome", "sepsis3_sofa2"),
         "static_concepts": ("age", "sex"),
         "outcome_concepts": ("death",),
-        "required_feature_concepts": ("sep3_sofa2_max",),
+        "required_feature_concepts": ("sep3_sofa2",),
         "require_outcome": True,
     }
 
