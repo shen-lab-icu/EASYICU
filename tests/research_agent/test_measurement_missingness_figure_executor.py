@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import pandas as pd
+
+from easyicu.research_agent.execution.runners.missingness_measurement_figure_executor import (
+    MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
+    measurement_missingness_figure_executor_owns_step,
+    run_measurement_missingness_figure,
+)
+from easyicu.research_agent.execution.runners.selection import (
+    select_standard_executor,
+)
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    ArtifactConsumptionContract,
+)
+
+
+def _step() -> AnalysisStep:
+    return AnalysisStep(
+        step_id="09_figure_data_quality",
+        planned_analysis_role="auxiliary",
+        intent="Render every row of the typed measurement-missingness audit.",
+        inputs=[MEASUREMENT_MISSINGNESS_FIGURE_INPUT],
+        expected_outputs=["figure:data_quality"],
+        method="visualization",
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(
+                input_key=MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
+                mode="all_rows",
+            )
+        ],
+    )
+
+
+def _binding(run_dir: Path) -> tuple[dict, pd.DataFrame]:
+    frame = pd.DataFrame(
+        {
+            "concept": ["exposure", "outcome", "age"],
+            "variable": ["exposure", "outcome", "age"],
+            "label": ["Exposure", "Outcome", "Age"],
+            "value_column": ["exposure_max", "outcome", "age"],
+            "n_total": [140, 140, 140],
+            "measured_one_n": [112, 140, 133],
+            "measured_one_pct": [80.0, 100.0, 95.0],
+            "value_missing_n": [28, 0, 7],
+            "value_missing_pct": [20.0, 0.0, 5.0],
+            "eligible_n": [140, 140, 140],
+            "not_applicable_n": [0, 0, 0],
+        }
+    )
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    path = evidence_dir / "table_owner__missingness_measurement_audit.csv"
+    frame.to_csv(path, index=False)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    identity = {
+        "declared_kind": "table",
+        "evidence_id": "table_owner",
+        "input_key": MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
+        "produced_by_step": "03_measurement_missingness_audit",
+        "product": "measurement_missingness",
+        "sha256": digest,
+    }
+    binding = {
+        "relative_path": str(path.relative_to(run_dir)),
+        "sha256": digest,
+        "declared_kind": "table",
+        "evidence_kind": "table",
+        "evidence_id": "table_owner",
+        "produced_by_step": "03_measurement_missingness_audit",
+        "product": "measurement_missingness",
+        "identity_row": identity,
+        "product_contract": {
+            "schema_version": "easyicu.host_typed_product.v4",
+            "columns": list(frame.columns),
+            "row_count": len(frame),
+        },
+        "consumption_contract": {
+            "schema_version": "easyicu.verified_artifact_consumption/1",
+            "input_key": MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
+            "mode": "all_rows",
+            "artifact_sha256": digest,
+            "verified_row_count": len(frame),
+        },
+    }
+    return binding, frame
+
+
+def test_single_typed_measurement_audit_selects_deterministic_renderer(tmp_path: Path):
+    step = _step()
+    binding, _frame = _binding(tmp_path)
+    bindings = {MEASUREMENT_MISSINGNESS_FIGURE_INPUT: binding}
+
+    assert measurement_missingness_figure_executor_owns_step(
+        step,
+        resolved_bindings=bindings,
+    )
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Audit data quality.", steps=[step]),
+        resolved_bindings=bindings,
+    )
+
+    assert selection is not None
+    assert selection.analysis_kind == "measurement_missingness_figure"
+    assert selection.consumed_input_keys == (MEASUREMENT_MISSINGNESS_FIGURE_INPUT,)
+
+
+def test_single_typed_measurement_audit_preserves_physical_parent_lineage(
+    tmp_path: Path,
+):
+    step = _step()
+    binding, frame = _binding(tmp_path)
+    resolved = {
+        "step_id": step.step_id,
+        "inputs": {MEASUREMENT_MISSINGNESS_FIGURE_INPUT: binding},
+    }
+    resolved_path = tmp_path / "resolved.json"
+    resolved_path.write_text(json.dumps(resolved), encoding="utf-8")
+    out_dir = tmp_path / "outputs"
+
+    summary = run_measurement_missingness_figure(
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        resolved_inputs=resolved_path,
+        step_id=step.step_id,
+        figure_product="data_quality",
+    )
+
+    source = pd.read_csv(out_dir / "data_quality_source_data.csv")
+    assert source["source_row_index"].tolist() == list(range(len(frame)))
+    assert source["source_table"].unique().tolist() == [
+        "missingness_measurement_audit.csv"
+    ]
+    assert source.drop(columns=["source_row_index", "source_table"]).equals(frame)
+    assert summary["source_rows_consumed"] == {
+        MEASUREMENT_MISSINGNESS_FIGURE_INPUT: len(frame)
+    }
+    assert (out_dir / "data_quality.figure_contract.json").is_file()
+    assert (out_dir / "data_quality.png").is_file()
+
+
+def test_single_renderer_declines_unreadable_or_widened_binding(tmp_path: Path):
+    step = _step()
+    binding, _frame = _binding(tmp_path)
+    binding["product_contract"]["columns"].remove("value_missing_pct")
+    assert not measurement_missingness_figure_executor_owns_step(
+        step,
+        resolved_bindings={MEASUREMENT_MISSINGNESS_FIGURE_INPUT: binding},
+    )
+    widened = step.model_copy(update={"inputs": [MEASUREMENT_MISSINGNESS_FIGURE_INPUT, "age"]})
+    assert not measurement_missingness_figure_executor_owns_step(
+        widened,
+        resolved_bindings={MEASUREMENT_MISSINGNESS_FIGURE_INPUT: binding},
+    )
