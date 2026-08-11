@@ -152,6 +152,7 @@ _IDEA_HANDOFF_SCHEMA = {
     "prior_art_sha256": "text",
     "prior_art_status": "text",
     "prior_art_result_count": "number",
+    "prior_art_searched_at": "text",
 }
 
 

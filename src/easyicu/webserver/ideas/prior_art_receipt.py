@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -39,7 +40,8 @@ def build_prior_art_binding(path: Path) -> Optional[dict[str, Any]]:
     prior = prior if isinstance(prior, Mapping) else {}
     searched = bool(prior.get("search_performed"))
     status = _text(prior.get("status"), 80)
-    if not searched or status in {"", "search_failed"}:
+    searched_at = _aware_iso_timestamp(prior.get("searched_at"))
+    if not searched or status in {"", "search_failed"} or not searched_at:
         return None
     results = _results(prior)
     return {
@@ -47,6 +49,7 @@ def build_prior_art_binding(path: Path) -> Optional[dict[str, Any]]:
         "prior_art_sha256": hashlib.sha256(raw).hexdigest(),
         "prior_art_status": status,
         "prior_art_result_count": len(results),
+        "prior_art_searched_at": searched_at,
     }
 
 
@@ -92,6 +95,18 @@ def load_bound_prior_art_literature(
             "prior_art_binding_status_mismatch",
             "The prior-art search status no longer matches the accepted handoff.",
         )
+    searched_at = _aware_iso_timestamp(prior.get("searched_at"))
+    expected_searched_at = _aware_iso_timestamp(binding.get("prior_art_searched_at"))
+    if not searched_at or not expected_searched_at:
+        raise PriorArtReceiptError(
+            "prior_art_binding_search_timestamp_invalid",
+            "The prior-art binding has no valid timezone-aware search timestamp.",
+        )
+    if searched_at != expected_searched_at:
+        raise PriorArtReceiptError(
+            "prior_art_binding_search_timestamp_mismatch",
+            "The prior-art search timestamp no longer matches the accepted handoff.",
+        )
     results = _results(prior)
     expected_count = binding.get("prior_art_result_count")
     if isinstance(expected_count, bool) or not isinstance(expected_count, int):
@@ -124,12 +139,26 @@ def load_bound_prior_art_literature(
             "sources_enabled": ["idea_mining_pubmed"],
             "sources_returning": ["idea_mining_pubmed"] if citations else [],
             "search_conducted": True,
+            "searched_at": searched_at,
             "note": (
                 "PubMed metadata was searched by Web Idea Mining and the exact "
                 "receipt was digest-bound when the Idea handoff was accepted."
             ),
         },
     }
+
+
+def _aware_iso_timestamp(value: Any) -> str:
+    text = _text(value, 80)
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return ""
+    return text
 
 
 def _read_receipt(

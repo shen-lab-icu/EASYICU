@@ -3697,6 +3697,7 @@ def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
     return {
         "status": status,
         "search_performed": True,
+        "searched_at": _now(),
         "network_calls": calls,
         "queries_to_run": queries,
         "result_count": len(deduped),
