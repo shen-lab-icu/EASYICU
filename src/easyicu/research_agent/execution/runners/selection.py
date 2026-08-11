@@ -46,8 +46,11 @@ from .deterministic_missingness import (
     source_availability_audit_executor_owns_step,
 )
 from .missingness_measurement_figure_executor import (
+    MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
     missingness_measurement_figure_declaration_verdict,
     MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
+    measurement_missingness_figure_executor_code,
+    measurement_missingness_figure_executor_owns_step,
     missingness_measurement_figure_executor_code,
     missingness_measurement_figure_executor_owns_step,
 )
@@ -514,6 +517,24 @@ def select_standard_executor(
             )
         )
     _missed("prevalence_mortality_figure")
+    if measurement_missingness_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined("measurement_missingness_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="measurement_missingness_figure",
+                selection_reason="measurement_missingness_figure_contract_preflight",
+                progress_message=(
+                    "Using digest-bound measurement-missingness figure renderer"
+                ),
+                code=measurement_missingness_figure_executor_code(step),
+                consumed_input_keys=(MEASUREMENT_MISSINGNESS_FIGURE_INPUT,),
+            )
+        )
+    _missed("measurement_missingness_figure")
     if missingness_measurement_figure_executor_owns_step(
         step, resolved_bindings=resolved_bindings
     ):

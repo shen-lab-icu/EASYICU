@@ -63,6 +63,7 @@ __all__ = [
     "missingness_audit_input_scope_supported",
     "is_measurement_bias_audit_contract",
     "missingness_measurement_audit_code",
+    "measurement_audit_product_filename",
     "source_availability_audit_executor_owns_step",
 ]
 
@@ -212,6 +213,21 @@ MISSINGNESS_AUDIT_PRODUCT_FILES: Mapping[str, str] = MappingProxyType(
         for product, audit in _LEGACY_PRODUCT_AUDITS.items()
     }
 )
+
+
+def measurement_audit_product_filename(product: str) -> str | None:
+    """Return the deterministic producer filename for one typed audit product.
+
+    ``measurement_audit_spec`` products use audit-kind names, while older
+    plans use the compatibility product ids above.  Figure renderers need the
+    physical producer filename in their ``source_table`` lineage column; the
+    typed product label alone is not necessarily that filename.
+    """
+
+    normalized = str(product or "").strip()
+    if normalized in MEASUREMENT_AUDIT_KIND_FILES:
+        return MEASUREMENT_AUDIT_KIND_FILES[normalized]
+    return MISSINGNESS_AUDIT_PRODUCT_FILES.get(normalized)
 
 # Every method token that can appear in a declared count-only audit label.  The
 # product side is the load-bearing guard -- a model or test step cannot declare

@@ -36,22 +36,28 @@ from ...figures.publication import (
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep
+from .deterministic_missingness import measurement_audit_product_filename
 from .figure_input_capability import TypedInputCapability
 
 __all__ = [
     "MEASUREMENT_PROCESS_AUDIT_INPUT",
+    "MEASUREMENT_MISSINGNESS_FIGURE_INPUT",
     "MISSINGNESS_MEASUREMENT_AUDIT_INPUT",
     "MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND",
     "MISSINGNESS_MEASUREMENT_FIGURE_INPUTS",
     "missingness_measurement_figure_declaration_verdict",
     "missingness_measurement_figure_executor_code",
     "missingness_measurement_figure_executor_owns_step",
+    "measurement_missingness_figure_executor_code",
+    "measurement_missingness_figure_executor_owns_step",
+    "run_measurement_missingness_figure",
     "run_missingness_measurement_figure",
 ]
 
 
 MISSINGNESS_MEASUREMENT_AUDIT_INPUT = "table:missingness_measurement_audit"
 MEASUREMENT_PROCESS_AUDIT_INPUT = "table:measurement_process_audit"
+MEASUREMENT_MISSINGNESS_FIGURE_INPUT = "table:measurement_missingness"
 MISSINGNESS_MEASUREMENT_FIGURE_INPUTS = (
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     MEASUREMENT_PROCESS_AUDIT_INPUT,
@@ -128,10 +134,12 @@ _PROCESS_MEASURES = (
 _PRODUCT_BY_INPUT = {
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT: "missingness_measurement_audit",
     MEASUREMENT_PROCESS_AUDIT_INPUT: "measurement_process_audit",
+    MEASUREMENT_MISSINGNESS_FIGURE_INPUT: "measurement_missingness",
 }
 _COLUMNS_BY_INPUT = {
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT: _AUDIT_COLUMNS,
     MEASUREMENT_PROCESS_AUDIT_INPUT: _PROCESS_COLUMNS,
+    MEASUREMENT_MISSINGNESS_FIGURE_INPUT: _AUDIT_COLUMNS,
 }
 
 
@@ -213,6 +221,31 @@ def missingness_measurement_figure_executor_owns_step(
     return all(
         _binding_carries_the_columns_read(resolved_bindings.get(key), key)
         for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
+    )
+
+
+def measurement_missingness_figure_executor_owns_step(
+    step: AnalysisStep,
+    *,
+    resolved_bindings: Mapping[str, Any] | None = None,
+) -> bool:
+    """Own a one-panel figure whose only authority is one full audit table."""
+
+    products = [_figure_product(value) for value in step.expected_outputs]
+    if not (
+        step.planned_analysis_role == "auxiliary"
+        and _method_head(step.method) == "visualization"
+        and tuple(step.inputs) == (MEASUREMENT_MISSINGNESS_FIGURE_INPUT,)
+        and len(products) == 1
+        and products[0] is not None
+        and step.trajectory_stability_spec is None
+    ):
+        return False
+    if not isinstance(resolved_bindings, Mapping):
+        return False
+    return _binding_carries_the_columns_read(
+        resolved_bindings.get(MEASUREMENT_MISSINGNESS_FIGURE_INPUT),
+        MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
     )
 
 
@@ -361,6 +394,34 @@ def missingness_measurement_figure_executor_code(step: AnalysisStep) -> str:
     ).strip()
 
 
+def measurement_missingness_figure_executor_code(step: AnalysisStep) -> str:
+    """Return the sandbox entrypoint for one digest-bound audit figure."""
+
+    product = (
+        _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    )
+    if product is None:
+        raise ValueError("The step is not owned by the measurement-missingness renderer")
+    return textwrap.dedent(
+        f"""
+        import os
+        from pathlib import Path
+
+        from easyicu.research_agent.execution.runners.missingness_measurement_figure_executor import (
+            run_measurement_missingness_figure,
+        )
+
+        run_measurement_missingness_figure(
+            out_dir=Path(os.environ["STEP_OUT_DIR"]),
+            run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
+            resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
+            step_id={step.step_id!r},
+            figure_product={product!r},
+        )
+        """
+    ).strip()
+
+
 def _canonical_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -435,7 +496,10 @@ def _load_one_binding(
         raise ValueError(f"{input_key} bytes disagree with its product contract")
     if _canonical_sha256(path) != expected_sha256:
         raise ValueError(f"{input_key} changed while it was being read")
-    return frame, binding, f"{product}.csv"
+    source_filename = measurement_audit_product_filename(product)
+    if not source_filename:
+        raise ValueError(f"{input_key} has no deterministic producer filename")
+    return frame, binding, source_filename
 
 
 def _load_bindings(
@@ -463,6 +527,30 @@ def _load_bindings(
         )
         for input_key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
     }
+
+
+def _load_single_measurement_binding(
+    *,
+    run_dir: Path,
+    resolved_inputs: Path | Mapping[str, Any],
+    step_id: str,
+) -> tuple[pd.DataFrame, Mapping[str, Any], str]:
+    if isinstance(resolved_inputs, Mapping):
+        payload = dict(resolved_inputs)
+    else:
+        payload = json.loads(Path(resolved_inputs).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("step_id") != step_id:
+        raise ValueError("resolved-input manifest does not belong to this step")
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, dict) or set(inputs) != {
+        MEASUREMENT_MISSINGNESS_FIGURE_INPUT
+    }:
+        raise ValueError("exact measurement-missingness binding is absent or widened")
+    return _load_one_binding(
+        run_dir=run_dir,
+        inputs=inputs,
+        input_key=MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
+    )
 
 
 def _finite(value: Any) -> float | None:
@@ -654,6 +742,181 @@ def _write_source_projection(
     export.insert(0, "source_row_index", export.index.astype(int))
     export.insert(1, "source_table", source_table)
     export.to_csv(path, index=False)
+
+
+def run_measurement_missingness_figure(
+    *,
+    out_dir: Path,
+    run_dir: Path,
+    resolved_inputs: Path | Mapping[str, Any],
+    step_id: str,
+    figure_product: str,
+) -> Mapping[str, Any]:
+    """Render one complete typed missingness audit without model-authored lineage."""
+
+    if not _is_safe_figure_product_id(figure_product):
+        raise ValueError("unsafe or malformed figure product id")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    audit_frame, audit_binding, audit_table = _load_single_measurement_binding(
+        run_dir=Path(run_dir),
+        resolved_inputs=resolved_inputs,
+        step_id=step_id,
+    )
+    per_variable = _validate_audit_rows(audit_frame)
+
+    source_path = out_dir / f"{figure_product}_source_data.csv"
+    _write_source_projection(
+        audit_frame,
+        path=source_path,
+        source_table=audit_table,
+    )
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    palette = apply_publication_style(font_size=7.0)
+    display = audit_frame.copy()
+    display["_missing_pct"] = [
+        per_variable[_text(value)]["missing_pct"] for value in display["variable"]
+    ]
+    display = display.sort_values("_missing_pct", ascending=True)
+    variables = [_text(value) for value in display["variable"]]
+    labels = [
+        _reader_label(_text(label) or variable)
+        + (" †" if per_variable[variable]["conditional"] else "")
+        for variable, label in zip(variables, display["label"])
+    ]
+    missing_pct = [per_variable[name]["missing_pct"] for name in variables]
+    available_pct = [per_variable[name]["available_pct"] for name in variables]
+    height_mm = max(82.0, 31.0 + 7.0 * len(variables))
+    fig, ax = plt.subplots(figsize=(183 / 25.4, height_mm / 25.4))
+    positions = list(range(len(variables)))
+    ax.barh(
+        positions,
+        available_pct,
+        color=palette["blue_soft"],
+        label="Source value available",
+        height=0.62,
+    )
+    ax.barh(
+        positions,
+        missing_pct,
+        left=available_pct,
+        color=palette["neutral_light"],
+        label="No source value",
+        height=0.62,
+    )
+    ax.set_yticks(positions)
+    ax.set_yticklabels(labels)
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Share of the declared cohort (%)")
+    ax.set_title("Measurement availability", loc="left", pad=4)
+    ax.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
+    ax.legend(frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2)
+    for y, available, missing in zip(positions, available_pct, missing_pct):
+        ax.text(
+            min(max(float(available), 2.0), 98.0),
+            y,
+            f"{float(missing):.1f}% missing",
+            va="center",
+            ha="right" if available > 12 else "left",
+            fontsize=6.1,
+            color=palette["blue"],
+        )
+    if any(entry["conditional"] for entry in per_variable.values()):
+        ax.set_xlabel(
+            "Share of the declared cohort (%)\n"
+            "† applies to only part of the cohort"
+        )
+    add_panel_label(ax, "A", x=-0.20, y=1.02)
+    fig.subplots_adjust(left=0.24, right=0.96, bottom=0.20, top=0.82)
+
+    contract = make_figure_contract(
+        figure_id=f"figure:{figure_product}",
+        core_claim=(
+            "Measurement availability and missingness are rendered from every "
+            "row of one digest-verified parent audit table."
+        ),
+        archetype="quantitative_grid",
+        width_mm=183.0,
+        height_mm=height_mm,
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Measurement availability",
+                "role": "data_quality",
+                "claim": (
+                    "For every audited variable, available and missing stays are "
+                    "reconciled against the parent table's declared denominator."
+                ),
+                "evidence_ids": [source_path.name],
+                "metadata": {
+                    "chart_type": "availability_panel",
+                    "source_data": [source_path.name],
+                },
+            }
+        ],
+        source_data=[source_path.name],
+        statistics_note=(
+            "The executor consumes every row under the all_rows contract and "
+            "re-derives both cohort and eligible-stay count partitions. It "
+            "introduces no variable selection, imputation, denominator, or "
+            "modeling decision."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig,
+        out_dir / figure_product,
+        contract=contract,
+        formats=("png", "svg", "pdf", "tiff"),
+        dpi=300,
+    )
+    plt.close(fig)
+    figure_files = [path.name for key, path in outputs.items() if key != "contract"]
+    summary = {
+        "step_id": step_id,
+        "status": "ok",
+        "analysis_status": "ok",
+        "method": "deterministic_measurement_missingness_figure",
+        "analysis_family": "data_quality",
+        "deterministic_standard_analysis": "measurement_missingness_figure",
+        "rendering_only": True,
+        "source_inputs": [MEASUREMENT_MISSINGNESS_FIGURE_INPUT],
+        "source_evidence_ids": {
+            MEASUREMENT_MISSINGNESS_FIGURE_INPUT: audit_binding.get("evidence_id")
+        },
+        "source_sha256": {
+            MEASUREMENT_MISSINGNESS_FIGURE_INPUT: audit_binding.get("sha256")
+        },
+        "source_rows_consumed": {
+            MEASUREMENT_MISSINGNESS_FIGURE_INPUT: int(len(audit_frame))
+        },
+        "audited_variable_count": int(len(per_variable)),
+        "source_data_files": [source_path.name],
+        "figure_files": figure_files,
+        "figure_path": f"{figure_product}.png",
+        "figure_contract": f"{figure_product}.figure_contract.json",
+        "contract_files": [f"{figure_product}.figure_contract.json"],
+        "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
+        "input_bindings": [
+            {
+                "input_key": MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
+                "evidence_id": audit_binding.get("evidence_id"),
+                "sha256": audit_binding.get("sha256"),
+                "loaded": True,
+                "row_count": int(len(audit_frame)),
+            }
+        ],
+        "export_qa": [],
+    }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return summary
 
 
 def run_missingness_measurement_figure(
