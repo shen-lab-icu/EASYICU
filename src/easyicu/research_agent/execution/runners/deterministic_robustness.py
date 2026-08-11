@@ -107,7 +107,7 @@ ROBUSTNESS_REPLAY_OUTPUT_FILES: Mapping[str, str] = MappingProxyType(
         "membership_change": "membership_change_summary.csv",
         "outcome_label_executability": "outcome_label_executability.csv",
         "missingness_strategy_notes": "missingness_strategy_notes.txt",
-        "primary_effect": "primary_or.json",
+        "primary_effect": "primary_effect.json",
         "complete_case_n": "complete_case_n.json",
     }
 )
@@ -149,6 +149,7 @@ _ROBUSTNESS_PRODUCT_KINDS: Dict[str, str] = {
     "model_replay_index": "log",
     "model_summaries": "table",
     "outcome_label_executability": "table",
+    "primary_effect": "statistic",
     "primary_or": "statistic",
     "robustness_matrix": "table",
     "robustness_summary": "table",
@@ -232,7 +233,7 @@ def declared_robustness_product_registrations(
     stem is spelled, and **6 do not**.  ``table:robustness_grid`` x4 and
     ``table:specification_grid`` x1 both resolve to
     ``sensitivity_specification_grid.csv``; ``statistic:primary_effect`` x1
-    resolves to ``primary_or.json``.  Each of the 6 raises
+    resolves to ``primary_effect.json``.  Each of the 6 raises
     ``declared_product_missing`` on a file sitting in its own output directory,
     which costs two LLM contract repairs and then kills the step -- canary32's
     E1 lost the replay, its figure, the robustness figure and the missingness
@@ -259,10 +260,23 @@ def declared_robustness_product_registrations(
     # No ``step is None`` guard: ``getattr`` already answers ``None`` for it and
     # the spec check below returns.  Mutation 2026-08-01 proved an explicit one
     # protects nothing.
+    return {
+        product_identity: target_filename
+        for product_identity, (target_filename, _source_filename) in (
+            _declared_robustness_product_bindings(step).items()
+        )
+    }
+
+
+def _declared_robustness_product_bindings(
+    step: AnalysisStep | None,
+) -> Dict[str, tuple[str, str]]:
+    """Return promised identity -> (identity-safe target, canonical source)."""
+
     spec = getattr(step, "robustness_replay_spec", None)
     if spec is None:
         return {}
-    registrations: Dict[str, str] = {}
+    bindings: Dict[str, tuple[str, str]] = {}
     for declared in step.expected_outputs or []:
         kind, sep, product_id = str(declared or "").strip().partition(":")
         if not sep or kind not in ROBUSTNESS_REPLAY_OUTPUT_KINDS:
@@ -276,8 +290,9 @@ def declared_robustness_product_registrations(
             # step; registering a promise no file backs would be worse than
             # the missing product it replaces.
             continue
-        registrations[f"{kind}:{product_id}"] = filename
-    return registrations
+        target_filename = f"{product_id}.json" if kind == "statistic" else filename
+        bindings[f"{kind}:{product_id}"] = (target_filename, filename)
+    return bindings
 
 
 def robustness_replay_declaration_verdict(step: AnalysisStep) -> OwnershipVerdict:
@@ -549,6 +564,13 @@ def robustness_sensitivity_preflight_scaffold(
         plausibility_scope is not None and plausibility_scope.expected_columns
     )
     declared_registrations = declared_robustness_product_registrations(step)
+    declared_bindings = _declared_robustness_product_bindings(step)
+    declared_sources = {
+        product_identity: source_filename
+        for product_identity, (_target_filename, source_filename) in (
+            declared_bindings.items()
+        )
+    }
     # One read-modify-write, not two.  The plausibility receipt and the
     # promised-product registration both patch ``step_summary.json`` after the
     # body has written it; a second block would be a second canonical write for
@@ -571,6 +593,7 @@ def robustness_sensitivity_preflight_scaffold(
                 + textwrap.dedent(
                     f"""
                     declared_product_files = {declared_registrations!r}
+                    declared_product_sources = {declared_sources!r}
                     registered_products = summary.setdefault("output_files", {{}})
                     for product_identity, product_filename in (
                         declared_product_files.items()
@@ -578,6 +601,34 @@ def robustness_sensitivity_preflight_scaffold(
                         product_path = (
                             Path(os.environ["STEP_OUT_DIR"]) / product_filename
                         )
+                        source_path = (
+                            Path(os.environ["STEP_OUT_DIR"])
+                            / declared_product_sources[product_identity]
+                        )
+                        if (
+                            product_identity.startswith("statistic:")
+                            and not product_path.is_file()
+                            and source_path.is_file()
+                        ):
+                            statistic_payload = json.loads(
+                                source_path.read_text(encoding="utf-8")
+                            )
+                            if isinstance(statistic_payload, dict):
+                                statistic_payload.pop("name", None)
+                                statistic_payload.pop("statistic", None)
+                                statistic_payload = {{
+                                    "statistic": product_identity.split(":", 1)[1],
+                                    **statistic_payload,
+                                }}
+                                product_path.write_text(
+                                    json.dumps(
+                                        statistic_payload,
+                                        ensure_ascii=False,
+                                        sort_keys=True,
+                                        allow_nan=False,
+                                    ),
+                                    encoding="utf-8",
+                                )
                         if not product_path.is_file():
                             continue
                         registered_products.setdefault(
@@ -1056,6 +1107,9 @@ def _run_robustness_preflight(
         None,
     )
     complete_case_n = _complete_case_n(matrix_rows, specs)
+    primary_effect_value = (
+        primary_row.get("point_estimate") if primary_row is not None else None
+    )
     (out_dir / "primary_or.json").write_text(
         json.dumps(
             {
@@ -1065,6 +1119,21 @@ def _run_robustness_preflight(
                     if primary_row is not None and effect_scale == "OR"
                     else None
                 ),
+                "ci_low": primary_row.get("ci_low") if primary_row else None,
+                "ci_high": primary_row.get("ci_high") if primary_row else None,
+                "effect_scale": effect_scale or None,
+            },
+            indent=2,
+            ensure_ascii=False,
+            allow_nan=False,
+        ),
+        encoding="utf-8",
+    )
+    (out_dir / "primary_effect.json").write_text(
+        json.dumps(
+            {
+                "statistic": "primary_effect",
+                "value": primary_effect_value,
                 "ci_low": primary_row.get("ci_low") if primary_row else None,
                 "ci_high": primary_row.get("ci_high") if primary_row else None,
                 "effect_scale": effect_scale or None,
@@ -1134,6 +1203,7 @@ def _run_robustness_preflight(
         "outcome_label_executability": "outcome_label_executability.csv",
         "missingness_strategy_notes": "missingness_strategy_notes.txt",
         "missingness_strategy_notes_json": "missingness_strategy_notes.json",
+        "primary_effect": "primary_effect.json",
         "primary_or": "primary_or.json",
         "complete_case_n": "complete_case_n.json",
     }
