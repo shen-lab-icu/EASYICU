@@ -10,8 +10,14 @@
     source: null, childSource: null, childJobId: '', error: '', shell: 'pi', draft: '', setupSaving: false,
     showSetup: false, availableModels: [], project: null,
     projectInitialization: null, workflow: null,
-    agentMode: 'research', pendingAuthorityRebind: false,
+    agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
   };
+
+  const ACCESS_MODE_GRANTS = Object.freeze({
+    ask: Object.freeze([]),
+    assist: Object.freeze(['idea', 'literature', 'configure', 'run', 'workspace_write']),
+    full: Object.freeze(['idea', 'literature', 'configure', 'extract', 'run', 'provider_run', 'cancel', 'workspace_write']),
+  });
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
   function esc(value) {
@@ -31,6 +37,15 @@
   function projectId() { return String((state.project && state.project.id) || '').trim(); }
   function agentMode() {
     return (state.session && state.session.agent_mode) || state.agentMode || 'research';
+  }
+  function accessModeLabel(mode) {
+    if (mode === 'ask') return tr('Ask first', '请求访问');
+    if (mode === 'full') return tr('Full access', '完全访问');
+    return tr('Auto-approve', '自动审批');
+  }
+  function turnGrants() {
+    const grants = ACCESS_MODE_GRANTS[state.accessMode] || ACCESS_MODE_GRANTS.assist;
+    return grants.filter(action => action !== 'workspace_write' || agentMode() === 'workspace');
   }
   function setShell(shell) {
     state.shell = shell === 'pi' ? 'pi' : 'legacy';
@@ -520,7 +535,7 @@
 
   function messageHtml(row) {
     if (row.role === 'activity') {
-      const visibleSteps = row.steps.filter(step => ['tool', 'pipeline', 'retry', 'compaction'].includes(step.kind));
+      const visibleSteps = row.steps.filter(step => ['submitted', 'agent', 'turn', 'assistant', 'tool', 'pipeline', 'retry', 'compaction'].includes(step.kind));
       const latest = visibleSteps[visibleSteps.length - 1] || row.steps[row.steps.length - 1];
       const running = row.status === 'running';
       const failed = row.status === 'error' || row.status === 'cancelled';
@@ -528,7 +543,7 @@
         const title = latest && latest.kind !== 'submitted'
           ? activityStepLabel(latest)
           : tr('Pi is preparing the next action', 'Pi 正在准备下一步');
-        const liveSteps = row.childJobId ? visibleSteps : visibleSteps.filter(step => step.kind === 'tool');
+        const liveSteps = visibleSteps.slice(-20);
         return `<div class="gpi-activity-running" role="status">
           <div class="gpi-activity-live">
             <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(activityIcon(latest), 15)}</span>
@@ -551,12 +566,12 @@
             : tr('Answered without using tools', '仅回答，未执行操作');
       const title = failed ? tr('This turn needs attention', '本轮需要处理') : completedTitle;
       const steps = visibleSteps.map(activityStepRow).join('');
-      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}" ${(toolSteps.length || pipelineSteps.length) ? 'open' : ''}>
+      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}" ${failed ? 'open' : ''}>
         <summary>
           <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(failed ? 'alert' : activityIcon(toolSteps[0] || pipelineSteps[0] || latest), 15)}</span>
           <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
           <span class="gpi-activity-title">${esc(title)}</span>
-          <span class="gpi-activity-meta">${esc(durationText(row.startedAt, row.endedAt))}</span>
+          <span class="gpi-activity-meta">${esc(tr(`${visibleSteps.length} steps`, `${visibleSteps.length} 个步骤`))} · ${esc(durationText(row.startedAt, row.endedAt))}</span>
         </summary>
         <div class="gpi-activity-body">
           ${steps ? `<ol>${steps}</ol>` : ''}
@@ -577,15 +592,70 @@
     const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
     if (!stages.length) return '';
     const names = {
-      question: tr('Question', '问题'), idea: tr('Ideas', '想法'),
-      setup: tr('Setup', '配置'), extraction: tr('Extract', '提取'),
-      plan: tr('Plan', '计划'), analysis: tr('Analyze', '分析'),
-      interpretation: tr('Interpret', '解读'), manuscript: tr('Paper', '论文'),
+      question: tr('Question', '问题'), idea: tr('Ideas + literature', '选题与文献'),
+      setup: tr('Study design', '研究设计'), extraction: tr('Extract + review', '提取与审阅'),
+      plan: tr('Plan + evidence', '计划与证据'), analysis: tr('Analyze + figures', '分析与图表'),
+      interpretation: tr('Interpret', '结果解读'), manuscript: tr('Paper', '论文'),
     };
     return `<nav class="gpi-workflow" aria-label="${tr('EasyICU research workflow', 'EasyICU 科研流程')}">
       <div class="gpi-workflow-meta"><strong>${tr('Research workflow', '科研流程')}</strong><span>${esc(workflow.completed_required_stages || 0)}/${esc(workflow.required_stage_count || 7)}</span></div>
       <ol>${stages.map(stage => `<li class="${esc(stage.status || 'blocked')}" title="${esc(stage.reason_code || '')}" aria-current="${stage.id === workflow.current_stage ? 'step' : 'false'}"><i></i><span>${esc(names[stage.id] || stage.label || stage.id)}</span></li>`).join('')}</ol>
     </nav>`;
+  }
+
+  function workflowConfirmation() {
+    const workflow = state.workflow || {};
+    const code = String(workflow.next_action_code || '');
+    if (code === 'extraction_ready') return {
+      code, grants: ['extract'],
+      message: tr('I confirm the current study setup. Start data extraction and quality review.', '我确认当前研究配置，请开始数据提取和质量审阅。'),
+      title: tr('Study setup is complete. Start data extraction and quality review?', '研究配置已完成，开始数据提取和质量审阅吗？'),
+      note: tr('This creates a governed export with denominator, missingness, provenance, and extraction receipts.', '这会生成带分母、缺失率、来源和提取回执的受治理数据包。'),
+      approve: tr('Confirm extraction', '确认提取'),
+    };
+    if (code === 'plan_ready') return {
+      code, grants: ['run', 'provider_run'],
+      message: tr('Use the current data package to prepare an evidence-bound analysis plan.', '请基于当前数据包生成证据绑定的分析计划。'),
+      title: tr('The data package is ready. Prepare the evidence-bound analysis plan?', '数据包已就绪，是否生成证据绑定的分析计划？'),
+      note: tr('The Agent may run a local preflight first and will pause again before executing the approved plan.', 'Agent 可以先运行本地预检，并会在执行计划前再次暂停等待批准。'),
+      approve: tr('Prepare plan', '生成计划'),
+    };
+    if (code === 'operator_plan_approval_required') return {
+      code, grants: ['provider_run'],
+      message: tr('I approve the current evidence-bound plan. Continue the analysis.', '我批准当前证据绑定的计划，请继续分析。'),
+      title: tr('The evidence-bound plan is ready. Continue to analysis?', '证据绑定的计划已准备好，是否继续分析？'),
+      note: tr('Approving resumes this plan only. Scientific and human-review gates remain in force.', '批准只会继续当前计划；科学闸门和人工审阅门禁仍然有效。'),
+      approve: tr('Approve and continue', '批准并继续'),
+    };
+    return null;
+  }
+
+  function workflowConfirmationHtml() {
+    const confirmation = workflowConfirmation();
+    if (state.busy || sessionIsStale() || !confirmation) return '';
+    return `<section class="gpi-confirmation" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
+      <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
+      <div><strong>${esc(confirmation.title)}</strong><small>${esc(confirmation.note)}</small></div>
+      <div class="gpi-confirmation-actions">
+        <button class="btn sm" type="button" data-gpi-confirm-edit>${tr('Request changes', '提出修改')}</button>
+        <button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.approve)}</button>
+      </div>
+    </section>`;
+  }
+
+  function accessModeHtml() {
+    const modes = [
+      ['ask', tr('Ask before every tool action', '每次工具操作前都询问')],
+      ['assist', tr('Auto-approve low-risk setup and inspection; ask before extraction and full analysis', '自动批准低风险配置与检查；提取和完整分析前仍询问')],
+      ['full', tr('Allow all available tools; explicit scientific confirmation gates still apply', '允许所有可用工具；明确的科学确认门禁仍然有效')],
+    ];
+    return `<details class="gpi-access-menu">
+      <summary>${iconHtml(state.accessMode === 'full' ? 'unlock' : 'shield', 15)}<span>${esc(accessModeLabel(state.accessMode))}</span><span class="gpi-access-chevron" aria-hidden="true">${iconHtml('chevron', 13)}</span></summary>
+      <div class="gpi-access-popover" role="group" aria-label="${tr('Agent access level', 'Agent 访问级别')}">
+        ${modes.map(([mode, description]) => `<button type="button" data-gpi-access-mode="${mode}" aria-pressed="${state.accessMode === mode}"><span><strong>${esc(accessModeLabel(mode))}</strong><small>${esc(description)}</small></span>${state.accessMode === mode ? iconHtml('check', 15) : ''}</button>`).join('')}
+        <p>${tr('Access levels never reveal credentials, patient rows, or arbitrary host files.', '任何访问级别都不会开放凭据、患者行级数据或任意本机文件。')}</p>
+      </div>
+    </details>`;
   }
 
   function sessionPanel() {
@@ -615,24 +685,15 @@
           ${messages || (workspace
             ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('Pi can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'Pi 可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
             : `<div class="gpi-empty"><strong>${tr('Ask about the current study', '询问当前研究')}</strong><span>${tr('Pi can inspect context, plans, runs, validation, artefacts, evidence, and blockers through bounded EasyICU tools.', 'Pi 可通过受限的 EasyICU 工具检查上下文、计划、运行、验证、产物、证据和阻断原因。')}</span></div>`)}
+          ${workflowConfirmationHtml()}
         </div>
         ${state.error ? `<div class="gpi-error">${esc(state.error)}</div>` : ''}
         <div class="gpi-compose">
           <textarea data-gpi-input rows="3" maxlength="12000" placeholder="${workspace ? tr('Ask Pi to create or edit a project artifact — do not paste patient rows or identifiers.', '让 Pi 创建或编辑当前项目产物——请勿粘贴患者行级数据或标识符。') : tr('Ask Pi about this EasyICU study — do not paste patient rows or identifiers.', '向 Pi 询问这个 EasyICU 研究——请勿粘贴患者行级数据或标识符。')}" ${state.busy || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
           <div class="gpi-actions">
-            <div class="gpi-grants" title="${tr('Actions are granted only for this message.', '操作权限仅对本条消息有效。')}">
-              ${workspace ? `<label class="workspace"><input type="checkbox" data-gpi-grant="workspace_write" ${state.busy ? 'disabled' : ''}> ${tr('Allow project file changes', '允许修改项目文件')}</label>` : ''}
-              <label><input type="checkbox" data-gpi-grant="idea" ${state.busy ? 'disabled' : ''}> ${tr('Allow one idea/plan update', '允许一次想法/计划更新')}</label>
-              <label><input type="checkbox" data-gpi-grant="literature" ${state.busy ? 'disabled' : ''}> ${tr('Allow one PubMed search', '允许一次 PubMed 文献检索')}</label>
-              <label><input type="checkbox" data-gpi-grant="configure" ${state.busy ? 'disabled' : ''}> ${tr('Allow one setup update', '允许一次配置更新')}</label>
-              <label><input type="checkbox" data-gpi-grant="extract" ${state.busy ? 'disabled' : ''}> ${tr('Allow one extraction', '允许一次数据提取')}</label>
-              <label><input type="checkbox" data-gpi-grant="run" ${state.busy ? 'disabled' : ''}> ${tr('Allow one local preflight', '允许一次本地预检')}</label>
-              <label><input type="checkbox" data-gpi-grant="provider_run" ${state.busy ? 'disabled' : ''}> ${tr('Allow one full analysis', '允许一次完整分析')}</label>
-              <label><input type="checkbox" data-gpi-grant="cancel" ${state.busy ? 'disabled' : ''}> ${tr('Allow job cancel', '允许取消任务')}</label>
-            </div>
+            ${accessModeHtml()}
             ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send ${stale ? 'disabled' : ''}>${tr('Send', '发送')}</button>`}
           </div>
-          <div class="gpi-foot">${workspace ? tr('Workspace file contents may be sent to your configured Pi model service. Do not place PHI, patient rows, credentials, or private clinical data here. Click a file or webpage tool step to preview it.', '工作区文件内容可能发送到你配置的 Pi 模型服务。请勿在此放置 PHI、患者行级数据、凭据或私密临床数据。点击文件或网页工具步骤可预览。') : tr('Pi session = conversation history. EasyICU = scientific authority and evidence.', 'Pi 会话 = 对话历史；EasyICU = 科学权威与证据。')}</div>
         </div>
     </div>`;
   }
@@ -765,6 +826,7 @@
       });
       state.session = payload.session; state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || state.agentMode;
+      hydrateProjectedJob(state.workflow && state.workflow.active_job);
       state.projectInitialization = null;
       rememberSession(state.session.session_id);
       state.sessions = [state.session].concat(state.sessions.filter(row => row.session_id !== state.session.session_id));
@@ -783,6 +845,7 @@
       if (expectedProjectId !== projectId()) return;
       state.session = payload.session; state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || 'research';
+      hydrateProjectedJob(state.workflow && state.workflow.active_job);
       rememberSession(sessionId); setShell('pi');
     } catch (error) { rememberSession(''); state.error = errorText(error); render(); }
   }
@@ -997,6 +1060,40 @@
     };
     render();
   }
+  function hydrateProjectedJob(job) {
+    if (!job || !job.present || !job.job_id || !state.session) return;
+    const jobId = String(job.job_id);
+    const activity = childActivity(jobId, String(job.kind || ''));
+    const progress = Array.isArray(job.progress) ? job.progress : [];
+    progress.forEach((event, index) => {
+      const step = String(event.step || event.type || 'pipeline').slice(0, 80);
+      const count = event.current != null && event.total != null ? `${event.current}/${event.total}` : '';
+      const reason = String(event.reason_code || '');
+      upsertActivityStep(activity, {
+        id: 'projected-' + String(event.seq == null ? index : event.seq),
+        kind: 'pipeline', step,
+        label: String(event.label || step.replace(/[_-]+/g, ' ')),
+        status: ['failed', 'cancelled', 'error'].includes(String(event.status || '')) ? 'error' : 'complete',
+        at: Date.now(), code: [count, reason].filter(Boolean).join(' · '), owner: String(job.kind || 'EasyICU'),
+      });
+    });
+    const settled = ['succeeded', 'failed', 'cancelled'].includes(String(job.status || ''));
+    if (settled) {
+      completeRunningPipelineSteps(activity);
+      upsertActivityStep(activity, {
+        id: 'projected-terminal', kind: 'pipeline', step: 'terminal',
+        label: job.status === 'succeeded'
+          ? tr('EasyICU research task completed', 'EasyICU 科研任务已完成')
+          : job.status === 'cancelled'
+            ? tr('EasyICU research task cancelled', 'EasyICU 科研任务已取消')
+            : tr('EasyICU research task failed', 'EasyICU 科研任务失败'),
+        status: job.status === 'succeeded' ? 'complete' : 'error', at: Date.now(),
+        code: String(job.error_code || job.status || ''), owner: String(job.kind || 'EasyICU'),
+      });
+      activity.status = job.status === 'succeeded' ? 'complete' : (job.status === 'cancelled' ? 'cancelled' : 'error');
+      activity.endedAt = Date.now();
+    }
+  }
   async function refreshSession(preserveTimeline) {
     if (!state.session || !projectId()) return;
     try {
@@ -1025,6 +1122,8 @@
       const payload = await api().loadPiCopilotProjectWorkflow(expectedProjectId);
       if (expectedProjectId !== projectId()) return;
       state.workflow = payload && payload.workflow ? payload.workflow : null;
+      if (state.workflow && payload && payload.active_job) state.workflow.active_job = payload.active_job;
+      hydrateProjectedJob(payload && payload.active_job);
     } catch (error) {
       if (expectedProjectId === projectId()) state.workflow = null;
     }
@@ -1115,12 +1214,11 @@
     };
     state.source.onerror = () => { if (!state.busy) closeSource(); };
   }
-  async function sendMessage() {
+  async function sendText(text, grantsOverride) {
     if (!state.session || state.busy || sessionIsStale()) return;
-    const input = state.host.querySelector('[data-gpi-input]');
-    const text = String((input && input.value) || state.draft || '').trim();
+    text = String(text || '').trim();
     if (!text) return;
-    const grants = Array.from(state.host.querySelectorAll('[data-gpi-grant]:checked')).map(node => node.dataset.gpiGrant);
+    const grants = Array.isArray(grantsOverride) ? grantsOverride : turnGrants();
     const submittedAt = Date.now();
     state.messages.push({ id: 'user-' + submittedAt, role: 'user', text, complete: true });
     const activity = ensureActivity(new Date(submittedAt).toISOString());
@@ -1135,6 +1233,25 @@
       state.busy = false; finishActivity('error', null, 'failed');
       state.error = errorText(error); render();
     }
+  }
+  async function sendMessage() {
+    if (!state.session || state.busy || sessionIsStale()) return;
+    const input = state.host.querySelector('[data-gpi-input]');
+    const text = String((input && input.value) || state.draft || '').trim();
+    await sendText(text);
+  }
+  async function confirmWorkflowAction() {
+    const confirmation = workflowConfirmation();
+    if (!confirmation) return;
+    await sendText(confirmation.message, confirmation.grants);
+  }
+  function editWorkflow() {
+    state.draft = tr('Please change the current workflow before continuing: ', '继续前请修改当前流程：');
+    render();
+    requestAnimationFrame(() => {
+      const input = state.host && state.host.querySelector('[data-gpi-input]');
+      if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+    });
   }
   async function stopMessage() {
     if (!state.session || !state.busy) return;
@@ -1186,11 +1303,15 @@
       if (modeChoice) { state.agentMode = modeChoice.dataset.gpiModeChoice === 'research' ? 'research' : 'workspace'; render(); return; }
       const modeSwitch = event.target.closest('[data-gpi-mode-switch]');
       if (modeSwitch) { switchMode(modeSwitch.dataset.gpiModeSwitch); return; }
+      const accessMode = event.target.closest('[data-gpi-access-mode]');
+      if (accessMode) { state.accessMode = accessMode.dataset.gpiAccessMode || 'assist'; render(); return; }
       if (event.target.closest('[data-gpi-retry]')) { loadStatus(); return; }
       if (event.target.closest('[data-gpi-setup]')) { state.showSetup = true; setShell('pi'); return; }
       if (event.target.closest('[data-gpi-open]')) { setShell('pi'); return; }
       if (event.target.closest('[data-gpi-legacy]')) { setShell('legacy'); return; }
       if (event.target.closest('[data-gpi-create]')) { createSession(); return; }
+      if (event.target.closest('[data-gpi-confirm-action]')) { confirmWorkflowAction(); return; }
+      if (event.target.closest('[data-gpi-confirm-edit]')) { editWorkflow(); return; }
       if (event.target.closest('[data-gpi-send]')) { sendMessage(); return; }
       if (event.target.closest('[data-gpi-stop]')) { stopMessage(); return; }
       if (event.target.closest('[data-gpi-rebind]')) { rebind(); return; }

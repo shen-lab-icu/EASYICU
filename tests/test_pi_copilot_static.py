@@ -21,12 +21,12 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260811-literature2" in index
+    assert "css/guided-pi.css?v=20260811-demo1" in index
     assert "css/guided-pi-preview.css?v=20260809-scientific-trust1" in index
     assert "css/guided-pi-literature.css?v=20260811-literature1" in index
     assert "js/screens-guided-pi-literature.js?v=20260811-literature1" in index
     assert "js/screens-guided-pi-preview.js?v=20260811-literature1" in index
-    assert "js/screens-guided-pi.js?v=20260811-plan-review2" in index
+    assert "js/screens-guided-pi.js?v=20260811-demo1" in index
     assert "js/api.js?v=20260810-research-workflow1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
@@ -86,13 +86,12 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "provider_connection_unverified" in pi_owner
     assert "localStorage.setItem('easyicu_pi_api" not in pi_owner
     assert "keyInput.value = ''" in pi_owner
-    assert 'data-gpi-grant="configure"' in pi_owner
-    assert 'data-gpi-grant="idea"' in pi_owner
-    assert 'data-gpi-grant="extract"' in pi_owner
-    assert 'data-gpi-grant="run"' in pi_owner
-    assert 'data-gpi-grant="provider_run"' in pi_owner
-    assert 'data-gpi-grant="cancel"' in pi_owner
-    assert 'data-gpi-grant="workspace_write"' in pi_owner
+    assert "ACCESS_MODE_GRANTS" in pi_owner
+    assert "data-gpi-access-mode" in pi_owner
+    assert "Ask first" in pi_owner
+    assert "Auto-approve" in pi_owner
+    assert "Full access" in pi_owner
+    assert "data-gpi-grant" not in pi_owner
     assert 'data-gpi-resource-file' in pi_owner
     assert 'data-gpi-resource-run' in pi_owner
     assert 'data-gpi-resource-artifact' in pi_owner
@@ -107,7 +106,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "childSource" in pi_owner
     assert "handleChildJobEvent" in pi_owner
     assert "if (state.session && sessionIsStale()) await rebind();" in pi_owner
-    assert "['tool', 'pipeline', 'retry', 'compaction']" in pi_owner
+    assert "['submitted', 'agent', 'turn', 'assistant', 'tool', 'pipeline', 'retry', 'compaction']" in pi_owner
     assert "Live progress connection stopped" in pi_owner
     assert "private chain-of-thought" in pi_owner
     assert "loadPiCopilotProjectWorkflow" in pi_owner
@@ -127,8 +126,14 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "event.type === 'run_start'" in pi_owner
     assert "event.type === 'tool_progress'" in pi_owner
     assert "event.type === 'run_end'" in pi_owner
-    assert "Workspace file contents may be sent to your configured Pi model service." in pi_owner
+    assert "workspace file contents may be sent to this configured service" in pi_owner
     assert "Do not place PHI, patient rows, credentials, or private clinical data" in pi_owner
+    assert "data-gpi-confirm-action" in pi_owner
+    assert "extraction_ready" in pi_owner
+    assert "plan_ready" in pi_owner
+    assert "operator_plan_approval_required" in pi_owner
+    assert "hydrateProjectedJob" in pi_owner
+    assert "visibleSteps.length} steps" in pi_owner
     for method in (
         "loadPiCopilotStatus",
         "savePiCopilotProviderConfig",
@@ -156,6 +161,9 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     assert ".gpi-activity" in owner
     assert ".gpi-activity-live" in owner
     assert ".gpi-activity-step-copy>span" in owner
+    assert ".gpi-access-menu" in owner
+    assert ".gpi-confirmation" in owner
+    assert ".gpi-grants" not in owner
     assert "grid-template-columns:repeat(8,minmax(0,1fr))" in owner
     assert "pi-gui's MIT-licensed timeline-item/timeline.css" in owner
     assert ".gpi-message{max-width:768px" in owner

@@ -35,7 +35,7 @@ from .project_authority import (
     ProjectStudyContextMigrationReceipt,
 )
 from .provider_config import PiProviderConfigStore
-from .projections import reject_sensitive_message
+from .projections import project_job, reject_sensitive_message
 from .workspace import ProjectWorkspace
 from .workflow import active_export_matches_study, build_research_workflow_snapshot
 
@@ -1167,6 +1167,7 @@ class PiCopilotService:
             "ok": True,
             "project_id": clean,
             "workflow": snapshot.model_dump(mode="json"),
+            "active_job": project_job(active_job),
         }
 
     def get_workspace_preview(
