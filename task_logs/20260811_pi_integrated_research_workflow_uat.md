@@ -53,6 +53,8 @@ Pi/Copilot 现在是同一研究项目的会话编排与交接层，不是 Idea 
 
 ## 第二阶段：真实 full6 数据基础到 Plan 人工门
 
+实现提交：`14c19ac`（`fix(web): enforce reviewed research plans`）
+
 同一 Web 项目后续绑定真实 MIMIC-IV full6 export，并使用已验证的本地 provider 进行了非 Canonical9 工程 UAT。本阶段不作为论文证据。
 
 ### 实现收口
