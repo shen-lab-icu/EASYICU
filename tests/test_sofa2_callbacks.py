@@ -367,6 +367,23 @@ def test_sofa2_component_receipts_do_not_treat_synthetic_zero_as_evidence():
 
 
 @pytest.mark.clinical_conformance
+def test_sofa2_component_receipts_fail_closed_on_nullable_evidence():
+    cns = _callback_sofa_component(standalone_sofa2_cns)(
+        {
+            "gcs": _component_table("gcs", [np.nan, np.nan]),
+            "delirium_tx_evidence": _component_table(
+                "delirium_tx_evidence",
+                pd.Series([pd.NA, "proxy_only"], dtype="string"),
+            ),
+        },
+        _component_context("sofa2_cns"),
+    ).data
+
+    assert cns["sofa2_cns_observed"].tolist() == [0, 0]
+    assert cns["sofa2_cns_available"].tolist() == [0, 0]
+
+
+@pytest.mark.clinical_conformance
 def test_sofa2_aggregate_counts_component_receipts_not_score_non_nullness():
     components = {
         name: _component_table(name, [0.0])
