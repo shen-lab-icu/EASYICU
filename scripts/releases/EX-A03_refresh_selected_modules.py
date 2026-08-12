@@ -11,8 +11,9 @@ be sealed by ``EX-A01_seal_full6_release.py``.
 Only correctness modules and their declared downstream closure are allowlisted.
 ``renal`` has ascertainment-aware KDIGO outputs. ``respiratory`` removes
 implicit room-air FiO2 imputation and therefore expands to ``sofa1_score`` and
-``sofa2_score`` plus the two Sepsis-SOFA labels that consume those scores. This
-is not a generic way to bypass the full extraction controller.
+``sofa2_score``, the shared infection evidence required at execution time, and
+the two Sepsis-SOFA labels that consume those scores. This is not a generic way
+to bypass the full extraction controller.
 """
 
 from __future__ import annotations
@@ -57,6 +58,7 @@ MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
     "renal": ("renal",),
     "respiratory": (
         "respiratory",
+        "sepsis_shared",
         "sofa1_score",
         "sofa2_score",
         "sepsis3_sofa1",
