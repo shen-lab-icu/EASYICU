@@ -27,6 +27,7 @@ assert SPEC is not None and SPEC.loader is not None
 sealer = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = sealer
 SPEC.loader.exec_module(sealer)
+PRODUCTION_FOUNDATION_RESOURCE_PATHS = dict(sealer.FOUNDATION_RESOURCE_PATHS)
 
 
 def _sha256(path: Path) -> str:
@@ -45,7 +46,9 @@ def _finalized_foundation_contract(
     resource_paths = {
         "concept_dictionary_sha256": foundation / "concept-dict.json",
         "sofa2_dictionary_sha256": foundation / "sofa2-dict.json",
-        "clinical_contracts_sha256": foundation / "clinical_contracts.py",
+        "clinical_contracts_sha256": foundation / "clinical-contracts.json",
+        "clinical_contract_validator_sha256": foundation
+        / "clinical_contracts.py",
         "data_sources_sha256": foundation / "data-sources.json",
     }
     for index, path in enumerate(resource_paths.values(), start=1):
@@ -484,6 +487,31 @@ def test_release_gate_rejects_manifest_foundation_digest_drift(
     with pytest.raises(
         sealer.ReleaseValidationError,
         match="aumc: foundation provenance.*concept_dictionary_sha256",
+    ):
+        sealer.validate_release(run_root)
+
+
+def test_clinical_contract_registry_and_validator_have_distinct_provenance() -> None:
+    assert PRODUCTION_FOUNDATION_RESOURCE_PATHS[
+        "clinical_contracts_sha256"
+    ].name == "clinical-contracts.json"
+    assert PRODUCTION_FOUNDATION_RESOURCE_PATHS[
+        "clinical_contract_validator_sha256"
+    ].name == "clinical_contracts.py"
+
+
+def test_release_gate_rejects_clinical_contract_registry_drift(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "clinical_contract_registry_drift"
+    _build_synthetic_release(run_root)
+    sealer.FOUNDATION_RESOURCE_PATHS[
+        "clinical_contracts_sha256"
+    ].write_text("changed semantic registry\n", encoding="utf-8")
+
+    with pytest.raises(
+        sealer.ReleaseValidationError,
+        match="foundation provenance.*clinical_contracts_sha256",
     ):
         sealer.validate_release(run_root)
 
