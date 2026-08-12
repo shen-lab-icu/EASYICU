@@ -8,10 +8,11 @@ EasyICU checkout.  Thus unchanged module bytes remain immutable in the source
 run, while the derived candidate has one consistent runtime provenance and can
 be sealed by ``EX-A01_seal_full6_release.py``.
 
-Only ``renal`` and ``respiratory`` are allowlisted.  Both have explicit
-post-release clinical-correctness changes: ascertainment-aware KDIGO outputs
-and removal of implicit room-air FiO2 imputation.  This is not a generic way
-to bypass the full extraction controller.
+Only correctness modules and their declared downstream closure are allowlisted.
+``renal`` has ascertainment-aware KDIGO outputs. ``respiratory`` removes
+implicit room-air FiO2 imputation and therefore expands to ``sofa1_score`` and
+``sofa2_score`` plus the two Sepsis-SOFA labels that consume those scores. This
+is not a generic way to bypass the full extraction controller.
 """
 
 from __future__ import annotations
@@ -51,7 +52,17 @@ def _load_republisher():
 REPUBLICATION = _load_republisher()
 DATABASES: tuple[str, ...] = tuple(REPUBLICATION.DATABASES)
 MODULES: tuple[str, ...] = tuple(REPUBLICATION.MODULES)
-REFRESHABLE_MODULES = frozenset({"renal", "respiratory"})
+DIRECT_REFRESHABLE_MODULES = frozenset({"renal", "respiratory"})
+MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
+    "renal": ("renal",),
+    "respiratory": (
+        "respiratory",
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    ),
+}
 SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v1"
 
 
@@ -115,7 +126,7 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
     unknown = set(selected) - set(MODULES)
     if unknown:
         raise ModuleRefreshError(f"Unknown extraction modules: {sorted(unknown)}")
-    disallowed = set(selected) - REFRESHABLE_MODULES
+    disallowed = set(selected) - DIRECT_REFRESHABLE_MODULES
     if disallowed:
         raise ModuleRefreshError(
             "This audited refresh entry point currently allows only renal and "
@@ -123,6 +134,18 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
             f"got disallowed modules: {sorted(disallowed)}"
         )
     return selected
+
+
+def _expand_module_dependency_closure(modules: Sequence[str]) -> tuple[str, ...]:
+    """Return requested correctness modules with every derived consumer."""
+
+    requested = _validate_modules(modules)
+    required = {
+        module
+        for requested_module in requested
+        for module in MODULE_DEPENDENCY_CLOSURE[requested_module]
+    }
+    return tuple(module for module in MODULES if module in required)
 
 
 def _require_regular_file(path: Path, *, label: str) -> None:
@@ -331,7 +354,8 @@ def refresh_candidate(
     destination = output_root.expanduser().absolute()
     if source == destination:
         raise ModuleRefreshError("Source and destination run roots must differ")
-    selected_modules = _validate_modules(modules)
+    requested_modules = _validate_modules(modules)
+    selected_modules = _expand_module_dependency_closure(requested_modules)
     publication_commit = REPUBLICATION._require_clean_checkout()
     source_run_manifest = REPUBLICATION._validate_source(source)
     data_paths = _resolve_data_paths(source_run_manifest, data_path_overrides)
@@ -415,6 +439,8 @@ def refresh_candidate(
             "publication_easyicu_git_dirty": False,
             "refresher": str(Path(__file__).relative_to(REPOSITORY_ROOT)),
             "refreshed_modules": list(selected_modules),
+            "requested_modules": list(requested_modules),
+            "dependency_closure_applied": list(selected_modules),
             "raw_database_reread": True,
             "raw_data_paths": data_paths,
             "per_database_runtime": refreshed,
