@@ -192,6 +192,32 @@ def _module_is_canonical_refresh(
     return True
 
 
+def _module_files_are_detached_from_source(
+    source_database_root: Path,
+    candidate_database_root: Path,
+    modules: Sequence[str],
+) -> bool:
+    """Prove atomic replacement, not merely a schema-matching source clone."""
+
+    for module in modules:
+        for suffix in (".parquet", ".manifest.json"):
+            source = source_database_root / f"{module}{suffix}"
+            candidate = candidate_database_root / f"{module}{suffix}"
+            if (
+                source.is_symlink()
+                or candidate.is_symlink()
+                or not source.is_file()
+                or not candidate.is_file()
+            ):
+                return False
+            try:
+                if os.path.samefile(source, candidate):
+                    return False
+            except OSError:
+                return False
+    return True
+
+
 def _metrics_from_module_manifests(
     database_root: Path, modules: Sequence[str]
 ) -> dict[str, dict[str, float]]:
@@ -249,6 +275,7 @@ def _refresh_one_database(
     *,
     database: str,
     data_path: str,
+    source_database_root: Path,
     candidate_root: Path,
     modules: Sequence[str],
     batch_size: int | None,
@@ -257,11 +284,29 @@ def _refresh_one_database(
     staging_root = candidate_root / ".module_refresh_staging" / database
     destination_database_root = candidate_root / "exports" / database
     # A cloned candidate deliberately starts with canonical source files, so
-    # destination schema can never prove that raw data were re-read.  Resume
-    # may promote a complete one-use staging directory below; otherwise the
-    # database is re-extracted.  ``reuse_completed_export`` remains explicit
-    # in the call contract to make this fail-closed resume rule reviewable.
-    del reuse_completed_export
+    # schema alone can never prove that raw data were re-read. Explicit resume
+    # may reuse only a complete package whose selected Parquet and producer
+    # manifests have all been atomically detached from their source hard links.
+    if (
+        reuse_completed_export
+        and _module_is_canonical_refresh(destination_database_root, modules)
+        and _module_files_are_detached_from_source(
+            source_database_root, destination_database_root, modules
+        )
+    ):
+        return {
+            "database": database,
+            "data_path": data_path,
+            "num_patients": None,
+            "batch_size": None,
+            "total_elapsed_seconds": None,
+            "modules": _metrics_from_module_manifests(
+                destination_database_root, modules
+            ),
+            "recovery_mode": (
+                "explicit_resume_of_complete_files_detached_from_source_clone"
+            ),
+        }
     if staging_root.exists() or staging_root.is_symlink():
         if _module_is_canonical_refresh(staging_root, modules):
             _replace_selected_module_files(
@@ -383,6 +428,7 @@ def refresh_candidate(
             refreshed[database] = _refresh_one_database(
                 database=database,
                 data_path=data_paths[database],
+                source_database_root=source / "exports" / database,
                 candidate_root=destination,
                 modules=selected_modules,
                 batch_size=batch_size,
