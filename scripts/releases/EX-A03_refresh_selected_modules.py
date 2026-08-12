@@ -8,9 +8,10 @@ EasyICU checkout.  Thus unchanged module bytes remain immutable in the source
 run, while the derived candidate has one consistent runtime provenance and can
 be sealed by ``EX-A01_seal_full6_release.py``.
 
-At present only ``renal`` is allowlisted.  This keeps the command's claim
-precise: it is the audited KDIGO/urine/RRT refresh path, not a generic way to
-bypass the full extraction controller.
+Only ``renal`` and ``respiratory`` are allowlisted.  Both have explicit
+post-release clinical-correctness changes: ascertainment-aware KDIGO outputs
+and removal of implicit room-air FiO2 imputation.  This is not a generic way
+to bypass the full extraction controller.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ def _load_republisher():
 REPUBLICATION = _load_republisher()
 DATABASES: tuple[str, ...] = tuple(REPUBLICATION.DATABASES)
 MODULES: tuple[str, ...] = tuple(REPUBLICATION.MODULES)
-REFRESHABLE_MODULES = frozenset({"renal"})
+REFRESHABLE_MODULES = frozenset({"renal", "respiratory"})
 SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v1"
 
 
@@ -117,7 +118,8 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
     disallowed = set(selected) - REFRESHABLE_MODULES
     if disallowed:
         raise ModuleRefreshError(
-            "This audited refresh entry point currently allows only renal; "
+            "This audited refresh entry point currently allows only renal and "
+            "respiratory; "
             f"got disallowed modules: {sorted(disallowed)}"
         )
     return selected
@@ -450,7 +452,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--module",
         action="append",
         default=[],
-        help="Raw-derived module to refresh (currently only renal); repeatable.",
+        help=(
+            "Raw-derived module to refresh (renal or respiratory); repeatable."
+        ),
     )
     parser.add_argument(
         "--data-path",
