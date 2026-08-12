@@ -69,7 +69,7 @@ class FilterCriteria:
     # 入院类型
     admission_type: Optional[str] = None
     
-    # 是否存活出院
+    # 是否存活至出院（统一为 hospital-discharge endpoint）
     survived: Optional[bool] = None
     
     # Sepsis筛选
@@ -225,27 +225,33 @@ class PatientFilter:
         if 'unitdischargeoffset' in patient.columns:
             patient['los_hours'] = patient['unitdischargeoffset'] / 60  # 分钟转小时
         
-        # 首次入ICU
+        # unitVisitNumber only orders unit stays within one hospitalization;
+        # eICU cannot reliably order separate hospitalizations for one patient.
         if 'unitvisitnumber' in patient.columns:
-            patient['first_icu_stay'] = patient['unitvisitnumber'] == 1
+            visit_number = pd.to_numeric(patient['unitvisitnumber'], errors='coerce')
+            first_unit_stay = pd.Series(pd.NA, index=patient.index, dtype='boolean')
+            first_unit_stay.loc[visit_number.notna()] = visit_number.eq(1)
+            patient['first_unit_stay_within_hospitalization'] = first_unit_stay
         
         # 性别
         if 'gender' in patient.columns:
             patient['gender'] = patient['gender'].str.upper().str[0]
         
-        # 存活
+        # Generic survived is strictly hospital-discharge survival. Unit-level
+        # status remains available under an endpoint-specific name and must not
+        # substitute when hospitalDischargeStatus is absent.
         if 'hospitaldischargestatus' in patient.columns:
             status = patient['hospitaldischargestatus'].astype('string').str.strip().str.lower()
             survived = pd.Series(pd.NA, index=patient.index, dtype='boolean')
             survived.loc[status.eq('alive')] = True
             survived.loc[status.eq('expired')] = False
             patient['survived'] = survived
-        elif 'unitdischargestatus' in patient.columns:
+        if 'unitdischargestatus' in patient.columns:
             status = patient['unitdischargestatus'].astype('string').str.strip().str.lower()
             survived = pd.Series(pd.NA, index=patient.index, dtype='boolean')
             survived.loc[status.eq('alive')] = True
             survived.loc[status.eq('expired')] = False
-            patient['survived'] = survived
+            patient['unit_survived'] = survived
         
         # ID列标准化
         patient['patient_id'] = patient['patientunitstayid']
@@ -303,7 +309,9 @@ class PatientFilter:
                 admissions['gender'].str.upper().str[0]
             )
         
-        # 存活
+        # destination is survival at ICU/MCU discharge, not hospital discharge.
+        # Preserve that endpoint explicitly; generic survived therefore remains
+        # unavailable for AmsterdamUMCdb and fails closed when requested.
         if 'destination' in admissions.columns:
             destination = admissions['destination'].astype('string').str.strip().str.lower()
             known = destination.notna() & destination.ne('')
@@ -311,7 +319,7 @@ class PatientFilter:
             survived.loc[known] = ~destination.loc[known].str.contains(
                 'died|death|deceased|overleden', regex=True
             )
-            admissions['survived'] = survived
+            admissions['icu_survived'] = survived
         
         # ID列标准化
         admissions['patient_id'] = admissions['admissionid']
@@ -418,25 +426,21 @@ class PatientFilter:
             )
             cases['los_hours'] = los_seconds.where(los_seconds >= 0) / 3600.0
         
-        # CaseID identifies an ICU admission, not a patient. PatientID plus the
-        # offset from the first admission is required to identify readmissions.
+        # OffsetAfterFirstAdmission has absolute semantics: zero identifies the
+        # first admission, positive values identify readmissions even when the
+        # first case is absent from the current extract. Negative/missing values
+        # remain unknown. Duplicate zeroes for one patient are ambiguous.
         patient_id = columns.get('patientid')
         first_admission_offset = columns.get('offsetafterfirstadmission')
         if patient_id is not None and first_admission_offset is not None:
             patient = cases[patient_id]
             offset = pd.to_numeric(cases[first_admission_offset], errors='coerce')
-            valid = patient.notna() & offset.notna()
             first_stay = pd.Series(pd.NA, index=cases.index, dtype='boolean')
-            if valid.any():
-                evidence = pd.DataFrame(
-                    {'patient': patient.loc[valid], 'offset': offset.loc[valid]}
-                )
-                minimum = evidence.groupby('patient')['offset'].transform('min')
-                candidate = evidence['offset'].eq(minimum)
-                candidate_count = candidate.groupby(evidence['patient']).transform('sum')
-                resolved = candidate.astype('boolean')
-                resolved.loc[candidate & candidate_count.gt(1)] = pd.NA
-                first_stay.loc[evidence.index] = resolved
+            first_stay.loc[offset.gt(0)] = False
+            zero_with_patient = offset.eq(0) & patient.notna()
+            if zero_with_patient.any():
+                zero_count = zero_with_patient.groupby(patient).transform('sum')
+                first_stay.loc[zero_with_patient & zero_count.eq(1)] = True
             cases['first_icu_stay'] = first_stay
         
         # 性别
@@ -538,7 +542,7 @@ class PatientFilter:
             los_min: 最短住院时长（小时）
             los_max: 最长住院时长（小时）
             gender: 性别 ('M' 或 'F')
-            survived: 是否存活出院
+            survived: 是否存活至医院出院（hospital-discharge endpoint）
             has_sepsis: 是否有Sepsis（需要额外加载诊断数据）
             return_dataframe: 是否返回完整DataFrame而非仅ID列表
         

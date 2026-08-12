@@ -201,7 +201,59 @@ def test_eicu_missing_discharge_status_remains_unknown(monkeypatch) -> None:
     assert patient_filter.filter(survived=True) == [1]
 
 
-def test_aumc_missing_discharge_destination_remains_unknown(monkeypatch) -> None:
+def test_eicu_unit_visit_number_does_not_claim_patient_global_first_stay(
+    monkeypatch,
+) -> None:
+    patient_filter = PatientFilter(database="eicu", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {
+                "patientunitstayid": [1, 2],
+                "uniquepid": ["patient-a", "patient-a"],
+                "patienthealthsystemstayid": [10, 20],
+                "unitvisitnumber": [1, 1],
+            }
+        ),
+    )
+
+    result = patient_filter._load_eicu_demographics()
+    patient_filter._demographics = result
+
+    assert result["first_unit_stay_within_hospitalization"].tolist() == [True, True]
+    assert "first_icu_stay" not in result.columns
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(first_icu_stay=True)
+    assert caught.value.code == "patient_filter_criterion_unavailable"
+
+
+def test_eicu_unit_discharge_status_does_not_substitute_for_hospital_survival(
+    monkeypatch,
+) -> None:
+    patient_filter = PatientFilter(database="eicu", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {
+                "patientunitstayid": [1, 2],
+                "unitdischargestatus": ["Alive", "Expired"],
+            }
+        ),
+    )
+
+    result = patient_filter._load_eicu_demographics()
+    patient_filter._demographics = result
+
+    assert result["unit_survived"].tolist() == [True, False]
+    assert "survived" not in result.columns
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(survived=True)
+    assert caught.value.code == "patient_filter_criterion_unavailable"
+
+
+def test_aumc_destination_is_icu_survival_not_hospital_survival(monkeypatch) -> None:
     patient_filter = PatientFilter(database="aumc", data_path="/unused")
     monkeypatch.setattr(
         patient_filter,
@@ -217,8 +269,11 @@ def test_aumc_missing_discharge_destination_remains_unknown(monkeypatch) -> None
     result = patient_filter._load_aumc_demographics()
     patient_filter._demographics = result
 
-    assert result["survived"].tolist() == [True, False, False, pd.NA]
-    assert patient_filter.filter(survived=True) == [1]
+    assert result["icu_survived"].tolist() == [True, False, False, pd.NA]
+    assert "survived" not in result.columns
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(survived=True)
+    assert caught.value.code == "patient_filter_criterion_unavailable"
 
 
 def test_sicdb_demographics_use_official_age_los_and_hospital_survival(
@@ -289,6 +344,27 @@ def test_sicdb_tied_first_admission_offsets_remain_unknown(monkeypatch) -> None:
     result = patient_filter._load_sic_demographics()
 
     assert result["first_icu_stay"].tolist() == [pd.NA, pd.NA, False]
+
+
+def test_sicdb_positive_offsets_are_readmissions_when_first_case_is_missing(
+    monkeypatch,
+) -> None:
+    patient_filter = PatientFilter(database="sicdb", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {
+                "CaseID": [1, 2, 3, 4],
+                "PatientID": [10, 10, 20, 20],
+                "OffsetAfterFirstAdmission": [86_400, 172_800, -1, None],
+            }
+        ),
+    )
+
+    result = patient_filter._load_sic_demographics()
+
+    assert result["first_icu_stay"].tolist() == [False, False, pd.NA, pd.NA]
 
 
 def test_aumc_age_threshold_that_splits_a_published_band_is_unavailable() -> None:
