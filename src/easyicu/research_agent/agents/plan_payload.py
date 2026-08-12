@@ -74,13 +74,10 @@ def planner_adjusted_association_owner_guidance() -> str:
     """Name the one method family implemented by the sealed host owner."""
 
     return (
-        "For the host-owned deterministic binary product "
-        "`table:adjusted_association_estimates`, choose "
-        "`method_family='statsmodels_logit_mle'`. The syntactically valid "
-        "`statsmodels_glm_binomial` token has no sealed deterministic executor; "
-        "a design that specifically requires it must use the separately declared "
-        "agent-coded association capability and a different result product, not "
-        "claim the host-owned table. "
+        "`table:adjusted_association_estimates` requires "
+        "`method_family='statsmodels_logit_mle'`; no sealed executor owns "
+        "`statsmodels_glm_binomial`, which needs an agent-coded step and a "
+        "different output. "
     )
 
 
@@ -88,17 +85,14 @@ def planner_endpoint_and_optional_science_guidance() -> str:
     """Render host-owned endpoint and optional post-analysis boundaries."""
 
     return (
-        "ENDPOINT: ResearchContext.endpoint is sealed HOST authority. Copy it "
-        "exactly into the compatibility projection; do not infer, repair, or "
-        "redefine it. A required missing endpoint blocks execution.\n\n"
-        "OPTIONAL POST-ANALYSIS: leave `evalue_conversion_spec` null unless an "
-        "odds-ratio E-value is requested with a declared baseline-risk evidence "
-        "id, rate column, population column, and exact population. Leave "
-        "`subgroup_analysis_spec` null unless explicitly requested; then bind a "
-        "primary model requirement id and declare predictor, outcome, subgroup "
-        "columns, quantile buckets, minimum sample sizes, effect scale, an empty "
-        "adjustment roster for the unadjusted kernel, and one multiplicity family. "
-        "These are scientific choices, never host guesses.\n\n"
+        "`ResearchContext.endpoint` is sealed host authority: copy exactly; never "
+        "infer or repair. A required missing endpoint blocks execution.\n\n"
+        "Leave `evalue_conversion_spec` null unless requested; it requires a "
+        "baseline-risk evidence id, rate and population columns, and exact "
+        "population. Leave `subgroup_analysis_spec` null unless requested; then "
+        "bind a primary model requirement and declare predictor, outcome, subgroup "
+        "columns, quantile buckets, minimum sizes, effect scale, adjustment roster, "
+        "and multiplicity family. The Planner chooses these fields.\n\n"
     )
 
 
@@ -206,15 +200,11 @@ def planner_science_retry_guide() -> str:
         "Contract applicability is exact: `family_primary_result_requirement` is "
         "legal only on the primary step when `analysis_type` is `causal_inference` "
         "or `survival`. An `association_study` must omit that field and declare its "
-        "supported adjusted model through `model_requirements`. Optional collection "
-        "fields, including `know_how_decisions`, must be omitted or encoded as JSON "
-        "arrays (`[]` when explicitly empty), never `null`."
-        " `input_consumption_contracts` entries accept only `input_key`, "
-        "`mode`, optional `role_column`, optional `expected_roles`, and optional "
-        "`schema_version`; use `input_key` (not `input`) and `mode` (not "
-        "`cardinality`). `AnalysisPlan.endpoint` is not independent Planner "
-        "authority: omit it or emit null; never invent endpoint keys such as "
-        "`type` or `definition`."
+        "supported adjusted model through `model_requirements`. Optional "
+        "collections such as `know_how_decisions` use JSON arrays, never `null`. "
+        "`input_consumption_contracts` accepts `input_key`, `mode`, and optional "
+        "`role_column`, `expected_roles`, or `schema_version`. "
+        "Omit `AnalysisPlan.endpoint` or emit null."
     )
     return "\n\n" + model_terms_retry_guide() + "\n\n" + optional_fields
 
