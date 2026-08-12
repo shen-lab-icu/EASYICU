@@ -419,7 +419,10 @@ sepsis = load_concepts(
 # loader transparently.
 aki_and_circ = load_concepts(
     concepts=['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
-              'aki_stage_rrt', 'aki_assessable', 'aki_ascertainment',
+              'aki_stage_rrt', 'aki_severe', 'aki_severe_creat',
+              'aki_severe_uo', 'aki_severe_rrt',
+              'aki_severe_assessable', 'aki_severe_ascertainment',
+              'aki_assessable', 'aki_ascertainment',
               'observation_window_coverage',
               'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
               'creat_low_past_48hr', 'creat_low_past_7day',
@@ -447,6 +450,10 @@ all_features = load_concepts(
 `aki_stage == 0` is a definitive absence of AKI only when
 `aki_ascertainment == 'negative_complete'`; rows with partial or indeterminate
 ascertainment must not be used as non-AKI controls.
+Likewise, `aki_severe` is a nullable KDIGO stage 2-3 state, not an incident
+endpoint. Define incident severe AKI downstream from an explicit baseline and
+follow-up anchor; use the component outputs when full three-component
+ascertainment is unavailable.
 
 > **Note on full-cohort extraction**: when you don't pass `patient_ids`
 > and `max_patients`, EasyICU loads every patient in the database. On a
