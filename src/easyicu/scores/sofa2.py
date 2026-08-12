@@ -207,8 +207,12 @@ def sofa2_component_evidence(
 
     return pd.DataFrame(
         {
-            f"{component}_observed": observed.astype("int8"),
-            f"{component}_available": available.astype("int8"),
+            # Nullable comparisons (for example string evidence compared with
+            # one category) can retain ``pd.NA``. At this owner boundary, NA
+            # means that no positive observation/availability evidence was
+            # established; fail closed to 0 before publishing integer receipts.
+            f"{component}_observed": observed.fillna(False).astype("int8"),
+            f"{component}_available": available.fillna(False).astype("int8"),
         },
         index=index,
     )
