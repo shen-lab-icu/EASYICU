@@ -276,6 +276,76 @@ def test_aumc_destination_is_icu_survival_not_hospital_survival(monkeypatch) -> 
     assert caught.value.code == "patient_filter_criterion_unavailable"
 
 
+def test_aumc_first_stay_uses_absolute_admission_count_in_partial_extract(
+    monkeypatch,
+) -> None:
+    patient_filter = PatientFilter(database="aumc", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {
+                "admissionid": [1, 2, 3, 4, 5, 6, 7],
+                "patientid": [10, 10, 20, 30, 40, 50, 60],
+                "admittedat": [100, 200, 0, 0, 0, 0, 0],
+                "admissioncount": [2, 3, 1, 0, -1, None, "invalid"],
+            }
+        ),
+    )
+
+    result = patient_filter._load_aumc_demographics()
+
+    assert result["first_icu_stay"].tolist() == [
+        False,
+        False,
+        True,
+        pd.NA,
+        pd.NA,
+        pd.NA,
+        pd.NA,
+    ]
+
+
+def test_aumc_first_stay_is_unavailable_without_admission_count(monkeypatch) -> None:
+    patient_filter = PatientFilter(database="aumc", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {
+                "admissionid": [1, 2],
+                "patientid": [10, 10],
+                "admittedat": [100, 200],
+            }
+        ),
+    )
+
+    result = patient_filter._load_aumc_demographics()
+    patient_filter._demographics = result
+
+    assert "first_icu_stay" not in result.columns
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(first_icu_stay=True)
+    assert caught.value.code == "patient_filter_criterion_unavailable"
+
+
+def test_hirid_first_stay_is_unavailable_without_patient_linkage(monkeypatch) -> None:
+    patient_filter = PatientFilter(database="hirid", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame({"patientid": [123, 987]}),
+    )
+
+    result = patient_filter._load_hirid_demographics()
+    patient_filter._demographics = result
+
+    assert "first_icu_stay" not in result.columns
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(first_icu_stay=True)
+    assert caught.value.code == "patient_filter_criterion_unavailable"
+
+
 def test_sicdb_demographics_use_official_age_los_and_hospital_survival(
     monkeypatch,
 ) -> None:

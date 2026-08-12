@@ -296,11 +296,16 @@ class PatientFilter:
                 admissions['dischargedat'] - admissions['admittedat']
             ) / (1000 * 3600)
         
-        # 首次入ICU（基于患者ID排序）
-        if 'admittedat' in admissions.columns and 'patientid' in admissions.columns:
-            admissions = admissions.sort_values(['patientid', 'admittedat'])
-            admissions['icu_order'] = admissions.groupby('patientid').cumcount() + 1
-            admissions['first_icu_stay'] = admissions['icu_order'] == 1
+        # admissioncount is the absolute per-patient ICU/MCU admission number;
+        # sorting only the current extract would promote a later stay to first.
+        if 'admissioncount' in admissions.columns:
+            admission_count = pd.to_numeric(
+                admissions['admissioncount'], errors='coerce'
+            )
+            first_stay = pd.Series(pd.NA, index=admissions.index, dtype='boolean')
+            first_stay.loc[admission_count.eq(1)] = True
+            first_stay.loc[admission_count.gt(1)] = False
+            admissions['first_icu_stay'] = first_stay
         
         # 性别
         if 'gender' in admissions.columns:
@@ -343,8 +348,8 @@ class PatientFilter:
                 general['dischargetime'] - general['admissiontime']
             ).dt.total_seconds() / 3600
         
-        # 首次入ICU（HiRID通常每次入院独立）
-        general['first_icu_stay'] = True
+        # HiRID assigns a new patient ID to every ICU (re-)admission and does
+        # not expose cross-admission patient linkage, so first stay is unknown.
         
         # 性别
         if 'sex' in general.columns:
