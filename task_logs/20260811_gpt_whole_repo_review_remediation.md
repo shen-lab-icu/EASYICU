@@ -1,9 +1,9 @@
-# GPT 整仓审阅复核与 F1–F16 / N1–N9 定点修复
+# GPT 整仓审阅复核与 F1–F16 / N1–N11 定点修复
 
 - 日期：2026-08-11
 - 分支 / 起始 HEAD：`fix/pi-workspace-review-20260809@e0ee97f`
-- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）+ `35bfc23`（终点语义）+ `d92c055`（Research Agent CI 根因）+ `ab58c5e`（N8/N9 first-stay）
-- 状态：四轮定点修复均已提交；N1–N9 代码层已失败关闭，`79f9a81` 的 Pi exact-head 全绿，Research Agent/main full matrices 仍在运行；未启动 Provider、Canonical9 或真实患者分析
+- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）+ `35bfc23`（终点语义）+ `d92c055`（Research Agent CI 根因）+ `ab58c5e`（N8/N9 first-stay）+ `d06c095`（N10/N11 MIMIC evidence）
+- 状态：五轮定点修复均已提交；N1–N11 代码层已失败关闭，`c51003a` 的 Pi security / runner trust 已绿，Research Agent/main full matrices 仍在运行；`d06c095` 尚未推送，未启动 Provider、Canonical9 或真实患者分析
 - 模块：`DATA-FIX1` / `WEBAPP-FASTAPI-NATIVE-QA` / `FIG2-CANONICAL9-GATE`
 
 ## 裁决
@@ -87,3 +87,16 @@ N8/N9 均成立并由 `ab58c5e` 定点修复。AmsterdamUMCdb 官方 admissions 
 第四次验证：三条新增 regression 在旧实现上 `3 failed`、修复后 `3 passed`；数据/API 相邻 `94 passed`；Ruff 与 `git diff --check` 通过。复核时 `79f9a81` 的 Research Agent push/PR runs `31567323098` / `31567325771` 和 main CI runs `31567323110` / `31567325792` 仍为 `in_progress`，Pi security 与 runner image trust 已成功；不得把 pending matrix 写成 closed。
 
 官方依据：AmsterdamUMCdb [admissions table](https://github.com/AmsterdamUMC/AmsterdamUMCdb/blob/master/tables/admissions.ipynb)；HiRID [data details](https://hirid.intensivecare.ai/data-details)。
+
+## 第五次复核（N10–N11）
+
+N10/N11 均成立并由 `d06c095` 定点修复。MIMIC-III/IV 的 `subject_id` 是患者、`icustay_id`/`stay_id` 是单次 ICU stay；prepared extract 内按 `subject_id + intime` 排序只能得到当前切片的相对顺序，不能证明 patient-global 首次 ICU。MIT-LCP 官方 `mimic-code` 中同名 `first_icu_stay` 还明确按 `hadm_id` 排名，语义是当前 hospitalization 内首次 ICU，而不是 EasyICU 通用合同采用的 patient-global 首次 ICU。
+
+| ID | 裁决 | 最终合同 |
+|---|---|---|
+| N10 MIMIC first stay | **成立，HIGH scientific** | MIMIC-III/IV 不再从当前 extract 的 `subject_id + intime` 生成通用 `first_icu_stay`；缺少绝对 patient ICU ordinal 或完整历史回执时，该 criterion 走 typed `patient_filter_criterion_unavailable`。本轮不新增同样受 partial-extract 影响的 hospitalization-level 派生字段。 |
+| N11 MIMIC survival | **成立，HIGH scientific** | 只接受标准 `hospital_expire_flag`：`0=True`、`1=False`，NULL、解析失败、非 0/1 及 left-merge 未匹配均为 nullable unknown；删除无法区分“确认匹配且 NULL”与“整行缺失”的 `deathtime.isna()` fallback。缺标准 flag 时通用 `survived` unavailable。 |
+
+第五次验证：六条 MIMIC-III/IV 参数化边界在旧实现上 `6 failed / 34 deselected`，修复后 `6 passed / 34 deselected`；数据正确性、profile/resource 与 cohort API 相邻门 `100 passed`；Ruff 与 `git diff --check` 通过。`c51003a` 的 PR runs `31568665528`（Research Agent）/`31568665508`（main CI）及 push main CI `31568662145` 仍为 `in_progress`，Pi security `31568665509` 与 runner trust `31568665500` 已成功；新提交 `d06c095` 尚未推送，故不存在可宣称绿色的新 exact-head 矩阵。
+
+官方依据：MIMIC-IV [ICU stays](https://mimic.mit.edu/docs/iv/modules/icu/icustays.html)、[admissions](https://mimic.mit.edu/docs/IV/modules/hosp/admissions.html)；MIMIC-III [ICU stays](https://mimic.mit.edu/docs/III/tables/icustays.html)、[admissions](https://mimic.mit.edu/docs/iii/tables/admissions.html)；MIT-LCP `mimic-code` 的 [MIMIC-IV icustay_detail](https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iv/concepts/demographics/icustay_detail.sql) 与 [MIMIC-III icustay_detail](https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iii/concepts/demographics/icustay_detail.sql)。
