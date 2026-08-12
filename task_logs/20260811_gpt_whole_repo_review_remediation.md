@@ -1,9 +1,9 @@
-# GPT 整仓审阅复核与 F1–F16 / N1–N7 定点修复
+# GPT 整仓审阅复核与 F1–F16 / N1–N9 定点修复
 
 - 日期：2026-08-11
 - 分支 / 起始 HEAD：`fix/pi-workspace-review-20260809@e0ee97f`
-- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）+ `35bfc23`（终点语义）+ `d92c055`（Research Agent CI 根因）
-- 状态：三轮定点修复均已提交；`a3ff37a` 的 Pi exact-head 两次全绿，Research Agent exact-head 红已在本地提交关闭两个高扇出根因并通过聚焦/端到端回归；未启动 Provider、Canonical9 或真实患者分析
+- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）+ `35bfc23`（终点语义）+ `d92c055`（Research Agent CI 根因）+ `ab58c5e`（N8/N9 first-stay）
+- 状态：四轮定点修复均已提交；N1–N9 代码层已失败关闭，`79f9a81` 的 Pi exact-head 全绿，Research Agent/main full matrices 仍在运行；未启动 Provider、Canonical9 或真实患者分析
 - 模块：`DATA-FIX1` / `WEBAPP-FASTAPI-NATIVE-QA` / `FIG2-CANONICAL9-GATE`
 
 ## 裁决
@@ -74,3 +74,16 @@ SICdb 语义来源：<https://www.sicdb.com/Documentation/Table%3A_Cases>、<htt
 第三次验证：数据/API 相邻 `91 passed`；Research Agent authority/literature/prompt/example 合同 `72 passed`；原 CI 失败面的 pipeline/resume/reviewer/sidecar 端到端 `4 passed`；architecture baseline diff `OK`；两组 Ruff、`git diff --check` 与 middle-layer progress lint 均通过。遵循开发测试策略，未在本地等待整个 Research Agent exact-head 矩阵；后续推送后的远端矩阵仍是冻结/合并前的最终门。
 
 官方依据：SICdb [Cases](https://www.sicdb.com/Documentation/Table%3A_Cases)；eICU [patient](https://eicu.mit.edu/eicutables/patient/)；AmsterdamUMCdb [Table 1 patient characteristics notebook](https://github.com/AmsterdamUMC/AmsterdamUMCdb/blob/master/paper/paper-table1-patient-data-characteristics.ipynb)。
+
+## 第四次复核（N8–N9）
+
+N8/N9 均成立并由 `ab58c5e` 定点修复。AmsterdamUMCdb 官方 admissions 表明确 `admissioncount` 会随同一患者每次额外 ICU/MCU admission 递增，`admittedat` 则是相对首次 admission 的毫秒数；因此 partial extract 内重排不能签发首次入住。HiRID 官方明确每次 ICU (re-)admission 都生成新的 Patient ID，且发布数据无法识别多次 admission 是否来自同一患者，因此不能把全部 stay 断言为 patient-global first stay。
+
+| ID | 裁决 | 最终合同 |
+|---|---|---|
+| N8 AUMC first stay | **成立，HIGH scientific** | 只使用原生 `admissioncount`：`1=True`、`>1=False`、`0`/负值/NULL/非法值 unknown；字段缺失时通用 `first_icu_stay` unavailable，不再按当前 extract 的 `admittedat` 排序。 |
+| N9 HiRID first stay | **成立，HIGH scientific** | 不生成 `first_icu_stay`；请求 patient-global first stay 时沿用 typed `patient_filter_criterion_unavailable` 失败关闭。非阻塞的 `discharge_status → icu_survived` API completeness 未混入本修复。 |
+
+第四次验证：三条新增 regression 在旧实现上 `3 failed`、修复后 `3 passed`；数据/API 相邻 `94 passed`；Ruff 与 `git diff --check` 通过。复核时 `79f9a81` 的 Research Agent push/PR runs `31567323098` / `31567325771` 和 main CI runs `31567323110` / `31567325792` 仍为 `in_progress`，Pi security 与 runner image trust 已成功；不得把 pending matrix 写成 closed。
+
+官方依据：AmsterdamUMCdb [admissions table](https://github.com/AmsterdamUMC/AmsterdamUMCdb/blob/master/tables/admissions.ipynb)；HiRID [data details](https://hirid.intensivecare.ai/data-details)。
