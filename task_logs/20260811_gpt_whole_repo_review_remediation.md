@@ -1,9 +1,9 @@
-# GPT 整仓审阅复核与 F1–F16 / N1–N11 定点修复
+# GPT 整仓审阅复核与 F1–F16 / N1–N13 定点修复
 
-- 日期：2026-08-11
+- 日期：2026-08-11–2026-08-12
 - 分支 / 起始 HEAD：`fix/pi-workspace-review-20260809@e0ee97f`
-- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）+ `35bfc23`（终点语义）+ `d92c055`（Research Agent CI 根因）+ `ab58c5e`（N8/N9 first-stay）+ `d06c095`（N10/N11 MIMIC evidence）
-- 状态：五轮定点修复均已提交；N1–N11 代码层已失败关闭，`c51003a` 的 Pi security / runner trust 已绿，Research Agent/main full matrices 仍在运行；`d06c095` 尚未推送，未启动 Provider、Canonical9 或真实患者分析
+- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）+ `35bfc23`（终点语义）+ `d92c055`（Research Agent CI 根因）+ `ab58c5e`（N8/N9 first-stay）+ `d06c095`（N10/N11 MIMIC evidence）+ `6783de6`（N12/N13 age/API contract）
+- 状态：六轮定点修复均已提交；N1–N13 代码层已失败关闭，`216426d` 的 Pi security / runner trust 已绿，Research Agent/main full matrices 仍在运行；`6783de6` 尚未推送，未启动 Provider、Canonical9 或真实患者分析
 - 模块：`DATA-FIX1` / `WEBAPP-FASTAPI-NATIVE-QA` / `FIG2-CANONICAL9-GATE`
 
 ## 裁决
@@ -100,3 +100,16 @@ N10/N11 均成立并由 `d06c095` 定点修复。MIMIC-III/IV 的 `subject_id` �
 第五次验证：六条 MIMIC-III/IV 参数化边界在旧实现上 `6 failed / 34 deselected`，修复后 `6 passed / 34 deselected`；数据正确性、profile/resource 与 cohort API 相邻门 `100 passed`；Ruff 与 `git diff --check` 通过。`c51003a` 的 PR runs `31568665528`（Research Agent）/`31568665508`（main CI）及 push main CI `31568662145` 仍为 `in_progress`，Pi security `31568665509` 与 runner trust `31568665500` 已成功；新提交 `d06c095` 尚未推送，故不存在可宣称绿色的新 exact-head 矩阵。
 
 官方依据：MIMIC-IV [ICU stays](https://mimic.mit.edu/docs/iv/modules/icu/icustays.html)、[admissions](https://mimic.mit.edu/docs/IV/modules/hosp/admissions.html)；MIMIC-III [ICU stays](https://mimic.mit.edu/docs/III/tables/icustays.html)、[admissions](https://mimic.mit.edu/docs/iii/tables/admissions.html)；MIT-LCP `mimic-code` 的 [MIMIC-IV icustay_detail](https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iv/concepts/demographics/icustay_detail.sql) 与 [MIMIC-III icustay_detail](https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iii/concepts/demographics/icustay_detail.sql)。
+
+## 第六次复核（N12–N13）
+
+N12/N13 均成立并由 `6783de6` 定点修复。此前只有 AUMC 保留发布年龄带；eICU `>89`、MIMIC-III shifted DOB、MIMIC-IV `anchor_age=91` 和 SICdb 5 年分组/90 顶码仍会被压成貌似精确的 scalar，随后由公共 `age_min` / `age_max` 静默改写队列。`FilterCriteria.admission_type` 同时没有对应的 `PatientFilter.filter()` 参数或执行路径，属于公开 schema 漂移。
+
+| ID | 裁决 | 最终合同 |
+|---|---|---|
+| N12 cross-database age | **成立，HIGH scientific** | 六库人口学 loader 统一发布 `age`、`age_lower`、`age_upper`、`age_is_grouped`、`age_is_censored`。精确年龄上下界相等；eICU/MIMIC 高龄为有下界、无上界；AUMC 保留原生年龄带；SICdb 依据官方“±5y，over 90 set to 90”采用保守 `age±5` 区间，90 的上界开放。所有数据库走同一 interval-aware filter：整段满足才纳入、整段不满足才排除、阈值切段时抛 `patient_filter_grouped_age_indeterminate`。 |
+| N13 admission type drift | **成立，MEDIUM API** | 删除未实现的 `FilterCriteria.admission_type` 和模块“支持入院类型”声明；新增 dataclass 字段与真实 filter 参数一致性回归。concept catalog / Web 中独立存在的入院类型展示或概念不属于这个悬空 PatientFilter API，未扩大删除范围。 |
+
+第六次验证：五条新增回归在旧实现上 `5 failed / 40 deselected`，修复后连同 AUMC 既有边界为 `7 passed / 38 deselected`；`test_patient_filter_correctness.py` 全量 `45 passed`；数据正确性、profile/resource、cohort API 与 callback 邻接门 `245 passed`；Ruff、`git diff --check` 通过。本地只读核验 SICdb v1.0.6 `AgeOnAdmission` 的非空发布值恰为 15–90 的 5 年步长，未输出患者标识。`216426d` 的 Research Agent PR run `31569536019` 与 main CI PR/push runs `31569536017` / `31569533396` 仍为 `in_progress`，Pi security `31569536042` 与 runner trust `31569536071` 已成功；新提交 `6783de6` 尚未推送，故尚无它自己的 exact-head 矩阵。
+
+官方依据：eICU [patient age](https://eicu.mit.edu/eicutables/patient/)；MIMIC-III [patients DOB de-identification](https://mimic.mit.edu/docs/III/tables/patients.html) 与 [official age tutorial](https://mimic.mit.edu/docs/III/tutorials/intro-to-mimic-iii.html)；MIMIC-IV [patients anchor age](https://mimic.mit.edu/docs/IV/modules/hosp/patients.html)；SICdb [case data](https://www.sicdb.com/Documentation/Table%3A_Cases) 与 [full documentation](https://www.sicdb.com/Documentation/SICdb_Documentation)。
