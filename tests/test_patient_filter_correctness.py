@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from inspect import signature
 from pathlib import Path
 
 import pandas as pd
@@ -14,6 +15,7 @@ from easyicu.config import load_src_cfg
 from easyicu.database_config import SUPPORTED_DATABASES
 from easyicu.databases.profiles import public_database_keys
 from easyicu.patient_filter import (
+    FilterCriteria,
     PatientFilter,
     PatientFilterCriterionError,
 )
@@ -313,6 +315,142 @@ def test_eicu_deidentified_over_89_age_maps_to_90(monkeypatch) -> None:
     result = patient_filter._load_eicu_demographics()
 
     assert result["age"].tolist() == [90, 90, 72]
+
+
+def test_eicu_top_coded_age_publishes_an_open_interval(monkeypatch) -> None:
+    patient_filter = PatientFilter(database="eicu", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {
+                "patientunitstayid": [1, 2],
+                "age": ["> 89", "72"],
+            }
+        ),
+    )
+
+    result = patient_filter._load_eicu_demographics()
+    patient_filter._demographics = result
+
+    assert result["age_lower"].tolist() == [90, 72]
+    assert result["age_upper"].tolist() == [pd.NA, 72]
+    assert result["age_is_censored"].tolist() == [True, False]
+    assert result["age_is_grouped"].tolist() == [True, False]
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(age_max=90)
+    assert caught.value.code == "patient_filter_grouped_age_indeterminate"
+
+
+def test_mimic3_top_coded_age_publishes_an_open_interval(monkeypatch) -> None:
+    patient_filter = PatientFilter(database="mimic", data_path="/unused")
+    tables = {
+        "icustays": pd.DataFrame(
+            {
+                "subject_id": [10, 20],
+                "hadm_id": [101, 201],
+                "icustay_id": [1, 2],
+                "intime": ["2000-01-01", "2000-01-01"],
+            }
+        ),
+        "patients": pd.DataFrame(
+            {
+                "subject_id": [10, 20],
+                "dob": ["1700-01-01", "1930-01-01"],
+            }
+        ),
+        "admissions": pd.DataFrame(
+            {"subject_id": [10, 20], "hadm_id": [101, 201]}
+        ),
+    }
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda name: tables[name].copy(),
+    )
+
+    result = patient_filter._load_mimic3_demographics()
+    patient_filter._demographics = result
+
+    assert result["age"].tolist() == pytest.approx([90, 70], abs=0.01)
+    assert result["age_lower"].tolist() == pytest.approx([90, 70], abs=0.01)
+    assert pd.isna(result.loc[0, "age_upper"])
+    assert result.loc[1, "age_upper"] == pytest.approx(70, abs=0.01)
+    assert result["age_is_censored"].tolist() == [True, False]
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(age_min=91)
+    assert caught.value.code == "patient_filter_grouped_age_indeterminate"
+
+
+def test_mimic4_top_coded_age_preserves_the_shifted_open_interval(monkeypatch) -> None:
+    patient_filter = PatientFilter(database="miiv", data_path="/unused")
+    tables = {
+        "icustays": pd.DataFrame(
+            {
+                "subject_id": [10, 20],
+                "hadm_id": [101, 201],
+                "stay_id": [1, 2],
+                "intime": ["2022-01-01", "2022-01-01"],
+            }
+        ),
+        "patients": pd.DataFrame(
+            {
+                "subject_id": [10, 20],
+                "anchor_age": [91, 70],
+                "anchor_year": [2020, 2020],
+            }
+        ),
+        "admissions": pd.DataFrame(
+            {"subject_id": [10, 20], "hadm_id": [101, 201]}
+        ),
+    }
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda name: tables[name].copy(),
+    )
+
+    result = patient_filter._load_miiv_demographics()
+    patient_filter._demographics = result
+
+    assert result["age"].tolist() == [93, 72]
+    assert result["age_lower"].tolist() == [92, 72]
+    assert result["age_upper"].tolist() == [pd.NA, 72]
+    assert result["age_is_censored"].tolist() == [True, False]
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(age_max=93)
+    assert caught.value.code == "patient_filter_grouped_age_indeterminate"
+
+
+def test_sicdb_rounded_age_publishes_a_conservative_interval(monkeypatch) -> None:
+    patient_filter = PatientFilter(database="sic", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {"CaseID": [1, 2], "AgeOnAdmission": [65, 90]}
+        ),
+    )
+
+    result = patient_filter._load_sic_demographics()
+    patient_filter._demographics = result
+
+    assert result["age_lower"].tolist() == [60, 85]
+    assert result["age_upper"].tolist() == [70, pd.NA]
+    assert result["age_is_grouped"].tolist() == [True, True]
+    assert result["age_is_censored"].tolist() == [False, True]
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(age_min=65)
+    assert caught.value.code == "patient_filter_grouped_age_indeterminate"
+
+
+def test_filter_criteria_declares_only_supported_filter_arguments() -> None:
+    public_filter_arguments = set(signature(PatientFilter.filter).parameters) - {
+        "self",
+        "return_dataframe",
+    }
+
+    assert set(FilterCriteria.__dataclass_fields__) == public_filter_arguments
 
 
 def test_eicu_missing_discharge_status_remains_unknown(monkeypatch) -> None:

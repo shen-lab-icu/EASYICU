@@ -6,7 +6,6 @@
 - 是否首次入ICU
 - ICU住院时长
 - 性别
-- 入院类型
 
 用法示例:
     >>> from easyicu.patient_filter import PatientFilter, filter_patients
@@ -59,6 +58,37 @@ def _hospital_survival_from_expire_flag(values: pd.Series) -> pd.Series:
     return survived
 
 
+def _publish_age_interval(
+    frame: pd.DataFrame,
+    *,
+    age: pd.Series,
+    lower: pd.Series,
+    upper: pd.Series,
+    grouped: Union[bool, pd.Series],
+    censored: Union[bool, pd.Series],
+) -> None:
+    """Publish one cross-database age interval contract."""
+
+    frame['age'] = pd.to_numeric(age, errors='coerce')
+    frame['age_lower'] = pd.to_numeric(lower, errors='coerce').astype('Float64')
+    frame['age_upper'] = pd.to_numeric(upper, errors='coerce').astype('Float64')
+    known = frame['age_lower'].notna()
+
+    for column, values in (
+        ('age_is_grouped', grouped),
+        ('age_is_censored', censored),
+    ):
+        source = (
+            values.reindex(frame.index).astype('boolean')
+            if isinstance(values, pd.Series)
+            else pd.Series(values, index=frame.index, dtype='boolean')
+        )
+        flag = pd.Series(pd.NA, index=frame.index, dtype='boolean')
+        resolved = known & source.notna()
+        flag.loc[resolved] = source.loc[resolved]
+        frame[column] = flag
+
+
 @dataclass
 class FilterCriteria:
     """筛选条件数据类"""
@@ -75,9 +105,6 @@ class FilterCriteria:
     
     # 性别 ('M', 'F', None=不限)
     gender: Optional[str] = None
-    
-    # 入院类型
-    admission_type: Optional[str] = None
     
     # 是否存活至出院（统一为 hospital-discharge endpoint）
     survived: Optional[bool] = None
@@ -178,16 +205,40 @@ class PatientFilter:
         # 计算年龄（入ICU时的年龄）
         if 'anchor_age' in df.columns:
             # MIMIC-IV 2.0+: 使用anchor_age + (intime.year - anchor_year)
+            anchor_age = pd.to_numeric(df['anchor_age'], errors='coerce')
             if 'anchor_year' in df.columns:
                 df['intime'] = pd.to_datetime(df['intime'])
-                df['age'] = df['anchor_age'] + (df['intime'].dt.year - df['anchor_year'])
+                year_delta = (
+                    df['intime'].dt.year
+                    - pd.to_numeric(df['anchor_year'], errors='coerce')
+                )
             else:
-                df['age'] = df['anchor_age']
+                year_delta = pd.Series(0, index=df.index)
+            age = anchor_age + year_delta
+            censored = anchor_age.eq(91)
+            _publish_age_interval(
+                df,
+                age=age,
+                lower=age.mask(censored, 90 + year_delta),
+                upper=age.mask(censored),
+                grouped=censored,
+                censored=censored,
+            )
         elif 'dob' in df.columns:
             # 老版本: 使用dob计算
             df['dob'] = pd.to_datetime(df['dob'])
             df['intime'] = pd.to_datetime(df['intime'])
-            df['age'] = (df['intime'] - df['dob']).dt.days / 365.25
+            raw_age = (df['intime'] - df['dob']).dt.days / 365.25
+            censored = raw_age.gt(100)
+            age = raw_age.mask(censored, 90)
+            _publish_age_interval(
+                df,
+                age=age,
+                lower=age,
+                upper=age.mask(censored),
+                grouped=censored,
+                censored=censored,
+            )
         
         # 计算ICU住院时长（小时）
         if 'los' in df.columns:
@@ -221,10 +272,20 @@ class PatientFilter:
         
         # eICU直接有age列，但可能是字符串
         if 'age' in patient.columns:
-            # 处理 "> 89" 这样的值
-            age_text = patient['age'].astype(str).str.replace(r'\s+', '', regex=True)
-            patient['age'] = pd.to_numeric(
-                age_text.replace({'>89': '90'}), errors='coerce'
+            age_text = (
+                patient['age'].astype('string').str.replace(r'\s+', '', regex=True)
+            )
+            censored = age_text.eq('>89')
+            age = pd.to_numeric(age_text.mask(censored), errors='coerce').mask(
+                censored, 90
+            )
+            _publish_age_interval(
+                patient,
+                age=age,
+                lower=age,
+                upper=age.mask(censored),
+                grouped=censored,
+                censored=censored,
             )
         
         # 住院时长
@@ -281,18 +342,27 @@ class PatientFilter:
                 '80+': (80.0, None),
             }
             bounds = admissions['agegroup'].map(age_bounds)
-            admissions['age_lower'] = bounds.map(
+            age_lower = bounds.map(
                 lambda value: value[0] if isinstance(value, tuple) else pd.NA
             )
-            admissions['age_upper'] = bounds.map(
+            age_upper = bounds.map(
                 lambda value: value[1] if isinstance(value, tuple) else pd.NA
             )
-            admissions['age'] = bounds.map(
+            age = bounds.map(
                 lambda value: (
                     (value[0] + value[1]) / 2
                     if isinstance(value, tuple) and value[1] is not None
                     else (85.0 if isinstance(value, tuple) else pd.NA)
                 )
+            )
+            known = bounds.map(lambda value: isinstance(value, tuple))
+            _publish_age_interval(
+                admissions,
+                age=age,
+                lower=age_lower,
+                upper=age_upper,
+                grouped=known,
+                censored=admissions['agegroup'].eq('80+'),
             )
         
         # 住院时长
@@ -342,7 +412,17 @@ class PatientFilter:
         general = self._read_table('general_table')
         
         # HiRID已有age列
-        if 'age' not in general.columns and 'admissiontime' in general.columns:
+        if 'age' in general.columns:
+            age = pd.to_numeric(general['age'], errors='coerce')
+            _publish_age_interval(
+                general,
+                age=age,
+                lower=age,
+                upper=age,
+                grouped=False,
+                censored=False,
+            )
+        elif 'admissiontime' in general.columns:
             # 如果没有age，尝试从其他来源获取
             pass
         
@@ -381,9 +461,18 @@ class PatientFilter:
         if 'dob' in df.columns and 'intime' in df.columns:
             df['dob'] = pd.to_datetime(df['dob'])
             df['intime'] = pd.to_datetime(df['intime'])
-            df['age'] = (df['intime'] - df['dob']).dt.days / 365.25
-            # MIMIC-III 对 >89 岁的患者做了脱敏，显示为 ~300岁
-            df.loc[df['age'] > 90, 'age'] = 90
+            raw_age = (df['intime'] - df['dob']).dt.days / 365.25
+            # Official tutorials identify the shifted DOB sentinel above 100.
+            censored = raw_age.gt(100)
+            age = raw_age.mask(censored, 90)
+            _publish_age_interval(
+                df,
+                age=age,
+                lower=age,
+                upper=age.mask(censored),
+                grouped=censored,
+                censored=censored,
+            )
         
         # 计算ICU住院时长（小时）
         if 'los' in df.columns:
@@ -421,7 +510,16 @@ class PatientFilter:
         # SICdb publishes rounded age in AgeOnAdmission.
         age_column = columns.get('ageonadmission') or columns.get('age')
         if age_column is not None:
-            cases['age'] = pd.to_numeric(cases[age_column], errors='coerce')
+            age = pd.to_numeric(cases[age_column], errors='coerce')
+            censored = age.ge(90)
+            _publish_age_interval(
+                cases,
+                age=age,
+                lower=(age - 5).clip(lower=0),
+                upper=(age + 5).mask(censored),
+                grouped=True,
+                censored=censored,
+            )
 
         # Both offsets are seconds from primary MetaVision admission. ICU LOS
         # starts at ICUOffset, so preceding surgery must be removed.
@@ -593,8 +691,7 @@ class PatientFilter:
         
         # 年龄筛选
         if (
-            self.database == 'aumc'
-            and (age_min is not None or age_max is not None)
+            (age_min is not None or age_max is not None)
             and {'age_lower', 'age_upper'}.issubset(df.columns)
         ):
             lower = pd.to_numeric(df['age_lower'], errors='coerce')
@@ -605,7 +702,8 @@ class PatientFilter:
                     raise PatientFilterCriterionError(
                         'patient_filter_grouped_age_indeterminate',
                         'age',
-                        f"age_min={age_min} splits an AmsterdamUMCdb age band.",
+                        f"age_min={age_min} splits a published age interval "
+                        f"for {self.database!r}.",
                     )
                 mask &= lower.ge(age_min).fillna(False)
             if age_max is not None:
@@ -614,7 +712,8 @@ class PatientFilter:
                     raise PatientFilterCriterionError(
                         'patient_filter_grouped_age_indeterminate',
                         'age',
-                        f"age_max={age_max} splits an AmsterdamUMCdb age band.",
+                        f"age_max={age_max} splits a published age interval "
+                        f"for {self.database!r}.",
                     )
                 mask &= upper.le(age_max).fillna(False)
         else:
