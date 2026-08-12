@@ -623,6 +623,12 @@ def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
     dictionary = api.load_dictionary(include_sofa2=True)
     receipt_columns = [
         "aki_assessable",
+        "aki_severe",
+        "aki_severe_creat",
+        "aki_severe_uo",
+        "aki_severe_rrt",
+        "aki_severe_assessable",
+        "aki_severe_ascertainment",
         "aki_ascertainment",
         "aki_assessment_reason",
         "observation_window_coverage",
@@ -635,6 +641,12 @@ def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
             "stay_id": [101, 102],
             "charttime": [0.0, 1.0],
             "aki_assessable": [1, 0],
+            "aki_severe": [1, None],
+            "aki_severe_creat": [1, 0],
+            "aki_severe_uo": [0, None],
+            "aki_severe_rrt": [0, None],
+            "aki_severe_assessable": [1, 0],
+            "aki_severe_ascertainment": ["positive", "indeterminate"],
             "aki_ascertainment": ["positive", "indeterminate"],
             "aki_assessment_reason": ["positive", "indeterminate"],
             "observation_window_coverage": ["complete", "partial"],
@@ -651,8 +663,25 @@ def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
         dictionary=dictionary,
     )
 
-    assert str(canonical["aki_assessable"].dtype) == "boolean"
-    assert all(str(canonical[column].dtype) == "string" for column in receipt_columns[1:])
+    boolean_columns = [
+        "aki_assessable",
+        "aki_severe",
+        "aki_severe_creat",
+        "aki_severe_uo",
+        "aki_severe_rrt",
+        "aki_severe_assessable",
+    ]
+    category_columns = [
+        "aki_severe_ascertainment",
+        "aki_ascertainment",
+        "aki_assessment_reason",
+        "observation_window_coverage",
+        "creatinine_ascertainment",
+        "urine_ascertainment",
+        "rrt_ascertainment",
+    ]
+    assert all(str(canonical[column].dtype) == "boolean" for column in boolean_columns)
+    assert all(str(canonical[column].dtype) == "string" for column in category_columns)
 
 
 def test_native_schema_accepts_multi_class_numeric_concept() -> None:
