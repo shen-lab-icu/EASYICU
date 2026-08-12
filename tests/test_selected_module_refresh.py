@@ -35,6 +35,7 @@ def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
     refresher = _load_refresher()
     assert refresher._expand_module_dependency_closure(["respiratory"]) == (
         "respiratory",
+        "sepsis_shared",
         "sofa1_score",
         "sofa2_score",
         "sepsis3_sofa1",
@@ -45,6 +46,7 @@ def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
     ) == (
         "respiratory",
         "renal",
+        "sepsis_shared",
         "sofa1_score",
         "sofa2_score",
         "sepsis3_sofa1",
