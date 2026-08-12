@@ -356,6 +356,15 @@ def test_grouped_output_is_sealed_without_accessing_the_raw_data_path(
         assert manifest["runtime_provenance"]["easyicu_git_diff_sha256"]
     else:
         assert manifest["runtime_provenance"]["easyicu_git_diff_sha256"] is None
+    for field in (
+        "concept_dictionary_sha256",
+        "sofa2_dictionary_sha256",
+        "clinical_contracts_sha256",
+        "data_sources_sha256",
+    ):
+        value = manifest["runtime_provenance"][field]
+        assert len(value) == 64
+        int(value, 16)
     assert list(pd.read_parquet(tmp_path / "demographics.parquet").columns) == [
         "stay_id",
         "age",
@@ -870,7 +879,8 @@ def test_native_bounds_survive_sofa2_overlay_redefinition(
 ) -> None:
     monkeypatch.setattr(api, "_CONCEPT_BOUNDS_CACHE", None)
     dictionary = api.load_dictionary(include_sofa2=True)
-    assert dictionary["uo_6h"].minimum is None
+    assert dictionary["uo_6h"].minimum == 0.0
+    assert dictionary["uo_6h"].maximum == 20.0
     assert api._load_concept_bounds_map()["uo_6h"] == (0.0, 20.0)
     frame = pd.DataFrame({"uo_6h": [0.0, 1.5, 20.0, 20.1, 1886.0]})
 

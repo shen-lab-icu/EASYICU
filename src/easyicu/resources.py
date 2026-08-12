@@ -98,14 +98,18 @@ def load_dictionary(
     Args:
         name: Base dictionary resource name (default ``concept-dict``).
         directories: Optional custom search directories (checked before bundled data).
-        extras: Additional dictionary resource names to merge (later entries override).
+        extras: Additional dictionary resources applied as per-concept patches.
+            Same-name sources are merged by database; explicitly provided
+            metadata fields override the base definition.
         include_sofa2: Convenience flag to append the packaged ``sofa2-dict`` overlay.
 
     Returns:
         ConceptDictionary with merged definitions.
     """
 
-    base_payload = dict(_load_json_payload(name, directories))
+    dictionary = ConceptDictionary.from_payload(
+        _load_json_payload(name, directories)
+    )
 
     extra_names: list[str] = list(extras or [])
     if include_sofa2 and "sofa2-dict" not in extra_names:
@@ -113,6 +117,6 @@ def load_dictionary(
 
     for extra in extra_names:
         overlay = _load_json_payload(extra, directories)
-        base_payload.update(overlay)
+        dictionary.update(ConceptDictionary.from_payload(overlay))
 
-    return ConceptDictionary.from_payload(base_payload)
+    return dictionary

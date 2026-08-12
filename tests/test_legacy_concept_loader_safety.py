@@ -93,3 +93,29 @@ def test_missing_table_key_error_is_not_misclassified_as_missing_column(
         _loader()._safe_load_table("events", ["stay_id"])
 
     assert len(calls) == 1
+
+
+def test_projection_cache_reloads_when_later_concept_needs_more_columns(
+    monkeypatch,
+):
+    calls = []
+
+    def load(*args, **kwargs):
+        columns = list(kwargs["columns"])
+        calls.append(columns)
+        return pd.DataFrame({column: [1] for column in columns})
+
+    monkeypatch.setattr(legacy_loader_module, "load_table", load)
+    loader = _loader()
+
+    narrow = loader._safe_load_table("events", ["stay_id", "value"])
+    wide = loader._safe_load_table(
+        "events", ["stay_id", "value", "statusdescription"]
+    )
+
+    assert list(narrow.columns) == ["stay_id", "value"]
+    assert "statusdescription" in wide.columns
+    assert calls == [
+        ["stay_id", "value"],
+        ["stay_id", "value", "statusdescription"],
+    ]

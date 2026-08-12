@@ -261,7 +261,7 @@ class ConceptDictionary:
         return ConceptDictionary(self._concepts.copy())
 
     def update(self, other: "ConceptDictionary") -> None:
-        """Merge another dictionary into this one with per-concept granularity."""
+        """Patch concepts, merging source definitions by database key."""
         if not isinstance(other, ConceptDictionary):
             raise TypeError("Can only update from another ConceptDictionary")
 
@@ -335,7 +335,7 @@ class ConceptDictionary:
                     else current.clinical_contract_id
                 ),
                 family=incoming.family if incoming.family is not None else current.family,
-                depends_on=_pick(incoming.depends_on, current.depends_on, allow_empty=True),
+                depends_on=_pick(incoming.depends_on, current.depends_on),
             )
 
             self._concepts[name] = merged_definition
@@ -357,13 +357,13 @@ class ConceptDictionary:
 
     @classmethod
     def from_multiple_json(cls, file_paths: List[str | Path]) -> "ConceptDictionary":
-        """从多个 JSON 文件加载概念字典并合并
+        """Load JSON dictionaries using the same per-concept patch contract.
 
         Args:
-            file_paths: JSON 文件路径列表，后面的文件会覆盖前面的同名概念
+            file_paths: Ordered JSON paths; later definitions patch earlier ones.
 
         Returns:
-            合并后的概念字典
+            The merged concept dictionary.
 
         Examples:
             >>> dict1 = ConceptDictionary.from_multiple_json([
@@ -371,14 +371,17 @@ class ConceptDictionary:
             ...     'data/sofa2-dict.json'
             ... ])
         """
-        merged_payload = {}
+        merged: ConceptDictionary | None = None
         for file_path in file_paths:
             path = Path(file_path)
             with path.open("r", encoding="utf8") as handle:
                 raw_dict = json.load(handle)
-            # 合并，后面的覆盖前面的
-            merged_payload.update(raw_dict)
-        return cls.from_payload(merged_payload)
+            incoming = cls.from_payload(raw_dict)
+            if merged is None:
+                merged = incoming
+            else:
+                merged.update(incoming)
+        return merged if merged is not None else cls({})
 
 
 # Legacy alias kept for backward compatibility with code that imports

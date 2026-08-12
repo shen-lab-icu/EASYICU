@@ -3591,12 +3591,23 @@ def _native_export_runtime_provenance() -> Dict[str, object]:
 
     package_root = Path(__file__).resolve().parents[1]
     repository_root = package_root.parents[1]
-    catalog_files = [
-        package_root / "data" / "concept-dict.json",
-        package_root / "data" / "sofa2-dict.json",
-    ]
+    foundation_files = {
+        "concept_dictionary_sha256": package_root
+        / "data"
+        / "concept-dict.json",
+        "sofa2_dictionary_sha256": package_root / "data" / "sofa2-dict.json",
+        "clinical_contracts_sha256": package_root / "clinical_contracts.py",
+        "data_sources_sha256": package_root / "data" / "data-sources.json",
+    }
+    foundation_sha256 = {
+        field: hashlib.sha256(path.read_bytes()).hexdigest()
+        for field, path in foundation_files.items()
+    }
     digest = hashlib.sha256()
-    for path in catalog_files:
+    for path in (
+        foundation_files["concept_dictionary_sha256"],
+        foundation_files["sofa2_dictionary_sha256"],
+    ):
         if path.is_file():
             digest.update(path.name.encode("utf-8"))
             digest.update(path.read_bytes())
@@ -3643,6 +3654,7 @@ def _native_export_runtime_provenance() -> Dict[str, object]:
         "easyicu_git_diff_sha256": git_diff_sha256,
         "easyicu_import_path": str(package_root),
         "concept_catalog_sha256": digest.hexdigest(),
+        **foundation_sha256,
         "python_version": platform.python_version(),
         "python_executable": sys.executable,
         "platform": platform.platform(),
@@ -4114,7 +4126,7 @@ def _publish_native_export_v2(
     }
     manifest = {
         "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
-        "contract_revision": "native_v2_row_grain_sha256_size_20260803",
+        "contract_revision": "native_v2_foundation_provenance_20260812",
         "database": normalized_database,
         "data_path": str(data_path),
         "format": "parquet",
