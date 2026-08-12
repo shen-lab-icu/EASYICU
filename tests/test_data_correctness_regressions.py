@@ -1019,7 +1019,9 @@ def test_converter_distinguishes_mimic_generations_and_rejects_ambiguity(tmp_pat
         DataConverter(ambiguous, verbose=False)
 
 
-def test_outcomes_preserve_missing_free_days_and_sort_readmissions(monkeypatch):
+def test_unverified_stay_history_does_not_publish_free_days_or_readmission(
+    monkeypatch,
+):
     import easyicu.scores.outcomes as outcomes
 
     icu = pd.DataFrame(
@@ -1039,12 +1041,9 @@ def test_outcomes_preserve_missing_free_days_and_sort_readmissions(monkeypatch):
     )
 
     result = outcomes.load_outcomes("miiv")
-    by_stay = result.set_index("stay_id")
-
-    assert by_stay.loc[1, "icu_free_days_28"] == 26.0
-    assert pd.isna(by_stay.loc[2, "icu_free_days_28"])
-    assert bool(by_stay.loc[1, "icu_readmission"]) is False
-    assert bool(by_stay.loc[2, "icu_readmission"]) is True
+    assert "icu_free_days_28" not in result.columns
+    assert "icu_readmission" not in result.columns
+    assert result["stay_id"].tolist() == [2, 1]
 
 
 def test_sic_outcomes_use_icu_origin_and_censor_incomplete_365d_followup(
@@ -1065,7 +1064,7 @@ def test_sic_outcomes_use_icu_origin_and_censor_incomplete_365d_followup(
 
     result = outcomes.load_outcomes("sic").set_index("CaseID")
 
-    assert result.loc[1, "icu_free_days_28"] == 27.0
+    assert "icu_free_days_28" not in result.columns
     assert bool(result.loc[1, "mort_365d"]) is False
     assert pd.isna(result.loc[2, "mort_365d"])
     assert bool(result.loc[2, "mort_90d"]) is False
@@ -1097,7 +1096,7 @@ def test_sic_outcomes_accept_the_public_sicdb_alias(monkeypatch):
     assert result["CaseID"].tolist() == [1]
 
 
-def test_missing_eicu_vent_days_are_not_treated_as_28_free_days(monkeypatch):
+def test_eicu_hospital_mortality_does_not_publish_vfd28(monkeypatch):
     import easyicu.scores.outcomes as outcomes
 
     apache = pd.DataFrame(
@@ -1110,11 +1109,10 @@ def test_missing_eicu_vent_days_are_not_treated_as_28_free_days(monkeypatch):
     )
     monkeypatch.setattr(outcomes, "_raw_table", lambda *args: apache)
 
-    result = outcomes.load_outcomes("eicu").set_index("patientunitstayid")
+    result = outcomes.load_outcomes("eicu")
 
-    assert pd.isna(result.loc[1, "vent_free_days_28"])
-    assert result.loc[2, "vent_free_days_28"] == 0
-    assert result.loc[3, "vent_free_days_28"] == 24
+    assert result.empty
+    assert "vent_free_days_28" not in result.columns
 
 
 def test_eicu_microbiology_uses_all_stays_as_denominator(monkeypatch):
