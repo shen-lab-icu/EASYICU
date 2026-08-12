@@ -721,13 +721,8 @@ def _build_planner_user_prompt(
         + ". outcome_type 'continuous': "
         + ", ".join(sorted(ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES))
         + ". No other label passes, and neither does one from the other list. "
-        "For the host-owned deterministic binary product "
-        "`table:adjusted_association_estimates`, choose "
-        "`method_family='statsmodels_logit_mle'`. The syntactically valid "
-        "`statsmodels_glm_binomial` token has no sealed deterministic executor; "
-        "a design that specifically requires it must use the separately declared "
-        "agent-coded association capability and a different result product, not "
-        "claim the host-owned table. "
+        + _payload.planner_adjusted_association_owner_guidance()
+        +
         "Primary and secondary entries must be required for step "
         "success; only a sensitivity entry may be optional. "
         "AN ORDINAL OR CATEGORICAL EXPOSURE is one model with several "
@@ -1098,21 +1093,8 @@ def _build_planner_user_prompt(
         '  "subgroup_analysis_spec": null,\n'
         '  "rationale": "<one paragraph>"\n'
         "}\n\n"
-        # Kept to what the Planner cannot get from the key names above. The
-        # longer explanation of why the censoring rule decides which study this
-        # is lives in the `endpoint_contract` finding, which is rendered on the
-        # retry -- exactly when it is needed, at zero fixed cost to every task.
-        "ENDPOINT: ResearchContext.endpoint is sealed HOST authority. Copy it "
-        "exactly into the compatibility projection; do not infer, repair, or "
-        "redefine it. A required missing endpoint blocks execution.\n\n"
-        "OPTIONAL POST-ANALYSIS: leave `evalue_conversion_spec` null unless an "
-        "odds-ratio E-value is requested with a declared baseline-risk evidence "
-        "id, rate column, population column, and exact population. "
-        "Leave `subgroup_analysis_spec` null unless explicitly requested; then "
-        "bind a primary model requirement id and declare predictor, outcome, subgroup "
-        "columns, quantile buckets, minimum sample sizes, effect scale, an "
-        "empty adjustment roster for the unadjusted kernel, and one "
-        "multiplicity family. These are scientific choices, never host guesses.\n\n"
+        + _payload.planner_endpoint_and_optional_science_guidance()
+        +
         "RESEARCH CONTEXT:\n"
         + _format_context(
             planner_context,
@@ -1147,34 +1129,11 @@ def _build_planner_user_prompt(
     return prompt
 
 
-def _render_methodological_principles() -> str:
-    """Render the cross-cutting ICU principles for injection into a prompt.
-
-    Faithful to the impartiality contract on :class:`MethodologicalPrinciple`:
-    ``error`` principles are objective mistakes the plan must avoid, while
-    ``caution`` principles are defensible analytical choices the planner must
-    surface and justify but never have imposed on it. Case-neutral by
-    construction — the principle layer hard-codes no benchmark task, variable,
-    score or database.
-    """
-    errors = [p for p in GENERAL_ICU_ANALYSIS_PRINCIPLES if p.kind == "error"]
-    cautions = [p for p in GENERAL_ICU_ANALYSIS_PRINCIPLES if p.kind == "caution"]
-    lines = [
-        "\n\nCROSS-CUTTING ICU METHODOLOGY (case-neutral; apply when planning):",
-        "Objective errors to avoid — wrong under any study design:",
-    ]
-    lines.extend(f"- [{p.phase}] {p.principle}" for p in errors)
-    lines.append(
-        "Defensible choices — state and justify in the plan; do not let them "
-        "pass silently, but the analyst, not these rules, decides:"
-    )
-    lines.extend(f"- [{p.phase}] {p.principle}" for p in cautions)
-    return "\n".join(lines)
-
-
 # Rendered once: the principle layer is static. Injected into the planner
 # system message so the (previously unused) principles actually steer the plan.
-_PRINCIPLES_GUIDE = _render_methodological_principles()
+_PRINCIPLES_GUIDE = _payload.render_methodological_principles(
+    GENERAL_ICU_ANALYSIS_PRINCIPLES
+)
 
 
 def _validate_table_one_observed_levels(
@@ -1540,12 +1499,8 @@ class PlannerAgent:
                 "Planner know-how decision authority and structured context must "
                 "be supplied together"
             )
-        allowed_citation_keys = tuple(
-            dict.fromkeys(
-                str(value or "").strip()
-                for value in (allowed_literature_citation_keys or [])
-                if str(value or "").strip()
-            )
+        allowed_citation_keys = _payload.normalize_literature_citation_keys(
+            allowed_literature_citation_keys
         )
         resolved_planning_contract_context = planning_contract_context
         if enforce_article_contract and not resolved_planning_contract_context:
@@ -1559,25 +1514,10 @@ class PlannerAgent:
                     build_article_analysis_contract(article_contract_context or context)
                 )
             )
-        if allowed_citation_keys:
-            citation_authority = (
-                "PRE-PLAN LITERATURE CITATION AUTHORITY (exact, run-bound):\n"
-                "- allowed_literature_citation_keys: "
-                + json.dumps(list(allowed_citation_keys), ensure_ascii=False)
-                + "\n- Every primary, secondary, and sensitivity step MUST bind "
-                "one or more exact values from this list in "
-                "literature_citation_keys. Do not cite an evidence artifact, "
-                "analysis contract, study-design brief, or invented semantic "
-                "label in that field. Auxiliary steps may use an empty list."
-            )
-            resolved_planning_contract_context = "\n\n".join(
-                value
-                for value in (
-                    resolved_planning_contract_context,
-                    citation_authority,
-                )
-                if value
-            )
+        resolved_planning_contract_context = _payload.bind_literature_citation_authority(
+            resolved_planning_contract_context,
+            allowed_citation_keys,
+        )
         messages = self.request_messages(
             context,
             know_how_context=know_how_context,
@@ -1637,13 +1577,7 @@ class PlannerAgent:
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
-                + (
-                    " Allowed literature_citation_keys for this run are exactly: "
-                    + json.dumps(list(allowed_citation_keys), ensure_ascii=False)
-                    + "."
-                    if allowed_citation_keys
-                    else ""
-                )
+                + _payload.literature_citation_retry_suffix(allowed_citation_keys)
                 + _payload.planner_science_retry_guide()
             ),
         )
@@ -1705,36 +1639,12 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
-        allowed_citations = {
-            str(value or "").strip()
-            for value in (allowed_literature_citation_keys or [])
-            if str(value or "").strip()
-        }
-        declared_citations = {
-            key for step in plan.steps for key in step.literature_citation_keys
-        }
-        unknown_citations = sorted(declared_citations - allowed_citations)
-        if unknown_citations:
-            raise ValueError(
-                "Planner cited keys outside this run's pre-plan LiteratureBundle: "
-                + ", ".join(unknown_citations)
-            )
-        scientific_steps = [
-            step
-            for step in plan.steps
-            if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
-        ]
-        unbound_scientific_steps = [
-            step.step_id
-            for step in scientific_steps
-            if not step.literature_citation_keys
-        ]
-        if allowed_citations and unbound_scientific_steps:
-            raise ValueError(
-                "Each primary/secondary/sensitivity plan step must bind an exact "
-                "key from the pre-plan LiteratureBundle; unbound steps: "
-                + ", ".join(unbound_scientific_steps)
-            )
+        _payload.validate_literature_citation_bindings(
+            plan,
+            _payload.normalize_literature_citation_keys(
+                allowed_literature_citation_keys
+            ),
+        )
         # What only *Planner output* must satisfy, asked where the Planner can
         # still answer.  A complete-case robustness spec has to name the
         # variables whose completeness defines the set, because a model fitted

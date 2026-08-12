@@ -2,8 +2,8 @@
 
 This owner deliberately exposes relative project files rather than arbitrary
 host paths.  It is the only filesystem boundary used by Pi workspace tools and
-the browser preview endpoints. V1 compare-and-swap locks are process-local;
-multi-worker WebApp deployment is not a supported write configuration.
+the browser preview endpoints. Compare-and-swap writes are serialized by both a
+process-local reentrant lock and an OS-released per-project file lock.
 
 The declared workspace entry itself must not be a symbolic link. Stable
 ancestor links are supported so an operator may relocate ``~/.easyicu`` as one
@@ -28,6 +28,7 @@ from types import MappingProxyType
 from typing import Any, Dict, Mapping, Optional
 
 from .contracts import PiCopilotError
+from .locking import exclusive_file_lock
 
 MAX_FILE_BYTES = 256 * 1024
 MAX_PROJECT_BYTES = 5 * 1024 * 1024
@@ -63,6 +64,7 @@ WORKSPACE_ARTIFACT_AUTHORITY: Mapping[str, Any] = MappingProxyType(
 
 _PROJECT_LOCKS: dict[tuple[str, str], threading.RLock] = {}
 _PROJECT_LOCKS_GUARD = threading.Lock()
+_PROJECT_LOCK_NAME = ".easyicu-workspace-write.lock"
 
 
 def _authority_metadata() -> Dict[str, Any]:
@@ -179,6 +181,12 @@ class ProjectWorkspace:
         key = (str(self.base_dir), project_workspace_id(project_id))
         with _PROJECT_LOCKS_GUARD:
             return _PROJECT_LOCKS.setdefault(key, threading.RLock())
+
+    def _project_file_lock(self, project_id: str):
+        return exclusive_file_lock(
+            self.project_root(project_id) / _PROJECT_LOCK_NAME,
+            code="pi_workspace_write_lock_unavailable",
+        )
 
     def project_root(self, project_id: str) -> Path:
         self._ensure_base_root()
@@ -399,7 +407,12 @@ class ProjectWorkspace:
         total = 0
         count = 0
         for candidate in root.rglob("*"):
-            if candidate.is_symlink() or not candidate.is_file() or candidate == target:
+            if (
+                candidate.is_symlink()
+                or not candidate.is_file()
+                or candidate == target
+                or candidate.name == _PROJECT_LOCK_NAME
+            ):
                 continue
             total += candidate.stat().st_size
             count += 1
@@ -413,7 +426,7 @@ class ProjectWorkspace:
         relative_file: Any,
         content: Any,
     ) -> Dict[str, Any]:
-        with self._project_lock(project_id):
+        with self._project_lock(project_id), self._project_file_lock(project_id):
             candidate, relative = self._candidate(
                 project_id,
                 relative_file,
@@ -502,7 +515,7 @@ class ProjectWorkspace:
         new_text: Any,
         expected_sha256: Any = None,
     ) -> Dict[str, Any]:
-        with self._project_lock(project_id):
+        with self._project_lock(project_id), self._project_file_lock(project_id):
             candidate, relative, source, raw = self._read_complete_file(
                 project_id, relative_file
             )

@@ -35,7 +35,18 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from .databases.profiles import normalize_database_key
+
 logger = logging.getLogger(__name__)
+
+
+class PatientFilterCriterionError(RuntimeError):
+    """A requested cohort criterion could not be applied faithfully."""
+
+    def __init__(self, code: str, criterion: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.criterion = criterion
 
 
 @dataclass
@@ -103,7 +114,10 @@ class PatientFilter:
         data_path: Optional[Union[str, Path]] = None,
         verbose: bool = False
     ):
-        self.database = database
+        try:
+            self.database = normalize_database_key(database)
+        except KeyError as exc:
+            raise ValueError(f"不支持的数据库: {database}") from exc
         self.data_path = Path(data_path) if data_path else None
         self.verbose = verbose
         
@@ -202,9 +216,9 @@ class PatientFilter:
         # eICU直接有age列，但可能是字符串
         if 'age' in patient.columns:
             # 处理 "> 89" 这样的值
+            age_text = patient['age'].astype(str).str.replace(r'\s+', '', regex=True)
             patient['age'] = pd.to_numeric(
-                patient['age'].astype(str).str.replace('> ', '').str.replace('>89', '90'),
-                errors='coerce'
+                age_text.replace({'>89': '90'}), errors='coerce'
             )
         
         # 住院时长
@@ -236,12 +250,30 @@ class PatientFilter:
         
         # 年龄
         if 'agegroup' in admissions.columns:
-            # AUMC使用年龄分组，取中点
-            age_map = {
-                '18-39': 28.5, '40-49': 44.5, '50-59': 54.5,
-                '60-69': 64.5, '70-79': 74.5, '80+': 85
+            # Preserve the published interval. The midpoint remains available
+            # for summaries, but exact inclusion thresholds use the bounds.
+            age_bounds = {
+                '18-39': (18.0, 39.0),
+                '40-49': (40.0, 49.0),
+                '50-59': (50.0, 59.0),
+                '60-69': (60.0, 69.0),
+                '70-79': (70.0, 79.0),
+                '80+': (80.0, None),
             }
-            admissions['age'] = admissions['agegroup'].map(age_map)
+            bounds = admissions['agegroup'].map(age_bounds)
+            admissions['age_lower'] = bounds.map(
+                lambda value: value[0] if isinstance(value, tuple) else pd.NA
+            )
+            admissions['age_upper'] = bounds.map(
+                lambda value: value[1] if isinstance(value, tuple) else pd.NA
+            )
+            admissions['age'] = bounds.map(
+                lambda value: (
+                    (value[0] + value[1]) / 2
+                    if isinstance(value, tuple) and value[1] is not None
+                    else (85.0 if isinstance(value, tuple) else pd.NA)
+                )
+            )
         
         # 住院时长
         if 'admittedat' in admissions.columns and 'dischargedat' in admissions.columns:
@@ -356,18 +388,23 @@ class PatientFilter:
         # SICdb 使用 cases 表
         cases = self._read_table('cases')
         
-        # 年龄 - SICdb 的 age 是直接的年龄值
-        if 'Age' in cases.columns:
-            cases['age'] = cases['Age']
-        elif 'age' in cases.columns:
-            pass  # 已经有age列
-        
-        # 住院时长 - OffsetOfDeath 或 ICUOffset 表示 ICU 停留时间（分钟）
-        if 'OffsetOfDeath' in cases.columns and 'TimeOfStay' in cases.columns:
-            # TimeOfStay 是 ICU 停留时间（分钟）
-            cases['los_hours'] = cases['TimeOfStay'] / 60
-        elif 'TimeOfStay' in cases.columns:
-            cases['los_hours'] = cases['TimeOfStay'] / 60
+        columns = {str(column).lower(): column for column in cases.columns}
+
+        # SICdb publishes rounded age in AgeOnAdmission.
+        age_column = columns.get('ageonadmission') or columns.get('age')
+        if age_column is not None:
+            cases['age'] = pd.to_numeric(cases[age_column], errors='coerce')
+
+        # Both offsets are seconds from primary MetaVision admission. ICU LOS
+        # starts at ICUOffset, so preceding surgery must be removed.
+        time_of_stay = columns.get('timeofstay')
+        icu_offset = columns.get('icuoffset')
+        if time_of_stay is not None and icu_offset is not None:
+            los_seconds = (
+                pd.to_numeric(cases[time_of_stay], errors='coerce')
+                - pd.to_numeric(cases[icu_offset], errors='coerce')
+            )
+            cases['los_hours'] = los_seconds.where(los_seconds >= 0) / 3600.0
         
         # 首次入ICU（SICdb 通常每个 CaseID 是独立的 ICU 入院）
         cases['first_icu_stay'] = True
@@ -378,19 +415,24 @@ class PatientFilter:
         elif 'sex' in cases.columns:
             cases['gender'] = cases['sex'].map({0: 'F', 1: 'M', 'Female': 'F', 'Male': 'M', 'F': 'F', 'M': 'M'})
         
-        # 存活状态 - OffsetOfDeath 如果不为空表示死亡
-        if 'OffsetOfDeath' in cases.columns:
-            cases['survived'] = cases['OffsetOfDeath'].isna()
-        elif 'offsetofdeath' in cases.columns:
-            cases['survived'] = cases['offsetofdeath'].isna()
-        else:
-            cases['survived'] = True  # 默认存活
+        # HospitalDischargeType is the hospital-discharge endpoint. OffsetOfDeath
+        # is one-year follow-up and must not be substituted for discharge survival.
+        discharge_column = columns.get('hospitaldischargetype')
+        if discharge_column is not None:
+            discharge = cases[discharge_column]
+            numeric = pd.to_numeric(discharge, errors='coerce')
+            survived = pd.Series(pd.NA, index=cases.index, dtype='boolean')
+            survived.loc[numeric.eq(2026)] = True
+            survived.loc[numeric.eq(2028)] = False
+            text = discharge.astype(str).str.strip().str.lower()
+            survived.loc[text.eq('survived')] = True
+            survived.loc[text.eq('deceased')] = False
+            cases['survived'] = survived
         
         # ID列标准化 - SICdb 使用 CaseID
-        if 'CaseID' in cases.columns:
-            cases['patient_id'] = cases['CaseID']
-        elif 'caseid' in cases.columns:
-            cases['patient_id'] = cases['caseid']
+        case_id = columns.get('caseid')
+        if case_id is not None:
+            cases['patient_id'] = cases[case_id]
         
         return cases
     
@@ -491,29 +533,70 @@ class PatientFilter:
         
         # 应用筛选条件
         mask = pd.Series([True] * len(df), index=df.index)
+
+        requested_columns = {
+            'age': ('age', age_min is not None or age_max is not None),
+            'first_icu_stay': ('first_icu_stay', first_icu_stay is not None),
+            'los': ('los_hours', los_min is not None or los_max is not None),
+            'gender': ('gender', gender is not None),
+            'survived': ('survived', survived is not None),
+        }
+        for criterion, (column, requested) in requested_columns.items():
+            if requested and (column not in df.columns or df[column].notna().sum() == 0):
+                raise PatientFilterCriterionError(
+                    'patient_filter_criterion_unavailable',
+                    criterion,
+                    f"Requested criterion {criterion!r} is unavailable for {self.database!r}.",
+                )
         
         # 年龄筛选
-        if age_min is not None and 'age' in df.columns:
-            mask &= df['age'] >= age_min
-        if age_max is not None and 'age' in df.columns:
-            mask &= df['age'] <= age_max
+        if (
+            self.database == 'aumc'
+            and (age_min is not None or age_max is not None)
+            and {'age_lower', 'age_upper'}.issubset(df.columns)
+        ):
+            lower = pd.to_numeric(df['age_lower'], errors='coerce')
+            upper = pd.to_numeric(df['age_upper'], errors='coerce')
+            if age_min is not None:
+                split = lower.lt(age_min) & (upper.isna() | upper.ge(age_min))
+                if split.any():
+                    raise PatientFilterCriterionError(
+                        'patient_filter_grouped_age_indeterminate',
+                        'age',
+                        f"age_min={age_min} splits an AmsterdamUMCdb age band.",
+                    )
+                mask &= lower.ge(age_min).fillna(False)
+            if age_max is not None:
+                split = lower.le(age_max) & (upper.isna() | upper.gt(age_max))
+                if split.any():
+                    raise PatientFilterCriterionError(
+                        'patient_filter_grouped_age_indeterminate',
+                        'age',
+                        f"age_max={age_max} splits an AmsterdamUMCdb age band.",
+                    )
+                mask &= upper.le(age_max).fillna(False)
+        else:
+            if age_min is not None:
+                mask &= df['age'] >= age_min
+            if age_max is not None:
+                mask &= df['age'] <= age_max
         
         # 首次入ICU
-        if first_icu_stay is not None and 'first_icu_stay' in df.columns:
+        if first_icu_stay is not None:
             mask &= df['first_icu_stay'] == first_icu_stay
         
         # 住院时长
-        if los_min is not None and 'los_hours' in df.columns:
+        if los_min is not None:
             mask &= df['los_hours'] >= los_min
-        if los_max is not None and 'los_hours' in df.columns:
+        if los_max is not None:
             mask &= df['los_hours'] <= los_max
         
         # 性别
-        if gender is not None and 'gender' in df.columns:
+        if gender is not None:
             mask &= df['gender'].str.upper() == gender.upper()
         
         # 存活状态
-        if survived is not None and 'survived' in df.columns:
+        if survived is not None:
             mask &= df['survived'] == survived
         
         # Sepsis筛选（需要额外处理）
@@ -551,8 +634,11 @@ class PatientFilter:
             from easyicu.api import load_sepsis3
             sep3 = load_sepsis3(database=self.database, data_path=self.data_path)
         except Exception as e:
-            logger.warning(f"无法用 Sepsis-3 定义筛选脓毒症患者: {e}")
-            return set()
+            raise PatientFilterCriterionError(
+                'patient_filter_sepsis_unascertainable',
+                'has_sepsis',
+                'Sepsis-3 derivation failed; the cohort cannot encode unknown as negative.',
+            ) from e
 
         if not isinstance(sep3, pd.DataFrame) or sep3.empty:
             return set()
@@ -561,8 +647,11 @@ class PatientFilter:
                          'admissionid', 'patientid', 'CaseID']
         id_col = next((c for c in id_candidates if c in sep3.columns), None)
         if id_col is None:
-            logger.warning("load_sepsis3 结果中找不到患者 ID 列，无法筛选脓毒症队列")
-            return set()
+            raise PatientFilterCriterionError(
+                'patient_filter_sepsis_identifier_unavailable',
+                'has_sepsis',
+                'The Sepsis-3 result has no supported ICU-stay identifier.',
+            )
 
         value_candidates = ['sep3', 'sep3_sofa2', 'sep3_sofa1']
         value_col = next((c for c in value_candidates if c in sep3.columns), None)

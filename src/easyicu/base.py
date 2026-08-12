@@ -19,12 +19,45 @@ import pandas as pd
 
 from .datasource import ICUDataSource
 from .concept import ConceptResolver, ConceptDictionary
+from .databases.profiles import normalize_database_key
 from .resources import load_data_sources, load_dictionary
 from .runtime.cache_manager import get_cache_manager
 from .runtime.parallel_config import get_global_config, get_runtime_load_strategy
 from .table import ICUTable
 
 logger = logging.getLogger(__name__)
+
+
+def _peek_table_columns(path: Path, table: str) -> set[str]:
+    """Read a prepared table schema without loading its rows."""
+
+    roots = (path, path / "icu", path / "hosp")
+    for root in roots:
+        for candidate in (root / f"{table}.parquet", root / table):
+            try:
+                import pyarrow.parquet as pq
+
+                if candidate.is_file():
+                    return {str(name).lower() for name in pq.read_schema(candidate).names}
+                if candidate.is_dir():
+                    shard = next(candidate.glob("*.parquet"), None)
+                    if shard is not None:
+                        return {
+                            str(name).lower() for name in pq.read_schema(shard).names
+                        }
+            except Exception:
+                continue
+        for suffix in (".csv", ".csv.gz"):
+            candidate = root / f"{table}{suffix}"
+            try:
+                if candidate.is_file():
+                    return {
+                        str(name).lower()
+                        for name in pd.read_csv(candidate, nrows=0).columns
+                    }
+            except Exception:
+                continue
+    return set()
 
 
 def _batch_patient_count(batch_ids: Union[List, Dict, None]) -> int:
@@ -61,7 +94,7 @@ class BaseICULoader:
 
         Args:
             data_path: Path to ICU data (auto-detected if None)
-            database: Database type ('miiv', 'mimic', 'eicu', 'hirid', 'aumc')
+            database: Canonical database key or registered alias
             dict_path: Custom concept dictionary path(s)
             use_sofa2: Whether to load SOFA2 dictionary
             verbose: Enable verbose logging
@@ -98,13 +131,26 @@ class BaseICULoader:
         4. 默认值 miiv
         """
         if database:
-            return database
+            try:
+                return normalize_database_key(database)
+            except KeyError as exc:
+                raise ValueError(f"Unsupported database: {database!r}") from exc
         
         # 尝试从 data_path 推断数据库类型
         if data_path:
             path = Path(data_path)
             path_str = str(path).lower()
             
+            # Prepared MIMIC-III/IV directories share the same table names.
+            # Their stay identifier is the authoritative discriminator and must
+            # be checked before the ambiguous admissions marker below.
+            if path.is_dir():
+                mimic_columns = _peek_table_columns(path, "icustays")
+                if "stay_id" in mimic_columns:
+                    return "miiv"
+                if "icustay_id" in mimic_columns:
+                    return "mimic"
+
             # 1. 检查路径名称中是否包含数据库标识
             db_patterns = {
                 'eicu': ['eicu', 'eicu-crd'],
@@ -112,6 +158,7 @@ class BaseICULoader:
                 'hirid': ['hirid'],
                 'miiv': ['miiv', 'mimiciv', 'mimic-iv', 'mimic_iv'],
                 'mimic': ['mimic', 'mimic-iii', 'mimic_iii', 'mimiciii'],
+                'sic': ['sicdb', 'sic-db'],
             }
             for db_name, patterns in db_patterns.items():
                 if any(p in path_str for p in patterns):
@@ -123,9 +170,12 @@ class BaseICULoader:
             if path.is_dir():
                 marker_files = {
                     'eicu': ['patient.parquet', 'patient.csv', 'patient.csv.gz', 'vitalPeriodic.parquet'],
-                    'aumc': ['numericitems', 'admissions.parquet'],
-                    'miiv': ['chartevents', 'icustays.parquet'],
+                    # admissions exists in both MIMIC generations and is not an
+                    # AmsterdamUMCdb marker. numericitems is distinctive.
+                    'aumc': ['numericitems'],
+                    'miiv': ['chartevents'],
                     'hirid': ['general_table.csv', 'general_table.parquet', 'observations'],  # 🔧 FIX: 正确的表名
+                    'sic': ['cases.parquet', 'data_float_h_bucket'],
                 }
                 for db_name, markers in marker_files.items():
                     if any((path / m).exists() for m in markers):
@@ -142,11 +192,18 @@ class BaseICULoader:
                             return db_name
 
         # Check environment variables
-        for db_name in ['miiv', 'mimic', 'eicu', 'hirid', 'aumc']:
-            env_var = f'{db_name.upper()}_PATH'
-            if os.getenv(env_var):
+        environment_keys = {
+            'miiv': ('MIIV_PATH', 'MIMICIV_PATH'),
+            'mimic': ('MIMIC_PATH', 'MIMICIII_PATH'),
+            'eicu': ('EICU_PATH',),
+            'hirid': ('HIRID_PATH',),
+            'aumc': ('AUMC_PATH',),
+            'sic': ('SIC_PATH', 'SICDB_PATH'),
+        }
+        for db_name, env_vars in environment_keys.items():
+            if any(os.getenv(env_var) for env_var in env_vars):
                 if self.verbose:
-                    logger.info(f"Auto-detected database: {db_name} from {env_var}")
+                    logger.info(f"Auto-detected database: {db_name} from environment")
                 return db_name
 
         # Default
@@ -233,12 +290,17 @@ class BaseICULoader:
 
         # Check environment variables
         # 1. 首先检查数据库专用的环境变量（如 MIMIC_PATH）
-        env_var = f'{database.upper()}_PATH'
-        path = os.getenv(env_var)
-        if path:
-            if self.verbose:
-                logger.info(f"Using path from {env_var}: {path}")
-            return Path(path)
+        env_vars = {
+            'miiv': ('MIIV_PATH', 'MIMICIV_PATH'),
+            'mimic': ('MIMIC_PATH', 'MIMICIII_PATH'),
+            'sic': ('SIC_PATH', 'SICDB_PATH'),
+        }.get(database, (f'{database.upper()}_PATH',))
+        for env_var in env_vars:
+            path = os.getenv(env_var)
+            if path:
+                if self.verbose:
+                    logger.info(f"Using path from {env_var}: {path}")
+                return Path(path)
         
         # 2. 检查 EASYICU_DATA_PATH 通用环境变量（需要与数据库目录映射）
         easyicu_data_path = os.getenv('EASYICU_DATA_PATH')
@@ -1259,9 +1321,11 @@ def get_default_data_path(database: str) -> Optional[Path]:
     loader = BaseICULoader(database=database, verbose=False)
     return loader.data_path
 
-def detect_database_type() -> str:
-    """Auto-detect database type from environment (convenience function)"""
-    loader = BaseICULoader(verbose=False)
+def detect_database_type(
+    data_path: Optional[Union[str, Path]] = None,
+) -> str:
+    """Auto-detect database type from a prepared path or environment."""
+    loader = BaseICULoader(data_path=data_path, verbose=False)
     return loader.database
 
 _PROCESS_WORKER_LOADER: Optional[BaseICULoader] = None

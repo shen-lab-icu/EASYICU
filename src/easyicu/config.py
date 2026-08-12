@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator, field_valida
 from .databases.profiles import (
     DATABASE_ID_CONFIG as DATABASE_ID_CONFIG,
     DatabaseProfileMetadata,
+    normalize_database_key,
 )
 
 class IdentifierConfig(BaseModel):
@@ -393,16 +394,21 @@ def load_src_cfg(src_name: str) -> DataSourceConfig:
     from .resources import load_data_sources
     registry = load_data_sources()
     
+    clean_name = str(src_name).strip()
     try:
-        return registry.get(src_name)
+        return registry.get(clean_name)
     except KeyError:
-        # 如果数据源不存在，创建一个基本配置
-        # 注意: id_cfg 和 tables 必须是字典
-        return DataSourceConfig(
-            name=src_name,
-            id_cfg={},
-            tables={}
-        )
+        try:
+            canonical_name = normalize_database_key(clean_name, registry=registry)
+            return registry.get(canonical_name)
+        except KeyError:
+            # Preserve the historical extension hook only for genuinely custom
+            # sources; registered aliases must never degrade to an empty config.
+            return DataSourceConfig(
+                name=clean_name,
+                id_cfg={},
+                tables={},
+            )
 
 # ============================================================================
 # Persistent Configuration Storage (R ricu config persistence)

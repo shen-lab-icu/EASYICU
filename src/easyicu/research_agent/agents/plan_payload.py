@@ -10,7 +10,8 @@ valid-looking design. It normalizes only representation-level aliases.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Dict, List, Tuple
+import json
+from typing import Any, Dict, List, Sequence, Tuple
 
 from ..contracts.declared_product import (
     PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
@@ -67,6 +68,135 @@ def planner_descriptive_robustness_guidance(analysis_type: str) -> str:
         "complete-case availability checks; any additional descriptive "
         "summary must remain a separately declared descriptive method.\n\n"
     )
+
+
+def planner_adjusted_association_owner_guidance() -> str:
+    """Name the one method family implemented by the sealed host owner."""
+
+    return (
+        "For the host-owned deterministic binary product "
+        "`table:adjusted_association_estimates`, choose "
+        "`method_family='statsmodels_logit_mle'`. The syntactically valid "
+        "`statsmodels_glm_binomial` token has no sealed deterministic executor; "
+        "a design that specifically requires it must use the separately declared "
+        "agent-coded association capability and a different result product, not "
+        "claim the host-owned table. "
+    )
+
+
+def planner_endpoint_and_optional_science_guidance() -> str:
+    """Render host-owned endpoint and optional post-analysis boundaries."""
+
+    return (
+        "ENDPOINT: ResearchContext.endpoint is sealed HOST authority. Copy it "
+        "exactly into the compatibility projection; do not infer, repair, or "
+        "redefine it. A required missing endpoint blocks execution.\n\n"
+        "OPTIONAL POST-ANALYSIS: leave `evalue_conversion_spec` null unless an "
+        "odds-ratio E-value is requested with a declared baseline-risk evidence "
+        "id, rate column, population column, and exact population. Leave "
+        "`subgroup_analysis_spec` null unless explicitly requested; then bind a "
+        "primary model requirement id and declare predictor, outcome, subgroup "
+        "columns, quantile buckets, minimum sample sizes, effect scale, an empty "
+        "adjustment roster for the unadjusted kernel, and one multiplicity family. "
+        "These are scientific choices, never host guesses.\n\n"
+    )
+
+
+def render_methodological_principles(principles: Sequence[Any]) -> str:
+    """Project case-neutral methodological principles into Planner guidance."""
+
+    errors = [principle for principle in principles if principle.kind == "error"]
+    cautions = [
+        principle for principle in principles if principle.kind == "caution"
+    ]
+    lines = [
+        "\n\nCROSS-CUTTING ICU METHODOLOGY (case-neutral; apply when planning):",
+        "Objective errors to avoid — wrong under any study design:",
+    ]
+    lines.extend(
+        f"- [{principle.phase}] {principle.principle}" for principle in errors
+    )
+    lines.append(
+        "Defensible choices — state and justify in the plan; do not let them "
+        "pass silently, but the analyst, not these rules, decides:"
+    )
+    lines.extend(
+        f"- [{principle.phase}] {principle.principle}" for principle in cautions
+    )
+    return "\n".join(lines)
+
+
+def normalize_literature_citation_keys(values: Sequence[str] | None) -> tuple[str, ...]:
+    """Return the ordered, unique run-bound citation-key authority."""
+
+    return tuple(
+        dict.fromkeys(
+            str(value or "").strip()
+            for value in (values or [])
+            if str(value or "").strip()
+        )
+    )
+
+
+def bind_literature_citation_authority(
+    planning_contract_context: str,
+    allowed_keys: Sequence[str],
+) -> str:
+    """Append exact LiteratureBundle keys to the Planner design profile."""
+
+    if not allowed_keys:
+        return planning_contract_context
+    authority = (
+        "PRE-PLAN LITERATURE CITATION AUTHORITY (exact, run-bound):\n"
+        "- allowed_literature_citation_keys: "
+        + json.dumps(list(allowed_keys), ensure_ascii=False)
+        + "\n- Every primary, secondary, and sensitivity step MUST bind one or "
+        "more exact values from this list in literature_citation_keys. Do not cite "
+        "an evidence artifact, analysis contract, study-design brief, or invented "
+        "semantic label in that field. Auxiliary steps may use an empty list."
+    )
+    return "\n\n".join(
+        value for value in (planning_contract_context, authority) if value
+    )
+
+
+def literature_citation_retry_suffix(allowed_keys: Sequence[str]) -> str:
+    """Render exact citation keys in the structured-retry reminder."""
+
+    if not allowed_keys:
+        return ""
+    return (
+        " Allowed literature_citation_keys for this run are exactly: "
+        + json.dumps(list(allowed_keys), ensure_ascii=False)
+        + "."
+    )
+
+
+def validate_literature_citation_bindings(
+    plan: AnalysisPlan,
+    allowed_keys: Sequence[str],
+) -> None:
+    """Reject invented keys and unbound scientific steps."""
+
+    allowed = set(allowed_keys)
+    declared = {key for step in plan.steps for key in step.literature_citation_keys}
+    unknown = sorted(declared - allowed)
+    if unknown:
+        raise ValueError(
+            "Planner cited keys outside this run's pre-plan LiteratureBundle: "
+            + ", ".join(unknown)
+        )
+    unbound = [
+        step.step_id
+        for step in plan.steps
+        if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
+        and not step.literature_citation_keys
+    ]
+    if allowed and unbound:
+        raise ValueError(
+            "Each primary/secondary/sensitivity plan step must bind an exact key "
+            "from the pre-plan LiteratureBundle; unbound steps: " + ", ".join(unbound)
+        )
 
 
 def planner_science_retry_guide() -> str:
@@ -482,4 +612,11 @@ __all__ = [
     "PlannerScientificProjectionError",
     "planner_descriptive_method_guidance",
     "planner_descriptive_robustness_guidance",
+    "planner_adjusted_association_owner_guidance",
+    "planner_endpoint_and_optional_science_guidance",
+    "render_methodological_principles",
+    "normalize_literature_citation_keys",
+    "bind_literature_citation_authority",
+    "literature_citation_retry_suffix",
+    "validate_literature_citation_bindings",
 ]

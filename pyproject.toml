@@ -128,6 +128,7 @@ easyicu = ["data/*.json", "data/research_know_how/*.json"]
   "static/THIRD_PARTY_NOTICES.md",
   "static/css/*.css",
   "static/js/*.js",
+  "static/assets/demo/*.png",
   "static/vendor/echarts/*",
   "pi_copilot/node_app/package.json",
   "pi_copilot/node_app/package-lock.json",

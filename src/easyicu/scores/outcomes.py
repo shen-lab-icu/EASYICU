@@ -31,6 +31,7 @@ import pandas as pd
 from easyicu.outcome_availability import FOLLOWUP_OUTCOME_DATABASES
 
 from .comorbidity import _lower_cols
+from ..databases.profiles import normalize_database_key
 
 
 def _raw_table(database: str, data_path: object, table: str) -> pd.DataFrame:
@@ -132,7 +133,21 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
     off_death = pd.to_numeric(cases[cmap["offsetofdeath"]], errors="coerce")
     icu_off = pd.to_numeric(cases[cmap["icuoffset"]], errors="coerce").fillna(0)
     df["days_to_death"] = (off_death - icu_off) / 86400.0  # SICdb offsets are seconds
-    df["los_days"] = pd.to_numeric(cases[cmap["timeofstay"]], errors="coerce") / 86400.0
+    time_of_stay = pd.to_numeric(cases[cmap["timeofstay"]], errors="coerce")
+    los_seconds = time_of_stay - icu_off
+    df["los_days"] = los_seconds.where(los_seconds >= 0) / 86400.0
+    df["followup_days"] = np.nan
+    followup_column = cmap.get("estimatedsurvivalobservationtime")
+    if followup_column is not None:
+        followup = cases[followup_column]
+        numeric = pd.to_numeric(followup, errors="coerce")
+        followup_days = pd.Series(np.nan, index=cases.index, dtype="float64")
+        followup_days.loc[numeric.eq(3076)] = 183.0
+        followup_days.loc[numeric.eq(3077)] = 365.0
+        text = followup.astype(str).str.strip().str.lower()
+        followup_days.loc[text.str.contains("6 month", na=False)] = 183.0
+        followup_days.loc[text.str.contains("1 year", na=False)] = 365.0
+        df["followup_days"] = followup_days.to_numpy()
     df["hadm_id"] = np.nan
     return df
 
@@ -183,7 +198,8 @@ def load_outcomes(
     boolean, MIMIC only). DBs without death follow-up return an empty
     frame.
     """
-    db = database.lower()
+    db = normalize_database_key(database)
+    database = db
     patient_values = _patient_values(patient_ids)
     if patient_values == []:
         return pd.DataFrame()
@@ -213,20 +229,28 @@ def load_outcomes(
     out = pd.DataFrame({_STAY_OUT_COL[db]: base["_stay"].values})
     dtd = base["days_to_death"].values
     has_death = ~pd.isna(dtd)
+    followup_days = pd.to_numeric(
+        base.get("followup_days", pd.Series(np.inf, index=base.index)),
+        errors="coerce",
+    ).to_numpy()
     for name, horizon in _HORIZONS.items():
-        # dead within horizon -> True; known-alive (no death, or death after
-        # horizon) -> False. We cannot see beyond the data window, but death
-        # follow-up in these DBs covers >= 1 year, so 28/90d are reliable.
         died_by = has_death & (dtd <= horizon) & (dtd >= 0)
-        out[name] = pd.array(died_by, dtype="boolean")
+        known_alive = (has_death & (dtd > horizon)) | (
+            ~has_death & (followup_days >= horizon)
+        )
+        endpoint = pd.array([pd.NA] * len(base), dtype="boolean")
+        endpoint[died_by] = True
+        endpoint[known_alive] = False
+        out[name] = endpoint
 
     los = pd.to_numeric(base["los_days"], errors="coerce").values
     dead28 = out["mort_28d"].fillna(False).to_numpy(dtype=bool)
+    unknown28 = out["mort_28d"].isna().to_numpy(dtype=bool)
     los_capped = np.clip(los, 0, 28)
     icu_free = np.where(
         dead28,
         0.0,
-        np.where(np.isnan(los), np.nan, 28.0 - los_capped),
+        np.where(unknown28 | np.isnan(los), np.nan, 28.0 - los_capped),
     )
     out["icu_free_days_28"] = icu_free
 

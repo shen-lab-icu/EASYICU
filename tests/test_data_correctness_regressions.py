@@ -280,6 +280,68 @@ def test_concept_cache_does_not_truncate_digest_to_collision_prone_prefix(
     assert second["stay_id"].tolist() == [2]
 
 
+def test_concept_cache_uses_opaque_parquet_name_by_default(monkeypatch, tmp_path):
+    data_path = tmp_path / "data"
+    cache_path = tmp_path / "cache"
+    data_path.mkdir()
+    calls = []
+
+    def fake_load_concepts(**kwargs):
+        calls.append(kwargs)
+        return pd.DataFrame({"stay_id": [1], "charttime": [pd.Timestamp("2020-01-01")]})
+
+    monkeypatch.setattr(api, "load_concepts", fake_load_concepts)
+
+    first = api.load_concept_cached(
+        "../heart/rate",
+        "../../miiv",
+        data_path,
+        cache_dir=cache_path,
+        verbose=False,
+    )
+    second = api.load_concept_cached(
+        "../heart/rate",
+        "../../miiv",
+        data_path,
+        cache_dir=cache_path,
+        verbose=False,
+    )
+
+    cache_files = list(cache_path.iterdir())
+    assert len(calls) == 1
+    assert first.equals(second)
+    assert len(cache_files) == 1
+    assert cache_files[0].parent == cache_path
+    assert cache_files[0].suffix == ".parquet"
+    assert len(cache_files[0].stem) == 64
+    int(cache_files[0].stem, 16)
+
+
+def test_pickle_cache_is_explicit_and_uses_an_opaque_name(monkeypatch, tmp_path):
+    data_path = tmp_path / "data"
+    cache_path = tmp_path / "cache"
+    data_path.mkdir()
+    monkeypatch.setattr(
+        api,
+        "load_concepts",
+        lambda **_kwargs: pd.DataFrame({"stay_id": [1]}),
+    )
+
+    api.load_concept_cached(
+        "../heart/rate",
+        "../../miiv",
+        data_path,
+        cache_dir=cache_path,
+        use_pickle=True,
+        verbose=False,
+    )
+
+    cache_files = list(cache_path.iterdir())
+    assert len(cache_files) == 1
+    assert cache_files[0].name.endswith(".trusted.pkl")
+    assert len(cache_files[0].name.removesuffix(".trusted.pkl")) == 64
+
+
 def test_transformed_bounds_are_applied_before_hourly_aggregation(tmp_path):
     pd.DataFrame(
         {
@@ -963,6 +1025,56 @@ def test_outcomes_preserve_missing_free_days_and_sort_readmissions(monkeypatch):
     assert pd.isna(by_stay.loc[2, "icu_free_days_28"])
     assert bool(by_stay.loc[1, "icu_readmission"]) is False
     assert bool(by_stay.loc[2, "icu_readmission"]) is True
+
+
+def test_sic_outcomes_use_icu_origin_and_censor_incomplete_365d_followup(
+    monkeypatch,
+):
+    import easyicu.scores.outcomes as outcomes
+
+    cases = pd.DataFrame(
+        {
+            "CaseID": [1, 2, 3],
+            "TimeOfStay": [90_000, 90_000, 90_000],
+            "ICUOffset": [3_600, 3_600, 3_600],
+            "OffsetOfDeath": [None, None, 3_600 + 300 * 86_400],
+            "EstimatedSurvivalObservationTime": [3077, 3076, 3076],
+        }
+    )
+    monkeypatch.setattr(outcomes, "_raw_table", lambda *_args: cases)
+
+    result = outcomes.load_outcomes("sic").set_index("CaseID")
+
+    assert result.loc[1, "icu_free_days_28"] == 27.0
+    assert bool(result.loc[1, "mort_365d"]) is False
+    assert pd.isna(result.loc[2, "mort_365d"])
+    assert bool(result.loc[2, "mort_90d"]) is False
+    assert bool(result.loc[3, "mort_365d"]) is True
+
+
+def test_sic_outcomes_accept_the_public_sicdb_alias(monkeypatch):
+    import easyicu.scores.outcomes as outcomes
+
+    observed = {}
+
+    def fake_sic(database, _data_path):
+        observed["database"] = database
+        return pd.DataFrame(
+            {
+                "_stay": [1],
+                "days_to_death": [400.0],
+                "los_days": [1.0],
+                "followup_days": [365.0],
+                "hadm_id": [pd.NA],
+            }
+        )
+
+    monkeypatch.setattr(outcomes, "_sic_stay_death_days", fake_sic)
+
+    result = outcomes.load_outcomes("sicdb")
+
+    assert observed["database"] == "sic"
+    assert result["CaseID"].tolist() == [1]
 
 
 def test_missing_eicu_vent_days_are_not_treated_as_28_free_days(monkeypatch):
