@@ -21,6 +21,9 @@ e3 2 repairs / +78 bytes / 11 bound / 0 markers.
 from __future__ import annotations
 
 import re
+from pathlib import Path
+
+import pytest
 
 from easyicu.research_agent.reporting.manuscript_post import (
     repair_miscited_numeric_citations,
@@ -83,14 +86,40 @@ MISCITING = (
 )
 
 
-def test_the_owning_citation_is_added() -> None:
+def test_multiple_denominator_owners_are_not_assumed_to_be_the_same_fact() -> None:
     repaired, repairs = repair_miscited_numeric_citations(
         MISCITING, evidence=_store()
     )
-    assert len(repairs) == 1
-    assert repairs[0]["cited"] == "00_probe"
-    # Earliest-ordered owner: provenance flows forward.
-    assert repairs[0]["added"] == "02_table_one_by_sepsis3_status"
+    assert repairs == []
+    assert repaired == MISCITING
+
+
+def test_the_unique_owning_citation_is_added() -> None:
+    from easyicu.research_agent.authority.evidence_store import NumericClaim
+
+    store = _FakeStore(
+        [
+            NumericClaim(
+                value="94,458",
+                canonical=94458.0,
+                evidence_id="02_table_one_by_sepsis3_status",
+                step_id="02_table_one_by_sepsis3_status",
+                source_field="cohort_n",
+                tolerance=0.0,
+            )
+        ],
+        names={"00_probe", "02_table_one_by_sepsis3_status"},
+    )
+
+    repaired, repairs = repair_miscited_numeric_citations(MISCITING, evidence=store)
+
+    assert repairs == [
+        {
+            "value": "94,458",
+            "cited": "00_probe",
+            "added": "02_table_one_by_sepsis3_status",
+        }
+    ]
     assert "{evidence:02_table_one_by_sepsis3_status}" in repaired
 
 
@@ -178,6 +207,102 @@ def test_nothing_is_added_when_no_owner_is_citable() -> None:
         MISCITING, evidence=uncitable
     )
     assert repairs == [] and repaired == MISCITING
+
+
+@pytest.mark.parametrize(
+    ("sentence", "claims"),
+    [
+        (
+            "The mortality rate was 0.85 {evidence:00_probe}.\n",
+            [("01_model", "auroc"), ("04_outcome", "mortality_rate")],
+        ),
+        (
+            "The hazard ratio was 1.20 {evidence:00_probe}.\n",
+            [("01_logistic", "odds_ratio"), ("04_survival", "hazard_ratio")],
+        ),
+        (
+            "There were 120 deaths {evidence:00_probe}.\n",
+            [("01_cohort", "n_total"), ("04_outcome", "n_deaths")],
+        ),
+        (
+            "Mortality was 85% {evidence:00_probe}.\n",
+            [("01_model", "auroc"), ("04_outcome", "mortality_rate")],
+        ),
+        (
+            "The primary odds ratio was 1.20 {evidence:00_probe}.\n",
+            [("01_primary", "primary_or"), ("04_sensitivity", "sensitivity_or")],
+        ),
+    ],
+)
+def test_same_value_different_semantics_is_never_auto_repaired(
+    sentence: str,
+    claims: list[tuple[str, str]],
+) -> None:
+    from easyicu.research_agent.authority.evidence_store import NumericClaim
+
+    store = _FakeStore(
+        [
+            NumericClaim(
+                value=("0.85" if "85" in sentence else "1.20" if "1.20" in sentence else "120"),
+                canonical=(0.85 if "85" in sentence else 1.2 if "1.20" in sentence else 120.0),
+                evidence_id=step,
+                step_id=step,
+                source_field=field,
+                tolerance=0.0,
+            )
+            for step, field in claims
+        ],
+        names={"00_probe", *(step for step, _ in claims)},
+    )
+
+    repaired, repairs = repair_miscited_numeric_citations(sentence, evidence=store)
+
+    assert repairs == []
+    assert repaired == sentence
+
+
+def test_same_value_different_semantics_remains_a_strict_block(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.authority.evidence_store import (
+        EvidenceEnforcementError,
+        EvidenceStore,
+    )
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = EvidenceStore(tmp_path, enforcement_mode="strict")
+    for evidence_id in ("00_probe", "01_model", "04_outcome"):
+        source = tmp_path / f"{evidence_id}.json"
+        source.write_text("{}", encoding="utf-8")
+        store.register_file(
+            kind="statistic",
+            description=evidence_id,
+            source_path=source,
+            evidence_id=evidence_id,
+            produced_by_step=evidence_id,
+        )
+    store.register_numeric_claim(
+        value="0.85",
+        canonical=0.85,
+        evidence_id="01_model",
+        step_id="01_model",
+        source_field="auroc",
+    )
+    store.register_numeric_claim(
+        value="0.85",
+        canonical=0.85,
+        evidence_id="04_outcome",
+        step_id="04_outcome",
+        source_field="mortality_rate",
+    )
+    sentence = "The mortality rate was 0.85 {evidence:00_probe}.\n"
+
+    repaired, repairs = repair_miscited_numeric_citations(sentence, evidence=store)
+
+    assert repairs == []
+    assert repaired == sentence
+    with pytest.raises(EvidenceEnforcementError):
+        bind_numeric_values(repaired, evidence=store)
 
 
 def test_the_repair_is_wired_into_the_write_phase() -> None:

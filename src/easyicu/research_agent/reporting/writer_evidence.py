@@ -622,7 +622,22 @@ def _render_writer_evidence_digest_v2(
 
     secondary_lines: List[str] = []
     derived_lines: List[str] = []
+    scientific_claim_lines: List[str] = []
     if evidence is not None:
+        scientific_claims = evidence.authoritative_scientific_claims(all_records)
+        if scientific_claims:
+            scientific_claim_lines.extend(
+                [
+                    "Writer instruction: qualitative result assertions must use "
+                    "the exact placeholder as a complete sentence. Do not "
+                    "paraphrase it or attach it to other prose. The host will "
+                    "render and cite the claim.",
+                    *(
+                        f"- {claim.placeholder} -> {claim.render_text()}"
+                        for claim in scientific_claims
+                    ),
+                ]
+            )
         # Group claims by step_id, sorted for determinism.
         claims_by_step: Dict[str, List[Any]] = {}
         for claim in evidence.authoritative_numeric_claims(all_records):
@@ -749,6 +764,14 @@ def _render_writer_evidence_digest_v2(
                 "",
                 "## derived numbers (computed from registered claims; cite with explanation)",
                 *derived_lines,
+            ]
+        )
+    if scientific_claim_lines:
+        extra_blocks.extend(
+            [
+                "",
+                "## host-authorized scientific claims",
+                *scientific_claim_lines,
             ]
         )
     if secondary_lines:

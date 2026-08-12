@@ -88,6 +88,13 @@ from .evidence_snapshot import (
     projection_sha256,
     validate_evidence_authority_root_marker,
 )
+from .scientific_claims import (
+    ScientificClaim,
+    ScientificClaimDraft,
+    bind_scientific_claim_drafts,
+    derive_scientific_claim_drafts,
+    scientific_claim_compilation_requested,
+)
 from ..schema import EvidenceRecord
 
 try:  # pragma: no cover - available on production POSIX platforms
@@ -2390,6 +2397,25 @@ class EvidenceStore:
         when called directly) disables the cap. Pipelines pass the
         ``PipelineConfig.max_numeric_claims_per_step`` value.
         """
+        # Qualitative scientific authority is validated before any numeric
+        # mutation.  The phase-level success transaction then publishes both
+        # claim families and the step aliases as one evidence generation.
+        scientific_claim_drafts: List[ScientificClaimDraft] = []
+        if scientific_claim_compilation_requested(summary):
+            with self._lock:
+                claim_record = self._record_by_id(str(evidence_id))
+            if claim_record is None or (
+                str(claim_record.generation_mode or "").strip()
+                == "deterministic_standard"
+            ):
+                scientific_claim_drafts = derive_scientific_claim_drafts(summary)
+        if scientific_claim_drafts:
+            self.register_step_summary_scientific_claims(
+                step_id=step_id,
+                evidence_id=evidence_id,
+                summary=summary,
+                drafts=scientific_claim_drafts,
+            )
         leaves = _walk_numeric_leaves(summary)
         truncated = False
         if max_leaves is not None and max_leaves > 0 and len(leaves) > max_leaves:
@@ -2430,6 +2456,151 @@ class EvidenceStore:
             # rejection cannot leave only the first N numeric leaves current.
             self._save()
         return registered
+
+    def register_step_summary_scientific_claims(
+        self,
+        *,
+        step_id: str,
+        evidence_id: str,
+        summary: Any,
+        drafts: Optional[Sequence[ScientificClaimDraft]] = None,
+    ) -> List[ScientificClaim]:
+        """Bind typed qualitative claims to the exact summary evidence.
+
+        The claim payload is read from the digest-registered summary file and
+        compared with the caller's parsed summary before it is trusted.  This
+        prevents a mutable in-memory object from claiming authority that the
+        immutable evidence bytes do not carry.
+        """
+
+        if not isinstance(summary, dict):
+            return []
+        derived_drafts = list(drafts or derive_scientific_claim_drafts(summary))
+        if not derived_drafts:
+            return []
+        with self._lock:
+            record = self._record_by_id(str(evidence_id))
+            if record is None:
+                raise ValueError(
+                    "scientific_claims require a registered summary evidence record"
+                )
+            if str(record.produced_by_step or "").strip() != str(step_id).strip():
+                raise ValueError(
+                    "scientific_claims evidence owner does not match the step"
+                )
+            if str(record.generation_mode or "").strip() != "deterministic_standard":
+                raise ValueError(
+                    "scientific_claims require a deterministic standard executor"
+                )
+            target = self.root / record.relative_path
+            if sha256_of_file(target) != record.sha256:
+                raise ValueError("scientific_claims summary evidence digest drifted")
+            try:
+                registered_summary = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise ValueError(
+                    "scientific_claims summary evidence is not valid JSON"
+                ) from exc
+            if registered_summary != summary:
+                raise ValueError(
+                    "scientific_claims must come from the registered summary bytes"
+                )
+            claims = bind_scientific_claim_drafts(
+                [draft.model_dump(mode="json") for draft in derived_drafts],
+                step_id=str(step_id).strip(),
+                evidence_id=record.evidence_id,
+            )
+            existing = dict(record.metadata or {}).get("scientific_claims")
+            payload = [claim.model_dump(mode="json") for claim in claims]
+            if existing is not None and existing != payload:
+                raise ValueError(
+                    "scientific_claims cannot change for registered evidence"
+                )
+            if claims and existing is None:
+                record.metadata = {
+                    **dict(record.metadata or {}),
+                    "scientific_claims": payload,
+                }
+                self._save()
+            return claims
+
+    def scientific_claims(self) -> List[ScientificClaim]:
+        """Re-derive and return qualitative claims in registration order."""
+
+        claims: List[ScientificClaim] = []
+        seen: set[str] = set()
+        with self._lock:
+            for record in self._records:
+                raw_claims = dict(record.metadata or {}).get("scientific_claims")
+                if raw_claims is None:
+                    continue
+                if not isinstance(raw_claims, list):
+                    raise EvidenceAuthorityIntegrityError(
+                        "scientific claim authority is not a list"
+                    )
+                target = self.root / record.relative_path
+                try:
+                    if sha256_of_file(target) != record.sha256:
+                        raise ValueError("evidence digest drifted")
+                    registered_summary = json.loads(
+                        target.read_text(encoding="utf-8")
+                    )
+                    drafts = derive_scientific_claim_drafts(registered_summary)
+                    expected_claims = bind_scientific_claim_drafts(
+                        [draft.model_dump(mode="json") for draft in drafts],
+                        step_id=str(record.produced_by_step or "").strip(),
+                        evidence_id=record.evidence_id,
+                    )
+                except Exception as exc:
+                    raise EvidenceAuthorityIntegrityError(
+                        "scientific claim authority cannot be reproduced from evidence"
+                    ) from exc
+                expected_payload = [
+                    claim.model_dump(mode="json") for claim in expected_claims
+                ]
+                if raw_claims != expected_payload:
+                    raise EvidenceAuthorityIntegrityError(
+                        "scientific claim authority differs from host derivation"
+                    )
+                for claim in expected_claims:
+                    if claim.evidence_id != record.evidence_id or (
+                        claim.step_id != str(record.produced_by_step or "").strip()
+                    ):
+                        raise EvidenceAuthorityIntegrityError(
+                            "scientific claim authority coordinates do not match evidence"
+                        )
+                    if claim.claim_ref in seen:
+                        raise EvidenceAuthorityIntegrityError(
+                            "scientific claim authority contains duplicate references"
+                        )
+                    seen.add(claim.claim_ref)
+                    claims.append(claim)
+        return claims
+
+    def authoritative_scientific_claims(
+        self,
+        per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    ) -> List[ScientificClaim]:
+        """Return only claims owned by current successful step evidence."""
+
+        claims = self.scientific_claims()
+        if per_step_records is None:
+            return claims
+        current_ids = {
+            record.evidence_id
+            for record in self.current_verified_records(per_step_records)
+        }
+        return [claim for claim in claims if claim.evidence_id in current_ids]
+
+    def _scientific_claim_by_ref(self, claim_ref: str) -> Optional[ScientificClaim]:
+        matches = [
+            claim for claim in self.scientific_claims() if claim.claim_ref == claim_ref
+        ]
+        if len(matches) > 1:
+            raise EvidenceAuthorityIntegrityError(
+                "scientific claim reference resolves to multiple authorities"
+            )
+        return matches[0] if matches else None
 
     # ------------------------------------------------------------------
     # Derived numeric claims (Commit 2, Phase-1 widening)
@@ -2914,7 +3085,7 @@ class EvidenceStore:
     # ------------------------------------------------------------------
 
     def enforce_evidence_bound_scaffold(self, scaffold: str) -> tuple[str, List[str]]:
-        """Drop result-like sentences that lack an explicit evidence placeholder.
+        """Drop result-like prose lacking evidence or typed claim authority.
 
         The writer is allowed to draft prose freely, but anything that looks like
         a numerical result or analytical claim must cite ``{evidence:<id>}``
@@ -2928,6 +3099,8 @@ class EvidenceStore:
         instead of shipping a silently shortened manuscript.
         """
         removed: List[str] = []
+        unsupported_scientific_claims: List[str] = []
+        filtered_claims: List[str] = []
         filtered_lines: List[str] = []
         for raw_line in scaffold.splitlines():
             line = raw_line.rstrip()
@@ -2951,30 +3124,107 @@ class EvidenceStore:
                 filtered_lines.append(line)
                 continue
             sentences = _split_sentences(content)
-            if len(sentences) == 1 and not _looks_result_like_sentence(sentences[0]):
+            if (
+                len(sentences) == 1
+                and not _looks_result_like_sentence(sentences[0])
+                and not _looks_qualitative_scientific_assertion(sentences[0])
+                and _SCIENTIFIC_CLAIM_TOKEN_RE.search(sentences[0]) is None
+            ):
                 filtered_lines.append(line)
                 continue
             kept: List[str] = []
             for sentence in sentences:
+                claim_match = _SCIENTIFIC_CLAIM_SENTENCE_RE.fullmatch(
+                    sentence.strip()
+                )
+                if claim_match is not None:
+                    claim = self._scientific_claim_by_ref(claim_match.group("ref"))
+                    if claim is None:
+                        rejected = sentence.strip()
+                        unsupported_scientific_claims.append(rejected)
+                        filtered_claims.append(rejected)
+                        continue
+                    kept.append(sentence.strip())
+                    continue
+                if _SCIENTIFIC_CLAIM_TOKEN_RE.search(
+                    sentence
+                ) or _looks_qualitative_scientific_assertion(sentence):
+                    # A claim token is a complete host-rendered sentence, not a
+                    # citation that can be attached to arbitrary Writer prose.
+                    rejected = sentence.strip()
+                    unsupported_scientific_claims.append(rejected)
+                    filtered_claims.append(rejected)
+                    continue
                 if (
                     _looks_result_like_sentence(sentence)
                     and "{evidence:" not in sentence
                 ):
-                    removed.append(sentence.strip())
+                    rejected = sentence.strip()
+                    removed.append(rejected)
+                    filtered_claims.append(rejected)
                     continue
                 kept.append(sentence.strip())
             kept_content = " ".join(part for part in kept if part).strip()
             filtered_lines.append(
                 f"{structure_prefix}{kept_content}".rstrip() if kept_content else ""
             )
-        if removed and self.enforcement_mode is EvidenceEnforcementMode.STRICT:
+        if filtered_claims and self.enforcement_mode is EvidenceEnforcementMode.STRICT:
             raise EvidenceEnforcementError(
-                f"STRICT evidence mode: {len(removed)} result-like sentence(s) "
-                f"without {{evidence:<id>}} placeholders. The writer must cite "
-                f"registered evidence ids for every analytical claim.",
-                detail={"removed_sentences": removed},
+                "STRICT evidence mode: manuscript prose lacks deterministic "
+                "evidence or scientific claim authority.",
+                detail={
+                    "removed_sentences": removed,
+                    "unsupported_scientific_claim_sentences": (
+                        unsupported_scientific_claims
+                    ),
+                },
             )
-        return "\n".join(filtered_lines).strip() + "\n", removed
+        return "\n".join(filtered_lines).strip() + "\n", filtered_claims
+
+    def _expand_scientific_claim_tokens(
+        self,
+        scaffold: str,
+        *,
+        current_evidence_ids: Optional[set[str]] = None,
+    ) -> str:
+        """Replace whole-sentence claim references with host-rendered prose."""
+
+        out: List[str] = []
+        missing: List[str] = []
+        malformed: List[str] = []
+        for raw_line in scaffold.splitlines():
+            structure_prefix, content = _split_markdown_structure_prefix(raw_line)
+            token_match = _SCIENTIFIC_CLAIM_SENTENCE_RE.fullmatch(content.strip())
+            if token_match is None:
+                if _SCIENTIFIC_CLAIM_TOKEN_RE.search(content):
+                    malformed.append(content.strip())
+                out.append(raw_line)
+                continue
+            claim_ref = token_match.group("ref")
+            claim = self._scientific_claim_by_ref(claim_ref)
+            if claim is None or (
+                current_evidence_ids is not None
+                and claim.evidence_id not in current_evidence_ids
+            ):
+                missing.append(claim_ref)
+                out.append(f"{structure_prefix}[scientific claim missing: {claim_ref}]")
+                continue
+            out.append(
+                f"{structure_prefix}{claim.render_text()} "
+                f"{{evidence:{claim.evidence_id}}}"
+            )
+        if (missing or malformed) and (
+            self.enforcement_mode is EvidenceEnforcementMode.STRICT
+        ):
+            raise EvidenceEnforcementError(
+                "STRICT evidence mode: scientific claim references are missing "
+                "or are not complete standalone sentences.",
+                detail={
+                    "missing_scientific_claim_ids": missing,
+                    "malformed_scientific_claim_sentences": malformed,
+                },
+            )
+        return "\n".join(out)
 
     def bind_manuscript(
         self,
@@ -3007,6 +3257,10 @@ class EvidenceStore:
             }
             if per_step_records is not None
             else None
+        )
+        scaffold = self._expand_scientific_claim_tokens(
+            scaffold,
+            current_evidence_ids=current_ids,
         )
         out: List[str] = []
         all_missing: List[str] = []
@@ -3128,6 +3382,24 @@ _RESULT_TOKEN_RE = re.compile(
     r"\bconfidence interval\b|\bCI\b|\bp\s*[<=>]|%|\d)",
     re.I,
 )
+_SCIENTIFIC_CLAIM_TOKEN_RE = re.compile(
+    r"\{claim:(?P<ref>[A-Za-z0-9_-]+\.[a-z][a-z0-9_]*)\}"
+)
+_SCIENTIFIC_CLAIM_SENTENCE_RE = re.compile(
+    r"\s*\{claim:(?P<ref>[A-Za-z0-9_-]+\.[a-z][a-z0-9_]*)\}[.!?。！？]?\s*"
+)
+_QUALITATIVE_SCIENTIFIC_ASSERTION_RE = re.compile(
+    r"\b(?:independently\s+)?associated\s+with\b|"
+    r"\b(?:no\s+(?:clear\s+)?)?association\s+with\b|"
+    r"\bcorrelat(?:ed|es|ing)\s+with\b|"
+    r"\bpredict(?:ed|s|ing)\b|"
+    r"\b(?:higher|lower|greater|less|elevated|unchanged|similar)\b|"
+    r"\b(?:increas(?:e|ed|es|ing)|decreas(?:e|ed|es|ing)|"
+    r"reduc(?:e|ed|es|ing)|declin(?:e|ed|es|ing)|"
+    r"improv(?:e|ed|es|ing)|worsen(?:ed|s|ing)?)\b|"
+    r"\b(?:consistent\s+with|may\s+reflect|could\s+reflect)\b",
+    re.I,
+)
 _MANUSCRIPT_METADATA_PREFIX_RE = re.compile(
     r"^\s*(?:\*\*)?"
     r"(?:keywords?|key words|funding|conflicts?\s+of\s+interest|"
@@ -3158,6 +3430,14 @@ def _looks_manuscript_metadata_sentence(sentence: str) -> bool:
     ):
         return True
     return False
+
+
+def _looks_qualitative_scientific_assertion(sentence: str) -> bool:
+    """Route qualitative result/interpretation prose to typed authority."""
+
+    if _looks_manuscript_metadata_sentence(sentence):
+        return False
+    return bool(_QUALITATIVE_SCIENTIFIC_ASSERTION_RE.search(sentence))
 
 
 def _split_sentences(text: str) -> List[str]:
@@ -3241,6 +3521,7 @@ __all__ = [
     "EvidenceEnforcementMode",
     "EvidenceEnforcementError",
     "NumericClaim",
+    "ScientificClaim",
     "DerivedFormulaError",
     "sha256_of_file",
     "sha256_of_bytes",
