@@ -961,6 +961,9 @@ def kdigo_stages(
         - aki_stage_uo: Urine output-based stage (0-3)
         - aki_stage: Final combined stage (0-3, or ``<NA>`` when indeterminate)
         - aki: Boolean indicator (True if aki_stage > 0)
+        - aki_severe: Nullable severe-AKI indicator (KDIGO stage 2-3)
+        - aki_severe_creat, aki_severe_uo, aki_severe_rrt: component indicators
+        - aki_severe_ascertainment, aki_severe_assessable: severe-AKI receipt
         - creatinine_ascertainment, urine_ascertainment, rrt_ascertainment
         - observation_window_coverage, aki_ascertainment
         - aki_assessable, aki_assessment_reason: compatibility/diagnostic fields
@@ -1372,6 +1375,73 @@ def kdigo_stages(
         {"positive", "negative_complete"}
     )
     result['aki_assessment_reason'] = result['aki_ascertainment'].copy()
+
+    # Publish severe AKI (KDIGO stage 2-3) as a separate, nullable endpoint.
+    # A positive component is sufficient to establish severe AKI even when
+    # the other components are missing.  A negative combined endpoint needs
+    # all three components and a complete observation-window receipt; absence
+    # of an RRT event row or of a urine/creatinine window is not negative
+    # evidence.  "Incident" severe AKI is intentionally not encoded here:
+    # incidence depends on a study-specific baseline and follow-up anchor.
+    result['aki_severe_creat'] = pd.Series(
+        pd.NA, index=result.index, dtype="boolean"
+    )
+    creat_known = result['aki_stage_creat'].notna()
+    result.loc[creat_known, 'aki_severe_creat'] = (
+        result.loc[creat_known, 'aki_stage_creat'] >= 2
+    )
+
+    result['aki_severe_uo'] = pd.Series(
+        pd.NA, index=result.index, dtype="boolean"
+    )
+    urine_known = result['aki_stage_uo'].notna()
+    result.loc[urine_known, 'aki_severe_uo'] = (
+        result.loc[urine_known, 'aki_stage_uo'] >= 2
+    )
+
+    result['aki_severe_rrt'] = pd.Series(
+        pd.NA, index=result.index, dtype="boolean"
+    )
+    result.loc[
+        result['rrt_ascertainment'] == "negative", 'aki_severe_rrt'
+    ] = False
+    result.loc[
+        result['rrt_ascertainment'] == "positive", 'aki_severe_rrt'
+    ] = True
+
+    severe_components = result[
+        ['aki_severe_creat', 'aki_severe_uo', 'aki_severe_rrt']
+    ]
+    any_severe = severe_components.eq(True).any(axis=1)
+    all_below_severe = severe_components.eq(False).all(axis=1)
+    any_below_severe = severe_components.eq(False).any(axis=1)
+    complete_severe_negative = all_below_severe & result[
+        'observation_window_coverage'
+    ].eq("complete")
+
+    result['aki_severe_ascertainment'] = pd.Series(
+        "indeterminate", index=result.index, dtype="string"
+    )
+    result.loc[
+        any_below_severe & ~any_severe, 'aki_severe_ascertainment'
+    ] = "partial_no_observed_positive"
+    result.loc[
+        complete_severe_negative, 'aki_severe_ascertainment'
+    ] = "negative_complete"
+    result.loc[any_severe, 'aki_severe_ascertainment'] = "positive"
+
+    result['aki_severe'] = pd.Series(
+        pd.NA, index=result.index, dtype="boolean"
+    )
+    result.loc[
+        result['aki_severe_ascertainment'] == "positive", 'aki_severe'
+    ] = True
+    result.loc[
+        result['aki_severe_ascertainment'] == "negative_complete", 'aki_severe'
+    ] = False
+    result['aki_severe_assessable'] = result[
+        'aki_severe_ascertainment'
+    ].isin({"positive", "negative_complete"})
     
     return result
 

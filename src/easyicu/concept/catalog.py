@@ -259,6 +259,12 @@ CONCEPT_DICTIONARY = {
     'aki_stage_creat': ('AKI Stage (Creatinine)', 'AKI分期（肌酐）', '0-3'),
     'aki_stage_uo': ('AKI Stage (Urine Output)', 'AKI分期（尿量）', '0-3'),
     'aki_stage_rrt': ('AKI Stage (RRT)', 'AKI分期（RRT）', '0-3'),
+    'aki_severe': ('Severe AKI (KDIGO Stage 2-3)', '严重AKI（KDIGO 2-3期）', 'boolean'),
+    'aki_severe_creat': ('Severe AKI by Creatinine', '肌酐标准严重AKI', 'boolean'),
+    'aki_severe_uo': ('Severe AKI by Urine Output', '尿量标准严重AKI', 'boolean'),
+    'aki_severe_rrt': ('Severe AKI by RRT', 'RRT标准严重AKI', 'boolean'),
+    'aki_severe_assessable': ('Severe AKI Assessable', '严重AKI可判定性', 'boolean'),
+    'aki_severe_ascertainment': ('Severe AKI Ascertainment', '严重AKI判定状态', 'category'),
     # These are receipts rather than measurements.  Their explicit storage
     # kinds keep native-v2 exports portable and prevent categorical
     # ascertainment states from being coerced to floating point.
@@ -435,6 +441,12 @@ CONCEPT_DESCRIPTIONS = {
     'aki_stage': ('KDIGO AKI stage (0-3): max of creatinine and urine output criteria', 'KDIGO AKI分期（0-3）：肌酐和尿量标准的最大值'),
     'aki_stage_creat': ('AKI stage based on creatinine: ≥1.5x baseline or ≥0.3 mg/dL increase in 48h', '基于肌酐的AKI分期：较基线升高≥1.5倍 或 48h内升高≥0.3 mg/dL'),
     'aki_stage_uo': ('AKI stage based on urine output: <0.5 mL/kg/h for 6h (Stage 1), 12h (Stage 2), or <0.3 for 24h (Stage 3)', '基于尿量的AKI分期：<0.5 mL/kg/h持续6h(1期)、12h(2期) 或 <0.3持续24h(3期)'),
+    'aki_severe': ('Severe AKI defined as ascertainable KDIGO stage 2 or 3', '严重AKI定义为可判定的KDIGO 2期或3期'),
+    'aki_severe_creat': ('Creatinine-component severe AKI (KDIGO stage 2-3)', '肌酐组件严重AKI（KDIGO 2-3期）'),
+    'aki_severe_uo': ('Urine-output-component severe AKI (KDIGO stage 2-3)', '尿量组件严重AKI（KDIGO 2-3期）'),
+    'aki_severe_rrt': ('RRT-component severe AKI; missing event evidence remains unknown', 'RRT组件严重AKI；缺少事件证据时保持未知'),
+    'aki_severe_assessable': ('Whether severe AKI is positively or completely negatively ascertained', '严重AKI是否已阳性确认或完整阴性确认'),
+    'aki_severe_ascertainment': ('Severe-AKI ascertainment receipt', '严重AKI判定回执'),
 
     # Circulatory failure
     'circ_failure': ('Circulatory failure (circEWS definition): lactate ≥2 mmol/L with hypotension/vasopressors', '循环衰竭（circEWS定义）：乳酸≥2 mmol/L伴低血压或血管活性药物'),
@@ -510,6 +522,9 @@ CONCEPT_GROUPS_INTERNAL = {
     'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium', 'apixaban', 'aspirin', 'diltiazem', 'enoxaparin', 'esmolol', 'insulin', 'labetalol', 'nicardipine', 'phenytoin', 'warfarin'],
     # 🔧 2026-02-04: 移除重复的 kdigo_aki/kdigo_creat/kdigo_uo，只保留 aki_* 规范名
     'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
+              'aki_severe', 'aki_severe_creat', 'aki_severe_uo',
+              'aki_severe_rrt', 'aki_severe_assessable',
+              'aki_severe_ascertainment',
               # KDIGO ascertainment receipt.  ``aki_stage == 0`` alone is not
               # evidence of a complete negative when an input component was
               # unavailable, so export the state alongside the stage.
