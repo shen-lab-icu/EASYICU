@@ -24,7 +24,7 @@ The additional suggestions to move all callback parameters under an explicit `pa
 
 ## Owner contracts
 
-- Native extraction owns four content hashes in each `_manifest.json`: `concept_dictionary_sha256`, `sofa2_dictionary_sha256`, `clinical_contracts_sha256`, and `data_sources_sha256`.
+- Native extraction owns five content hashes in each `_manifest.json`: `concept_dictionary_sha256`, `sofa2_dictionary_sha256`, `clinical_contracts_sha256` (the semantic JSON registry), `clinical_contract_validator_sha256` (the Python loader/validator), and `data_sources_sha256`.
 - The full-six release sealer owns the finalized-lock check, semantic minimum-commit ancestry, cross-database hash equality and immutable release receipt.
 - `ConceptLoader` compatibility cache owns projection coverage and may not reuse a narrower frame for a wider concept request.
 - `DataSourceRegistry` owns explicit custom-source registration; `load_src_cfg()` resolves only registered keys/aliases.
@@ -41,3 +41,16 @@ The additional suggestions to move all callback parameters under an explicit `pa
 - The real repository lock was explicitly probed and correctly raised `ReleaseValidationError: concept foundation lock is not finalized`; therefore no existing full-six product can be falsely resealed as current.
 
 Per the development-test policy, no full exact-head matrix was started locally. No full-six extraction was launched while other high-memory work was active. Critical 1 remains blocked on a future clean-commit six-database re-extraction, QC and intentional lock finalization.
+
+## Follow-up review: clinical-contract registry provenance
+
+The review at PR #7 exact head `394868a` correctly found a remaining provenance gap: `clinical_contracts_sha256` pointed to `src/easyicu/clinical_contracts.py`, while the clinical semantics are stored in `src/easyicu/data/clinical-contracts.json`. A JSON-only semantic change could therefore retain the old provenance receipt.
+
+Implementation commit `997c481` closes that code defect without changing the still-open publication state:
+
+- `clinical_contracts_sha256` now hashes the semantic JSON registry.
+- `clinical_contract_validator_sha256` separately hashes the Python loader/validator implementation.
+- Native-export and full-six release contract revisions were advanced together; every database manifest must carry both exact digests and the sealer compares both with its current foundation.
+- A negative regression builds a valid synthetic release, changes only the semantic registry, and proves the sealer rejects it. A separate owner-path assertion prevents the two resources from being collapsed again.
+
+Old implementation evidence: the owner-path and native-manifest regressions failed `2/2`. After the patch, the three focused provenance tests passed. The directly related and adjacent release/data set passed `135/135`; Ruff and `git diff --check` passed. The real repository lock was probed again and still fails closed as `finalized=false`, so Critical 1 remains OPEN pending clean six-database re-extraction, QC and intentional lock finalization.
