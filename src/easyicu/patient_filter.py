@@ -58,6 +58,39 @@ def _hospital_survival_from_expire_flag(values: pd.Series) -> pd.Series:
     return survived
 
 
+def _calendar_age_years(
+    intime: pd.Series,
+    date_of_birth: pd.Series,
+) -> pd.Series:
+    """Calculate completed years without nanosecond timedelta overflow.
+
+    MIMIC-III shifts dates for de-identification and can therefore expose
+    date-of-birth values several centuries before ICU admission.  Subtracting
+    those timestamps as pandas nanosecond timedeltas can overflow even though
+    each timestamp is individually representable.  Calendar components retain
+    the age information required by the cohort contract without materialising
+    that unsafe timedelta.
+    """
+
+    admission = pd.to_datetime(intime, errors="coerce")
+    birth = pd.to_datetime(date_of_birth, errors="coerce")
+    valid = admission.notna() & birth.notna()
+    age = pd.Series(pd.NA, index=admission.index, dtype="Float64")
+    before_birthday = (
+        admission.dt.month.lt(birth.dt.month)
+        | (
+            admission.dt.month.eq(birth.dt.month)
+            & admission.dt.day.lt(birth.dt.day)
+        )
+    )
+    age.loc[valid] = (
+        admission.loc[valid].dt.year
+        - birth.loc[valid].dt.year
+        - before_birthday.loc[valid].astype(int)
+    ).astype(float)
+    return age
+
+
 def _publish_age_interval(
     frame: pd.DataFrame,
     *,
@@ -228,7 +261,7 @@ class PatientFilter:
             # 老版本: 使用dob计算
             df['dob'] = pd.to_datetime(df['dob'])
             df['intime'] = pd.to_datetime(df['intime'])
-            raw_age = (df['intime'] - df['dob']).dt.days / 365.25
+            raw_age = _calendar_age_years(df['intime'], df['dob'])
             censored = raw_age.gt(100)
             age = raw_age.mask(censored, 90)
             _publish_age_interval(
@@ -466,7 +499,7 @@ class PatientFilter:
         if 'dob' in df.columns and 'intime' in df.columns:
             df['dob'] = pd.to_datetime(df['dob'])
             df['intime'] = pd.to_datetime(df['intime'])
-            raw_age = (df['intime'] - df['dob']).dt.days / 365.25
+            raw_age = _calendar_age_years(df['intime'], df['dob'])
             # Official tutorials identify the shifted DOB sentinel above 100.
             censored = raw_age.gt(100)
             age = raw_age.mask(censored, 90)
