@@ -107,3 +107,48 @@ def test_new_candidate_never_reuses_source_module_just_because_schema_matches(
     )
 
     assert len(calls) == 1
+
+
+def test_resume_never_treats_destination_schema_as_raw_reread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resume also needs staged evidence or a fresh extraction."""
+
+    refresher = _load_refresher()
+    candidate = tmp_path / "candidate"
+    destination = candidate / "exports" / "miiv"
+    destination.mkdir(parents=True)
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(refresher, "_module_is_canonical_refresh", lambda *_: True)
+
+    def fake_extract_database(*args, **kwargs):
+        calls.append(kwargs)
+        staging = Path(kwargs["output_dir"])
+        staging.mkdir(parents=True)
+        (staging / "respiratory.parquet").write_bytes(b"parquet-placeholder")
+        (staging / "respiratory.manifest.json").write_text(json.dumps({}))
+        return {
+            "num_patients": 1,
+            "batch_size": 1,
+            "total_elapsed": 1.0,
+            "modules": {
+                "respiratory": {
+                    "errors": [],
+                    "elapsed": 1.0,
+                    "peak_rss_mb": 1.0,
+                    "peak_working_set_mb": 1.0,
+                }
+            },
+        }
+
+    monkeypatch.setattr(refresher, "extract_database", fake_extract_database)
+    refresher._refresh_one_database(
+        database="miiv",
+        data_path=str(tmp_path),
+        candidate_root=candidate,
+        modules=("respiratory",),
+        batch_size=None,
+        reuse_completed_export=True,
+    )
+
+    assert len(calls) == 1
