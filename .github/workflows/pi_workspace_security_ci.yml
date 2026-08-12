@@ -61,18 +61,23 @@ jobs:
             tests/test_pi_copilot_static.py \
             tests/test_pi_copilot_gateway.py \
             tests/test_pi_copilot_provider_config.py \
-            tests/test_pi_copilot_install.py
+            tests/test_pi_copilot_install.py \
+            tests/test_pi_copilot_multiprocess_locking.py \
+            tests/test_pi_copilot_security_workflow.py
 
       - name: Parse-check Pi sidecar owners
+        if: ${{ !cancelled() }}
         run: |
           node --check src/easyicu/webserver/pi_copilot/node_app/src/main.mjs
           node --check src/easyicu/webserver/pi_copilot/node_app/src/event-projection.mjs
           node --check src/easyicu/webserver/pi_copilot/node_app/src/shell-budget.mjs
 
       - name: Run research artifact renderer security vectors
+        if: ${{ !cancelled() }}
         run: |
           node tests/js/agent_render_security.test.js \
             src/easyicu/webserver/static/js/screens-agent-render.js
 
       - name: Prove hostile preview origin isolation in Chromium
+        if: ${{ !cancelled() }}
         run: python tools/qa_pi_workspace_preview_security.py
