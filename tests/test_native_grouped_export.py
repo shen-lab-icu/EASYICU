@@ -616,6 +616,26 @@ def test_native_schema_preserves_numeric_logical_and_categorical_families() -> N
     assert str(canonical["ecmo_indication"].dtype) == "string"
 
 
+def test_native_schema_preserves_state_valued_sofa2_ascertainment() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    concept = "sofa2_cns_delirium_tx_ascertainment"
+    canonical = api._canonicalise_native_export_frame(
+        pd.DataFrame(
+            {
+                "stay_id": [101, 102],
+                "charttime": [0.0, 1.0],
+                concept: ["complete", "proxy_only"],
+            }
+        ),
+        module="sofa2_score",
+        requested_concepts=[concept],
+        dictionary=dictionary,
+    )
+
+    assert str(canonical[concept].dtype) == "string"
+    assert canonical[concept].tolist() == ["complete", "proxy_only"]
+
+
 def test_native_arrow_schema_normalises_backend_large_strings() -> None:
     import pyarrow as pa
 
