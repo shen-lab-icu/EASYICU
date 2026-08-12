@@ -2179,7 +2179,7 @@ def _native_export_storage_kind(concept_id: str, dictionary) -> str:
         return "boolean"
     if (
         class_names.intersection({"fct_cncpt", "chr_cncpt"})
-        or str(catalog_unit).strip().lower() == "category"
+        or str(catalog_unit).strip().lower() in {"category", "state"}
         or concept_id == "avpu"
     ):
         return "string"
