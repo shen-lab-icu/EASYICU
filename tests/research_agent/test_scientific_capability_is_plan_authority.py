@@ -176,6 +176,19 @@ def test_every_public_step_field_has_one_explicit_authority_class() -> None:
     assert len(flattened) == len(set(flattened))
 
 
+def test_literature_citation_keys_change_the_scientific_plan_signature() -> None:
+    base = _freeform_plan()
+    cited_step = base.steps[0].model_copy(
+        update={"literature_citation_keys": ["strobe_2007"]}
+    )
+    cited = base.model_copy(update={"steps": [cited_step]})
+
+    assert _step_scientific_signature(base.steps[0]) != _step_scientific_signature(
+        cited.steps[0]
+    )
+    assert _plan_signature(base) != _plan_signature(cited)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

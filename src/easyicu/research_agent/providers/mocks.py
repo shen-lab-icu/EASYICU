@@ -325,7 +325,7 @@ def _contextual_mock_response(
         or "RESEARCH PLAN AS JSON" in upper
         or "ANALYSISPLAN SCHEMA" in upper
     ):
-        return _mock_plan_json(context)
+        return _mock_plan_json(context, request_text)
     if "LITERATURE" in upper and ("REVIEW" in upper or "CITATION" in upper):
         return _mock_literature(context)
     return _mock_generic_response(last_user)
@@ -420,7 +420,25 @@ def _mock_literature(ctx: ResearchContext) -> str:
     return json.dumps({"citations": citations}, indent=2, ensure_ascii=False)
 
 
-def _mock_plan_json(ctx: ResearchContext) -> str:
+def _mock_literature_citation_keys(prompt: str) -> List[str]:
+    """Read the exact run-bound citation keys published in the mock prompt."""
+
+    match = re.search(
+        r"allowed_literature_citation_keys:\s*(\[[^\n]*\])",
+        prompt,
+    )
+    if match is None:
+        return []
+    try:
+        values = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(values, list):
+        return []
+    return [str(value) for value in values if isinstance(value, str) and value]
+
+
+def _mock_plan_json(ctx: ResearchContext, prompt: str = "") -> str:
     """Compose a minimal but valid AnalysisPlan as JSON.
 
     The mock plan keeps the outer research loop deterministic while
@@ -651,13 +669,21 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
         wired_steps.append(
             step.model_copy(update={"inputs": [source] if source is not None else []})
         )
+    citation_keys = _mock_literature_citation_keys(prompt)
+    if citation_keys:
+        wired_steps = [
+            step.model_copy(update={"literature_citation_keys": [citation_keys[0]]})
+            if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
+            else step
+            for step in wired_steps
+        ]
     plan = plan.model_copy(update={"steps": wired_steps})
     return plan.model_dump_json(indent=2)
 
 
 def _mock_replan_json(ctx: ResearchContext, prompt: str) -> str:
     """Deterministic replan: preserve completed steps, adjust remaining plan conservatively."""
-    plan = AnalysisPlan.model_validate_json(_mock_plan_json(ctx))
+    plan = AnalysisPlan.model_validate_json(_mock_plan_json(ctx, prompt))
     try:
         current_match = re.search(
             r"CURRENT PLAN:\n(\{.*?\})\n\nPROBE SUMMARY:", prompt, flags=re.DOTALL

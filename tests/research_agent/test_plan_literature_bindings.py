@@ -7,7 +7,7 @@ import json
 import pytest
 
 from easyicu.research_agent.agents.core import PlannerAgent
-from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.providers.mocks import MockLLMClient, ScriptedMockLLMClient
 from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 
 
@@ -111,3 +111,22 @@ def test_planner_receives_exact_preplan_literature_authority() -> None:
     assert "Do not cite an evidence artifact" in prompt
     assert "Allowed literature_citation_keys for this run are exactly" in prompt
     assert len(llm.calls) == 2
+
+
+def test_builtin_mock_obeys_preplan_literature_authority() -> None:
+    context = _context()
+    plan = PlannerAgent(MockLLMClient(context=context)).run(
+        context,
+        allowed_literature_citation_keys=["strobe_2007"],
+    )
+
+    scientific_steps = [
+        step
+        for step in plan.steps
+        if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
+    ]
+    assert scientific_steps
+    assert all(
+        step.literature_citation_keys == ["strobe_2007"]
+        for step in scientific_steps
+    )
