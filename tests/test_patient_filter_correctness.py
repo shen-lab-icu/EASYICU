@@ -5,7 +5,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu.base import BaseICULoader, detect_database_type
+from easyicu.base import (
+    BaseICULoader,
+    DatabaseDetectionError,
+    detect_database_type,
+)
 from easyicu.config import load_src_cfg
 from easyicu.database_config import SUPPORTED_DATABASES
 from easyicu.databases.profiles import public_database_keys
@@ -45,6 +49,39 @@ def test_flat_mimic_iv_is_detected_by_stay_id_schema_before_admissions_marker(
     loader.verbose = False
 
     assert loader._detect_database(None, tmp_path) == "miiv"
+
+
+def test_unknown_database_path_fails_closed_instead_of_defaulting_to_miiv(
+    tmp_path,
+) -> None:
+    with pytest.raises(DatabaseDetectionError) as caught:
+        detect_database_type(tmp_path)
+
+    assert caught.value.code == "database_detection_unavailable"
+    assert caught.value.data_path == tmp_path
+
+
+def test_conflicting_database_markers_fail_closed(tmp_path) -> None:
+    (tmp_path / "numericitems").mkdir()
+    pd.DataFrame({"CaseID": [1]}).to_parquet(tmp_path / "cases.parquet")
+    loader = BaseICULoader.__new__(BaseICULoader)
+    loader.verbose = False
+
+    with pytest.raises(DatabaseDetectionError) as caught:
+        loader._detect_database(None, tmp_path)
+
+    assert caught.value.code == "database_detection_ambiguous"
+    assert caught.value.candidates == ("aumc", "sic")
+
+
+def test_explicit_database_rejects_an_unrecognized_prepared_path(tmp_path) -> None:
+    loader = BaseICULoader.__new__(BaseICULoader)
+    loader.verbose = False
+
+    with pytest.raises(DatabaseDetectionError) as caught:
+        loader._setup_data_path(tmp_path, "miiv")
+
+    assert caught.value.code == "database_path_unrecognized"
 
 
 @pytest.mark.parametrize(
@@ -144,6 +181,46 @@ def test_eicu_deidentified_over_89_age_maps_to_90(monkeypatch) -> None:
     assert result["age"].tolist() == [90, 90, 72]
 
 
+def test_eicu_missing_discharge_status_remains_unknown(monkeypatch) -> None:
+    patient_filter = PatientFilter(database="eicu", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {
+                "patientunitstayid": [1, 2, 3],
+                "hospitaldischargestatus": ["Alive", "Expired", None],
+            }
+        ),
+    )
+
+    result = patient_filter._load_eicu_demographics()
+    patient_filter._demographics = result
+
+    assert result["survived"].tolist() == [True, False, pd.NA]
+    assert patient_filter.filter(survived=True) == [1]
+
+
+def test_aumc_missing_discharge_destination_remains_unknown(monkeypatch) -> None:
+    patient_filter = PatientFilter(database="aumc", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {
+                "admissionid": [1, 2, 3, 4],
+                "destination": ["Home", "Deceased", "Overleden", None],
+            }
+        ),
+    )
+
+    result = patient_filter._load_aumc_demographics()
+    patient_filter._demographics = result
+
+    assert result["survived"].tolist() == [True, False, False, pd.NA]
+    assert patient_filter.filter(survived=True) == [1]
+
+
 def test_sicdb_demographics_use_official_age_los_and_hospital_survival(
     monkeypatch,
 ) -> None:
@@ -154,6 +231,8 @@ def test_sicdb_demographics_use_official_age_los_and_hospital_survival(
         lambda _name: pd.DataFrame(
             {
                 "CaseID": [1, 2, 3],
+                "PatientID": [10, 10, 20],
+                "OffsetAfterFirstAdmission": [0, 86_400, 0],
                 "AgeOnAdmission": [65, 70, 75],
                 "TimeOfStay": [90_000, 86_400, 172_800],
                 "ICUOffset": [3_600, 0, 0],
@@ -165,10 +244,51 @@ def test_sicdb_demographics_use_official_age_los_and_hospital_survival(
     )
 
     result = patient_filter._load_sic_demographics()
+    patient_filter._demographics = result
 
     assert result["age"].tolist() == [65, 70, 75]
     assert result["los_hours"].tolist() == [24.0, 24.0, 48.0]
+    assert result["first_icu_stay"].tolist() == [True, False, True]
     assert result["survived"].tolist() == [True, False, pd.NA]
+    assert patient_filter.filter(first_icu_stay=True) == [1, 3]
+
+
+def test_sicdb_first_stay_is_unknown_without_patient_level_evidence(
+    monkeypatch,
+) -> None:
+    patient_filter = PatientFilter(database="sicdb", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame({"CaseID": [1, 2]}),
+    )
+
+    demographics = patient_filter._load_sic_demographics()
+    patient_filter._demographics = demographics
+
+    assert "first_icu_stay" not in demographics.columns
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(first_icu_stay=True)
+    assert caught.value.code == "patient_filter_criterion_unavailable"
+
+
+def test_sicdb_tied_first_admission_offsets_remain_unknown(monkeypatch) -> None:
+    patient_filter = PatientFilter(database="sicdb", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {
+                "CaseID": [1, 2, 3],
+                "PatientID": [10, 10, 10],
+                "OffsetAfterFirstAdmission": [0, 0, 500],
+            }
+        ),
+    )
+
+    result = patient_filter._load_sic_demographics()
+
+    assert result["first_icu_stay"].tolist() == [pd.NA, pd.NA, False]
 
 
 def test_aumc_age_threshold_that_splits_a_published_band_is_unavailable() -> None:

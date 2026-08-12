@@ -28,6 +28,23 @@ from .table import ICUTable
 logger = logging.getLogger(__name__)
 
 
+class DatabaseDetectionError(ValueError):
+    """Prepared database identity or path could not be established safely."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        data_path: Optional[Union[str, Path]] = None,
+        candidates: Sequence[str] = (),
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.data_path = Path(data_path) if data_path is not None else None
+        self.candidates = tuple(sorted(set(candidates)))
+
+
 def _peek_table_columns(path: Path, table: str) -> set[str]:
     """Read a prepared table schema without loading its rows."""
 
@@ -122,13 +139,13 @@ class BaseICULoader:
         self._thread_local_resolver = threading.local()
 
     def _detect_database(self, database: Optional[str], data_path: Optional[Union[str, Path]] = None) -> str:
-        """Detect database type from data_path, environment or use default
+        """Detect database type from explicit identity, path, or environment.
         
         优先级:
         1. 用户显式指定的 database 参数
         2. 从 data_path 路径推断（检查路径名和数据文件）
         3. 环境变量
-        4. 默认值 miiv
+        4. 无充分证据时失败关闭
         """
         if database:
             try:
@@ -136,62 +153,89 @@ class BaseICULoader:
             except KeyError as exc:
                 raise ValueError(f"Unsupported database: {database!r}") from exc
         
-        # 尝试从 data_path 推断数据库类型
+        # 尝试从 data_path 推断数据库类型。MIMIC stay-ID schema is the
+        # authoritative discriminator because table names overlap generations.
         if data_path:
             path = Path(data_path)
             path_str = str(path).lower()
-            
-            # Prepared MIMIC-III/IV directories share the same table names.
-            # Their stay identifier is the authoritative discriminator and must
-            # be checked before the ambiguous admissions marker below.
+
             if path.is_dir():
                 mimic_columns = _peek_table_columns(path, "icustays")
-                if "stay_id" in mimic_columns:
-                    return "miiv"
-                if "icustay_id" in mimic_columns:
-                    return "mimic"
+                mimic_schema_candidates = {
+                    database_name
+                    for column, database_name in (
+                        ("stay_id", "miiv"),
+                        ("icustay_id", "mimic"),
+                    )
+                    if column in mimic_columns
+                }
+                if len(mimic_schema_candidates) == 1:
+                    return next(iter(mimic_schema_candidates))
+                if len(mimic_schema_candidates) > 1:
+                    raise DatabaseDetectionError(
+                        "database_detection_ambiguous",
+                        f"Conflicting MIMIC stay identifiers in {path}.",
+                        data_path=path,
+                        candidates=mimic_schema_candidates,
+                    )
 
-            # 1. 检查路径名称中是否包含数据库标识
-            db_patterns = {
-                'eicu': ['eicu', 'eicu-crd'],
-                'aumc': ['aumc', 'amsterdam'],
-                'hirid': ['hirid'],
-                'miiv': ['miiv', 'mimiciv', 'mimic-iv', 'mimic_iv'],
-                'mimic': ['mimic', 'mimic-iii', 'mimic_iii', 'mimiciii'],
-                'sic': ['sicdb', 'sic-db'],
-            }
-            for db_name, patterns in db_patterns.items():
-                if any(p in path_str for p in patterns):
-                    if self.verbose:
-                        logger.info(f"Auto-detected database: {db_name} from path: {path}")
-                    return db_name
-            
-            # 2. 检查数据文件来推断数据库类型
+            candidates: set[str] = set()
+
+            # Path names are supporting evidence. Avoid treating the generic
+            # MIMIC token inside a MIMIC-IV name as a second database.
+            miiv_patterns = ('miiv', 'mimiciv', 'mimic-iv', 'mimic_iv')
+            if any(pattern in path_str for pattern in miiv_patterns):
+                candidates.add('miiv')
+            elif any(
+                pattern in path_str
+                for pattern in ('mimiciii', 'mimic-iii', 'mimic_iii', '/mimic')
+            ):
+                candidates.add('mimic')
+            for db_name, patterns in {
+                'eicu': ('eicu', 'eicu-crd'),
+                'aumc': ('aumc', 'amsterdam'),
+                'hirid': ('hirid',),
+                'sic': ('sicdb', 'sic-db'),
+            }.items():
+                if any(pattern in path_str for pattern in patterns):
+                    candidates.add(db_name)
+
             if path.is_dir():
+                patient_columns = _peek_table_columns(path, "patient")
+                if "patientunitstayid" in patient_columns:
+                    candidates.add("eicu")
+
                 marker_files = {
-                    'eicu': ['patient.parquet', 'patient.csv', 'patient.csv.gz', 'vitalPeriodic.parquet'],
-                    # admissions exists in both MIMIC generations and is not an
-                    # AmsterdamUMCdb marker. numericitems is distinctive.
-                    'aumc': ['numericitems'],
-                    'miiv': ['chartevents'],
-                    'hirid': ['general_table.csv', 'general_table.parquet', 'observations'],  # 🔧 FIX: 正确的表名
-                    'sic': ['cases.parquet', 'data_float_h_bucket'],
+                    'eicu': ('vitalPeriodic.parquet', 'vitalPeriodic.csv'),
+                    'aumc': ('numericitems',),
+                    'mimic': ('chartevents_bucket', 'labevents_bucket'),
+                    'hirid': (
+                        'general_table.csv',
+                        'general_table.parquet',
+                        'observations',
+                    ),
+                    'sic': ('cases.parquet', 'data_float_h_bucket'),
                 }
                 for db_name, markers in marker_files.items():
-                    if any((path / m).exists() for m in markers):
-                        # 额外确认：避免误判
-                        if db_name == 'eicu' and (path / 'patient.parquet').exists():
-                            # 确认是 eicu 而不是其他有 patient 表的数据库
-                            if not (path / 'chartevents').exists():
-                                if self.verbose:
-                                    logger.info(f"Auto-detected database: {db_name} from data files in: {path}")
-                                return db_name
-                        elif db_name != 'eicu':
-                            if self.verbose:
-                                logger.info(f"Auto-detected database: {db_name} from data files in: {path}")
-                            return db_name
+                    if any((path / marker).exists() for marker in markers):
+                        candidates.add(db_name)
 
-        # Check environment variables
+            if len(candidates) == 1:
+                detected = next(iter(candidates))
+                if self.verbose:
+                    logger.info("Auto-detected database %s from %s", detected, path)
+                return detected
+            if len(candidates) > 1:
+                raise DatabaseDetectionError(
+                    "database_detection_ambiguous",
+                    f"Conflicting database evidence in {path}: {sorted(candidates)}.",
+                    data_path=path,
+                    candidates=candidates,
+                )
+
+        # Environment variables are evidence only when they identify one
+        # canonical database. Multiple configured databases require an explicit
+        # database argument.
         environment_keys = {
             'miiv': ('MIIV_PATH', 'MIMICIV_PATH'),
             'mimic': ('MIMIC_PATH', 'MIMICIII_PATH'),
@@ -200,16 +244,31 @@ class BaseICULoader:
             'aumc': ('AUMC_PATH',),
             'sic': ('SIC_PATH', 'SICDB_PATH'),
         }
-        for db_name, env_vars in environment_keys.items():
-            if any(os.getenv(env_var) for env_var in env_vars):
-                if self.verbose:
-                    logger.info(f"Auto-detected database: {db_name} from environment")
-                return db_name
+        environment_candidates = {
+            db_name
+            for db_name, env_vars in environment_keys.items()
+            if any(os.getenv(env_var) for env_var in env_vars)
+        }
+        if len(environment_candidates) == 1:
+            detected = next(iter(environment_candidates))
+            if self.verbose:
+                logger.info("Auto-detected database %s from environment", detected)
+            return detected
+        if len(environment_candidates) > 1:
+            raise DatabaseDetectionError(
+                "database_detection_ambiguous",
+                "Multiple database-specific environment paths are configured; "
+                "supply database explicitly.",
+                data_path=data_path,
+                candidates=environment_candidates,
+            )
 
-        # Default
-        if self.verbose:
-            logger.info("Using default database: miiv")
-        return 'miiv'
+        raise DatabaseDetectionError(
+            "database_detection_unavailable",
+            "Database could not be detected from prepared data evidence; supply "
+            "database explicitly.",
+            data_path=data_path,
+        )
 
     def _setup_data_path(self, data_path: Optional[Union[str, Path]], database: str) -> Path:
         """Setup and validate data path
@@ -231,16 +290,32 @@ class BaseICULoader:
                 # SICdb 特征文件: cases.parquet, data_float_h_bucket/
                 marker_files = {
                     'aumc': ['admissions.csv', 'admissions.parquet', 'numericitems'],
-                    'miiv': ['admissions.csv', 'admissions.parquet', 'chartevents'],
-                    'eicu': ['patient.csv', 'patient.csv.gz', 'vitalPeriodic.csv'],
-                    'hirid': ['general.csv', 'observations'],
-                    'mimic': ['icustays.parquet', 'chartevents_bucket', 'labevents_bucket'],  # MIMIC-III
+                    'miiv': [],
+                    'eicu': [
+                        'patient.parquet',
+                        'patient.csv',
+                        'patient.csv.gz',
+                        'vitalPeriodic.parquet',
+                        'vitalPeriodic.csv',
+                    ],
+                    'hirid': [
+                        'general.csv',
+                        'general_table.csv',
+                        'general_table.parquet',
+                        'observations',
+                    ],
+                    'mimic': [],
                     'mimic_demo': ['icustays.parquet', 'chartevents'],  # MIMIC-III demo
                     'sic': ['cases.parquet', 'data_float_h_bucket', 'laboratory_bucket'],  # SICdb
                 }
                 
                 db_markers = marker_files.get(database, [])
                 is_valid_db_dir = any((user_path / marker).exists() for marker in db_markers)
+                mimic_columns = _peek_table_columns(user_path, 'icustays')
+                if database == 'miiv':
+                    is_valid_db_dir = 'stay_id' in mimic_columns
+                elif database == 'mimic':
+                    is_valid_db_dir = 'icustay_id' in mimic_columns
                 
                 if is_valid_db_dir:
                     if self.verbose:
@@ -276,17 +351,29 @@ class BaseICULoader:
                 for subpath in possible_subpaths:
                     if subpath.is_dir():
                         is_valid = any((subpath / marker).exists() for marker in db_markers)
+                        mimic_columns = _peek_table_columns(subpath, 'icustays')
+                        if database == 'miiv':
+                            is_valid = 'stay_id' in mimic_columns
+                        elif database == 'mimic':
+                            is_valid = 'icustay_id' in mimic_columns
                         if is_valid:
                             if self.verbose:
                                 logger.info(f"Auto-detected database path: {subpath} (from base: {user_path})")
                             return subpath
                 
-                # 回退：返回用户路径（可能导致后续错误，但保持向后兼容）
-                if self.verbose:
-                    logger.warning(f"Could not find valid {database} data in {user_path}, using as-is")
-                return user_path
-            
-            return user_path
+                raise DatabaseDetectionError(
+                    "database_path_unrecognized",
+                    f"Could not find prepared {database!r} data in {user_path}.",
+                    data_path=user_path,
+                    candidates=(database,),
+                )
+
+            raise DatabaseDetectionError(
+                "database_path_unrecognized",
+                f"Prepared data path is not a directory: {user_path}.",
+                data_path=user_path,
+                candidates=(database,),
+            )
 
         # Check environment variables
         # 1. 首先检查数据库专用的环境变量（如 MIMIC_PATH）

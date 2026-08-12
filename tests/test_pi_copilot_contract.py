@@ -1096,7 +1096,14 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
 
 def test_provider_error_marks_message_job_failed_without_raw_network_detail(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        settings,
+        "load_settings",
+        lambda: {"ai_enabled": True, "language": "en"},
+    )
+
     class ProviderErrorGateway(FakeGateway):
         def request(
             self, method: str, params: dict[str, Any], **kwargs: Any

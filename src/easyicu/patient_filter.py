@@ -235,9 +235,17 @@ class PatientFilter:
         
         # 存活
         if 'hospitaldischargestatus' in patient.columns:
-            patient['survived'] = patient['hospitaldischargestatus'].str.lower() != 'expired'
+            status = patient['hospitaldischargestatus'].astype('string').str.strip().str.lower()
+            survived = pd.Series(pd.NA, index=patient.index, dtype='boolean')
+            survived.loc[status.eq('alive')] = True
+            survived.loc[status.eq('expired')] = False
+            patient['survived'] = survived
         elif 'unitdischargestatus' in patient.columns:
-            patient['survived'] = patient['unitdischargestatus'].str.lower() != 'expired'
+            status = patient['unitdischargestatus'].astype('string').str.strip().str.lower()
+            survived = pd.Series(pd.NA, index=patient.index, dtype='boolean')
+            survived.loc[status.eq('alive')] = True
+            survived.loc[status.eq('expired')] = False
+            patient['survived'] = survived
         
         # ID列标准化
         patient['patient_id'] = patient['patientunitstayid']
@@ -297,9 +305,13 @@ class PatientFilter:
         
         # 存活
         if 'destination' in admissions.columns:
-            admissions['survived'] = ~admissions['destination'].str.lower().str.contains(
-                'died|death|deceased', na=False
+            destination = admissions['destination'].astype('string').str.strip().str.lower()
+            known = destination.notna() & destination.ne('')
+            survived = pd.Series(pd.NA, index=admissions.index, dtype='boolean')
+            survived.loc[known] = ~destination.loc[known].str.contains(
+                'died|death|deceased|overleden', regex=True
             )
+            admissions['survived'] = survived
         
         # ID列标准化
         admissions['patient_id'] = admissions['admissionid']
@@ -406,8 +418,26 @@ class PatientFilter:
             )
             cases['los_hours'] = los_seconds.where(los_seconds >= 0) / 3600.0
         
-        # 首次入ICU（SICdb 通常每个 CaseID 是独立的 ICU 入院）
-        cases['first_icu_stay'] = True
+        # CaseID identifies an ICU admission, not a patient. PatientID plus the
+        # offset from the first admission is required to identify readmissions.
+        patient_id = columns.get('patientid')
+        first_admission_offset = columns.get('offsetafterfirstadmission')
+        if patient_id is not None and first_admission_offset is not None:
+            patient = cases[patient_id]
+            offset = pd.to_numeric(cases[first_admission_offset], errors='coerce')
+            valid = patient.notna() & offset.notna()
+            first_stay = pd.Series(pd.NA, index=cases.index, dtype='boolean')
+            if valid.any():
+                evidence = pd.DataFrame(
+                    {'patient': patient.loc[valid], 'offset': offset.loc[valid]}
+                )
+                minimum = evidence.groupby('patient')['offset'].transform('min')
+                candidate = evidence['offset'].eq(minimum)
+                candidate_count = candidate.groupby(evidence['patient']).transform('sum')
+                resolved = candidate.astype('boolean')
+                resolved.loc[candidate & candidate_count.gt(1)] = pd.NA
+                first_stay.loc[evidence.index] = resolved
+            cases['first_icu_stay'] = first_stay
         
         # 性别
         if 'Sex' in cases.columns:
