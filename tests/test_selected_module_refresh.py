@@ -31,6 +31,27 @@ def test_selected_module_refresh_is_limited_to_correctness_modules() -> None:
         refresher._validate_modules(["vitals"])
 
 
+def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
+    refresher = _load_refresher()
+    assert refresher._expand_module_dependency_closure(["respiratory"]) == (
+        "respiratory",
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    )
+    assert refresher._expand_module_dependency_closure(
+        ["renal", "respiratory"]
+    ) == (
+        "respiratory",
+        "renal",
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    )
+
+
 def test_selected_module_refresh_rejects_duplicate_data_path_overrides() -> None:
     refresher = _load_refresher()
     with pytest.raises(refresher.ModuleRefreshError, match="Duplicate"):
