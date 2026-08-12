@@ -1,9 +1,9 @@
-# GPT 整仓审阅复核与 F1–F16 定点修复
+# GPT 整仓审阅复核与 F1–F16 / N1–N7 定点修复
 
 - 日期：2026-08-11
 - 分支 / 起始 HEAD：`fix/pi-workspace-review-20260809@e0ee97f`
-- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）
-- 状态：两轮修复均已提交；复核时远端已由并发流程更新到 `a3ff37a`，exact-head CI 运行中；未启动 Provider、Canonical9 或真实患者分析
+- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）+ `35bfc23`（终点语义）+ `d92c055`（Research Agent CI 根因）
+- 状态：三轮定点修复均已提交；`a3ff37a` 的 Pi exact-head 两次全绿，Research Agent exact-head 红已在本地提交关闭两个高扇出根因并通过聚焦/端到端回归；未启动 Provider、Canonical9 或真实患者分析
 - 模块：`DATA-FIX1` / `WEBAPP-FASTAPI-NATIVE-QA` / `FIG2-CANONICAL9-GATE`
 
 ## 裁决
@@ -49,11 +49,28 @@ SICdb 语义来源：<https://www.sicdb.com/Documentation/Table%3A_Cases>、<htt
 
 | ID | 裁决 | `a3ff37a` 修复 |
 |---|---|---|
-| N1 SICdb first ICU stay | **成立，HIGH scientific** | `CaseID` 不再等同首次入住；按 `PatientID + OffsetAfterFirstAdmission` 求患者级最早 admission，缺字段/缺值保持 unknown，并列最早 offset 不猜。 |
+| N1 SICdb first ICU stay | **成立，HIGH scientific；第三次复核纠偏** | `CaseID` 不再等同首次入住；最终按 `OffsetAfterFirstAdmission` 的绝对语义裁决：`0` 且患者内唯一才是首次，`>0` 为再次入住，负值/缺失/并列零保持 unknown，不再把当前 extract 的最小正 offset 当首次。 |
 | N2 nullable survival | **成立，HIGH scientific** | eICU hospital/unit discharge status 只把 `Alive/Expired` 映射为 nullable boolean；NULL 保持 unknown。AUMC destination 的 NULL 同步不再编码成存活；本地类别审计另发现荷兰语 `Overleden`，现显式映射为死亡。 |
 | N3 detector fail-open | **成立，HIGH** | 新增公开 `DatabaseDetectionError(code, data_path, candidates)`；未知证据、冲突 marker、多数据库环境与显式无效 prepared path 均失败关闭，不再默认 `miiv` 或原样放行路径。 |
 | N4 Pi security CI | **成立，merge blocker** | 远端 run `31559641320` 在 provider-error regression 因读取 runner 全局 Settings 而失败，后续 Node/XSS/Chromium 被跳过；测试现显式隔离 `ai_enabled`，workflow 纳入 multiprocess + workflow regression，并以 `if: !cancelled()` 保证普通 pytest 失败后仍运行三项安全证明。 |
 
 官方依据：SICdb `cases` 文档明确每次 ICU admission 生成独立 `CaseID`，readmission 由 `PatientID` 与 `OffsetAfterFirstAdmission` 识别；eICU patient 表明确 hospital/unit discharge status 均允许 `Alive / Expired / NULL`。本地 SICdb v1.0.6 `d_references.parquet` 只读核验：`2026=Survived`、`2028=Deceased`、`3076=6 Months`、`3077=1 Year`；本轮不把动态 reference 解码扩成额外重构。
 
-二次验证：数据/API 邻接 `88 passed`；Pi dedicated 清单（含 multiprocess/workflow regression）`126 passed`；Node 三 owner parse 与 renderer hostile vectors `6/6`；Chromium hostile-preview `passed=true`、1280px 无横溢出；真实本地六库路径识别/显式验证 `6/6`；Ruff、YAML parse、`git diff --check` 通过。`a3ff37a` 的 push/PR Pi security runs `31561506020` / `31561507835` 已触发，记录收尾时为 `in_progress`，当前不宣称绿色。
+二次验证：数据/API 邻接 `88 passed`；Pi dedicated 清单（含 multiprocess/workflow regression）`126 passed`；Node 三 owner parse 与 renderer hostile vectors `6/6`；Chromium hostile-preview `passed=true`、1280px 无横溢出；真实本地六库路径识别/显式验证 `6/6`；Ruff、YAML parse、`git diff --check` 通过。`a3ff37a` 的 push/PR Pi security runs `31561506020` / `31561507835` 后续均为 `success`。
+
+## 第三次 exact-head 复核（N1 / N5–N7 + Research Agent CI）
+
+再次按官方字段定义核对后，N1 的“当前 extract 内求最小 offset”仍不符合 SICdb 的绝对 offset 语义；另确认 AUMC `destination` 是 ICU/MCU 出院终点、eICU `unitVisitNumber` 只在一次 hospitalization 内编号、`unitDischargeStatus` 也不能代替 hospital discharge survival。四项均成立并由 `35bfc23` 定点失败关闭。
+
+| ID | 裁决 | 最终合同 |
+|---|---|---|
+| N1 SICdb positive-min edge | **成立，HIGH scientific** | `OffsetAfterFirstAdmission > 0` 始终为再次入住；仅唯一零 offset 可判首次；负值、缺失与重复零不猜。 |
+| N5 AUMC survival endpoint | **成立，HIGH scientific** | `destination` 只产出 endpoint-specific `icu_survived`；通用 `survived` 定义为 hospital-discharge survival，在 AUMC 失败关闭。 |
+| N6 eICU first stay scope | **成立，HIGH scientific** | `unitVisitNumber` 只产出 `first_unit_stay_within_hospitalization`；不再冒充 patient-global `first_icu_stay`。 |
+| N7 eICU unit survival fallback | **成立，HIGH scientific** | `unitDischargeStatus` 只产出 `unit_survived`；缺少 `hospitalDischargeStatus` 时通用 `survived` 不可用。 |
+
+`a3ff37a` 的 Research Agent run `31561507838` 在 Python 3.10/3.11 均红。日志中的高扇出根因有两个：新增的 `literature_citation_keys` 未进入显式科学 authority 分类，且内置 Mock Planner 收到 run-bound literature authority 后仍生成无 citation 的 scientific steps；固定 Planner prompt 同时为 `51,989 > 51,600` bytes。`d92c055` 将 citation key 纳入 step/plan signature、让 Mock Planner 只绑定提示词发布的 exact key，并压缩重复 guidance 而不抬预算，最终 fixed cost 为 `51,595` bytes。
+
+第三次验证：数据/API 相邻 `91 passed`；Research Agent authority/literature/prompt/example 合同 `72 passed`；原 CI 失败面的 pipeline/resume/reviewer/sidecar 端到端 `4 passed`；architecture baseline diff `OK`；两组 Ruff、`git diff --check` 与 middle-layer progress lint 均通过。遵循开发测试策略，未在本地等待整个 Research Agent exact-head 矩阵；后续推送后的远端矩阵仍是冻结/合并前的最终门。
+
+官方依据：SICdb [Cases](https://www.sicdb.com/Documentation/Table%3A_Cases)；eICU [patient](https://eicu.mit.edu/eicutables/patient/)；AmsterdamUMCdb [Table 1 patient characteristics notebook](https://github.com/AmsterdamUMC/AmsterdamUMCdb/blob/master/paper/paper-table1-patient-data-characteristics.ipynb)。
