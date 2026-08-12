@@ -444,6 +444,44 @@ def test_sicdb_rounded_age_publishes_a_conservative_interval(monkeypatch) -> Non
     assert caught.value.code == "patient_filter_grouped_age_indeterminate"
 
 
+def test_hirid_binned_age_publishes_conservative_intervals(monkeypatch) -> None:
+    patient_filter = PatientFilter(database="hirid", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {"patientid": [1, 2], "age": [70, 90]}
+        ),
+    )
+
+    result = patient_filter._load_hirid_demographics()
+
+    assert result["age_lower"].tolist() == [65, 85]
+    assert result["age_upper"].tolist() == [75, pd.NA]
+    assert result["age_is_grouped"].tolist() == [True, True]
+    assert result["age_is_censored"].tolist() == [False, True]
+
+
+def test_hirid_binned_age_thresholds_fail_closed(monkeypatch) -> None:
+    patient_filter = PatientFilter(database="hirid", data_path="/unused")
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda _name: pd.DataFrame(
+            {"patientid": [1, 2], "age": [70, 90]}
+        ),
+    )
+    patient_filter._demographics = patient_filter._load_hirid_demographics()
+
+    for criterion in ({"age_min": 70}, {"age_max": 90}, {"age_min": 92}):
+        with pytest.raises(PatientFilterCriterionError) as caught:
+            patient_filter.filter(**criterion)
+        assert caught.value.code == "patient_filter_grouped_age_indeterminate"
+
+    assert patient_filter.filter(age_min=80) == [2]
+    assert patient_filter.filter(age_max=80) == [1]
+
+
 def test_filter_criteria_declares_only_supported_filter_arguments() -> None:
     public_filter_arguments = set(signature(PatientFilter.filter).parameters) - {
         "self",

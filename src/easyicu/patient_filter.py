@@ -414,13 +414,18 @@ class PatientFilter:
         # HiRID已有age列
         if 'age' in general.columns:
             age = pd.to_numeric(general['age'], errors='coerce')
+            top_coded = age.eq(90)
+            # HiRID documents five-year bins but not whether the published
+            # label is a lower edge, upper edge, or centre.  A +/- 5-year
+            # envelope covers those encodings without inventing precision;
+            # the published 90 bin also contains every older patient.
             _publish_age_interval(
                 general,
                 age=age,
-                lower=age,
-                upper=age,
-                grouped=False,
-                censored=False,
+                lower=(age - 5).clip(lower=0),
+                upper=(age + 5).mask(top_coded),
+                grouped=True,
+                censored=top_coded,
             )
         elif 'admissiontime' in general.columns:
             # 如果没有age，尝试从其他来源获取
