@@ -33,6 +33,61 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.fixture(autouse=True)
+def _finalized_foundation_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Give synthetic releases an internally consistent finalized foundation."""
+
+    foundation = tmp_path / "foundation"
+    foundation.mkdir()
+    resource_paths = {
+        "concept_dictionary_sha256": foundation / "concept-dict.json",
+        "sofa2_dictionary_sha256": foundation / "sofa2-dict.json",
+        "clinical_contracts_sha256": foundation / "clinical_contracts.py",
+        "data_sources_sha256": foundation / "data-sources.json",
+    }
+    for index, path in enumerate(resource_paths.values(), start=1):
+        path.write_text(f"foundation resource {index}\n", encoding="utf-8")
+    lock_path = foundation / "concept-dict.LOCK.json"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "finalized": True,
+                "locked_for_extraction_run": "synthetic_finalized_release",
+                "concept_dict_sha256": _sha256(
+                    resource_paths["concept_dictionary_sha256"]
+                ),
+                "sofa2_dict_sha256": _sha256(
+                    resource_paths["sofa2_dictionary_sha256"]
+                ),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sealer,
+        "FOUNDATION_RESOURCE_PATHS",
+        resource_paths,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sealer,
+        "FOUNDATION_LOCK_PATH",
+        lock_path,
+        raising=False,
+    )
+
+
+def _foundation_runtime_provenance() -> dict[str, str]:
+    return {
+        field: _sha256(path)
+        for field, path in sealer.FOUNDATION_RESOURCE_PATHS.items()
+    }
+
+
 def _build_synthetic_release(run_root: Path) -> None:
     export_root = run_root / "exports"
     timing_rows = []
@@ -100,6 +155,7 @@ def _build_synthetic_release(run_root: Path) -> None:
             "runtime_provenance": {
                 "easyicu_git_commit": sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT,
                 "easyicu_git_dirty": False,
+                **_foundation_runtime_provenance(),
             },
             "module_timings_seconds": {
                 module: float(index + 1) for index, module in enumerate(sealer.MODULES)
@@ -177,6 +233,12 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
         "affected_database_runtime_commits": {
             database: sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT
             for database in sealer.DATABASES
+        },
+        "foundation": {
+            "lock_finalized": True,
+            "locked_for_extraction_run": "synthetic_finalized_release",
+            "lock_sha256": _sha256(sealer.FOUNDATION_LOCK_PATH),
+            **_foundation_runtime_provenance(),
         },
     }
     assert metadata["extraction_execution"]["profile"] == "server-adaptive"
@@ -384,6 +446,56 @@ def test_stable_module_contract_matches_public_extractor() -> None:
     from easyicu.api import EXTRACT_MODULE_ORDER
 
     assert tuple(EXTRACT_MODULE_ORDER) == sealer.MODULES
+
+
+def test_foundation_gate_rejects_unfinalized_lock() -> None:
+    lock = json.loads(sealer.FOUNDATION_LOCK_PATH.read_text(encoding="utf-8"))
+    lock["finalized"] = False
+    sealer.FOUNDATION_LOCK_PATH.write_text(
+        json.dumps(lock) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(sealer.ReleaseValidationError, match="not finalized"):
+        sealer._validate_foundation_lock()
+
+
+def test_foundation_gate_rejects_dictionary_hash_drift() -> None:
+    sealer.FOUNDATION_RESOURCE_PATHS[
+        "concept_dictionary_sha256"
+    ].write_text("drifted dictionary\n", encoding="utf-8")
+
+    with pytest.raises(
+        sealer.ReleaseValidationError,
+        match="concept_dictionary_sha256.*does not match",
+    ):
+        sealer._validate_foundation_lock()
+
+
+def test_release_gate_rejects_manifest_foundation_digest_drift(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "foundation_digest_drift"
+    _build_synthetic_release(run_root)
+    manifest_path = run_root / "exports" / "aumc" / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["runtime_provenance"]["concept_dictionary_sha256"] = "f" * 64
+    manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        sealer.ReleaseValidationError,
+        match="aumc: foundation provenance.*concept_dictionary_sha256",
+    ):
+        sealer.validate_release(run_root)
+
+
+def test_harmonized_minimum_includes_aumc_rrt_interval_fix() -> None:
+    assert sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT == (
+        "187c6123ea59b4d904a2594d755de4186dc249b5"
+    )
+    assert (
+        "aumc_rrt_derived_from_processitem_treatment_intervals"
+        in sealer.REQUIRED_HARMONIZED_CORRECTIONS
+    )
 
 
 def test_sealer_expands_sofa2_owner_receipts_in_physical_column_order() -> None:

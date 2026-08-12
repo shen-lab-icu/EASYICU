@@ -254,15 +254,28 @@ class ConceptLoader:
         projection. I/O, corruption, permission and memory failures propagate
         unchanged. Low-memory mode never retries with a full-table read.
         """
-        # Check cache first
-        if table_name in self._table_cache:
-            return self._table_cache[table_name]
+        # A cached narrow projection is reusable only when it contains every
+        # column requested by the next concept.  Reusing by table name alone
+        # made results depend on concept order when callbacks needed extra
+        # source columns.
+        cached = self._table_cache.get(table_name)
+        requested_columns = list(dict.fromkeys(columns or []))
+        if cached is not None and (
+            not requested_columns
+            or set(requested_columns).issubset(cached.columns)
+        ):
+            return cached
 
         # 🚀 加载表并存入缓存
         df = None
-        if columns:
+        if requested_columns:
             try:
-                df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
+                df = load_table(
+                    self._src_name,
+                    table_name,
+                    columns=requested_columns,
+                    path=self.data_path,
+                )
             except Exception as exc:
                 if self._low_memory or not _is_missing_column_projection_error(exc):
                     raise
@@ -1904,7 +1917,8 @@ class ConceptLoader:
         
         # 2. Load and filter
         for table_name, columns in table_columns.items():
-            if table_name in self._table_cache:
+            cached = self._table_cache.get(table_name)
+            if cached is not None and set(columns).issubset(cached.columns):
                 continue
             
             # 🚀 跳过需要概念特定过滤的超大表

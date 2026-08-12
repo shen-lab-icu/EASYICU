@@ -372,12 +372,18 @@ def list_config() -> Dict[str, Any]:
     """
     return global_config.get_all()
 
-def load_src_cfg(src_name: str) -> DataSourceConfig:
+def load_src_cfg(
+    src_name: str,
+    *,
+    registry: DataSourceRegistry | None = None,
+) -> DataSourceConfig:
     """
     加载数据源配置 - 对应 R ricu load_src_cfg
     
     Args:
         src_name: 数据源名称 (如 'mimic_demo', 'eicu_demo', 'eicu', 'miiv')
+        registry: Optional explicit registry for custom sources. Unknown names
+            never create an empty source configuration implicitly.
         
     Returns:
         DataSourceConfig 对象
@@ -392,23 +398,17 @@ def load_src_cfg(src_name: str) -> DataSourceConfig:
     """
     # 使用 load_data_sources 加载数据源注册表
     from .resources import load_data_sources
-    registry = load_data_sources()
+    active_registry = registry if registry is not None else load_data_sources()
     
     clean_name = str(src_name).strip()
     try:
-        return registry.get(clean_name)
+        return active_registry.get(clean_name)
     except KeyError:
-        try:
-            canonical_name = normalize_database_key(clean_name, registry=registry)
-            return registry.get(canonical_name)
-        except KeyError:
-            # Preserve the historical extension hook only for genuinely custom
-            # sources; registered aliases must never degrade to an empty config.
-            return DataSourceConfig(
-                name=clean_name,
-                id_cfg={},
-                tables={},
-            )
+        canonical_name = normalize_database_key(
+            clean_name,
+            registry=active_registry,
+        )
+        return active_registry.get(canonical_name)
 
 # ============================================================================
 # Persistent Configuration Storage (R ricu config persistence)

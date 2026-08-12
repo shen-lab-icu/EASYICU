@@ -108,6 +108,19 @@ def test_public_source_config_resolves_registered_aliases(
     assert load_src_cfg(alias).name == canonical
 
 
+def test_public_source_config_unknown_name_fails_closed() -> None:
+    with pytest.raises(KeyError, match="Unknown database profile 'mivv'"):
+        load_src_cfg("mivv")
+
+
+def test_custom_source_config_requires_explicit_registry() -> None:
+    from easyicu.config import DataSourceConfig, DataSourceRegistry
+
+    registry = DataSourceRegistry([DataSourceConfig(name="custom", tables={})])
+
+    assert load_src_cfg("custom", registry=registry).name == "custom"
+
+
 def test_legacy_database_constants_cover_every_public_canonical_key() -> None:
     assert set(SUPPORTED_DATABASES) == set(public_database_keys())
 

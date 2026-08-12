@@ -7,20 +7,15 @@ thresholds, and conversion factors to avoid hardcoding throughout the codebase.
 from typing import Dict, List
 import pandas as pd
 
+from .databases.profiles import DATABASE_LABELS, public_database_keys
+
 # ============================================================================
 # Database Metadata
 # ============================================================================
 
-SUPPORTED_DATABASES = ['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic']
+SUPPORTED_DATABASES = list(public_database_keys())
 
-DATABASE_FULL_NAMES = {
-    'miiv': 'MIMIC-IV',
-    'eicu': 'eICU Collaborative Research Database',
-    'aumc': 'AmsterdamUMCdb',
-    'hirid': 'HiRID (High Time Resolution ICU Dataset)',
-    'mimic': 'MIMIC-III',
-    'sic': 'SICdb (Surgical Intensive Care Database)',
-}
+DATABASE_FULL_NAMES = DATABASE_LABELS
 
 # ============================================================================
 # Column Names by Database
@@ -93,7 +88,7 @@ UNIT_COLUMNS: Dict[str, str] = {
 TIME_IS_OFFSET: Dict[str, bool] = {
     'miiv': False,  # Uses datetime
     'eicu': True,   # Uses minutes from admission
-    'aumc': False,  # Uses datetime
+    'aumc': True,   # Uses a database-wide millisecond offset clock
     'hirid': False, # Uses datetime
     'mimic': False, # Uses datetime
     'sic': True,    # Uses numeric offsets from ICU admission
