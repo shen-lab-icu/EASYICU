@@ -1,9 +1,9 @@
-# GPT 整仓审阅复核与 F1–F16 / N1–N14 定点修复
+# GPT 整仓审阅复核与 F1–F16 / N1–N18 定点修复
 
 - 日期：2026-08-11–2026-08-12
 - 分支 / 起始 HEAD：`fix/pi-workspace-review-20260809@e0ee97f`
-- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）+ `35bfc23`（终点语义）+ `d92c055`（Research Agent CI 根因）+ `ab58c5e`（N8/N9 first-stay）+ `d06c095`（N10/N11 MIMIC evidence）+ `6783de6`（N12/N13 age/API contract）+ `1210efb`（N14 HiRID age bins）
-- 状态：七轮定点修复均已提交；N1–N14 代码层已失败关闭，远端 `c1b7924` 的 Pi security / runner trust 已绿，Research Agent/main full matrices 仍在运行；`1210efb` 尚未推送，未启动 Provider、Canonical9 或真实患者分析
+- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）+ `35bfc23`（终点语义）+ `d92c055`（Research Agent CI 根因）+ `ab58c5e`（N8/N9 first-stay）+ `d06c095`（N10/N11 MIMIC evidence）+ `6783de6`（N12/N13 age/API contract）+ `1210efb`（N14 HiRID age bins）+ `5c075e1`（N15–N18 endpoint/weight evidence）
+- 状态：八轮定点修复均已提交；N1–N18 代码层已失败关闭，新 exact-head CI 待推送后复核，未启动 Provider、Canonical9 或真实患者分析
 - 模块：`DATA-FIX1` / `WEBAPP-FASTAPI-NATIVE-QA` / `FIG2-CANONICAL9-GATE`
 
 ## 裁决
@@ -125,3 +125,18 @@ N14 成立并由 `1210efb` 定点修复。HiRID 官方与 PhysioNet 均明确年
 第七次验证：两条新增回归在旧实现上 `2 failed / 45 deselected`，修复后 `2 passed / 45 deselected`；`test_patient_filter_correctness.py` 全量 `47 passed`；数据正确性、profile/resource、cohort API 与 callback 相邻门 `209 passed`；Ruff 与 `git diff --check` 通过。远端 exact head `c1b7924` 的 Pi security run `31570935158` 与 runner trust `31570935056` 已成功，Research Agent run `31570935036`、PR/push main CI `31570934935` / `31570932350` 仍在运行；新提交 `1210efb` 尚未推送，因此不存在可宣称绿色的新 exact-head 矩阵。
 
 官方依据：HiRID [data details](https://hirid.intensivecare.ai/data-details)；PhysioNet [HiRID v1.0 anonymization procedure](https://physionet.org/content/hirid/1.0/)。
+
+## 第八次复核（N15–N18）
+
+N15–N18 均成立并由 `5c075e1` 定点修复。旧实现把单次 ICU stay 的 LOS 当作完整 28 天 ICU 轨迹、用当前 extract 内排序推断再入院、以 eICU 院内死亡代替 28 天死亡，并在 KDIGO 尿量率计算中从冲突体重里取首条；这些路径都会在证据不足时静默发布临床结论。
+
+| ID | 裁决 | 最终合同 |
+|---|---|---|
+| N15 ICU-free days 28 | **成立，HIGH scientific** | 六库均不再从 index stay LOS 直接发布 `icu_free_days_28`。只有具备完整 28 天 ICU 进出轨迹及终点所需生存证据后才可恢复；当前通过 outcome-availability owner 明确报告 structurally unavailable。 |
+| N16 MIMIC ICU readmission | **成立，HIGH scientific** | MIMIC-III/IV 不再按当前 extract 的 `subject_id + intime` 排序生成 `icu_readmission`；缺少原生绝对 ICU ordinal 或 patient-history completeness 回执时失败关闭。 |
+| N17 eICU ventilator-free days 28 | **成立，HIGH scientific** | `actualHospitalMortality` 是院内死亡而非 28 天死亡，不能与 `actualVentdays` 拼成正式 VFD28；eICU 的 `vent_free_days_28` 现明确 unavailable，既有 horizon mortality 仍按各自证据合同发布。 |
+| N18 KDIGO keyed weight | **成立，HIGH scientific** | `urine_weight_linkage.py` 作为依赖中立 owner，只接受同一实体唯一一致的正体重；重复相同值可折叠，多个不同有效值抛 `kdigo_weight_values_conflict`。事件体积与 HiRID rate-source 两条 KDIGO 路径共用该合同，不再依赖行顺序，也不在缺临床选择规则时擅取首条/中位数。 |
+
+第八次验证：七条新增/调整回归在旧实现上 `6 failed / 1 passed`（相同重复体重是负向对照），修复后 `7 passed`；outcome availability、outcomes、数据正确性、KDIGO、native export 与 Web patient feature 相邻门 `112 passed / 9 real-data skipped`；API/cohort/module ownership/concept catalog/extract/callback 邻接门 `60 passed`；Ruff 与 `git diff --check` 通过。按开发测试策略未在本地启动 full matrix，新 exact-head 以推送后 GitHub Actions 为准。
+
+官方依据：eICU [`apachePatientResult`](https://eicu.mit.edu/eicutables/apachepatientresult/) 将 `actualHospitalMortality` 定义为院内死亡、`actualVentdays` 定义为实际通气天数且 30 天顶码；ICU-free days 试验方案说明 ICU 再入院后应从最终 ICU 出院计算、28 天前死亡计 0（[protocol](https://pmc.ncbi.nlm.nih.gov/articles/PMC6687016/)）；MIMIC-III [`icustays`](https://mimic.mit.edu/docs/iii/tables/icustays/) 区分 hospitalization `HADM_ID` 与单次 ICU stay `ICUSTAY_ID`；VFD28 的正式定义要求患者存活且脱离有创机械通气（[PubMed](https://pubmed.ncbi.nlm.nih.gov/41361939/)）。
