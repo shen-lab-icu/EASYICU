@@ -689,7 +689,7 @@ def _enforce_concept_bounds(df, concept_name):
 
 def _module_parquet_columns(columns, concepts, *, include_missing=False):
     """Return stable context + catalog column order without touching payloads."""
-    requested = list(dict.fromkeys(concepts))
+    requested = _native_export_physical_value_columns(concepts)
     requested_set = set(requested)
     context_columns = [column for column in columns if column not in requested_set]
     concept_columns = (
@@ -731,7 +731,7 @@ def _module_arrow_table(
 ):
     """Create a stable module table, adding structural nulls only in Arrow."""
     table = pyarrow_module.Table.from_pandas(frame, preserve_index=False)
-    requested = list(dict.fromkeys(concepts))
+    requested = _native_export_physical_value_columns(concepts)
     requested_set = set(requested)
 
     # Every non-demographics module is longitudinal in the native-v2 physical
