@@ -68,6 +68,7 @@ def _ctx(ra):
 
 def _make_cli_available(monkeypatch, backend="codex"):
     monkeypatch.setattr(ac_mod, "cli_backend_available", lambda b: b == backend)
+    monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +293,60 @@ def test_cohort_env_is_passed_through_to_subprocess(ra, monkeypatch):
 
     AgenticCoderAgent(_FakeCoder(), backend="codex").run(context=_ctx(ra), step=_step())
     assert captured["env"].get("COHORT_PARQUET") == "/tmp/cohort.parquet"
+
+
+def test_agentic_coder_does_not_delegate_without_external_opt_in(ra, monkeypatch):
+    monkeypatch.setattr(ac_mod, "cli_backend_available", lambda backend: True)
+    monkeypatch.delenv("EASYICU_ALLOW_EXTERNAL_LLM", raising=False)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unauthorized standalone CLI must not launch")
+        ),
+    )
+    fallback = _FakeCoder()
+
+    result = AgenticCoderAgent(fallback, backend="codex").run(
+        context=_ctx(ra), step=_step()
+    )
+
+    assert fallback.run_called is True
+    assert "fallback script" in result
+
+
+def test_agentic_coder_drops_unrelated_parent_secrets(ra, monkeypatch):
+    _make_cli_available(monkeypatch)
+    monkeypatch.setenv("COHORT_PARQUET", "/tmp/cohort.parquet")
+    monkeypatch.setenv("OPENAI_API_KEY", "required-backend-secret")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-leak")
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-leak")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://must-not-leak")
+    captured = {}
+
+    def _fake_run(argv, **kwargs):
+        captured["env"] = kwargs["env"]
+        Path(kwargs["cwd"], "analysis.py").write_text("x=1\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    import easyicu.research_agent.gates.method_compatibility as mc
+
+    monkeypatch.setattr(
+        mc,
+        "detect_forbidden_pattern_usage",
+        lambda code, ctx, step=None: [],
+    )
+
+    AgenticCoderAgent(_FakeCoder(), backend="codex").run(
+        context=_ctx(ra), step=_step()
+    )
+
+    assert captured["env"]["COHORT_PARQUET"] == "/tmp/cohort.parquet"
+    assert captured["env"]["OPENAI_API_KEY"] == "required-backend-secret"
+    assert "AWS_SECRET_ACCESS_KEY" not in captured["env"]
+    assert "GITHUB_TOKEN" not in captured["env"]
+    assert "DATABASE_URL" not in captured["env"]
 
 
 def test_agentic_prompt_forbids_undeclared_figures(ra):

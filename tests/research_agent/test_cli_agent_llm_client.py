@@ -19,6 +19,20 @@ def _client(backend="codex", model=None):
     return CLIAgentLLMClient(backend=backend, model=model)
 
 
+def _authorized_client(backend="codex", model=None):
+    from easyicu.research_agent.providers.factory import authorize_provider_client
+
+    client = _client(backend, model=model)
+    return authorize_provider_client(
+        client,
+        provider=f"{backend}-cli",
+        model=model or "cli-default",
+        base_url=f"cli://{backend}",
+        destination="external",
+        environment={"EASYICU_ALLOW_EXTERNAL_LLM": "1"},
+    )
+
+
 def test_rejects_unknown_backend():
     from easyicu.research_agent.providers.llm import CLIAgentLLMClient
 
@@ -81,8 +95,73 @@ def test_complete_returns_text_and_strips_reasoning(monkeypatch):
         )
 
     monkeypatch.setattr(subprocess, "run", _run)
-    out = _client("codex").complete([LLMMessage(role="user", content="hi")])
+    out = _authorized_client("codex").complete(
+        [LLMMessage(role="user", content="hi")]
+    )
     assert out == "final answer"
+
+
+def test_direct_constructor_is_denied_before_cli_launch(monkeypatch):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unmanaged CLI transport must not launch")
+        ),
+    )
+
+    with pytest.raises(PermissionError, match="authorization"):
+        _client("codex").complete([LLMMessage(role="user", content="hi")])
+
+
+def test_cli_subprocess_receives_only_reviewed_environment(monkeypatch):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/" + cmd)
+    monkeypatch.setenv("OPENAI_API_KEY", "required-backend-secret")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-leak")
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-leak")
+    monkeypatch.setenv("HTTPS_PROXY", "https://proxy-secret.example")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://must-not-leak")
+    captured = {}
+
+    def _run(argv, **kwargs):
+        captured["env"] = kwargs["env"]
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+
+    assert _authorized_client("codex").complete(
+        [LLMMessage(role="user", content="hi")]
+    ) == "ok"
+    assert captured["env"]["OPENAI_API_KEY"] == "required-backend-secret"
+    assert "AWS_SECRET_ACCESS_KEY" not in captured["env"]
+    assert "GITHUB_TOKEN" not in captured["env"]
+    assert "HTTPS_PROXY" not in captured["env"]
+    assert "DATABASE_URL" not in captured["env"]
+
+
+def test_claude_cli_receives_only_claude_authentication(monkeypatch):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/" + cmd)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "claude-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-secret")
+    captured = {}
+
+    def _run(argv, **kwargs):
+        captured["env"] = kwargs["env"]
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+
+    assert _authorized_client("claude").complete(
+        [LLMMessage(role="user", content="hi")]
+    ) == "ok"
+    assert captured["env"]["ANTHROPIC_API_KEY"] == "claude-secret"
+    assert "OPENAI_API_KEY" not in captured["env"]
 
 
 def test_complete_missing_cli_raises(monkeypatch):
@@ -90,7 +169,9 @@ def test_complete_missing_cli_raises(monkeypatch):
 
     monkeypatch.setattr(shutil, "which", lambda cmd: None)
     with pytest.raises(RuntimeError):
-        _client("claude").complete([LLMMessage(role="user", content="hi")])
+        _authorized_client("claude").complete(
+            [LLMMessage(role="user", content="hi")]
+        )
 
 
 def test_complete_nonzero_exit_raises(monkeypatch):
@@ -103,7 +184,9 @@ def test_complete_nonzero_exit_raises(monkeypatch):
         lambda argv, **kw: SimpleNamespace(returncode=1, stdout="", stderr="boom"),
     )
     with pytest.raises(RuntimeError):
-        _client("codex").complete([LLMMessage(role="user", content="hi")])
+        _authorized_client("codex").complete(
+            [LLMMessage(role="user", content="hi")]
+        )
 
 
 def test_complete_accepts_and_ignores_extra_kwargs(monkeypatch):
@@ -116,7 +199,7 @@ def test_complete_accepts_and_ignores_extra_kwargs(monkeypatch):
         "run",
         lambda argv, **kw: SimpleNamespace(returncode=0, stdout="ok", stderr=""),
     )
-    out = _client("codex").complete(
+    out = _authorized_client("codex").complete(
         [LLMMessage(role="user", content="hi")],
         max_tokens=10,
         temperature=0.7,

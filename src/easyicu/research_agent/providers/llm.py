@@ -1594,6 +1594,18 @@ class CLIAgentLLMClient:
             argv += ["-m", model]
         return argv
 
+    def _require_outbound_authorization(self) -> None:
+        """Reject direct/unmanaged CLI transports before process launch."""
+
+        from .factory import require_provider_client_authorization
+
+        try:
+            require_provider_client_authorization(self)
+        except Exception as exc:
+            raise PermissionError(
+                "external CLI calls require factory-minted provider authorization"
+            ) from exc
+
     def complete(
         self,
         messages: Sequence[LLMMessage],
@@ -1608,6 +1620,9 @@ class CLIAgentLLMClient:
         import subprocess
         import tempfile
 
+        from .subprocess_env import build_provider_subprocess_env
+
+        self._require_outbound_authorization()
         if not shutil.which(self._command):
             raise RuntimeError(
                 f"The '{self._command}' CLI is not installed or not on PATH."
@@ -1630,6 +1645,7 @@ class CLIAgentLLMClient:
                     text=True,
                     timeout=self._timeout,
                     cwd=cwd,
+                    env=build_provider_subprocess_env(self._backend),
                 )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(

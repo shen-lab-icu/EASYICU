@@ -1549,10 +1549,11 @@ def repair_miscited_numeric_citations(
     replaced and no citation is ever removed, so a genuine attribution error
     remains visible in the text rather than being quietly rewritten.
 
-    The owner chosen is the earliest-ordered registered owner of that value:
-    provenance flows forward, so the earliest step to register the number is
-    the closest to where it came from. When no owner resolves to a citable
-    evidence name, nothing is added and the gate still refuses.
+    A citation is added only when exactly one registered claim owns the value.
+    ``NumericClaim`` does not yet carry the full estimand/exposure/outcome/
+    population identity needed to prove that multiple same-valued claims are
+    the same fact.  Therefore any multiplicity remains unmodified and the
+    strict binder still refuses it; ordering alone is never semantic evidence.
     """
 
     lineage = _evidence_lineage(evidence)
@@ -1591,6 +1592,19 @@ def repair_miscited_numeric_citations(
             continue
         detail = _miscitation_detail(candidates, context=context, lineage=lineage)
         if detail is None:
+            continue
+        distinct_candidates = {
+            (claim.step_id, claim.evidence_id, claim.source_field)
+            for claim, _distance in candidates
+        }
+        if len(distinct_candidates) != 1:
+            continue
+        citable_candidates = [
+            claim
+            for claim, _distance in candidates
+            if claim.step_id in resolvable or claim.evidence_id in resolvable
+        ]
+        if len(citable_candidates) != 1:
             continue
         owner = next(
             (item for item in sorted(detail["owned_by"]) if item in resolvable),

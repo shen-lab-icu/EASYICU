@@ -43,6 +43,7 @@ def _cli_engine_returning(manuscript: str, monkeypatch):
     import shutil
     import subprocess
 
+    from easyicu.research_agent.providers.factory import authorize_provider_client
     from easyicu.research_agent.providers.llm import CLIAgentLLMClient
 
     monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/" + cmd)
@@ -50,7 +51,14 @@ def _cli_engine_returning(manuscript: str, monkeypatch):
         subprocess, "run",
         lambda argv, **kw: SimpleNamespace(returncode=0, stdout=manuscript, stderr=""),
     )
-    return CLIAgentLLMClient(backend="codex")
+    return authorize_provider_client(
+        CLIAgentLLMClient(backend="codex"),
+        provider="codex-cli",
+        model="cli-default",
+        base_url="cli://codex",
+        destination="external",
+        environment={"EASYICU_ALLOW_EXTERNAL_LLM": "1"},
+    )
 
 
 _HALLUCINATED = "The observed odds ratio was 1.42, but the engine invented 999."
