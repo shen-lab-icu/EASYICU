@@ -636,6 +636,36 @@ def test_native_schema_preserves_state_valued_sofa2_ascertainment() -> None:
     assert canonical[concept].tolist() == ["complete", "proxy_only"]
 
 
+def test_stream_arrow_table_keeps_sofa2_owner_receipt_companions() -> None:
+    import pyarrow as pa
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": [101, 102],
+            "charttime": [0.0, 1.0],
+            "sofa2_resp": [2.0, 0.0],
+            "sofa2_resp_observed": [1, 0],
+            "sofa2_resp_available": [1, 0],
+        }
+    )
+    table = api._module_arrow_table(
+        frame,
+        ["sofa2_resp"],
+        pa,
+        module="sofa2_score",
+    )
+
+    assert table.column_names == [
+        "stay_id",
+        "charttime",
+        "sofa2_resp",
+        "sofa2_resp_observed",
+        "sofa2_resp_available",
+    ]
+    assert table.column("sofa2_resp_observed").to_pylist() == [1, 0]
+    assert table.column("sofa2_resp_available").to_pylist() == [1, 0]
+
+
 def test_native_arrow_schema_normalises_backend_large_strings() -> None:
     import pyarrow as pa
 
