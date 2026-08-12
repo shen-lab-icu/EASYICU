@@ -19,10 +19,15 @@ def _load_refresher():
     return module
 
 
-def test_selected_module_refresh_is_deliberately_limited_to_renal() -> None:
+def test_selected_module_refresh_is_limited_to_correctness_modules() -> None:
     refresher = _load_refresher()
     assert refresher._validate_modules(["renal"]) == ("renal",)
-    with pytest.raises(refresher.ModuleRefreshError, match="only renal"):
+    assert refresher._validate_modules(["respiratory"]) == ("respiratory",)
+    assert refresher._validate_modules(["renal", "respiratory"]) == (
+        "renal",
+        "respiratory",
+    )
+    with pytest.raises(refresher.ModuleRefreshError, match="renal and respiratory"):
         refresher._validate_modules(["vitals"])
 
 
