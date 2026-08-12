@@ -386,6 +386,23 @@ def test_stable_module_contract_matches_public_extractor() -> None:
     assert tuple(EXTRACT_MODULE_ORDER) == sealer.MODULES
 
 
+def test_sealer_expands_sofa2_owner_receipts_in_physical_column_order() -> None:
+    assert sealer._physical_columns_from_manifest_concepts(
+        ["stay_id", "charttime"],
+        ["sofa2", "sofa2_cns_ascertainment", "hr"],
+    ) == [
+        "stay_id",
+        "charttime",
+        "sofa2",
+        "sofa2_observed",
+        "sofa2_available",
+        "sofa2_cns_ascertainment",
+        "sofa2_cns_ascertainment_observed",
+        "sofa2_cns_ascertainment_available",
+        "hr",
+    ]
+
+
 def test_harmonized_ancestry_rejects_old_and_unknown_runtime_commits() -> None:
     commits = {
         database: sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT

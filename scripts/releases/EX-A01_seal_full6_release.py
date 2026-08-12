@@ -77,6 +77,30 @@ CORRECTIONS = (
     "cumulative_fluid_balance_excludes_preadmission_baseline",
     "per_parquet_sha256_and_byte_size_receipts",
 )
+OWNER_RECEIPT_SUFFIXES = ("_observed", "_available")
+
+
+def _physical_columns_from_manifest_concepts(
+    primary_key: list[str], physical_concepts: list[str]
+) -> list[str]:
+    """Expand owner-issued receipt companions exactly as native-v2 does.
+
+    SOFA-2 observed/available receipts are physical columns owned by their
+    public value concept, not independently selectable concepts.  The native
+    publisher therefore lists the public concepts in ``physical_concept_ids``
+    while placing the receipt companions immediately after each SOFA-2 value.
+    The release gate must validate that deterministic expansion rather than
+    reject a package merely because it preserved owner receipts.
+    """
+
+    columns = list(primary_key)
+    for concept in physical_concepts:
+        columns.append(concept)
+        if concept.startswith("sofa2"):
+            columns.extend(
+                f"{concept}{suffix}" for suffix in OWNER_RECEIPT_SUFFIXES
+            )
+    return list(dict.fromkeys(columns))
 
 
 # Only these admission-level values may occupy a longitudinal row whose
@@ -477,7 +501,9 @@ def _validate_file_entry(
         raise ReleaseValidationError(
             f"{label}: physical_concept_ids must be a non-empty string list"
         )
-    expected_columns = [*primary_key, *physical_concepts]
+    expected_columns = _physical_columns_from_manifest_concepts(
+        primary_key, physical_concepts
+    )
     if list(actual_schema) != expected_columns:
         raise ReleaseValidationError(
             f"{label}: Parquet columns do not follow primary-key + concept order"
