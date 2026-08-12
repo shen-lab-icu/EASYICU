@@ -3596,7 +3596,11 @@ def _native_export_runtime_provenance() -> Dict[str, object]:
         / "data"
         / "concept-dict.json",
         "sofa2_dictionary_sha256": package_root / "data" / "sofa2-dict.json",
-        "clinical_contracts_sha256": package_root / "clinical_contracts.py",
+        "clinical_contracts_sha256": package_root
+        / "data"
+        / "clinical-contracts.json",
+        "clinical_contract_validator_sha256": package_root
+        / "clinical_contracts.py",
         "data_sources_sha256": package_root / "data" / "data-sources.json",
     }
     foundation_sha256 = {
@@ -4126,7 +4130,7 @@ def _publish_native_export_v2(
     }
     manifest = {
         "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
-        "contract_revision": "native_v2_foundation_provenance_20260812",
+        "contract_revision": "native_v2_clinical_contract_provenance_20260812",
         "database": normalized_database,
         "data_path": str(data_path),
         "format": "parquet",

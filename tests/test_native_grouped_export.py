@@ -360,6 +360,7 @@ def test_grouped_output_is_sealed_without_accessing_the_raw_data_path(
         "concept_dictionary_sha256",
         "sofa2_dictionary_sha256",
         "clinical_contracts_sha256",
+        "clinical_contract_validator_sha256",
         "data_sources_sha256",
     ):
         value = manifest["runtime_provenance"][field]

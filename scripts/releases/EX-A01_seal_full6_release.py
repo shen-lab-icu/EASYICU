@@ -48,9 +48,9 @@ MODULES = (
     "sepsis3_sofa2",
 )
 NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
-CONTRACT_REVISION = "native_v2_foundation_provenance_20260812"
-RELEASE_SCHEMA_VERSION = "easyicu_full6_release_v2"
-RELEASE_GATE_CONTRACT = "easyicu_harmonized_semantics_release_gate_v3"
+CONTRACT_REVISION = "native_v2_clinical_contract_provenance_20260812"
+RELEASE_SCHEMA_VERSION = "easyicu_full6_release_v3"
+RELEASE_GATE_CONTRACT = "easyicu_harmonized_semantics_release_gate_v4"
 MINIMUM_HARMONIZED_EASYICU_COMMIT = "187c6123ea59b4d904a2594d755de4186dc249b5"
 REQUIRED_HARMONIZED_CORRECTIONS = (
     "aumc_relative_time_bucketed_before_admission_alignment",
@@ -66,6 +66,7 @@ FOUNDATION_PROVENANCE_FIELDS = (
     "concept_dictionary_sha256",
     "sofa2_dictionary_sha256",
     "clinical_contracts_sha256",
+    "clinical_contract_validator_sha256",
     "data_sources_sha256",
 )
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -75,6 +76,8 @@ FOUNDATION_RESOURCE_PATHS = {
     "sofa2_dictionary_sha256": _REPOSITORY_ROOT
     / "src/easyicu/data/sofa2-dict.json",
     "clinical_contracts_sha256": _REPOSITORY_ROOT
+    / "src/easyicu/data/clinical-contracts.json",
+    "clinical_contract_validator_sha256": _REPOSITORY_ROOT
     / "src/easyicu/clinical_contracts.py",
     "data_sources_sha256": _REPOSITORY_ROOT
     / "src/easyicu/data/data-sources.json",
@@ -99,6 +102,7 @@ CORRECTIONS = (
     "per_parquet_sha256_and_byte_size_receipts",
     "aumc_rrt_uses_processitem_treatment_intervals",
     "foundation_resources_are_content_addressed",
+    "clinical_contract_registry_and_validator_are_content_addressed",
 )
 OWNER_RECEIPT_SUFFIXES = ("_observed", "_available")
 
