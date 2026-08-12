@@ -256,24 +256,12 @@ def _refresh_one_database(
 ) -> dict[str, Any]:
     staging_root = candidate_root / ".module_refresh_staging" / database
     destination_database_root = candidate_root / "exports" / database
-    # A newly cloned candidate deliberately starts with the source package's
-    # canonical files.  Their schema alone is not evidence that this checkout
-    # has re-read the selected raw module.  Reuse is permissible only on an
-    # explicit ``--resume`` invocation after an interrupted refresh.
-    if reuse_completed_export and _module_is_canonical_refresh(
-        destination_database_root, modules
-    ):
-        return {
-            "database": database,
-            "data_path": data_path,
-            "num_patients": None,
-            "batch_size": None,
-            "total_elapsed_seconds": None,
-            "modules": _metrics_from_module_manifests(
-                destination_database_root, modules
-            ),
-            "recovery_mode": "candidate_export_already_refreshed",
-        }
+    # A cloned candidate deliberately starts with canonical source files, so
+    # destination schema can never prove that raw data were re-read.  Resume
+    # may promote a complete one-use staging directory below; otherwise the
+    # database is re-extracted.  ``reuse_completed_export`` remains explicit
+    # in the call contract to make this fail-closed resume rule reviewable.
+    del reuse_completed_export
     if staging_root.exists() or staging_root.is_symlink():
         if _module_is_canonical_refresh(staging_root, modules):
             _replace_selected_module_files(
