@@ -23,11 +23,12 @@ def test_selected_module_refresh_is_limited_to_correctness_modules() -> None:
     refresher = _load_refresher()
     assert refresher._validate_modules(["renal"]) == ("renal",)
     assert refresher._validate_modules(["respiratory"]) == ("respiratory",)
+    assert refresher._validate_modules(["sofa2_score"]) == ("sofa2_score",)
     assert refresher._validate_modules(["renal", "respiratory"]) == (
         "renal",
         "respiratory",
     )
-    with pytest.raises(refresher.ModuleRefreshError, match="renal and respiratory"):
+    with pytest.raises(refresher.ModuleRefreshError, match="sofa2_score"):
         refresher._validate_modules(["vitals"])
 
 
@@ -50,6 +51,11 @@ def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
         "sofa1_score",
         "sofa2_score",
         "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    )
+    assert refresher._expand_module_dependency_closure(["sofa2_score"]) == (
+        "sepsis_shared",
+        "sofa2_score",
         "sepsis3_sofa2",
     )
 
