@@ -71,7 +71,7 @@ def load_concept_cached_impl(
     merge: bool = True,
     align_time: bool = False,
     verbose: bool = True,
-    use_pickle: bool = True,
+    use_pickle: bool = False,
     n_patients: Optional[int] = None,
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
@@ -92,9 +92,8 @@ def load_concept_cached_impl(
         **kwargs,
     }
     cache_key = get_cache_key_fn(concept_list, source, **cache_params)
-    cache_ext = "pkl" if use_pickle else "csv"
     cache_file = resolved_cache_dir / (
-        f"{source}_{'_'.join(concept_list[:3])}_{cache_key[:32]}.{cache_ext}"
+        f"{cache_key}.trusted.pkl" if use_pickle else f"{cache_key}.parquet"
     )
 
     if not force_reload and cache_file.exists():
@@ -105,7 +104,7 @@ def load_concept_cached_impl(
                 with cache_file.open("rb") as handle:
                     result = pickle.load(handle)
             else:
-                result = pd.read_csv(cache_file, parse_dates=["charttime"])
+                result = pd.read_parquet(cache_file)
             if verbose:
                 size = len(result)
                 unit = "行缓存数据" if isinstance(result, pd.DataFrame) else "个概念"
@@ -137,7 +136,7 @@ def load_concept_cached_impl(
             with cache_file.open("wb") as handle:
                 pickle.dump(result, handle)
         elif isinstance(result, pd.DataFrame):
-            result.to_csv(cache_file, index=False)
+            result.to_parquet(cache_file, index=False)
         if verbose:
             print(f"💾 缓存已保存: {cache_file.name}")
     except Exception as exc:

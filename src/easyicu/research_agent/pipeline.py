@@ -168,6 +168,8 @@ from .orchestration.config import (
     assert_step_provider_budget_funds_its_repairs,
 )
 from .orchestration.services import PipelineServices
+from .orchestration.progress import planner_retry_progress_callback
+from .orchestration.scientific_runtime import ScientificRuntimeAuthorities
 from .orchestration.workflow import PipelineRunOutcome
 from .resources.capability_runtime import CapabilityWorkflowRuntime
 from .contracts.runtime import (
@@ -1662,30 +1664,10 @@ class ResearchAgentPipeline:
         self._required_primary_cohort_selection_mode = (
             config.required_primary_cohort_selection_mode
         )
-        if config.trajectory_scientific_runtime_authority is not None:
-            from .trajectory.scientific_runtime_authority import (
-                load_trajectory_scientific_runtime_authority,
-            )
-
-            self._trajectory_scientific_runtime_authority = (
-                load_trajectory_scientific_runtime_authority(
-                    config.trajectory_scientific_runtime_authority
-                )
-            )
-        else:
-            self._trajectory_scientific_runtime_authority = None
-        if config.current_case_scientific_runtime_authority is not None:
-            from .authority.current_case_scientific_runtime import (
-                load_current_case_scientific_runtime_authority,
-            )
-
-            self._current_case_scientific_runtime_authority = (
-                load_current_case_scientific_runtime_authority(
-                    config.current_case_scientific_runtime_authority
-                )
-            )
-        else:
-            self._current_case_scientific_runtime_authority = None
+        self._scientific_runtime_authorities = ScientificRuntimeAuthorities.load(
+            trajectory=config.trajectory_scientific_runtime_authority,
+            current_case=config.current_case_scientific_runtime_authority,
+        )
         self._scientific_runtime_projection_sha256 = (
             config.scientific_runtime_projection_sha256
         )
@@ -3058,37 +3040,7 @@ class ResearchAgentPipeline:
             plan_generation_mode = "llm"
             planner = PlannerAgent(role_resolver("planner"))
 
-            def _planner_retry_progress(event: Any) -> None:
-                attempt = int(getattr(event, "attempt", 0) or 0)
-                total = int(getattr(event, "total_attempts", 0) or 0)
-                phase = str(getattr(event, "phase", "") or "")
-                if phase == "started":
-                    label = f"Generating plan draft {attempt}/{total}."
-                    status = "running"
-                elif phase == "rejected":
-                    label = (
-                        f"Plan draft {attempt}/{total} did not satisfy the "
-                        "scientific contract; retrying."
-                        if attempt < total
-                        else (
-                            f"Plan draft {attempt}/{total} did not satisfy the "
-                            "scientific contract."
-                        )
-                    )
-                    status = "running" if attempt < total else "error"
-                elif phase == "accepted":
-                    label = f"Plan draft {attempt}/{total} passed contract validation."
-                    status = "complete"
-                else:
-                    return
-                emit_progress(
-                    "planning",
-                    label,
-                    current=attempt,
-                    total=total,
-                    status=status,
-                    run_id=run_id,
-                )
+            planner_progress = planner_retry_progress_callback(emit_progress, run_id=run_id)
 
             try:
                 plan = planner.run(
@@ -3098,7 +3050,7 @@ class ResearchAgentPipeline:
                     enforce_article_contract=True,
                     article_contract_context=context,
                     planning_contract_context=planning_contract_context,
-                    progress_callback=_planner_retry_progress,
+                    progress_callback=planner_progress,
                 )
                 planner_prompt_metrics = know_how_binding.prompt_metrics(
                     planner,
@@ -3410,10 +3362,7 @@ class ResearchAgentPipeline:
                 raise CohortAuthorityError(
                     "Planner primary cohort selection is not explicit"
                 )
-        if self._trajectory_scientific_runtime_authority is not None:
-            self._trajectory_scientific_runtime_authority.validate_plan(plan)
-        if self._current_case_scientific_runtime_authority is not None:
-            self._current_case_scientific_runtime_authority.validate_plan(plan)
+        self._scientific_runtime_authorities.validate_plan(plan)
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )
