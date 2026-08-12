@@ -1,9 +1,9 @@
-# GPT 整仓审阅复核与 F1–F16 / N1–N13 定点修复
+# GPT 整仓审阅复核与 F1–F16 / N1–N14 定点修复
 
 - 日期：2026-08-11–2026-08-12
 - 分支 / 起始 HEAD：`fix/pi-workspace-review-20260809@e0ee97f`
-- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）+ `35bfc23`（终点语义）+ `d92c055`（Research Agent CI 根因）+ `ab58c5e`（N8/N9 first-stay）+ `d06c095`（N10/N11 MIMIC evidence）+ `6783de6`（N12/N13 age/API contract）
-- 状态：六轮定点修复均已提交；N1–N13 代码层已失败关闭，`216426d` 的 Pi security / runner trust 已绿，Research Agent/main full matrices 仍在运行；`6783de6` 尚未推送，未启动 Provider、Canonical9 或真实患者分析
+- 实现提交：`3e03529`（首轮）+ `a3ff37a`（二次 N1–N4）+ `35bfc23`（终点语义）+ `d92c055`（Research Agent CI 根因）+ `ab58c5e`（N8/N9 first-stay）+ `d06c095`（N10/N11 MIMIC evidence）+ `6783de6`（N12/N13 age/API contract）+ `1210efb`（N14 HiRID age bins）
+- 状态：七轮定点修复均已提交；N1–N14 代码层已失败关闭，远端 `c1b7924` 的 Pi security / runner trust 已绿，Research Agent/main full matrices 仍在运行；`1210efb` 尚未推送，未启动 Provider、Canonical9 或真实患者分析
 - 模块：`DATA-FIX1` / `WEBAPP-FASTAPI-NATIVE-QA` / `FIG2-CANONICAL9-GATE`
 
 ## 裁决
@@ -113,3 +113,15 @@ N12/N13 均成立并由 `6783de6` 定点修复。此前只有 AUMC 保留发布�
 第六次验证：五条新增回归在旧实现上 `5 failed / 40 deselected`，修复后连同 AUMC 既有边界为 `7 passed / 38 deselected`；`test_patient_filter_correctness.py` 全量 `45 passed`；数据正确性、profile/resource、cohort API 与 callback 邻接门 `245 passed`；Ruff、`git diff --check` 通过。本地只读核验 SICdb v1.0.6 `AgeOnAdmission` 的非空发布值恰为 15–90 的 5 年步长，未输出患者标识。`216426d` 的 Research Agent PR run `31569536019` 与 main CI PR/push runs `31569536017` / `31569533396` 仍为 `in_progress`，Pi security `31569536042` 与 runner trust `31569536071` 已成功；新提交 `6783de6` 尚未推送，故尚无它自己的 exact-head 矩阵。
 
 官方依据：eICU [patient age](https://eicu.mit.edu/eicutables/patient/)；MIMIC-III [patients DOB de-identification](https://mimic.mit.edu/docs/III/tables/patients.html) 与 [official age tutorial](https://mimic.mit.edu/docs/III/tutorials/intro-to-mimic-iii.html)；MIMIC-IV [patients anchor age](https://mimic.mit.edu/docs/IV/modules/hosp/patients.html)；SICdb [case data](https://www.sicdb.com/Documentation/Table%3A_Cases) 与 [full documentation](https://www.sicdb.com/Documentation/SICdb_Documentation)。
+
+## 第七次复核（N14）
+
+N14 成立并由 `1210efb` 定点修复。HiRID 官方与 PhysioNet 均明确年龄、身高和体重按 5 年/单位分箱，年龄最大档为 90 且包含全部更高年龄；此前 HiRID loader 却发布 `age_lower == age_upper == age`、`grouped=False`、`censored=False`，会让公共年龄阈值把匿名化档位当作精确年龄。
+
+| ID | 裁决 | 最终合同 |
+|---|---|---|
+| N14 HiRID age bins | **成立，HIGH scientific** | 普通 HiRID 年龄档发布保守 `age±5` 区间并标记 grouped；90 档发布 `[85, open]` 并标记 grouped+censored。官方没有公开档位标签表示左边界、右边界还是中心，因此不用未经证实的窄区间，采用覆盖三种解释的 envelope；统一 evaluator 对切穿普通档或 90 顶档的阈值抛 `patient_filter_grouped_age_indeterminate`，只有整段可判定时才纳排。 |
+
+第七次验证：两条新增回归在旧实现上 `2 failed / 45 deselected`，修复后 `2 passed / 45 deselected`；`test_patient_filter_correctness.py` 全量 `47 passed`；数据正确性、profile/resource、cohort API 与 callback 相邻门 `209 passed`；Ruff 与 `git diff --check` 通过。远端 exact head `c1b7924` 的 Pi security run `31570935158` 与 runner trust `31570935056` 已成功，Research Agent run `31570935036`、PR/push main CI `31570934935` / `31570932350` 仍在运行；新提交 `1210efb` 尚未推送，因此不存在可宣称绿色的新 exact-head 矩阵。
+
+官方依据：HiRID [data details](https://hirid.intensivecare.ai/data-details)；PhysioNet [HiRID v1.0 anonymization procedure](https://physionet.org/content/hirid/1.0/)。
