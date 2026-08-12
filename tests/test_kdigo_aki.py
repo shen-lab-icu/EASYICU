@@ -132,6 +132,67 @@ def test_kdigo_uo_invalid_weight_does_not_fall_back_to_70kg():
     assert result["uo_rt_6hr"].isna().all()
 
 
+@pytest.mark.parametrize("weights", ([50.0, 100.0], [100.0, 50.0]))
+def test_kdigo_uo_conflicting_keyed_weights_fail_closed(weights):
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1] * 6,
+            "charttime": [0, 60, 120, 180, 240, 300],
+            "urine": [30.0] * 6,
+        }
+    )
+    weight = pd.DataFrame({"stay_id": [1, 1], "weight": weights})
+
+    with pytest.raises(KDIGOComponentCalculationError) as caught:
+        _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+
+    assert caught.value.reason_code == "kdigo_weight_values_conflict"
+
+
+def test_kdigo_rate_source_conflicting_keyed_weights_fail_closed():
+    urine = pd.DataFrame(
+        {
+            "patientid": [1, 1, 1],
+            "datetime": [
+                pd.Timedelta(hours=0),
+                pd.Timedelta(hours=2),
+                pd.Timedelta(hours=6),
+            ],
+            "urine": [30.0, 30.0, 30.0],
+        }
+    )
+    weight = pd.DataFrame(
+        {"patientid": [1, 1], "weight": [50.0, 100.0]}
+    )
+
+    with pytest.raises(KDIGOComponentCalculationError) as caught:
+        _calculate_uo_rates_simple(
+            urine,
+            weight,
+            "patientid",
+            "datetime",
+            source_is_rate=True,
+            interval=pd.Timedelta(hours=1),
+        )
+
+    assert caught.value.reason_code == "kdigo_weight_values_conflict"
+
+
+def test_kdigo_uo_duplicate_identical_keyed_weights_are_accepted():
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1] * 6,
+            "charttime": [0, 60, 120, 180, 240, 300],
+            "urine": [30.0] * 6,
+        }
+    )
+    weight = pd.DataFrame({"stay_id": [1, 1], "weight": [100.0, 100.0]})
+
+    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+
+    assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(0.3)
+
+
 def test_empty_weight_source_is_missingness_not_a_calculation_crash():
     urine = pd.DataFrame(
         {

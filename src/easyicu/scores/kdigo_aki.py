@@ -36,7 +36,11 @@ import numpy as np
 import logging
 
 from easyicu.io.ts_utils import _infer_numeric_time_unit
-from easyicu.urine_weight_linkage import resolve_unkeyed_single_entity_weight
+from easyicu.urine_weight_linkage import (
+    ConflictingKeyedWeightError,
+    resolve_keyed_unique_weights,
+    resolve_unkeyed_single_entity_weight,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -600,6 +604,24 @@ def _calculate_uo_rates_simple(
     )
     weight_id_col = _detect_id_col(weight)
 
+    keyed_weight = None
+    if weight_id_col and weight_id_col in weight.columns:
+        try:
+            keyed_weight = resolve_keyed_unique_weights(
+                weight,
+                id_columns=[weight_id_col],
+                weight_column=weight_col,
+            )
+        except ConflictingKeyedWeightError as exc:
+            raise KDIGOComponentCalculationError(
+                component="weight",
+                reason_code="kdigo_weight_values_conflict",
+                message=(
+                    "KDIGO urine-output staging cannot choose among "
+                    "different valid keyed weights without a clinical selector"
+                ),
+            ) from exc
+
     if source_is_rate:
         # HiRID 10020000 is OUTurine/h (mL/h), whereas the other databases
         # expose voided volume events. Reusing the event-volume denominator
@@ -609,7 +631,7 @@ def _calculate_uo_rates_simple(
         from easyicu.callbacks import _urine_rate_window_avg_multi
 
         rate_urine = urine.copy()
-        rate_weight = weight.copy()
+        rate_weight = keyed_weight.copy() if keyed_weight is not None else weight.copy()
         if urine_col != "urine" and urine_col in rate_urine.columns:
             rate_urine = rate_urine.rename(columns={urine_col: "urine"})
         if weight_col != "weight" and weight_col in rate_weight.columns:
@@ -644,11 +666,10 @@ def _calculate_uo_rates_simple(
     # one-entity path is explicitly proved below; selecting ``iloc[0]`` from a
     # multi-patient table would silently apply one patient's weight to another.
     global_weight = np.nan
-    if weight_id_col and weight_id_col in weight.columns:
-        valid_weight = weight.loc[weight[weight_col] > 0]
-        weight_per_patient = (
-            valid_weight.groupby(weight_id_col)[weight_col].first().to_dict()
-        )
+    if keyed_weight is not None:
+        weight_per_patient = keyed_weight.set_index(weight_id_col)[
+            weight_col
+        ].to_dict()
     else:
         resolution = resolve_unkeyed_single_entity_weight(
             urine,
