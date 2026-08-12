@@ -163,6 +163,140 @@ def test_sepsis_result_without_a_stay_identifier_fails_closed(monkeypatch) -> No
     assert caught.value.code == "patient_filter_sepsis_identifier_unavailable"
 
 
+@pytest.mark.parametrize(
+    ("database", "loader_name", "stay_id_column"),
+    [
+        ("miiv", "_load_miiv_demographics", "stay_id"),
+        ("mimic", "_load_mimic3_demographics", "icustay_id"),
+    ],
+)
+def test_mimic_partial_extract_does_not_claim_patient_global_first_stay(
+    monkeypatch,
+    database: str,
+    loader_name: str,
+    stay_id_column: str,
+) -> None:
+    patient_filter = PatientFilter(database=database, data_path="/unused")
+    tables = {
+        "icustays": pd.DataFrame(
+            {
+                "subject_id": [10, 10],
+                "hadm_id": [102, 103],
+                stay_id_column: [2, 3],
+                "intime": ["2021-01-01", "2022-01-01"],
+            }
+        ),
+        "patients": pd.DataFrame({"subject_id": [10]}),
+        "admissions": pd.DataFrame(
+            {"subject_id": [10, 10], "hadm_id": [102, 103]}
+        ),
+    }
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda name: tables[name].copy(),
+    )
+
+    result = getattr(patient_filter, loader_name)()
+    patient_filter._demographics = result
+
+    assert "first_icu_stay" not in result.columns
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(first_icu_stay=True)
+    assert caught.value.code == "patient_filter_criterion_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("database", "loader_name", "stay_id_column"),
+    [
+        ("miiv", "_load_miiv_demographics", "stay_id"),
+        ("mimic", "_load_mimic3_demographics", "icustay_id"),
+    ],
+)
+def test_mimic_hospital_survival_preserves_missing_and_unknown_flags(
+    monkeypatch,
+    database: str,
+    loader_name: str,
+    stay_id_column: str,
+) -> None:
+    patient_filter = PatientFilter(database=database, data_path="/unused")
+    tables = {
+        "icustays": pd.DataFrame(
+            {
+                "subject_id": [10, 20, 30, 40, 50],
+                "hadm_id": [101, 201, 301, 401, 501],
+                stay_id_column: [1, 2, 3, 4, 5],
+            }
+        ),
+        "patients": pd.DataFrame({"subject_id": [10, 20, 30, 40, 50]}),
+        "admissions": pd.DataFrame(
+            {
+                "subject_id": [10, 20, 30, 40],
+                "hadm_id": [101, 201, 301, 401],
+                "hospital_expire_flag": [0, 1, None, 2],
+            }
+        ),
+    }
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda name: tables[name].copy(),
+    )
+
+    result = getattr(patient_filter, loader_name)()
+    patient_filter._demographics = result
+
+    assert str(result["survived"].dtype) == "boolean"
+    assert result["survived"].tolist() == [True, False, pd.NA, pd.NA, pd.NA]
+    assert patient_filter.filter(survived=True) == [1]
+
+
+@pytest.mark.parametrize(
+    ("database", "loader_name", "stay_id_column"),
+    [
+        ("miiv", "_load_miiv_demographics", "stay_id"),
+        ("mimic", "_load_mimic3_demographics", "icustay_id"),
+    ],
+)
+def test_mimic_deathtime_does_not_replace_standard_hospital_flag(
+    monkeypatch,
+    database: str,
+    loader_name: str,
+    stay_id_column: str,
+) -> None:
+    patient_filter = PatientFilter(database=database, data_path="/unused")
+    tables = {
+        "icustays": pd.DataFrame(
+            {
+                "subject_id": [10, 20],
+                "hadm_id": [101, 201],
+                stay_id_column: [1, 2],
+            }
+        ),
+        "patients": pd.DataFrame({"subject_id": [10, 20]}),
+        "admissions": pd.DataFrame(
+            {
+                "subject_id": [10, 20],
+                "hadm_id": [101, 201],
+                "deathtime": [None, "2022-01-01"],
+            }
+        ),
+    }
+    monkeypatch.setattr(
+        patient_filter,
+        "_read_table",
+        lambda name: tables[name].copy(),
+    )
+
+    result = getattr(patient_filter, loader_name)()
+    patient_filter._demographics = result
+
+    assert "survived" not in result.columns
+    with pytest.raises(PatientFilterCriterionError) as caught:
+        patient_filter.filter(survived=True)
+    assert caught.value.code == "patient_filter_criterion_unavailable"
+
+
 def test_eicu_deidentified_over_89_age_maps_to_90(monkeypatch) -> None:
     patient_filter = PatientFilter(database="eicu", data_path="/unused")
     monkeypatch.setattr(
