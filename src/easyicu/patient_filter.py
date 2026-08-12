@@ -49,6 +49,16 @@ class PatientFilterCriterionError(RuntimeError):
         self.criterion = criterion
 
 
+def _hospital_survival_from_expire_flag(values: pd.Series) -> pd.Series:
+    """Map the standard MIMIC hospital-discharge flag without guessing."""
+
+    flag = pd.to_numeric(values, errors='coerce')
+    survived = pd.Series(pd.NA, index=values.index, dtype='boolean')
+    survived.loc[flag.eq(0)] = True
+    survived.loc[flag.eq(1)] = False
+    return survived
+
+
 @dataclass
 class FilterCriteria:
     """筛选条件数据类"""
@@ -187,12 +197,8 @@ class PatientFilter:
             df['outtime'] = pd.to_datetime(df['outtime'])
             df['los_hours'] = (df['outtime'] - df['intime']).dt.total_seconds() / 3600
         
-        # 判断是否首次入ICU
-        # 方法1: 使用 first_careunit 和排序
-        if 'intime' in df.columns:
-            df = df.sort_values(['subject_id', 'intime'])
-            df['icu_order'] = df.groupby('subject_id').cumcount() + 1
-            df['first_icu_stay'] = df['icu_order'] == 1
+        # Generic first_icu_stay is patient-global. MIMIC exposes no absolute
+        # patient ICU ordinal, and this extract has no history-completeness receipt.
         
         # 性别标准化
         if 'gender' in df.columns:
@@ -200,9 +206,9 @@ class PatientFilter:
         
         # 存活状态
         if 'hospital_expire_flag' in df.columns:
-            df['survived'] = df['hospital_expire_flag'] == 0
-        elif 'deathtime' in df.columns:
-            df['survived'] = df['deathtime'].isna()
+            df['survived'] = _hospital_survival_from_expire_flag(
+                df['hospital_expire_flag']
+            )
         
         # ID列标准化
         df['patient_id'] = df['stay_id']
@@ -387,11 +393,8 @@ class PatientFilter:
             df['outtime'] = pd.to_datetime(df['outtime'])
             df['los_hours'] = (df['outtime'] - df['intime']).dt.total_seconds() / 3600
         
-        # 判断是否首次入ICU
-        if 'intime' in df.columns:
-            df = df.sort_values(['subject_id', 'intime'])
-            df['icu_order'] = df.groupby('subject_id').cumcount() + 1
-            df['first_icu_stay'] = df['icu_order'] == 1
+        # Generic first_icu_stay is patient-global. MIMIC exposes no absolute
+        # patient ICU ordinal, and this extract has no history-completeness receipt.
         
         # 性别标准化
         if 'gender' in df.columns:
@@ -399,9 +402,9 @@ class PatientFilter:
         
         # 存活状态
         if 'hospital_expire_flag' in df.columns:
-            df['survived'] = df['hospital_expire_flag'] == 0
-        elif 'deathtime' in df.columns:
-            df['survived'] = df['deathtime'].isna()
+            df['survived'] = _hospital_survival_from_expire_flag(
+                df['hospital_expire_flag']
+            )
         
         # ID列标准化 - MIMIC-III 使用 icustay_id
         df['patient_id'] = df['icustay_id']
