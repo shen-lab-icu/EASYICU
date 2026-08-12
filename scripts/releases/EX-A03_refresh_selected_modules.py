@@ -53,7 +53,7 @@ def _load_republisher():
 REPUBLICATION = _load_republisher()
 DATABASES: tuple[str, ...] = tuple(REPUBLICATION.DATABASES)
 MODULES: tuple[str, ...] = tuple(REPUBLICATION.MODULES)
-DIRECT_REFRESHABLE_MODULES = frozenset({"renal", "respiratory"})
+DIRECT_REFRESHABLE_MODULES = frozenset({"renal", "respiratory", "sofa2_score"})
 MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
     "renal": ("renal",),
     "respiratory": (
@@ -62,6 +62,14 @@ MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
         "sofa1_score",
         "sofa2_score",
         "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    ),
+    # Targeted repair path for owner-issued SOFA-2 receipt companions. The
+    # parent candidate must already contain a raw-refreshed respiratory input;
+    # downstream M1 validates that parent provenance before using the child.
+    "sofa2_score": (
+        "sepsis_shared",
+        "sofa2_score",
         "sepsis3_sofa2",
     ),
 }
@@ -131,8 +139,8 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
     disallowed = set(selected) - DIRECT_REFRESHABLE_MODULES
     if disallowed:
         raise ModuleRefreshError(
-            "This audited refresh entry point currently allows only renal and "
-            "respiratory; "
+            "This audited refresh entry point currently allows only renal, "
+            "respiratory and sofa2_score; "
             f"got disallowed modules: {sorted(disallowed)}"
         )
     return selected
@@ -515,7 +523,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="append",
         default=[],
         help=(
-            "Raw-derived module to refresh (renal or respiratory); repeatable."
+            "Raw-derived module to refresh (renal, respiratory or sofa2_score); repeatable."
         ),
     )
     parser.add_argument(
