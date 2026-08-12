@@ -81,7 +81,17 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
     monkeypatch.setattr(
         kdigo,
         "load_kdigo_aki",
-        record("aki", pd.DataFrame({"stay_id": [7], "aki": [1]})),
+        record(
+            "aki",
+            pd.DataFrame(
+                {
+                    "stay_id": [7],
+                    "aki": [1],
+                    "aki_severe": [True],
+                    "aki_severe_ascertainment": ["positive"],
+                }
+            ),
+        ),
     )
     monkeypatch.setattr(
         circ,
@@ -105,7 +115,15 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
     )
 
     result = api.load_concepts(
-        ["aki", "circ_failure", "charlson", "mort_28d", "culture_positive"],
+        [
+            "aki",
+            "aki_severe",
+            "aki_severe_ascertainment",
+            "circ_failure",
+            "charlson",
+            "mort_28d",
+            "culture_positive",
+        ],
         patient_ids={"stay_id": [7]},
         merge=False,
         concept_workers=1,
@@ -115,6 +133,8 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
 
     assert set(result) == {
         "aki",
+        "aki_severe",
+        "aki_severe_ascertainment",
         "circ_failure",
         "charlson",
         "mort_28d",
