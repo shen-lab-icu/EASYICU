@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from easyicu.research_agent.literature import (
     CitationRecord,
     LiteratureBundle,
@@ -8,6 +10,8 @@ from easyicu.research_agent.literature import (
 )
 from easyicu.research_agent.reporting.scientific_maturity import (
     build_scientific_maturity_audit,
+    scientific_maturity_audit_from_gates,
+    scientific_maturity_readiness_gates,
 )
 from easyicu.research_agent.schema import (
     AnalysisPlan,
@@ -212,3 +216,12 @@ None.
         "results",
         "discussion",
     ]
+
+    readiness_gates = scientific_maturity_readiness_gates(audit)
+    assert readiness_gates["scientific_maturity_article_grade"] is False
+    assert scientific_maturity_audit_from_gates(readiness_gates) == audit
+
+    incomplete = dict(readiness_gates)
+    incomplete.pop("scientific_maturity_findings")
+    with pytest.raises(KeyError, match="scientific_maturity_findings"):
+        scientific_maturity_audit_from_gates(incomplete)

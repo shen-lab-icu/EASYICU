@@ -7119,6 +7119,24 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
     _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
+    from easyicu.research_agent.reporting import readiness as readiness_module
+    from easyicu.research_agent.reporting.scientific_maturity import (
+        ScientificMaturityAudit,
+    )
+
+    # This test isolates the display-suite gate.  The independent scientific
+    # maturity contract has its own focused tests and must be explicitly passed
+    # rather than accidentally depending on an incomplete synthetic run.
+    monkeypatch.setattr(
+        readiness_module,
+        "build_scientific_maturity_audit",
+        lambda **_: ScientificMaturityAudit(
+            status="article_grade",
+            article_grade=True,
+            score=100,
+            dimension_scores={},
+        ),
+    )
 
     context = ra.ResearchContext(
         research_question="Estimate whether Sepsis-3 is associated with mortality.",
