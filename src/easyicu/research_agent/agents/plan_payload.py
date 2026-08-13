@@ -237,6 +237,17 @@ def literature_citation_retry_suffix(
         for key in normalize_literature_citation_keys(direct_comparator_keys)
         if key in set(allowed_keys)
     )
+    method_element_map = {
+        key: sorted(
+            {
+                element
+                for card in METHOD_CARDS
+                if card.source_key == key
+                for element in card.design_elements
+            }
+        )
+        for key in method_source_keys
+    }
     return (
         " Allowed literature_citation_keys for this run are exactly: "
         + json.dumps(list(allowed_keys), ensure_ascii=False)
@@ -247,6 +258,10 @@ def literature_citation_retry_suffix(
             " Every scientific step must include at least one method-source key "
             "from: "
             + json.dumps(list(method_source_keys), ensure_ascii=False)
+            + ". Method-source bindings may use ONLY the design elements in "
+            "this exact host-owned map (use another source or omit an "
+            "unsupported element; never broaden a method card): "
+            + json.dumps(method_element_map, ensure_ascii=False, sort_keys=True)
             + "."
             if method_source_keys
             else ""

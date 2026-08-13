@@ -1215,6 +1215,12 @@ _PLANNER_PROMPT_BYTE_LIMIT = int(
     DEFAULT_MAX_PROMPT_TOKENS * CONSERVATIVE_BYTES_PER_TOKEN
 )
 _PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 9_000
+# The Planner emits a complete typed DAG rather than a short answer.  A real
+# Web E1 run produced otherwise-valid 10k+ character objects that were cut off
+# twice at the former 4096-token response ceiling, so the JSON parser never had
+# a complete contract to judge.  This matches the already-proven Coder envelope
+# and remains bounded independently from the five-attempt retry budget.
+_PLANNER_MAX_TOKENS = 8192
 
 
 def _planner_prompt_within_budget(
@@ -1595,7 +1601,7 @@ class PlannerAgent:
             ),
             role="planner",
             max_retries=PLANNER_MAX_RETRIES,
-            max_tokens=4096,
+            max_tokens=_PLANNER_MAX_TOKENS,
             temperature=0.2,
             failed_response_transform=_planner_retry_response_projection,
             progress_callback=progress_callback,
