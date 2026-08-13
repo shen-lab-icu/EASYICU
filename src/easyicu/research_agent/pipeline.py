@@ -167,8 +167,6 @@ from .reporting.article_contract import (
 )
 from .planning.figure_strategy import build_article_figure_strategy
 from .planning.scientific_review import (
-    PlanScientificReview,
-    build_plan_scientific_review,
     render_plan_scientific_guardrails,
 )
 from .orchestration.config import (
@@ -361,6 +359,9 @@ from .planning.figure_plan_shaping import (
 )
 from .planning.final_plan_shape import validate_final_plan_shape
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
+from .orchestration.scientific_plan_review_gate import (
+    prepare_scientific_plan_review_gate,
+)
 from .figures.skill import PublicationFigureSkill
 from .reporting.bibtex import render_bibtex
 from .reporting.latex import scaffold_to_latex
@@ -3456,112 +3457,15 @@ class ResearchAgentPipeline:
                 },
             )
         if self._config.require_human_plan_review:
-            # A human may approve only a plan that has first passed the
-            # deterministic scientific review owner.  This review is bound
-            # into the same EvidenceStore/PlanReviewAuthority as the plan; it
-            # is not a post-hoc report generated after provider execution.
-            current_review = build_plan_scientific_review(
+            review_gate = prepare_scientific_plan_review_gate(
                 context=context,
                 plan=plan,
                 literature=preplan_literature,
                 figure_strategy=article_figure_strategy,
+                run_dir=run_dir,
+                evidence=evidence,
             )
-            scientific_review_path = run_dir / "scientific_plan_review.json"
-            existing_review_record = evidence.get("scientific_plan_review")
-            if existing_review_record is None:
-                scientific_review_path.write_text(
-                    current_review.model_dump_json(indent=2),
-                    encoding="utf-8",
-                )
-                evidence.register_file(
-                    kind="log",
-                    description=(
-                        "Pre-execution multi-dimensional scientific review of "
-                        "the exact proposed plan, literature authority and "
-                        "article figure strategy."
-                    ),
-                    source_path=scientific_review_path,
-                    evidence_id="scientific_plan_review",
-                    producer="plan_scientific_review",
-                    generation_mode="deterministic_skill",
-                )
-                scientific_review = current_review
-            else:
-                try:
-                    scientific_review = PlanScientificReview.model_validate_json(
-                        scientific_review_path.read_text(encoding="utf-8")
-                    )
-                except (OSError, UnicodeDecodeError, ValueError) as exc:
-                    raise RuntimeError(
-                        "the existing scientific plan review cannot be "
-                        f"revalidated ({exc})"
-                    ) from exc
-                if scientific_review.model_dump(
-                    mode="json", exclude={"generated_at"}
-                ) != current_review.model_dump(
-                    mode="json", exclude={"generated_at"}
-                ):
-                    raise RuntimeError(
-                        "the existing scientific plan review does not match "
-                        "the exact current context, plan, literature and figure "
-                        "strategy"
-                    )
-            finding_codes = [item.code for item in scientific_review.findings]
-            authorization_requests = [
-                {
-                    "code": item.code,
-                    "question": item.authorization_question,
-                }
-                for item in scientific_review.findings
-                if item.requires_user_authorization
-                and item.authorization_question
-            ]
-            findings.append(
-                ValidationFinding(
-                    validator="plan_scientific_review",
-                    severity=(
-                        "error"
-                        if not scientific_review.approval_allowed
-                        else (
-                            "warning"
-                            if scientific_review.status == "analysis_only"
-                            else "info"
-                        )
-                    ),
-                    message=(
-                        "The exact analysis plan requires scientific changes "
-                        "before it can be approved."
-                        if not scientific_review.approval_allowed
-                        else (
-                            "The exact analysis plan may run only with an "
-                            "analysis-only claim ceiling unless its major "
-                            "scientific findings are revised."
-                            if scientific_review.status == "analysis_only"
-                            else "The exact analysis plan is ready for explicit human approval."
-                        )
-                    ),
-                    evidence_ids=["scientific_plan_review"],
-                    detail={
-                        "reason": (
-                            "plan_scientific_changes_required"
-                            if not scientific_review.approval_allowed
-                            else "plan_scientific_review_complete"
-                        ),
-                        "human_review_required": bool(
-                            not scientific_review.approval_allowed
-                        ),
-                        "approval_allowed": scientific_review.approval_allowed,
-                        "review_status": scientific_review.status,
-                        "review_score": scientific_review.score,
-                        "top_journal_candidate": (
-                            scientific_review.top_journal_candidate
-                        ),
-                        "finding_codes": finding_codes,
-                        "review_evidence_id": "scientific_plan_review",
-                        "user_authorization_requests": authorization_requests,
-                    },
-                )
-            )
+            findings.append(review_gate.finding)
         know_how_binding.persist_prompt_metrics(
             planner_prompt_metrics,
             run_dir=run_dir,
