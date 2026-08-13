@@ -27,6 +27,8 @@ from ...schema import AnalysisStep
 
 __all__ = [
     "COHORT_FLOW_INPUT",
+    "COHORT_ACCOUNTING_COMPLETE",
+    "COHORT_ACCOUNTING_DENOMINATOR_ONLY",
     "cohort_flow_figure_executor_code",
     "cohort_flow_figure_executor_owns_step",
     "run_cohort_flow_figure",
@@ -34,6 +36,8 @@ __all__ = [
 
 
 COHORT_FLOW_INPUT = "table:cohort_flow"
+COHORT_ACCOUNTING_COMPLETE = "sequential_attrition_ledger"
+COHORT_ACCOUNTING_DENOMINATOR_ONLY = "analysis_denominator_only"
 _REQUIRED_COLUMNS = (
     "step_order",
     "predicate_kind",
@@ -200,6 +204,8 @@ def _verified_flow(path: Path, binding: Mapping[str, Any]) -> pd.DataFrame:
     if numeric["step_order"].duplicated().any():
         raise ValueError("cohort-flow step_order values are not unique")
     frame = frame.assign(**numeric).sort_values("step_order", kind="stable")
+    if frame["step_order"].tolist() != list(range(len(frame))):
+        raise ValueError("cohort-flow step_order values are not contiguous from zero")
     labels = frame["predicate_kind"].fillna("").astype(str).str.strip()
     if labels.eq("").any():
         raise ValueError("cohort-flow has an empty predicate label")
@@ -212,6 +218,42 @@ def _verified_flow(path: Path, binding: Mapping[str, Any]) -> pd.DataFrame:
     ).all():
         raise ValueError("cohort-flow denominator sequence is discontinuous")
     return frame.reset_index(drop=True)
+
+
+def _accounting_completeness(frame: pd.DataFrame) -> str:
+    """Classify only what the bound ledger itself can prove.
+
+    A singleton row proves one denominator, not upstream eligibility or
+    attrition.  It remains useful as an analysis-denominator display but must
+    never be promoted to complete participant-flow accounting.
+    """
+
+    return (
+        COHORT_ACCOUNTING_COMPLETE
+        if len(frame) > 1
+        else COHORT_ACCOUNTING_DENOMINATOR_ONLY
+    )
+
+
+def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
+    if not complete:
+        return ["Analysis denominator only"]
+    labels: list[str] = []
+    for index, row in frame.iterrows():
+        kind = str(row.get("predicate_kind") or "").strip()
+        if index == 0:
+            labels.append("Source universe")
+            continue
+        concept = str(row.get("concept_id") or "").strip()
+        label = (
+            f"{kind.title()}: {concept}"
+            if concept and kind.casefold() in {"inclusion", "exclusion"}
+            else kind.replace("_", " ").strip().title()
+        )
+        if index == len(frame) - 1:
+            label = f"Final · {label}"
+        labels.append(label)
+    return labels
 
 
 def run_cohort_flow_figure(
@@ -234,47 +276,89 @@ def run_cohort_flow_figure(
         step_id=step_id,
     )
     frame = _verified_flow(path, binding)
+    completeness = _accounting_completeness(frame)
+    complete = completeness == COHORT_ACCOUNTING_COMPLETE
+    display_labels = _display_labels(frame, complete=complete)
     source = frame.copy()
+    source.insert(0, "accounting_completeness", completeness)
+    source.insert(0, "display_label", display_labels)
     source.insert(0, "source_step_id", binding.get("produced_by_step"))
     source.insert(0, "source_table", path.name)
     source.insert(0, "source_row_index", range(len(source)))
     source_path = out_dir / f"{figure_product}_source_data.csv"
     source.to_csv(source_path, index=False)
 
-    labels = frame["predicate_kind"].astype(str).tolist()
-    positions = list(range(len(frame)))
     apply_publication_style()
     height = max(3.2, 0.42 * len(frame) + 1.5)
     fig, ax = plt.subplots(figsize=(7.2, height))
-    bars = ax.barh(
-        positions,
-        frame["n_remaining"],
-        color=PALETTE_CLINICAL["blue"],
-    )
-    ax.set_yticks(positions)
-    ax.set_yticklabels(labels)
-    ax.invert_yaxis()
-    ax.set_xlabel("ICU stays remaining")
-    ax.set_title("Cohort accounting", loc="left")
-    ax.grid(axis="x", color=PALETTE_CLINICAL["neutral_light"], linewidth=0.6)
-    for bar, remaining, excluded in zip(
-        bars, frame["n_remaining"], frame["n_excluded"]
-    ):
-        suffix = f"  (-{int(excluded):,})" if int(excluded) else ""
-        ax.annotate(
-            f"{int(remaining):,}{suffix}",
-            (bar.get_width(), bar.get_y() + bar.get_height() / 2),
-            xytext=(5, 0),
-            textcoords="offset points",
+    if complete:
+        positions = list(range(len(frame)))
+        bars = ax.barh(
+            positions,
+            frame["n_remaining"],
+            color=PALETTE_CLINICAL["blue"],
+        )
+        ax.set_yticks(positions)
+        ax.set_yticklabels(display_labels)
+        ax.invert_yaxis()
+        ax.set_xlabel("ICU stays remaining")
+        ax.set_title("Cohort accounting", loc="left")
+        ax.grid(axis="x", color=PALETTE_CLINICAL["neutral_light"], linewidth=0.6)
+        for bar, remaining, excluded in zip(
+            bars, frame["n_remaining"], frame["n_excluded"]
+        ):
+            suffix = f"  (-{int(excluded):,})" if int(excluded) else ""
+            ax.annotate(
+                f"{int(remaining):,}{suffix}",
+                (bar.get_width(), bar.get_y() + bar.get_height() / 2),
+                xytext=(5, 0),
+                textcoords="offset points",
+                va="center",
+                fontsize=7,
+            )
+    else:
+        denominator = int(frame.iloc[0]["n_remaining"])
+        ax.set_axis_off()
+        ax.text(
+            0.5,
+            0.68,
+            "Analysis denominator only",
+            ha="center",
             va="center",
-            fontsize=7,
+            fontsize=11,
+            fontweight="bold",
+            color=PALETTE_CLINICAL["baseline"],
+            transform=ax.transAxes,
+        )
+        ax.text(
+            0.5,
+            0.47,
+            f"n = {denominator:,} ICU stays",
+            ha="center",
+            va="center",
+            fontsize=16,
+            color=PALETTE_CLINICAL["blue"],
+            transform=ax.transAxes,
+        )
+        ax.text(
+            0.5,
+            0.27,
+            "Upstream attrition unavailable",
+            ha="center",
+            va="center",
+            fontsize=8,
+            color=PALETTE_CLINICAL["neutral"],
+            transform=ax.transAxes,
         )
     fig.tight_layout()
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
-            "The figure reproduces the remaining denominator at every row of "
-            "the digest-verified cohort-flow table."
+            "The figure reproduces the sequential source-to-final denominator "
+            "ledger from the digest-verified cohort-flow table."
+            if complete
+            else "The bound cohort-flow table proves only the final analysis "
+            "denominator; upstream eligibility and attrition are unavailable."
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
@@ -282,20 +366,39 @@ def run_cohort_flow_figure(
         panels=[
             {
                 "panel_id": "A",
-                "title": "Cohort accounting",
+                "title": (
+                    "Cohort accounting" if complete else "Analysis denominator only"
+                ),
                 "role": "cohort_flow",
-                "claim": "Every displayed count comes from the bound cohort flow.",
+                "claim": (
+                    "Every displayed source, eligibility, and final count comes "
+                    "from the bound sequential cohort flow."
+                    if complete
+                    else "The single displayed count is the bound analysis "
+                    "denominator and does not establish upstream attrition."
+                ),
                 "evidence_ids": [str(binding.get("evidence_id") or "")],
+                "review_risk": (
+                    None
+                    if complete
+                    else "Upstream attrition is unavailable; this panel must not "
+                    "be described as complete participant-flow accounting."
+                ),
                 "metadata": {
                     "chart_type": "cohort_flow",
                     "source_data": [source_path.name],
+                    "accounting_completeness": completeness,
+                    "paper_grade_cohort_accounting": complete,
                 },
             }
         ],
         source_data=[source_path.name],
         statistics_note=(
-            "All parent rows are preserved. The renderer introduces no cohort "
-            "filter, imputation, or denominator change."
+            "All bound attrition rows are preserved. The renderer introduces no "
+            "cohort filter, imputation, or denominator change."
+            if complete
+            else "Only one bound denominator row was available. No exclusion "
+            "counts or upstream eligibility stages were inferred."
         ),
     )
     outputs = save_publication_figure(
@@ -322,6 +425,12 @@ def run_cohort_flow_figure(
         "source_evidence_id": binding.get("evidence_id"),
         "source_sha256": binding.get("sha256"),
         "source_rows_consumed": len(frame),
+        "cohort_accounting_completeness": completeness,
+        "paper_grade_cohort_accounting": complete,
+        "upstream_attrition_available": complete,
+        "rendering_mode": (
+            "sequential_attrition_bars" if complete else "denominator_only_node"
+        ),
         "input_bindings": [
             {
                 "input_key": COHORT_FLOW_INPUT,
