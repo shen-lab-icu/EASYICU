@@ -17,6 +17,7 @@ import json
 import re
 import hashlib
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..agents.core import CriticAgent, ManuscriptAgent
@@ -428,180 +429,42 @@ def _persist_manuscript_critique(
     return critique_path
 
 
-def run_write_phase(
-    pipeline,
+@dataclass(frozen=True)
+class _DraftStageResult:
+    """Immutable handoff from manuscript generation to evidence binding."""
+
+    current_verified_evidence_records: Sequence[Any]
+    current_evidence_names: Sequence[str]
+    manuscript_packet: Optional[ManuscriptDraftPacket]
+    writer_error_message: Optional[str]
+    scaffold: str
+
+
+@dataclass(frozen=True)
+class _BindingStageResult:
+    """Immutable handoff from manuscript binding to publication audits."""
+
+    bound: str
+    bound_path: Path
+    manuscript_critique: CritiqueReport
+
+
+def _activate_publication_inputs(
+    pipeline: Any,
     *,
     plan_result: _PlanPhaseResult,
     execute_result: _ExecutePhaseResult,
+    context: Any,
+    agent_context: Any,
+    evidence: Any,
+    findings: List[ValidationFinding],
+    role_resolver: Callable[[str], Any],
+    prompt_version: str,
     run_dir: Path,
     run_id: str,
-    stop_after_analysis: bool,
-    manuscript_title: Optional[str],
-    manuscript_authors: Optional[Sequence[str]],
-    run_language: str,
     emit_progress: Callable[..., None],
-    force_writer_probe: bool = False,
-) -> _WritePhaseResult:
-    """Draft manuscript-facing outputs after analysis is complete."""
-    context = plan_result.context
-    agent_context = plan_result.agent_context
-    evidence = plan_result.evidence
-    findings = plan_result.findings
-    role_resolver = plan_result.role_resolver
-    prompt_version = plan_result.prompt_version
-    runtime_state = execute_result.runtime_state
-    per_step_records = execute_result.per_step_records
-    critic = CriticAgent(role_resolver("analyzer"))
-    user_extension_receipt = pipeline._user_extension_activation.receipt
-    if evidence.get("user_extension_activation") is None:
-        evidence.register_json(
-            kind="log",
-            description=(
-                "Run-bound, path-free activation receipt for user-installed "
-                "Skills and MCP descriptors. MCP output is not scientific evidence."
-            ),
-            payload=user_extension_receipt,
-            filename="user_extension_activation.json",
-            evidence_id="user_extension_activation",
-            aliases=["user_extension_activation"],
-            producer="easyicu.extensions",
-            generation_mode="system",
-            prompt_pack_version=prompt_version,
-            metadata={
-                "activation_sha256": user_extension_receipt["activation_sha256"],
-                "active_skill_count": len(user_extension_receipt["skills"]),
-                "active_mcp_server_count": len(
-                    user_extension_receipt["mcp_servers"]
-                ),
-                "scientific_evidence_authority": False,
-            },
-        )
-
-    def blocked_write_result(bound_path: Path, reason: str) -> _WritePhaseResult:
-        critique = _blocked_manuscript_critique(reason)
-        _persist_manuscript_critique(
-            critique=critique,
-            run_dir=run_dir,
-            evidence=evidence,
-            producer="pipeline",
-        )
-        return _WritePhaseResult(
-            literature=None,
-            bound_path=bound_path,
-            manuscript_critique=critique,
-        )
-
-    execution_gate = execution_gate_status(
-        plan=execute_result.plan,
-        per_step_records=per_step_records,
-    )
-    writer_probe_mode = (
-        bool(force_writer_probe) and not execution_gate["execution_complete"]
-    )
-    writer_probe_failed_steps = _failed_step_labels_from_execution_gate(execution_gate)
-    if not execution_gate["execution_complete"]:
-        if writer_probe_mode:
-            findings.append(
-                ValidationFinding(
-                    validator="manuscript_gate",
-                    severity="warning",
-                    message=(
-                        "Diagnostic writer probe forced manuscript drafting even "
-                        "though the execution gate did not pass. This output is "
-                        "for engineering triage only and must not be cited."
-                    ),
-                    detail={
-                        **execution_gate,
-                        "writer_probe_mode": True,
-                        "writer_probe_failed_steps": list(writer_probe_failed_steps),
-                    },
-                )
-            )
-        elif stop_after_analysis:
-            findings.append(
-                ValidationFinding(
-                    validator="manuscript_gate",
-                    severity="info",
-                    message=(
-                        "Manuscript generation skipped after a planned analysis "
-                        "pause before the execution gate completed."
-                    ),
-                    detail={
-                        **execution_gate,
-                        "planned_pause": True,
-                    },
-                )
-            )
-            emit_progress(
-                "pause",
-                "Analysis paused before all planned steps completed; manuscript generation skipped.",
-                status="paused",
-                run_id=run_id,
-            )
-            bound_path = run_dir / "manuscript_scaffold_bound.md"
-            bound_path.write_text(
-                "# Manuscript scaffold not generated\n\n"
-                "This run stopped after a requested analysis checkpoint before "
-                "all planned analysis steps completed. Review the completed "
-                "step outputs and resume from the next step when ready.\n",
-                encoding="utf-8",
-            )
-            return blocked_write_result(
-                bound_path,
-                "Manuscript review was not run because execution paused before "
-                "all planned analysis steps completed.",
-            )
-        else:
-            findings.append(
-                ValidationFinding(
-                    validator="manuscript_gate",
-                    severity="error",
-                    message=(
-                        "Formal manuscript generation skipped because the execution "
-                        "gate did not pass. Review author_review_note.md and the "
-                        "diagnostic artefacts before rerunning."
-                    ),
-                    detail=execution_gate,
-                )
-            )
-            bound_path = run_dir / "manuscript_scaffold_bound.md"
-            bound_path.write_text(
-                "# Manuscript scaffold not generated\n\n"
-                "Strict fail-closed policy blocked manuscript drafting because "
-                "one or more required analysis steps did not complete successfully.\n\n"
-                "Review `author_review_note.md`, `run_status.json`, "
-                "`evidence_audit.json`, `numeric_audit.json`, and "
-                "`claim_ledger.csv` for the diagnostic record.\n",
-                encoding="utf-8",
-            )
-            return blocked_write_result(
-                bound_path,
-                "Manuscript review was not run because the analysis execution "
-                "gate did not pass.",
-            )
-
-    if stop_after_analysis:
-        emit_progress(
-            "pause",
-            "Analysis phase complete; manuscript generation skipped by user setting.",
-            status="paused",
-            run_id=run_id,
-        )
-        bound_path = run_dir / "manuscript_scaffold_bound.md"
-        bound_path.write_text(
-            "# Manuscript scaffold not generated\n\n"
-            "This run stopped after the analysis phase. Review the "
-            "`results_report.md`, tables, figures and manifest, then "
-            "rerun with manuscript drafting enabled when the analysis "
-            "is ready.\n",
-            encoding="utf-8",
-        )
-        return blocked_write_result(
-            bound_path,
-            "Manuscript review was not run because manuscript drafting was "
-            "explicitly paused after analysis.",
-        )
-
+) -> Optional[LiteratureBundle]:
+    """Activate publication skills and produce the run-bound literature bundle."""
     literature: Optional[LiteratureBundle] = plan_result.preplan_literature
     publication_skill_activation = compile_publication_skill_activation(
         nature_figure_enabled=pipeline._enable_publication_figure_skill,
@@ -849,7 +712,28 @@ def run_write_phase(
                     message=f"Literature agent failed: {exc}",
                 )
             )
+    return literature
 
+
+def _draft_manuscript(
+    pipeline: Any,
+    *,
+    context: Any,
+    agent_context: Any,
+    evidence: Any,
+    findings: List[ValidationFinding],
+    literature: Optional[LiteratureBundle],
+    per_step_records: Sequence[Dict[str, Any]],
+    prompt_version: str,
+    role_resolver: Callable[[str], Any],
+    runtime_state: Any,
+    execute_result: _ExecutePhaseResult,
+    run_dir: Path,
+    run_id: str,
+    run_language: str,
+    emit_progress: Callable[..., None],
+) -> _DraftStageResult:
+    """Generate and minimally repair the evidence-aware manuscript scaffold."""
     # The evidence store is append-only across resume attempts. Freeze one
     # digest-verified view after the optional literature inputs are registered
     # and use it for every analysis-facing writer consumer; otherwise an old
@@ -899,9 +783,7 @@ def run_write_phase(
         role_resolver("writer"),
         language=run_language,
         nature_writing_enabled=pipeline._enable_nature_writing_skill,
-        user_writing_advisory=(
-            pipeline._user_extension_activation.writing_advisory
-        ),
+        user_writing_advisory=(pipeline._user_extension_activation.writing_advisory),
     )
     manuscript_packet: Optional[ManuscriptDraftPacket] = None
     if runtime_state.semantics is not None:
@@ -1107,7 +989,31 @@ def run_write_phase(
             generation_mode="llm",
             prompt_pack_version=prompt_version,
         )
+    return _DraftStageResult(
+        current_verified_evidence_records=current_verified_evidence_records,
+        current_evidence_names=current_evidence_names,
+        manuscript_packet=manuscript_packet,
+        writer_error_message=writer_error_message,
+        scaffold=scaffold,
+    )
 
+
+def _bind_and_review_manuscript(
+    pipeline: Any,
+    *,
+    critic: CriticAgent,
+    evidence: Any,
+    findings: List[ValidationFinding],
+    literature: Optional[LiteratureBundle],
+    per_step_records: Sequence[Dict[str, Any]],
+    current_evidence_names: Sequence[str],
+    scaffold: str,
+    writer_error_message: Optional[str],
+    writer_probe_mode: bool,
+    writer_probe_failed_steps: Sequence[str],
+    run_dir: Path,
+) -> _BindingStageResult:
+    """Bind manuscript claims to current evidence and persist the critique."""
     manuscript_literature_audit = audit_manuscript_literature(scaffold, literature)
     manuscript_literature_path = run_dir / "manuscript_literature_audit.json"
     manuscript_literature_path.write_text(
@@ -1432,7 +1338,31 @@ def run_write_phase(
                 evidence_ids=["manuscript_critique"],
             )
         )
+    return _BindingStageResult(
+        bound=bound,
+        bound_path=bound_path,
+        manuscript_critique=manuscript_critique,
+    )
 
+
+def _publish_and_audit_manuscript(
+    pipeline: Any,
+    *,
+    bound: str,
+    bound_path: Path,
+    context: Any,
+    current_verified_evidence_records: Sequence[Any],
+    evidence: Any,
+    findings: List[ValidationFinding],
+    literature: Optional[LiteratureBundle],
+    manuscript_authors: Optional[Sequence[str]],
+    manuscript_title: Optional[str],
+    per_step_records: Sequence[Dict[str, Any]],
+    run_dir: Path,
+    run_id: str,
+    emit_progress: Callable[..., None],
+) -> None:
+    """Render publication artifacts and run post-binding scientific audits."""
     if pipeline._enable_latex:
         try:
             emit_progress(
@@ -1454,9 +1384,7 @@ def run_write_phase(
                     # produced ``evidence/evidence/...`` and made the safe PDF
                     # renderer fail after LaTeX had emitted a partial PDF.
                     figure_path = str(rec.relative_path).replace("\\", "/")
-                    fig_paths_for_latex.append(
-                        (rec.evidence_id, figure_path)
-                    )
+                    fig_paths_for_latex.append((rec.evidence_id, figure_path))
             tex = scaffold_to_latex(
                 markdown=bound,
                 title=manuscript_title
@@ -1879,6 +1807,17 @@ def run_write_phase(
             )
         )
 
+
+def _write_reproducibility_artifacts(
+    pipeline: Any,
+    *,
+    plan_result: _PlanPhaseResult,
+    evidence: Any,
+    findings: List[ValidationFinding],
+    current_verified_evidence_records: Sequence[Any],
+    run_dir: Path,
+) -> None:
+    """Persist the notebook, dependency lock, and development lineage."""
     # O26 — Notebook + lockfile. Concatenates every per-step
     # generated script in plan order into a single runnable
     # ``run.ipynb`` and captures the interpreter's installed
@@ -2020,6 +1959,257 @@ def run_write_phase(
                 ),
             )
         )
+
+
+def run_write_phase(
+    pipeline,
+    *,
+    plan_result: _PlanPhaseResult,
+    execute_result: _ExecutePhaseResult,
+    run_dir: Path,
+    run_id: str,
+    stop_after_analysis: bool,
+    manuscript_title: Optional[str],
+    manuscript_authors: Optional[Sequence[str]],
+    run_language: str,
+    emit_progress: Callable[..., None],
+    force_writer_probe: bool = False,
+) -> _WritePhaseResult:
+    """Draft manuscript-facing outputs after analysis is complete."""
+    context = plan_result.context
+    agent_context = plan_result.agent_context
+    evidence = plan_result.evidence
+    findings = plan_result.findings
+    role_resolver = plan_result.role_resolver
+    prompt_version = plan_result.prompt_version
+    runtime_state = execute_result.runtime_state
+    per_step_records = execute_result.per_step_records
+    critic = CriticAgent(role_resolver("analyzer"))
+    user_extension_receipt = pipeline._user_extension_activation.receipt
+    if evidence.get("user_extension_activation") is None:
+        evidence.register_json(
+            kind="log",
+            description=(
+                "Run-bound, path-free activation receipt for user-installed "
+                "Skills and MCP descriptors. MCP output is not scientific evidence."
+            ),
+            payload=user_extension_receipt,
+            filename="user_extension_activation.json",
+            evidence_id="user_extension_activation",
+            aliases=["user_extension_activation"],
+            producer="easyicu.extensions",
+            generation_mode="system",
+            prompt_pack_version=prompt_version,
+            metadata={
+                "activation_sha256": user_extension_receipt["activation_sha256"],
+                "active_skill_count": len(user_extension_receipt["skills"]),
+                "active_mcp_server_count": len(user_extension_receipt["mcp_servers"]),
+                "scientific_evidence_authority": False,
+            },
+        )
+
+    def blocked_write_result(bound_path: Path, reason: str) -> _WritePhaseResult:
+        critique = _blocked_manuscript_critique(reason)
+        _persist_manuscript_critique(
+            critique=critique,
+            run_dir=run_dir,
+            evidence=evidence,
+            producer="pipeline",
+        )
+        return _WritePhaseResult(
+            literature=None,
+            bound_path=bound_path,
+            manuscript_critique=critique,
+        )
+
+    execution_gate = execution_gate_status(
+        plan=execute_result.plan,
+        per_step_records=per_step_records,
+    )
+    writer_probe_mode = (
+        bool(force_writer_probe) and not execution_gate["execution_complete"]
+    )
+    writer_probe_failed_steps = _failed_step_labels_from_execution_gate(execution_gate)
+    if not execution_gate["execution_complete"]:
+        if writer_probe_mode:
+            findings.append(
+                ValidationFinding(
+                    validator="manuscript_gate",
+                    severity="warning",
+                    message=(
+                        "Diagnostic writer probe forced manuscript drafting even "
+                        "though the execution gate did not pass. This output is "
+                        "for engineering triage only and must not be cited."
+                    ),
+                    detail={
+                        **execution_gate,
+                        "writer_probe_mode": True,
+                        "writer_probe_failed_steps": list(writer_probe_failed_steps),
+                    },
+                )
+            )
+        elif stop_after_analysis:
+            findings.append(
+                ValidationFinding(
+                    validator="manuscript_gate",
+                    severity="info",
+                    message=(
+                        "Manuscript generation skipped after a planned analysis "
+                        "pause before the execution gate completed."
+                    ),
+                    detail={
+                        **execution_gate,
+                        "planned_pause": True,
+                    },
+                )
+            )
+            emit_progress(
+                "pause",
+                "Analysis paused before all planned steps completed; manuscript generation skipped.",
+                status="paused",
+                run_id=run_id,
+            )
+            bound_path = run_dir / "manuscript_scaffold_bound.md"
+            bound_path.write_text(
+                "# Manuscript scaffold not generated\n\n"
+                "This run stopped after a requested analysis checkpoint before "
+                "all planned analysis steps completed. Review the completed "
+                "step outputs and resume from the next step when ready.\n",
+                encoding="utf-8",
+            )
+            return blocked_write_result(
+                bound_path,
+                "Manuscript review was not run because execution paused before "
+                "all planned analysis steps completed.",
+            )
+        else:
+            findings.append(
+                ValidationFinding(
+                    validator="manuscript_gate",
+                    severity="error",
+                    message=(
+                        "Formal manuscript generation skipped because the execution "
+                        "gate did not pass. Review author_review_note.md and the "
+                        "diagnostic artefacts before rerunning."
+                    ),
+                    detail=execution_gate,
+                )
+            )
+            bound_path = run_dir / "manuscript_scaffold_bound.md"
+            bound_path.write_text(
+                "# Manuscript scaffold not generated\n\n"
+                "Strict fail-closed policy blocked manuscript drafting because "
+                "one or more required analysis steps did not complete successfully.\n\n"
+                "Review `author_review_note.md`, `run_status.json`, "
+                "`evidence_audit.json`, `numeric_audit.json`, and "
+                "`claim_ledger.csv` for the diagnostic record.\n",
+                encoding="utf-8",
+            )
+            return blocked_write_result(
+                bound_path,
+                "Manuscript review was not run because the analysis execution "
+                "gate did not pass.",
+            )
+
+    if stop_after_analysis:
+        emit_progress(
+            "pause",
+            "Analysis phase complete; manuscript generation skipped by user setting.",
+            status="paused",
+            run_id=run_id,
+        )
+        bound_path = run_dir / "manuscript_scaffold_bound.md"
+        bound_path.write_text(
+            "# Manuscript scaffold not generated\n\n"
+            "This run stopped after the analysis phase. Review the "
+            "`results_report.md`, tables, figures and manifest, then "
+            "rerun with manuscript drafting enabled when the analysis "
+            "is ready.\n",
+            encoding="utf-8",
+        )
+        return blocked_write_result(
+            bound_path,
+            "Manuscript review was not run because manuscript drafting was "
+            "explicitly paused after analysis.",
+        )
+
+    literature = _activate_publication_inputs(
+        pipeline,
+        plan_result=plan_result,
+        execute_result=execute_result,
+        context=context,
+        agent_context=agent_context,
+        evidence=evidence,
+        findings=findings,
+        role_resolver=role_resolver,
+        prompt_version=prompt_version,
+        run_dir=run_dir,
+        run_id=run_id,
+        emit_progress=emit_progress,
+    )
+
+    draft = _draft_manuscript(
+        pipeline,
+        context=context,
+        agent_context=agent_context,
+        evidence=evidence,
+        findings=findings,
+        literature=literature,
+        per_step_records=per_step_records,
+        prompt_version=prompt_version,
+        role_resolver=role_resolver,
+        runtime_state=runtime_state,
+        execute_result=execute_result,
+        run_dir=run_dir,
+        run_id=run_id,
+        run_language=run_language,
+        emit_progress=emit_progress,
+    )
+    current_verified_evidence_records = draft.current_verified_evidence_records
+    manuscript_packet = draft.manuscript_packet
+
+    binding = _bind_and_review_manuscript(
+        pipeline,
+        critic=critic,
+        evidence=evidence,
+        findings=findings,
+        literature=literature,
+        per_step_records=per_step_records,
+        current_evidence_names=draft.current_evidence_names,
+        scaffold=draft.scaffold,
+        writer_error_message=draft.writer_error_message,
+        writer_probe_mode=writer_probe_mode,
+        writer_probe_failed_steps=writer_probe_failed_steps,
+        run_dir=run_dir,
+    )
+    bound_path = binding.bound_path
+    manuscript_critique = binding.manuscript_critique
+
+    _publish_and_audit_manuscript(
+        pipeline,
+        bound=binding.bound,
+        bound_path=bound_path,
+        context=context,
+        current_verified_evidence_records=current_verified_evidence_records,
+        evidence=evidence,
+        findings=findings,
+        literature=literature,
+        manuscript_authors=manuscript_authors,
+        manuscript_title=manuscript_title,
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+        run_id=run_id,
+        emit_progress=emit_progress,
+    )
+
+    _write_reproducibility_artifacts(
+        pipeline,
+        plan_result=plan_result,
+        evidence=evidence,
+        findings=findings,
+        current_verified_evidence_records=current_verified_evidence_records,
+        run_dir=run_dir,
+    )
 
     return _WritePhaseResult(
         literature=literature,
