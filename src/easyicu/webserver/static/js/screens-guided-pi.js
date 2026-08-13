@@ -16,8 +16,8 @@
 
   const ACCESS_MODE_GRANTS = Object.freeze({
     ask: Object.freeze([]),
-    assist: Object.freeze(['idea', 'literature', 'configure', 'run', 'workspace_write']),
-    full: Object.freeze(['idea', 'literature', 'configure', 'extract', 'run', 'provider_run', 'cancel', 'workspace_write']),
+    assist: Object.freeze(['idea', 'literature', 'configure', 'run', 'workspace_write', 'mcp_read']),
+    full: Object.freeze(['idea', 'literature', 'configure', 'extract', 'run', 'provider_run', 'cancel', 'workspace_write', 'mcp_read']),
   });
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -232,6 +232,8 @@
       easyicu_cancel: tr('Cancel EasyICU job', '取消 EasyICU 任务'),
       easyicu_request_replan: tr('Request replan', '请求重新规划'),
       easyicu_load_skill: tr('Load web-prototype skill', '加载网页原型技能'),
+      easyicu_list_extensions: tr('List frozen extensions', '列出固化扩展'),
+      easyicu_call_mcp_tool: tr('Call allowlisted MCP tool', '调用白名单 MCP 工具'),
       easyicu_list_project_files: tr('List project files', '列出项目文件'),
       easyicu_read_project_file: tr('Read project file', '读取项目文件'),
       easyicu_write_project_file: tr('Write project file', '写入项目文件'),
@@ -271,6 +273,8 @@
       easyicu_cancel: tr('Cancelled EasyICU job', '已取消 EasyICU 任务'),
       easyicu_request_replan: tr('Requested replan', '已请求重新规划'),
       easyicu_load_skill: tr('Loaded web-prototype skill', '已加载网页原型技能'),
+      easyicu_list_extensions: tr('Listed frozen extensions', '已列出固化扩展'),
+      easyicu_call_mcp_tool: tr('Called allowlisted MCP tool', '已调用白名单 MCP 工具'),
       easyicu_list_project_files: tr('Listed project files', '已列出项目文件'),
       easyicu_read_project_file: tr('Read project file', '已读取项目文件'),
       easyicu_write_project_file: tr('Wrote project file', '已写入项目文件'),

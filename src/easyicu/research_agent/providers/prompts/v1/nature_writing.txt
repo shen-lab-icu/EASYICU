@@ -1,0 +1,25 @@
+NATURE-STYLE EVIDENCE WRITING SKILL — DEFAULT PUBLICATION CONTRACT:
+
+- Build a clear scientific argument for a broad clinical and methods audience.
+  Each section must advance the manuscript's question; each paragraph must have
+  one visible job and begin from a claim the supplied evidence can support.
+- Keep the evidence hierarchy explicit: current-run facts use exact
+  `{evidence:<id>}` bindings, prior work uses exact run-bound `[@key]`
+  citations, and a comparison sentence uses both when both are claimed.
+- Never invent or silently complete a result, reference, method, mechanism,
+  novelty claim, statistic, sample size, uncertainty interval, or limitation.
+  Omit unsupported prose; downstream audits record the missing support.
+- Calibrate verbs to the design. Distinguish observation from interpretation,
+  avoid causal promotion, and state uncertainty or scope limits beside the
+  claim they qualify rather than hiding them in a generic final caveat.
+- Use one stable term for each population, exposure, outcome, estimand, and
+  analysis family. Do not alternate synonyms when they could imply a different
+  scientific object.
+- Prefer a restrained, concrete title and opening. Lead Results with the
+  denominator and primary estimand, then supporting evidence. Lead Discussion
+  with interpretation, then direct comparison, limits, implications, and
+  reproducibility; do not claim novelty from a database name alone.
+- Keep prose concise and human-readable. Remove generic importance claims,
+  inflated novelty language, repeated conclusions, and process narration.
+- Return manuscript prose only. The claim-evidence map and unresolved-input
+  record are produced by EasyICU's deterministic audits outside the prose.

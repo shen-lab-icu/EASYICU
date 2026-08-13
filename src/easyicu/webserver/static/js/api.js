@@ -324,6 +324,33 @@
   function loadCapabilities() {
     return hydrateCapabilities();
   }
+  async function loadExtensions() {
+    window.EU_EXTENSIONS = await getJSON('/api/extensions');
+    return window.EU_EXTENSIONS;
+  }
+  async function installExtensionSkill(body) {
+    const result = await postJSON('/api/extensions/skills/install', body || {});
+    if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
+    return result;
+  }
+  async function installExtensionMcp(body) {
+    const result = await postJSON('/api/extensions/mcp/install', body || {});
+    if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
+    return result;
+  }
+  async function setExtensionState(body) {
+    const result = await postJSON('/api/extensions/state', body || {});
+    if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
+    return result;
+  }
+  async function removeExtension(body) {
+    const result = await postJSON('/api/extensions/remove', body || {});
+    if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
+    return result;
+  }
+  function testExtensionMcp(body) {
+    return postJSON('/api/extensions/mcp/test', body || {});
+  }
   function checkCapabilityTool(body) {
     return postJSON('/api/capabilities/tool-check', body || {});
   }
@@ -555,6 +582,12 @@
   window.EU_API.loadAgentRunReview = loadAgentRunReview;
   window.EU_API.loadAgentScienceWorkbench = loadAgentScienceWorkbench;
   window.EU_API.loadCapabilities = loadCapabilities;
+  window.EU_API.loadExtensions = loadExtensions;
+  window.EU_API.installExtensionSkill = installExtensionSkill;
+  window.EU_API.installExtensionMcp = installExtensionMcp;
+  window.EU_API.setExtensionState = setExtensionState;
+  window.EU_API.removeExtension = removeExtension;
+  window.EU_API.testExtensionMcp = testExtensionMcp;
   window.EU_API.checkCapabilityTool = checkCapabilityTool;
   window.EU_API.searchZotero = searchZotero;
   window.EU_API.testZoteroConnection = testZoteroConnection;

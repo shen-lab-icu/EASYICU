@@ -20,7 +20,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from easyicu.webserver import provider_adapter
+from easyicu.extensions import (
+    ExtensionActivationSnapshot,
+    ExtensionRegistry,
+    ExtensionRegistryError,
+)
+from easyicu.research_agent.publication_skills import (
+    publication_skill_flags_from_settings,
+)
+from easyicu.webserver import capabilities as capability_policy, provider_adapter
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.literature_projection import load_run_literature_projection
 from easyicu.webserver.scientific_readiness_projection import (
@@ -1071,6 +1079,24 @@ def make_research_pipeline_run_runner(
     primary_exposure = _primary_exposure(study)
     covariates = _configured_covariates(study)
     window = _cohort_window(study)
+    capability_settings = capability_policy.capability_settings()
+    publication_skill_flags = publication_skill_flags_from_settings(
+        capability_settings
+    )
+    try:
+        extension_registry = ExtensionRegistry()
+        extension_snapshot = extension_registry.snapshot()
+        if not bool(capability_settings.get("mcp_tools_enabled", False)):
+            extension_snapshot = ExtensionActivationSnapshot.build(
+                revision=extension_snapshot.revision,
+                skills=extension_snapshot.skills,
+                mcp_servers=(),
+            )
+        user_extension_activation = extension_registry.pipeline_activation(
+            extension_snapshot
+        )
+    except ExtensionRegistryError as exc:
+        raise ResearchPipelineRunError(exc.code, exc.message) from exc
     research_provider_environment = (
         dict(provider_environment) if provider_environment is not None else None
     )
@@ -1171,6 +1197,13 @@ def make_research_pipeline_run_runner(
                 ) from exc
             config = PipelineConfig(
                 workdir=wrapper_dir / "pipeline",
+                enable_publication_figure_skill=publication_skill_flags[
+                    "nature_figure_enabled"
+                ],
+                enable_nature_writing_skill=publication_skill_flags[
+                    "nature_writing_enabled"
+                ],
+                extension_activation=user_extension_activation,
                 enable_reproducibility_envelope=True,
                 evidence_enforcement_mode="strict",
                 require_human_plan_review=True,

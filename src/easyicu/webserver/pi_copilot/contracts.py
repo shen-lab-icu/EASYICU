@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Option
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
+from easyicu.extensions.contracts import (
+    EMPTY_EXTENSION_ACTIVATION,
+    ExtensionActivationSnapshot,
+)
+
 if TYPE_CHECKING:
+    from easyicu.extensions import ExtensionRegistry
     from .workspace import ProjectWorkspace
 
 PROTOCOL_VERSION = "easyicu.pi-copilot/1"
@@ -90,6 +96,12 @@ class PiSessionRecord(BaseModel):
     language: Literal["en", "zh"] = "en"
     thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
     external_llm_opt_in: bool = False
+    # Installed extensions are frozen when the Pi AgentSession is created.
+    # Later registry edits affect only new sessions; old sessions retain this
+    # path-free descriptor and load exact Skill objects by content digest.
+    extension_activation: ExtensionActivationSnapshot = Field(
+        default_factory=lambda: EMPTY_EXTENSION_ACTIVATION
+    )
     binding: AuthorityBinding = Field(default_factory=AuthorityBinding)
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
@@ -176,6 +188,7 @@ class ToolExecutionContext:
         authority_validator: Optional[AuthorityValidator] = None,
         workspace_root: Optional[Path] = None,
         workspace: Optional["ProjectWorkspace"] = None,
+        extension_registry: Optional["ExtensionRegistry"] = None,
     ) -> None:
         self.session = session
         self.grant = grant or HostTurnGrant.from_actions(allowed_actions)
@@ -184,6 +197,7 @@ class ToolExecutionContext:
             Path(workspace_root).expanduser().absolute() if workspace_root else None
         )
         self.workspace = workspace
+        self.extension_registry = extension_registry
         self._authority_invalidated_reason: Optional[str] = None
         self._lock = threading.Lock()
 

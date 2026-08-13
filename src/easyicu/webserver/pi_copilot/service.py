@@ -11,6 +11,12 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from easyicu.extensions import (
+    ExtensionActivationSnapshot,
+    ExtensionRegistry,
+    ExtensionRegistryError,
+)
+
 from easyicu.webserver import (
     agent_runs,
     guided_sessions,
@@ -54,6 +60,7 @@ ALLOWED_TURN_ACTIONS = frozenset(
         "provider_run",
         "cancel",
         "workspace_write",
+        "mcp_read",
     }
 )
 
@@ -68,6 +75,7 @@ class PiCopilotService:
         gateway: Optional[PiGatewayClient] = None,
         provider_store: Optional[PiProviderConfigStore] = None,
         project_store: Optional[ProjectAuthorityStore] = None,
+        extension_registry: Optional[ExtensionRegistry] = None,
     ) -> None:
         self.store_path = (
             Path(store_path)
@@ -85,6 +93,7 @@ class PiCopilotService:
             if store_path is None
             else self.store_path.with_name(f"{self.store_path.stem}.projects.json")
         )
+        self.extension_registry = extension_registry or ExtensionRegistry()
         self._lock = threading.RLock()
         self._active_message_jobs: Dict[str, str] = {}
         self._busy_sessions: set[str] = set()
@@ -734,12 +743,28 @@ class PiCopilotService:
             context,
             run_id=self._latest_run_id(str(context.get("id")) if context else None),
         )
+        try:
+            extension_activation = self.extension_registry.snapshot()
+        except ExtensionRegistryError as exc:
+            raise PiCopilotError(
+                exc.code,
+                exc.message,
+                status_code=409,
+                details=exc.details,
+            ) from exc
+        if not bool(settings.load_settings().get("mcp_tools_enabled", False)):
+            extension_activation = ExtensionActivationSnapshot.build(
+                revision=extension_activation.revision,
+                skills=extension_activation.skills,
+                mcp_servers=(),
+            )
         state = self.gateway.request(
             "session.create",
             {
                 "session_id": session_id,
                 "thinking_level": resolved_thinking,
                 "agent_mode": resolved_mode,
+                "extension_snapshot": extension_activation.model_dump(mode="json"),
             },
             timeout=30,
         )
@@ -753,6 +778,7 @@ class PiCopilotService:
             language=resolved_language,
             thinking_level=resolved_thinking,
             external_llm_opt_in=True,
+            extension_activation=extension_activation,
             binding=binding,
         )
         self._save_record(record)
@@ -778,6 +804,7 @@ class PiCopilotService:
                 "session_file": record.pi_session_file,
                 "thinking_level": "off",
                 "agent_mode": record.agent_mode,
+                "extension_snapshot": record.extension_activation.model_dump(mode="json"),
             },
             timeout=30,
         )
@@ -949,6 +976,7 @@ class PiCopilotService:
                 project_id=record.project_id,
             ),
             workspace=self.workspace,
+            extension_registry=self.extension_registry,
         )
         with self._lock:
             if record.session_id in self._busy_sessions:
@@ -1360,6 +1388,28 @@ class PiCopilotService:
             "last_message_job_id": record.last_message_job_id,
             "session_storage": "private_local_jsonl",
             "scientific_authority": "EasyICU",
+            "extension_activation": {
+                "schema_version": record.extension_activation.schema_version,
+                "activation_sha256": record.extension_activation.activation_sha256,
+                "revision": record.extension_activation.revision,
+                "skills": [
+                    {
+                        "name": item.name,
+                        "description": item.description,
+                        "digest": item.digest,
+                        "stages": list(item.stages),
+                    }
+                    for item in record.extension_activation.skills
+                ],
+                "mcp_servers": [
+                    {
+                        "name": item.name,
+                        "transport": item.transport,
+                        "allowed_tools": list(item.allowed_tools),
+                    }
+                    for item in record.extension_activation.mcp_servers
+                ],
+            },
             "project_migration": (
                 binding.migration_receipt.model_dump(mode="json")
                 if (

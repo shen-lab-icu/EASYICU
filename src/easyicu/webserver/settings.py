@@ -43,6 +43,8 @@ DEFAULTS: Dict[str, Any] = {
     "data_mode": "demo",  # "demo" | "real"
     "export_dir": None,
     "science_skills_enabled": True,
+    "nature_figure_skill_enabled": True,
+    "nature_writing_skill_enabled": True,
     "connector_pubmed_enabled": True,
     "connector_zotero_enabled": False,
     "mcp_tools_enabled": False,
@@ -105,6 +107,8 @@ _COERCE = {
     "data_mode": _choice("data_mode"),
     "export_dir": _optional_path,
     "science_skills_enabled": parse_bool,
+    "nature_figure_skill_enabled": parse_bool,
+    "nature_writing_skill_enabled": parse_bool,
     "connector_pubmed_enabled": parse_bool,
     "connector_zotero_enabled": parse_bool,
     "mcp_tools_enabled": parse_bool,

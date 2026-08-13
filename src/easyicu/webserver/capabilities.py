@@ -15,6 +15,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List
 
+from easyicu.research_agent.publication_skills import PUBLICATION_SKILLS
 from easyicu.webserver import settings as settings_store
 
 _STATE_DIR = Path.home() / ".easyicu"
@@ -26,6 +27,8 @@ _YEAR_RE = re.compile(r"\b(?:18|19|20|21|22)\d{2}\b")
 
 CAPABILITY_SETTINGS = {
     "science_skills_enabled": True,
+    "nature_figure_skill_enabled": True,
+    "nature_writing_skill_enabled": True,
     "connector_pubmed_enabled": True,
     "connector_zotero_enabled": False,
     "mcp_tools_enabled": False,
@@ -646,6 +649,16 @@ def audit_events(limit: int = 20) -> Dict[str, Any]:
 
 def capability_status() -> Dict[str, Any]:
     settings = capability_settings()
+    skills_master_enabled = bool(settings["science_skills_enabled"])
+    publication_skills = [
+        skill.to_dict(
+            enabled=(
+                skills_master_enabled
+                and bool(settings.get(skill.setting_key, skill.default_enabled))
+            )
+        )
+        for skill in PUBLICATION_SKILLS
+    ]
     zotero = zotero_status(settings)
     mcp = mcp_tool_policy(settings)
     remote = remote_compute_status(settings)
@@ -660,9 +673,20 @@ def capability_status() -> Dict[str, Any]:
         "settings": settings,
         "capabilities": {
             "science_skills": {
-                "enabled": settings["science_skills_enabled"],
-                "status": "enabled" if settings["science_skills_enabled"] else "disabled",
-                "behavior": "filters_reusable_protocol_registry",
+                "enabled": skills_master_enabled,
+                "status": "enabled" if skills_master_enabled else "disabled",
+                "behavior": (
+                    "controls_default_agent_publication_skills_and_filters_"
+                    "reusable_protocol_registry"
+                ),
+            },
+            "publication_skills": {
+                "enabled": skills_master_enabled,
+                "status": "enabled" if skills_master_enabled else "disabled",
+                "items": publication_skills,
+                "active_skill_ids": [
+                    row["id"] for row in publication_skills if row["enabled"]
+                ],
             },
             "pubmed_connector": {
                 "enabled": settings["connector_pubmed_enabled"],

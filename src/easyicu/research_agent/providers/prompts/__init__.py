@@ -14,6 +14,7 @@ _PROMPT_FILES = {
     "coder": "coder.txt",
     "replanner": "replanner.txt",
     "writer": "writer.txt",
+    "nature_writing": "nature_writing.txt",
 }
 
 

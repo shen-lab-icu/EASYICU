@@ -88,10 +88,11 @@ class PiMessageRequest(BaseModel):
             "provider_run",
             "cancel",
             "workspace_write",
+            "mcp_read",
         ]
     ] = Field(
         default_factory=list,
-        max_length=8,
+        max_length=9,
     )
 
 

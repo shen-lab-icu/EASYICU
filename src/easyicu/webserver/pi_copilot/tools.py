@@ -8,11 +8,21 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from fastapi import HTTPException
 
+from easyicu.extensions import ExtensionRegistry, ExtensionRegistryError
+from easyicu.extensions.mcp_client import call_mcp_tool
+
 from easyicu.ai_optin import is_offline_llm_choice
 from easyicu.research_agent.reporting.result_card import (
     build_result_interpretation_card,
 )
-from easyicu.webserver import agent_runs, capabilities, jobs, sources, study_contexts
+from easyicu.webserver import (
+    agent_runs,
+    capabilities,
+    jobs,
+    settings,
+    sources,
+    study_contexts,
+)
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.literature_projection import literature_source_resource
 
@@ -58,6 +68,8 @@ READ_TOOLS = frozenset(
         "easyicu_inspect_interpretation",
         "easyicu_inspect_manuscript",
         "easyicu_resume",
+        "easyicu_list_extensions",
+        "easyicu_load_skill",
     }
 )
 CONTROL_TOOLS = frozenset(
@@ -71,11 +83,11 @@ CONTROL_TOOLS = frozenset(
         "easyicu_run",
         "easyicu_cancel",
         "easyicu_request_replan",
+        "easyicu_call_mcp_tool",
     }
 )
 WORKSPACE_TOOLS = frozenset(
     {
-        "easyicu_load_skill",
         "easyicu_list_project_files",
         "easyicu_read_project_file",
         "easyicu_write_project_file",
@@ -136,6 +148,35 @@ def _workspace_result(
         code=code,
         summary=summary[:2000],
         owner="easyicu.webserver.pi_copilot.workspace",
+        details=safe_details,
+        authority=context.session.binding.model_dump(mode="json"),
+    ).model_dump(mode="json")
+
+
+def _extension_result(
+    context: ToolExecutionContext,
+    *,
+    status: str,
+    code: str,
+    summary: str,
+    details: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Return registry-reviewed text or an MCP-client-sanitized projection."""
+
+    safe_details = dict(details or {})
+    encoded = json.dumps(safe_details, ensure_ascii=False, default=str).encode("utf-8")
+    if len(encoded) > 32_000:
+        raise PiCopilotError(
+            "pi_extension_projection_too_large",
+            "The extension result exceeds the bounded Pi tool contract.",
+            status_code=500,
+            details={"bytes": len(encoded), "max_bytes": 32_000},
+        )
+    return PiToolResult(
+        status=status,
+        code=code,
+        summary=summary[:2000],
+        owner="easyicu.extensions",
         details=safe_details,
         authority=context.session.binding.model_dump(mode="json"),
     ).model_dump(mode="json")
@@ -2368,33 +2409,197 @@ def _load_skill(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
     _require_args(params, allowed=("name",), required=("name",))
-    _, blocked = _workspace_access(context)
-    if blocked:
-        return blocked
     name = str(params.get("name") or "").strip()
-    if name != "web-prototype":
+    if name == "web-prototype":
+        _, blocked = _workspace_access(context)
+        if blocked:
+            return blocked
+        skill_file = (
+            Path(__file__).resolve().with_name("node_app")
+            / "src"
+            / "skills"
+            / "web-prototype"
+            / "SKILL.md"
+        )
+        instructions = skill_file.read_text(encoding="utf-8")[:12_000]
+        return _workspace_result(
+            context,
+            status="ok",
+            code="pi_workspace_skill_loaded",
+            summary="Loaded the governed web-prototype workspace skill.",
+            details={"skill": name, "instructions": instructions},
+        )
+    activation = next(
+        (
+            item
+            for item in context.session.extension_activation.skills
+            if item.name == name
+            and "conversation" in item.stages
+            and not item.disable_model_invocation
+        ),
+        None,
+    )
+    if activation is None:
         return _result(
             context,
             status="not_found",
-            code="pi_workspace_skill_not_found",
-            summary="The requested governed Pi workspace skill is not installed.",
-            owner="easyicu.webserver.pi_copilot.workspace",
-            details={"available_skills": ["web-prototype"]},
+            code="pi_extension_skill_not_active",
+            summary="The requested Skill is not active for conversation in this frozen session.",
+            owner="easyicu.extensions",
+            details={
+                "available_skills": [
+                    item.name
+                    for item in context.session.extension_activation.skills
+                    if "conversation" in item.stages
+                    and not item.disable_model_invocation
+                ]
+                + (["web-prototype"] if context.session.agent_mode == "workspace" else [])
+            },
         )
-    skill_file = (
-        Path(__file__).resolve().with_name("node_app")
-        / "src"
-        / "skills"
-        / "web-prototype"
-        / "SKILL.md"
-    )
-    instructions = skill_file.read_text(encoding="utf-8")[:12_000]
-    return _workspace_result(
+    try:
+        loaded = (context.extension_registry or ExtensionRegistry()).load_skill(
+            name=activation.name,
+            digest=activation.digest,
+        )
+    except ExtensionRegistryError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=exc.code,
+            summary=exc.message,
+            owner="easyicu.extensions",
+            details=exc.details,
+        )
+    return _extension_result(
         context,
         status="ok",
-        code="pi_workspace_skill_loaded",
-        summary="Loaded the governed web-prototype workspace skill.",
-        details={"skill": name, "instructions": instructions},
+        code="pi_extension_skill_loaded",
+        summary=f"Loaded frozen Skill {activation.name} at sha256:{activation.digest[:12]}.",
+        details={
+            "skill": activation.name,
+            "digest": activation.digest,
+            "instructions": loaded["instructions"],
+            "authority": "user_advisory_only",
+        },
+    )
+
+
+def _list_extensions(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(params, allowed=())
+    activation = context.session.extension_activation
+    return _extension_result(
+        context,
+        status="ok",
+        code="pi_extension_activation_listed",
+        summary=(
+            f"This session froze {len(activation.skills)} user Skills and "
+            f"{len(activation.mcp_servers)} MCP servers."
+        ),
+        details={
+            "activation_sha256": activation.activation_sha256,
+            "revision": activation.revision,
+            "skills": [
+                {
+                    "name": item.name,
+                    "description": item.description,
+                    "digest": item.digest,
+                    "stages": list(item.stages),
+                    "model_invocation_allowed": not item.disable_model_invocation,
+                }
+                for item in activation.skills
+            ],
+            "mcp_servers": [
+                {
+                    "name": item.name,
+                    "transport": item.transport,
+                    "allowed_tools": list(item.allowed_tools),
+                }
+                for item in activation.mcp_servers
+            ],
+            "scope": "session_frozen_user_advisory",
+        },
+    )
+
+
+def _call_mcp_extension_tool(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(
+        params,
+        allowed=("server", "tool", "arguments"),
+        required=("server", "tool"),
+    )
+    if not bool(settings.load_settings().get("mcp_tools_enabled", False)):
+        return _result(
+            context,
+            status="blocked",
+            code="extension_mcp_master_disabled",
+            summary="Enable the MCP tools layer in Settings before calling an external MCP tool.",
+            owner="easyicu.webserver.settings",
+        )
+    server_name = str(params.get("server") or "").strip()
+    server = next(
+        (
+            item
+            for item in context.session.extension_activation.mcp_servers
+            if item.name == server_name
+        ),
+        None,
+    )
+    if server is None:
+        return _result(
+            context,
+            status="not_found",
+            code="pi_extension_mcp_server_not_active",
+            summary="The requested MCP server is not active in this frozen session.",
+            owner="easyicu.extensions",
+        )
+    grant_block = _consume_action(context, "mcp_read")
+    if grant_block is not None:
+        return grant_block
+    arguments = params.get("arguments") or {}
+    if not isinstance(arguments, Mapping):
+        return _result(
+            context,
+            status="blocked",
+            code="extension_mcp_arguments_invalid",
+            summary="MCP arguments must be a bounded JSON object.",
+            owner="easyicu.extensions",
+        )
+    try:
+        external = call_mcp_tool(
+            server,
+            str(params.get("tool") or ""),
+            arguments,
+        )
+    except ExtensionRegistryError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=exc.code,
+            summary=exc.message,
+            owner="easyicu.extensions",
+            details=exc.details,
+        )
+    return _extension_result(
+        context,
+        status="ok" if external.get("ok") else "error",
+        code=(
+            "pi_extension_mcp_tool_completed"
+            if external.get("ok")
+            else "pi_extension_mcp_tool_error"
+        ),
+        summary=(
+            f"Called allowlisted MCP tool {server.name}.{params.get('tool')}; "
+            "the result remains untrusted external metadata."
+        ),
+        details={
+            **external,
+            "claim_ceiling": "external_metadata_not_study_evidence",
+            "activation_sha256": context.session.extension_activation.activation_sha256,
+        },
     )
 
 
@@ -2564,7 +2769,9 @@ _DISPATCH = {
     "easyicu_resume": _resume,
     "easyicu_cancel": _cancel,
     "easyicu_request_replan": _request_replan,
+    "easyicu_list_extensions": _list_extensions,
     "easyicu_load_skill": _load_skill,
+    "easyicu_call_mcp_tool": _call_mcp_extension_tool,
     "easyicu_list_project_files": _list_project_files,
     "easyicu_read_project_file": _read_project_file,
     "easyicu_write_project_file": _write_project_file,
