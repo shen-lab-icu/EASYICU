@@ -91,9 +91,13 @@ from .evidence_snapshot import (
 from .scientific_claims import (
     ScientificClaim,
     ScientificClaimDraft,
-    bind_scientific_claim_drafts,
     derive_scientific_claim_drafts,
     scientific_claim_compilation_requested,
+)
+from .scientific_claim_registry import (
+    ScientificClaimRegistryError,
+    load_registered_scientific_claims,
+    validate_scientific_claim_registration,
 )
 from ..schema import EvidenceRecord
 
@@ -2484,98 +2488,37 @@ class EvidenceStore:
                 raise ValueError(
                     "scientific_claims require a registered summary evidence record"
                 )
-            if str(record.produced_by_step or "").strip() != str(step_id).strip():
-                raise ValueError(
-                    "scientific_claims evidence owner does not match the step"
-                )
-            if str(record.generation_mode or "").strip() != "deterministic_standard":
-                raise ValueError(
-                    "scientific_claims require a deterministic standard executor"
-                )
-            target = self.root / record.relative_path
-            if sha256_of_file(target) != record.sha256:
-                raise ValueError("scientific_claims summary evidence digest drifted")
-            try:
-                registered_summary = json.loads(target.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, ValueError) as exc:
-                raise ValueError(
-                    "scientific_claims summary evidence is not valid JSON"
-                ) from exc
-            if registered_summary != summary:
-                raise ValueError(
-                    "scientific_claims must come from the registered summary bytes"
-                )
-            claims = bind_scientific_claim_drafts(
-                [draft.model_dump(mode="json") for draft in derived_drafts],
-                step_id=str(step_id).strip(),
-                evidence_id=record.evidence_id,
+            registration = validate_scientific_claim_registration(
+                root=self.root,
+                record=record,
+                step_id=step_id,
+                summary=summary,
+                drafts=derived_drafts,
             )
-            existing = dict(record.metadata or {}).get("scientific_claims")
-            payload = [claim.model_dump(mode="json") for claim in claims]
-            if existing is not None and existing != payload:
-                raise ValueError(
-                    "scientific_claims cannot change for registered evidence"
-                )
-            if claims and existing is None:
+            if registration.attach_metadata:
                 record.metadata = {
                     **dict(record.metadata or {}),
-                    "scientific_claims": payload,
+                    "scientific_claims": [
+                        claim.model_dump(mode="json")
+                        for claim in registration.claims
+                    ],
                 }
                 self._save()
-            return claims
+            return list(registration.claims)
 
     def scientific_claims(self) -> List[ScientificClaim]:
         """Re-derive and return qualitative claims in registration order."""
 
-        claims: List[ScientificClaim] = []
-        seen: set[str] = set()
         with self._lock:
-            for record in self._records:
-                raw_claims = dict(record.metadata or {}).get("scientific_claims")
-                if raw_claims is None:
-                    continue
-                if not isinstance(raw_claims, list):
-                    raise EvidenceAuthorityIntegrityError(
-                        "scientific claim authority is not a list"
+            try:
+                return list(
+                    load_registered_scientific_claims(
+                        root=self.root,
+                        records=tuple(self._records),
                     )
-                target = self.root / record.relative_path
-                try:
-                    if sha256_of_file(target) != record.sha256:
-                        raise ValueError("evidence digest drifted")
-                    registered_summary = json.loads(
-                        target.read_text(encoding="utf-8")
-                    )
-                    drafts = derive_scientific_claim_drafts(registered_summary)
-                    expected_claims = bind_scientific_claim_drafts(
-                        [draft.model_dump(mode="json") for draft in drafts],
-                        step_id=str(record.produced_by_step or "").strip(),
-                        evidence_id=record.evidence_id,
-                    )
-                except Exception as exc:
-                    raise EvidenceAuthorityIntegrityError(
-                        "scientific claim authority cannot be reproduced from evidence"
-                    ) from exc
-                expected_payload = [
-                    claim.model_dump(mode="json") for claim in expected_claims
-                ]
-                if raw_claims != expected_payload:
-                    raise EvidenceAuthorityIntegrityError(
-                        "scientific claim authority differs from host derivation"
-                    )
-                for claim in expected_claims:
-                    if claim.evidence_id != record.evidence_id or (
-                        claim.step_id != str(record.produced_by_step or "").strip()
-                    ):
-                        raise EvidenceAuthorityIntegrityError(
-                            "scientific claim authority coordinates do not match evidence"
-                        )
-                    if claim.claim_ref in seen:
-                        raise EvidenceAuthorityIntegrityError(
-                            "scientific claim authority contains duplicate references"
-                        )
-                    seen.add(claim.claim_ref)
-                    claims.append(claim)
-        return claims
+                )
+            except ScientificClaimRegistryError as exc:
+                raise EvidenceAuthorityIntegrityError(str(exc)) from exc
 
     def authoritative_scientific_claims(
         self,
