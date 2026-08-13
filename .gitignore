@@ -166,6 +166,8 @@ pilot_runs/
 !docs/research_agent_capability_inventory.md
 !docs/qa/
 !docs/qa/*.md
+!docs/evidence/
+!docs/evidence/*.md
 !src/easyicu/webserver/pi_copilot/node_app/README.md
 !src/easyicu/webserver/pi_copilot/node_app/THIRD_PARTY_NOTICES.md
 !benchmarks/meta_generalization/README.md
