@@ -7,6 +7,39 @@ from easyicu.research_agent.execution.failure_classification import (
     classify_runtime_failure,
 )
 from easyicu.research_agent.contracts.execution_result import RunnerFailureCode
+from easyicu.research_agent.contracts.declared_product import is_failed_step_status
+
+
+@pytest.mark.parametrize(
+    ("timed_out", "runner_failure_code"),
+    [
+        (True, None),
+        (False, RunnerFailureCode.ISOLATION_BACKEND_UNAVAILABLE),
+    ],
+)
+def test_every_terminal_status_is_recognised_as_a_failure(
+    timed_out: bool, runner_failure_code: RunnerFailureCode | None
+) -> None:
+    """A terminal class must not invent a status no consumer recognises.
+
+    ``execution_environment_failed`` shipped as a spelling that appeared
+    exactly once in the tree.  The ``!= "ok"`` gates stayed fail-closed, but
+    the allow-list consumers -- and the ``fail_``/``failed_`` prefix fallback
+    in :func:`is_failed_step_status` -- did not recognise it.
+    """
+
+    decision = classify_runtime_failure(
+        run_log="",
+        timed_out=timed_out,
+        step_id="02_table_one",
+        returncode=71,
+        runner_failure_code=runner_failure_code,
+    )
+
+    assert decision is not None
+    status = decision.step_updates["status"]
+    assert status != "ok"
+    assert is_failed_step_status(status), status
 
 
 def test_isolation_backend_failure_is_not_sent_to_coder_repair() -> None:

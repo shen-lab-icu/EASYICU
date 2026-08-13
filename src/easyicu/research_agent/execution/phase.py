@@ -351,6 +351,10 @@ from ..planning.cohort_contract import (
     cohort_definition_has_explicit_selection,
     cohort_definition_sha,
 )
+from ..planning.figure_strategy import (
+    validate_run_against_article_figure_strategy,
+)
+from ..planning.study_design import study_design_family_for_analysis_type
 from ..planning.method_vocabulary import (
     MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
 )
@@ -12481,6 +12485,36 @@ def run_execute_phase(
                 severity="warning",
                 message=(
                     "Run-level article analysis contract audit failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            )
+        )
+
+    # Figure-strategy coverage already gates publication readiness, but until
+    # this call the shortfall existed only inside that projection: a run whose
+    # figures missed a required article role produced no finding a reviewer
+    # could read. The family is resolved from the final plan so this finding
+    # cannot disagree with the gate it reports on.
+    try:
+        findings.extend(
+            validate_run_against_article_figure_strategy(
+                context=context,
+                run_dir=run_dir,
+                per_step_records=per_step_records,
+                analysis_family=(
+                    study_design_family_for_analysis_type(plan.analysis_type)
+                    if plan is not None and plan.analysis_type is not None
+                    else None
+                ),
+            )
+        )
+    except Exception as exc:
+        findings.append(
+            ValidationFinding(
+                validator="article_figure_strategy",
+                severity="warning",
+                message=(
+                    "Run-level article figure strategy audit failed: "
                     f"{type(exc).__name__}: {exc}"
                 ),
             )

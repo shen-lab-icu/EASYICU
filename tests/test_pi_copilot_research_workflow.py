@@ -3798,6 +3798,105 @@ def test_web_materialization_window_never_declares_clinical_time_zero() -> None:
     )
 
 
+def _large_diagnosis_study(count: int) -> dict[str, Any]:
+    study = _complete_study()
+    study["cohort"] = {
+        "preset": "adult_icu",
+        "label": "Adult ICU stays with suspected infection",
+        "comparison": (
+            "Sepsis-3 positive versus Sepsis-3 negative at suspected-infection onset"
+        ),
+        "icd_include": (
+            "Sepsis and septic shock diagnoses recorded during the index admission"
+        ),
+        "age_min": 18,
+        "age_max": 89,
+        "max_patients": 20000,
+        "icd_enabled": True,
+        "include_diagnoses": [
+            f"A41.{index} Sepsis due to unspecified organism, variant {index}"
+            for index in range(count)
+        ],
+        "exclude_diagnoses": [
+            f"Z51.{index} Encounter for palliative care variant {index}"
+            for index in range(8)
+        ],
+    }
+    # The only place the repeated-stay signal lives for this study.
+    study["confirmations"] = {"repeated_icu_stays_retained": True}
+    return study
+
+
+@pytest.mark.parametrize("count", [0, 12, 18, 28, 64])
+def test_web_data_constraints_never_silently_drop_a_constraint_key(
+    count: int,
+) -> None:
+    """A long cohort must not delete confirmations or the executed window.
+
+    ``data_constraints`` is transported as one JSON string and is read
+    downstream both as prompt text and by token-scanning scientific gates.
+    Cutting the serialized text at a character offset used to remove whole
+    trailing keys -- ``sort_keys`` sorts ``confirmations`` and
+    ``materialization_window`` last -- so a study with enough ICD codes lost
+    its repeated-stay signal and its executed window at the same time.
+    """
+
+    compiled = agent_pipeline_runs._research_user_preferences(
+        _large_diagnosis_study(count)
+    )
+    validated = UserPreferences.model_validate(compiled)
+
+    constraints = json.loads(str(validated.data_constraints))
+    assert set(constraints) == {
+        "analysis_design",
+        "cohort",
+        "confirmations",
+        "materialization_window",
+    }
+    assert constraints["confirmations"] == {"repeated_icu_stays_retained": True}
+    assert constraints["materialization_window"]["role"] == "outer_observation_window"
+    assert "repeat" in str(validated.data_constraints).casefold()
+
+
+def test_web_data_constraints_elide_list_items_visibly() -> None:
+    """Anything actually dropped is dropped inside the structure, in the open."""
+
+    compiled = agent_pipeline_runs._research_user_preferences(
+        _large_diagnosis_study(64)
+    )
+    constraints = json.loads(str(compiled["data_constraints"]))
+    included = constraints["cohort"]["include_diagnoses"]
+
+    assert len(included) < 64
+    assert included[-1] == f"[{64 - (len(included) - 1)} omitted]"
+    # The marker must not be able to satisfy a gate's text scan on its own.
+    assert "readmission" not in included[-1].casefold()
+
+
+def test_web_oversized_data_constraints_fail_closed_instead_of_truncating() -> None:
+    study = _complete_study()
+    study["cohort"] = {
+        name: "L" * 500
+        for name in (
+            "preset",
+            "label",
+            "review",
+            "review_scope",
+            "comparison",
+            "source_type",
+            "comparison_mode",
+            "icd_include",
+            "icd_exclude",
+        )
+    }
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as excinfo:
+        agent_pipeline_runs._research_user_preferences(study)
+
+    assert excinfo.value.code == "research_pipeline_data_constraints_too_large"
+    assert excinfo.value.details["section_chars"]["cohort"] > 2_400
+
+
 def test_web_study_context_preserves_an_explicit_empty_adjustment_set() -> None:
     study = _complete_study()
     study["covariates"] = []

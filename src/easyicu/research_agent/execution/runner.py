@@ -717,11 +717,18 @@ def _suspected_isolation_failure_kind(
 
 def _trusted_isolation_probe_command(
     command: Sequence[str], *, failure_kind: str
-) -> List[str]:
-    """Replace the generated script with fixed host-owned probe code."""
+) -> Optional[List[str]]:
+    """Replace the generated script with fixed host-owned probe code.
+
+    Returns ``None`` when the argv is too short to carry an interpreter payload.
+    An empty argv is not a runnable probe: ``subprocess`` raises ``IndexError``
+    for it, which the caller's ``(OSError, TimeoutExpired)`` handler does not
+    catch, so returning ``[]`` would turn an unprobeable command into a crash
+    instead of a retained child failure.
+    """
 
     if len(command) < 2:
-        return []
+        return None
     probe_code = (
         "import numpy as _np; "
         "_np.dot(_np.array([1.0]), _np.array([1.0])); "
@@ -1306,18 +1313,22 @@ class CodeRunner:
                 )
                 probe_proc = None
                 probe_error: Optional[str] = None
-                try:
-                    probe_proc = _run_capturing_with_descendant_reaping(
-                        probe_cmd,
-                        cwd=str(step_dir),
-                        env=env,
-                        timeout=probe_timeout,
-                    )
-                except (OSError, subprocess.TimeoutExpired) as exc:
-                    # A child-controlled diagnostic may request this probe, so
-                    # probe infrastructure failure cannot replace the child's
-                    # original result or buy a different repair route.
-                    probe_error = type(exc).__name__
+                if probe_cmd is None:
+                    probe_error = "ProbeCommandUnavailable"
+                else:
+                    try:
+                        probe_proc = _run_capturing_with_descendant_reaping(
+                            probe_cmd,
+                            cwd=str(step_dir),
+                            env=env,
+                            timeout=probe_timeout,
+                        )
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        # A child-controlled diagnostic may request this probe,
+                        # so probe infrastructure failure cannot replace the
+                        # child's original result or buy a different repair
+                        # route.
+                        probe_error = type(exc).__name__
                 confirmed = bool(
                     probe_proc is not None
                     and _trusted_probe_confirms_isolation_failure(

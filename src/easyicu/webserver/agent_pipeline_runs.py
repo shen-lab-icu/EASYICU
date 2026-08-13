@@ -58,6 +58,16 @@ _MAX_FIGURE_EMBED_BYTES = 420_000
 _MAX_FIGURE_EMBED_TOTAL = 1_400_000
 _MAX_TABLE_ROWS = 30
 _MAX_TABLE_COLUMNS = 12
+# ``UserPreferences.data_constraints`` is transported as one JSON string that is
+# read downstream both as prompt text and by token-scanning scientific gates
+# (the repeated-stay dependence gate in ``planning.scientific_review`` is the
+# load-bearing example).  Cutting the serialized text at a character offset
+# silently deletes whole trailing keys -- ``sort_keys`` sorts ``confirmations``
+# and ``materialization_window`` last -- and leaves an unparseable value behind.
+# Bound the STRUCTURE instead, so every top-level constraint key survives, the
+# value stays valid JSON, and anything actually dropped is dropped visibly.
+_MAX_DATA_CONSTRAINTS_CHARS = 2_400
+_DATA_CONSTRAINT_LIST_HEADS = (16, 8, 4, 2, 1, 0)
 _MANUSCRIPT_DOCUMENT_SPECS = {
     "manuscript_scaffold.pdf": ("application/pdf", 16 * 1024 * 1024),
     "manuscript_scaffold.tex": ("text/x-tex; charset=utf-8", 2 * 1024 * 1024),
@@ -733,6 +743,68 @@ def _resolve_materialized_primary_exposure(
     return configured if configured in materialized else None
 
 
+def _elide_constraint_lists(
+    constraints: Mapping[str, Any], *, head: int
+) -> Dict[str, Any]:
+    """Shorten list values in place of deleting whole constraint keys."""
+
+    reduced: Dict[str, Any] = {}
+    for key, value in constraints.items():
+        if not isinstance(value, Mapping):
+            reduced[key] = value
+            continue
+        row: Dict[str, Any] = {}
+        for name, item in value.items():
+            if isinstance(item, list) and len(item) > head:
+                # The marker is deliberately token-free: it must not be able to
+                # satisfy a downstream gate's text scan on its own.
+                row[name] = [*item[:head], f"[{len(item) - head} omitted]"]
+            else:
+                row[name] = item
+        reduced[key] = row
+    return reduced
+
+
+def _compile_data_constraints(constraints: Mapping[str, Any]) -> str:
+    """Serialize the study's data constraints without silent key loss.
+
+    Returns valid JSON containing every top-level constraint key, or fails
+    closed.  A study whose constraints cannot fit even with every list fully
+    elided is a configuration the user must shorten; it must never be answered
+    by handing the Research Agent a truncated blob whose missing tail happens
+    to be the user's confirmations.
+    """
+
+    payload = json.dumps(constraints, ensure_ascii=False, sort_keys=True)
+    if len(payload) <= _MAX_DATA_CONSTRAINTS_CHARS:
+        return payload
+    for head in _DATA_CONSTRAINT_LIST_HEADS:
+        candidate = json.dumps(
+            _elide_constraint_lists(constraints, head=head),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        if len(candidate) <= _MAX_DATA_CONSTRAINTS_CHARS:
+            return candidate
+    raise ResearchPipelineRunError(
+        "research_pipeline_data_constraints_too_large",
+        "The configured study constraints are too large to transport to the "
+        "Research Agent without dropping part of them. Shorten the longest "
+        "cohort text fields and retry.",
+        details={
+            "field": "data_constraints",
+            "limit_chars": _MAX_DATA_CONSTRAINTS_CHARS,
+            "serialized_chars": len(payload),
+            "section_chars": {
+                str(key): len(
+                    json.dumps(value, ensure_ascii=False, sort_keys=True)
+                )
+                for key, value in constraints.items()
+            },
+        },
+    )
+
+
 def _research_user_preferences(study: Mapping[str, Any]) -> Dict[str, Any]:
     """Compile StudyContext into the existing strict preference contract."""
 
@@ -792,9 +864,7 @@ def _research_user_preferences(study: Mapping[str, Any]) -> Dict[str, Any]:
             **dict(time_window),
         }
     if constraints:
-        preferences["data_constraints"] = json.dumps(
-            constraints, ensure_ascii=False, sort_keys=True
-        )[:2_400]
+        preferences["data_constraints"] = _compile_data_constraints(constraints)
     sensitivity_specs = _configured_sensitivity_specs(study)
     if sensitivity_specs:
         preferences["sensitivity_specs"] = [

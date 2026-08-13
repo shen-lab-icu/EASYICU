@@ -818,11 +818,20 @@ def validate_run_against_article_figure_strategy(
     context: ResearchContext,
     run_dir: Path,
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    analysis_family: StudyDesignFamily | None = None,
 ) -> List[ValidationFinding]:
+    """Emit the finding for the same coverage readiness already gates on.
+
+    ``analysis_family`` must be the family the readiness projection resolves
+    from the final plan.  Letting this validator re-derive it from context
+    alone would let the emitted finding disagree with the gate it reports on.
+    """
+
     status = summarize_article_figure_strategy_coverage(
         context=context,
         run_dir=run_dir,
         per_step_records=per_step_records,
+        analysis_family=analysis_family,
     )
     if status["article_figure_strategy_complete"]:
         return []
