@@ -12,6 +12,13 @@ import re
 from typing import Sequence
 
 from ..contracts.declared_product import typed_product
+from ..contracts.figure_plan import (
+    COHORT_FLOW_FIGURE_PANELS,
+    COHORT_FLOW_INPUT,
+    DATA_QUALITY_FIGURE_PANELS,
+    EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS,
+    EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,
+)
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -150,6 +157,10 @@ def ensure_data_quality_figure_step(
             ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
             for input_key in required_inputs
         ],
+        figure_panels=[
+            panel.bind(figure_output=DATA_QUALITY_FIGURE_PRODUCT)
+            for panel in DATA_QUALITY_FIGURE_PANELS
+        ],
     )
     return plan.model_copy(update={"steps": [*steps, audit_step]}), [
         ValidationFinding(
@@ -169,7 +180,104 @@ def ensure_data_quality_figure_step(
     ]
 
 
+def bind_deterministic_figure_panels(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Bind exact panels for a renderer already selected by typed inputs.
+
+    This owner never chooses a source product. It only recognizes exact typed
+    inputs already present in the Planner step and projects the selected
+    deterministic renderer's shared contract before plan digest and review.
+    The Planner response is still a draft at this boundary.  Once its typed
+    inputs and all-row consumption contracts select a deterministic renderer,
+    compile that renderer's exact panels into the final plan shown for human
+    review.  This prevents the reviewed plan from promising a chart that the
+    selected host renderer cannot produce.
+    """
+
+    templates_by_inputs = {
+        frozenset({COHORT_FLOW_INPUT}): COHORT_FLOW_FIGURE_PANELS,
+        frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_INPUT}): (
+            EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS
+        ),
+        frozenset(DATA_QUALITY_FIGURE_REQUIRED_INPUTS): DATA_QUALITY_FIGURE_PANELS,
+    }
+    changed = False
+    findings: list[ValidationFinding] = []
+    steps: list[AnalysisStep] = []
+    for step in plan.steps:
+        figure_outputs = [
+            str(output)
+            for output in step.expected_outputs
+            if str(output).startswith("figure:")
+        ]
+        templates = templates_by_inputs.get(
+            frozenset(str(value) for value in step.inputs)
+        )
+        if (
+            _method_head(str(step.method or "")) != "visualization"
+            or step.planned_analysis_role != "auxiliary"
+            or len(figure_outputs) != 1
+            or templates is None
+        ):
+            steps.append(step)
+            continue
+        all_row_inputs = {
+            str(contract.input_key)
+            for contract in step.input_consumption_contracts
+            if contract.mode == "all_rows"
+        }
+        if all_row_inputs != {str(value) for value in step.inputs}:
+            steps.append(step)
+            continue
+        figure_output = figure_outputs[0]
+        bound = [panel.bind(figure_output=figure_output) for panel in templates]
+        scientific_signatures = {
+            (
+                panel.article_role,
+                panel.chart_type,
+                tuple(sorted(panel.source_products)),
+            )
+            for panel in step.figure_panels
+        }
+        bound_signatures = {
+            (
+                panel.article_role,
+                panel.chart_type,
+                tuple(sorted(panel.source_products)),
+            )
+            for panel in bound
+        }
+        if step.figure_panels != bound:
+            changed = True
+            reason = (
+                "deterministic_figure_panels_normalized"
+                if step.figure_panels and scientific_signatures != bound_signatures
+                else "deterministic_figure_panels_bound"
+            )
+            step = step.model_copy(update={"figure_panels": bound})
+            findings.append(
+                ValidationFinding(
+                    validator="deterministic_figure_plan_binding",
+                    severity="warning",
+                    message=(
+                        f"Bound exact deterministic panel contracts for figure "
+                        f"step {step.step_id!r}."
+                    ),
+                    detail={
+                        "reason": reason,
+                        "step_id": step.step_id,
+                        "figure_output": figure_output,
+                    },
+                )
+            )
+        steps.append(step)
+    return (plan.model_copy(update={"steps": steps}) if changed else plan), findings
+
+
 __all__ = [
+    "bind_deterministic_figure_panels",
     "dedicated_renderer_consumes_typed_source",
     "ensure_data_quality_figure_step",
     "step_declares_audit_panel",

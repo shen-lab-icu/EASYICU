@@ -366,6 +366,7 @@ from .plan_utils import (
     effect_output_authorized,
 )
 from .planning.figure_plan_shaping import (
+    bind_deterministic_figure_panels,
     ensure_data_quality_figure_step as _ensure_audit_panel_step_in_plan,
 )
 from .planning.final_plan_shape import validate_final_plan_shape
@@ -2660,6 +2661,10 @@ class ResearchAgentPipeline:
                 context=context,
             )
             findings.extend(audit_panel_findings)
+            plan, deterministic_panel_findings = bind_deterministic_figure_panels(
+                plan=plan
+            )
+            findings.extend(deterministic_panel_findings)
 
             cap = self._max_total_steps
             plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)

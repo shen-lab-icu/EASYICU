@@ -17,6 +17,7 @@ from typing import Any, Mapping
 
 import pandas as pd
 
+from ...contracts.figure_plan import COHORT_FLOW_FIGURE_PANELS, COHORT_FLOW_INPUT
 from ...figures.publication import (
     PALETTE_CLINICAL,
     apply_publication_style,
@@ -35,7 +36,6 @@ __all__ = [
 ]
 
 
-COHORT_FLOW_INPUT = "table:cohort_flow"
 COHORT_ACCOUNTING_COMPLETE = "sequential_attrition_ledger"
 COHORT_ACCOUNTING_DENOMINATOR_ONLY = "analysis_denominator_only"
 _REQUIRED_COLUMNS = (
@@ -365,11 +365,11 @@ def run_cohort_flow_figure(
         height_mm=92.0,
         panels=[
             {
-                "panel_id": "A",
+                "panel_id": COHORT_FLOW_FIGURE_PANELS[0].panel_id,
                 "title": (
                     "Cohort accounting" if complete else "Analysis denominator only"
                 ),
-                "role": "cohort_flow",
+                "role": COHORT_FLOW_FIGURE_PANELS[0].article_role,
                 "claim": (
                     "Every displayed source, eligibility, and final count comes "
                     "from the bound sequential cohort flow."
@@ -385,7 +385,11 @@ def run_cohort_flow_figure(
                     "be described as complete participant-flow accounting."
                 ),
                 "metadata": {
-                    "chart_type": "cohort_flow",
+                    "article_role": COHORT_FLOW_FIGURE_PANELS[0].article_role,
+                    "chart_type": COHORT_FLOW_FIGURE_PANELS[0].chart_type,
+                    "source_products": list(
+                        COHORT_FLOW_FIGURE_PANELS[0].source_products
+                    ),
                     "source_data": [source_path.name],
                     "accounting_completeness": completeness,
                     "paper_grade_cohort_accounting": complete,

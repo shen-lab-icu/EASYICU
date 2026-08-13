@@ -19,6 +19,7 @@ from easyicu.research_agent.plan_utils import (
     _step_produces_figure,
 )
 from easyicu.research_agent.planning.figure_plan_shaping import (
+    bind_deterministic_figure_panels,
     dedicated_renderer_consumes_typed_source,
     ensure_data_quality_figure_step,
     step_declares_audit_panel,
@@ -106,6 +107,10 @@ def test_data_quality_figure_guard_binds_typed_sources_then_is_idempotent():
         "table:missingness_measurement_audit",
         "table:measurement_process_audit",
     ]
+    assert [panel.panel_id for panel in figure.figure_panels] == [
+        "source_availability",
+        "measurement_process_coverage",
+    ]
     assert findings and findings[0].validator == "data_quality_figure_contract"
 
     # Idempotent: a plan that already declares an audit panel is left alone.
@@ -126,6 +131,87 @@ def test_data_quality_figure_guard_never_invents_an_unbound_renderer():
         "data_quality_figure_source_not_closed"
     )
     assert not any(step_declares_audit_panel(step) for step in shaped.steps)
+
+
+def test_deterministic_cohort_renderer_gets_digest_bound_panel_contract() -> None:
+    step = AnalysisStep(
+        step_id="06_cohort_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render the exact cohort flow.",
+        method="visualization",
+        inputs=["table:cohort_flow"],
+        expected_outputs=["figure:cohort_flow"],
+        input_consumption_contracts=[
+            {"input_key": "table:cohort_flow", "mode": "all_rows"}
+        ],
+    )
+    plan = AnalysisPlan(research_question="Describe the cohort.", steps=[step])
+
+    shaped, findings = bind_deterministic_figure_panels(plan=plan)
+
+    assert [panel.model_dump() for panel in shaped.steps[0].figure_panels] == [
+        {
+            "schema_version": "easyicu.planned_figure_panel/1",
+            "panel_id": "cohort_accounting",
+            "figure_output": "figure:cohort_flow",
+            "article_role": "cohort_accounting",
+            "chart_type": "cohort_flow",
+            "source_products": ["table:cohort_flow"],
+        }
+    ]
+    assert findings[0].detail["reason"] == "deterministic_figure_panels_bound"
+
+
+def test_deterministic_renderer_normalizes_draft_visual_semantics_before_review() -> None:
+    step = AnalysisStep(
+        step_id="06_cohort_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render the exact cohort flow.",
+        method="visualization",
+        inputs=["table:cohort_flow"],
+        expected_outputs=["figure:cohort_flow"],
+        input_consumption_contracts=[
+            {"input_key": "table:cohort_flow", "mode": "all_rows"}
+        ],
+        figure_panels=[
+            {
+                "panel_id": "wrong_panel",
+                "figure_output": "figure:cohort_flow",
+                "article_role": "distribution",
+                "chart_type": "histogram",
+                "source_products": ["table:cohort_flow"],
+            }
+        ],
+    )
+    plan = AnalysisPlan(research_question="Describe the cohort.", steps=[step])
+
+    shaped, findings = bind_deterministic_figure_panels(plan=plan)
+
+    assert shaped != plan
+    assert shaped.steps[0].figure_panels[0].panel_id == "cohort_accounting"
+    assert shaped.steps[0].figure_panels[0].article_role == "cohort_accounting"
+    assert shaped.steps[0].figure_panels[0].chart_type == "cohort_flow"
+    assert findings[0].severity == "warning"
+    assert findings[0].detail["reason"] == (
+        "deterministic_figure_panels_normalized"
+    )
+
+
+def test_deterministic_renderer_is_not_bound_without_all_rows_authority() -> None:
+    step = AnalysisStep(
+        step_id="06_cohort_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render a cohort summary without a cardinality contract.",
+        method="visualization",
+        inputs=["table:cohort_flow"],
+        expected_outputs=["figure:cohort_flow"],
+    )
+    plan = AnalysisPlan(research_question="Describe the cohort.", steps=[step])
+
+    shaped, findings = bind_deterministic_figure_panels(plan=plan)
+
+    assert shaped == plan
+    assert findings == []
 
 
 def test_plan_dimension_lifts_after_both_guards():

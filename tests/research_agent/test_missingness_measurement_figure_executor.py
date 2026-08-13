@@ -481,6 +481,41 @@ def test_runner_renders_complete_source_backed_bundle(tmp_path: Path) -> None:
     ]
 
 
+def test_all_zero_missingness_renders_explicit_completeness_instead_of_blank_bars(
+    tmp_path: Path,
+) -> None:
+    audit = _audit_frame()
+    audit["value_missing_n"] = 0
+    audit["value_missing_pct"] = 0.0
+    audit["measured_one_n"] = audit["eligible_n"]
+    audit["measured_one_pct"] = 100.0 * audit["measured_one_n"] / audit["n_total"]
+    process = _process_frame()
+    process["measured_one_n"] = process["eligible_n"]
+    process["repeat_measured_n"] = 0
+
+    run_dir, manifest = _binding(tmp_path, audit=audit, process=process)
+    out_dir, summary = _run(run_dir, manifest)
+
+    assert summary["zero_missing_completeness_display"] is True
+    source = pd.read_csv(
+        out_dir / f"{PRODUCT}_source_missingness_panel_source_data.csv"
+    )
+    assert source["value_missing_n"].tolist() == [0, 0, 0]
+    assert source["value_missing_pct"].tolist() == [0.0, 0.0, 0.0]
+
+    svg = (out_dir / f"{PRODUCT}.svg").read_text(encoding="utf-8")
+    assert "Source completeness" in svg
+    assert "0 missing / 100% complete" in svg
+    contract = json.loads(
+        (out_dir / f"{PRODUCT}.figure_contract.json").read_text(encoding="utf-8")
+    )
+    panel = contract["panels"][0]
+    assert panel["title"] == "Source completeness"
+    assert panel["metadata"]["zero_missing_completeness_display"] is True
+    assert panel["metadata"]["source_products"] == [MISSINGNESS_MEASUREMENT_AUDIT_INPUT]
+    assert "zero missing source values" in panel["claim"]
+
+
 # The long-format schema these tests were written against (metric / level /
 # summary_value rows) was never emitted by the deterministic producer, so the
 # row-kind properties -- "a median reported as a tally", "an unknown metric",
