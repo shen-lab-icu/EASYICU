@@ -165,6 +165,7 @@ def test_generation_mode_exhaustively_matches_extracted_legacy_projection() -> N
 
 def test_worker_progress_is_data_only_and_pipeline_uses_single_seam() -> None:
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import concept_repair
     from easyicu.research_agent.execution import step_worker_state
 
     module_source = inspect.getsource(step_worker_state)
@@ -204,17 +205,22 @@ def test_worker_progress_is_data_only_and_pipeline_uses_single_seam() -> None:
     # Critic repair is projected into the later LLM lineage flag, and a
     # pre-execution runner repair becomes the active runner repair only after
     # the concept loop.
+    repair_loop = ast.parse(inspect.getsource(concept_repair.run_concept_repair_loop))
     attribute_bridges = {
         (node.targets[0].attr, node.value.attr)
-        for node in ast.walk(execute_one)
+        for tree, owner_name in (
+            (execute_one, "worker_progress"),
+            (repair_loop, "worker"),
+        )
+        for node in ast.walk(tree)
         if isinstance(node, ast.Assign)
         and len(node.targets) == 1
         and isinstance(node.targets[0], ast.Attribute)
         and isinstance(node.targets[0].value, ast.Name)
-        and node.targets[0].value.id == "worker_progress"
+        and node.targets[0].value.id == owner_name
         and isinstance(node.value, ast.Attribute)
         and isinstance(node.value.value, ast.Name)
-        and node.value.value.id == "worker_progress"
+        and node.value.value.id == owner_name
     }
     assert ("llm_repair_used", "critic_resume_repair_used") in attribute_bridges
     assert (

@@ -22,6 +22,7 @@ from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.execution.step_candidate_recovery import (
     StepCandidateRecovery,
 )
+from easyicu.research_agent.execution.concept_repair import run_concept_repair_loop
 from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
@@ -46,6 +47,7 @@ def _repair_orchestration_tree() -> ast.Module:
         (
             inspect.getsource(pipeline_execute.run_execute_phase),
             inspect.getsource(StepCandidateRecovery),
+            inspect.getsource(run_concept_repair_loop),
         )
     )
     return ast.parse(source)
@@ -58,7 +60,7 @@ def _is_repair_call(node: ast.Call) -> bool:
         isinstance(node.func, ast.Attribute)
         and node.func.attr == "repair_with_capsule"
         and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "self"
+        and node.func.value.id in {"self", "services"}
     )
 
 

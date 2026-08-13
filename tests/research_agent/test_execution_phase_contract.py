@@ -1210,12 +1210,18 @@ def test_run_execute_phase_does_not_mutate_pipeline_state():
 def test_execute_phase_preserves_repair_provenance_across_concept_and_runtime():
     """Every LLM mutation must outrank pure resume/runner provenance labels."""
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution.concept_repair import (
+        run_concept_repair_loop,
+    )
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
+    concept_source = inspect.getsource(run_concept_repair_loop)
 
     # Initial concept, post-mutation concept, visual, contract, and runtime
     # repairs each mark the same lineage flag after a successful coder call.
-    assert source.count("worker_progress.llm_repair_used = True") == 5
+    llm_repair_marks = source.count("worker_progress.llm_repair_used = True")
+    llm_repair_marks += concept_source.count("worker.llm_repair_used = True")
+    assert llm_repair_marks == 5
     assert source.count("worker_progress.generation_mode(") == 4
     assert source.count("llm_repair_used=False") == 1
     assert "_non_llm_interpretation_for_generation(" in source
