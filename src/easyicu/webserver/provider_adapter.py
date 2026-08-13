@@ -18,6 +18,13 @@ import stat
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from easyicu.provider_auth import (
+    OPENAI_AUTH_HEADER_ENV,
+    OpenAIAuthHeader,
+    ProviderAuthContractError,
+    credential_headers,
+    normalize_openai_auth_header,
+)
 from easyicu.webserver import agent_outputs
 from easyicu.webserver.provider_url_security import (
     ProviderUrlSecurityError,
@@ -125,6 +132,9 @@ def build_research_agent_provider_client(
             # factory this one configured loopback proxy is allowed to receive
             # its own authentication token rather than the no-auth dummy key.
             provider_environment[TRUST_LOOPBACK_PROXY_KEY_ENV] = "1"
+        provider_environment[OPENAI_AUTH_HEADER_ENV] = str(
+            credentials.get("auth_header") or OpenAIAuthHeader.AUTHORIZATION.value
+        )
         effective_timeout = (
             float(request_timeout)
             if request_timeout is not None
@@ -200,8 +210,26 @@ def generate_bound_provider_payload(
         max_output_tokens=max_output_tokens,
         json_format_style=json_format_style,
     )
+    auth_header = normalize_openai_auth_header(credentials.get("auth_header"))
+    if auth_header is OpenAIAuthHeader.X_API_KEY:
+        from easyicu.research_agent.providers.factory import (
+            is_loopback_openai_base_url,
+        )
+
+        endpoint = str(credentials.get("base_url") or "")
+        suffix = "/chat/completions"
+        auth_base_url = (
+            endpoint[: -len(suffix)] if endpoint.endswith(suffix) else endpoint
+        )
+        if not is_loopback_openai_base_url(auth_base_url):
+            raise ProviderAdapterError(
+                {
+                    "error": "provider_x_api_key_requires_loopback",
+                    "secrets_returned": False,
+                }
+            )
     headers = {
-        "Authorization": f"Bearer {credentials['api_key']}",
+        **credential_headers(credentials["api_key"], mode=auth_header),
         "Content-Type": "application/json",
     }
     if transport is None:
@@ -261,7 +289,9 @@ def provider_readiness(
     default_base = _default_base_url(provider_text)
     model_name, model = _first_env(env, model_names)
     has_base_url = bool(base_url or default_base)
-    base_url_validation = "provider_default" if default_base and not base_url else "missing"
+    base_url_validation = (
+        "provider_default" if default_base and not base_url else "missing"
+    )
     base_url_rejection_reason: Optional[str] = None
     if base_url:
         try:
@@ -446,6 +476,16 @@ def _load_external_credentials(
         validate_provider_base_url(base_url)
         base_url = _chat_completions_url(base_url)
     model_name, model = _first_env(env, _model_env_names(provider))
+    try:
+        auth_header = normalize_openai_auth_header(env.get(OPENAI_AUTH_HEADER_ENV))
+    except ProviderAuthContractError as exc:
+        raise ProviderAdapterError(
+            {
+                "error": exc.code,
+                "blocked_by": "external_provider_credentials",
+                "secrets_returned": False,
+            }
+        ) from exc
     attempted = {
         "credentials_attempted": True,
         "credentials_loaded": False,
@@ -495,6 +535,7 @@ def _load_external_credentials(
         "base_url_env": base_name or "provider_default",
         "model": model,
         "model_env": model_name,
+        "auth_header": auth_header.value,
     }
 
 
@@ -509,6 +550,9 @@ def _credential_public_metadata(credentials: Dict[str, str]) -> Dict[str, Any]:
         "base_url_source": credentials["base_url_env"],
         "model": credentials["model"],
         "model_source": credentials["model_env"],
+        "credential_header": str(
+            credentials.get("auth_header") or OpenAIAuthHeader.AUTHORIZATION.value
+        ),
         "client_constructed": False,
     }
 
