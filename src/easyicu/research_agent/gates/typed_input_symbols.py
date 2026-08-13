@@ -34,7 +34,22 @@ def scope_id(
     return id(tree)
 
 
-def _environment_key(node: ast.AST, expected: str) -> bool:
+def environment_key_node(node: ast.AST, expected: str) -> ast.AST | None:
+    """Return the literal naming ``expected`` in an ``os.environ`` read.
+
+    Recognises the two shapes generated code actually uses -- ``os.environ[K]``
+    and ``os.environ.get(K, ...)`` -- and hands back the key node itself so a
+    caller that needs to rewrite it can, while a caller that only needs a yes/no
+    can use :func:`_environment_key`.
+
+    Single owner on purpose: this matcher decides whether generated code is
+    reading a host-issued coordinate, and it had drifted into three copies (the
+    boolean form here, plus a node-returning closure inside the relative-path
+    gate and another inside the evidence-dir repair). A gate and the repair that
+    is supposed to satisfy that gate must not disagree about what they are
+    looking at.
+    """
+
     if (
         isinstance(node, ast.Subscript)
         and isinstance(node.value, ast.Attribute)
@@ -42,8 +57,8 @@ def _environment_key(node: ast.AST, expected: str) -> bool:
         and node.value.value.id == "os"
         and node.value.attr == "environ"
     ):
-        return subscript_key(node.slice) == expected
-    return bool(
+        return node.slice if subscript_key(node.slice) == expected else None
+    if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and isinstance(node.func.value, ast.Attribute)
@@ -53,7 +68,13 @@ def _environment_key(node: ast.AST, expected: str) -> bool:
         and node.func.attr == "get"
         and node.args
         and subscript_key(node.args[0]) == expected
-    )
+    ):
+        return node.args[0]
+    return None
+
+
+def _environment_key(node: ast.AST, expected: str) -> bool:
+    return environment_key_node(node, expected) is not None
 
 
 def _resolved_manifest_loads(
