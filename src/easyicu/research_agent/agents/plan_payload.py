@@ -286,9 +286,24 @@ def planner_science_retry_guide() -> str:
         "or `survival`. An `association_study` must omit that field and declare its "
         "supported adjusted model through `model_requirements`. Optional "
         "collections such as `know_how_decisions` use JSON arrays, never `null`. "
-        "`input_consumption_contracts` accepts `input_key`, `mode`, and optional "
-        "`role_column`, `expected_roles`, or `schema_version`. "
+        "Every `input_consumption_contracts` item has this exact shape: "
+        "`{\"input_key\": \"table:exact_product\", \"mode\": \"all_rows\"}`. "
+        "The only modes are `all_rows`, `single_row`, and `one_per_role`; never "
+        "rename `input_key` to `input` or `mode` to `cardinality`. Only "
+        "`one_per_role` also declares `role_column` and `expected_roles`; "
+        "`schema_version` is optional. "
         "Omit `AnalysisPlan.endpoint` or emit null."
+    )
+    model_representation_fields = (
+        "Within `model_requirements`, categorical `exposure_levels`, "
+        "`exposure_reference_level`, and `primary_contrast_level` are symbolic "
+        "model-term labels and therefore must be JSON strings, for example "
+        "`[\"0\", \"1\"]`, `\"0\"`, and `\"1\"`. This is deliberately "
+        "different from `exposure_outcome_distribution_spec`, whose closed "
+        "observed values preserve their source scalar types. Every "
+        "`robustness_specs` item must include non-empty `spec_id`, `axis`, and "
+        "`description`; the description states the prespecified scientific "
+        "alternative rather than merely repeating the axis."
     )
     representation_fields = (
         "Use only schema product kinds: `protocol` is not a product kind. A "
@@ -308,6 +323,8 @@ def planner_science_retry_guide() -> str:
         + model_terms_retry_guide()
         + "\n\n"
         + optional_fields
+        + "\n\n"
+        + model_representation_fields
         + "\n\n"
         + representation_fields
     )

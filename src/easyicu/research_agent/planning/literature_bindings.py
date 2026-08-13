@@ -50,6 +50,29 @@ def _method_layers_by_source_key() -> dict[str, set[str]]:
     return layers
 
 
+def _method_elements_by_source_key() -> dict[str, set[str]]:
+    elements: dict[str, set[str]] = {}
+    for card in METHOD_CARDS:
+        elements.setdefault(card.source_key, set()).update(card.design_elements)
+    return elements
+
+
+def _available_method_sources_by_element(
+    method_source_keys: set[str],
+    allowed_keys: set[str],
+) -> dict[str, list[str]]:
+    sources: dict[str, set[str]] = {}
+    for card in METHOD_CARDS:
+        if (
+            card.source_key not in method_source_keys
+            or card.source_key not in allowed_keys
+        ):
+            continue
+        for element in card.design_elements:
+            sources.setdefault(element, set()).add(card.source_key)
+    return {element: sorted(keys) for element, keys in sources.items()}
+
+
 def validate_literature_citation_bindings(
     plan: AnalysisPlan,
     allowed_keys: Sequence[str],
@@ -118,6 +141,11 @@ def validate_literature_citation_bindings(
             + ", ".join(method_unbound)
         )
     unsupported_method_bindings: list[str] = []
+    method_elements_by_source = _method_elements_by_source_key()
+    available_sources_by_element = _available_method_sources_by_element(
+        method_source_keys,
+        allowed,
+    )
     matched_layers_by_step: dict[str, set[str]] = {}
     for step in plan.steps:
         if step.planned_analysis_role not in {
@@ -135,9 +163,22 @@ def validate_literature_citation_bindings(
             matched_layers.update(support["matched_layers"])
             unsupported = support["unsupported_design_elements"]
             if support["method_source"] and unsupported:
+                alternatives = ", ".join(
+                    f"{element}={available_sources_by_element.get(element, [])!r}"
+                    for element in unsupported
+                )
                 unsupported_method_bindings.append(
                     f"{step.step_id}:{binding.citation_key}="
                     + ",".join(unsupported)
+                    + " (source supports: "
+                    + ",".join(
+                        sorted(
+                            method_elements_by_source.get(binding.citation_key, set())
+                        )
+                    )
+                    + "; available run sources by requested element: "
+                    + alternatives
+                    + ")"
                 )
         matched_layers_by_step[step.step_id] = matched_layers
     if unsupported_method_bindings:
