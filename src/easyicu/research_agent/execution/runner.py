@@ -48,7 +48,7 @@ import threading
 import time
 import uuid
 from pathlib import Path, PurePosixPath
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .code_hygiene import reorder_forward_references
 from ..contracts.method_packages import (
@@ -613,6 +613,26 @@ def _sandbox_quote(path: Path | str) -> str:
     return str(path).replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _sandbox_metadata_ancestors(paths: Iterable[Path]) -> tuple[Path, ...]:
+    """Return exact directory entries needed to traverse allowed macOS paths.
+
+    ``sandbox-exec`` does not infer metadata access to ancestors such as
+    ``/Users`` from a deep allowed subpath.  ``Path.resolve()`` walks those
+    entries before reaching the allowed run tree, so a deterministic executor
+    could read a bound file but could not verify its containment.  Metadata-only
+    grants keep file contents and sibling enumeration denied.
+    """
+
+    ancestors: set[Path] = set()
+    for path in paths:
+        cursor = Path(path).parent
+        while cursor != cursor.parent:
+            ancestors.add(cursor)
+            cursor = cursor.parent
+    ancestors.discard(Path("/"))
+    return tuple(sorted(ancestors, key=str))
+
+
 def _env_flag(name: str, *, default: bool = False) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -1062,6 +1082,16 @@ class CodeRunner:
             "(allow mach-lookup)",
             "(allow ipc-posix-shm)",
         ]
+        traversal_paths = {
+            *read_dirs,
+            *read_files,
+            script_path.parent.resolve(),
+        }
+        rules.extend(
+            f'(allow file-read-metadata (literal "{_sandbox_quote(path)}"))'
+            for path in _sandbox_metadata_ancestors(traversal_paths)
+            if path.exists()
+        )
         rules.extend(
             f'(allow file-read* (subpath "{_sandbox_quote(path)}"))'
             for path in sorted(read_dirs, key=str)

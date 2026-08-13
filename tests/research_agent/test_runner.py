@@ -772,6 +772,54 @@ def test_macos_sandbox_imports_pandas_and_easyicu_but_confines_files(
     assert protected.read_text(encoding="utf-8") == "original"
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin" or shutil.which("sandbox-exec") is None,
+    reason="requires the macOS sandbox-exec backend",
+)
+def test_macos_sandbox_resolves_bound_run_file_without_exposing_sibling(
+    ra, tmp_path: Path, unauthorized_host_fallback
+):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    run_dir = tmp_path / "run"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    bound = evidence_dir / "bound.txt"
+    bound.write_text("bound", encoding="utf-8")
+    runner = ra.CodeRunner(workdir=run_dir, cohort_parquet=cohort_path)
+
+    result = runner.run(
+        step_id="realpath_confinement",
+        code=(
+            "import json, os\n"
+            "from pathlib import Path\n"
+            "root = Path(os.environ['EASYICU_RUN_DIR']).resolve(strict=True)\n"
+            "bound = (root / 'evidence' / 'bound.txt').resolve(strict=True)\n"
+            f"outside = Path({str(outside)!r})\n"
+            "try:\n"
+            "    outside_value = outside.read_text()\n"
+            "except Exception:\n"
+            "    outside_value = None\n"
+            "payload = {\n"
+            "    'bound': bound.read_text(),\n"
+            "    'contained': bound.is_relative_to(root),\n"
+            "    'outside': outside_value,\n"
+            "}\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'probe.json').write_text(json.dumps(payload))\n"
+        ),
+    )
+
+    _skip_if_outer_macos_sandbox_denied(result)
+    assert result.succeeded, result.stderr
+    assert result.effective_isolation == "macos_sandbox_exec"
+    payload = json.loads((result.out_dir / "probe.json").read_text(encoding="utf-8"))
+    assert payload == {"bound": "bound", "contained": True, "outside": None}
+
+
 def test_pipeline_runner_receives_target_outcome_env(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
