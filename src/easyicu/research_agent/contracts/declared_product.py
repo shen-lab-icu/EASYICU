@@ -661,8 +661,6 @@ def typed_product_binding_contract(
     }
 
 
-
-
 def read_digest_bound_artifact_snapshot(
     *, parent_out: Path, artifact_digests: Mapping[str, str]
 ) -> dict[str, bytes]:
