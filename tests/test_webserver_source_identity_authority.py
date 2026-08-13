@@ -83,6 +83,21 @@ def test_patient_grouping_authority_wrong_source_does_not_cross_bind(
     )
 
 
+def test_unrelated_missing_source_is_not_forced_open_by_machine_authority(
+    tmp_path: Path,
+) -> None:
+    env, _ = _authority_environment(tmp_path)
+
+    assert (
+        resolve_patient_grouping_authority(
+            export_path=tmp_path / "not-mounted" / "other-export",
+            database="miiv",
+            environ=env,
+        )
+        is None
+    )
+
+
 def test_patient_grouping_authority_digest_drift_fails_closed(
     tmp_path: Path,
 ) -> None:
