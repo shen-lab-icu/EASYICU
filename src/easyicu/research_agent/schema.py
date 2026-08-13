@@ -67,6 +67,7 @@ from .planning.robustness_contract import (
     validate_robustness_specs,
 )
 from .planning.sensitivity_authority import PrespecifiedSensitivitySpec
+from .research_context.clinical_definition import ClinicalDefinitionReference
 
 PlannedAnalysisRole = Literal[
     "primary",
@@ -434,40 +435,6 @@ class ClusterSelectionManifest(BaseModel):
         ):
             raise ValueError("elbow/multi_criteria selection requires rationale")
         return self
-
-
-class ClinicalDefinitionReference(BaseModel):
-    """Owner-issued clinical identity for one derived ICU concept.
-
-    Physical observation windows and clinical phenotype time zero are
-    deliberately separate.  For example, a Sepsis-3 phenotype can be defined
-    relative to suspected-infection onset while the exported rows are selected
-    inside an ICU-admission-relative observation window.  Keeping this as a
-    typed reference prevents the Planner from treating those coordinates as
-    interchangeable prose.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    contract_id: str
-    definition: str
-    version: str
-    source_id: str
-    definition_time_anchor: Optional[str] = None
-    status: str
-    validation_status: str
-    canonical_definition: bool
-    ascertainment_limitations: List[str] = Field(default_factory=list)
-    database_conformance: Dict[
-        str,
-        Literal["not_assessed", "mapping_only", "algorithm_golden"],
-    ] = Field(
-        default_factory=dict,
-        description=(
-            "Owner-issued per-database validation depth. mapping_only proves "
-            "physical concept mapping, not clinical algorithm equivalence."
-        ),
-    )
 
 
 class ConceptDescriptor(BaseModel):
