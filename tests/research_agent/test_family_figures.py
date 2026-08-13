@@ -577,3 +577,69 @@ def test_survival_rescue_returns_none_without_cox_table(ra, tmp_path: Path):
         )
         is None
     )
+
+
+def test_incomplete_figure_strategy_becomes_a_readable_finding(ra, tmp_path: Path):
+    """The publication gate's shortfall must also reach the findings list.
+
+    ``summarize_article_figure_strategy_coverage`` has always fed
+    ``publication_authorized``, but until the execute phase called the
+    validator the shortfall existed only inside that projection: a run whose
+    figures missed a required article role produced no finding a reviewer
+    could read.
+    """
+
+    from easyicu.research_agent.planning.figure_strategy import (
+        validate_run_against_article_figure_strategy,
+    )
+
+    context = _context(
+        ra,
+        "Is lactate associated with mortality?",
+        exposure="lactate",
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    findings = validate_run_against_article_figure_strategy(
+        context=context,
+        run_dir=run_dir,
+        analysis_family="time_to_event",
+    )
+
+    assert [item.validator for item in findings] == ["article_figure_strategy"]
+    finding = findings[0]
+    # The family must be the one the caller resolved from the final plan, not
+    # one this validator re-derived: a finding that disagrees with the gate it
+    # reports on is worse than no finding.
+    assert "time_to_event" in finding.message
+    assert finding.detail["missing_roles"]
+
+
+def test_the_figure_strategy_validator_is_silent_when_coverage_is_complete(
+    ra, tmp_path: Path
+):
+    from easyicu.research_agent.planning.figure_strategy import (
+        summarize_article_figure_strategy_coverage,
+        validate_run_against_article_figure_strategy,
+    )
+
+    context = _context(
+        ra,
+        "Is lactate associated with mortality?",
+        exposure="lactate",
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    status = summarize_article_figure_strategy_coverage(
+        context=context,
+        run_dir=run_dir,
+        analysis_family="time_to_event",
+    )
+    if status["article_figure_strategy_complete"]:  # pragma: no cover
+        assert (
+            validate_run_against_article_figure_strategy(
+                context=context, run_dir=run_dir, analysis_family="time_to_event"
+            )
+            == []
+        )

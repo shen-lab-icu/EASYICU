@@ -55,6 +55,7 @@ _NOT_ESTIMABLE_SIGNATURES = (
     "could not be fitted as declared",
 )
 
+
 @dataclass(frozen=True)
 class RuntimeFailureDecision:
     """Terminal fail-closed payload consumed by execute-phase bookkeeping."""

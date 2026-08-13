@@ -35,12 +35,17 @@ from .typed_schema import (
 )
 
 _FIGURE_KINDS = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
+#: Terminal step statuses.  Host-issued spellings must be listed explicitly:
+#: the ``fail_``/``failed_`` prefix fallback in :func:`is_failed_step_status`
+#: only covers generated-code spellings, so a host status such as
+#: ``execution_environment_failed`` is invisible to it.
 _FAILED_STATUSES = frozenset(
     {
         "blocked",
         "error",
         "failed",
         "execution_failed",
+        "execution_environment_failed",
         "contract_failed",
         "fail_closed",
         "failed_closed",

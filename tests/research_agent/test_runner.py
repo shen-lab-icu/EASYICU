@@ -1076,6 +1076,65 @@ def test_child_diagnostic_cannot_authorize_unsafe_host_fallback(
     assert result.runner_failure_code is None
 
 
+def test_an_unprobeable_command_keeps_the_child_failure_instead_of_crashing(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """An argv with no interpreter payload cannot be turned into a probe.
+
+    ``subprocess`` raises ``IndexError`` for an empty argv, and the probe's
+    ``(OSError, TimeoutExpired)`` handler does not catch it -- so building an
+    empty probe command would replace a retained child failure with a crash.
+    """
+
+    import easyicu.research_agent.execution.runner as runner_mod
+
+    assert (
+        runner_mod._trusted_isolation_probe_command(
+            ["sandbox-exec"], failure_kind="macos_permission"
+        )
+        is None
+    )
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
+    )
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, *, cwd, env, timeout):
+        calls.append(list(cmd))
+        if not cmd:  # pragma: no cover - the fix must prevent this call
+            raise IndexError("list index out of range")
+        return SimpleNamespace(
+            stdout="",
+            stderr="sandbox-exec: execvp() failed: Operation not permitted",
+            returncode=1,
+        )
+
+    monkeypatch.setattr(
+        runner, "build_command", lambda *, script_path: ["sandbox-exec"]
+    )
+    monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        runner_mod, "_run_capturing_with_descendant_reaping", _fake_run
+    )
+
+    result = runner.run(step_id="short_argv", code="raise RuntimeError('boom')\n")
+
+    # Exactly one call: the child. No probe was attempted, and nothing crashed.
+    assert len(calls) == 1
+    assert result.returncode == 1
+    assert result.isolation_degraded is False
+    assert result.runner_failure_code is None
+    assert "trusted isolation probe did not complete" in result.stderr
+
+
 def test_child_diagnostic_plus_probe_timeout_keeps_original_repair_route(
     ra,
     tmp_path: Path,
