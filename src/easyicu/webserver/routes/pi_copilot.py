@@ -390,11 +390,19 @@ def get_pi_copilot_sessions(
 def get_pi_copilot_session(
     session_id: ShortText,
     project_id: Annotated[str, Query(min_length=1, max_length=160)],
+    transcript_cursor: Annotated[str | None, Query(max_length=32)] = None,
+    transcript_limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    replay_cursor: Annotated[str | None, Query(max_length=32)] = None,
+    replay_limit: Annotated[int, Query(ge=1, le=100)] = 48,
 ) -> dict:
     try:
         return get_pi_copilot_service().get_session(
             session_id,
             project_id=project_id,
+            transcript_cursor=transcript_cursor,
+            transcript_limit=transcript_limit,
+            replay_cursor=replay_cursor,
+            replay_limit=replay_limit,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

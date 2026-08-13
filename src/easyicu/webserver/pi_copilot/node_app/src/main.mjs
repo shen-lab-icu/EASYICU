@@ -556,9 +556,37 @@ async function requestHostTool(sessionId, name, args) {
   });
 }
 
-function sessionState(record) {
+function transcriptPage(messages, cursor, limit = 100) {
+  const projected = messages.map(projectTranscriptMessage).filter(Boolean);
+  const total = projected.length;
+  const pageSize = Math.max(1, Math.min(200, Number(limit) || 100));
+  let end = total;
+  if (cursor !== undefined && cursor !== null && String(cursor).trim() !== "") {
+    const raw = String(cursor).trim();
+    if (!/^\d+$/.test(raw) || Number(raw) > total) {
+      throw Object.assign(new Error("invalid transcript cursor"), { code: "pi_transcript_cursor_invalid" });
+    }
+    end = Number(raw);
+  }
+  const start = Math.max(0, end - pageSize);
+  return {
+    items: projected.slice(start, end),
+    start,
+    end,
+    total,
+    has_more: start > 0,
+    next_cursor: start > 0 ? String(start) : null,
+  };
+}
+
+function sessionState(record, options = {}) {
   const { session } = record;
   const stats = session.getSessionStats();
+  const transcript = transcriptPage(
+    session.messages,
+    options.transcriptCursor,
+    options.transcriptLimit,
+  );
   return {
     session_id: record.externalId,
     agent_mode: record.agentMode,
@@ -570,7 +598,8 @@ function sessionState(record) {
     message_count: session.messages.length,
     streaming: session.isStreaming,
     enabled_tools: session.getActiveToolNames().filter((name) => ALL_TOOL_NAMES.includes(name)),
-    transcript: session.messages.slice(-100).map(projectTranscriptMessage).filter(Boolean),
+    transcript: transcript.items,
+    transcript_page: transcript,
     shell_usage: {
       tokens: stats.tokens,
       cost: null,
@@ -720,10 +749,18 @@ async function handleRequest(request) {
     case "session.prompt":
       return await promptSession(requestId, params);
     case "session.state": {
-      assertExactKeys(params, new Set(["session_id"]), "pi_session_state_invalid");
+      assertExactKeys(params, new Set(["session_id", "transcript_cursor", "transcript_limit"]), "pi_session_state_invalid");
       const record = sessions.get(boundedText(params.session_id, 160).trim());
       if (!record) throw Object.assign(new Error("Pi session is not open"), { code: "pi_session_not_open" });
-      return sessionState(record);
+      const transcriptLimit = params.transcript_limit === undefined
+        ? 100 : Number(params.transcript_limit);
+      if (!Number.isInteger(transcriptLimit) || transcriptLimit < 1 || transcriptLimit > 200) {
+        throw Object.assign(new Error("invalid transcript limit"), { code: "pi_transcript_limit_invalid" });
+      }
+      return sessionState(record, {
+        transcriptCursor: params.transcript_cursor,
+        transcriptLimit,
+      });
     }
     case "session.abort": {
       assertExactKeys(params, new Set(["session_id"]), "pi_session_abort_invalid");

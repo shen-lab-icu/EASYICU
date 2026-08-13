@@ -11,12 +11,15 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from .contracts import PiCopilotError, utc_now
+from .projections import project_pi_replay_event
 
 SCHEMA_VERSION = "easyicu.pi-conversation-replay/1"
-MAX_REPLAY_BYTES = 1024 * 1024
-MAX_TURNS = 48
-MAX_EVENTS_PER_TURN = 120
-MAX_CHILD_JOBS = 16
+MAX_REPLAY_BYTES = 8 * 1024 * 1024
+MAX_TURNS = 256
+MAX_EVENTS_PER_TURN = 500
+MAX_CHILD_JOBS = 64
+DEFAULT_TURN_PAGE_SIZE = 48
+MAX_TURN_PAGE_SIZE = 100
 
 
 class PiConversationReplayStore:
@@ -167,6 +170,9 @@ class PiConversationReplayStore:
         job_id: str,
         event: Mapping[str, Any],
     ) -> None:
+        projected = project_pi_replay_event(event)
+        if projected is None:
+            return
         with self._lock:
             payload = self._read(session_id, project_id)
             turn = next(
@@ -183,7 +189,7 @@ class PiConversationReplayStore:
                     "The Pi replay turn was not initialized.",
                     status_code=409,
                 )
-            turn["events"] = (list(turn.get("events") or []) + [dict(event)])[
+            turn["events"] = (list(turn.get("events") or []) + [projected])[
                 -MAX_EVENTS_PER_TURN:
             ]
             self._write(payload)
@@ -248,17 +254,66 @@ class PiConversationReplayStore:
             self._write(payload)
             return dict(job)
 
-    def snapshot(self, *, session_id: str, project_id: str) -> Dict[str, Any]:
+    @staticmethod
+    def _turn_page(
+        turns: list[Any],
+        *,
+        cursor: Optional[str] = None,
+        limit: int = DEFAULT_TURN_PAGE_SIZE,
+    ) -> Dict[str, Any]:
+        """Return one reverse-cursor page while preserving chronological order."""
+
+        total = len(turns)
+        page_size = max(1, min(MAX_TURN_PAGE_SIZE, int(limit)))
+        if cursor is None or str(cursor).strip() == "":
+            end = total
+        else:
+            raw = str(cursor).strip()
+            if not raw.isdigit() or int(raw) > total:
+                raise PiCopilotError(
+                    "pi_replay_cursor_invalid",
+                    "The Pi conversation replay cursor is invalid.",
+                    status_code=400,
+                )
+            end = int(raw)
+        start = max(0, end - page_size)
+        return {
+            "items": list(turns[start:end]),
+            "start": start,
+            "end": end,
+            "total": total,
+            "has_more": start > 0,
+            "next_cursor": str(start) if start > 0 else None,
+        }
+
+    def snapshot(
+        self,
+        *,
+        session_id: str,
+        project_id: str,
+        cursor: Optional[str] = None,
+        limit: int = DEFAULT_TURN_PAGE_SIZE,
+    ) -> Dict[str, Any]:
         with self._lock:
             payload = self._read(session_id, project_id)
-        public = {
+        turn_page = self._turn_page(
+            list(payload["turns"]),
+            cursor=cursor,
+            limit=limit,
+        )
+        digest_payload = {
             "schema_version": payload["schema_version"],
             "updated_at": payload.get("updated_at"),
             "turns": list(payload["turns"]),
             "child_jobs": list(payload["child_jobs"]),
         }
+        public = {
+            **digest_payload,
+            "turns": list(turn_page["items"]),
+            "turn_page": turn_page,
+        }
         normalized = json.dumps(
-            public,
+            digest_payload,
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,

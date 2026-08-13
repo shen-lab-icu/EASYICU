@@ -106,24 +106,28 @@ function projectedResource(value) {
     const runId = safeStableId(value.run_id);
     const artifact = safeArtifactName(value.artifact);
     if (!runId || !artifact) return undefined;
+    const sha256 = safeSha256(value.sha256);
     return {
       kind: "research_artifact",
       run_id: runId,
       artifact,
       label: boundedText(value.label || artifact, 160),
       media_type: "application/json",
+      ...(sha256 ? { sha256 } : {}),
     };
   }
   if (value.kind === "research_document") {
     const runId = safeStableId(value.run_id);
     const artifact = safeResearchDocumentName(value.artifact);
     if (!runId || !artifact) return undefined;
+    const sha256 = safeSha256(value.sha256);
     return {
       kind: "research_document",
       run_id: runId,
       artifact,
       label: boundedText(value.label || artifact, 160),
       media_type: boundedText(value.media_type || "application/octet-stream", 120),
+      ...(sha256 ? { sha256 } : {}),
     };
   }
   if (value.kind === "data_package_review") {
@@ -149,11 +153,13 @@ function projectedResource(value) {
   if (!file) return undefined;
   const kind = value.kind === "webpage" ? "webpage" : "file";
   const fallbackLabel = file.split("/").at(-1) || file;
+  const sha256 = safeSha256(value.sha256);
   return {
     kind,
     file,
     label: boundedText(value.label || fallbackLabel, 160),
     media_type: boundedText(value.media_type || "text/plain", 120),
+    ...(sha256 ? { sha256 } : {}),
   };
 }
 

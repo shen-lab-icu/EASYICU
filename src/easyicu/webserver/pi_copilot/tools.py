@@ -302,7 +302,12 @@ def _run_review(row: Mapping[str, Any]) -> Dict[str, Any]:
     return review
 
 
-def _artifact_resource(run_id: Any, artifact_name: Any) -> Optional[Dict[str, Any]]:
+def _artifact_resource(
+    run_id: Any,
+    artifact_name: Any,
+    *,
+    sha256: Any = None,
+) -> Optional[Dict[str, Any]]:
     """Build a path-free browser reference to one whitelisted run artefact."""
 
     clean_run = stable_code(run_id)
@@ -315,16 +320,27 @@ def _artifact_resource(run_id: Any, artifact_name: Any) -> Optional[Dict[str, An
         or not clean_name.endswith(".json")
     ):
         return None
+    digest = str(sha256 or "").strip().lower()
     return {
         "kind": "research_artifact",
         "run_id": clean_run,
         "artifact": clean_name,
         "label": clean_name,
         "media_type": "application/json",
+        **(
+            {"sha256": digest}
+            if len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)
+            else {}
+        ),
     }
 
 
-def _document_resource(run_id: Any, document_name: Any) -> Optional[Dict[str, Any]]:
+def _document_resource(
+    run_id: Any,
+    document_name: Any,
+    *,
+    sha256: Any = None,
+) -> Optional[Dict[str, Any]]:
     clean_run = stable_code(run_id)
     clean_name = str(document_name or "").strip()
     labels = {
@@ -339,12 +355,18 @@ def _document_resource(run_id: Any, document_name: Any) -> Optional[Dict[str, An
     }
     if clean_run is None or clean_name not in labels:
         return None
+    digest = str(sha256 or "").strip().lower()
     return {
         "kind": "research_document",
         "run_id": clean_run,
         "artifact": clean_name,
         "label": labels[clean_name],
         "media_type": media_types[clean_name],
+        **(
+            {"sha256": digest}
+            if len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)
+            else {}
+        ),
     }
 
 
@@ -353,9 +375,17 @@ def _artifact_resources(
 ) -> list[Dict[str, Any]]:
     resources = []
     for artifact in list(artifacts)[:80]:
-        resource = _artifact_resource(run_id, artifact.get("name"))
+        resource = _artifact_resource(
+            run_id,
+            artifact.get("name"),
+            sha256=artifact.get("sha256"),
+        )
         if resource is None:
-            resource = _document_resource(run_id, artifact.get("name"))
+            resource = _document_resource(
+                run_id,
+                artifact.get("name"),
+                sha256=artifact.get("sha256"),
+            )
         if resource is not None:
             resources.append(resource)
     return resources
@@ -639,6 +669,7 @@ def _inspect_data_package(
         )
     from easyicu.webserver.data_package_review import (
         DataPackageReviewError,
+        DataPackageReviewSnapshotStore,
         build_registered_data_package_review,
     )
 
@@ -650,6 +681,21 @@ def _inspect_data_package(
             status="blocked",
             code=exc.code,
             summary=exc.message,
+            owner="easyicu.webserver.data_package_review",
+            details=exc.details,
+        )
+    try:
+        DataPackageReviewSnapshotStore().persist(review)
+    except DataPackageReviewError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=exc.code,
+            summary=(
+                "The aggregate data-package review was produced, but its "
+                "immutable replay snapshot could not be sealed. Do not emit a "
+                "conversation resource that will drift with later study edits."
+            ),
             owner="easyicu.webserver.data_package_review",
             details=exc.details,
         )

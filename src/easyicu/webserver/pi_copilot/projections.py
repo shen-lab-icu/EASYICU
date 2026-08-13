@@ -302,6 +302,44 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 "reason_code": stable_code(event.get("reason"))
             }
         )
+    result = snapshot.get("result")
+    result = result if isinstance(result, Mapping) else {}
+    run_id = stable_code(result.get("run_id"))
+    artifacts = result.get("artifacts")
+    artifacts = artifacts if isinstance(artifacts, list) else []
+    artifact_refs = []
+    for row in artifacts[:80]:
+        if not isinstance(row, Mapping):
+            continue
+        name = _bounded_text(row.get("name"), 160)
+        digest = _bounded_text(row.get("sha256"), 64).lower()
+        if (
+            not run_id
+            or not name
+            or Path(name).name != name
+            or not re.fullmatch(r"[a-f0-9]{64}", digest)
+        ):
+            continue
+        artifact_refs.append(
+            {
+                "kind": "research_document" if name in {
+                    "manuscript_scaffold.pdf",
+                    "manuscript_scaffold.tex",
+                    "manuscript_scaffold.bib",
+                } else "research_artifact",
+                "run_id": run_id,
+                "artifact": name,
+                "label": name,
+                "sha256": digest,
+                **(
+                    {"size": int(row.get("size") or row.get("bytes"))}
+                    if isinstance(row.get("size") or row.get("bytes"), int)
+                    else {}
+                ),
+            }
+        )
+    gate = result.get("gate")
+    gate = gate if isinstance(gate, Mapping) else {}
     return ensure_safe_projection(
         {
             "present": True,
@@ -312,8 +350,100 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "cancel_reason_code": stable_code(snapshot.get("cancel_reason")),
             "error_code": _safe_error_code(snapshot.get("error")),
             "progress": progress,
+            "run_id": run_id,
+            "artifact_refs": artifact_refs,
+            "gate_status": stable_code(gate.get("status")),
+            "gate_reason_code": stable_code(gate.get("reason")),
+            "reportable": bool(gate.get("reportable")),
+            "human_review_pending": bool(result.get("human_review_pending")),
         }
     )
+
+
+def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
+    """Keep only reopenable, path-free references from a normalized Pi event."""
+
+    if not isinstance(value, Mapping):
+        return None
+    kind = str(value.get("kind") or "").strip()
+    if kind == "literature_source":
+        url = _bounded_text(value.get("url"), 500)
+        if not re.fullmatch(
+            r"(?:https://pubmed\.ncbi\.nlm\.nih\.gov/[0-9]{1,12}/|"
+            r"https://doi\.org/10\.[0-9]{4,9}/[A-Za-z0-9._;()/:+\-]+)",
+            url,
+        ):
+            return None
+        return {
+            "kind": kind,
+            "url": url,
+            "label": _bounded_text(value.get("label"), 160),
+            "title": _bounded_text(value.get("title"), 500),
+            "year": _bounded_text(value.get("year"), 16),
+            "venue": _bounded_text(value.get("venue"), 240),
+            "doi": _bounded_text(value.get("doi"), 240),
+            "pmid": _bounded_text(value.get("pmid"), 32),
+            "authority_class": stable_code(value.get("authority_class")),
+        }
+    if kind in {"research_artifact", "research_document"}:
+        run_id = stable_code(value.get("run_id"))
+        artifact = _bounded_text(value.get("artifact"), 160)
+        digest = _bounded_text(value.get("sha256"), 64).lower()
+        if not run_id or not artifact or Path(artifact).name != artifact:
+            return None
+        return {
+            "kind": kind,
+            "run_id": run_id,
+            "artifact": artifact,
+            "label": _bounded_text(value.get("label") or artifact, 160),
+            "media_type": _bounded_text(value.get("media_type"), 120),
+            **(
+                {"sha256": digest}
+                if re.fullmatch(r"[a-f0-9]{64}", digest)
+                else {}
+            ),
+        }
+    if kind == "data_package_review":
+        study_id = stable_code(value.get("study_context_id"))
+        digest = _bounded_text(value.get("review_sha256"), 64).lower()
+        revision = value.get("study_revision")
+        if (
+            not study_id
+            or not isinstance(revision, int)
+            or revision < 0
+            or not re.fullmatch(r"[a-f0-9]{64}", digest)
+        ):
+            return None
+        return {
+            "kind": kind,
+            "study_context_id": study_id,
+            "study_revision": revision,
+            "review_sha256": digest,
+            "label": _bounded_text(value.get("label"), 160),
+            "media_type": "application/json",
+        }
+    if kind in {"file", "webpage"}:
+        file_name = _bounded_text(value.get("file"), 240).replace("\\", "/")
+        parts = file_name.split("/")
+        if (
+            not file_name
+            or file_name.startswith("/")
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
+            return None
+        digest = _bounded_text(value.get("sha256"), 64).lower()
+        return {
+            "kind": kind,
+            "file": file_name,
+            "label": _bounded_text(value.get("label") or parts[-1], 160),
+            "media_type": _bounded_text(value.get("media_type"), 120),
+            **(
+                {"sha256": digest}
+                if re.fullmatch(r"[a-f0-9]{64}", digest)
+                else {}
+            ),
+        }
+    return None
 
 
 def project_pi_replay_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
@@ -372,6 +502,18 @@ def project_pi_replay_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]
         payload["will_retry"] = bool(event.get("will_retry"))
     if event.get("aborted") is not None:
         payload["aborted"] = bool(event.get("aborted"))
+    resource = _project_replay_resource(event.get("resource"))
+    if resource is not None:
+        payload["resource"] = resource
+    resources = [
+        projected
+        for raw in (
+            event.get("resources") if isinstance(event.get("resources"), list) else []
+        )[:80]
+        if (projected := _project_replay_resource(raw)) is not None
+    ]
+    if resources:
+        payload["resources"] = resources
     return ensure_safe_projection(payload)
 
 

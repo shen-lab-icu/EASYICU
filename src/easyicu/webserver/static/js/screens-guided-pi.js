@@ -206,7 +206,7 @@
       data-gpi-resource-pmid="${esc(resource.pmid || '')}"
       data-gpi-resource-study="${esc(resource.study_context_id || '')}"
       data-gpi-resource-revision="${esc(resource.study_revision == null ? '' : resource.study_revision)}"
-      data-gpi-resource-digest="${esc(resource.review_sha256 || '')}">${esc(label || resourceLabel(resource))}</button>`;
+      data-gpi-resource-digest="${esc(resource.review_sha256 || resource.sha256 || '')}">${esc(label || resourceLabel(resource))}</button>`;
   }
   function toolLabel(name, resource) {
     const labels = {
@@ -434,17 +434,25 @@
       }
     });
     closeHistoryActivity(lastTimestamp);
-    const replay = Array.isArray(session && session.last_turn_events) ? session.last_turn_events : [];
-    if (replay.length) {
-      const replayStarted = timeMs(replay[0] && replay[0].at);
-      let replayActivity = messages.slice().reverse().find(row => row.role === 'activity' && !row.childJobId);
+    const replayOwner = window.EU_GUIDED_PI_REPLAY;
+    const replayTurns = replayOwner && typeof replayOwner.lifecycleTurns === 'function'
+      ? replayOwner.lifecycleTurns(session) : [];
+    const historyActivities = messages.filter(row => row.role === 'activity' && !row.childJobId);
+    const replayOffset = Math.max(0, historyActivities.length - replayTurns.length);
+    replayTurns.forEach((turn, turnIndex) => {
+      const replay = Array.isArray(turn && turn.events) ? turn.events : [];
+      if (!replay.length) return;
+      const replayStarted = timeMs((turn && turn.started_at) || (replay[0] && replay[0].at));
+      let replayActivity = historyActivities[replayOffset + turnIndex];
       const isNewReplayActivity = !replayActivity;
-      if (!replayActivity) replayActivity = { id: 'saved-activity-' + replayStarted, role: 'activity', steps: [], expanded: false };
-      replayActivity.status = session.last_turn_status === 'running' ? 'running'
-        : (['failed', 'interrupted'].includes(String(session.last_turn_status || '')) ? 'error'
-          : (session.last_turn_status === 'cancelled' ? 'cancelled' : 'complete'));
+      if (!replayActivity) replayActivity = { id: 'saved-activity-' + String((turn && turn.job_id) || replayStarted), role: 'activity', steps: [], expanded: false };
+      const turnStatus = String((turn && turn.status) || session.last_turn_status || 'done');
+      replayActivity.status = turnStatus === 'running' ? 'running'
+        : (['failed', 'interrupted'].includes(turnStatus) ? 'error'
+          : (turnStatus === 'cancelled' ? 'cancelled' : 'complete'));
       replayActivity.startedAt = replayActivity.startedAt || replayStarted;
-      replayActivity.endedAt = timeMs(replay[replay.length - 1] && replay[replay.length - 1].at);
+      replayActivity.endedAt = timeMs((turn && turn.ended_at) || (replay[replay.length - 1] && replay[replay.length - 1].at));
+      replayActivity.allowedActions = Array.isArray(turn && turn.allowed_actions) ? turn.allowed_actions.slice() : [];
       replay.forEach(event => {
         const at = timeMs(event && event.at);
         if (event.type === 'run_start') upsertActivityStep(replayActivity, { id: 'agent', kind: 'agent', status: 'complete', at });
@@ -459,15 +467,15 @@
           const phase = replayActivity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
           if (phase) phase.status = event.error_code ? 'error' : 'complete';
         } else if (event.type === 'tool_start' || event.type === 'tool_progress') {
-          upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
+          upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at, resource: event.resource || null });
         } else if (event.type === 'tool_end') {
-          upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: event.is_error ? 'error' : 'complete', code: event.code || '', owner: event.owner || '', jobId: event.job_id || '', at, endedAt: at });
+          upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: event.is_error ? 'error' : 'complete', code: event.code || '', owner: event.owner || '', jobId: event.job_id || '', at, endedAt: at, resource: event.resource || null, resources: Array.isArray(event.resources) ? event.resources : [] });
         } else if (event.type === 'retry') upsertActivityStep(replayActivity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'complete', attempt: event.attempt, maxAttempts: event.max_attempts, at });
         else if (event.type === 'compaction_start' || event.type === 'compaction_end') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: event.type === 'compaction_end' && !event.aborted ? 'complete' : 'running', at });
       });
       replayActivity.steps.forEach(step => { if (step.status === 'running' && replayActivity.status !== 'running') step.status = replayActivity.status === 'complete' ? 'complete' : 'error'; });
       if (isNewReplayActivity && replayActivity.steps.length) messages.push(replayActivity);
-    }
+    });
     return messages.filter(row => row.text || row.role === 'activity');
   }
 
@@ -1070,7 +1078,12 @@
     try {
       const payload = await api().loadPiCopilotSession(sessionId, expectedProjectId);
       if (expectedProjectId !== projectId()) return;
-      state.session = payload.session; state.messages = transcriptMessages(state.session);
+      const replayOwner = window.EU_GUIDED_PI_REPLAY;
+      state.session = replayOwner && typeof replayOwner.hydrate === 'function'
+        ? await replayOwner.hydrate(api(), payload.session, expectedProjectId)
+        : payload.session;
+      if (expectedProjectId !== projectId()) return;
+      state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || 'research';
       (Array.isArray(state.session.archived_child_jobs) ? state.session.archived_child_jobs : []).forEach(hydrateProjectedJob);
       const activeMessageJob = String(state.session.active_message_job_id || '').trim();
@@ -1356,7 +1369,8 @@
             ? tr('EasyICU research task cancelled', 'EasyICU 科研任务已取消')
             : tr('EasyICU research task failed', 'EasyICU 科研任务失败'),
         status: job.status === 'done' ? 'complete' : 'error', at: Date.now(),
-        code: String(job.error_code || job.status || ''), owner: String(job.kind || 'EasyICU'),
+        code: String(job.gate_status || job.error_code || job.status || ''), owner: String(job.kind || 'EasyICU'),
+        resources: Array.isArray(job.artifact_refs) ? job.artifact_refs : [],
       });
       activity.status = job.status === 'done' ? 'complete' : (job.status === 'cancelled' ? 'cancelled' : 'error');
       activity.endedAt = Date.now();
@@ -1366,7 +1380,10 @@
     if (!state.session || !projectId()) return;
     try {
       const payload = await api().loadPiCopilotSession(state.session.session_id, projectId());
-      state.session = payload.session;
+      const replayOwner = window.EU_GUIDED_PI_REPLAY;
+      state.session = !preserveTimeline && replayOwner && typeof replayOwner.hydrate === 'function'
+        ? await replayOwner.hydrate(api(), payload.session, projectId())
+        : payload.session;
       if (!preserveTimeline) state.messages = transcriptMessages(state.session);
       (Array.isArray(state.session.archived_child_jobs) ? state.session.archived_child_jobs : []).forEach(hydrateProjectedJob);
       reconcileSettledSession();
@@ -1665,6 +1682,7 @@
             study_context_id: resource.dataset.gpiResourceStudy,
             study_revision: resource.dataset.gpiResourceRevision,
             review_sha256: resource.dataset.gpiResourceDigest,
+            sha256: resource.dataset.gpiResourceDigest,
           }, projectId());
         }
         return;

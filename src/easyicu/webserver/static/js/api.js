@@ -419,8 +419,14 @@
     const n = Math.max(1, Math.min(100, Number(limit) || 30));
     return getJSON('/api/copilot/pi/sessions?project_id=' + encodeURIComponent(projectId || '') + '&limit=' + encodeURIComponent(n));
   }
-  function loadPiCopilotSession(sessionId, projectId) {
-    return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '?project_id=' + encodeURIComponent(projectId || ''));
+  function loadPiCopilotSession(sessionId, projectId, options) {
+    const opts = options || {};
+    const query = new URLSearchParams({ project_id: String(projectId || '') });
+    if (opts.transcriptCursor != null) query.set('transcript_cursor', String(opts.transcriptCursor));
+    if (opts.transcriptLimit != null) query.set('transcript_limit', String(opts.transcriptLimit));
+    if (opts.replayCursor != null) query.set('replay_cursor', String(opts.replayCursor));
+    if (opts.replayLimit != null) query.set('replay_limit', String(opts.replayLimit));
+    return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '?' + query.toString());
   }
   function sendPiCopilotMessage(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/message', body || {});

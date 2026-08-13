@@ -407,6 +407,7 @@ def test_pi_frontend_javascript_parses() -> None:
         "js/screens-guided-pi-literature.js",
         "js/screens-guided-pi-markdown.js",
         "js/screens-guided-pi-demo.js",
+        "js/screens-guided-pi-replay.js",
     ):
         subprocess.run(
             [node, "--check", str(STATIC / relative)],
@@ -418,10 +419,12 @@ def test_pi_frontend_javascript_parses() -> None:
 
 def test_pi_project_reopens_latest_session_and_replays_safe_lifecycle() -> None:
     owner = _read("js/screens-guided-pi.js")
+    replay = _read("js/screens-guided-pi-replay.js")
     assert "state.session.active_message_job_id" in owner
     assert "watchJob(activeMessageJob)" in owner
     assert "await openSession(state.sessions[0].session_id)" in owner
-    assert "session.last_turn_events" in owner
+    assert "session.last_turn_events" in replay
+    assert "next_cursor" in replay
     assert "saved-activity-" in owner
     assert "state.session.archived_child_jobs" in owner
     assert "archiveChildJob(jobId)" in owner
