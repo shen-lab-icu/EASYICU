@@ -25,10 +25,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi.css?v=20260812-natural-chat-artifacts1" in index
     assert "css/guided-pi-demo.css?v=20260811-product-demo5" in index
     assert "css/guided-pi-preview.css?v=20260811-research-docs1" in index
+    assert "css/guided-pi-workbench-preview.css?v=20260813-workbench1" in index
     assert "css/guided-pi-literature.css?v=20260812-literature3" in index
     assert "js/screens-guided-pi-literature.js?v=20260812-literature3" in index
     assert "js/screens-guided-pi-markdown.js?v=20260811-message-links1" in index
     assert "js/screens-guided-pi-demo.js?v=20260811-science-readiness1" in index
+    assert "js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1" in index
     assert "js/screens-guided-pi-preview.js?v=20260812-data-package1" in index
     assert "js/screens-guided-pi.js?v=20260812-natural-chat-artifacts1" in index
     assert "js/api.js?v=20260812-extension-manager1" in index
@@ -40,6 +42,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-demo.js"
     )
     assert index.index("js/screens-guided-pi-demo.js") < index.index(
+        "js/screens-guided-pi-workbench-preview.js"
+    )
+    assert index.index("js/screens-guided-pi-workbench-preview.js") < index.index(
         "js/screens-guided-pi-preview.js"
     )
     assert index.index("js/screens-guided-pi-preview.js") < index.index(
@@ -110,9 +115,9 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "Auto-approve" in pi_owner
     assert "Full access" in pi_owner
     assert "data-gpi-grant" not in pi_owner
-    assert 'data-gpi-resource-file' in pi_owner
-    assert 'data-gpi-resource-run' in pi_owner
-    assert 'data-gpi-resource-artifact' in pi_owner
+    assert "data-gpi-resource-file" in pi_owner
+    assert "data-gpi-resource-run" in pi_owner
+    assert "data-gpi-resource-artifact" in pi_owner
     assert 'data-gpi-mode-switch="workspace"' in pi_owner
     assert "agentMode: 'research'" in pi_owner
     assert "pendingAuthorityRebind" in pi_owner
@@ -128,7 +133,10 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "function reconcileSettledSession()" in pi_owner
     assert "state.session.streaming !== false" in pi_owner
     assert pi_owner.count("reconcileSettledSession();") == 2
-    assert "['submitted', 'agent', 'turn', 'assistant', 'tool', 'pipeline', 'retry', 'compaction']" in pi_owner
+    assert (
+        "['submitted', 'agent', 'turn', 'assistant', 'tool', 'pipeline', 'retry', 'compaction']"
+        in pi_owner
+    )
     assert "Live progress connection stopped" in pi_owner
     assert "private chain-of-thought" in pi_owner
     assert "loadPiCopilotProjectWorkflow" in pi_owner
@@ -144,12 +152,18 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "gpi-avatar" not in pi_owner
     assert "private chain-of-thought" in pi_owner
     assert "assistantTextHtml" in pi_owner
-    assert "row.role === 'assistant' ? assistantTextHtml(row.text) : esc(row.text)" in pi_owner
+    assert (
+        "row.role === 'assistant' ? assistantTextHtml(row.text) : esc(row.text)"
+        in pi_owner
+    )
     assert "event.type === 'run_start'" in pi_owner
     assert "event.type === 'tool_progress'" in pi_owner
     assert "event.type === 'run_end'" in pi_owner
     assert "workspace file contents may be sent to this configured service" in pi_owner
-    assert "Do not place PHI, patient rows, credentials, or private clinical data" in pi_owner
+    assert (
+        "Do not place PHI, patient rows, credentials, or private clinical data"
+        in pi_owner
+    )
     assert "data-gpi-confirm-action" in pi_owner
     assert "data-gpi-demo" in pi_owner
     assert "data-gpi-demo-exit" in pi_owner
@@ -174,6 +188,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
         "loadPiCopilotSession",
         "sendPiCopilotMessage",
         "rebindPiCopilotSession",
+        "pinPiCopilotPresentation",
+        "archivePiCopilotChildJob",
         "abortPiCopilotSession",
         "loadPiCopilotWorkspaceFile",
         "piCopilotWorkspacePreviewUrl",
@@ -187,7 +203,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
 def test_existing_project_study_setup_stays_in_bound_pi_conversation() -> None:
     owner = _read("js/screens-guided-pi.js")
 
-    assert 'data-gpi-study-setup' in owner
+    assert "data-gpi-study-setup" in owner
     assert "function studySetupReviewPrompt(workflow)" in owner
     assert "function openStudySetupInConversation()" in owner
     assert "setShell('pi')" in owner
@@ -206,7 +222,7 @@ def test_existing_project_study_setup_stays_in_bound_pi_conversation() -> None:
     session_panel = owner[
         owner.index("function sessionPanel()") : owner.index("function demoPanel()")
     ]
-    assert 'data-gpi-legacy' not in session_panel
+    assert "data-gpi-legacy" not in session_panel
 
 
 def test_scientific_review_continues_as_one_question_in_chat() -> None:
@@ -225,8 +241,14 @@ def test_agent_handoff_receipt_is_forwarded_to_project_initialization() -> None:
 
     assert "binding_receipt: state.project.binding_receipt || undefined" in owner
     assert "binding_receipt: project.binding_receipt || null" in owner
-    assert "study_context_id: guidedBinding.binding_receipt && guidedBinding.binding_receipt.study_context_id" in guided
-    assert "study_context_revision: guidedBinding.binding_receipt && guidedBinding.binding_receipt.study_context_revision" in guided
+    assert (
+        "study_context_id: guidedBinding.binding_receipt && guidedBinding.binding_receipt.study_context_id"
+        in guided
+    )
+    assert (
+        "study_context_revision: guidedBinding.binding_receipt && guidedBinding.binding_receipt.study_context_revision"
+        in guided
+    )
 
 
 def test_agent_handoff_project_remains_visible_without_a_guided_folder() -> None:
@@ -236,7 +258,11 @@ def test_agent_handoff_project_remains_visible_without_a_guided_folder() -> None
     result = subprocess.run(
         [
             node,
-            str(Path(__file__).resolve().parent / "js" / "guided_project_handoff.test.js"),
+            str(
+                Path(__file__).resolve().parent
+                / "js"
+                / "guided_project_handoff.test.js"
+            ),
             str(STATIC / "js" / "screens-guided-projects.js"),
         ],
         check=False,
@@ -262,7 +288,10 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     assert "grid-template-columns:repeat(8,minmax(0,1fr))" in owner
     assert "pi-gui's MIT-licensed timeline-item/timeline.css" in owner
     assert ".gpi-message{max-width:768px" in owner
-    assert ".gpi-activity,.gpi-activity-live,.gpi-activity-running{max-width:768px" in owner
+    assert (
+        ".gpi-activity,.gpi-activity-live,.gpi-activity-running{max-width:768px"
+        in owner
+    )
     assert ".gpi-preview-aside" in preview_owner
     assert ".gpi-preview-frame" in preview_owner
     assert ".gpi-preview-code" in preview_owner
@@ -337,6 +366,7 @@ def test_pi_css_has_balanced_comments_and_braces() -> None:
     for relative in (
         "css/guided-pi.css",
         "css/guided-pi-preview.css",
+        "css/guided-pi-workbench-preview.css",
         "css/guided-pi-literature.css",
         "css/guided-pi-demo.css",
     ):
@@ -353,6 +383,7 @@ def test_pi_frontend_javascript_parses() -> None:
     for relative in (
         "js/screens-guided-pi.js",
         "js/screens-guided-pi-preview.js",
+        "js/screens-guided-pi-workbench-preview.js",
         "js/screens-guided-pi-literature.js",
         "js/screens-guided-pi-markdown.js",
         "js/screens-guided-pi-demo.js",
@@ -363,6 +394,36 @@ def test_pi_frontend_javascript_parses() -> None:
             capture_output=True,
             text=True,
         )
+
+
+def test_pi_project_reopens_latest_session_and_replays_safe_lifecycle() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    assert "state.session.active_message_job_id" in owner
+    assert "watchJob(activeMessageJob)" in owner
+    assert "await openSession(state.sessions[0].session_id)" in owner
+    assert "session.last_turn_events" in owner
+    assert "saved-activity-" in owner
+    assert "state.session.archived_child_jobs" in owner
+    assert "archiveChildJob(jobId)" in owner
+    assert "data-gpi-presentation-pin" in owner
+    assert "pinPiCopilotPresentation" in owner
+    assert "private chain-of-thought" in owner
+
+
+def test_data_package_opens_in_a_route_owned_read_only_workbench() -> None:
+    preview = _read("js/screens-guided-pi-preview.js")
+    workbench = _read("js/screens-guided-pi-workbench-preview.js")
+    css = _read("css/guided-pi-workbench-preview.css")
+    assert 'data-gpi-preview-mode="workbench"' in preview
+    assert "window.EU_GUIDED_PI_WORKBENCH_PREVIEW" in workbench
+    assert "data-gpi-wb-query" in workbench
+    assert "data-gpi-wb-status" in workbench
+    assert "typed proposal" in workbench
+    assert "effect estimates" in workbench
+    assert ".gpi-wb" in css
+    assert ".patient-" not in css
+    assert ".cohort-" not in css
+    assert ".crossdb-" not in css
 
 
 def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
@@ -494,14 +555,18 @@ def test_complete_research_demo_renderer_escapes_untrusted_values() -> None:
     assert "&lt;script" in completed.stdout
 
 
-def test_research_artifact_renderer_rejects_attribute_xss_and_non_png_data_urls() -> None:
+def test_research_artifact_renderer_rejects_attribute_xss_and_non_png_data_urls() -> (
+    None
+):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
     subprocess.run(
         [
             node,
-            str(Path(__file__).resolve().parent / "js" / "agent_render_security.test.js"),
+            str(
+                Path(__file__).resolve().parent / "js" / "agent_render_security.test.js"
+            ),
             str(STATIC / "js" / "screens-agent-render.js"),
         ],
         check=True,
@@ -576,7 +641,9 @@ def test_assistant_message_renderer_makes_https_citations_clickable_and_safe() -
     assert "<em>journal</em>" in completed.stdout
 
 
-def test_literature_preview_distinguishes_auxiliary_steps_from_scientific_gaps() -> None:
+def test_literature_preview_distinguishes_auxiliary_steps_from_scientific_gaps() -> (
+    None
+):
     literature_owner = _read("js/screens-guided-pi-literature.js")
 
     assert "个科学决策已绑定" in literature_owner
@@ -584,7 +651,9 @@ def test_literature_preview_distinguishes_auxiliary_steps_from_scientific_gaps()
     assert "该科学决策没有绑定文献，需要审阅" in literature_owner
 
 
-def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox() -> None:
+def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox() -> (
+    None
+):
     preview = _read("js/screens-guided-pi-preview.js")
     assert "authority_class: 'workspace_artifact'" in preview
     assert "scientific_evidence: false" in preview
@@ -602,9 +671,9 @@ def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox()
 
 def test_workspace_sidecar_requires_digest_for_edit_and_teaches_safe_egress() -> None:
     sidecar = (NODE_APP / "src" / "main.mjs").read_text(encoding="utf-8")
-    skill = (
-        NODE_APP / "src" / "skills" / "web-prototype" / "SKILL.md"
-    ).read_text(encoding="utf-8")
+    skill = (NODE_APP / "src" / "skills" / "web-prototype" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
     assert sidecar.count("expected_sha256") >= 1
     assert "Create a new bounded artifact. Existing files must be changed" in sidecar
     assert "To change an existing file, read it first" in skill
@@ -614,7 +683,9 @@ def test_workspace_sidecar_requires_digest_for_edit_and_teaches_safe_egress() ->
     assert "llm_provider:" not in sidecar
 
 
-def test_workspace_security_workflow_covers_sidecar_and_browser_helper_dependencies() -> None:
+def test_workspace_security_workflow_covers_sidecar_and_browser_helper_dependencies() -> (
+    None
+):
     workflow = (
         STATIC.parents[3] / ".github" / "workflows" / "pi_workspace_security_ci.yml"
     ).read_text(encoding="utf-8")
@@ -626,4 +697,7 @@ def test_workspace_security_workflow_covers_sidecar_and_browser_helper_dependenc
     assert "node tests/js/agent_render_security.test.js" in workflow
     assert "src/easyicu/webserver/static/js/screens-agent-render.js" in workflow
     for sidecar in ("main.mjs", "event-projection.mjs", "shell-budget.mjs"):
-        assert f"node --check src/easyicu/webserver/pi_copilot/node_app/src/{sidecar}" in workflow
+        assert (
+            f"node --check src/easyicu/webserver/pi_copilot/node_app/src/{sidecar}"
+            in workflow
+        )

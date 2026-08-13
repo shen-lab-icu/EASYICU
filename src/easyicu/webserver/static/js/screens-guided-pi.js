@@ -434,6 +434,40 @@
       }
     });
     closeHistoryActivity(lastTimestamp);
+    const replay = Array.isArray(session && session.last_turn_events) ? session.last_turn_events : [];
+    if (replay.length) {
+      const replayStarted = timeMs(replay[0] && replay[0].at);
+      let replayActivity = messages.slice().reverse().find(row => row.role === 'activity' && !row.childJobId);
+      const isNewReplayActivity = !replayActivity;
+      if (!replayActivity) replayActivity = { id: 'saved-activity-' + replayStarted, role: 'activity', steps: [], expanded: false };
+      replayActivity.status = session.last_turn_status === 'running' ? 'running'
+        : (['failed', 'interrupted'].includes(String(session.last_turn_status || '')) ? 'error'
+          : (session.last_turn_status === 'cancelled' ? 'cancelled' : 'complete'));
+      replayActivity.startedAt = replayActivity.startedAt || replayStarted;
+      replayActivity.endedAt = timeMs(replay[replay.length - 1] && replay[replay.length - 1].at);
+      replay.forEach(event => {
+        const at = timeMs(event && event.at);
+        if (event.type === 'run_start') upsertActivityStep(replayActivity, { id: 'agent', kind: 'agent', status: 'complete', at });
+        else if (event.type === 'turn_start') upsertActivityStep(replayActivity, { id: 'turn-' + event.turn_index, kind: 'turn', turn: Number(event.turn_index || 0), status: 'running', at });
+        else if (event.type === 'turn_end') {
+          const turn = replayActivity.steps.find(item => item.id === 'turn-' + event.turn_index);
+          if (turn) turn.status = 'complete';
+        } else if (event.type === 'assistant_start') {
+          const phase = replayActivity.steps.filter(item => item.kind === 'assistant').length + 1;
+          upsertActivityStep(replayActivity, { id: 'assistant-' + phase, kind: 'assistant', phase, status: 'running', at });
+        } else if (event.type === 'message_end') {
+          const phase = replayActivity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
+          if (phase) phase.status = event.error_code ? 'error' : 'complete';
+        } else if (event.type === 'tool_start' || event.type === 'tool_progress') {
+          upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
+        } else if (event.type === 'tool_end') {
+          upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: event.is_error ? 'error' : 'complete', code: event.code || '', owner: event.owner || '', jobId: event.job_id || '', at, endedAt: at });
+        } else if (event.type === 'retry') upsertActivityStep(replayActivity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'complete', attempt: event.attempt, maxAttempts: event.max_attempts, at });
+        else if (event.type === 'compaction_start' || event.type === 'compaction_end') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: event.type === 'compaction_end' && !event.aborted ? 'complete' : 'running', at });
+      });
+      replayActivity.steps.forEach(step => { if (step.status === 'running' && replayActivity.status !== 'running') step.status = replayActivity.status === 'complete' ? 'complete' : 'error'; });
+      if (isNewReplayActivity && replayActivity.steps.length) messages.push(replayActivity);
+    }
     return messages.filter(row => row.text || row.role === 'activity');
   }
 
@@ -798,6 +832,7 @@
             </div>
             <span>${esc(model.id || (state.runtime && state.runtime.model) || 'model')}</span>
             <button class="btn sm gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 14)} ${tr('Full demo', '完整演示')}</button>
+            <button class="gpi-link" type="button" data-gpi-presentation-pin aria-pressed="${session.pinned_for_presentation ? 'true' : 'false'}">${session.pinned_for_presentation ? tr('Saved for presentation', '已保留演示') : tr('Save for presentation', '保留演示')}</button>
             <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
             <button class="gpi-link" type="button" data-gpi-new>${tr('New', '新会话')}</button>
             <button class="gpi-link" type="button" data-gpi-study-setup>${tr('Study setup', '研究配置')}</button>
@@ -1037,9 +1072,17 @@
       if (expectedProjectId !== projectId()) return;
       state.session = payload.session; state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || 'research';
+      (Array.isArray(state.session.archived_child_jobs) ? state.session.archived_child_jobs : []).forEach(hydrateProjectedJob);
+      const activeMessageJob = String(state.session.active_message_job_id || '').trim();
+      if (activeMessageJob) {
+        state.busy = true;
+        state.jobId = activeMessageJob;
+        watchJob(activeMessageJob);
+      }
       reconcileSettledSession();
       hydrateProjectedJob(state.workflow && state.workflow.active_job);
       rememberSession(sessionId); setShell('pi');
+      await loadWorkflow();
     } catch (error) { rememberSession(''); state.error = errorText(error); render(); }
   }
 
@@ -1169,6 +1212,7 @@
   }
   function closeSource() { if (state.source) { state.source.close(); state.source = null; } }
   function reconcileSettledSession() {
+    if (state.session && state.session.active_message_job_id) return;
     if (!state.session || state.session.streaming !== false || !state.busy) return;
     closeSource();
     state.busy = false;
@@ -1236,7 +1280,9 @@
       activity.status = failed ? (event.status === 'cancelled' ? 'cancelled' : 'error') : 'complete';
       activity.endedAt = Date.now();
       closeChildSource();
-      refreshSession(true)
+      archiveChildJob(jobId)
+        .catch(() => null)
+        .then(() => refreshSession(true))
         .then(async () => {
           if (state.session && sessionIsStale()) await rebind();
           await loadWorkflow();
@@ -1257,6 +1303,7 @@
     render();
   }
   function watchChildJob(jobId, code) {
+    if (state.childJobId === jobId && state.childSource) return;
     closeChildSource();
     state.childJobId = jobId;
     childActivity(jobId, code);
@@ -1321,6 +1368,7 @@
       const payload = await api().loadPiCopilotSession(state.session.session_id, projectId());
       state.session = payload.session;
       if (!preserveTimeline) state.messages = transcriptMessages(state.session);
+      (Array.isArray(state.session.archived_child_jobs) ? state.session.archived_child_jobs : []).forEach(hydrateProjectedJob);
       reconcileSettledSession();
     } catch (e) {}
   }
@@ -1334,6 +1382,10 @@
     const remembered = rememberedSession();
     if (remembered && state.sessions.some(row => row.session_id === remembered)) {
       await openSession(remembered);
+    } else if (state.sessions.length) {
+      // Recover the latest project conversation even on another browser/device
+      // where no local navigation hint exists.
+      await openSession(state.sessions[0].session_id);
     }
   }
 
@@ -1346,6 +1398,14 @@
       state.workflow = payload && payload.workflow ? payload.workflow : null;
       if (state.workflow && payload && payload.active_job) state.workflow.active_job = payload.active_job;
       hydrateProjectedJob(payload && payload.active_job);
+      const activeJob = payload && payload.active_job;
+      if (activeJob && activeJob.present && activeJob.status === 'running' && activeJob.job_id) {
+        const kind = String(activeJob.kind || '');
+        const code = /extract/i.test(kind)
+          ? 'easyicu_extraction_submitted'
+          : (/research|agent/i.test(kind) ? 'easyicu_full_run_submitted' : 'easyicu_run_submitted');
+        watchChildJob(String(activeJob.job_id), code);
+      }
     } catch (error) {
       if (expectedProjectId === projectId()) state.workflow = null;
     }
@@ -1551,6 +1611,33 @@
     } catch (error) { state.error = errorText(error); render(); }
   }
 
+  async function archiveChildJob(jobId) {
+    if (!state.session || !jobId || !api().archivePiCopilotChildJob) return null;
+    return api().archivePiCopilotChildJob(
+      state.session.session_id,
+      jobId,
+      { project_id: projectId() },
+    );
+  }
+
+  async function togglePresentationPin() {
+    if (!state.session || !api().pinPiCopilotPresentation) return;
+    try {
+      const pinned = !Boolean(state.session.pinned_for_presentation);
+      const payload = await api().pinPiCopilotPresentation(
+        state.session.session_id,
+        { project_id: projectId(), pinned },
+      );
+      state.session.pinned_for_presentation = Boolean(
+        payload && payload.session && payload.session.pinned_for_presentation,
+      );
+      state.error = '';
+    } catch (error) {
+      state.error = errorText(error);
+    }
+    render();
+  }
+
   function wire() {
     if (!state.host) return;
     state.host.addEventListener('click', event => {
@@ -1599,6 +1686,7 @@
       if (event.target.closest('[data-gpi-send]')) { sendMessage(); return; }
       if (event.target.closest('[data-gpi-stop]')) { stopMessage(); return; }
       if (event.target.closest('[data-gpi-rebind]')) { rebind(); return; }
+      if (event.target.closest('[data-gpi-presentation-pin]')) { togglePresentationPin(); return; }
       if (event.target.closest('[data-gpi-config]')) { state.showSetup = true; state.error = ''; render(); return; }
       if (event.target.closest('[data-gpi-cancel-setup]')) { state.showSetup = false; state.error = ''; render(); return; }
       if (event.target.closest('[data-gpi-new]')) { state.session = null; state.messages = []; rememberSession(''); render(); }

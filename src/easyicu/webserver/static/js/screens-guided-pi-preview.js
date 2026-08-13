@@ -33,8 +33,6 @@
       const artifact = String(value.artifact || '').trim();
       if (!/^[A-Za-z0-9_.-]+\.json$/.test(artifact) || artifact.length > 160) return null;
       if (!demo || typeof demo.hasArtifact !== 'function' || !demo.hasArtifact(artifact)) return null;
-      const authorityClass = value.authority_class === 'literature_method'
-        ? 'literature_method' : 'literature_retrieval_candidate';
       return {
         kind: 'demo_artifact', artifact,
         run_id: String(value.run_id || demo.sourceRunId || '').slice(0, 160),
@@ -44,6 +42,8 @@
     }
     if (value.kind === 'literature_source') {
       const literature = window.EU_GUIDED_PI_LITERATURE;
+      const authorityClass = value.authority_class === 'literature_method'
+        ? 'literature_method' : 'literature_retrieval_candidate';
       const url = literature && typeof literature.safeUrl === 'function'
         ? literature.safeUrl(value.url) : '';
       const title = String(value.title || value.label || '').trim().slice(0, 500);
@@ -176,6 +176,7 @@
     setAsideOpen(true);
     const tabs = isLiteratureSource() ? '' : isStructuredArtifact() ? `
       <div class="gpi-preview-tabs" role="tablist" aria-label="${tr('Artifact views', '产物视图')}">
+        ${isDataPackageReview() ? `<button type="button" role="tab" data-gpi-preview-mode="workbench" aria-selected="${state.mode === 'workbench'}">${icon('grid', 14)} ${tr('Workbench', '数据工作台')}</button>` : ''}
         <button type="button" role="tab" data-gpi-preview-mode="structured" aria-selected="${state.mode === 'structured'}">${icon('list', 14)} ${tr('Readable', '可读视图')}</button>
         <button type="button" role="tab" data-gpi-preview-mode="code" aria-selected="${state.mode === 'code'}">${icon('file', 14)} JSON</button>
       </div>` : isHtml() ? `
@@ -197,6 +198,8 @@
       body = `<iframe class="gpi-preview-frame gpi-preview-document-frame" src="${esc(previewUrl())}" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`;
     } else if (state.mode === 'web' && isHtml()) {
       body = `<iframe class="gpi-preview-frame" src="${esc(previewUrl())}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`;
+    } else if (state.mode === 'workbench' && isDataPackageReview()) {
+      body = `<div data-gpi-workbench-mount></div>`;
     } else if (state.mode === 'structured' && isStructuredArtifact()) {
       const renderer = window.AGENT_RENDER;
       const literature = window.EU_GUIDED_PI_LITERATURE;
@@ -238,6 +241,11 @@
       ${provenance}
       ${tabs}
       <div class="gpi-preview-body">${body}</div>`;
+    if (state.mode === 'workbench' && isDataPackageReview() && !state.loading && !state.error) {
+      const owner = window.EU_GUIDED_PI_WORKBENCH_PREVIEW;
+      const mount = state.host.querySelector('[data-gpi-workbench-mount]');
+      if (owner && typeof owner.mount === 'function') owner.mount(mount, state.payload || {});
+    }
   }
   async function loadResource() {
     if (!state.resource || isLiteratureSource() || isResearchDocument() || (!state.projectId && !isDemoArtifact())) return;
@@ -290,7 +298,7 @@
     state.payload = null;
     state.governance = null;
     state.error = '';
-    state.mode = safe.kind === 'research_document' ? 'document' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' || safe.kind === 'data_package_review' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code')));
+    state.mode = safe.kind === 'research_document' ? 'document' : (safe.kind === 'data_package_review' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
     render();
     if (state.mode !== 'web' && state.mode !== 'source' && state.mode !== 'document') loadResource();
   }
@@ -309,7 +317,7 @@
       const tab = event.target.closest('[data-gpi-preview-mode]');
       if (!tab || !state.resource) return;
       const requested = tab.dataset.gpiPreviewMode;
-      const mode = requested === 'web' ? 'web' : (requested === 'structured' ? 'structured' : 'code');
+      const mode = requested === 'web' ? 'web' : (requested === 'workbench' ? 'workbench' : (requested === 'structured' ? 'structured' : 'code'));
       if (mode === state.mode) return;
       state.mode = mode;
       render();

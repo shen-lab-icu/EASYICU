@@ -123,6 +123,14 @@ class PiSessionRecord(BaseModel):
         default=None,
         validation_alias=AliasChoices("last_message_job_id", "last_job_id"),
     )
+    # Process reconciliation and retention metadata only. Browser-safe lifecycle
+    # replay lives in PiConversationReplayStore, outside this bounded index.
+    active_message_job_id: Optional[str] = None
+    last_turn_status: Optional[
+        Literal["running", "done", "failed", "cancelled", "interrupted"]
+    ] = None
+    last_turn_allowed_actions: list[str] = Field(default_factory=list, max_length=16)
+    pinned_for_presentation: bool = False
 
 
 class PiToolResult(BaseModel):
@@ -198,6 +206,7 @@ class HostTurnGrant:
                 action for action, count in self._remaining.items() if count > 0
             )
             return one_use | self._capabilities
+
 
 AuthorityValidator = Callable[[AuthorityBinding], Dict[str, Any]]
 

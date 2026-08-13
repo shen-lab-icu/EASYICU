@@ -130,6 +130,13 @@ class PiProjectRequest(BaseModel):
     project_id: ShortText
 
 
+class PiPresentationPinRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    pinned: StrictBool = True
+
+
 class PiProjectInitializeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -412,6 +419,37 @@ def post_pi_copilot_rebind(session_id: ShortText, body: PiProjectRequest) -> dic
         return get_pi_copilot_service().rebind_session(
             session_id,
             project_id=body.project_id,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/presentation")
+def post_pi_copilot_presentation_pin(
+    session_id: ShortText,
+    body: PiPresentationPinRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().set_presentation_pin(
+            session_id,
+            project_id=body.project_id,
+            pinned=body.pinned,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/child-jobs/{job_id}/archive")
+def post_pi_copilot_child_job_archive(
+    session_id: ShortText,
+    job_id: ShortText,
+    body: PiProjectRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().archive_child_job(
+            session_id,
+            project_id=body.project_id,
+            job_id=job_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

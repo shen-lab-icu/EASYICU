@@ -95,6 +95,12 @@ class FakeService:
     def rebind_session(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
+    def set_presentation_pin(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
+    def archive_child_job(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
     def abort_session(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
@@ -181,6 +187,7 @@ def test_project_initialization_is_an_explicit_typed_mutation(monkeypatch) -> No
         "project_id": "guided-project-2",
         "title": "Existing study",
         "confirm_initialization": False,
+        "binding_receipt": None,
     }
     assert (
         client.post(
@@ -238,9 +245,7 @@ def test_project_workflow_route_is_project_scoped(monkeypatch) -> None:
     monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
     client = TestClient(app)
 
-    response = client.get(
-        "/api/copilot/pi/projects/guided-project-2/workflow"
-    )
+    response = client.get("/api/copilot/pi/projects/guided-project-2/workflow")
     assert response.status_code == 200
     assert response.json()["received"] == {"project_id": "guided-project-2"}
     assert response.json()["workflow"]["current_stage"] == "setup"
@@ -404,6 +409,36 @@ def test_all_session_mutations_require_project_scope(monkeypatch) -> None:
     assert aborted.json()["received"] == {
         "project_id": "guided-project-1",
         "message_job_id": "job-1",
+    }
+
+
+def test_presentation_and_child_replay_routes_are_project_scoped(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    pin_path = "/api/copilot/pi/sessions/pi-test/presentation"
+    child_path = "/api/copilot/pi/sessions/pi-test/child-jobs/job-child-1/archive"
+    assert client.post(pin_path, json={"pinned": True}).status_code == 422
+    assert client.post(child_path, json={}).status_code == 422
+
+    pinned = client.post(
+        pin_path,
+        json={"project_id": "guided-project-2", "pinned": True},
+    )
+    archived = client.post(
+        child_path,
+        json={"project_id": "guided-project-2"},
+    )
+    assert pinned.status_code == 200
+    assert pinned.json()["received"] == {
+        "project_id": "guided-project-2",
+        "pinned": True,
+    }
+    assert archived.status_code == 200
+    assert archived.json()["received"] == {
+        "project_id": "guided-project-2",
+        "job_id": "job-child-1",
     }
 
 
