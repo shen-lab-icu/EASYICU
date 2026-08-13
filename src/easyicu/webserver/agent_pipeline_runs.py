@@ -2286,6 +2286,12 @@ def make_research_pipeline_run_runner(
                 extension_activation=user_extension_activation,
                 enable_reproducibility_envelope=True,
                 evidence_enforcement_mode="strict",
+                # Strict manuscript enforcement can only bind the host's
+                # typed ScientificClaim placeholders when the writer receives
+                # the claim-aware v2 evidence digest.  The primary-only v1
+                # digest omits that authority and would make an otherwise
+                # valid Web analysis fail at the writing boundary.
+                writer_digest_widened=True,
                 require_human_plan_review=True,
                 required_primary_cohort_selection_mode=(
                     _primary_cohort_selection_mode(study)
