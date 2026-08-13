@@ -17,7 +17,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -181,6 +181,17 @@ def resolve_column(
         for lower, original in lookup.items():
             if _appears_as_token(key, lower):
                 return original
+    return None
+
+
+def first_exact_column(
+    columns: Mapping[str, str], candidates: Sequence[str]
+) -> Optional[str]:
+    """Return the first exact normalized column named by the caller."""
+
+    for candidate in candidates:
+        if candidate in columns:
+            return columns[candidate]
     return None
 
 

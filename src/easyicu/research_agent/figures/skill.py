@@ -31,6 +31,12 @@ from .publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from .base import first_exact_column as _first_col
+from .display_labels import display_label as _display_label
+from .strata import (
+    normalise_strata_frame as _normalise_strata_frame,
+    strata_score_label as _strata_score_label,
+)
 from . import RenderedFigure, render_family_figure
 from ..robustness.panel import RobustnessPanel, load_robustness_panel
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
@@ -3104,199 +3110,6 @@ def _association_axis_metadata(frame: pd.DataFrame) -> Dict[str, Any]:
     return _association_axis_from_token("")
 
 
-def _normalise_strata_frame(
-    frame: pd.DataFrame,
-    *,
-    display_labels: Optional[Mapping[str, str]] = None,
-) -> pd.DataFrame:
-    if frame.empty:
-        return pd.DataFrame(columns=["score", "rate"])
-    cols = {str(c).lower(): c for c in frame.columns}
-    score_col = _first_col(
-        cols,
-        [
-            "score",
-            "stratum",
-            "severity_score",
-            "risk_score",
-            "sofa2",
-            "sofa_2",
-            "gcs",
-            "gcs_score",
-            "kdigo",
-            "kdigo_stage",
-            "exposure",
-            "exposure_label",
-            "exposure_group",
-            "group",
-            "group_label",
-            "status",
-            "category",
-            "level",
-            "sepsis3",
-            "sepsis_3",
-            "exposure_status",
-        ],
-    )
-    rate_col = _first_col(
-        cols,
-        [
-            "death_rate",
-            "mortality_rate",
-            "outcome_rate",
-            "outcome_risk",
-            "event_rate",
-            "outcome_rate_pct",
-            "death_pct",
-            "mortality_pct",
-            "event_pct",
-            "outcome_pct",
-            "incidence_proportion",
-            "incidence_pct",
-            "risk",
-            "rate",
-            "death_risk",
-            "mortality_risk",
-        ],
-    )
-    if score_col is None:
-        # Exposure/severity strata are often named after the predictor
-        # (``lactate_group``, ``sofa2_stratum``, ``lactate_quartile``),
-        # so an exact-name list can never enumerate them. Fall back to the
-        # first column whose name ends in a grouping suffix, preferring a
-        # sibling ``*_order`` column's source when present. General on
-        # purpose — do NOT add case-specific names like ``lactate_group``.
-        _GROUP_SUFFIXES = (
-            "_group",
-            "_stratum",
-            "_strata",
-            "_bin",
-            "_band",
-            "_category",
-            "_class",
-            "_quartile",
-            "_quintile",
-            "_decile",
-            "_tertile",
-            "_level",
-        )
-        for name, col in cols.items():
-            if name.endswith(_GROUP_SUFFIXES) and not name.endswith("_order"):
-                score_col = col
-                break
-    n_col = _first_col(
-        cols,
-        ["n", "count", "n_total", "n_rows", "outcome_denominator"],
-    )
-    if score_col is None or rate_col is None:
-        return pd.DataFrame(columns=["score", "rate"])
-    working = frame.copy()
-    row_role_col = cols.get("row_role")
-    if row_role_col is not None:
-        # Deterministic distribution tables carry one overall audit row beside
-        # the actual exposure strata.  Overall is a denominator check, not a
-        # third exposure group, and must never become a blank/Nan category in a
-        # publication panel.
-        row_roles = working[row_role_col].astype(str).str.strip().str.casefold()
-        working = working.loc[
-            ~row_roles.isin({"overall", "total", "summary"})
-        ].copy()
-    raw_score = working[score_col]
-    numeric_score = pd.to_numeric(raw_score, errors="coerce")
-    semantic_category = _score_column_is_semantic_category(score_col)
-    score_is_numeric = bool(numeric_score.notna().all()) and not semantic_category
-    score_values = (
-        numeric_score
-        if score_is_numeric
-        else raw_score.map(
-            lambda value: _score_category_label(
-                score_col, value, display_labels=display_labels
-            )
-        )
-    )
-    score_order = (
-        numeric_score
-        if numeric_score.notna().any()
-        else pd.Series(range(len(working)), index=working.index)
-    )
-    out = pd.DataFrame(
-        {
-            "score": score_values,
-            "rate": pd.to_numeric(working[rate_col], errors="coerce"),
-            "_score_order": score_order,
-        }
-    ).dropna(subset=["score", "rate"])
-    if n_col is not None:
-        out["n"] = pd.to_numeric(working.loc[out.index, n_col], errors="coerce")
-    if not out.empty and out["rate"].max() > 1.0:
-        out["rate"] = out["rate"] / 100.0
-    result = (
-        out.sort_values("score").drop(columns=["_score_order"]).reset_index(drop=True)
-        if score_is_numeric
-        else out.sort_values("_score_order")
-        .drop(columns=["_score_order"])
-        .reset_index(drop=True)
-    )
-    result.attrs["score_label"] = _score_axis_label(
-        score_col, display_labels=display_labels
-    )
-    result.attrs["score_is_numeric"] = score_is_numeric
-    return result
-
-
-def _score_column_is_semantic_category(column: Any) -> bool:
-    normalized = str(column or "").strip().lower().replace("-", "_").replace(" ", "_")
-    return normalized in {
-        "exposure",
-        "exposure_level",
-        "exposure_label",
-        "group",
-        "group_label",
-        "status",
-        "category",
-        "level",
-        "sepsis3",
-        "sepsis_3",
-        "exposure_status",
-    }
-
-
-def _score_category_label(
-    column: Any,
-    value: Any,
-    *,
-    display_labels: Optional[Mapping[str, str]] = None,
-) -> str:
-    normalized_col = (
-        str(column or "").strip().lower().replace("-", "_").replace(" ", "_")
-    )
-    state = _binary_state_label(value)
-    column_label = _display_label(column, display_labels)
-    value_label = _display_label(value, display_labels)
-    if state is not None and _label_lookup(column, display_labels) is not None:
-        return f"{column_label} {state}"
-    if normalized_col in {
-        "exposure",
-        "exposure_level",
-        "exposure_status",
-    } and state is not None:
-        return "Exposed" if state == "positive" else "Unexposed"
-    if normalized_col == "status" and state is not None:
-        return state.capitalize()
-    if normalized_col in {"group", "group_label"}:
-        return f"Group {value_label}"
-    return value_label
-
-
-def _binary_state_label(value: Any) -> Optional[str]:
-    token = str(value).strip().lower()
-    if token in {"1", "1.0", "true", "yes", "y", "positive", "present"}:
-        return "positive"
-    if token in {"0", "0.0", "false", "no", "n", "negative", "absent"}:
-        return "negative"
-    return None
-
-
 def _normalise_missingness_frame(
     frame: pd.DataFrame,
     *,
@@ -3460,52 +3273,6 @@ def _draw_strata_panel(
     ax.set_title(f"Observed outcome by {score_label}", loc="left", pad=3)
 
 
-def _strata_score_label(frame: pd.DataFrame) -> str:
-    label = frame.attrs.get("score_label")
-    if label:
-        return str(label)
-    return "Score"
-
-
-def _score_axis_label(
-    column: Any, *, display_labels: Optional[Mapping[str, str]] = None
-) -> str:
-    raw = str(column or "").strip()
-    normalized = raw.lower().replace("-", "_").replace(" ", "_")
-    declared = _label_lookup(raw, display_labels)
-    if declared is not None:
-        if _score_column_is_semantic_category(column) and not any(
-            word in declared.casefold()
-            for word in ("status", "category", "group", "stratum")
-        ):
-            return f"{declared} status"
-        return declared
-    mapping = {
-        "score": "Score",
-        "stratum": "Stratum",
-        "severity_score": "Severity score",
-        "risk_score": "Risk score",
-        "exposure": "Exposure group",
-        "exposure_level": "Exposure group",
-        "exposure_label": "Exposure group",
-        "group": "Group",
-        "group_label": "Group",
-        "status": "Status",
-        "category": "Category",
-        "level": "Level",
-        "exposure_status": "Exposure status",
-    }
-    if normalized in mapping:
-        return mapping[normalized]
-    pretty = _display_label(raw)
-    if any(
-        word in pretty.lower()
-        for word in ("score", "stratum", "stage", "group", "status", "category")
-    ):
-        return pretty
-    return f"{pretty} score"
-
-
 def _draw_missingness_panel(
     ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str]
 ) -> None:
@@ -3590,60 +3357,6 @@ def _robustness_axis_label(axis: Any) -> str:
         "unspecified": "Unspecified",
     }
     return mapping.get(str(axis or "").strip().lower(), _display_label(axis))
-
-
-def _normalise_display_key(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(value or "").casefold()).strip("_")
-
-
-def _label_lookup(
-    value: Any, display_labels: Optional[Mapping[str, str]] = None
-) -> Optional[str]:
-    """Return the Planner-owned label for an exact/normalized identifier.
-
-    ``AnalysisPlan`` rejects conflicting normalized keys.  This renderer may
-    therefore accept punctuation/case variants without inventing endpoint or
-    measurement semantics of its own.
-    """
-
-    if not display_labels:
-        return None
-    raw = str(value or "").strip()
-    exact = display_labels.get(raw)
-    if exact is not None and str(exact).strip():
-        return str(exact).strip()
-    normalized = _normalise_display_key(raw)
-    if not normalized:
-        return None
-    for key, label in display_labels.items():
-        if _normalise_display_key(key) == normalized and str(label).strip():
-            return str(label).strip()
-    return None
-
-
-def _display_label(
-    value: Any, display_labels: Optional[Mapping[str, str]] = None
-) -> str:
-    """Render a declared label, otherwise apply case-neutral title casing.
-
-    The fallback is deliberately mechanical: a name such as ``death`` must not
-    be silently reinterpreted as ICU, hospital, or fixed-day mortality.
-    """
-
-    declared = _label_lookup(value, display_labels)
-    if declared is not None:
-        return declared
-    token = str(value or "").strip()
-    if not token:
-        return "Value"
-    return re.sub(r"[_-]+", " ", token).strip().title()
-
-
-def _first_col(cols: Dict[str, str], candidates: Sequence[str]) -> Optional[str]:
-    for candidate in candidates:
-        if candidate in cols:
-            return cols[candidate]
-    return None
 
 
 __all__ = ["PublicationFigureSkill", "PublicationFigureSkillResult"]
