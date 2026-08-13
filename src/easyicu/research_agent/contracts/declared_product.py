@@ -39,8 +39,12 @@ from .product_files import (
     descriptor_path_is_compatible as _descriptor_path_is_compatible,
     file_kinds as _file_kinds,
 )
+from .product_identity import (
+    canonical_product_kind as _canonical_kind,
+    normalize_product_token as _normalise,
+    typed_product,
+)
 
-_FIGURE_KINDS = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
 #: Terminal step statuses.  Host-issued spellings must be listed explicitly:
 #: the ``fail_``/``failed_`` prefix fallback in :func:`is_failed_step_status`
 #: only covers generated-code spellings, so a host status such as
@@ -257,10 +261,6 @@ _OPERATIONAL_SUBJECT_SUFFIXES = frozenset(
 # were not installed by an authorized sealed renderer, so excluding the digest
 # map here cannot let generated code claim renderer authority.
 _HOST_RECEIPT_SUBTREES = frozenset({"sealed_renderer_parent_digests"})
-
-
-def _normalise(value: object) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
 
 
 def _assignment_artifact_frame(
@@ -645,40 +645,6 @@ def typed_product_binding_contract(
         "authoritative_cohort_sha256": _sha256_file(Path(authoritative_cohort_path)),
         "models": bound_models,
     }
-
-
-def _canonical_kind(value: object) -> str:
-    kind = _normalise(value)
-    if kind in _FIGURE_KINDS:
-        return "figure"
-    # A cohort is a scientifically scoped tabular dataset, not a distinct
-    # physical evidence class.  Canonicalising the Planner-facing alias here
-    # keeps plan DAG construction, declared-output validation, and runtime
-    # evidence binding on the same identity.  The alias never chooses or
-    # modifies cohort membership; it only closes the typed product boundary.
-    if kind == "cohort":
-        return "dataset"
-    if kind in {"metric", "statistics"}:
-        return "statistic"
-    return kind
-
-
-def typed_product(value: object) -> tuple[str, str] | None:
-    """Return the shared canonical identity for a ``kind:product`` token."""
-
-    kind, separator, product = str(value or "").strip().partition(":")
-    if not separator:
-        return None
-    canonical_kind = _canonical_kind(kind)
-    product_name = _normalise(Path(product).name)
-    for suffix in sorted(_KNOWN_FILE_SUFFIXES, key=len, reverse=True):
-        normalised_suffix = _normalise(suffix)
-        if product_name.endswith(f"_{normalised_suffix}"):
-            product_name = product_name[: -(len(normalised_suffix) + 1)]
-            break
-    if not canonical_kind or not product_name:
-        return None
-    return canonical_kind, product_name
 
 
 _PRIMARY_ANALYSIS_COHORT_METHODS = frozenset(
