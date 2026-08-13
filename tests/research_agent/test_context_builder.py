@@ -11,6 +11,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from easyicu.research_agent.research_context.outbound import (
+    outbound_safe_context_payload,
+)
+
 
 def test_wide_companion_columns_inherit_exact_base_concept_metadata(ra, monkeypatch):
     from easyicu.research_agent.research_context import builder as context_module
@@ -48,6 +52,63 @@ def test_wide_companion_columns_inherit_exact_base_concept_metadata(ra, monkeypa
         assert "Treat structural absence as event-negative." in (
             descriptor.clinical_caveats
         )
+
+
+def test_clinical_contract_projects_definition_anchor_separately_from_window(
+    ra, monkeypatch
+):
+    from easyicu.research_agent.research_context import builder as context_module
+
+    monkeypatch.setattr(
+        context_module,
+        "_safe_get_concept_info",
+        lambda name: (
+            {
+                "name": "sep3",
+                "description": "canonical Sepsis-3 criterion",
+                "clinical_contract_id": "sepsis3_2016",
+            }
+            if name == "sep3"
+            else None
+        ),
+    )
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "sep3_max": [0, 1, 1],
+        }
+    )
+
+    context = ra.build_research_context(
+        research_question="Estimate Sepsis-3 prevalence.",
+        cohort=frame,
+        cohort_name="synthetic",
+        database="synthetic",
+    )
+
+    descriptor = context.variable("sep3_max")
+    assert descriptor is not None
+    assert descriptor.clinical_definition is not None
+    assert descriptor.clinical_definition.contract_id == "sepsis3_2016"
+    assert (
+        descriptor.clinical_definition.definition_time_anchor
+        == "suspected_infection_onset"
+    )
+    assert descriptor.clinical_definition.database_conformance["miiv"] == (
+        "mapping_only"
+    )
+    projected = outbound_safe_context_payload(context)
+    projected_definition = next(
+        item["clinical_definition"]
+        for item in projected["variables"]
+        if item["name"] == "sep3_max"
+    )
+    assert projected_definition["definition_time_anchor"] == (
+        "suspected_infection_onset"
+    )
+    assert projected_definition["database_conformance"]["miiv"] == (
+        "mapping_only"
+    )
 
 
 def test_wide_concept_resolution_does_not_fuzzy_match_unknown_columns(
@@ -360,7 +421,7 @@ def test_default_time_windows_attached(ra):
     assert {"first_24h", "first_6h", "full_stay"} <= names
 
 
-def test_target_outcome_semantics_are_enriched_from_question(ra):
+def test_owner_endpoint_semantics_are_not_overwritten_by_question(ra):
     df = pd.DataFrame(
         {
             "stay_id": [1, 2, 3, 4],
@@ -378,11 +439,33 @@ def test_target_outcome_semantics_are_enriched_from_question(ra):
     death = ctx.variable("death")
     assert death is not None
     assert death.description is not None
-    assert "ICU mortality" in death.description
-    assert death.source_concept == "icu_mortality"
+    assert death.description == "in hospital mortality"
+    assert death.source_concept == "death"
     assert any(
-        "explicitly treated as ICU mortality" in note for note in death.clinical_caveats
+        "Endpoint-definition conflict" in note for note in death.clinical_caveats
     )
+
+
+def test_chinese_hospital_mortality_matches_owner_endpoint_semantics(ra):
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "sep3": [0, 1, 0, 1],
+            "death": [0, 1, 0, 1],
+        }
+    )
+    ctx = ra.build_research_context(
+        research_question="Sepsis-3 与院内死亡是否存在关联？",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="death",
+    )
+    death = ctx.variable("death")
+    assert death is not None
+    assert death.description == "in hospital mortality"
+    assert death.source_concept == "death"
+    assert any("agrees with the requested hospital mortality" in note for note in death.clinical_caveats)
 
 
 def test_non_mortality_target_outcomes_receive_explicit_semantics(ra):
@@ -404,8 +487,8 @@ def test_non_mortality_target_outcomes_receive_explicit_semantics(ra):
     assert los is not None
     assert los.role.value == "outcome"
     assert los.description is not None
-    assert "Length-of-stay" in los.description or "length-of-stay" in los.description
-    assert los.source_concept == "length_of_stay"
+    assert "length of stay" in los.description.lower()
+    assert los.source_concept == "los_icu"
     assert any(
         "Do not convert length of stay" in note for note in los.cross_database_notes
     )
@@ -455,8 +538,13 @@ def test_survival_question_marks_target_as_time_to_event_endpoint(ra):
     )
     death = ctx.variable("death")
     assert death is not None
-    assert death.source_concept == "time_to_event_endpoint"
-    assert any("time-to-event endpoint" in note for note in death.clinical_caveats)
+    # The question cannot relabel the physical ``death`` concept (hospital
+    # mortality) into a complete event-time endpoint.  A binary event plus a
+    # convenient follow-up column still needs an owner-issued time-zero and
+    # censoring contract, so this request must surface a conflict.
+    assert death.source_concept == "death"
+    assert death.description == "in hospital mortality"
+    assert any("Endpoint-definition conflict" in note for note in death.clinical_caveats)
 
 
 def test_naive_context_strips_icu_metadata_and_preferences(ra):

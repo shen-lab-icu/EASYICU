@@ -113,6 +113,39 @@ def test_single_typed_measurement_audit_selects_deterministic_renderer(tmp_path:
     assert selection is not None
     assert selection.analysis_kind == "measurement_missingness_figure"
     assert selection.consumed_input_keys == (MEASUREMENT_MISSINGNESS_FIGURE_INPUT,)
+    assert selection.host_sealed_renderer is True
+
+
+def test_legacy_measurement_product_label_selects_the_same_host_renderer(
+    tmp_path: Path,
+) -> None:
+    input_key = "table:measurement_missingness"
+    step = _step().model_copy(
+        update={
+            "inputs": [input_key],
+            "input_consumption_contracts": [
+                ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
+            ],
+        }
+    )
+    binding, _frame = _binding(tmp_path)
+    binding["product"] = "measurement_missingness"
+    binding["identity_row"] = {
+        **binding["identity_row"],
+        "input_key": input_key,
+        "product": "measurement_missingness",
+    }
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Audit data quality.", steps=[step]),
+        resolved_bindings={input_key: binding},
+    )
+
+    assert selection is not None
+    assert selection.analysis_kind == "measurement_missingness_figure"
+    assert selection.consumed_input_keys == (input_key,)
+    assert f"input_key={input_key!r}" in selection.code
 
 
 def test_single_typed_measurement_audit_preserves_physical_parent_lineage(

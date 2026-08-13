@@ -29,6 +29,7 @@ from easyicu.research_agent.planning.method_literature import (
     method_literature_citations,
     method_literature_digest,
     method_literature_pack,
+    method_binding_support,
 )
 from easyicu.research_agent.schema import ResearchContext
 
@@ -75,6 +76,7 @@ def test_an_enabled_source_still_gets_a_real_prisma_flow() -> None:
     assert bundle.search_provenance is not None
     assert bundle.search_provenance.search_conducted is True
     assert "pubmed" in bundle.search_provenance.sources_enabled
+    assert bundle.search_provenance.search_queries["pubmed"]
     assert isinstance(bundle.prisma, dict)
     assert set(bundle.prisma) >= {"identified", "screened", "included"}
 
@@ -99,17 +101,49 @@ def test_a_source_that_returns_nothing_is_not_recorded_as_returning() -> None:
 
 
 def test_digest_bound_web_search_seed_is_available_to_preplan_planning() -> None:
+    context = _context(
+        research_question=(
+            "Is peak lactate during the first 24 ICU hours associated with "
+            "hospital mortality?"
+        ),
+        variables=[
+            {
+                "name": "lact_max",
+                "description": "lactate",
+                "role": "lab",
+                "dtype": "float64",
+                "source_concept": "lact",
+                "analysis_window": "icu_admission[0,24]h",
+            },
+            {
+                "name": "death",
+                "description": "hospital mortality",
+                "role": "outcome",
+                "dtype": "int64",
+                "source_concept": "hospital_mortality",
+            },
+        ],
+        primary_exposure="lact_max",
+        target_outcome="death",
+    )
     seed = LiteratureBundle.model_validate(
         {
             "research_question": "Question",
             "citations": [
                 {
-                    "key": "idea_pubmed_26903338",
-                    "title": "The Third International Consensus Definitions for Sepsis and Septic Shock",
-                    "year": "2016",
-                    "venue": "JAMA",
-                    "pmid": "26903338",
-                    "url": "https://pubmed.ncbi.nlm.nih.gov/26903338/",
+                    "key": "idea_pubmed_lactate_mortality_2024",
+                    "title": (
+                        "Early lactate and hospital mortality in intensive care"
+                    ),
+                    "year": "2024",
+                    "venue": "Critical Care",
+                    "pmid": "12345678",
+                    "url": "https://pubmed.ncbi.nlm.nih.gov/12345678/",
+                    "relevance": (
+                        "Source excerpt: In adult ICU patients, peak lactate "
+                        "during the first 24 hours was evaluated for association "
+                        "with in-hospital mortality."
+                    ),
                 }
             ],
             "prisma": {
@@ -123,19 +157,105 @@ def test_digest_bound_web_search_seed_is_available_to_preplan_planning() -> None
                 "curated_seed_count": 0,
                 "sources_enabled": ["idea_mining_pubmed"],
                 "sources_returning": ["idea_mining_pubmed"],
+                "search_queries": {
+                    "idea_mining_pubmed": [
+                        '"lactate"[Title/Abstract] AND "hospital mortality"[Title/Abstract]'
+                    ]
+                },
+                "record_queries": {
+                    "idea_pubmed_lactate_mortality_2024": [
+                        '"lactate"[Title/Abstract] AND "hospital mortality"[Title/Abstract]'
+                    ]
+                },
                 "search_conducted": True,
+                "searched_at": "2026-08-12T12:00:00+00:00",
                 "note": "Digest-bound Web search.",
             },
+            "screening_decisions": [
+                {
+                    "citation_key": "idea_pubmed_lactate_mortality_2024",
+                    "source": "idea_mining_pubmed",
+                    "disposition": "exclude",
+                    "evidence_role": "related_context",
+                    "rationale": (
+                        "Upstream Idea-level screen is provisional; the exact "
+                        "ResearchContext must decide comparator authority."
+                    ),
+                }
+            ],
+        }
+    )
+
+    bundle = build_preplan_literature_bundle(context, bound_seed=seed)
+
+    assert "idea_pubmed_lactate_mortality_2024" in {
+        row.key for row in bundle.citations
+    }
+    decision = next(
+        row
+        for row in bundle.screening_decisions
+        if row.citation_key == "idea_pubmed_lactate_mortality_2024"
+    )
+    assert decision.disposition == "include"
+    assert decision.evidence_role == "direct_comparator"
+    assert bundle.search_provenance is not None
+    assert bundle.search_provenance.search_conducted is True
+    assert "idea_mining_pubmed" in bundle.search_provenance.sources_enabled
+    assert bundle.search_provenance.search_queries["idea_mining_pubmed"]
+    assert (
+        decision.query
+        == '"lactate"[Title/Abstract] AND "hospital mortality"[Title/Abstract]'
+    )
+    assert bundle.prisma is not None
+    assert bundle.prisma["identified"] == 1
+    assert bundle.prisma["included"] == 1
+
+
+def test_bound_seed_upstream_include_cannot_promote_an_irrelevant_record() -> None:
+    seed = LiteratureBundle.model_validate(
+        {
+            "research_question": "Broad idea",
+            "citations": [
+                {
+                    "key": "irrelevant_but_premarked",
+                    "title": "Nutrition in postoperative wards",
+                    "year": "2025",
+                    "relevance": (
+                        "Source excerpt: Adults were enrolled after elective surgery."
+                    ),
+                }
+            ],
+            "search_provenance": {
+                "curated_seed_count": 0,
+                "sources_enabled": ["idea_mining_pubmed"],
+                "sources_returning": ["idea_mining_pubmed"],
+                "search_queries": {"idea_mining_pubmed": ["broad query"]},
+                "search_conducted": True,
+                "searched_at": "2026-08-12T12:00:00+00:00",
+            },
+            "screening_decisions": [
+                {
+                    "citation_key": "irrelevant_but_premarked",
+                    "source": "idea_mining_pubmed",
+                    "disposition": "include",
+                    "evidence_role": "direct_comparator",
+                    "rationale": "Provisional upstream label.",
+                }
+            ],
         }
     )
 
     bundle = build_preplan_literature_bundle(_context(), bound_seed=seed)
 
-    assert "idea_pubmed_26903338" in {row.key for row in bundle.citations}
-    assert bundle.search_provenance is not None
-    assert bundle.search_provenance.search_conducted is True
-    assert "idea_mining_pubmed" in bundle.search_provenance.sources_enabled
-    assert bundle.prisma is not None
+    assert "irrelevant_but_premarked" in {
+        row.key for row in bundle.citations
+    }
+    decision = next(
+        row
+        for row in bundle.screening_decisions
+        if row.citation_key == "irrelevant_but_premarked"
+    )
+    assert decision.disposition == "exclude"
 
 
 def test_the_methodology_layer_reaches_every_study() -> None:
@@ -228,6 +348,21 @@ def test_sources_expose_only_the_frozen_verified_identifiers() -> None:
             "10.1371/journal.pmed.1001885",
             "https://pubmed.ncbi.nlm.nih.gov/26440803/",
         ),
+        "suissa_immortal_time_2008": (
+            "18056625",
+            "10.1093/aje/kwm324",
+            "https://pubmed.ncbi.nlm.nih.gov/18056625/",
+        ),
+        "anderson_landmark_1983": (
+            "6668489",
+            "10.1200/JCO.1983.1.11.710",
+            "https://pubmed.ncbi.nlm.nih.gov/6668489/",
+        ),
+        "durrleman_splines_1989": (
+            "2657958",
+            "10.1002/sim.4780080504",
+            "https://pubmed.ncbi.nlm.nih.gov/2657958/",
+        ),
         "sterne_missing_data_2009": (
             "19564179",
             "10.1136/bmj.b2393",
@@ -260,6 +395,17 @@ def test_one_source_backing_several_cards_is_cited_once() -> None:
     strobe = next(source for source in sources if source["key"] == "strobe_2007")
     # Its relevance line names every decision it backs, not just the first.
     assert strobe["relevance"].count("?") == len(shared)
+
+
+def test_method_card_support_is_exact_per_design_element() -> None:
+    reporting = method_binding_support("strobe_2007", ["reporting"])
+    dependence = method_binding_support("strobe_2007", ["dependence"])
+    unsupported = method_binding_support("strobe_2007", ["adjustment"])
+
+    assert reporting["matched_layers"] == ["reporting_standard"]
+    assert dependence["matched_layers"] == ["dependence"]
+    assert unsupported["matched_layers"] == []
+    assert unsupported["unsupported_design_elements"] == ["adjustment"]
 
 
 def test_method_card_is_immutable() -> None:

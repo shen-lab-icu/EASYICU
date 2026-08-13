@@ -77,12 +77,38 @@ async def test_official_client_initializes_lists_and_calls_tools() -> None:
         "research_agent.run",
         "research_agent.list_skills",
         "research_agent.read_manifest",
+        "research_agent.list_export_concepts",
+        "research_agent.assess_export_coverage",
         "research_agent.bind_evidence",
     } <= names
     assert result.isError is False
     assert result.structuredContent is not None
     keys = {item["key"] for item in result.structuredContent["skills"]}
     assert {"association_analysis", "prediction_model", "data_quality_audit"} <= keys
+
+
+@pytest.mark.anyio
+async def test_sdk_rejects_empty_export_coverage_before_dispatch() -> None:
+    calls: list[tuple[str, dict]] = []
+    server = _server(
+        dispatcher=lambda name, arguments: (
+            calls.append((name, arguments or {})) or {"unexpected": True}
+        )
+    )
+
+    async with create_connected_server_and_client_session(
+        server,
+        raise_exceptions=True,
+    ) as session:
+        await session.initialize()
+        result = await session.call_tool(
+            "research_agent.assess_export_coverage",
+            {"export_dir": "/not/read", "concepts": []},
+        )
+
+    assert result.isError is True
+    assert "Input validation error" in result.content[0].text
+    assert calls == []
 
 
 @pytest.mark.anyio

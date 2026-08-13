@@ -1102,9 +1102,23 @@ def infer_analysis_type(
     if preferred is not None:
         return _REGISTRY[preferred]
     text = _question_text(context)
+    primary_question_text = (context.research_question or "").lower().strip()
     primary_predictor = primary_predictor or context.primary_exposure
     target_outcome = target_outcome or context.target_outcome
-    cohort_sensitivity_framed = _cohort_definition_sensitivity_framing(text)
+    # Free-text preferences are supplementary design constraints, not a second
+    # primary research question.  In particular, an ordinary association study
+    # may request alternate cohort definitions as a sensitivity analysis.  If
+    # those preference words are allowed to select the execution family, the
+    # robustness analysis replaces the estimand it was meant to challenge.
+    #
+    # A cohort-definition comparison therefore owns the primary family only
+    # when it is stated in ``research_question`` itself (or when the caller has
+    # supplied the typed ``inferred_analysis_family`` authority handled above).
+    # The merged preference text remains available below for method and output
+    # routing, but it cannot silently promote an adjunct into the study family.
+    cohort_sensitivity_framed = _cohort_definition_sensitivity_framing(
+        primary_question_text
+    )
     treatment_response_framed = _treatment_response_framing(text)
     # A bare "causal" anywhere in the text asserts the causal family, so the
     # disclaimer that cancels it must be at least as easy to say as the

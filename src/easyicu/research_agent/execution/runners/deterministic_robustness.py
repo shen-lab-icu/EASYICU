@@ -60,6 +60,7 @@ from ...contracts.result_envelope import (
 )
 from ...planning.robustness_contract import (
     COMPLETE_CASE_VARIABLES_KEY,
+    ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS,
     complete_case_variables,
 )
 from ...schema import AnalysisStep, spec_backs_every_declared_product
@@ -68,11 +69,14 @@ from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 __all__ = [
     "ROBUSTNESS_REPLAY_OUTPUT_FILES",
+    "ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS",
     "declared_robustness_product_registrations",
     "replay_locked_memberships",
     "ROBUSTNESS_REPLAY_ANALYSIS_KIND",
     "ROBUSTNESS_REPLAY_OUTPUT_KINDS",
     "robustness_replay_declaration_verdict",
+    "robustness_replay_output_kind",
+    "robustness_replay_spec_has_kind_mismatch",
     "robustness_replay_spec_is_emittable",
     "robustness_sensitivity_preflight_code",
     "robustness_sensitivity_preflight_scaffold",
@@ -160,6 +164,37 @@ _ROBUSTNESS_PRODUCT_KINDS: Dict[str, str] = {
 }
 
 
+def robustness_replay_output_kind(output: Any) -> Optional[str]:
+    """Return the one typed-product kind this owner writes for ``output``."""
+
+    return ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS.get(str(output or "").strip())
+
+
+def robustness_replay_spec_has_kind_mismatch(step: AnalysisStep) -> bool:
+    """Whether a mapped replay output is promised under an incompatible kind.
+
+    A partial declaration is deliberately not a mismatch: it may still use the
+    characterised label fallback while the plan-time declaration gate asks the
+    Planner to complete it.  This predicate only answers cases where a product
+    was mapped and then retyped away from the deterministic output's contract.
+    """
+
+    spec = step.robustness_replay_spec
+    if spec is None:
+        return False
+    for declared in step.expected_outputs or []:
+        kind, separator, product_id = str(declared or "").strip().partition(":")
+        if not separator:
+            continue
+        output = spec.output_for(product_id)
+        if output is None:
+            continue
+        required_kind = robustness_replay_output_kind(output)
+        if required_kind is not None and kind != required_kind:
+            return True
+    return False
+
+
 def canonical_robustness_output_files(
     product_files: Mapping[str, str]
 ) -> Dict[str, str]:
@@ -206,6 +241,8 @@ def robustness_replay_spec_is_emittable(step: AnalysisStep) -> bool:
     if spec is None:
         return False
     if not all(item.output in ROBUSTNESS_REPLAY_OUTPUT_FILES for item in spec.products):
+        return False
+    if robustness_replay_spec_has_kind_mismatch(step):
         return False
     return spec_backs_every_declared_product(
         step.expected_outputs,
@@ -289,6 +326,12 @@ def _declared_robustness_product_bindings(
             # ``robustness_replay_spec_is_emittable`` already refuses this
             # step; registering a promise no file backs would be worse than
             # the missing product it replaces.
+            continue
+        if robustness_replay_output_kind(output) != kind:
+            # Never reinterpret a canonical CSV table as a JSON statistic (or
+            # vice versa) just because the plan used the wrong prefix. The
+            # plan-time product-promise gate owns the repair; execution stays
+            # fail-closed if an incompatible plan reaches this layer.
             continue
         target_filename = f"{product_id}.json" if kind == "statistic" else filename
         bindings[f"{kind}:{product_id}"] = (target_filename, filename)

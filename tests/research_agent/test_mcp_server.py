@@ -38,6 +38,54 @@ def _mcp_roots(tmp_path, monkeypatch):
     )
 
 
+def _prepared_export(root):
+    root.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "stay_id": [101, 102],
+            "charttime": [0.0, 1.0],
+            "lact": [1.2, 2.4],
+            "sofa2": [3, 6],
+        }
+    ).to_parquet(root / "labs.parquet", index=False)
+    pd.DataFrame(
+        {"stay_id": [101, 102], "death": [0, 1]}
+    ).to_parquet(root / "outcome.parquet", index=False)
+    (root / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "database": "miiv",
+                "format": "parquet",
+                "concept_selection": {
+                    "modules": {
+                        "labs": ["lact", "sofa2"],
+                        "outcome": ["death"],
+                    }
+                },
+                "files": [
+                    {
+                        "file": "labs.parquet",
+                        "module": "labs",
+                        "concepts": 2,
+                        "concept_ids": ["lact", "sofa2"],
+                        "rows": 2,
+                    },
+                    {
+                        "file": "outcome.parquet",
+                        "module": "outcome",
+                        "concepts": 1,
+                        "concept_ids": ["death"],
+                        "rows": 2,
+                    },
+                ],
+                "feature_definitions": {"included": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
 def test_mcp_python_dispatch_remains_available(ra):
     from easyicu.research_agent.mcp_server import dispatch
 
@@ -63,6 +111,8 @@ def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
         "research_agent.build_context",
         "research_agent.list_concepts",
         "research_agent.describe_concept",
+        "research_agent.list_export_concepts",
+        "research_agent.assess_export_coverage",
         "research_agent.audit_cohort",
         "research_agent.run_validator",
         "research_agent.load_concepts",
@@ -125,6 +175,82 @@ def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
     )
     assert availability["availability"]["creatinine"]["miiv"]["concept"] == "crea"
     assert availability["availability"]["sofa2"]["miiv"]["available"] is True
+
+
+def test_mcp_projects_pre_materialization_export_catalog_and_coverage(
+    ra, tmp_path, monkeypatch
+):
+    from easyicu.research_agent.mcp_server import dispatch
+
+    export_dir = _prepared_export(tmp_path / "prepared_export")
+    monkeypatch.setenv(MCP_SCOPES_ENV, "metadata")
+
+    catalog = dispatch(
+        "research_agent.list_export_concepts",
+        {
+            "export_dir": str(export_dir),
+            "modules": ["labs"],
+            "query": "lact",
+            "limit": 10,
+        },
+    )
+
+    assert catalog["schema_version"] == "easyicu.mcp-export-catalog/1"
+    assert catalog["catalog_concept_count"] == 3
+    assert [row["concept_id"] for row in catalog["concepts"]] == ["lact"]
+    assert catalog["concepts"][0]["module"] == "labs"
+    assert catalog["source"]["path_returned"] is False
+    assert catalog["privacy"] == {
+        "patient_rows_returned": False,
+        "host_path_returned": False,
+        "raw_sql_returned": False,
+    }
+
+    coverage = dispatch(
+        "research_agent.assess_export_coverage",
+        {
+            "export_dir": str(export_dir),
+            "concepts": ["lact", "death", "troponin"],
+        },
+    )
+
+    assert coverage["schema_version"] == "easyicu.mcp-export-coverage/1"
+    assert coverage["available"] == ["lact", "death"]
+    assert coverage["missing"] == ["troponin"]
+    assert coverage["sufficient"] is False
+    assert "re-extract" in coverage["advice"][0].casefold()
+    assert "does not establish" in coverage["claim_boundary"]
+    rendered = json.dumps({"catalog": catalog, "coverage": coverage})
+    assert str(export_dir) not in rendered
+    assert '"stay_id"' not in rendered
+    assert '"charttime"' not in rendered
+    assert '"rows"' not in rendered
+
+
+def test_mcp_export_coverage_refuses_empty_requests(ra, tmp_path):
+    from easyicu.research_agent.mcp_server import dispatch
+
+    export_dir = _prepared_export(tmp_path / "prepared_export")
+    result = dispatch(
+        "research_agent.assess_export_coverage",
+        {"export_dir": str(export_dir), "concepts": []},
+    )
+
+    assert result["error_code"] == "invalid_argument"
+    assert "at least one" in result["error"]
+
+
+def test_mcp_export_catalog_remains_confined_to_allowed_roots(
+    ra, tmp_path
+):
+    from easyicu.research_agent.mcp_server import dispatch
+
+    result = dispatch(
+        "research_agent.list_export_concepts",
+        {"export_dir": str(tmp_path.parent / "outside_export")},
+    )
+
+    assert result["error_code"] == "path_not_allowed"
 
 
 def test_mcp_load_concepts_calls_standardized_easyicu_api(ra, tmp_path, monkeypatch):

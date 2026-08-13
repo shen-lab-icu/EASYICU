@@ -109,6 +109,35 @@ def test_conditional_event_time_uses_event_positive_denominator() -> None:
     assert any("precede the declared time origin" in item for item in death_time.clinical_caveats)
 
 
+def test_legacy_export_event_time_is_reconciled_without_treating_absence_as_missing() -> None:
+    frame = pd.DataFrame(
+        {
+            "death": [0, 1, 1, 0],
+            "death_time": [np.nan, 48.0, np.nan, np.nan],
+        }
+    )
+    descriptors = [
+        _descriptor("death", is_binary=True),
+        _descriptor("death_time", n_missing=3),
+    ]
+
+    compiled = compile_observation_semantics(
+        frame=frame,
+        descriptors=descriptors,
+    )
+
+    death_time = next(item for item in compiled if item.name == "death_time")
+    assert death_time.observation_semantics is not None
+    assert death_time.observation_semantics.kind == "conditional_event_time"
+    assert death_time.observation_semantics.event_status_column == "death"
+    assert death_time.missingness is not None
+    assert death_time.missingness.raw_n_missing == 3
+    assert death_time.missingness.not_applicable_n == 2
+    assert death_time.missingness.eligible_n == 2
+    assert death_time.missingness.n_missing == 1
+    assert death_time.missingness.fraction_missing == 0.5
+
+
 def test_builder_wires_positive_only_event_semantics_into_context() -> None:
     frame = pd.DataFrame(
         {

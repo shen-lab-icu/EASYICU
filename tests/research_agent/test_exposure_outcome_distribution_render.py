@@ -28,6 +28,7 @@ from easyicu.research_agent.execution.runners.exposure_outcome_distribution_exec
     run_exposure_outcome_distribution_from_env,
 )
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_render import (
+    exposure_outcome_distribution_figure_declaration_verdict,
     exposure_outcome_distribution_figure_owns_step,
     run_exposure_outcome_distribution_figure,
 )
@@ -224,6 +225,36 @@ def test_an_unsafe_label_or_a_widened_input_is_refused() -> None:
     )
 
 
+def test_distribution_renderer_reports_single_row_as_an_incomplete_declaration() -> None:
+    step = _step(
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=INPUT_KEY, mode="single_row")
+        ]
+    )
+
+    verdict = exposure_outcome_distribution_figure_declaration_verdict(step)
+    assert not verdict.claimed
+    assert verdict.missing_declarations == (
+        "input_consumption_contracts["
+        "table:exposure_outcome_distribution].mode=all_rows",
+    )
+    trace = []
+    assert (
+        select_standard_executor(
+            step,
+            plan=AnalysisPlan(research_question="Test", steps=[step]),
+            trace=trace,
+        )
+        is None
+    )
+    candidate = next(
+        item
+        for item in trace
+        if item.analysis_kind == "exposure_outcome_distribution_figure"
+    )
+    assert candidate.missing_declarations == verdict.missing_declarations
+
+
 # --------------------------------------------------------------------------
 # Rendering from the one table
 # --------------------------------------------------------------------------
@@ -243,6 +274,12 @@ def test_it_renders_from_the_one_table_alone(tmp_path: Path, monkeypatch) -> Non
 
     # Source data is emitted for every panel, and the denominators and the
     # unobserved count travel with it -- that is what removes the second table.
+    prevalence_source = pd.read_csv(
+        out_dir / f"{PRODUCT}_prevalence_source_data.csv"
+    )
+    assert {"exposure_ci_low_pct", "exposure_ci_high_pct"} <= set(
+        prevalence_source.columns
+    )
     outcome_source = pd.read_csv(out_dir / f"{PRODUCT}_outcome_source_data.csv")
     assert {"outcome_denominator", "outcome_missing_n", "ci_low_pct"} <= set(
         outcome_source.columns
@@ -394,6 +431,18 @@ def test_an_exposure_percentage_that_is_not_its_own_counts_is_refused(
 
     run_dir, manifest = _tampered(tmp_path, monkeypatch, mutate)
     with pytest.raises(ValueError, match="not its own counts"):
+        _render(run_dir, manifest, tmp_path / "out")
+
+
+def test_an_exposure_interval_that_is_not_the_declared_method_is_refused(
+    tmp_path: Path, monkeypatch
+) -> None:
+    def mutate(frame: pd.DataFrame) -> None:
+        frame["exposure_ci_low_pct"] = frame["exposure_pct"] * 0.99
+        frame["exposure_ci_high_pct"] = frame["exposure_pct"] * 1.01
+
+    run_dir, manifest = _tampered(tmp_path, monkeypatch, mutate)
+    with pytest.raises(ValueError, match="exposure prevalence interval"):
         _render(run_dir, manifest, tmp_path / "out")
 
 

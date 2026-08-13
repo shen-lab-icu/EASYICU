@@ -24,6 +24,7 @@ import textwrap
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..planning.analysis_types import infer_analysis_type
+from ..planning.method_literature import METHOD_CARDS
 from .protocol import LLMMessage
 from ..skills import build_dynamic_core_plan_steps
 from ..schema import (
@@ -438,6 +439,66 @@ def _mock_literature_citation_keys(prompt: str) -> List[str]:
     return [str(value) for value in values if isinstance(value, str) and value]
 
 
+def _mock_scientific_citation_keys(prompt: str) -> List[str]:
+    """Return one topic key plus one allowed methodology key for mock plans.
+
+    The production Planner must make the relevance decision itself.  The
+    deterministic mock only needs to exercise that same typed boundary: a
+    disease/database paper cannot masquerade as the methodological authority
+    for an analysis step.
+    """
+
+    allowed = _mock_literature_citation_keys(prompt)
+    if not allowed:
+        return []
+    method_keys = {card.source_key for card in METHOD_CARDS}
+    comparator_match = re.search(
+        r"screened_direct_comparator_keys:\s*(\[[^\n]*\])",
+        prompt,
+    )
+    comparator_keys: List[str] = []
+    if comparator_match is not None:
+        try:
+            parsed = json.loads(comparator_match.group(1))
+        except json.JSONDecodeError:
+            parsed = []
+        if isinstance(parsed, list):
+            comparator_keys = [
+                str(value) for value in parsed if isinstance(value, str)
+            ]
+    selected = [
+        key for key in comparator_keys if key in allowed
+    ] or [allowed[0]]
+    for method_key in allowed:
+        if method_key in method_keys and method_key not in selected:
+            selected.append(method_key)
+    return selected
+
+
+def _mock_literature_design_bindings(citation_keys: List[str]) -> List[dict]:
+    """Emit typed, inspectable source-to-design records for mock plans."""
+
+    elements_by_key: dict[str, list[str]] = {}
+    for card in METHOD_CARDS:
+        elements_by_key.setdefault(card.source_key, [])
+        elements_by_key[card.source_key].extend(card.design_elements)
+    bindings: List[dict] = []
+    for key in citation_keys:
+        elements = list(dict.fromkeys(elements_by_key.get(key) or ["population"]))
+        bindings.append(
+            {
+                "citation_key": key,
+                "design_elements": elements,
+                "application": (
+                    f"Use {key} prospectively to govern the declared "
+                    f"{', '.join(elements)} "
+                    "decision in this exact analysis step."
+                ),
+            }
+        )
+    return bindings
+
+
 def _mock_plan_json(ctx: ResearchContext, prompt: str = "") -> str:
     """Compose a minimal but valid AnalysisPlan as JSON.
 
@@ -669,10 +730,17 @@ def _mock_plan_json(ctx: ResearchContext, prompt: str = "") -> str:
         wired_steps.append(
             step.model_copy(update={"inputs": [source] if source is not None else []})
         )
-    citation_keys = _mock_literature_citation_keys(prompt)
+    citation_keys = _mock_scientific_citation_keys(prompt)
     if citation_keys:
         wired_steps = [
-            step.model_copy(update={"literature_citation_keys": [citation_keys[0]]})
+            step.model_copy(
+                update={
+                    "literature_citation_keys": list(citation_keys),
+                    "literature_design_bindings": _mock_literature_design_bindings(
+                        list(citation_keys)
+                    ),
+                }
+            )
             if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
             else step
             for step in wired_steps
@@ -2462,6 +2530,37 @@ def _mock_writer_section(
     missingness = cite("missingness", "research_context", "table_one")
     context = cite("research_context", "architecture_profile", "table_one")
 
+    literature_match = re.search(
+        r"RUN-BOUND LITERATURE DIGEST:\n(.*?)\n\nRESEARCH CONTEXT:",
+        prompt,
+        flags=re.I | re.S,
+    )
+    literature_keys = (
+        re.findall(r"\[@([A-Za-z0-9_.:-]+)\]", literature_match.group(1))
+        if literature_match
+        else []
+    )
+    literature_lines = literature_match.group(1).splitlines() if literature_match else []
+
+    def literature_key_for_role(role_token: str) -> str:
+        for line in literature_lines:
+            if f"| {role_token}" not in line:
+                continue
+            match = re.search(r"\[@([A-Za-z0-9_.:-]+)\]", line)
+            if match is not None:
+                return match.group(1)
+        return ""
+
+    comparator_key = literature_key_for_role("direct_comparator")
+    method_key = literature_key_for_role("method:")
+    fallback_key = literature_keys[0] if literature_keys else ""
+    comparator_literature = (
+        f"[@{comparator_key or fallback_key}]" if comparator_key or fallback_key else ""
+    )
+    method_literature = (
+        f"[@{method_key or fallback_key}]" if method_key or fallback_key else ""
+    )
+
     if language == "zh":
         if section.startswith("Title"):
             return "# EasyICU ICU 关联分析\n\n**关键词：** ICU，队列，关联，证据追踪，EasyICU"
@@ -2494,13 +2593,30 @@ def _mock_writer_section(
         **Conclusions:** Findings are associational and require external validation.
         """
         ).strip()
+    if section.startswith("Introduction"):
+        prior_work = (
+            f"Prior ICU literature provides a study-design comparator {comparator_literature} {context}."
+            if comparator_literature
+            else f"The run-bound evidence does not establish a current direct comparator {context}."
+        )
+        return textwrap.dedent(
+            f"""
+        ## Introduction
+
+        The requested ICU question is clinically important because endpoint timing and data provenance can change the interpretation of an observed association {context}.
+
+        {prior_work}
+
+        This analysis therefore evaluates the declared question while retaining associational language and an auditable evidence chain {context}.
+        """
+        ).strip()
     if section.startswith("Methods"):
         return textwrap.dedent(
             f"""
         ## Methods
 
         The cohort, variable definitions, and analysis context were taken from the EasyICU research context {context}.
-        Descriptive cohort evidence is available in {table}, and missingness handling is documented in {missingness}.
+        Descriptive cohort evidence is available in {table}, and missingness handling is documented in {missingness}; the declared observational methods are grounded in {method_literature or context}.
         """
         ).strip()
     if section.startswith("Results"):
@@ -2515,11 +2631,17 @@ def _mock_writer_section(
         """
         ).strip()
     if section.startswith("Discussion"):
+        comparison = (
+            f"The result can be compared with the retained prior-work candidate {comparator_literature}, without treating retrieval alone as proof of agreement {context}."
+            if comparator_literature
+            else f"No run-bound direct literature comparison is available for this mock smoke run {context}."
+        )
         return textwrap.dedent(
             f"""
         ## Discussion
 
         The analysis should be interpreted as an observed association grounded in the registered evidence {association}.
+        {comparison}
         EasyICU's concept layer and evidence registry document how the cohort and variables were constructed {context}.
         """
         ).strip()

@@ -157,12 +157,20 @@ from .planning.analysis_blueprint import (
     render_analysis_blueprint_for_prompt,
     validate_plan_against_analysis_blueprint,
 )
+from .planning.adjustment_authority import (
+    validate_plan_against_adjustment_authority,
+)
 from .planning.cohort_contract import cohort_definition_has_explicit_selection
 from .reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
 )
 from .planning.figure_strategy import build_article_figure_strategy
+from .planning.scientific_review import (
+    PlanScientificReview,
+    build_plan_scientific_review,
+    render_plan_scientific_guardrails,
+)
 from .orchestration.config import (
     PipelineConfig,
     assert_step_provider_budget_funds_its_repairs,
@@ -348,6 +356,7 @@ from .plan_utils import (
     _step_expects_figure,
     _step_produces_figure,
     effect_output_authorized,
+    validate_final_plan_shape,
 )
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
 from .figures.skill import PublicationFigureSkill
@@ -1515,6 +1524,7 @@ class ResearchAgentPipeline:
         self._enable_memory = config.enable_memory
         self._enable_latex = config.enable_latex
         self._latex_venue_template = config.latex_venue_template or "article"
+        self._latex_draft_watermark = bool(config.latex_draft_watermark)
         lang = (config.manuscript_language or "en").lower()
         self._manuscript_language = (
             "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
@@ -1575,6 +1585,9 @@ class ResearchAgentPipeline:
             if config.bound_preplan_literature is not None
             else None
         )
+        self._bound_plan_revision_contract = str(
+            config.bound_plan_revision_contract or ""
+        ).strip()
         # O5 — opt-in Tavily web search for preprints/guidelines/trial
         # registries that PubMed may not index. Off by default so CI
         # and offline demos remain deterministic.
@@ -2404,6 +2417,8 @@ class ResearchAgentPipeline:
                 )
 
         allowed_literature_citation_keys: list[str] = []
+        direct_comparator_literature_keys: list[str] = []
+        preplan_literature: Optional[LiteratureBundle] = None
         if self._enable_literature and skill_obj is None:
             try:
                 emit_progress(
@@ -2424,8 +2439,12 @@ class ResearchAgentPipeline:
                     tavily_include_domains=self._tavily_include_domains,
                     bound_seed=self._bound_preplan_literature,
                 )
-                allowed_literature_citation_keys = [
-                    citation.key for citation in preplan_literature.citations
+                allowed_literature_citation_keys = [citation.key for citation in preplan_literature.citations]
+                direct_comparator_literature_keys = [
+                    decision.citation_key
+                    for decision in preplan_literature.screening_decisions
+                    if decision.disposition == "include"
+                    and decision.evidence_role == "direct_comparator"
                 ]
                 # O17 — Front-door hypothesis generation. Opt-in; writes
                 # ``hypothesis_candidates.json`` + ``.md`` so the paper
@@ -2712,6 +2731,16 @@ class ResearchAgentPipeline:
                     ),
                 )
             )
+        scientific_plan_guardrails = render_plan_scientific_guardrails(agent_context)
+        planning_contract_context = "\n\n".join(
+            value
+            for value in (
+                planning_contract_context,
+                scientific_plan_guardrails,
+                self._bound_plan_revision_contract,
+            )
+            if value
+        )
         if self._required_primary_cohort_selection_mode is not None:
             population_contract = (
                 "CALLER-BOUND PRIMARY COHORT MODE: set "
@@ -3053,6 +3082,9 @@ class ResearchAgentPipeline:
                     agent_context,
                     **know_how_binding.planner_kwargs,
                     allowed_literature_citation_keys=allowed_literature_citation_keys,
+                    direct_comparator_literature_keys=(
+                        direct_comparator_literature_keys
+                    ),
                     enforce_article_contract=True,
                     article_contract_context=context,
                     planning_contract_context=planning_contract_context,
@@ -3082,6 +3114,12 @@ class ResearchAgentPipeline:
                 plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
                     agent_context,
                     **know_how_binding.planner_kwargs,
+                    allowed_literature_citation_keys=(
+                        allowed_literature_citation_keys
+                    ),
+                    direct_comparator_literature_keys=(
+                        direct_comparator_literature_keys
+                    ),
                 )
                 used_mock_llm = True
                 plan_generation_mode = "fallback"
@@ -3113,6 +3151,9 @@ class ResearchAgentPipeline:
                         agent_context,
                         **know_how_binding.planner_kwargs,
                         allowed_literature_citation_keys=allowed_literature_citation_keys,
+                        direct_comparator_literature_keys=(
+                            direct_comparator_literature_keys
+                        ),
                         enforce_article_contract=True,
                         article_contract_context=context,
                         planning_contract_context=planning_contract_context,
@@ -3144,6 +3185,12 @@ class ResearchAgentPipeline:
                     plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
                         agent_context,
                         **know_how_binding.planner_kwargs,
+                        allowed_literature_citation_keys=(
+                            allowed_literature_citation_keys
+                        ),
+                        direct_comparator_literature_keys=(
+                            direct_comparator_literature_keys
+                        ),
                     )
                     used_mock_llm = True
                     plan_generation_mode = "fallback"
@@ -3163,6 +3210,9 @@ class ResearchAgentPipeline:
                         agent_context,
                         **know_how_binding.planner_kwargs,
                         allowed_literature_citation_keys=allowed_literature_citation_keys,
+                        direct_comparator_literature_keys=(
+                            direct_comparator_literature_keys
+                        ),
                         enforce_article_contract=True,
                         article_contract_context=context,
                         planning_contract_context=planning_contract_context,
@@ -3262,6 +3312,12 @@ class ResearchAgentPipeline:
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.
         findings.extend(endpoint_contract_findings(plan, context=context))
+        # Planner output was validated before shaping, but the host has since
+        # split mixed outputs, closed typed dependencies, and applied the step
+        # cap. Never offer a human an approval request for a transform-corrupted
+        # plan (for example a visualization step whose sole figure declaration
+        # was moved away during de-duplication).
+        validate_final_plan_shape(plan)
         if study_design_brief is not None:
             if (
                 plan.analysis_type
@@ -3368,6 +3424,7 @@ class ResearchAgentPipeline:
                 raise CohortAuthorityError(
                     "Planner primary cohort selection is not explicit"
                 )
+        validate_plan_against_adjustment_authority(plan=plan, context=agent_context)
         self._scientific_runtime_authorities.validate_plan(plan)
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
@@ -3395,6 +3452,113 @@ class ResearchAgentPipeline:
                     "llm_signature": llm_signature,
                     "used_mock_llm": used_mock_llm,
                 },
+            )
+        if self._config.require_human_plan_review:
+            # A human may approve only a plan that has first passed the
+            # deterministic scientific review owner.  This review is bound
+            # into the same EvidenceStore/PlanReviewAuthority as the plan; it
+            # is not a post-hoc report generated after provider execution.
+            current_review = build_plan_scientific_review(
+                context=context,
+                plan=plan,
+                literature=preplan_literature,
+                figure_strategy=article_figure_strategy,
+            )
+            scientific_review_path = run_dir / "scientific_plan_review.json"
+            existing_review_record = evidence.get("scientific_plan_review")
+            if existing_review_record is None:
+                scientific_review_path.write_text(
+                    current_review.model_dump_json(indent=2),
+                    encoding="utf-8",
+                )
+                evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Pre-execution multi-dimensional scientific review of "
+                        "the exact proposed plan, literature authority and "
+                        "article figure strategy."
+                    ),
+                    source_path=scientific_review_path,
+                    evidence_id="scientific_plan_review",
+                    producer="plan_scientific_review",
+                    generation_mode="deterministic_skill",
+                )
+                scientific_review = current_review
+            else:
+                try:
+                    scientific_review = PlanScientificReview.model_validate_json(
+                        scientific_review_path.read_text(encoding="utf-8")
+                    )
+                except (OSError, UnicodeDecodeError, ValueError) as exc:
+                    raise RuntimeError(
+                        "the existing scientific plan review cannot be "
+                        f"revalidated ({exc})"
+                    ) from exc
+                if scientific_review.model_dump(
+                    mode="json", exclude={"generated_at"}
+                ) != current_review.model_dump(
+                    mode="json", exclude={"generated_at"}
+                ):
+                    raise RuntimeError(
+                        "the existing scientific plan review does not match "
+                        "the exact current context, plan, literature and figure "
+                        "strategy"
+                    )
+            finding_codes = [item.code for item in scientific_review.findings]
+            authorization_requests = [
+                {
+                    "code": item.code,
+                    "question": item.authorization_question,
+                }
+                for item in scientific_review.findings
+                if item.requires_user_authorization
+                and item.authorization_question
+            ]
+            findings.append(
+                ValidationFinding(
+                    validator="plan_scientific_review",
+                    severity=(
+                        "error"
+                        if not scientific_review.approval_allowed
+                        else (
+                            "warning"
+                            if scientific_review.status == "analysis_only"
+                            else "info"
+                        )
+                    ),
+                    message=(
+                        "The exact analysis plan requires scientific changes "
+                        "before it can be approved."
+                        if not scientific_review.approval_allowed
+                        else (
+                            "The exact analysis plan may run only with an "
+                            "analysis-only claim ceiling unless its major "
+                            "scientific findings are revised."
+                            if scientific_review.status == "analysis_only"
+                            else "The exact analysis plan is ready for explicit human approval."
+                        )
+                    ),
+                    evidence_ids=["scientific_plan_review"],
+                    detail={
+                        "reason": (
+                            "plan_scientific_changes_required"
+                            if not scientific_review.approval_allowed
+                            else "plan_scientific_review_complete"
+                        ),
+                        "human_review_required": bool(
+                            not scientific_review.approval_allowed
+                        ),
+                        "approval_allowed": scientific_review.approval_allowed,
+                        "review_status": scientific_review.status,
+                        "review_score": scientific_review.score,
+                        "top_journal_candidate": (
+                            scientific_review.top_journal_candidate
+                        ),
+                        "finding_codes": finding_codes,
+                        "review_evidence_id": "scientific_plan_review",
+                        "user_authorization_requests": authorization_requests,
+                    },
+                )
             )
         know_how_binding.persist_prompt_metrics(
             planner_prompt_metrics,
@@ -3515,6 +3679,13 @@ class ResearchAgentPipeline:
             repro_envelope=repro_envelope,
             started_at=started_at,
             resume_state=resume_state,
+            allowed_literature_citation_keys=tuple(
+                allowed_literature_citation_keys
+            ),
+            direct_comparator_literature_keys=tuple(
+                direct_comparator_literature_keys
+            ),
+            preplan_literature=preplan_literature,
         )
 
     def _execute_phase_services(self) -> ExecutePhaseServices:
@@ -4054,6 +4225,14 @@ class ResearchAgentPipeline:
         )
         audit_logger: Optional[AuditLogger] = None
 
+        # A plan review pauses ``run`` and is later resumed by a different Web
+        # job.  Keep the callback behind a per-run mutable sink so resume can
+        # hand subsequent execution/writing events to that new job without
+        # changing any of the digest-bound scientific invokers closed over by
+        # the workflow.  The sink belongs to this run (not the pipeline
+        # instance), so another concurrent run cannot steal its timeline.
+        progress_sink: Dict[str, Any] = {"callback": progress_callback}
+
         def _emit_progress(stage: str, message: str, **extra: Any) -> None:
             progress_status = str(extra.get("status", "running"))
             progress_step_id = (
@@ -4082,7 +4261,8 @@ class ResearchAgentPipeline:
                     )
                 except Exception:
                     pass
-            if progress_callback is None:
+            active_progress_callback = progress_sink.get("callback")
+            if active_progress_callback is None:
                 return
             payload = {
                 "stage": stage,
@@ -4092,7 +4272,7 @@ class ResearchAgentPipeline:
             }
             payload.update(extra)
             try:
-                progress_callback(payload)
+                active_progress_callback(payload)
             except Exception:
                 pass
 
@@ -4748,6 +4928,7 @@ class ResearchAgentPipeline:
             workflow=workflow,
             run_id=run_id,
             run_dir=run_dir,
+            progress_sink=progress_sink,
         )
 
     def _pipeline_result_or_pending(
@@ -4757,6 +4938,7 @@ class ResearchAgentPipeline:
         workflow: Any,
         run_id: str,
         run_dir: Path,
+        progress_sink: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """Return the run's result, or the typed pause that replaced it.
 
@@ -4806,6 +4988,10 @@ class ResearchAgentPipeline:
             "runtime_bundle": deepcopy(
                 getattr(self, "_validated_runtime_bundle", None)
             ),
+            # Mutable indirection owned by this paused run.  Resume may replace
+            # only the transport callback; the workflow, plan and scientific
+            # authority remain the exact objects reviewed by the operator.
+            "progress_sink": progress_sink,
         }
         return pending
 
@@ -4815,6 +5001,7 @@ class ResearchAgentPipeline:
         decisions: Sequence[Union[Any, Mapping[str, Any]]],
         *,
         run_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Any:
         """Answer the review that paused :meth:`run` and finish the run.
 
@@ -4877,6 +5064,9 @@ class ResearchAgentPipeline:
         # writing there. ``run`` returns when it pauses, releasing its lease,
         # which is exactly why resume has to take one of its own.
         workflow = pending_state["workflow"]
+        progress_sink = pending_state.get("progress_sink")
+        if progress_callback is not None and isinstance(progress_sink, dict):
+            progress_sink["callback"] = progress_callback
         try:
             with run_heartbeat_scope(run_id=pending.run_id):
                 bind_active_run_heartbeat(
@@ -4892,6 +5082,7 @@ class ResearchAgentPipeline:
                 workflow=workflow,
                 run_id=pending.run_id,
                 run_dir=Path(pending.run_dir),
+                progress_sink=progress_sink,
             )
         except HumanReviewRejected:
             # The workflow has recorded the rejection and discarded its live
@@ -5420,7 +5611,10 @@ class ResearchAgentPipeline:
             "enable_deterministic_runner_repair": bool(
                 self._enable_deterministic_runner_repair
             ),
+            "enable_latex": bool(self._enable_latex),
+            "enable_pdf_render": bool(self._enable_pdf_render),
             "latex_venue_template": self._latex_venue_template,
+            "latex_draft_watermark": bool(self._latex_draft_watermark),
         }
 
     def _finalise_aborted(

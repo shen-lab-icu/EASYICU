@@ -109,6 +109,9 @@ from ..planning.robustness_contract import (
     RobustnessPlanError,
     validate_planner_robustness_specs,
 )
+from ..planning.adjustment_authority import (
+    validate_plan_against_adjustment_authority,
+)
 from ..plan_utils import (
     _cohort_predicate_partition_safety_rules,
     _primary_analysis_cohort_canonical_schema_rules,
@@ -170,6 +173,7 @@ from ..schema import (
     VisualizationResult,
 )
 from ..planning.robustness_contract import RobustnessSpec
+from ..planning.sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
 from ..research_context.temporal_semantics import (
     ConceptValidationLayer,
     ICUEpisodeResolver,
@@ -533,14 +537,43 @@ def _build_planner_user_prompt(
     planner_context = scoped_planner_context(context)
     inferred_analysis_type = infer_analysis_type(context)
 
+    sensitivity_specs = (
+        context.user_preferences.sensitivity_specs
+        if context.user_preferences is not None
+        else []
+    )
+    sensitivity_guide = ""
+    if sensitivity_specs:
+        rows = []
+        for spec in sensitivity_specs:
+            methods = ", ".join(
+                repr(value)
+                for value in sorted(EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy])
+            )
+            rows.append(
+                f"- {spec.spec_id}: axis={spec.axis}, strategy={spec.strategy}; "
+                f"bind this exact id in sensitivity_spec_ids and use one of [{methods}]."
+            )
+        sensitivity_guide = (
+            "\n\nThe typed `user_preferences.sensitivity_specs` are exact "
+            "user-reviewed authority, not suggestions. Every listed spec must "
+            "be implemented by an executable primary/secondary/sensitivity step "
+            "that emits a table/statistic/model/dataset/artifact and copies its "
+            "exact id into `sensitivity_spec_ids`. Copy its execution variables "
+            "and numeric/eligibility settings exactly; do not replace them with "
+            "prose or merge away a scientific axis. Legal bindings for this "
+            "context are:\n" + "\n".join(rows) + "\n\n"
+        )
+
     prompt = (
         "Produce an ICU-AWARE RESEARCH PLAN as JSON matching the "
         "AnalysisPlan schema. First infer the EHR analysis type, "
         "then choose only the steps justified by that family and "
         "the available context. The plan must not assume that "
         "every task needs Table 1, outcome incidence, missingness, "
-        "or a primary association model. That said, a baseline "
-        "characteristics table (Table 1) IS a reporting standard for "
+        "or a primary association model."
+        + sensitivity_guide
+        + "That said, a baseline characteristics table (Table 1) IS a reporting standard for "
         "observational/association and prediction-model families "
         "(STROBE item 14 / TRIPOD): for those families include a "
         "baseline characteristics step (e.g. expected_outputs "
@@ -1311,6 +1344,8 @@ def _planner_retry_response_projection(raw: str) -> str:
         "method",
         "icu_rule_refs",
         "literature_citation_keys",
+        "literature_design_bindings",
+        "sensitivity_spec_ids",
         "model_requirements",
         "family_primary_result_requirement",
         "input_consumption_contracts",
@@ -1364,6 +1399,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "inputs",
         "expected_outputs",
         "method",
+        "sensitivity_spec_ids",
         "model_requirements",
         "family_primary_result_requirement",
     )
@@ -1393,6 +1429,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "inputs",
         "expected_outputs",
         "method",
+        "sensitivity_spec_ids",
     )
     projection["steps"] = [
         {key: step[key] for key in compact_step_keys if key in step}
@@ -1489,6 +1526,7 @@ class PlannerAgent:
         *,
         allowed_know_how_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
         allowed_literature_citation_keys: Optional[Sequence[str]] = None,
+        direct_comparator_literature_keys: Optional[Sequence[str]] = None,
         know_how_context: str = "",
         enforce_article_contract: bool = False,
         article_contract_context: Optional[ResearchContext] = None,
@@ -1502,6 +1540,9 @@ class PlannerAgent:
             )
         allowed_citation_keys = _payload.normalize_literature_citation_keys(
             allowed_literature_citation_keys
+        )
+        direct_comparator_keys = _payload.normalize_literature_citation_keys(
+            direct_comparator_literature_keys
         )
         resolved_planning_contract_context = planning_contract_context
         if enforce_article_contract and not resolved_planning_contract_context:
@@ -1518,6 +1559,7 @@ class PlannerAgent:
         resolved_planning_contract_context = _payload.bind_literature_citation_authority(
             resolved_planning_contract_context,
             allowed_citation_keys,
+            direct_comparator_keys=direct_comparator_keys,
         )
         messages = self.request_messages(
             context,
@@ -1547,6 +1589,7 @@ class PlannerAgent:
                 context,
                 allowed_know_how_decisions=allowed_know_how_decisions,
                 allowed_literature_citation_keys=allowed_citation_keys,
+                direct_comparator_literature_keys=direct_comparator_keys,
                 enforce_article_contract=enforce_article_contract,
                 article_contract_context=article_contract_context,
             ),
@@ -1567,8 +1610,11 @@ class PlannerAgent:
                 "claim_id, and citation_ids), "
                 "steps (array of objects "
                 "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
-                "method, icu_rule_refs, literature_citation_keys (exact keys from "
-                "the supplied literature bundle that support this step), optional "
+                "method, icu_rule_refs, sensitivity_spec_ids, "
+                "literature_citation_keys (exact keys from "
+                "the supplied literature bundle that support this step), "
+                "literature_design_bindings (records with citation_key, exact "
+                "design_elements, a concise application, and optional divergence), optional "
                 "model_requirements, optional "
                 "family_primary_result_requirement, optional "
                 "input_consumption_contracts, optional table_one_spec, optional "
@@ -1578,7 +1624,10 @@ class PlannerAgent:
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
-                + _payload.literature_citation_retry_suffix(allowed_citation_keys)
+                + _payload.literature_citation_retry_suffix(
+                    allowed_citation_keys,
+                    direct_comparator_keys=direct_comparator_keys,
+                )
                 + _payload.planner_science_retry_guide()
             ),
         )
@@ -1590,6 +1639,7 @@ class PlannerAgent:
         *,
         allowed_know_how_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
         allowed_literature_citation_keys: Optional[Sequence[str]] = None,
+        direct_comparator_literature_keys: Optional[Sequence[str]] = None,
         enforce_article_contract: bool = False,
         article_contract_context: Optional[ResearchContext] = None,
     ) -> AnalysisPlan:
@@ -1644,6 +1694,10 @@ class PlannerAgent:
             plan,
             _payload.normalize_literature_citation_keys(
                 allowed_literature_citation_keys
+            ),
+            context=context,
+            direct_comparator_keys=_payload.normalize_literature_citation_keys(
+                direct_comparator_literature_keys
             ),
         )
         # What only *Planner output* must satisfy, asked where the Planner can
@@ -1858,6 +1912,7 @@ class PlannerAgent:
                 )
             plan.analysis_type = canonical_family
         validate_plan_typed_bindings_against_context(plan=plan, context=context)
+        validate_plan_against_adjustment_authority(plan=plan, context=context)
         primary_cohort_findings = primary_analysis_cohort_plan_findings(plan=plan)
         if primary_cohort_findings:
             violations = [
@@ -2029,6 +2084,8 @@ class ReplannerAgent(PlannerAgent):
         probe_summary: Optional[Dict[str, Any]] = None,
         completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
         directive: Optional[str] = None,
+        allowed_literature_citation_keys: Optional[Sequence[str]] = None,
+        direct_comparator_literature_keys: Optional[Sequence[str]] = None,
     ) -> AnalysisPlan:
         completed = _slim_completed_records_for_prompt(
             list(completed_step_records or [])
@@ -2042,6 +2099,24 @@ class ReplannerAgent(PlannerAgent):
             else ""
         )
         replanner_context = scoped_planner_context(context)
+        current_citation_keys = tuple(
+            key
+            for step in current_plan.steps
+            for key in step.literature_citation_keys
+        )
+        allowed_citation_keys = _payload.normalize_literature_citation_keys(
+            allowed_literature_citation_keys
+            if allowed_literature_citation_keys is not None
+            else current_citation_keys
+        )
+        direct_comparator_keys = _payload.normalize_literature_citation_keys(
+            direct_comparator_literature_keys
+        )
+        literature_authority = _payload.bind_literature_citation_authority(
+            "",
+            allowed_citation_keys,
+            direct_comparator_keys=direct_comparator_keys,
+        )
         messages = [
             LLMMessage(
                 role="system",
@@ -2061,7 +2136,9 @@ class ReplannerAgent(PlannerAgent):
                     )
                     + "\n\n"
                     f"CURRENT PLAN:\n{current_plan.model_dump_json(indent=2)}\n\n"
-                    f"PROBE SUMMARY:\n{_clip_json(project_outbound_probe(probe_summary or {}), char_budget=_REPLANNER_PROBE_CHAR_BUDGET)}\n\n"
+                    + literature_authority
+                    + ("\n\n" if literature_authority else "")
+                    + f"PROBE SUMMARY:\n{_clip_json(project_outbound_probe(probe_summary or {}), char_budget=_REPLANNER_PROBE_CHAR_BUDGET)}\n\n"
                     f"COMPLETED STEP RECORDS:\n{json.dumps(completed, ensure_ascii=False, default=str)}\n\n"
                     "RESEARCH CONTEXT:\n"
                     + _format_context(
@@ -2102,6 +2179,8 @@ class ReplannerAgent(PlannerAgent):
                 raw,
                 context,
                 allowed_know_how_decisions=decision_authority,
+                allowed_literature_citation_keys=allowed_citation_keys,
+                direct_comparator_literature_keys=direct_comparator_keys,
             )
             if candidate.know_how_decisions != current_plan.know_how_decisions:
                 raise ValueError(
@@ -2124,6 +2203,10 @@ class ReplannerAgent(PlannerAgent):
                 "know_how_decisions when present. Every step must include "
                 "planned_analysis_role. Keep completed step_ids "
                 "from the CURRENT PLAN unchanged; only revise the remaining steps."
+                + _payload.literature_citation_retry_suffix(
+                    allowed_citation_keys,
+                    direct_comparator_keys=direct_comparator_keys,
+                )
                 + _payload.planner_science_retry_guide()
             ),
         )
@@ -2401,6 +2484,7 @@ class ManuscriptAgent:
         context: ResearchContext,
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
+        literature_digest: Optional[str] = None,
     ) -> str:
         return WriterAgent(
             self.llm,
@@ -2411,6 +2495,7 @@ class ManuscriptAgent:
             context=context,
             evidence_ids=evidence_ids,
             evidence_digest=evidence_digest,
+            literature_digest=literature_digest,
         )
 
 
@@ -4296,6 +4381,7 @@ class WriterAgent:
         context: ResearchContext,
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str],
+        literature_digest: Optional[str] = None,
         max_tokens: int = 2048,
     ) -> str:
         lang_inst = _writer_language_instruction(self.language)
@@ -4334,15 +4420,32 @@ class WriterAgent:
                     "`mortality was 12% {evidence:outcome_rate}`.\n"
                     "- Use exactly single braces: `{evidence:<id>}`, not "
                     "`{{evidence:<id>}}`.\n"
-                    "- Every body-text sentence that reports, interprets, compares, "
-                    "or explains cohort composition, exposure prevalence, outcome "
-                    "frequency, model estimates, sensitivity/robustness, missingness, "
-                    "data quality, mechanisms, strengths, or limitations must include "
-                    "at least one evidence citation.\n"
+                    "- Every current-study empirical sentence about cohort composition, "
+                    "exposure prevalence, outcome frequency, model estimates, "
+                    "sensitivity/robustness, missingness, or data quality must include "
+                    "at least one `{evidence:<id>}` citation.\n"
                     "- Keywords, Data/code availability, Funding, and Conflicts of "
                     "interest are manuscript metadata and do not need evidence citations.\n"
                     "- NEVER use a placeholder as a noun. If a number is unavailable, omit the sentence.\n"
                     f"- Only use ids from this list: {evidence_list}\n\n"
+                    "LITERATURE RULE:\n"
+                    "- Cite prior work only with an exact `[@key]` from the "
+                    "run-bound literature digest below.\n"
+                    "- Claims about prior studies or plausible clinical mechanisms "
+                    "require an exact `[@key]`; a current-run evidence id cannot "
+                    "substitute for literature support. A sentence comparing the "
+                    "current result with prior work needs both citation types.\n"
+                    "- Statements about mechanisms, strengths, or limitations must "
+                    "use the exact applicable source: `[@key]` for prior knowledge "
+                    "and `{evidence:<id>}` for a current-run empirical fact. Omit "
+                    "the statement when neither supplied source supports it.\n"
+                    "- If the digest contains a `direct_comparator`, Introduction and "
+                    "Discussion must each cite at least one such key. Methods must cite "
+                    "at least one `method:<layer>` key when one is available.\n"
+                    "- `{evidence:literature_prisma}` supports the search process, "
+                    "not what an individual paper found.\n"
+                    "- Never invent an author, paper, comparison, mechanism, or "
+                    "citation key; omit unsupported literature claims.\n\n"
                     "OUTPUT DISCIPLINE:\n"
                     "- Output ONLY finished, publishable manuscript prose. Do NOT include "
                     "your reasoning, planning, working notes, or meta-commentary about the "
@@ -4360,6 +4463,8 @@ class WriterAgent:
                     f"- {section_name}: follow the requested length and paragraph structure exactly.\n\n"
                     "MACHINE EVIDENCE DIGEST:\n"
                     + (evidence_digest or "(none)")
+                    + "\n\nRUN-BOUND LITERATURE DIGEST:\n"
+                    + (literature_digest or "(none)")
                     + "\n\nRESEARCH CONTEXT:\n"
                     + _format_context(
                         reporting_context,
@@ -4384,11 +4489,13 @@ class WriterAgent:
         context: ResearchContext,
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
+        literature_digest: Optional[str] = None,
     ) -> str:
         common = dict(
             context=context,
             evidence_ids=evidence_ids,
             evidence_digest=evidence_digest,
+            literature_digest=literature_digest,
         )
 
         # The eight manuscript sections are independent: each _call_section is
@@ -4441,6 +4548,7 @@ class WriterAgent:
                 "- Para 4: The specific gap in the literature that this study addresses.\n"
                 "- Para 5: One sentence on the objective, one sentence on the hypothesis, and one sentence on the expected contribution.\n"
                 "Requirements: write full prose (no bullets), avoid generic filler, and include at least one evidence citation or literature citation in each paragraph when evidence is available. Do not collapse the introduction into two sentences."
+                " Cite at least one exact direct-comparator key when the literature digest provides one."
             ),
             max_tokens=4096,
             **common,
@@ -4466,7 +4574,9 @@ class WriterAgent:
                 "  One sentence: 'Analyses were conducted through the EasyICU research-agent "
                 "pipeline; the full reproducibility envelope (prompt/response SHA-256 hashes, "
                 "per-step scripts, and dependency lockfile) is released as supplementary material.'\n"
-                "Target: 400-600 words."
+                "Target: 400-600 words. Cite at least one exact method-source key "
+                "from the literature digest when available; do not cite a disease "
+                "definition paper as statistical-method authority."
             ),
             max_tokens=2048,
             **common,
@@ -4509,6 +4619,9 @@ class WriterAgent:
                 "- Para 4: Clinical implications, limits to generalisability, and why the result should not be over-interpreted.\n"
                 "- Para 5: Strengths of the pipeline, evidence traceability, ICU-aware rules, and reproducibility.\n"
                 "Requirements: full prose only, no bullets, no recommendations or causal claims, and at least one evidence citation or literature citation in each paragraph when available. Do not collapse the discussion into a two-sentence stub."
+                " Cite a screened direct comparator when available, and state the "
+                "specific population, time-zero, estimand, or analysis difference "
+                "instead of claiming novelty from database choice alone."
             ),
             max_tokens=4096,
             **common,

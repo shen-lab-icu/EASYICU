@@ -322,6 +322,12 @@ class PublicationFigureSkill:
                         "outcome_by_group",
                         "outcome_by_sepsis3",
                         "outcome_incidence",
+                        # The deterministic distribution owner uses this exact
+                        # product name and exposes ``exposure_level`` plus
+                        # ``outcome_rate_pct``.  It is the strongest absolute-
+                        # risk context for an association figure and must not be
+                        # hidden merely because it is not named "incidence".
+                        "exposure_outcome_distribution",
                         # Association steps commonly export the absolute
                         # outcome risk by exposure group as
                         # absolute_risk_by_<exposure>.csv; the prefix token
@@ -569,6 +575,32 @@ class PublicationFigureSkill:
         plot_df["is_primary"] = False
         if not plot_df.empty:
             plot_df.loc[0, "is_primary"] = True
+        primary_step = next(
+            (
+                step
+                for step in plan.steps
+                if step.planned_analysis_role == "primary"
+                and source_record.produced_by_step == step.step_id
+            ),
+            None,
+        )
+        if primary_step is None:
+            primary_step = next(
+                (
+                    step
+                    for step in plan.steps
+                    if step.planned_analysis_role == "primary"
+                ),
+                None,
+            )
+        primary_requirements = list(
+            getattr(primary_step, "model_requirements", ()) or ()
+        )
+        adjusted = any(
+            bool(getattr(requirement, "covariates", ()) or ())
+            for requirement in primary_requirements
+        )
+        estimate_label = "Adjusted" if adjusted else "Unadjusted"
 
         palette = apply_publication_style()
         out_dir = run_dir / "publication_figures"
@@ -743,10 +775,11 @@ class PublicationFigureSkill:
                 fontsize=6.5,
                 color=palette.get("baseline", "#272727"),
             )
-        outcome_label = _display_label(
-            context.target_outcome or "target outcome", plan.display_labels
-        )
-        ax.set_title(f"Adjusted estimate for {outcome_label}", loc="left", pad=4)
+        # Keep the title band short enough that the left scientific label and
+        # the right interval header remain distinct in compact journal panels.
+        # The target outcome is already explicit in the figure contract and
+        # caption; repeating a long endpoint name here caused real SVG overlap.
+        ax.set_title(f"{estimate_label} association", loc="left", pad=4)
         add_panel_label(ax, "A", x=-0.08)
         ax.margins(x=0.08)
         ax.grid(
@@ -783,10 +816,13 @@ class PublicationFigureSkill:
         panels = [
             {
                 "panel_id": "A",
-                "title": "Adjusted association",
+                "title": f"{estimate_label} association",
                 "role": "primary_estimand",
                 "chart_type": "dot_interval",
-                "claim": "The association estimate and interval are drawn from the registered primary association table.",
+                "claim": (
+                    f"The {estimate_label.lower()} association estimate and interval "
+                    "are drawn from the registered primary association table."
+                ),
                 "evidence_ids": [source_record.evidence_id],
                 "review_risk": "Interpretability depends on the upstream model specification and validator findings.",
             }
@@ -799,7 +835,10 @@ class PublicationFigureSkill:
                     "title": f"Outcome by {score_label}",
                     "role": "descriptive_result",
                     "chart_type": "event_rate_panel",
-                    "claim": f"Observed outcome risk by {score_label} is shown before adjusted relative estimates.",
+                    "claim": (
+                        f"Observed outcome risk by {score_label} is shown before "
+                        f"the {estimate_label.lower()} relative estimate."
+                    ),
                     "evidence_ids": [strata_record.evidence_id],
                     "review_risk": "Sparse high-score strata should be interpreted with their denominators.",
                 }
@@ -2841,6 +2880,7 @@ def _normalise_association_frame(
         cols,
         [
             "exposure",
+            "exposure_level",
             "primary_exposure",
             "reader_label",
             "label",
@@ -3106,6 +3146,7 @@ def _normalise_strata_frame(
             "outcome_rate",
             "outcome_risk",
             "event_rate",
+            "outcome_rate_pct",
             "death_pct",
             "mortality_pct",
             "event_pct",
@@ -3143,10 +3184,24 @@ def _normalise_strata_frame(
             if name.endswith(_GROUP_SUFFIXES) and not name.endswith("_order"):
                 score_col = col
                 break
-    n_col = _first_col(cols, ["n", "count", "n_total"])
+    n_col = _first_col(
+        cols,
+        ["n", "count", "n_total", "n_rows", "outcome_denominator"],
+    )
     if score_col is None or rate_col is None:
         return pd.DataFrame(columns=["score", "rate"])
-    raw_score = frame[score_col]
+    working = frame.copy()
+    row_role_col = cols.get("row_role")
+    if row_role_col is not None:
+        # Deterministic distribution tables carry one overall audit row beside
+        # the actual exposure strata.  Overall is a denominator check, not a
+        # third exposure group, and must never become a blank/Nan category in a
+        # publication panel.
+        row_roles = working[row_role_col].astype(str).str.strip().str.casefold()
+        working = working.loc[
+            ~row_roles.isin({"overall", "total", "summary"})
+        ].copy()
+    raw_score = working[score_col]
     numeric_score = pd.to_numeric(raw_score, errors="coerce")
     semantic_category = _score_column_is_semantic_category(score_col)
     score_is_numeric = bool(numeric_score.notna().all()) and not semantic_category
@@ -3162,17 +3217,17 @@ def _normalise_strata_frame(
     score_order = (
         numeric_score
         if numeric_score.notna().any()
-        else pd.Series(range(len(frame)), index=frame.index)
+        else pd.Series(range(len(working)), index=working.index)
     )
     out = pd.DataFrame(
         {
             "score": score_values,
-            "rate": pd.to_numeric(frame[rate_col], errors="coerce"),
+            "rate": pd.to_numeric(working[rate_col], errors="coerce"),
             "_score_order": score_order,
         }
     ).dropna(subset=["score", "rate"])
     if n_col is not None:
-        out["n"] = pd.to_numeric(frame.loc[out.index, n_col], errors="coerce")
+        out["n"] = pd.to_numeric(working.loc[out.index, n_col], errors="coerce")
     if not out.empty and out["rate"].max() > 1.0:
         out["rate"] = out["rate"] / 100.0
     result = (
@@ -3193,6 +3248,7 @@ def _score_column_is_semantic_category(column: Any) -> bool:
     normalized = str(column or "").strip().lower().replace("-", "_").replace(" ", "_")
     return normalized in {
         "exposure",
+        "exposure_level",
         "exposure_label",
         "group",
         "group_label",
@@ -3219,7 +3275,11 @@ def _score_category_label(
     value_label = _display_label(value, display_labels)
     if state is not None and _label_lookup(column, display_labels) is not None:
         return f"{column_label} {state}"
-    if normalized_col in {"exposure", "exposure_status"} and state is not None:
+    if normalized_col in {
+        "exposure",
+        "exposure_level",
+        "exposure_status",
+    } and state is not None:
         return "Exposed" if state == "positive" else "Unexposed"
     if normalized_col == "status" and state is not None:
         return state.capitalize()
@@ -3426,6 +3486,7 @@ def _score_axis_label(
         "severity_score": "Severity score",
         "risk_score": "Risk score",
         "exposure": "Exposure group",
+        "exposure_level": "Exposure group",
         "exposure_label": "Exposure group",
         "group": "Group",
         "group_label": "Group",

@@ -37,6 +37,11 @@ from ..authority.evidence_store import (
 from ..figures.skill import PublicationFigureSkill
 from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
+from .manuscript_literature import (
+    audit_manuscript_literature,
+    render_writer_literature_digest,
+)
+from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle
 from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import budgeted_vlm_client
@@ -597,7 +602,7 @@ def run_write_phase(
             "explicitly paused after analysis.",
         )
 
-    literature: Optional[LiteratureBundle] = None
+    literature: Optional[LiteratureBundle] = plan_result.preplan_literature
     publication_skill_activation = compile_publication_skill_activation(
         nature_figure_enabled=pipeline._enable_publication_figure_skill,
         nature_writing_enabled=pipeline._enable_nature_writing_skill,
@@ -707,7 +712,7 @@ def run_write_phase(
                 )
             )
 
-    if pipeline._enable_literature:
+    if pipeline._enable_literature and literature is None:
         try:
             emit_progress(
                 "literature",
@@ -858,6 +863,33 @@ def run_write_phase(
         evidence,
         per_step_records,
     )
+    # Produce a digest-bound appraisal surface before the Writer runs.  It is
+    # deliberately unsigned and leaves comparator/difference cells blank; an
+    # abstract search hit cannot authorize the Agent to declare its own work
+    # novel.  Existing independently reviewed packets are never overwritten.
+    novelty_path = run_dir / "novelty_positioning_audit.json"
+    if not novelty_path.exists():
+        novelty_packet = build_unsigned_novelty_positioning_packet(
+            context=context,
+            plan=execute_result.plan,
+            literature=literature,
+        )
+        novelty_path.write_text(
+            novelty_packet.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+    if evidence.get("novelty_positioning_audit") is None:
+        evidence.register_file(
+            kind="log",
+            description=(
+                "Unsigned source-bound novelty comparison packet for independent "
+                "clinical and methods appraisal."
+            ),
+            source_path=novelty_path,
+            evidence_id="novelty_positioning_audit",
+            producer="pipeline",
+            generation_mode="system",
+        )
     emit_progress(
         "writer",
         "Drafting manuscript scaffold.",
@@ -945,6 +977,7 @@ def run_write_phase(
             context=agent_context,
             evidence_ids=preferred_writer_evidence_names,
             evidence_digest=writer_evidence_digest,
+            literature_digest=render_writer_literature_digest(literature),
         )
     except Exception as exc:
         writer_error_message = f"{type(exc).__name__}: {exc}"
@@ -1073,6 +1106,31 @@ def run_write_phase(
             producer="writer",
             generation_mode="llm",
             prompt_pack_version=prompt_version,
+        )
+
+    manuscript_literature_audit = audit_manuscript_literature(scaffold, literature)
+    manuscript_literature_path = run_dir / "manuscript_literature_audit.json"
+    manuscript_literature_path.write_text(
+        manuscript_literature_audit.model_dump_json(indent=2), encoding="utf-8"
+    )
+    if evidence.get("manuscript_literature_audit") is None:
+        evidence.register_file(
+            kind="log",
+            description="Exact run-bound manuscript literature citation audit.",
+            source_path=manuscript_literature_path,
+            evidence_id="manuscript_literature_audit",
+            producer="pipeline",
+            generation_mode="system",
+        )
+    if manuscript_literature_audit.status != "pass":
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_literature",
+                severity="error",
+                message=manuscript_literature_audit.message,
+                evidence_ids=["manuscript_literature_audit"],
+                detail=manuscript_literature_audit.model_dump(mode="json"),
+            )
         )
 
     evidence_bound_scaffold, removed_sentences = (
@@ -1391,8 +1449,13 @@ def run_write_phase(
                 # Prefer PNG for LaTeX compatibility; SVG needs
                 # inkscape or svg package.
                 if rec.relative_path.endswith((".png", ".pdf", ".tiff")):
+                    # EvidenceRecord paths are already run-root-relative
+                    # (normally ``evidence/<file>``).  Prefixing them again
+                    # produced ``evidence/evidence/...`` and made the safe PDF
+                    # renderer fail after LaTeX had emitted a partial PDF.
+                    figure_path = str(rec.relative_path).replace("\\", "/")
                     fig_paths_for_latex.append(
-                        (rec.evidence_id, "evidence/" + rec.relative_path)
+                        (rec.evidence_id, figure_path)
                     )
             tex = scaffold_to_latex(
                 markdown=bound,
@@ -1403,6 +1466,7 @@ def run_write_phase(
                 bibliography_basename=bib_basename,
                 venue_template=pipeline._latex_venue_template,
                 figure_paths=fig_paths_for_latex or None,
+                draft_watermark=pipeline._latex_draft_watermark,
             )
             tex_path = run_dir / "manuscript_scaffold.tex"
             tex_path.write_text(tex, encoding="utf-8")
@@ -1442,6 +1506,7 @@ def run_write_phase(
                     tex_path=tex_path,
                     bib_path=bib_full,
                     output_dir=run_dir,
+                    draft_watermark=pipeline._latex_draft_watermark,
                 )
                 if pdf_result.success and pdf_result.pdf_path is not None:
                     if evidence.get("manuscript_scaffold_pdf") is None:
@@ -1452,6 +1517,21 @@ def run_write_phase(
                             ),
                             source_path=pdf_result.pdf_path,
                             evidence_id="manuscript_scaffold_pdf",
+                            producer="pipeline",
+                            generation_mode="system",
+                        )
+                    if (
+                        pdf_result.receipt_path is not None
+                        and evidence.get("manuscript_pdf_receipt") is None
+                    ):
+                        evidence.register_file(
+                            kind="log",
+                            description=(
+                                "Digest-bound receipt for the sandboxed manuscript "
+                                "PDF render."
+                            ),
+                            source_path=pdf_result.receipt_path,
+                            evidence_id="manuscript_pdf_receipt",
                             producer="pipeline",
                             generation_mode="system",
                         )

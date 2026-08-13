@@ -28,6 +28,7 @@ from typing import Any, Mapping
 
 import pandas as pd
 
+from ...contracts.ownership_verdict import OwnershipVerdict
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
@@ -49,6 +50,7 @@ from .typed_input_binding import BoundTypedInput, load_typed_input
 __all__ = [
     "EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY",
     "EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT",
+    "exposure_outcome_distribution_figure_declaration_verdict",
     "exposure_outcome_distribution_figure_code",
     "exposure_outcome_distribution_figure_owns_step",
     "run_exposure_outcome_distribution_figure",
@@ -66,6 +68,7 @@ EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY = TypedInputCapability(
 
 _OVERALL_ROLE = "overall"
 _LEVEL_ROLE = "exposure_level"
+_ANALYSIS_KIND = "exposure_outcome_distribution_figure"
 
 
 def _is_safe_figure_product_id(value: Any) -> bool:
@@ -83,14 +86,15 @@ def _figure_product(value: Any) -> str | None:
     return product
 
 
-def exposure_outcome_distribution_figure_owns_step(step: AnalysisStep) -> bool:
-    """Own a rendering-only step whose single typed input is this product."""
+def exposure_outcome_distribution_figure_declaration_verdict(
+    step: AnalysisStep,
+) -> OwnershipVerdict:
+    """Distinguish a different figure from this figure with the wrong row mode."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
-    if not EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY.admits_step(step):
-        return False
-    return bool(
-        step.planned_analysis_role == "auxiliary"
+    if not (
+        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY.admits(step.inputs)
+        and step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
         and len(products) == 1
         and products[0] is not None
@@ -98,7 +102,39 @@ def exposure_outcome_distribution_figure_owns_step(step: AnalysisStep) -> bool:
         and step.table_one_spec is None
         and step.trajectory_stability_spec is None
         and step.exposure_outcome_distribution_spec is None
+    ):
+        return OwnershipVerdict.wrong_shape(
+            _ANALYSIS_KIND,
+            reason=(
+                "the step is not one auxiliary visualization of the exact "
+                "exposure/outcome distribution table"
+            ),
+        )
+
+    if not EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY.admits_step(step):
+        return OwnershipVerdict.incomplete_declaration(
+            _ANALYSIS_KIND,
+            missing=(
+                "input_consumption_contracts["
+                f"{EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT}].mode=all_rows",
+            ),
+            reason=(
+                "the deterministic renderer re-derives and draws the two exposure "
+                "levels plus the overall denominator from all rows; single_row or "
+                "role-subset consumption cannot realize that declared figure"
+            ),
+        )
+
+    return OwnershipVerdict.claim(
+        _ANALYSIS_KIND,
+        reason="the exact typed distribution and its all_rows contract are declared",
     )
+
+
+def exposure_outcome_distribution_figure_owns_step(step: AnalysisStep) -> bool:
+    """Own a rendering-only step whose single typed input is this product."""
+
+    return exposure_outcome_distribution_figure_declaration_verdict(step).claimed
 
 
 def exposure_outcome_distribution_figure_code(
@@ -286,6 +322,18 @@ def _validate(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, dict[str, A
             percentage(int(row["n_rows"]), int(row["exposure_denominator"])),
         ):
             raise ValueError("an exposure percentage is not its own counts")
+        expected_exposure_low, expected_exposure_high = wilson_interval(
+            int(row["n_rows"]),
+            int(row["exposure_denominator"]),
+            confidence_level=confidence_level,
+        )
+        if not _close(
+            row["exposure_ci_low_pct"], expected_exposure_low
+        ) or not _close(row["exposure_ci_high_pct"], expected_exposure_high):
+            raise ValueError(
+                "an exposure prevalence interval is not the declared method at "
+                "the declared confidence level"
+            )
         if not _close(
             row["outcome_rate_pct"],
             percentage(int(row["outcome_events"]), int(row["outcome_denominator"])),
@@ -359,9 +407,16 @@ def run_exposure_outcome_distribution_figure(
     prevalence_source = out_dir / f"{figure_product}_prevalence_source_data.csv"
     outcome_source = out_dir / f"{figure_product}_outcome_source_data.csv"
     frame.to_csv(full_source, index=False)
-    levels[["exposure_level", "n_rows", "exposure_denominator", "exposure_pct"]].to_csv(
-        prevalence_source, index=False
-    )
+    levels[
+        [
+            "exposure_level",
+            "n_rows",
+            "exposure_denominator",
+            "exposure_pct",
+            "exposure_ci_low_pct",
+            "exposure_ci_high_pct",
+        ]
+    ].to_csv(prevalence_source, index=False)
     levels[
         [
             "exposure_level",
@@ -383,10 +438,15 @@ def run_exposure_outcome_distribution_figure(
 
     fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(7.2, 3.4))
 
+    prevalence = levels["exposure_pct"].astype(float)
+    prevalence_low = levels["exposure_ci_low_pct"].astype(float)
+    prevalence_high = levels["exposure_ci_high_pct"].astype(float)
     ax_a.barh(
         positions,
-        [float(value) for value in levels["exposure_pct"]],
+        prevalence,
+        xerr=[prevalence - prevalence_low, prevalence_high - prevalence],
         color=palette["blue"],
+        error_kw={"ecolor": palette["neutral"], "capsize": 2.0, "elinewidth": 1.0},
         height=0.55,
     )
     ax_a.set_yticks(positions)

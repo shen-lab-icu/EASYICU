@@ -24,6 +24,16 @@ from .study_design_playbook import StudyDesignFamily
 ARTICLE_FIGURE_STRATEGY_SCHEMA_VERSION = "easyicu.article_figure_strategy/1"
 ARTICLE_FIGURE_STRATEGY_AUDIT_SCHEMA_VERSION = "easyicu.article_figure_strategy_audit/1"
 
+# One owner vocabulary for the typed data-quality display. Plan shaping and
+# the deterministic renderer both import these identities; a generic
+# sensitivity plot can therefore never masquerade as missingness/measurement
+# evidence simply because it contains the word "audit".
+DATA_QUALITY_FIGURE_REQUIRED_INPUTS = (
+    "table:missingness_measurement_audit",
+    "table:measurement_process_audit",
+)
+DATA_QUALITY_FIGURE_PRODUCT = "figure:data_quality"
+
 _GENERIC_CHART_TYPES = {"bar", "forest", "heatmap", "unspecified"}
 _GENERIC_PANEL_ROLES = {
     "",
@@ -43,6 +53,36 @@ _PRIMARY_PUBLICATION_MIN_ROLES = {
     "phenotyping": 3,
     "causal_emulation": 3,
     "descriptive": 2,
+}
+
+# Owner vocabulary for typed plan products.  Article strategies intentionally
+# use reader-facing phrases ("outcome by exposure"), while plan products use
+# stable snake-case identities (``exposure_outcome_distribution``).  Matching
+# only literal prose under-credits real figures; searching the whole plan
+# over-credits tables that are never rendered.  Keep the bridge here, beside
+# the role strategy it interprets, and apply it only to explicit figure steps.
+_PLAN_PRODUCT_HINTS_BY_ROLE: dict[str, tuple[str, ...]] = {
+    "descriptive_result": (
+        "exposure_outcome_distribution",
+        "exposure_outcome_panel",
+        "absolute_risk",
+        "event_rate",
+        "prevalence",
+    ),
+    "primary_estimand": (
+        "adjusted_association",
+        "primary_association",
+        "primary_estimand",
+        "effect_estimate",
+    ),
+    "robustness": ("robustness", "sensitivity"),
+    "data_quality": (
+        "missingness",
+        "measurement_process",
+        "data_quality",
+        "availability",
+        "coverage",
+    ),
 }
 
 
@@ -68,6 +108,44 @@ class ArticleFigureStrategy(BaseModel):
     role_strategies: List[FigureRoleStrategy] = Field(default_factory=list)
     anti_patterns: List[str] = Field(default_factory=list)
     prompt_rules: List[str] = Field(default_factory=list)
+
+
+def _normalise_role_match_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+
+
+def figure_step_covers_role(step: Any, role: FigureRoleStrategy) -> bool:
+    """Whether one explicit figure step carries a role's typed evidence.
+
+    Intent text is deliberately excluded: a model saying it will make a data
+    quality figure is not equivalent to declaring the source table and figure
+    product that the runtime can execute and audit.
+    """
+
+    outputs = [str(value) for value in getattr(step, "expected_outputs", ())]
+    if not any(value.startswith("figure:") for value in outputs):
+        return False
+    text = _normalise_role_match_text(
+        " ".join(
+            [
+                str(getattr(step, "step_id", "") or ""),
+                str(getattr(step, "method", "") or ""),
+                *[str(value) for value in getattr(step, "inputs", ())],
+                *outputs,
+            ]
+        )
+    )
+    raw_terms = (
+        role.role,
+        *role.search_terms,
+        *role.acceptable_chart_types,
+        *role.required_text_terms,
+        *_PLAN_PRODUCT_HINTS_BY_ROLE.get(role.role, ()),
+    )
+    return any(
+        term and term in text
+        for term in (_normalise_role_match_text(value) for value in raw_terms)
+    )
 
 
 def _role(
@@ -769,8 +847,11 @@ __all__ = [
     "ARTICLE_FIGURE_STRATEGY_AUDIT_SCHEMA_VERSION",
     "ARTICLE_FIGURE_STRATEGY_SCHEMA_VERSION",
     "ArticleFigureStrategy",
+    "DATA_QUALITY_FIGURE_PRODUCT",
+    "DATA_QUALITY_FIGURE_REQUIRED_INPUTS",
     "FigureRoleStrategy",
     "build_article_figure_strategy",
+    "figure_step_covers_role",
     "render_article_figure_strategy_for_prompt",
     "summarize_article_figure_strategy_coverage",
     "validate_run_against_article_figure_strategy",

@@ -253,6 +253,17 @@ def test_the_retry_reminder_publishes_primary_contract_applicability():
     assert "never `null`" in reminder
 
 
+def test_the_retry_reminder_closes_common_representation_seams():
+    reminder = planner_science_retry_guide()
+
+    assert "`report:<name>`" in reminder
+    assert "`protocol` is not a product kind" in reminder
+    assert "`report_missing_by_group`" in reminder
+    assert "exact exposure and outcome" in reminder
+    assert "JSON numbers remain numbers" in reminder
+    assert "required `robustness_specs`" in reminder
+
+
 # ---------------------------------------------------------------------------
 # A constant the Planner cannot choose is not dictated to it
 # ---------------------------------------------------------------------------

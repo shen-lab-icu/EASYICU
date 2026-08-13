@@ -183,6 +183,12 @@ def outbound_safe_context_payload(
                     "aggregation_hint": _aggregation_hint(variable),
                     "observed_shape": projected_domain,
                     "analysis_window": variable.analysis_window,
+                    "analysis_window_role": variable.analysis_window_role,
+                    "clinical_definition": (
+                        variable.clinical_definition.model_dump(mode="json")
+                        if variable.clinical_definition is not None
+                        else None
+                    ),
                     "temporal_resolution": variable.temporal_resolution,
                     "fixed_window_trajectory": (
                         variable.fixed_window_trajectory.model_dump(mode="json")
@@ -214,7 +220,26 @@ def outbound_safe_context_payload(
                 }
             )
         )
-    return _compact(
+    preferences = context.user_preferences
+    explicit_user_choices = (
+        preferences.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude={"extra_notes"},
+        )
+        if preferences is not None
+        else None
+    )
+    if (
+        isinstance(explicit_user_choices, dict)
+        and preferences is not None
+        and preferences.covariate_selection == "planner_selectable"
+    ):
+        # Preserve the historic prompt shape when the new authority is not in
+        # use. The default is host semantics, not extra Provider prose.
+        explicit_user_choices.pop("covariate_selection", None)
+
+    payload = _compact(
         {
             "schema": "easyicu.outbound_safe_context/1",
             "research_question": context.research_question,
@@ -253,18 +278,24 @@ def outbound_safe_context_payload(
                 for constraint in context.temporal_constraints
             ],
             "cross_database_validation": context.cross_database_validation,
-            "explicit_user_choices": (
-                context.user_preferences.model_dump(
-                    mode="json",
-                    exclude_none=True,
-                    exclude={"extra_notes"},
-                )
-                if context.user_preferences is not None
-                else None
-            ),
+            "explicit_user_choices": explicit_user_choices,
             "variables": variables,
         }
     )
+    # ``_compact`` normally removes empty arrays.  Under exact adjustment
+    # authority, however, [] is the user's positive decision to run an
+    # unadjusted model, not missing information.  Preserve it in the outbound
+    # Planner projection so the model sees the same typed distinction enforced
+    # by the host validator.
+    if (
+        preferences is not None
+        and preferences.covariate_selection == "exact"
+        and isinstance(payload.get("explicit_user_choices"), dict)
+    ):
+        payload["explicit_user_choices"]["covariates"] = list(
+            preferences.covariates
+        )
+    return payload
 
 
 def format_outbound_safe_context(

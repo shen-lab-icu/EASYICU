@@ -202,6 +202,7 @@ from .runners.deterministic_missingness import (
     missingness_measurement_audit_code,
 )
 from .runners.deterministic_robustness import (
+    robustness_replay_spec_has_kind_mismatch,
     robustness_replay_spec_is_emittable,
     robustness_sensitivity_preflight_code,
 )
@@ -2274,6 +2275,16 @@ def _robustness_sensitivity_runner_owns_step(
         and robustness_replay_spec_is_emittable(step)
     ):
         return True
+    if (
+        step is not None
+        and step.robustness_replay_spec is not None
+        and robustness_replay_spec_has_kind_mismatch(step)
+    ):
+        # Incomplete declarations retain the characterised label fallback;
+        # incompatible declarations do not. Otherwise a plan that maps a CSV
+        # replay output but promises it as JSON is claimed and only fails after
+        # irrelevant code-repair calls.
+        return False
     method_head = _method_head(method)
     if method_head not in _ROBUSTNESS_SENSITIVITY_METHODS:
         return False
@@ -4379,6 +4390,12 @@ def run_execute_phase(
                 probe_summary=probe_summary_payload,
                 completed_step_records=completed_records,
                 directive=directive,
+                allowed_literature_citation_keys=(
+                    plan_result.allowed_literature_citation_keys
+                ),
+                direct_comparator_literature_keys=(
+                    plan_result.direct_comparator_literature_keys
+                ),
             )
         except Exception as exc:
             findings.append(
@@ -4407,6 +4424,12 @@ def run_execute_phase(
         candidate_contract_findings = replan_candidate_contract_findings(
             plan=revised,
             context=context,
+            allowed_literature_citation_keys=(
+                plan_result.allowed_literature_citation_keys
+            ),
+            direct_comparator_literature_keys=(
+                plan_result.direct_comparator_literature_keys
+            ),
             owner_declaration_findings=owner_declaration_plan_findings(
                 plan=revised
             ),
@@ -4512,6 +4535,7 @@ def run_execute_phase(
 
     trajectory_plan_blocked = False
     typed_plan_dag_blocked = False
+    product_promise_blocked = False
     endpoint_contract_blocked = False
     probe_step_id = "00_probe"
     # The plan-time gates below validate the PLAN, not the probe, so they
@@ -4767,6 +4791,12 @@ def run_execute_phase(
         # here with a named, repairable finding.
         *declared_raw_input_plan_findings(plan=plan, context=context),
     ]
+    # The first pass feeds a repair directive to the Planner.  A repaired plan
+    # is still model output, so verify the same product contract again before
+    # any executor is selected.  The E1 run that motivated this check removed
+    # the duplicate promise but kept the *wrong* kind; without this second pass
+    # the replay tried to parse its CSV summary as a JSON statistic.
+    final_product_promise_findings = product_promise_plan_findings(plan=plan)
     final_endpoint_findings = [
         finding.model_copy(
             update={
@@ -4795,6 +4825,17 @@ def run_execute_phase(
             {
                 "typed_plan_dag_blocked": True,
                 "typed_plan_dag_error_count": len(final_typed_plan_findings),
+            }
+        )
+    if final_product_promise_findings:
+        product_promise_blocked = True
+        findings.extend(final_product_promise_findings)
+        _flush_partial_manifest(
+            {
+                "product_promise_blocked": True,
+                "product_promise_error_count": len(
+                    final_product_promise_findings
+                ),
             }
         )
 
@@ -7435,7 +7476,13 @@ def run_execute_phase(
                 step_record["concept_approved_code_sha256"] = (
                     concept_approved_code_digest
                 )
-                if sealed_renderer_state.repair_id is not None:
+                if (
+                    sealed_renderer_state.repair_id is not None
+                    or (
+                        standard_executor is not None
+                        and standard_executor.host_sealed_renderer
+                    )
+                ):
                     sealed_renderer_authorized_code_sha256 = (
                         concept_approved_code_digest
                     )
@@ -9723,7 +9770,18 @@ def run_execute_phase(
                     if isinstance(reported_slot_bindings, Mapping)
                     else {}
                 )
-                if sealed_renderer_authorized_code_sha256 is not None:
+                # A registry-backed sealed renderer carries an additional
+                # repair-id/parent-snapshot/product-slot receipt bundle.  A
+                # normal deterministic host renderer is also code-sealed so a
+                # model cannot rewrite it, but its lineage is governed by the
+                # resolved-input and host input-binding receipts written above.
+                # Do not demand the legacy repair receipt from that second
+                # class: its SealedRendererState is intentionally empty.
+                legacy_sealed_renderer_receipt = bool(
+                    sealed_renderer_authorized_code_sha256 is not None
+                    and sealed_renderer_state.repair_id is not None
+                )
+                if legacy_sealed_renderer_receipt:
                     parent_step_id = str(step.step_id or "").removesuffix("_figure")
                     parent_out = run_dir / "steps" / parent_step_id / "outputs"
                     try:
@@ -9748,7 +9806,7 @@ def run_execute_phase(
                                 },
                             )
                         )
-                if sealed_renderer_authorized_code_sha256 is not None and (
+                if legacy_sealed_renderer_receipt and (
                     visual_step_summary.get("sealed_renderer_repair")
                     != sealed_renderer_state.repair_id
                     or visual_step_summary.get("sealed_renderer_implementation_sha256")
@@ -11810,9 +11868,13 @@ def run_execute_phase(
                 "typed_plan_dag_blocked"
                 if typed_plan_dag_blocked
                 else (
-                    "development_sample_unauthorized"
-                    if development_sample_blocked
-                    else None
+                    "product_promise_blocked"
+                    if product_promise_blocked
+                    else (
+                        "development_sample_unauthorized"
+                        if development_sample_blocked
+                        else None
+                    )
                 )
             )
         )
@@ -12227,6 +12289,7 @@ def run_execute_phase(
         not endpoint_contract_blocked
         and not trajectory_plan_blocked
         and not typed_plan_dag_blocked
+        and not product_promise_blocked
         and trajectory_plan_contract_applies(
             plan=plan,
             context=context,

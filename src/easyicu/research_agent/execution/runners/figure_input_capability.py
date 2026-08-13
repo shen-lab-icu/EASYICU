@@ -76,6 +76,7 @@ class TypedInputCapability:
 
     required: frozenset[str]
     optional: frozenset[str] = frozenset()
+    supported_consumption_modes: frozenset[str] = frozenset({"all_rows"})
 
     def __post_init__(self) -> None:
         if not self.required:
@@ -89,6 +90,11 @@ class TypedInputCapability:
         for key in self.required | self.optional:
             if not key or ":" not in key:
                 raise ValueError(f"capability inputs must be typed keys: {key!r}")
+        if not self.supported_consumption_modes or not (
+            self.supported_consumption_modes
+            <= {"all_rows", "single_row", "one_per_role"}
+        ):
+            raise ValueError("renderer capability has unsupported consumption modes")
 
     @property
     def readable(self) -> frozenset[str]:
@@ -112,10 +118,19 @@ class TypedInputCapability:
         declared = declared_typed_inputs(step)
         if not self.admits(declared):
             return False
-        return _contracts_match(step.input_consumption_contracts, declared)
+        return _contracts_match(
+            step.input_consumption_contracts,
+            declared,
+            supported_modes=self.supported_consumption_modes,
+        )
 
 
-def _contracts_match(contracts: Iterable[Any], declared: Sequence[str]) -> bool:
+def _contracts_match(
+    contracts: Iterable[Any],
+    declared: Sequence[str],
+    *,
+    supported_modes: frozenset[str],
+) -> bool:
     """Every input that owes a contract has one, whole and once, and only those.
 
     Which inputs owe one is not decided here.  ``AnalysisStep`` already
@@ -129,9 +144,14 @@ def _contracts_match(contracts: Iterable[Any], declared: Sequence[str]) -> bool:
         return False
     if set(keys) != inputs_owing_a_consumption_contract(declared):
         return False
-    return all(
-        contract.mode == "all_rows"
-        and contract.role_column is None
-        and not contract.expected_roles
-        for contract in consumption
-    )
+    for contract in consumption:
+        if contract.mode not in supported_modes:
+            return False
+        if contract.mode == "one_per_role":
+            if not str(contract.role_column or "").strip() or not list(
+                contract.expected_roles or ()
+            ):
+                return False
+        elif contract.role_column is not None or contract.expected_roles:
+            return False
+    return True

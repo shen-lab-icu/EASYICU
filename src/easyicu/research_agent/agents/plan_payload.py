@@ -18,8 +18,15 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     typed_product as _canonical_typed_product,
 )
+from ..planning.method_literature import METHOD_CARDS
+from ..planning.literature_bindings import (
+    allowed_method_source_keys,
+    normalize_literature_citation_keys,
+    validate_literature_citation_bindings,
+)
 from ..planning.primary_result_contract import model_terms_retry_guide
 from ..planning.robustness_contract import RobustnessSpec
+from ..planning.scientific_review import required_method_layers_for_plan
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -120,77 +127,139 @@ def render_methodological_principles(principles: Sequence[Any]) -> str:
     return "\n".join(lines)
 
 
-def normalize_literature_citation_keys(values: Sequence[str] | None) -> tuple[str, ...]:
-    """Return the ordered, unique run-bound citation-key authority."""
-
-    return tuple(
-        dict.fromkeys(
-            str(value or "").strip()
-            for value in (values or [])
-            if str(value or "").strip()
-        )
-    )
-
-
 def bind_literature_citation_authority(
     planning_contract_context: str,
     allowed_keys: Sequence[str],
+    *,
+    direct_comparator_keys: Sequence[str] = (),
 ) -> str:
-    """Append exact LiteratureBundle keys to the Planner design profile."""
+    """Append role-bound LiteratureBundle authority to the Planner profile.
+
+    Citation keys alone are not a scientific design aid: the model also needs
+    to know which source supports which methodological decision, and which
+    retrieved records survived the direct-comparator screen.  This projection
+    is deliberately assembled by the host from the sealed pre-plan bundle.
+    """
 
     if not allowed_keys:
         return planning_contract_context
+    method_source_keys = allowed_method_source_keys(allowed_keys)
+    direct_keys = tuple(
+        key
+        for key in normalize_literature_citation_keys(direct_comparator_keys)
+        if key in set(allowed_keys)
+    )
+    method_cards = [
+        card for card in METHOD_CARDS if card.source_key in method_source_keys
+    ]
     authority = (
         "PRE-PLAN LITERATURE CITATION AUTHORITY (exact, run-bound):\n"
         "- allowed_literature_citation_keys: "
         + json.dumps(list(allowed_keys), ensure_ascii=False)
+        + (
+            "\n- allowed_method_source_keys: "
+            + json.dumps(list(method_source_keys), ensure_ascii=False)
+            if method_source_keys
+            else ""
+        )
+        + (
+            "\n- screened_direct_comparator_keys: "
+            + json.dumps(list(direct_keys), ensure_ascii=False)
+            if direct_keys
+            else "\n- screened_direct_comparator_keys: []"
+        )
         + "\n- Every primary, secondary, and sensitivity step MUST bind one or "
         "more exact values from this list in literature_citation_keys. Do not cite "
         "an evidence artifact, analysis contract, study-design brief, or invented "
         "semantic label in that field. Auxiliary steps may use an empty list."
+        + " Every scientific step MUST also emit literature_design_bindings. "
+        "Each record must use a bound citation_key, select one or more exact "
+        "design_elements (population, time_zero, exposure, outcome, estimand, "
+        "adjustment, dependence, missing_data, robustness, reporting), and state what was "
+        "applied plus any deliberate divergence. Do not invent or copy a source "
+        "quotation; the host joins the sealed excerpt."
+        + (
+            " Every scientific step MUST include at least one exact "
+            "allowed_method_source_key that supports its design or method; a "
+            "disease-definition or database paper alone is insufficient. Add "
+            "topic/direct-comparator keys when they support the step's population, "
+            "exposure, outcome, or interpretation."
+            if method_source_keys
+            else ""
+        )
+        + (
+            " When screened_direct_comparator_keys is non-empty, at least one "
+            "primary analysis step MUST additionally bind one of those keys. "
+            "Use its source excerpt only to compare population, time zero, "
+            "exposure, outcome/estimand, and analysis choices. It is not "
+            "automatic authority to copy eligibility criteria or change this "
+            "study's sealed ResearchContext."
+            if direct_keys
+            else ""
+        )
+        + (
+            "\n- method_decision_cards (host-curated; id|layer|supported_design_elements|question|requirement|source):\n"
+            + "\n".join(
+                "  - "
+                + " | ".join(
+                    (
+                        card.id,
+                        card.layer,
+                        ",".join(card.design_elements),
+                        card.question,
+                        card.requirement,
+                        card.source_key,
+                    )
+                )
+                for card in method_cards
+            )
+            if method_cards
+            else ""
+        )
     )
     return "\n\n".join(
         value for value in (planning_contract_context, authority) if value
     )
 
 
-def literature_citation_retry_suffix(allowed_keys: Sequence[str]) -> str:
+def literature_citation_retry_suffix(
+    allowed_keys: Sequence[str],
+    *,
+    direct_comparator_keys: Sequence[str] = (),
+) -> str:
     """Render exact citation keys in the structured-retry reminder."""
 
     if not allowed_keys:
         return ""
+    method_source_keys = allowed_method_source_keys(allowed_keys)
+    direct_keys = tuple(
+        key
+        for key in normalize_literature_citation_keys(direct_comparator_keys)
+        if key in set(allowed_keys)
+    )
     return (
         " Allowed literature_citation_keys for this run are exactly: "
         + json.dumps(list(allowed_keys), ensure_ascii=False)
         + "."
+        + " Each scientific step must also include literature_design_bindings "
+        "with citation_key, design_elements, application, and optional divergence."
+        + (
+            " Every scientific step must include at least one method-source key "
+            "from: "
+            + json.dumps(list(method_source_keys), ensure_ascii=False)
+            + "."
+            if method_source_keys
+            else ""
+        )
+        + (
+            " At least one primary step must also cite a screened direct "
+            "comparator from: "
+            + json.dumps(list(direct_keys), ensure_ascii=False)
+            + "."
+            if direct_keys
+            else ""
+        )
     )
-
-
-def validate_literature_citation_bindings(
-    plan: AnalysisPlan,
-    allowed_keys: Sequence[str],
-) -> None:
-    """Reject invented keys and unbound scientific steps."""
-
-    allowed = set(allowed_keys)
-    declared = {key for step in plan.steps for key in step.literature_citation_keys}
-    unknown = sorted(declared - allowed)
-    if unknown:
-        raise ValueError(
-            "Planner cited keys outside this run's pre-plan LiteratureBundle: "
-            + ", ".join(unknown)
-        )
-    unbound = [
-        step.step_id
-        for step in plan.steps
-        if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
-        and not step.literature_citation_keys
-    ]
-    if allowed and unbound:
-        raise ValueError(
-            "Each primary/secondary/sensitivity plan step must bind an exact key "
-            "from the pre-plan LiteratureBundle; unbound steps: " + ", ".join(unbound)
-        )
 
 
 def planner_science_retry_guide() -> str:
@@ -206,7 +275,27 @@ def planner_science_retry_guide() -> str:
         "`role_column`, `expected_roles`, or `schema_version`. "
         "Omit `AnalysisPlan.endpoint` or emit null."
     )
-    return "\n\n" + model_terms_retry_guide() + "\n\n" + optional_fields
+    representation_fields = (
+        "Use only schema product kinds: `protocol` is not a product kind. A "
+        "non-executable future/feasibility step uses method "
+        "`feasibility_protocol` and output `report:<name>`; never consume that "
+        "terminal report downstream. "
+        "`TableOneSpec` already requires "
+        "`missingness_display='n_percent_by_group'`; do not add undeclared "
+        "`report_missing_by_group`. An `exposure_outcome_distribution_spec` "
+        "step must list its exact exposure and outcome in `inputs`. Preserve "
+        "observed scalar types (JSON numbers remain numbers). On retry retain "
+        "every article role and required `robustness_specs`; do not fix one "
+        "error by dropping an already-satisfied requirement."
+    )
+    return (
+        "\n\n"
+        + model_terms_retry_guide()
+        + "\n\n"
+        + optional_fields
+        + "\n\n"
+        + representation_fields
+    )
 
 
 def _canonicalise_figure_output_alias(token: object) -> object:
@@ -608,5 +697,6 @@ __all__ = [
     "normalize_literature_citation_keys",
     "bind_literature_citation_authority",
     "literature_citation_retry_suffix",
+    "required_method_layers_for_plan",
     "validate_literature_citation_bindings",
 ]

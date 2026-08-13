@@ -9,6 +9,7 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ConceptDescriptor,
     ResearchContext,
+    UserPreferences,
     VariableRole,
 )
 
@@ -112,6 +113,33 @@ def test_wide_planner_context_is_scoped_without_mutating_authority() -> None:
     assert "unrelated_signal_0_mean" not in {
         variable.name for variable in scoped.variables
     }
+
+
+def test_typed_sensitivity_variable_and_binding_reach_the_planner() -> None:
+    context = _wide_context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                sensitivity_specs=[
+                    {
+                        "spec_id": "nonlinear_signal_check",
+                        "axis": "functional_form",
+                        "strategy": "restricted_cubic_spline",
+                        "execution_variables": ["unrelated_signal_0_mean"],
+                    }
+                ]
+            )
+        }
+    )
+
+    scoped = scoped_planner_context(context)
+    prompt = PlannerAgent.request_messages(context)[1].content
+
+    assert "unrelated_signal_0_mean" in {
+        variable.name for variable in scoped.variables
+    }
+    assert "nonlinear_signal_check" in prompt
+    assert "sensitivity_spec_ids" in prompt
+    assert "restricted_cubic_spline_sensitivity" in prompt
 
 
 def test_wide_planner_request_preserves_catalog_and_stays_bounded() -> None:

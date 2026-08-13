@@ -189,6 +189,19 @@ def test_literature_citation_keys_change_the_scientific_plan_signature() -> None
     assert _plan_signature(base) != _plan_signature(cited)
 
 
+def test_sensitivity_spec_ids_change_the_scientific_plan_signature() -> None:
+    base = _freeform_plan()
+    bound_step = base.steps[0].model_copy(
+        update={"sensitivity_spec_ids": ["timing_landmark_24h"]}
+    )
+    bound = base.model_copy(update={"steps": [bound_step]})
+
+    assert _step_scientific_signature(base.steps[0]) != _step_scientific_signature(
+        bound.steps[0]
+    )
+    assert _plan_signature(base) != _plan_signature(bound)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

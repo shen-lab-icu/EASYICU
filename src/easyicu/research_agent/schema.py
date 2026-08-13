@@ -61,10 +61,12 @@ from .planning.cohort_contract import (
     coerce_cohort_definition,
 )
 from .planning.robustness_contract import (
+    ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS,
     RobustnessPlanError,
     RobustnessSpec,
     validate_robustness_specs,
 )
+from .planning.sensitivity_authority import PrespecifiedSensitivitySpec
 
 PlannedAnalysisRole = Literal[
     "primary",
@@ -152,26 +154,7 @@ MEASUREMENT_AUDIT_KINDS = frozenset(
 # Claiming it and then failing for a missing product is strictly worse than
 # never claiming it.  Only the Planner can say "this step IS that replay", so
 # it says it here.
-ROBUSTNESS_REPLAY_OUTPUTS = frozenset(
-    {
-        # Per locked specification: the estimate, its interval and its n.
-        "robustness_matrix",
-        # Agreement/disagreement across the grid, as one summary.
-        "robustness_summary",
-        # The locked grid itself, one row per specification.
-        "specification_grid",
-        # Cohort overlap and attrition between the primary set and each variant.
-        "membership_change",
-        # Whether each variant's outcome label could be executed at all.
-        "outcome_label_executability",
-        # The prespecified missing-data strategies and their warnings.
-        "missingness_strategy_notes",
-        # The primary effect on its declared scale.
-        "primary_effect",
-        # The complete-case denominator.
-        "complete_case_n",
-    }
-)
+ROBUSTNESS_REPLAY_OUTPUTS = frozenset(ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS)
 
 
 def _closed_table_one_levels(values: List[Any], *, label: str) -> List[Any]:
@@ -453,6 +436,40 @@ class ClusterSelectionManifest(BaseModel):
         return self
 
 
+class ClinicalDefinitionReference(BaseModel):
+    """Owner-issued clinical identity for one derived ICU concept.
+
+    Physical observation windows and clinical phenotype time zero are
+    deliberately separate.  For example, a Sepsis-3 phenotype can be defined
+    relative to suspected-infection onset while the exported rows are selected
+    inside an ICU-admission-relative observation window.  Keeping this as a
+    typed reference prevents the Planner from treating those coordinates as
+    interchangeable prose.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    contract_id: str
+    definition: str
+    version: str
+    source_id: str
+    definition_time_anchor: Optional[str] = None
+    status: str
+    validation_status: str
+    canonical_definition: bool
+    ascertainment_limitations: List[str] = Field(default_factory=list)
+    database_conformance: Dict[
+        str,
+        Literal["not_assessed", "mapping_only", "algorithm_golden"],
+    ] = Field(
+        default_factory=dict,
+        description=(
+            "Owner-issued per-database validation depth. mapping_only proves "
+            "physical concept mapping, not clinical algorithm equivalence."
+        ),
+    )
+
+
 class ConceptDescriptor(BaseModel):
     """ICU-aware metadata for a single column in the analysis dataset.
 
@@ -516,6 +533,23 @@ class ConceptDescriptor(BaseModel):
     analysis_window: Optional[str] = Field(
         default=None,
         description="Named time window used to derive this variable, e.g. 'first_24h'.",
+    )
+    analysis_window_role: Optional[
+        Literal["exposure_definition", "outer_observation_window"]
+    ] = Field(
+        default=None,
+        description=(
+            "Whether analysis_window defines the exposure's clinical time zero "
+            "or merely bounds observation of an already-derived phenotype. "
+            "None means the role is not owner-verified."
+        ),
+    )
+    clinical_definition: Optional[ClinicalDefinitionReference] = Field(
+        default=None,
+        description=(
+            "Digest-bound clinical definition/version/source projected from the "
+            "EasyICU clinical-contract registry for this concept."
+        ),
     )
     temporal_resolution: Optional[str] = Field(
         default=None,
@@ -611,12 +645,79 @@ class UserPreferences(BaseModel):
     data_constraints: Optional[str] = None
     must_have_outputs: Optional[str] = None
     covariates: List[str] = Field(default_factory=list)
+    covariate_selection: Literal["planner_selectable", "exact"] = Field(
+        default="planner_selectable",
+        description=(
+            "Whether covariates remain a Planner-owned choice or are the exact "
+            "user-approved adjustment roster. With 'exact', an empty covariates "
+            "list authorizes only an unadjusted model."
+        ),
+    )
+    covariate_rationales: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "User-reviewed clinical rationale for each exact adjustment "
+            "covariate. Keys are exact covariate identifiers; values explain "
+            "the pre-exposure confounding role rather than mere availability."
+        ),
+    )
+    covariate_temporal_roles: Dict[
+        str, Literal["baseline_static", "at_or_before_time_zero"]
+    ] = Field(
+        default_factory=dict,
+        description=(
+            "User-reviewed temporal eligibility for each exact adjustment "
+            "covariate. Post-time-zero measurements cannot satisfy this contract."
+        ),
+    )
     # Optional landmark / immortal-time origin (hours) for time-to-event
     # designs. Consumed by the deterministic survival runner; ``None`` means
     # "use the skill's case-neutral default" (24h) rather than a study-specific
     # constant baked into the skill.
     landmark_hours: Optional[float] = None
+    sensitivity_specs: List[PrespecifiedSensitivitySpec] = Field(
+        default_factory=list,
+        max_length=16,
+        description=(
+            "Exact user-reviewed sensitivity analyses. These typed commitments "
+            "govern materialization and plan review; prose is not authority."
+        ),
+    )
     extra_notes: Optional[str] = None
+
+    @field_validator("covariate_rationales")
+    @classmethod
+    def _bounded_covariate_rationales(cls, value: Dict[str, str]) -> Dict[str, str]:
+        result: Dict[str, str] = {}
+        for raw_key, raw_text in value.items():
+            key = str(raw_key or "").strip()
+            text = " ".join(str(raw_text or "").split())
+            if not key or key in result:
+                raise ValueError("covariate_rationales keys must be unique non-empty names")
+            if len(text) < 8 or len(text) > 600:
+                raise ValueError(
+                    "covariate_rationales values must contain 8-600 characters"
+                )
+            result[key] = text
+        return result
+
+    @model_validator(mode="after")
+    def _covariate_decisions_match_exact_roster(self) -> "UserPreferences":
+        rationale_keys = set(self.covariate_rationales)
+        temporal_keys = set(self.covariate_temporal_roles)
+        roster = set(self.covariates)
+        if rationale_keys - roster or temporal_keys - roster:
+            raise ValueError(
+                "covariate rationale/temporal-role keys must belong to covariates"
+            )
+        if self.covariate_selection != "exact" and (
+            rationale_keys or temporal_keys
+        ):
+            raise ValueError(
+                "covariate rationales and temporal roles require "
+                "covariate_selection='exact'"
+            )
+        return self
 
 
 RESEARCH_CONTEXT_SCHEMA_VERSION = "easyicu.research_context/1"
@@ -1908,6 +2009,49 @@ class RobustnessReplaySpec(BaseModel):
         return None
 
 
+LiteratureDesignElement = Literal[
+    "population",
+    "time_zero",
+    "exposure",
+    "outcome",
+    "estimand",
+    "adjustment",
+    "dependence",
+    "missing_data",
+    "robustness",
+    "reporting",
+]
+
+
+class LiteratureDesignBinding(BaseModel):
+    """Planner-owned explanation of how one source governs one plan step.
+
+    A citation key alone proves only that an article was named.  This contract
+    records the exact design decisions the Planner adopted from it, plus any
+    deliberate divergence.  Source excerpts remain owned by the sealed
+    LiteratureBundle and are joined by the host during scientific review.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    citation_key: str = Field(
+        ...,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$",
+    )
+    design_elements: List[LiteratureDesignElement] = Field(min_length=1)
+    application: str = Field(min_length=8, max_length=1200)
+    divergence: Optional[str] = Field(default=None, max_length=1200)
+
+    @field_validator("design_elements")
+    @classmethod
+    def _unique_design_elements(
+        cls, values: List[LiteratureDesignElement]
+    ) -> List[LiteratureDesignElement]:
+        if len(values) != len(set(values)):
+            raise ValueError("literature design_elements must be unique")
+        return values
+
+
 class AnalysisStep(BaseModel):
     """One step in a planner-emitted analysis plan."""
 
@@ -1958,12 +2102,30 @@ class AnalysisStep(BaseModel):
         ),
     )
     icu_rule_refs: List[str] = Field(default_factory=list)
+    sensitivity_spec_ids: List[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description=(
+            "Exact StudyContext sensitivity authorities this executable step "
+            "implements. The host validates these ids against sealed user "
+            "preferences; descriptive prose is not a binding."
+        ),
+    )
     literature_citation_keys: List[str] = Field(
         default_factory=list,
         description=(
             "Exact keys from this run's pre-plan LiteratureBundle that support "
             "the step's scientific design or method. Empty means no citation "
             "was bound; it must not be filled retrospectively by a renderer."
+        ),
+    )
+    literature_design_bindings: List[LiteratureDesignBinding] = Field(
+        default_factory=list,
+        description=(
+            "Typed article-to-design adoption records for this exact step. "
+            "Each citation_key must also appear in literature_citation_keys; "
+            "the host joins it to the sealed source record rather than trusting "
+            "Planner-authored quotations."
         ),
     )
 
@@ -1975,6 +2137,19 @@ class AnalysisStep(BaseModel):
             raise ValueError("literature_citation_keys must contain stable citation keys")
         if len(cleaned) != len(set(cleaned)):
             raise ValueError("literature_citation_keys must be unique")
+        return cleaned
+
+    @field_validator("sensitivity_spec_ids")
+    @classmethod
+    def _validate_sensitivity_spec_ids(cls, values: List[str]) -> List[str]:
+        cleaned = [str(value or "").strip() for value in values]
+        if any(
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", item)
+            for item in cleaned
+        ):
+            raise ValueError("sensitivity_spec_ids must contain stable ids")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("sensitivity_spec_ids must be unique")
         return cleaned
     model_requirements: List[PlannedModelRequirement] = Field(
         default_factory=list,
@@ -2112,6 +2287,19 @@ class AnalysisStep(BaseModel):
 
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
+        binding_keys = [item.citation_key for item in self.literature_design_bindings]
+        if len(binding_keys) != len(set(binding_keys)):
+            raise ValueError(
+                "literature_design_bindings must contain at most one record per citation_key"
+            )
+        unbound_design_keys = sorted(
+            set(binding_keys) - set(self.literature_citation_keys)
+        )
+        if unbound_design_keys:
+            raise ValueError(
+                "literature_design_bindings citation_key values must also appear "
+                "in literature_citation_keys; unbound " + ", ".join(unbound_design_keys)
+            )
         if self.table_one_spec is not None:
             if "table:table_one" not in self.expected_outputs:
                 raise ValueError(
@@ -3181,6 +3369,7 @@ __all__ = [
     "FixedWindowTrajectoryMetadata",
     "ClusterSelectionCandidate",
     "ClusterSelectionManifest",
+    "ClinicalDefinitionReference",
     "ConceptDescriptor",
     "CohortDescriptor",
     "ResearchContext",

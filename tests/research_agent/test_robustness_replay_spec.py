@@ -34,6 +34,8 @@ from easyicu.research_agent.execution.phase import (
 )
 from easyicu.research_agent.execution.runners.deterministic_robustness import (
     ROBUSTNESS_REPLAY_OUTPUT_FILES,
+    declared_robustness_product_registrations,
+    robustness_replay_spec_has_kind_mismatch,
     robustness_replay_spec_is_emittable,
 )
 from easyicu.research_agent.schema import (
@@ -198,6 +200,27 @@ def test_the_same_product_under_two_kinds_is_refused() -> None:
     # the run at re-parse, far from the cause -- and the host declines.
     step = AnalysisStep.model_validate(payload)
     assert robustness_replay_spec_is_emittable(step) is False
+
+
+def test_a_replay_csv_cannot_be_retyped_as_a_json_statistic() -> None:
+    """Regression for Web E1's second plan revision and two wasted repairs."""
+
+    payload = _real_payload()
+    payload["expected_outputs"] = [
+        value
+        for value in payload["expected_outputs"]
+        if value != "table:robustness_summary"
+    ]
+    payload["robustness_replay_spec"] = json.loads(json.dumps(_REAL_SPEC))
+    step = AnalysisStep.model_validate(payload)
+
+    assert "statistic:robustness_summary" in step.expected_outputs
+    assert robustness_replay_spec_has_kind_mismatch(step) is True
+    assert robustness_replay_spec_is_emittable(step) is False
+    assert _owns(step) is False
+    registrations = declared_robustness_product_registrations(step)
+    assert "statistic:robustness_summary" not in registrations
+    assert registrations["table:robustness_matrix"] == "robustness_matrix.csv"
 
 
 def test_a_declared_product_with_no_output_is_refused() -> None:

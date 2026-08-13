@@ -1528,21 +1528,24 @@ def _file_kinds(value: object) -> frozenset[str]:
 
 
 _AUDIT_PHYSICAL_FILE_KINDS = frozenset({"log", "table"})
+_REPORT_PHYSICAL_FILE_KINDS = frozenset({"log"})
 
 
 def _descriptor_path_is_compatible(*, kind: str, path: str) -> bool:
     """Return whether an exact typed descriptor can use *path*.
 
-    ``audit`` is a semantic product role rather than a file suffix.  It must
-    therefore be authorised only by an explicit structured descriptor, while
-    its physical payload may be a table or a machine-readable/log sidecar.
-    Keeping this compatibility here avoids teaching suffix-only path inference
-    that every CSV or JSON file is an audit product.
+    ``audit`` and ``report`` are semantic product roles rather than file
+    suffixes.  They are authorised only by an explicit typed descriptor, while
+    their physical payloads use ordinary table/log formats.  Keeping these
+    compatibilities here avoids teaching suffix-only inference that every CSV
+    is an audit or every Markdown file is a report.
     """
 
     physical_kinds = _file_kinds(path)
     if kind == "audit":
         return bool(physical_kinds & _AUDIT_PHYSICAL_FILE_KINDS)
+    if kind == "report":
+        return bool(physical_kinds & _REPORT_PHYSICAL_FILE_KINDS)
     return kind in physical_kinds
 
 
@@ -3005,7 +3008,8 @@ def _registered_products(
                 if role is not None:
                     role_kind, role_name = role
                     compatible_path = any(
-                        role_kind in _file_kinds(path) for path in paths
+                        _descriptor_path_is_compatible(kind=role_kind, path=path)
+                        for path in paths
                     )
                     scalar_registration = (
                         role_kind in {"statistic", "log"}

@@ -68,6 +68,7 @@ from __future__ import annotations
 __all__ = [
     # Schemas
     "ResearchContext",
+    "ClinicalDefinitionReference",
     "ConceptDescriptor",
     "EndpointSpec",
     "FixedWindowTrajectoryMetadata",
@@ -466,6 +467,7 @@ def __getattr__(name: str):
     """
     if name in {
         "ResearchContext",
+        "ClinicalDefinitionReference",
         "ConceptDescriptor",
         "EndpointSpec",
         "FixedWindowTrajectoryMetadata",

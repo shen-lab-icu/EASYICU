@@ -22,6 +22,8 @@ import ast
 from pathlib import Path
 
 import easyicu.research_agent as research_agent
+from easyicu.research_agent.agents import plan_payload
+from easyicu.research_agent.planning import literature_bindings
 
 PACKAGE_ROOT = Path(research_agent.__file__).resolve().parent
 PACKAGE_NAME = "easyicu.research_agent"
@@ -177,6 +179,10 @@ def test_planning_does_not_import_agent_or_action_layers() -> None:
     assert forbidden == [], (
         "planning/ must own dependency-neutral contracts instead of importing "
         f"agent adapters or action layers; violations: {forbidden}"
+    )
+    assert (
+        plan_payload.validate_literature_citation_bindings
+        is literature_bindings.validate_literature_citation_bindings
     )
 
 

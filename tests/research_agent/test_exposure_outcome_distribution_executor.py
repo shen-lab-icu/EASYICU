@@ -17,6 +17,7 @@ one study would not be exercised by the suite that guards it.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -26,6 +27,7 @@ import pytest
 
 from pydantic import ValidationError
 
+from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilityScope
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
     EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
     _distribution_rows,
@@ -36,6 +38,9 @@ from easyicu.research_agent.execution.runners.exposure_outcome_distribution_exec
 )
 from easyicu.research_agent.execution.runners.selection import (
     select_standard_executor,
+)
+from easyicu.research_agent.gates.plausibility_obligation import (
+    flag_only_plausibility_obligation_findings,
 )
 from easyicu.research_agent.schema import (
     AnalysisPlan,
@@ -149,6 +154,34 @@ def test_a_declared_design_is_owned_and_selected() -> None:
     )
     assert selection is not None
     assert selection.analysis_kind == "exposure_outcome_distribution"
+
+
+def test_a_receipt_bearing_distribution_is_owned_not_handed_to_the_coder() -> None:
+    step = _step()
+    scope = FlagOnlyPlausibilityScope(
+        step_id=STEP_ID,
+        expected_columns=(EXPOSURE,),
+        source_contracts_sha256="a" * 64,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Test", steps=[step]),
+        plausibility_scope=scope,
+    )
+
+    assert selection is not None
+    assert selection.analysis_kind == "exposure_outcome_distribution"
+    assert (
+        flag_only_plausibility_obligation_findings(
+            ast.parse(selection.code),
+            script_text=selection.code,
+            step=step,
+            scope=scope,
+        )
+        == []
+    )
 
 
 def test_a_step_without_the_spec_is_never_claimed() -> None:
@@ -309,6 +342,11 @@ def test_the_product_is_self_contained(monkeypatch, tmp_path: Path) -> None:
     assert exposed["outcome_missing_n"] == 1
     assert exposed["exposure_denominator"] == 20
     assert exposed["exposure_pct"] == pytest.approx(50.0)
+    assert exposed["exposure_ci_low_pct"] < 50.0 < exposed["exposure_ci_high_pct"]
+    assert (
+        exposed["exposure_ci_low_pct"],
+        exposed["exposure_ci_high_pct"],
+    ) == pytest.approx(wilson_interval(10, 20, confidence_level=0.95))
     # all_declared_rows: the rate is over all 10, not over the 9 observed.
     assert exposed["outcome_denominator"] == 10
     assert exposed["outcome_rate_pct"] == pytest.approx(30.0)

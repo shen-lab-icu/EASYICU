@@ -30,6 +30,7 @@ from .figure_strategy import (
     ArticleFigureStrategy,
     FigureRoleStrategy,
     build_article_figure_strategy,
+    figure_step_covers_role,
 )
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .study_design import StudyDesignBrief, build_study_design_brief
@@ -386,19 +387,34 @@ def _covered_article_roles(
 
 
 def _covered_visual_roles(
-    plan_text: str,
+    plan: Optional[AnalysisPlan],
     roles: Sequence[BlueprintVisualRole],
 ) -> List[str]:
+    """Return roles owned by explicit figure-producing steps only.
+
+    The old implementation searched the complete plan text.  A Table 1 or
+    missingness *table* elsewhere in the plan could therefore satisfy a
+    required visual role even when no figure consumed that evidence.  That
+    made the plan gate credit article figures that the executor would never
+    produce.
+    """
+
     covered: set[str] = set()
+    figure_steps = [
+        step
+        for step in (plan.steps if plan is not None else ())
+        if any(str(value).startswith("figure:") for value in step.expected_outputs)
+    ]
     for role in roles:
-        terms = [
-            role.role,
-            role.role.replace("_", " "),
-            *role.search_terms,
-            *role.acceptable_chart_types,
-            *role.required_text_terms,
-        ]
-        if any(_normalise_space(term) in plan_text for term in terms):
+        strategy_role = FigureRoleStrategy(
+            role=role.role,
+            required=role.required,
+            rationale=role.rationale,
+            acceptable_chart_types=list(role.acceptable_chart_types),
+            required_text_terms=list(role.required_text_terms),
+            search_terms=list(role.search_terms),
+        )
+        if any(figure_step_covers_role(step, strategy_role) for step in figure_steps):
             covered.add(role.role)
     return sorted(covered)
 
@@ -418,7 +434,7 @@ def validate_plan_against_analysis_blueprint(
     covered_article_roles = set(
         _covered_article_roles(plan_text, blueprint.article_roles)
     )
-    covered_visual_roles = set(_covered_visual_roles(plan_text, blueprint.visual_roles))
+    covered_visual_roles = set(_covered_visual_roles(plan, blueprint.visual_roles))
     missing_article_roles = sorted(required_article_roles - covered_article_roles)
     missing_visual_roles = sorted(required_visual_roles - covered_visual_roles)
     findings: List[ValidationFinding] = []
