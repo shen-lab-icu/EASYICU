@@ -56,11 +56,15 @@ def _budget(tmp_path, *, max_llm: int = 2, provider_limit: int = 9):
         reserved_final_category="concept_audit",
     )
     step_record: dict = {}
-    return provider, step_record, StepRepairBudget(
-        provider_budget=provider,
-        step_record=step_record,
-        max_llm_repairs=max_llm,
-        provider_receipt_relative_path=".runtime/provider_call_budgets/x.json",
+    return (
+        provider,
+        step_record,
+        StepRepairBudget(
+            provider_budget=provider,
+            step_record=step_record,
+            max_llm_repairs=max_llm,
+            provider_receipt_relative_path=".runtime/provider_call_budgets/x.json",
+        ),
     )
 
 
@@ -222,19 +226,33 @@ def test_the_execute_phase_asks_the_gate_by_name():
     """
 
     from easyicu.research_agent.execution import phase as execution_phase
+    from easyicu.research_agent.execution import concept_repair
 
-    tree = ast.parse(inspect.getsource(execution_phase))
+    trees = (
+        ast.parse(inspect.getsource(execution_phase)),
+        ast.parse(inspect.getsource(concept_repair.run_concept_repair_loop)),
+    )
     asked: collections.Counter = collections.Counter()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
-            continue
-        if node.func.id not in {
-            "_llm_repair_budget_available",
-            "_logical_llm_repair_budget_available",
-        }:
-            continue
-        if node.args and isinstance(node.args[0], ast.Constant):
-            asked[str(node.args[0].value)] += 1
+    for tree in trees:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            function_name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else ""
+            )
+            if function_name not in {
+                "_llm_repair_budget_available",
+                "_logical_llm_repair_budget_available",
+                "repair_budget_available",
+                "logical_budget_available",
+            }:
+                continue
+            if node.args and isinstance(node.args[0], ast.Constant):
+                asked[str(node.args[0].value)] += 1
 
     for terminal_class in sorted(TERMINAL_GATE_REPAIR_CLASSES):
         assert asked[terminal_class] >= 1, (
@@ -252,9 +270,12 @@ def test_the_concept_repair_is_gated_on_that_same_availability_check():
     """
 
     from easyicu.research_agent.execution import phase as execution_phase
+    from easyicu.research_agent.execution import concept_repair
 
-    source = inspect.getsource(execution_phase)
-    assert 'or not _llm_repair_budget_available("concept")' in source
+    source = inspect.getsource(execution_phase) + inspect.getsource(
+        concept_repair.run_concept_repair_loop
+    )
+    assert 'or not services.repair_budget_available("concept")' in source
 
 
 # ---------------------------------------------------------------------------

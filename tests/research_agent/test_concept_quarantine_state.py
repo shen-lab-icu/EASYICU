@@ -7,6 +7,7 @@ import inspect
 
 from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.execution import concept_audit as concept_audit_execution
+from easyicu.research_agent.execution import concept_repair as concept_repair_execution
 from easyicu.research_agent.execution.concept_reaudit import (
     DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE,
 )
@@ -320,6 +321,9 @@ def test_successful_final_audit_retires_only_prior_provider_failure() -> None:
 
 def test_execute_phase_keeps_quarantine_lifecycle_on_one_state_object() -> None:
     execute_one_step = _execute_one_step_node()
+    repair_loop = ast.parse(
+        inspect.getsource(concept_repair_execution.run_concept_repair_loop)
+    )
     constructors = [
         node
         for node in ast.walk(execute_one_step)
@@ -343,10 +347,14 @@ def test_execute_phase_keeps_quarantine_lifecycle_on_one_state_object() -> None:
 
     quarantine_attributes = {
         node.attr
-        for node in ast.walk(execute_one_step)
+        for tree, owner_names in (
+            (execute_one_step, {"quarantine_state"}),
+            (repair_loop, {"quarantine"}),
+        )
+        for node in ast.walk(tree)
         if isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
-        and node.value.id == "quarantine_state"
+        and node.value.id in owner_names
     }
     assert {
         "resumed_draft_used",
