@@ -62,7 +62,6 @@ from .planning.cohort_contract import (
 )
 from .planning.literature_contract import (
     LiteratureDesignBinding,
-    LiteratureDesignElement,
 )
 from .planning.robustness_contract import (
     ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS,
