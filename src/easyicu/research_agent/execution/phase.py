@@ -433,6 +433,11 @@ from ..authority.provider_budget import (
     load_provider_call_budget_state,
     provider_call_budget_receipt_path,
 )
+from .provider_budget_runtime import (
+    monotonic_step_llm_repair_history as _monotonic_step_llm_repair_history,
+    prepare_step_provider_budget,
+    step_snapshot_requires_provider_receipt as _step_snapshot_requires_provider_receipt,
+)
 from ..authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
     RUN_INPUT_CAPSULE_FILENAME,
@@ -850,48 +855,6 @@ def _persisted_monotonic_concept_constraints(
             continue
         parsed = _merge_monotonic_concept_constraints(parsed, [finding])
     return parsed
-
-
-def _monotonic_step_llm_repair_history(
-    records: Sequence[Mapping[str, Any]],
-    *,
-    limit: int,
-) -> tuple[int, List[str], bool]:
-    """Recover the largest durable logical-repair counter for one step.
-
-    Step records are append-only attempts.  The latest attempt may terminate
-    before copying the logical counter (for example, on a damaged provider
-    receipt), so latest-record-only recovery can incorrectly buy a fresh
-    repair budget.  A malformed explicit counter is treated conservatively as
-    exhausted instead of being ignored.
-    """
-
-    attempts = 0
-    classes: List[str] = []
-    invalid_snapshot = False
-    for record in records:
-        if "step_llm_repair_attempts" in record:
-            raw_attempts = record.get("step_llm_repair_attempts")
-            if (
-                isinstance(raw_attempts, bool)
-                or not isinstance(raw_attempts, int)
-                or raw_attempts < 0
-            ):
-                invalid_snapshot = True
-            else:
-                attempts = max(attempts, raw_attempts)
-        raw_classes = record.get("step_llm_repair_classes")
-        if not isinstance(raw_classes, list):
-            continue
-        normalized = [str(item).strip() for item in raw_classes]
-        if any(not item for item in normalized):
-            invalid_snapshot = True
-            continue
-        if len(normalized) > len(classes):
-            classes = normalized
-    if invalid_snapshot:
-        attempts = max(attempts, max(0, int(limit)))
-    return attempts, classes, invalid_snapshot
 
 
 def _remove_standard_executor_pending_artifacts(out_dir: Path) -> None:
@@ -1313,32 +1276,6 @@ _CAPSULE_TRANSIENT_STEP_STATUSES = {
     "concept_audited_pending_review",
     "executed_pending_review",
 }
-
-
-def _step_snapshot_requires_provider_receipt(
-    record: Mapping[str, Any],
-    *,
-    provider_attempts: int,
-    logical_repair_attempts: int,
-) -> bool:
-    """Whether a checkpoint proves a durable provider ledger must exist."""
-
-    if record.get("step_provider_call_receipt_version") not in {
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
-    }:
-        return False
-    return bool(
-        provider_attempts > 0
-        or logical_repair_attempts > 0
-        or record.get("capsule_pending_initial_transport_id")
-        or record.get("step_provider_call_receipt")
-    )
 
 
 def _append_terminal_step_record(
@@ -4486,9 +4423,7 @@ def run_execute_phase(
             direct_comparator_literature_keys=(
                 plan_result.direct_comparator_literature_keys
             ),
-            owner_declaration_findings=owner_declaration_plan_findings(
-                plan=revised
-            ),
+            owner_declaration_findings=owner_declaration_plan_findings(plan=revised),
         )
         active_candidate_findings, candidate_contract_errors = (
             partition_replan_candidate_findings(
@@ -4671,7 +4606,9 @@ def run_execute_phase(
     )
     owner_declaration_preflight = owner_declaration_plan_findings(plan=plan)
     product_promise_preflight = product_promise_plan_findings(plan=plan)
-    endpoint_preflight = endpoint_contract_findings(plan, context=context, severity="error")
+    endpoint_preflight = endpoint_contract_findings(
+        plan, context=context, severity="error"
+    )
     trajectory_directive = None
     typed_plan_directive = None
     declared_input_directive = None
@@ -4768,7 +4705,11 @@ def run_execute_phase(
         product_promise_preflight
     )
     endpoint_directive = None
-    if endpoint_preflight and (endpoint_preflight[0].detail or {}).get("reason") == "endpoint_projection_mismatch":
+    if (
+        endpoint_preflight
+        and (endpoint_preflight[0].detail or {}).get("reason")
+        == "endpoint_projection_mismatch"
+    ):
         endpoint_directive = (
             "Repair or remove the plan's stale endpoint projection without "
             "changing the sealed ResearchContext endpoint or any other science. "
@@ -4863,7 +4804,9 @@ def run_execute_phase(
                 }
             }
         )
-        for finding in endpoint_contract_findings(plan, context=context, severity="error")
+        for finding in endpoint_contract_findings(
+            plan, context=context, severity="error"
+        )
     ]
     if final_endpoint_findings:
         endpoint_contract_blocked = True
@@ -4889,9 +4832,7 @@ def run_execute_phase(
         _flush_partial_manifest(
             {
                 "product_promise_blocked": True,
-                "product_promise_error_count": len(
-                    final_product_promise_findings
-                ),
+                "product_promise_error_count": len(final_product_promise_findings),
             }
         )
 
@@ -5199,212 +5140,25 @@ def run_execute_phase(
                     "paper_authority": False,
                 }
             )
-        (
-            step_llm_repair_attempts,
-            prior_repair_classes,
-            repair_history_invalid,
-        ) = _monotonic_step_llm_repair_history(
-            prior_attempt_records,
-            limit=pipeline._max_step_llm_repair_attempts,
-        )
-        if step_llm_repair_attempts:
-            step_record["step_llm_repair_attempts"] = step_llm_repair_attempts
-            step_record["step_llm_repair_budget"] = (
-                pipeline._max_step_llm_repair_attempts
-            )
-        if prior_repair_classes:
-            step_record["step_llm_repair_classes"] = list(prior_repair_classes)
-        if repair_history_invalid:
-            step_record["step_llm_repair_history_invalid"] = True
-            step_record["step_llm_repair_budget_exhausted"] = True
-        configured_provider_limit = pipeline._max_step_provider_calls
-        effective_provider_limit = configured_provider_limit
-        reserved_final_category = (
-            "concept_audit" if pipeline._enable_llm_concept_audit else None
-        )
-        provider_receipt_path = provider_call_budget_receipt_path(
-            run_dir,
+        budget_runtime = prepare_step_provider_budget(
+            prior_attempt_records=prior_attempt_records,
+            prior_step_record=prior_step_record,
+            run_dir=run_dir,
             step_id=step.step_id,
-        )
-        provider_receipt_relative_path = str(provider_receipt_path.relative_to(run_dir))
-        prior_provider_categories: tuple[str, ...] = ()
-        prior_logical_repair_entries: tuple[Dict[str, object], ...] = ()
-        prior_initial_generation_entries: tuple[Dict[str, object], ...] = ()
-        prior_required_reservation_token: Optional[str] = None
-        prior_reservation_bound_provider_history_len: Optional[int] = None
-        prior_completed_reservation_token: Optional[str] = None
-        prior_reservation_released = False
-        prior_reserved_category_extensions: tuple[Dict[str, object], ...] = ()
-        prior_provider_attempts = 0
-        provider_receipt_integrity_error: Optional[str] = None
-        prior_snapshot_present = False
-        if isinstance(prior_step_record, Mapping):
-            snapshot_keys = {
-                "step_provider_call_budget",
-                "step_provider_call_attempts",
-                "step_provider_call_categories",
-            }
-            prior_snapshot_present = any(
-                key in prior_step_record for key in snapshot_keys
-            )
-            if prior_snapshot_present:
-                prior_limit = prior_step_record.get("step_provider_call_budget")
-                prior_attempts_raw = prior_step_record.get(
-                    "step_provider_call_attempts"
-                )
-                prior_categories_raw = prior_step_record.get(
-                    "step_provider_call_categories"
-                )
-                if (
-                    isinstance(prior_limit, bool)
-                    or not isinstance(prior_limit, int)
-                    or prior_limit < 0
-                    or isinstance(prior_attempts_raw, bool)
-                    or not isinstance(prior_attempts_raw, int)
-                    or prior_attempts_raw < 0
-                    or not isinstance(prior_categories_raw, list)
-                ):
-                    provider_receipt_integrity_error = (
-                        "Prior provider-call budget snapshot is incomplete or invalid."
-                    )
-                else:
-                    normalized_categories = tuple(
-                        str(item).strip() for item in prior_categories_raw
-                    )
-                    if any(
-                        not item for item in normalized_categories
-                    ) or prior_attempts_raw != len(normalized_categories):
-                        provider_receipt_integrity_error = "Prior provider-call attempts and category history disagree."
-                    else:
-                        prior_provider_attempts = prior_attempts_raw
-                        prior_provider_categories = normalized_categories
-                        effective_provider_limit = min(
-                            effective_provider_limit,
-                            prior_limit,
-                        )
-
-        if provider_receipt_integrity_error is None and provider_receipt_path.exists():
-            try:
-                receipt_state = load_provider_call_budget_state(
-                    provider_receipt_path,
-                    step_id=step.step_id,
-                    expected_reserved_final_category=reserved_final_category,
-                )
-                receipt_limit = receipt_state.limit
-                receipt_categories = receipt_state.categories
-                prior_logical_repair_entries = receipt_state.logical_repairs
-                prior_initial_generation_entries = receipt_state.initial_generations
-                prior_required_reservation_token = (
-                    receipt_state.required_reservation_token
-                )
-                prior_reservation_bound_provider_history_len = (
-                    receipt_state.reservation_bound_provider_history_len
-                )
-                prior_completed_reservation_token = (
-                    receipt_state.completed_reservation_token
-                )
-                prior_reservation_released = receipt_state.reservation_released
-                prior_reserved_category_extensions = (
-                    receipt_state.reserved_category_extensions
-                )
-                effective_provider_limit = min(
-                    effective_provider_limit,
-                    receipt_limit,
-                )
-                if prior_snapshot_present and (
-                    len(receipt_categories) < len(prior_provider_categories)
-                    or receipt_categories[: len(prior_provider_categories)]
-                    != prior_provider_categories
-                ):
-                    raise ProviderCallBudgetReceiptError(
-                        "Durable provider-call receipt conflicts with the latest "
-                        "step snapshot."
-                    )
-                prior_provider_categories = receipt_categories
-                prior_provider_attempts = len(receipt_categories)
-            except ProviderCallBudgetReceiptError as exc:
-                provider_receipt_integrity_error = str(exc)
-        elif (
-            provider_receipt_integrity_error is None
-            and isinstance(prior_step_record, Mapping)
-            and _step_snapshot_requires_provider_receipt(
-                prior_step_record,
-                provider_attempts=prior_provider_attempts,
-                logical_repair_attempts=step_llm_repair_attempts,
-            )
-        ):
-            provider_receipt_integrity_error = (
-                "Durable provider/repair receipt is missing for a prior reservation."
-            )
-
-        provider_budget = StepProviderCallBudget(
-            effective_provider_limit,
-            step_id=step.step_id,
-            consumed_categories=prior_provider_categories,
-            logical_repair_entries=prior_logical_repair_entries,
-            initial_generation_entries=prior_initial_generation_entries,
+            step_record=step_record,
+            max_provider_calls=pipeline._max_step_provider_calls,
+            max_llm_repairs=pipeline._max_step_llm_repair_attempts,
+            reserve_concept_audit=pipeline._enable_llm_concept_audit,
             allow_terminal_initial_generation_restart=(
                 resume_controller.explicitly_reruns_step(step.step_id)
             ),
-            receipt_path=provider_receipt_path,
-            reserved_final_category=reserved_final_category,
-            required_reservation_token=prior_required_reservation_token,
-            reservation_bound_provider_history_len=(
-                prior_reservation_bound_provider_history_len
-            ),
-            completed_reservation_token=prior_completed_reservation_token,
-            reservation_released=prior_reservation_released,
-            reserved_category_extensions=prior_reserved_category_extensions,
         )
-
-        if provider_receipt_integrity_error is None:
-            try:
-                # A crash before the first provider call leaves an exact unpaid
-                # reservation that can be resumed. A crash after any paid call
-                # but before the result digest was sealed is unknowable and must
-                # block the step before any other route can ignore or replace it.
-                provider_budget.next_logical_repair_attempt_id()
-                initial_resume_status = (
-                    provider_budget.initial_generation_resume_status()
-                )
-                if initial_resume_status == "paid_pending":
-                    raise ProviderCallBudgetReceiptError(
-                        "Initial generation has paid provider calls but no durable "
-                        "transport result."
-                    )
-                if (
-                    initial_resume_status == "failed"
-                    and not provider_budget.terminal_initial_generation_restart_allowed
-                ):
-                    raise ProviderCallBudgetReceiptError(
-                        "Initial generation previously reached a terminal provider "
-                        "failure."
-                    )
-            except ProviderCallBudgetReceiptError as exc:
-                provider_receipt_integrity_error = str(exc)
-
-        try:
-            step_repair_budget = StepRepairBudget(
-                provider_budget=provider_budget,
-                step_record=step_record,
-                max_llm_repairs=pipeline._max_step_llm_repair_attempts,
-                initial_llm_repair_attempts=step_llm_repair_attempts,
-                initial_repair_classes=(
-                    prior_repair_classes
-                    if provider_receipt_integrity_error is None
-                    else ()
-                ),
-                provider_receipt_relative_path=provider_receipt_relative_path,
-            )
-        except (ProviderCallBudgetReceiptError, ValueError) as exc:
-            provider_receipt_integrity_error = str(exc)
-            step_repair_budget = StepRepairBudget(
-                provider_budget=provider_budget,
-                step_record=step_record,
-                max_llm_repairs=pipeline._max_step_llm_repair_attempts,
-                initial_llm_repair_attempts=step_llm_repair_attempts,
-                provider_receipt_relative_path=provider_receipt_relative_path,
-            )
+        provider_budget = budget_runtime.provider_budget
+        step_repair_budget = budget_runtime.repair_budget
+        provider_receipt_path = budget_runtime.receipt_path
+        provider_receipt_relative_path = budget_runtime.receipt_relative_path
+        reserved_final_category = budget_runtime.reserved_final_category
+        provider_receipt_integrity_error = budget_runtime.integrity_error
         step_repair_budget.bind_semantic_escalation_recorder(
             SemanticRepairRecorder(
                 step_record=step_record,
@@ -5811,9 +5565,7 @@ def run_execute_phase(
                 )
             ),
             # From the sealed context, the study's unique endpoint authority.
-            study_endpoint=study_endpoint_declaration_entry(
-                context.endpoint
-            ),
+            study_endpoint=study_endpoint_declaration_entry(context.endpoint),
             # Which of this step's bound columns are ranks rather than interval
             # measurements. From the unscoped context: the roles are a property
             # of the columns, and the step-scoped projection would drop the ones
@@ -6831,12 +6583,15 @@ def run_execute_phase(
         # code still runs through every current execution audit and repair gate.
         standard_executor_trace: list[StandardExecutorCandidate] = []
         standard_executor = select_standard_executor(
-            step, plan=plan,
+            step,
+            plan=plan,
             plausibility_scope=plausibility_authority.scope,
             resolved_bindings=resolved_input_bindings,
             trajectory_scientific_runtime_authority=pipeline._scientific_runtime_authorities.trajectory,
             current_case_scientific_runtime_authority=pipeline._scientific_runtime_authorities.current_case,
-            scientific_runtime_projection_sha256=getattr(pipeline, "_scientific_runtime_projection_sha256", None),
+            scientific_runtime_projection_sha256=getattr(
+                pipeline, "_scientific_runtime_projection_sha256", None
+            ),
             trace=standard_executor_trace,
         )
         preflight_standard_code = None
@@ -7407,9 +7162,7 @@ def run_execute_phase(
                     lambda: pipeline._llm_signature(llm_concept_audit_client)
                 ),
                 enable_llm_audit=pipeline._enable_llm_concept_audit,
-                study_endpoint=study_endpoint_declaration_entry(
-                    context.endpoint
-                ),
+                study_endpoint=study_endpoint_declaration_entry(context.endpoint),
                 # Every step of the locked plan, so a requirement the plan
                 # assigned to another step stops looking like this script's
                 # omission. Id/role/method only: the other steps' rule prose
@@ -9817,9 +9570,7 @@ def run_execute_phase(
                 early_contract_findings.extend(
                     validate_and_record_sealed_renderer_receipt(
                         state=sealed_renderer_state,
-                        authorized_code_sha256=(
-                            sealed_renderer_authorized_code_sha256
-                        ),
+                        authorized_code_sha256=(sealed_renderer_authorized_code_sha256),
                         visual_step_summary=visual_step_summary,
                         run_dir=run_dir,
                         step_id=step.step_id,
