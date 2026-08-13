@@ -691,12 +691,16 @@ def test_pipeline_finalization_never_infers_relaxed_variant_from_locked_cohort(
         for warning in warnings
     )
 
-    from easyicu.research_agent.execution.phase import run_execute_phase
     from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _run_robustness_preflight,
     )
+    from easyicu.research_agent.robustness.runtime_panel import (
+        finalize_run_robustness_panel,
+    )
 
-    assert "allow_implicit_cohort_refit=False" in inspect.getsource(run_execute_phase)
+    assert "allow_implicit_cohort_refit=False" in inspect.getsource(
+        finalize_run_robustness_panel
+    )
     assert "allow_implicit_cohort_refit=False" in inspect.getsource(
         _run_robustness_preflight
     )

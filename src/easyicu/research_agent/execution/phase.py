@@ -212,7 +212,6 @@ from ..contracts.declared_product import (
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
 )
-from ..robustness.estimators import fit_robustness_rows_from_records
 from ..authority.evidence_store import (
     EvidenceAuthorityIntegrityError,
     sha256_of_bytes,
@@ -401,12 +400,10 @@ from ..contracts.robustness_execution import (
 from ..robustness.panel import (
     RobustnessSpec,
     assert_robustness_specs_locked,
-    build_robustness_panel_from_records,
     robustness_specs_for_execution,
     robustness_specs_sha,
-    unexecuted_locked_spec_ids,
-    write_robustness_panel,
 )
+from ..robustness.runtime_panel import finalize_run_robustness_panel
 from ..trajectory.bundle import trajectory_bundle_findings
 from ..trajectory.plan_contract import (
     augment_trajectory_plan_products,
@@ -12291,95 +12288,19 @@ def run_execute_phase(
             }
         )
 
-    try:
-        robustness_specs = robustness_specs_for_execution(run_dir=run_dir, plan=plan)
-        if robustness_specs and not list(getattr(plan, "robustness_specs", []) or []):
-            findings.append(
-                ValidationFinding(
-                    validator="robustness_panel",
-                    severity="warning",
-                    message=(
-                        "Recovered robustness_specs from the plan-time lock because "
-                        "the active replanned AnalysisPlan no longer carried them."
-                    ),
-                )
-            )
-        adapter_rows, adapter_warnings = fit_robustness_rows_from_records(
-            specs=robustness_specs,
-            per_step_records=per_step_records,
-            primary_cohort=getattr(plan, "cohort", None),
-            cohort_path=cohort_path,
-            context=context,
-            run_dir=run_dir,
-            allow_implicit_cohort_refit=False,
-        )
-        for warning in adapter_warnings:
-            findings.append(
-                ValidationFinding(
-                    validator="robustness_estimator",
-                    severity="warning",
-                    message=warning,
-                )
-            )
-        robustness_panel = build_robustness_panel_from_records(
-            specs=robustness_specs,
-            per_step_records=per_step_records,
-            adapter_rows=adapter_rows,
-        )
-        write_robustness_panel(
-            run_dir=run_dir,
-            panel=robustness_panel,
-            evidence=evidence,
-            prompt_pack_version=prompt_version,
-        )
-        # A specification the run LOCKED and then never estimated is a hole in
-        # the protocol, not a blank cell.  The panel already records it as
-        # ``converged: false`` with an explanatory note, and a real E1 run
-        # finished with exactly that -- the pre-specified complete-case variant
-        # unexecuted -- while every error the run reported was about something
-        # else, so the sensitivity analysis read as done.  Keyed on the locked
-        # spec ids themselves, so no method or product allowlist decides
-        # whether the hole is noticed.
-        unexecuted_locked_specs = unexecuted_locked_spec_ids(robustness_panel)
-        if unexecuted_locked_specs:
-            findings.append(
-                ValidationFinding(
-                    validator="robustness_panel",
-                    severity="error",
-                    message=(
-                        "The run locked robustness specifications that no step "
-                        "estimated, so the panel carries them as blank rows: "
-                        + ", ".join(unexecuted_locked_specs)
-                        + ". A step re-estimating the locked grid must declare "
-                        "robustness_replay_spec to reach the deterministic "
-                        "replay owner; generic refitting stays disabled here "
-                        "because it would choose an exposure, outcome or "
-                        "method on the plan's behalf."
-                    ),
-                    detail={
-                        "unexecuted_spec_ids": unexecuted_locked_specs,
-                        "primary_spec_id": robustness_panel.primary_spec_id,
-                        "locked_spec_count": len(robustness_specs),
-                        "panel_path": "robustness_panel.json",
-                    },
-                )
-            )
-        _flush_partial_manifest(
-            {
-                "robustness_panel_path": "robustness_panel.json",
-                "robustness_n_variants": robustness_panel.n_variants,
-                "robustness_range_low": robustness_panel.range_low,
-                "robustness_range_high": robustness_panel.range_high,
-            }
-        )
-    except Exception as exc:
-        findings.append(
-            ValidationFinding(
-                validator="robustness_panel",
-                severity="warning",
-                message=f"Robustness panel artifact could not be built: {exc}",
-            )
-        )
+    robustness_result = finalize_run_robustness_panel(
+        run_dir=run_dir,
+        plan=plan,
+        per_step_records=per_step_records,
+        cohort_path=cohort_path,
+        context=context,
+        evidence=evidence,
+        prompt_pack_version=prompt_version,
+    )
+    findings.extend(robustness_result.findings)
+    robustness_manifest_update = robustness_result.manifest_update()
+    if robustness_manifest_update:
+        _flush_partial_manifest(robustness_manifest_update)
 
     if pipeline._enable_visual_qa and requested_stop_after_step_id is None:
         emit_progress(
