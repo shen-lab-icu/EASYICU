@@ -192,12 +192,13 @@ def test_workflow_projects_exact_path_free_study_setup_receipt() -> None:
     assert receipt.configuration["modules"] == study["modules"]
     assert receipt.configuration["execution_concepts"] == study["execution_concepts"]
     assert receipt.configuration["analysis_design"] == study["analysis_design"]
-    assert receipt.configuration["covariate_rationales"] == study[
-        "covariate_rationales"
-    ]
-    assert receipt.configuration["covariate_temporal_roles"] == study[
-        "covariate_temporal_roles"
-    ]
+    assert (
+        receipt.configuration["covariate_rationales"] == study["covariate_rationales"]
+    )
+    assert (
+        receipt.configuration["covariate_temporal_roles"]
+        == study["covariate_temporal_roles"]
+    )
     assert receipt.configuration["confirmations"] == study["confirmations"]
     assert receipt.configuration["data_source"] == {
         "database": "mimiciv",
@@ -217,7 +218,10 @@ def test_workflow_keeps_typed_execution_decisions_in_setup_gate() -> None:
         latest_run=None,
     )
     assert design_snapshot.missing_setup_fields == ["analysis_design"]
-    assert next(row for row in design_snapshot.stages if row.id == "setup").status == "ready"
+    assert (
+        next(row for row in design_snapshot.stages if row.id == "setup").status
+        == "ready"
+    )
 
     labelled_window = {
         **_complete_study(),
@@ -248,9 +252,7 @@ def test_workflow_keeps_typed_execution_decisions_in_setup_gate() -> None:
         active_job=None,
         latest_run=None,
     )
-    assert conflated_snapshot.missing_setup_fields == [
-        "time_window.anchor_supported"
-    ]
+    assert conflated_snapshot.missing_setup_fields == ["time_window.anchor_supported"]
 
     unaddressed_repeats = {
         **_complete_study(),
@@ -265,9 +267,7 @@ def test_workflow_keeps_typed_execution_decisions_in_setup_gate() -> None:
         active_job=None,
         latest_run=None,
     )
-    assert dependence_snapshot.missing_setup_fields == [
-        "analysis_design.dependence"
-    ]
+    assert dependence_snapshot.missing_setup_fields == ["analysis_design.dependence"]
 
 
 def test_pipeline_factory_rejects_missing_typed_analysis_design_before_job(
@@ -394,9 +394,7 @@ def test_pipeline_factory_rejects_unaddressed_repeat_stay_dependence_before_job(
             provider={"provider": "openai", "external": True},
         )
 
-    assert exc.value.code == (
-        "research_pipeline_repeated_stay_dependence_unaddressed"
-    )
+    assert exc.value.code == ("research_pipeline_repeated_stay_dependence_unaddressed")
     assert exc.value.details["required_design"] == {
         "variance_estimator": "cluster_robust",
         "cluster_unit": "patient",
@@ -442,7 +440,9 @@ def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
     assert by_id["analysis"].reason_code == "operator_plan_approval_required"
 
 
-def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions() -> None:
+def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions() -> (
+    None
+):
     study = _complete_study()
     snapshot = build_research_workflow_snapshot(
         study=study,
@@ -493,9 +493,7 @@ def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions()
                         "study_authority_change": [
                             "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
                         ],
-                        "external_evidence": [
-                            "DIRECT_COMPARATOR_NOT_ESTABLISHED"
-                        ],
+                        "external_evidence": ["DIRECT_COMPARATOR_NOT_ESTABLISHED"],
                         "independent_review": [],
                     }
                 },
@@ -519,12 +517,8 @@ def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions()
             }
         ],
         "remediation_buckets": {
-            "agent_plan_revision": [
-                "CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED"
-            ],
-            "study_authority_change": [
-                "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
-            ],
+            "agent_plan_revision": ["CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED"],
+            "study_authority_change": ["POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"],
             "external_evidence": ["DIRECT_COMPARATOR_NOT_ESTABLISHED"],
             "independent_review": [],
         },
@@ -768,9 +762,7 @@ def test_result_interpretation_card_reuses_agent_claims_without_new_numbers() ->
     assert card.source == "research_agent_artifacts_only"
     assert card.claims[0].evidence_ids == ["ev_table1"]
     assert card.result_tables[0].evidence_id == "ev-primary"
-    assert card.result_tables[0].entries == [
-        ["1.25", "1.10", "1.42", "odds_ratio"]
-    ]
+    assert card.result_tables[0].entries == [["1.25", "1.10", "1.42", "odds_ratio"]]
     assert card.human_review_required is True
 
 
@@ -997,19 +989,16 @@ def test_plan_literature_projection_keeps_only_bundle_bound_keys() -> None:
     assert payload["scientific_plan_step_count"] == 1
     assert payload["scientific_mapped_step_count"] == 1
     assert payload["search"]["searched_at"] == "2026-08-11T12:00:00+00:00"
-    assert payload["search"]["queries"]["pubmed"] == [
-        "ICU AND exposure AND outcome"
-    ]
+    assert payload["search"]["queries"]["pubmed"] == ["ICU AND exposure AND outcome"]
     assert payload["direct_comparator_keys"] == ["method_key"]
     assert payload["citations"][0]["screening"]["population_match"] is True
     assert payload["citation_year_range"] == {"oldest": None, "newest": None}
     assert payload["step_citation_map"][0]["citation_keys"] == ["method_key"]
-    assert payload["step_citation_map"][0]["citation_bindings"][0][
-        "evidence_role"
-    ] == "direct_comparator"
-    assert payload["integrity"]["unknown_citation_keys_removed"] == [
-        "invented_key"
-    ]
+    assert (
+        payload["step_citation_map"][0]["citation_bindings"][0]["evidence_role"]
+        == "direct_comparator"
+    )
+    assert payload["integrity"]["unknown_citation_keys_removed"] == ["invented_key"]
     assert (
         payload["citations"][0]["source_url"]
         == "https://pubmed.ncbi.nlm.nih.gov/12345/"
@@ -1059,10 +1048,7 @@ def test_web_projection_refuses_ineligible_publication_type_as_comparator() -> N
         "Systematic Review",
         "Review",
     ]
-    assert (
-        payload["citations"][0]["screening"]["publication_type_eligible"]
-        is False
-    )
+    assert payload["citations"][0]["screening"]["publication_type_eligible"] is False
 
 
 def test_loaded_literature_projection_uses_digest_verified_final_plan(
@@ -1088,9 +1074,7 @@ def test_loaded_literature_projection_uses_digest_verified_final_plan(
             }
         ]
     }
-    (tmp_path / "analysis_plan.json").write_text(
-        json.dumps(initial), encoding="utf-8"
-    )
+    (tmp_path / "analysis_plan.json").write_text(json.dumps(initial), encoding="utf-8")
     evidence_dir = tmp_path / "evidence"
     evidence_dir.mkdir()
     final_path = evidence_dir / "analysis_plan_revision_2.json"
@@ -1165,9 +1149,7 @@ def test_literature_search_tool_uses_separate_one_turn_network_grant(
     assert result["details"]["resource"]["kind"] == "literature_source"
     assert result["details"]["resource"]["pmid"] == "12345"
     methodology = result["details"]["literature_search"]["methodology"]
-    assert methodology["schema_version"].startswith(
-        "easyicu.method_literature_pack/"
-    )
+    assert methodology["schema_version"].startswith("easyicu.method_literature_pack/")
     assert len(methodology["sha256"]) == 64
     assert {
         "reporting_standard",
@@ -1177,9 +1159,7 @@ def test_literature_search_tool_uses_separate_one_turn_network_grant(
         "missing_data",
         "interpretation",
     } <= {row["layer"] for row in methodology["cards"]}
-    assert any(
-        row.get("pmid") == "17938396" for row in methodology["sources"]
-    )
+    assert any(row.get("pmid") == "17938396" for row in methodology["sources"])
     consumed = tool_module.execute_tool("easyicu_search_literature", {}, context)
     assert consumed["code"] == "pi_action_grant_consumed"
 
@@ -1299,9 +1279,7 @@ def test_literature_search_binds_exact_receipt_to_real_study_context(
         authority: dict[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
-        writes.append(
-            ({"id": study_id, "literature_authority": authority}, kwargs)
-        )
+        writes.append(({"id": study_id, "literature_authority": authority}, kwargs))
         return {**study, "literature_authority": authority, "revision": 5}
 
     monkeypatch.setattr(
@@ -1345,9 +1323,10 @@ def test_literature_search_binds_exact_receipt_to_real_study_context(
     result = tool_module.execute_tool("easyicu_search_literature", {}, context)
 
     assert result["code"] == "easyicu_literature_search_completed"
-    assert result["details"]["literature_search"][
-        "study_literature_authority"
-    ] == persisted
+    assert (
+        result["details"]["literature_search"]["study_literature_authority"]
+        == persisted
+    )
     assert result["details"]["rebind_required"] is True
     assert writes == [
         (
@@ -1617,10 +1596,7 @@ def test_bound_literature_projection_stays_bounded_with_long_abstracts(
 
     assert result["status"] == "ok"
     assert 5 < len(result["details"]["resources"]) <= 8
-    assert any(
-        row.get("pmid") == "17938396"
-        for row in result["details"]["resources"]
-    )
+    assert any(row.get("pmid") == "17938396" for row in result["details"]["resources"])
     assert len(result["details"]["literature_search"]["articles"]) == 5
     assert all(
         len(row["evidence_excerpt"]) <= 360
@@ -2551,6 +2527,7 @@ def test_provider_bridge_keeps_private_key_out_of_public_metadata(
             "api_key_env": "OPENAI_API_KEY",
             "base_url_env": "OPENAI_BASE_URL",
             "model_env": "OPENAI_MODEL",
+            "auth_header": "x-api-key",
         },
     )
     captured: dict[str, Any] = {}
@@ -2569,6 +2546,7 @@ def test_provider_bridge_keeps_private_key_out_of_public_metadata(
     assert captured["environment"]["OPENAI_API_KEY"] == private_key
     assert captured["environment"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8317/v1"
     assert captured["environment"]["EASYICU_TRUST_LOOPBACK_PROXY_KEY"] == "1"
+    assert captured["environment"]["EASYICU_OPENAI_AUTH_HEADER"] == "x-api-key"
     assert captured["request_timeout"] == 480.0
     assert private_key not in json.dumps(public)
     assert public["request_timeout_seconds"] == 480.0
@@ -3007,9 +2985,10 @@ def test_web_runner_reuses_digest_bound_web_literature_without_second_search(
 
     runner(Job())
 
-    assert dict(captured["config"].bound_preplan_literature)[
-        "research_question"
-    ] == seed["research_question"]
+    assert (
+        dict(captured["config"].bound_preplan_literature)["research_question"]
+        == seed["research_question"]
+    )
     assert captured["config"].bound_preplan_literature["search_provenance"][
         "search_queries"
     ]["web_pubmed"] == ("ICU feature AND mortality",)
@@ -3792,10 +3771,7 @@ def test_web_materialization_window_never_declares_clinical_time_zero() -> None:
     assert validated.timing_and_design is None
     constraints = json.loads(str(validated.data_constraints))
     assert constraints["materialization_window"]["anchor"] == "ICU admission"
-    assert (
-        constraints["materialization_window"]["role"]
-        == "outer_observation_window"
-    )
+    assert constraints["materialization_window"]["role"] == "outer_observation_window"
 
 
 def _large_diagnosis_study(count: int) -> dict[str, Any]:

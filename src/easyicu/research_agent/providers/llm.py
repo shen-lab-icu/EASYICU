@@ -444,6 +444,13 @@ class OpenAIClient:
         # to the SDK as default headers when supplied.
         if extra_headers:
             kwargs["default_headers"] = dict(extra_headers)
+        self._provider_auth_header_mode = (
+            "x-api-key"
+            if any(
+                str(key).strip().lower() == "x-api-key" for key in (extra_headers or {})
+            )
+            else "authorization"
+        )
         # Stash the params needed to REBUILD the client with a fresh httpx
         # connection pool on a transient proxy-401 (see _rebuild_openai_client):
         # the shared :8787 proxy rotates its upstream key, and a POOLED httpx

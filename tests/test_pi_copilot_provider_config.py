@@ -9,6 +9,7 @@ from typing import Any, Mapping
 import pytest
 
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+from easyicu.provider_auth import OPENAI_AUTH_HEADER_ENV
 from easyicu.webserver.pi_copilot.provider_config import (
     DEFAULT_MODEL,
     PiProviderConfigStore,
@@ -29,14 +30,23 @@ def test_cliproxyapi_default_uses_the_reported_model_identifier() -> None:
 
 
 def _models_ok(
+    method: str,
     url: str,
     headers: Mapping[str, str],
+    body: Mapping[str, Any] | None,
     timeout: float,
 ) -> tuple[int, Any]:
-    assert url == "http://127.0.0.1:8317/v1/models"
-    assert headers["Authorization"] == "Bearer test-private-key"
+    assert headers["x-api-key"] == "test-private-key"
+    assert "Authorization" not in headers
     assert timeout > 0
-    return 200, {"data": [{"id": "gpt5.6 luna"}]}
+    if url == "http://127.0.0.1:8317/v1/models":
+        assert method == "GET"
+        assert body is None
+        return 200, {"data": [{"id": "gpt5.6 luna"}]}
+    assert method == "POST"
+    assert url == "http://127.0.0.1:8317/v1/chat/completions"
+    assert body and body["model"] == "gpt5.6 luna"
+    return 200, {"choices": [{"message": {"content": "READY"}}]}
 
 
 def test_verified_provider_config_is_private_and_never_returns_secret(
@@ -62,6 +72,7 @@ def test_verified_provider_config_is_private_and_never_returns_secret(
     assert public["credential_present"] is True
     assert public["connection_verified"] is True
     assert public["model_available"] is True
+    assert public["inference_verified"] is True
     assert public["secrets_returned"] is False
     assert "test-private-key" not in json.dumps(public)
     assert (config_path.stat().st_mode & 0o777) == 0o600
@@ -101,6 +112,7 @@ def test_verified_provider_config_projects_to_research_memory_only_after_opt_in(
         "OPENAI_API_KEY": "test-private-key",
         "OPENAI_BASE_URL": "http://127.0.0.1:8317/v1",
         "OPENAI_MODEL": "gpt5.6 luna",
+        OPENAI_AUTH_HEADER_ENV: "x-api-key",
         "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
     }
     assert "test-private-key" not in json.dumps(store.public_status())
@@ -138,8 +150,10 @@ def test_failed_verification_does_not_persist_credentials(tmp_path: Path) -> Non
     )
 
     def rejected(
+        method: str,
         url: str,
         headers: Mapping[str, str],
+        body: Mapping[str, Any] | None,
         timeout: float,
     ) -> tuple[int, Any]:
         return 401, {"error": "invalid key"}
@@ -225,11 +239,15 @@ def test_native_provider_protocols_use_their_own_auth_and_catalog_shape(
     )
 
     def verify(
+        method: str,
         url: str,
         headers: Mapping[str, str],
+        body: Mapping[str, Any] | None,
         timeout: float,
     ) -> tuple[int, Any]:
+        assert method == "GET"
         assert url.endswith("/models")
+        assert body is None
         assert timeout > 0
         assert "Authorization" not in headers
         for key, value in expected_headers.items():
@@ -246,6 +264,45 @@ def test_native_provider_protocols_use_their_own_auth_and_catalog_shape(
     )
 
     assert public["connection_verified"] is True
+
+
+def test_model_catalog_alone_cannot_unlock_research_inference(tmp_path: Path) -> None:
+    store = PiProviderConfigStore(
+        config_path=tmp_path / "pi-provider.env",
+        receipt_path=tmp_path / "receipt.json",
+    )
+    calls: list[tuple[str, str]] = []
+
+    def catalog_only(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: Mapping[str, Any] | None,
+        timeout: float,
+    ) -> tuple[int, Any]:
+        calls.append((method, url))
+        assert headers.get("x-api-key") == "test-private-key"
+        if method == "GET":
+            return 200, {"data": [{"id": "gpt5.6 luna"}]}
+        return 401, {"error": "inference credential rejected"}
+
+    with pytest.raises(PiCopilotError) as caught:
+        store.verify_and_save(
+            provider="easyicu-local",
+            api_key="test-private-key",
+            base_url="http://127.0.0.1:8317/v1",
+            model="gpt5.6 luna",
+            api_transport="openai-completions",
+            verifier=catalog_only,
+        )
+
+    assert caught.value.code == "pi_provider_auth_failed"
+    assert calls == [
+        ("GET", "http://127.0.0.1:8317/v1/models"),
+        ("POST", "http://127.0.0.1:8317/v1/chat/completions"),
+    ]
+    assert not store.config_path.exists()
+    assert not store.receipt_path.exists()
 
 
 def test_insecure_config_file_is_not_loaded(tmp_path: Path) -> None:
@@ -309,7 +366,7 @@ def test_rejected_service_address_never_reaches_verifier(tmp_path: Path) -> None
             base_url="file:///tmp/provider",
             model="gpt5.6 luna",
             api_transport="openai-completions",
-            verifier=lambda url, *_: (calls.append(url), (200, {}))[1],
+            verifier=lambda _method, url, *_: (calls.append(url), (200, {}))[1],
         )
 
     assert caught.value.code == "pi_provider_base_url_rejected"

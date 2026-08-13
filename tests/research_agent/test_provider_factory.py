@@ -14,6 +14,8 @@ _PROVIDER_ENV_KEYS = (
     "OPENROUTER_API_KEY",
     "OPENROUTER_BASE_URL",
     "EASYICU_ALLOW_EXTERNAL_LLM",
+    "EASYICU_OPENAI_AUTH_HEADER",
+    "EASYICU_TRUST_LOOPBACK_PROXY_KEY",
 )
 
 
@@ -199,6 +201,70 @@ def test_loopback_opt_in_forwards_real_openai_key_to_trusted_proxy(ra, monkeypat
         assert kwargs["api_key"] == "sk-real-proxy-key"
 
 
+def test_trusted_loopback_x_api_key_contract_reaches_every_entrypoint(ra, monkeypatch):
+    mcp, discovery, benchmark, seen = _install_entrypoint_recorders(monkeypatch, ra)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:8317/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "local-proxy-key")
+    monkeypatch.setenv("EASYICU_TRUST_LOOPBACK_PROXY_KEY", "1")
+    monkeypatch.setenv("EASYICU_OPENAI_AUTH_HEADER", "x-api-key")
+
+    _build_all_three(mcp, discovery, benchmark, provider="openai")
+
+    assert set(seen) == {"mcp", "discovery", "benchmark"}
+    for kwargs in seen.values():
+        assert kwargs["api_key"] == "local-proxy-key"
+        assert kwargs["extra_headers"] == {"x-api-key": "local-proxy-key"}
+
+
+def test_x_api_key_contract_is_rejected_for_external_or_request_owned_endpoint(
+    ra, monkeypatch
+):
+    from easyicu.research_agent.providers.factory import (
+        OPENAI_AUTH_HEADER_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        build_provider_client,
+    )
+
+    class Recorder:
+        def __init__(self, **_kwargs):
+            raise AssertionError("rejected auth contract must not construct a client")
+
+    external = {
+        "OPENAI_BASE_URL": "https://api.example.test/v1",
+        "OPENAI_API_KEY": "external-key",
+        "EASYICU_ALLOW_EXTERNAL_LLM": "1",
+        "EASYICU_TRUST_LOOPBACK_PROXY_KEY": "1",
+        "EASYICU_OPENAI_AUTH_HEADER": "x-api-key",
+    }
+    with pytest.raises(ProviderConfigurationError) as external_error:
+        build_provider_client(
+            provider="openai",
+            model="model",
+            request_timeout=1,
+            title="test",
+            client_cls=Recorder,
+            environment=external,
+        )
+    assert external_error.value.issue == OPENAI_AUTH_HEADER_NOT_AUTHORIZED
+
+    loopback = {
+        "OPENAI_API_KEY": "loopback-key",
+        "EASYICU_TRUST_LOOPBACK_PROXY_KEY": "1",
+        "EASYICU_OPENAI_AUTH_HEADER": "x-api-key",
+    }
+    with pytest.raises(ProviderConfigurationError) as override_error:
+        build_provider_client(
+            provider="openai",
+            model="model",
+            request_timeout=1,
+            title="test",
+            client_cls=Recorder,
+            environment=loopback,
+            base_url_override="http://127.0.0.1:9999/v1",
+        )
+    assert override_error.value.issue == OPENAI_AUTH_HEADER_NOT_AUTHORIZED
+
+
 def test_loopback_opt_in_does_not_forward_real_key_to_per_request_override(
     ra, monkeypatch
 ):
@@ -250,9 +316,7 @@ def test_loopback_opt_in_without_key_still_uses_dummy(ra, monkeypatch):
         assert kwargs["api_key"] == LOCAL_OPENAI_DUMMY_API_KEY
 
 
-def test_benchmark_adaptive_reasoning_is_explicit_and_role_scoped(
-    ra, monkeypatch
-):
+def test_benchmark_adaptive_reasoning_is_explicit_and_role_scoped(ra, monkeypatch):
     import tools.run_research_agent_bench as benchmark
     from easyicu.research_agent.providers.factory import (
         provider_authorization_manifest,
@@ -282,15 +346,9 @@ def test_benchmark_adaptive_reasoning_is_explicit_and_role_scoped(
     assert router.for_role("planner") is router.for_role("coder")
     assert router.for_role("analyzer") is router.for_role("writer")
     assert router.for_role("repair") is not router.for_role("coder")
-    assert router.for_role("planner")._extra_body == {
-        "reasoning": {"effort": "medium"}
-    }
-    assert router.for_role("analyzer")._extra_body == {
-        "reasoning": {"effort": "low"}
-    }
-    assert router.for_role("repair")._extra_body == {
-        "reasoning": {"effort": "high"}
-    }
+    assert router.for_role("planner")._extra_body == {"reasoning": {"effort": "medium"}}
+    assert router.for_role("analyzer")._extra_body == {"reasoning": {"effort": "low"}}
+    assert router.for_role("repair")._extra_body == {"reasoning": {"effort": "high"}}
     assert (
         provider_authorization_manifest(router)["reasoning_effort_profile"]
         == "adaptive_v1"
@@ -306,9 +364,7 @@ def test_benchmark_adaptive_reasoning_is_explicit_and_role_scoped(
     assert len(constructed) == 3
 
 
-def test_reasoning_extra_body_mutation_is_rejected_before_transport(
-    ra, monkeypatch
-):
+def test_reasoning_extra_body_mutation_is_rejected_before_transport(ra, monkeypatch):
     from easyicu.research_agent.providers.factory import (
         ProviderConfigurationError,
         authorized_complete,

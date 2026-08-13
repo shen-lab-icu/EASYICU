@@ -19,6 +19,13 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
+from easyicu.provider_auth import (
+    OPENAI_AUTH_HEADER_ENV,
+    OpenAIAuthHeader,
+    ProviderAuthContractError,
+    normalize_openai_auth_header,
+)
+
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 LOCAL_OPENAI_DUMMY_API_KEY = "easyicu-local-noauth"
@@ -48,8 +55,44 @@ INVALID_OPENAI_BASE_URL_OVERRIDE = "invalid_openai_base_url_override"
 OPENROUTER_BASE_URL_OVERRIDE = "openrouter_base_url_override"
 UNSUPPORTED_PROVIDER = "unsupported_provider"
 EXTERNAL_LLM_NOT_AUTHORIZED = "external_llm_not_authorized"
+OPENAI_AUTH_HEADER_NOT_AUTHORIZED = "openai_auth_header_not_authorized"
 
 _BASE_URL_UNSET = object()
+
+
+def _openai_auth_header(env: Mapping[str, str]) -> OpenAIAuthHeader:
+    try:
+        return normalize_openai_auth_header(env.get(OPENAI_AUTH_HEADER_ENV))
+    except ProviderAuthContractError as exc:
+        raise ProviderConfigurationError(
+            OPENAI_AUTH_HEADER_NOT_AUTHORIZED,
+            "openai",
+        ) from exc
+
+
+def _openai_authorization_mode(
+    env: Mapping[str, str],
+    *,
+    loopback: bool,
+    has_override: bool,
+    api_key: Optional[str],
+) -> tuple[OpenAIAuthHeader, str]:
+    """Validate one wire header against the trusted loopback authority."""
+
+    header = _openai_auth_header(env)
+    if header is OpenAIAuthHeader.X_API_KEY:
+        if (
+            not loopback
+            or has_override
+            or not api_key
+            or not _loopback_forwards_real_key(env)
+        ):
+            raise ProviderConfigurationError(
+                OPENAI_AUTH_HEADER_NOT_AUTHORIZED,
+                "openai",
+            )
+        return header, "local_x_api_key"
+    return header, "local_exempt" if loopback else "operator_env"
 
 
 @dataclass(frozen=True)
@@ -85,9 +128,9 @@ class _ConstructedClientRecord:
     dispatch_identity: tuple[Any, ...]
 
 
-_TRUSTED_CLIENTS: dict[int, tuple[weakref.ReferenceType[Any], _TrustedClientRecord]] = (
-    {}
-)
+_TRUSTED_CLIENTS: dict[
+    int, tuple[weakref.ReferenceType[Any], _TrustedClientRecord]
+] = {}
 _TRUSTED_CLIENTS_LOCK = threading.RLock()
 _CONSTRUCTED_CLIENTS: dict[
     int, tuple[weakref.ReferenceType[Any], _ConstructedClientRecord]
@@ -731,7 +774,10 @@ def _valid_provider_authorization(value: object) -> bool:
         return False
     if value.destination == "external" and value.authorization_mode != "operator_env":
         return False
-    if value.destination == "local" and value.authorization_mode != "local_exempt":
+    if value.destination == "local" and value.authorization_mode not in {
+        "local_exempt",
+        "local_x_api_key",
+    }:
         return False
     expected = ProviderAuthorization.create(
         provider=value.provider,
@@ -791,7 +837,18 @@ def _transport_matches_authorization(
         ):
             return False
         is_loopback = is_loopback_openai_base_url(live_base_url)
-        return (authorization.destination == "local") == is_loopback
+        if (authorization.destination == "local") != is_loopback:
+            return False
+        live_auth_header = str(
+            getattr(client, "_provider_auth_header_mode", "authorization")
+            or "authorization"
+        )
+        expected_auth_header = (
+            "x-api-key"
+            if authorization.authorization_mode == "local_x_api_key"
+            else "authorization"
+        )
+        return live_auth_header == expected_auth_header
     if _is_reviewed_client_type(client, "CLIAgentLLMClient"):
         backend = str(getattr(client, "_backend", "") or "")
         live_model = str(getattr(client, "_model", "") or "") or "cli-default"
@@ -1020,12 +1077,20 @@ def provider_authorization_for_configuration(
     loopback = normalized == "openai" and is_loopback_openai_base_url(base_url)
     if not loopback and not _external_llm_allowed(env):
         raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, normalized)
+    authorization_mode = "operator_env"
+    if normalized == "openai":
+        _header, authorization_mode = _openai_authorization_mode(
+            env,
+            loopback=loopback,
+            has_override=False,
+            api_key=env.get("OPENAI_API_KEY"),
+        )
     authorization = ProviderAuthorization.create(
         provider=normalized,
         model=model,
         base_url=base_url,
         destination="local" if loopback else "external",
-        authorization_mode="local_exempt" if loopback else "operator_env",
+        authorization_mode=authorization_mode,
     )
     return {
         "schema_version": "easyicu.provider_authorization_manifest/2",
@@ -1218,6 +1283,12 @@ def build_provider_client(
 
         api_key = env.get("OPENAI_API_KEY")
         loopback = is_loopback_openai_base_url(base_url)
+        auth_header, authorization_mode = _openai_authorization_mode(
+            env,
+            loopback=loopback,
+            has_override=has_override,
+            api_key=api_key,
+        )
         if not loopback and not api_key:
             raise ProviderConfigurationError(
                 MISSING_OPENAI_KEY,
@@ -1262,6 +1333,9 @@ def build_provider_client(
             kwargs["base_url"] = base_url
         if extra_body:
             kwargs["extra_body"] = dict(extra_body)
+        if auth_header is OpenAIAuthHeader.X_API_KEY:
+            assert loopback_key is not None
+            kwargs["extra_headers"] = {"x-api-key": loopback_key}
         client = client_cls(**kwargs)
         resolved_url = str(base_url or DEFAULT_OPENAI_BASE_URL)
         return _attach_provider_authorization(
@@ -1271,7 +1345,7 @@ def build_provider_client(
                 model=model,
                 base_url=resolved_url,
                 destination="local" if loopback else "external",
-                authorization_mode=("local_exempt" if loopback else "operator_env"),
+                authorization_mode=authorization_mode,
             ),
         )
 
