@@ -452,6 +452,41 @@ def test_study_context_rejects_invalid_sensitivity_authority() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "study_sensitivity_specs_invalid"
+    assert (
+        "landmark sensitivity requires landmark_hours"
+        in response.json()["detail"]["reason"]
+    )
+
+
+def test_study_context_update_preview_normalizes_without_mutating_store() -> None:
+    current = {
+        "id": "study_preview",
+        "revision": 2,
+        "cohort": {"exclude_readmissions": True},
+        "analysis_design": {
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "model_based",
+        },
+    }
+
+    patch = context_store.validate_context_update(
+        {
+            "id": "study_preview",
+            "sensitivity_specs": [
+                {
+                    "spec_id": "first_stay_only",
+                    "axis": "repeated_stays",
+                    "strategy": "first_stay",
+                    "execution_variables": ["icu_readmission"],
+                }
+            ],
+        },
+        current_context=current,
+        lifecycle_write=False,
+    )
+
+    assert patch["sensitivity_specs"][0]["execution_variables"] == ["icu_readmission"]
+    assert "sensitivity_specs" not in current
 
 
 def test_scientific_configuration_digest_ignores_lifecycle_only_changes() -> None:

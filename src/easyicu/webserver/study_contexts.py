@@ -11,7 +11,7 @@ import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from easyicu.research_agent.planning.sensitivity_authority import (
     normalize_prespecified_sensitivities,
@@ -947,6 +947,44 @@ def normalize_sensitivity_specs(value: Any) -> List[Dict[str, Any]]:
     return [spec.model_dump(mode="json") for spec in specs]
 
 
+def validate_context_update(
+    raw_context: Dict[str, Any],
+    *,
+    current_context: Optional[Mapping[str, Any]] = None,
+    lifecycle_write: bool = True,
+) -> Dict[str, Any]:
+    """Validate and normalize one proposed update without mutating the store.
+
+    Conversational callers need to distinguish a rejected proposal from an
+    authorized mutation.  In particular, a one-use host grant must not be
+    consumed merely because a typed sensitivity row is malformed.  This owner
+    preview applies the same normalizers and cross-field scientific contracts
+    as :func:`upsert_context`; the subsequent write still performs revision
+    checking and validates again under the store lock.
+    """
+
+    patch = _sanitize_patch(raw_context)
+    current = dict(current_context or {})
+    if current and not lifecycle_write:
+        for field in ("current_stage", "last_route", "active_job_id"):
+            patch.pop(field, None)
+    elif not current and not lifecycle_write and patch.get("active_job_id"):
+        raise StudyContextError(
+            {
+                "error": "study_context_lifecycle_field_forbidden",
+                "field": "active_job_id",
+            }
+        )
+
+    candidate = dict(current)
+    candidate.update(patch)
+    _validate_covariate_decision_contract(candidate)
+    _validate_analysis_dependence_contract(candidate)
+    if "time_window" in patch:
+        _validate_materialization_window_contract(candidate)
+    return patch
+
+
 def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
     return {
         "id": context_id,
@@ -1704,6 +1742,7 @@ __all__ = [
     "normalize_analysis_design",
     "normalize_sensitivity_specs",
     "normalize_execution_concepts",
+    "validate_context_update",
     "literature_search_scope_sha256",
     "scientific_configuration_sha256",
     "upsert_context",

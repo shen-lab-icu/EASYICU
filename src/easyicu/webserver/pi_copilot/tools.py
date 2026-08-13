@@ -1725,6 +1725,53 @@ def _update_study_context(
             "pi_tool_arguments_required",
             "At least one typed study-setup field is required.",
         )
+
+    # Validate the complete proposed StudyContext before spending the one-use
+    # Configure grant.  A rejected typed proposal is not a mutation; consuming
+    # the grant here used to prevent Pi from correcting a mechanical schema
+    # error in the same turn.
+    try:
+        patch = study_contexts.validate_context_update(
+            patch,
+            current_context=current,
+            lifecycle_write=False,
+        )
+    except study_contexts.StudyContextError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=str(exc.detail.get("error") or "study_context_update_blocked"),
+            summary="The typed StudyContext owner rejected the proposed setup update.",
+            owner="easyicu.webserver.study_contexts",
+            details={
+                key: exc.detail.get(key)
+                for key in (
+                    "error",
+                    "field",
+                    "fields",
+                    "reason",
+                    "allowed",
+                    "required_design",
+                    "alternative",
+                )
+                if exc.detail.get(key) is not None
+            },
+        )
+
+    if "analysis_design" in params:
+        proposed = {**dict(current or {}), **patch}
+        try:
+            agent_pipeline_runs.validate_analysis_design_for_execution(proposed)
+        except agent_pipeline_runs.ResearchPipelineRunError as exc:
+            return _result(
+                context,
+                status="blocked",
+                code=exc.code,
+                summary=str(exc),
+                owner="easyicu.webserver.agent_pipeline_runs.analysis_design",
+                details=exc.details,
+            )
+
     grant_block = _consume_action(context, "configure")
     if grant_block is not None:
         return grant_block
@@ -1750,6 +1797,10 @@ def _update_study_context(
                     "error",
                     "field",
                     "fields",
+                    "reason",
+                    "allowed",
+                    "required_design",
+                    "alternative",
                     "expected_revision",
                     "current_revision",
                 )
