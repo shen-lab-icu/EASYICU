@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -26,6 +29,215 @@ class DataPackageReviewError(RuntimeError):
         self.code = str(code)
         self.message = str(message)
         self.details = dict(details or {})
+
+
+class DataPackageReviewSnapshotStore:
+    """Persist immutable aggregate review receipts for conversation replay.
+
+    The registered export and StudyContext remain the scientific owners.  This
+    store only retains the already path-free aggregate receipt produced by this
+    module so a historical Pi message can reopen the exact review it linked to
+    after the live StudyContext advances.
+    """
+
+    def __init__(self, root: Optional[Path] = None) -> None:
+        self.root = (
+            Path(root)
+            if root is not None
+            else Path.home() / ".easyicu" / "data-package-reviews"
+        )
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _coordinates(payload: Mapping[str, Any]) -> tuple[str, int, str]:
+        study_id = str(payload.get("study_context_id") or "").strip()
+        revision = payload.get("study_context_revision")
+        digest = str(payload.get("review_sha256") or "").strip().lower()
+        if (
+            not study_id
+            or not isinstance(revision, int)
+            or revision < 0
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise DataPackageReviewError(
+                "data_package_review_snapshot_coordinates_invalid",
+                "The aggregate review is missing valid immutable coordinates.",
+            )
+        return study_id, revision, digest
+
+    @staticmethod
+    def _verify_digest(payload: Mapping[str, Any], expected: str) -> None:
+        canonical = dict(payload)
+        canonical.pop("review_sha256", None)
+        actual = hashlib.sha256(
+            json.dumps(
+                canonical,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if actual != expected:
+            raise DataPackageReviewError(
+                "data_package_review_snapshot_digest_invalid",
+                "The aggregate review does not match its owner digest.",
+                details={"expected_sha256": expected, "actual_sha256": actual},
+            )
+
+    @staticmethod
+    def _verify_path_free(payload: Mapping[str, Any]) -> None:
+        """Reject host-path keys and values before durable replay storage."""
+
+        def fail(location: tuple[str, ...], reason: str) -> None:
+            raise DataPackageReviewError(
+                "data_package_review_snapshot_path_forbidden",
+                "The aggregate review snapshot contains a host-path-shaped field.",
+                details={
+                    "field": ".".join(location)[:500],
+                    "reason": reason,
+                },
+            )
+
+        def host_path_value(value: str) -> bool:
+            clean = value.strip()
+            lowered = clean.lower()
+            windows_drive = (
+                len(clean) >= 3
+                and clean[0].isalpha()
+                and clean[1] == ":"
+                and clean[2] in {"/", "\\"}
+            )
+            return bool(
+                clean.startswith("/")
+                or clean.startswith("\\")
+                or windows_drive
+                or lowered.startswith("file://")
+                or clean == "~"
+                or clean.startswith("~/")
+                or clean.startswith("~\\")
+            )
+
+        def visit(value: Any, location: tuple[str, ...]) -> None:
+            if isinstance(value, Mapping):
+                for raw_key, child in value.items():
+                    key = str(raw_key)
+                    normalized = key.strip().lower()
+                    child_location = (*location, key)
+                    if (
+                        normalized == "path"
+                        or normalized.endswith("_path")
+                        or normalized.endswith("_paths")
+                    ):
+                        fail(child_location, "path_key")
+                    visit(child, child_location)
+                return
+            if isinstance(value, (list, tuple)):
+                for index, child in enumerate(value):
+                    visit(child, (*location, str(index)))
+                return
+            if isinstance(value, Path):
+                fail(location, "path_object")
+            if isinstance(value, str) and host_path_value(value):
+                fail(location, "absolute_path_value")
+
+        visit(payload, ())
+
+    def _path(self, study_id: str, revision: int, digest: str) -> Path:
+        study_key = hashlib.sha256(study_id.encode("utf-8")).hexdigest()[:24]
+        return self.root / study_key / f"r{revision}-{digest}.json"
+
+    def persist(self, payload: Mapping[str, Any]) -> Path:
+        study_id, revision, digest = self._coordinates(payload)
+        self._verify_path_free(payload)
+        self._verify_digest(payload, digest)
+        encoded = json.dumps(
+            dict(payload), ensure_ascii=False, indent=2, sort_keys=True
+        ).encode("utf-8")
+        if len(encoded) > 512 * 1024:
+            raise DataPackageReviewError(
+                "data_package_review_snapshot_too_large",
+                "The aggregate review exceeds its bounded snapshot contract.",
+            )
+        path = self._path(study_id, revision, digest)
+        with self._lock:
+            if path.exists():
+                try:
+                    existing = path.read_bytes()
+                except OSError as exc:
+                    raise DataPackageReviewError(
+                        "data_package_review_snapshot_unreadable",
+                        "The existing aggregate review snapshot cannot be read.",
+                    ) from exc
+                if existing != encoded:
+                    raise DataPackageReviewError(
+                        "data_package_review_snapshot_identity_drift",
+                        "An immutable aggregate review coordinate already has different bytes.",
+                    )
+                return path
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            handle = tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=str(path.parent),
+                prefix=".data-package-review-",
+                suffix=".tmp",
+                delete=False,
+            )
+            temporary = Path(handle.name)
+            try:
+                with handle:
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                temporary.chmod(0o600)
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return path
+
+    def load(self, *, study_id: str, revision: int, digest: str) -> Dict[str, Any]:
+        coordinates = {
+            "study_context_id": str(study_id),
+            "study_context_revision": int(revision),
+            "review_sha256": str(digest).lower(),
+        }
+        clean_id, clean_revision, clean_digest = self._coordinates(coordinates)
+        path = self._path(clean_id, clean_revision, clean_digest)
+        try:
+            if path.stat().st_size > 512 * 1024:
+                raise DataPackageReviewError(
+                    "data_package_review_snapshot_too_large",
+                    "The aggregate review snapshot exceeds its bounded contract.",
+                )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise DataPackageReviewError(
+                "data_package_review_snapshot_not_found",
+                "The immutable aggregate review snapshot is unavailable.",
+            ) from exc
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise DataPackageReviewError(
+                "data_package_review_snapshot_unreadable",
+                "The aggregate review snapshot cannot be read.",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise DataPackageReviewError(
+                "data_package_review_snapshot_invalid",
+                "The aggregate review snapshot has an invalid shape.",
+            )
+        self._verify_path_free(payload)
+        actual_id, actual_revision, actual_digest = self._coordinates(payload)
+        if (actual_id, actual_revision, actual_digest) != (
+            clean_id,
+            clean_revision,
+            clean_digest,
+        ):
+            raise DataPackageReviewError(
+                "data_package_review_snapshot_scope_mismatch",
+                "The aggregate review snapshot belongs to different coordinates.",
+            )
+        self._verify_digest(payload, clean_digest)
+        return payload
 
 
 def _normalized_path(value: Any) -> str:
@@ -389,5 +601,6 @@ def build_registered_data_package_review(
 
 __all__ = [
     "DataPackageReviewError",
+    "DataPackageReviewSnapshotStore",
     "build_registered_data_package_review",
 ]

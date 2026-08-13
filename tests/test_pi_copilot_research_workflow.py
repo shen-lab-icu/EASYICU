@@ -1995,6 +1995,13 @@ def test_data_package_tool_returns_digest_bound_path_free_review(
     monkeypatch.setattr(tool_module, "_bound_context", lambda binding: current)
     from easyicu.webserver import data_package_review as review_owner
 
+    sealed: list[dict] = []
+    monkeypatch.setattr(
+        review_owner,
+        "DataPackageReviewSnapshotStore",
+        lambda: SimpleNamespace(persist=lambda payload: sealed.append(dict(payload))),
+    )
+
     monkeypatch.setattr(
         review_owner,
         "build_registered_data_package_review",
@@ -2024,6 +2031,7 @@ def test_data_package_tool_returns_digest_bound_path_free_review(
     result = tool_module.execute_tool("easyicu_inspect_data_package", {}, context)
 
     assert result["code"] == "easyicu_data_package_review_ready"
+    assert sealed and sealed[0]["review_sha256"] == "d" * 64
     assert result["details"]["resource"] == {
         "kind": "data_package_review",
         "study_context_id": "study-workflow",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -3096,6 +3097,7 @@ def test_run_artifact_tools_emit_path_free_clickable_resources(
         "artifact": "table1_summary.json",
         "label": "table1_summary.json",
         "media_type": "application/json",
+        "sha256": "a" * 64,
     }
     assert "project_dir" not in json.dumps(result)
     assert "/private/" not in json.dumps(result)
@@ -3228,26 +3230,37 @@ def test_project_data_package_preview_is_revision_and_digest_bound(
     monkeypatch.setattr(service_module.study_contexts, "get_context", lambda _id: study)
     from easyicu.webserver import data_package_review as review_owner
 
+    review_payload = {
+        "schema_version": "easyicu.data-package-review/1",
+        "study_context_id": "study-a",
+        "study_context_revision": 7,
+        "status": "ready_for_plan",
+        "source": {"database": "miiv"},
+        "privacy": {
+            "raw_rows_returned": False,
+            "host_paths_returned": False,
+        },
+        "analysis_results_withheld": True,
+    }
+    review_digest = hashlib.sha256(
+        json.dumps(
+            review_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    review_payload["review_sha256"] = review_digest
     monkeypatch.setattr(
         review_owner,
         "build_registered_data_package_review",
-        lambda _study: {
-            "schema_version": "easyicu.data-package-review/1",
-            "status": "ready_for_plan",
-            "review_sha256": "d" * 64,
-            "source": {"path": "/private/export", "database": "miiv"},
-            "privacy": {
-                "raw_rows_returned": False,
-                "host_paths_returned": False,
-            },
-            "analysis_results_withheld": True,
-        },
+        lambda _study: dict(review_payload),
     )
 
     payload = service.get_data_package_review(
         project_id="project-a",
         study_revision=7,
-        review_sha256="d" * 64,
+        review_sha256=review_digest,
     )
     assert payload["payload"]["source"] == {"database": "miiv"}
     assert payload["governance"]["claim_ceiling"] == "pre_analysis_review"
@@ -3255,9 +3268,9 @@ def test_project_data_package_preview_is_revision_and_digest_bound(
 
     with pytest.raises(PiCopilotError) as stale:
         service.get_data_package_review(
-            project_id="project-a", study_revision=6, review_sha256="d" * 64
+            project_id="project-a", study_revision=6, review_sha256=review_digest
         )
-    assert stale.value.code == "pi_data_package_review_stale"
+    assert stale.value.code == "pi_data_package_review_snapshot_missing"
 
     with pytest.raises(PiCopilotError) as drift:
         service.get_data_package_review(

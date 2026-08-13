@@ -28,6 +28,7 @@ from easyicu.webserver import (
     sources,
     study_contexts,
 )
+from easyicu.webserver.data_package_review import DataPackageReviewSnapshotStore
 
 from .contracts import (
     MAX_MESSAGE_CHARS,
@@ -89,6 +90,7 @@ class PiCopilotService:
         project_store: Optional[ProjectAuthorityStore] = None,
         extension_registry: Optional[ExtensionRegistry] = None,
         replay_store: Optional[PiConversationReplayStore] = None,
+        review_snapshot_store: Optional[DataPackageReviewSnapshotStore] = None,
     ) -> None:
         self.store_path = (
             Path(store_path)
@@ -111,6 +113,16 @@ class PiCopilotService:
             None
             if store_path is None
             else self.store_path.with_name(f"{self.store_path.stem}.replay")
+        )
+        self.review_snapshot_store = (
+            review_snapshot_store
+            or DataPackageReviewSnapshotStore(
+                None
+                if store_path is None
+                else self.store_path.with_name(
+                    f"{self.store_path.stem}.data-package-reviews"
+                )
+            )
         )
         self._lock = threading.RLock()
         self._active_message_jobs: Dict[str, str] = {}
@@ -932,17 +944,29 @@ class PiCopilotService:
             "session": self._public_session(record, gateway_state=state),
         }
 
-    def _ensure_open(self, record: PiSessionRecord) -> Dict[str, Any]:
+    def _ensure_open(
+        self,
+        record: PiSessionRecord,
+        *,
+        transcript_cursor: Optional[str] = None,
+        transcript_limit: int = 100,
+    ) -> Dict[str, Any]:
+        state_params: Dict[str, Any] = {
+            "session_id": record.session_id,
+            "transcript_limit": max(1, min(200, int(transcript_limit))),
+        }
+        if transcript_cursor is not None:
+            state_params["transcript_cursor"] = str(transcript_cursor)
         try:
             return self.gateway.request(
                 "session.state",
-                {"session_id": record.session_id},
+                state_params,
                 timeout=5,
             )
         except PiCopilotError as exc:
             if exc.code != "pi_session_not_open":
                 raise
-        return self.gateway.request(
+        opened = self.gateway.request(
             "session.create",
             {
                 "session_id": record.session_id,
@@ -955,6 +979,9 @@ class PiCopilotService:
             },
             timeout=30,
         )
+        if transcript_cursor is None and int(transcript_limit) == 100:
+            return opened
+        return self.gateway.request("session.state", state_params, timeout=5)
 
     def _binding_stale_details(
         self,
@@ -1452,14 +1479,32 @@ class PiCopilotService:
             ],
         }
 
-    def get_session(self, session_id: str, *, project_id: str) -> Dict[str, Any]:
+    def get_session(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        transcript_cursor: Optional[str] = None,
+        transcript_limit: int = 100,
+        replay_cursor: Optional[str] = None,
+        replay_limit: int = 48,
+    ) -> Dict[str, Any]:
         record = self._reconcile_replay_execution(
             self._scoped_record(session_id, project_id=project_id)
         )
-        state = self._ensure_open(record)
+        state = self._ensure_open(
+            record,
+            transcript_cursor=transcript_cursor,
+            transcript_limit=transcript_limit,
+        )
         return {
             "ok": True,
-            "session": self._public_session(record, gateway_state=state),
+            "session": self._public_session(
+                record,
+                gateway_state=state,
+                replay_cursor=replay_cursor,
+                replay_limit=replay_limit,
+            ),
         }
 
     def _assert_project_initialized(self, project_id: str) -> str:
@@ -1541,7 +1586,7 @@ class PiCopilotService:
         study_revision: int,
         review_sha256: str,
     ) -> Dict[str, Any]:
-        """Rebuild an exact project-scoped aggregate data-package review."""
+        """Open the exact immutable review, rebuilding only the current revision."""
 
         clean = self._assert_project_initialized(project_id)
         study_context_id = self.project_store.resolve(clean)
@@ -1556,31 +1601,68 @@ class PiCopilotService:
             )
         expected_revision = int(study_revision)
         current_revision = int(study.get("revision") or 0)
-        if expected_revision != current_revision:
-            raise PiCopilotError(
-                "pi_data_package_review_stale",
-                "The data-package review is stale because the StudyContext changed.",
-                status_code=409,
-                details={
-                    "expected_revision": expected_revision,
-                    "current_revision": current_revision,
-                },
-            )
         from easyicu.webserver.data_package_review import (
             DataPackageReviewError,
             build_registered_data_package_review,
         )
 
-        try:
-            payload = build_registered_data_package_review(study)
-        except DataPackageReviewError as exc:
-            raise PiCopilotError(
-                exc.code,
-                exc.message,
-                status_code=409,
-                details=exc.details,
-            ) from exc
         expected_digest = str(review_sha256 or "").strip().lower()
+        try:
+            payload = self.review_snapshot_store.load(
+                study_id=str(study_context_id),
+                revision=expected_revision,
+                digest=expected_digest,
+            )
+        except DataPackageReviewError as exc:
+            if exc.code != "data_package_review_snapshot_not_found":
+                raise PiCopilotError(
+                    exc.code,
+                    exc.message,
+                    status_code=409,
+                    details=exc.details,
+                ) from exc
+            if expected_revision != current_revision:
+                raise PiCopilotError(
+                    "pi_data_package_review_snapshot_missing",
+                    "The historical data-package review snapshot is unavailable.",
+                    status_code=404,
+                    details={
+                        "expected_revision": expected_revision,
+                        "current_revision": current_revision,
+                        "review_sha256": expected_digest,
+                    },
+                ) from exc
+            try:
+                payload = build_registered_data_package_review(study)
+            except DataPackageReviewError as build_exc:
+                raise PiCopilotError(
+                    build_exc.code,
+                    build_exc.message,
+                    status_code=409,
+                    details=build_exc.details,
+                ) from build_exc
+            actual_digest = str(payload.get("review_sha256") or "")
+            if expected_digest != actual_digest:
+                raise PiCopilotError(
+                    "pi_data_package_review_digest_mismatch",
+                    "The requested data-package review no longer matches its owner digest.",
+                    status_code=409,
+                )
+            try:
+                self.review_snapshot_store.persist(payload)
+            except DataPackageReviewError as persist_exc:
+                raise PiCopilotError(
+                    persist_exc.code,
+                    persist_exc.message,
+                    status_code=409,
+                    details=persist_exc.details,
+                ) from persist_exc
+        except (ValueError, TypeError) as exc:
+            raise PiCopilotError(
+                "pi_data_package_review_snapshot_coordinates_invalid",
+                "The requested data-package review coordinates are invalid.",
+                status_code=409,
+            ) from exc
         actual_digest = str(payload.get("review_sha256") or "")
         if expected_digest != actual_digest:
             raise PiCopilotError(
@@ -1824,15 +1906,19 @@ class PiCopilotService:
         *,
         gateway_state: Optional[Mapping[str, Any]] = None,
         include_replay: bool = True,
+        replay_cursor: Optional[str] = None,
+        replay_limit: int = 48,
     ) -> Dict[str, Any]:
         state = gateway_state or {}
         replay = (
             self.replay_store.snapshot(
                 session_id=record.session_id,
                 project_id=str(record.project_id),
+                cursor=replay_cursor,
+                limit=replay_limit,
             )
             if include_replay
-            else {"turns": [], "child_jobs": []}
+            else {"turns": [], "turn_page": {}, "child_jobs": []}
         )
         replay_turns = replay.get("turns") or []
         latest_replay_turn = (
@@ -1856,9 +1942,14 @@ class PiCopilotService:
                 else []
             ),
             "transcript": (
-                list(state.get("transcript") or [])[:100]
+                list(state.get("transcript") or [])[:200]
                 if isinstance(state.get("transcript"), list)
                 else []
+            ),
+            "transcript_page": (
+                dict(state.get("transcript_page") or {})
+                if isinstance(state.get("transcript_page"), Mapping)
+                else {}
             ),
             "shell_usage": (
                 dict(state.get("shell_usage") or {})
