@@ -16,7 +16,12 @@ import os
 import re
 import stat
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional
+
+if TYPE_CHECKING:
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLimits,
+    )
 
 from easyicu.provider_auth import (
     OPENAI_AUTH_HEADER_ENV,
@@ -38,6 +43,13 @@ _ABSOLUTE_MAX_OUTPUT_TOKENS = 4000
 _DEFAULT_PROVIDER_ENV_FILE = Path.home() / ".easyicu" / "provider.env"
 _DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT = 240.0
 _LOOPBACK_RESEARCH_AGENT_REQUEST_TIMEOUT = 480.0
+_WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES = (500, 502, 503, 504)
+_WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS = 192
+_WEB_RESEARCH_AGENT_MAX_TOTAL_TOKENS = 2_000_000
+_WEB_RESEARCH_AGENT_MAX_ESTIMATED_COST_USD = 100.0
+_WEB_RESEARCH_AGENT_MAX_WALL_CLOCK_SECONDS = 21_600.0
+_WEB_RESEARCH_AGENT_INPUT_COST_PER_MILLION = 10.0
+_WEB_RESEARCH_AGENT_OUTPUT_COST_PER_MILLION = 30.0
 
 
 class ProviderAdapterError(ValueError):
@@ -46,6 +58,33 @@ class ProviderAdapterError(ValueError):
     def __init__(self, detail: Dict[str, Any]) -> None:
         super().__init__(str(detail.get("error") or "provider_adapter_error"))
         self.detail = detail
+
+
+def web_research_agent_hard_stop_limits() -> "ProviderHardStopLimits":
+    """Return the one reviewed stop-loss used by Web config and live service."""
+
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLimits,
+    )
+
+    return ProviderHardStopLimits(
+        max_provider_attempts_per_run=_WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS,
+        max_provider_attempts_per_batch=_WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS,
+        max_total_tokens_per_run=_WEB_RESEARCH_AGENT_MAX_TOTAL_TOKENS,
+        max_total_tokens_per_batch=_WEB_RESEARCH_AGENT_MAX_TOTAL_TOKENS,
+        max_estimated_cost_usd_per_batch=(
+            _WEB_RESEARCH_AGENT_MAX_ESTIMATED_COST_USD
+        ),
+        max_wall_clock_seconds_per_task=(
+            _WEB_RESEARCH_AGENT_MAX_WALL_CLOCK_SECONDS
+        ),
+        input_cost_usd_per_million_tokens=(
+            _WEB_RESEARCH_AGENT_INPUT_COST_PER_MILLION
+        ),
+        output_cost_usd_per_million_tokens=(
+            _WEB_RESEARCH_AGENT_OUTPUT_COST_PER_MILLION
+        ),
+    )
 
 
 def require_external_credentials(
@@ -151,7 +190,16 @@ def build_research_agent_provider_client(
             title="EasyICU Web Research Agent",
             client_cls=OpenAIClient,
             environment=provider_environment,
-            max_retries=0,
+            # One extra transport attempt, hence two total requests.  Freeze
+            # environment overrides so EASYICU_LLM_MAX_RETRIES cannot silently
+            # widen the Web job's reviewed bound.  This allowlist is the whole
+            # Web retry policy: non-HTTP failures and other status codes fail
+            # closed without a transport replay.
+            max_retries=1,
+            retryable_http_status_codes=(
+                _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES
+            ),
+            allow_environment_overrides=False,
         )
     except Exception as exc:
         raise ProviderAdapterError(
@@ -170,6 +218,14 @@ def build_research_agent_provider_client(
             "client_constructed": True,
             "provider_gate": "research_agent_provider_ready",
             "request_timeout_seconds": effective_timeout,
+            "transport_max_attempts": 2,
+            "retryable_http_status_codes": list(
+                _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES
+            ),
+            "provider_hard_stop": {
+                "required": True,
+                "schema_version": "easyicu.web-provider-hard-stop-policy/1",
+            },
             "secrets_returned": False,
         }
     )

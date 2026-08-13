@@ -358,10 +358,85 @@ def test_benchmark_adaptive_reasoning_is_explicit_and_role_scoped(ra, monkeypatc
         provider="openai",
         model="gpt-5.6-luna",
         reasoning_effort_profile="adaptive_v1",
+        request_timeout=17.0,
+        transport_max_attempts=1,
     )
     actual_identity = benchmark._benchmark_execution_identity({}, router)
     assert actual_identity.identity_sha256 == expected_identity.identity_sha256
     assert len(constructed) == 3
+
+
+def test_benchmark_total_transport_attempts_map_to_retry_count(ra, monkeypatch):
+    import tools.run_research_agent_bench as benchmark
+
+    class _Transport:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=SimpleNamespace())
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **kwargs: _Transport(**kwargs)),
+    )
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:8317/v1")
+
+    client = benchmark._make_llm(
+        provider="openai",
+        model="gpt-5.6-luna",
+        request_timeout=17.0,
+        transport_max_attempts=2,
+    )
+
+    assert client._max_retries == 1
+
+
+def test_benchmark_identity_uses_the_same_explicit_provider_environment(
+    ra, monkeypatch
+):
+    import tools.run_research_agent_bench as benchmark
+
+    class _Transport:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=SimpleNamespace())
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **kwargs: _Transport(**kwargs)),
+    )
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9999/v1")
+    provider_environment = {"OPENAI_BASE_URL": "http://127.0.0.1:8317/v1"}
+    client = benchmark._make_llm(
+        provider="openai",
+        model="gpt-5.6-luna",
+        request_timeout=120.0,
+        provider_environment=provider_environment,
+    )
+
+    expected = benchmark._benchmark_execution_identity(
+        {},
+        provider="openai",
+        model="gpt-5.6-luna",
+        provider_environment=provider_environment,
+    )
+    actual = benchmark._benchmark_execution_identity({}, client)
+
+    assert actual.identity_sha256 == expected.identity_sha256
+
+
+@pytest.mark.parametrize("attempts", [0, -1, True, 1.5, "2"])
+def test_benchmark_invalid_transport_attempts_fail_closed(
+    ra, attempts: object
+) -> None:
+    import tools.run_research_agent_bench as benchmark
+
+    with pytest.raises(ValueError, match="must be a positive integer"):
+        benchmark._make_llm(
+            provider="mock",
+            model="mock",
+            request_timeout=17.0,
+            transport_max_attempts=attempts,
+        )
 
 
 def test_reasoning_extra_body_mutation_is_rejected_before_transport(ra, monkeypatch):
@@ -501,7 +576,7 @@ def test_factory_authorization_records_exact_nonsecret_endpoint():
         },
     )
 
-    assert payload["schema_version"] == "easyicu.provider_authorization_manifest/2"
+    assert payload["schema_version"] == "easyicu.provider_authorization_manifest/3"
     assert payload["reasoning_effort_profile"] == "provider_default"
     assert payload["clients"] == [
         {
@@ -511,6 +586,14 @@ def test_factory_authorization_records_exact_nonsecret_endpoint():
             "destination": "external",
             "authorization_mode": "operator_env",
             "authorization_sha256": payload["clients"][0]["authorization_sha256"],
+            "transport_policy": {
+                "schema_version": "easyicu.provider_transport_policy/1",
+                "transport": "openai_compatible",
+                "request_timeout_seconds": 120.0,
+                "transport_max_attempts": 9,
+                "retryable_http_status_codes": None,
+                "stream_enabled": False,
+            },
         }
     ]
     assert "secret-never-persisted" not in str(payload)
@@ -565,7 +648,7 @@ def test_unknown_provider_is_unmanaged_external_and_never_local_exempt():
 
     assert provider_transport_destination(client) == "external"
     assert provider_authorization_manifest(client) == {
-        "schema_version": "easyicu.provider_authorization_manifest/2",
+        "schema_version": "easyicu.provider_authorization_manifest/3",
         "reasoning_effort_profile": "provider_default",
         "clients": [
             {
@@ -575,6 +658,14 @@ def test_unknown_provider_is_unmanaged_external_and_never_local_exempt():
                 "destination": "external",
                 "authorization_mode": "unmanaged",
                 "authorization_sha256": "",
+                "transport_policy": {
+                    "schema_version": "easyicu.provider_transport_policy/1",
+                    "transport": "unmanaged",
+                    "request_timeout_seconds": None,
+                    "transport_max_attempts": None,
+                    "retryable_http_status_codes": None,
+                    "stream_enabled": None,
+                },
             }
         ],
     }
@@ -1003,11 +1094,15 @@ def test_remote_openai_transport_cannot_be_authorized_as_local():
         ("_resolved_base_url", "https://attacker.example/v1"),
         ("_model", "mutated-model"),
         ("_completion_token_parameter", "max_completion_tokens"),
+        ("_request_timeout", 999.0),
+        ("_stream_enabled", True),
+        ("_max_retries", 99),
+        ("_retryable_http_status_codes", frozenset({408, 429, 500, 502, 503, 504})),
     ],
 )
 def test_registered_openai_transport_mutation_is_rejected_before_delivery(
     attribute: str,
-    mutated_value: str,
+    mutated_value: object,
 ) -> None:
     from easyicu.research_agent.providers.factory import (
         EXTERNAL_LLM_NOT_AUTHORIZED,

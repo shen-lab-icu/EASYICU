@@ -2458,6 +2458,13 @@ def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
             return SimpleNamespace(manifest_path=run_dir / "manifest.json")
 
     study = _complete_study()
+    hard_stop = agent_pipeline_runs._start_web_provider_hard_stop(
+        wrapper_dir=tmp_path / "wrapper",
+        job_id="resume-contract",
+        declaration_sha256=(
+            study_context_owner.scientific_configuration_sha256(study)
+        ),
+    )
     entry = agent_pipeline_runs._PendingRun(
         pipeline=_Pipeline(),
         pending=pending,
@@ -2466,6 +2473,7 @@ def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
         provider={},
         acquisition=_acquisition_receipt(),
         created_at=1.0,
+        provider_hard_stop=hard_stop,
     )
     monkeypatch.setitem(agent_pipeline_runs._PENDING, pending.run_id, entry)
     monkeypatch.setattr(
@@ -2484,6 +2492,7 @@ def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
             self.events.append(event)
 
     job = _Job()
+    assert hard_stop.ledger.snapshot()["tasks"][0]["status"] == "running"
     result = agent_pipeline_runs.resume_research_pipeline(
         run_id=pending.run_id,
         study_context_id=study["id"],
@@ -2498,6 +2507,148 @@ def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
     assert calls["run_id"] == pending.run_id
     assert [event["step"] for event in job.events] == ["human_review", "coder"]
     assert job.events[-1]["label"] == "Generating analysis code."
+    ledger = json.loads(hard_stop.ledger.path.read_text(encoding="utf-8"))
+    assert ledger["tasks"][0]["task_id"] == hard_stop.task_id
+    assert ledger["tasks"][0]["status"] == "completed"
+
+
+def test_recoverable_review_resume_failure_keeps_pending_run_and_pauses_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "recoverable-review"
+    run_dir.mkdir()
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Review the digest-bound plan before analysis.",
+        authority_sha256="d" * 64,
+        payload={"reason": "operator_plan_approval_required"},
+    )
+    pending = HumanReviewPending(
+        run_id="run-recoverable-review",
+        thread_id="thread-recoverable-review",
+        run_dir=str(run_dir),
+        requests=(request,),
+    )
+
+    class _Pipeline:
+        has_resumable_human_review = True
+
+        def resume_human_review(self, decisions, *, run_id, progress_callback=None):
+            raise ValueError("review decision evidence could not be persisted")
+
+    study = _complete_study()
+    hard_stop = agent_pipeline_runs._start_web_provider_hard_stop(
+        wrapper_dir=tmp_path / "wrapper",
+        job_id="recoverable-review",
+        declaration_sha256=(
+            study_context_owner.scientific_configuration_sha256(study)
+        ),
+    )
+    hard_stop.pause()
+    entry = agent_pipeline_runs._PendingRun(
+        pipeline=_Pipeline(),
+        pending=pending,
+        wrapper_dir=tmp_path / "wrapper",
+        study=study,
+        provider={},
+        acquisition=_acquisition_receipt(),
+        created_at=1.0,
+        provider_hard_stop=hard_stop,
+    )
+    monkeypatch.setitem(agent_pipeline_runs._PENDING, pending.run_id, entry)
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        agent_pipeline_runs.resume_research_pipeline(
+            run_id=pending.run_id,
+            study_context_id=study["id"],
+            decision="approved",
+            reviewer="local reviewer",
+            note="",
+            job=SimpleNamespace(emit=lambda _event: None, cancel_requested=False),
+            current_study_context=study,
+        )
+
+    assert exc.value.code == "research_pipeline_review_resume_failed"
+    assert exc.value.details["review_resumable"] is True
+    assert agent_pipeline_runs._PENDING[pending.run_id] is entry
+    task_row = hard_stop.ledger.snapshot()["tasks"][0]
+    assert task_row["status"] == "paused"
+    assert hard_stop.ledger.snapshot()["terminal"] is False
+
+
+def test_review_resume_claim_is_exclusive_before_touching_provider_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "already-claimed-review"
+    run_dir.mkdir()
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Review the digest-bound plan before analysis.",
+        authority_sha256="e" * 64,
+        payload={"reason": "operator_plan_approval_required"},
+    )
+    pending = HumanReviewPending(
+        run_id="run-already-claimed-review",
+        thread_id="thread-already-claimed-review",
+        run_dir=str(run_dir),
+        requests=(request,),
+    )
+
+    class _Pipeline:
+        def resume_human_review(self, *args, **kwargs):
+            raise AssertionError("a second job must not touch the live workflow")
+
+    study = _complete_study()
+    hard_stop = agent_pipeline_runs._start_web_provider_hard_stop(
+        wrapper_dir=tmp_path / "wrapper",
+        job_id="already-claimed-review",
+        declaration_sha256=(
+            study_context_owner.scientific_configuration_sha256(study)
+        ),
+    )
+    hard_stop.pause()
+    entry = agent_pipeline_runs._PendingRun(
+        pipeline=_Pipeline(),
+        pending=pending,
+        wrapper_dir=tmp_path / "wrapper",
+        study=study,
+        provider={},
+        acquisition=_acquisition_receipt(),
+        created_at=1.0,
+        provider_hard_stop=hard_stop,
+    )
+    monkeypatch.setitem(agent_pipeline_runs._PENDING, pending.run_id, entry)
+
+    class _ContendedLock:
+        def __init__(self) -> None:
+            self.entries = 0
+
+        def __enter__(self):
+            self.entries += 1
+            if self.entries == 2:
+                # Simulate another resume job claiming the entry after this
+                # caller read it but before this caller obtains the lease.
+                agent_pipeline_runs._PENDING.pop(pending.run_id, None)
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(agent_pipeline_runs, "_PENDING_LOCK", _ContendedLock())
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        agent_pipeline_runs.resume_research_pipeline(
+            run_id=pending.run_id,
+            study_context_id=study["id"],
+            decision="approved",
+            reviewer="local reviewer",
+            note="",
+            job=SimpleNamespace(emit=lambda _event: None, cancel_requested=False),
+            current_study_context=study,
+        )
+
+    assert exc.value.code == "research_pipeline_review_resume_in_progress"
+    assert hard_stop.ledger.snapshot()["tasks"][0]["status"] == "paused"
 
 
 def test_guided_project_rail_projects_real_mode_from_bound_study_setup(
@@ -2596,8 +2747,13 @@ def test_provider_bridge_keeps_private_key_out_of_public_metadata(
     assert captured["environment"]["EASYICU_TRUST_LOOPBACK_PROXY_KEY"] == "1"
     assert captured["environment"]["EASYICU_OPENAI_AUTH_HEADER"] == "x-api-key"
     assert captured["request_timeout"] == 480.0
+    assert captured["max_retries"] == 1
+    assert captured["retryable_http_status_codes"] == (500, 502, 503, 504)
+    assert captured["allow_environment_overrides"] is False
     assert private_key not in json.dumps(public)
     assert public["request_timeout_seconds"] == 480.0
+    assert public["transport_max_attempts"] == 2
+    assert public["retryable_http_status_codes"] == [500, 502, 503, 504]
     assert public["secrets_returned"] is False
 
 
@@ -2690,6 +2846,80 @@ def test_web_runner_timeout_is_typed_and_records_bounded_retry_diagnostic(
         event.get("label", "").startswith("The model provider timed out")
         for event in Job.events
     )
+
+
+def test_planner_failure_artifact_persists_only_safe_attempt_metadata(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.providers.structured_retry import (
+        StructuredAttempt,
+        StructuredResponseFailure,
+    )
+
+    secret = "sk-provider-secret-in-model-output"
+    failure = StructuredResponseFailure(
+        [
+            StructuredAttempt(
+                attempt=0,
+                raw_head=f'{{"answer": "{secret}"}}',
+                raw_chars=42,
+                error_class="ValidationError",
+                error_message=f"raw input included {secret}",
+                finish_reason="length",
+                usage_summary={
+                    "prompt_tokens": 100,
+                    "completion_tokens": 55,
+                    "total_tokens": 155,
+                },
+                transport_attempts=2,
+            )
+        ],
+        role="planner",
+    )
+
+    relative = agent_pipeline_runs._write_pipeline_failure_diagnostic(
+        wrapper_dir=tmp_path,
+        exc=failure,
+        code="research_pipeline_plan_contract_exhausted",
+    )
+
+    assert relative == "diagnostics/research_pipeline_failure.json"
+    payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "easyicu.web-research-pipeline-failure/2"
+    assert payload["structured_attempts"] == [
+        {
+            "attempt": 1,
+            "raw_chars": 42,
+            "error_class": "validation",
+            "finish_reason": "length",
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 55,
+                "total_tokens": 155,
+            },
+            "transport_attempts": 2,
+        }
+    ]
+    rendered = json.dumps(payload)
+    assert secret not in rendered
+    assert payload["raw_model_output_recorded"] is False
+    assert payload["prompt_recorded"] is False
+    assert payload["secrets_recorded"] is False
+    assert payload["failure_type"] == "structured_response"
+
+
+def test_pipeline_failure_type_is_a_closed_nonsecret_category(tmp_path: Path) -> None:
+    secret_error_type = type("sk_secret_shaped_failure_type", (RuntimeError,), {})
+
+    relative = agent_pipeline_runs._write_pipeline_failure_diagnostic(
+        wrapper_dir=tmp_path,
+        exc=secret_error_type("ordinary failure"),
+        code="research_pipeline_execution_failed",
+    )
+
+    payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
+    assert payload["failure_type"] == "error"
+    assert "sk_secret" not in json.dumps(payload)
 
 
 def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
@@ -2836,6 +3066,15 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     result = runner(Job())
 
     assert calls["acquire"]["question"] == _complete_study()["question"]
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+
+    assert isinstance(calls["acquire"]["llm"], HardStopClient)
+    assert calls["acquire"]["llm"]._role == "acquisition"
+    assert calls["services"].provider_hard_stop is not None
+    assert (
+        calls["acquire"]["llm"]._task
+        is calls["services"].provider_hard_stop
+    )
     assert calls["acquire"]["allowed_modules"] == ("demographics", "outcome")
     assert calls["acquire"]["static_concepts"] == ("age", "sex")
     assert calls["run"]["cohort"] == universe
@@ -2849,6 +3088,23 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["config"].require_human_plan_review is True
     assert calls["config"].required_primary_cohort_selection_mode == "all_input_rows"
     assert calls["config"].enable_pubmed is False
+    assert calls["config"].max_provider_attempts_per_run == 192
+    assert calls["config"].max_total_tokens_per_run == 2_000_000
+    assert (
+        calls["services"].provider_hard_stop.ledger.limits
+        == provider_adapter.web_research_agent_hard_stop_limits()
+    )
+    ledger = json.loads(
+        (
+            tmp_path
+            / "projects"
+            / "study-workflow"
+            / "run_job-real-pipeline"
+            / ".runtime"
+            / "provider_hard_stop_ledger.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert ledger["tasks"][0]["status"] == "completed"
     assert result["engine"] == "easyicu.research_agent.pipeline"
     assert result["gate"]["status"] == "analysis_only"
     assert any(event["step"] == "research_pipeline" for event in Job.events)

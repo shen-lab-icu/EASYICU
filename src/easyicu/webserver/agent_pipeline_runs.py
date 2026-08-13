@@ -27,8 +27,11 @@ from easyicu.extensions import (
     ExtensionRegistryError,
 )
 
-from easyicu.research_agent.authority.secret_redaction import redact_text_secrets
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+from easyicu.research_agent.providers.structured_retry import (
+    safe_provider_error_category,
+    safe_structured_attempt_metadata,
+)
 from easyicu.research_agent.acquisition.patient_grouping import (
     PatientGroupingBinding,
 )
@@ -141,6 +144,7 @@ class _PendingRun:
     provider: Dict[str, Any]
     acquisition: Any
     created_at: float
+    provider_hard_stop: Optional[Any] = None
 
 
 _PENDING: Dict[str, _PendingRun] = {}
@@ -235,30 +239,61 @@ def _load_pending_scientific_review(
     return review.model_dump(mode="json")
 
 
-def _failure_note(value: Any, *, limit: int = 6_000) -> str:
-    """Return a bounded, secret-free retry diagnostic without model output."""
-
-    text = redact_text_secrets(str(value or ""))
-    text = re.sub(
-        r"(?:file://)?/(?:Users|home|private|tmp|var|etc|opt|Volumes)/[^\s,;]+",
-        "[HOST_PATH]",
-        text,
-        flags=re.I,
-    )
-    return text.strip()[:limit]
-
-
 def _pipeline_failure_code(exc: BaseException) -> str:
-    chain: List[BaseException] = []
-    current: Optional[BaseException] = exc
-    while current is not None and current not in chain and len(chain) < 8:
-        chain.append(current)
-        current = current.__cause__ or current.__context__
+    chain = _pipeline_exception_chain(exc)
     if any("timeout" in type(item).__name__.casefold() for item in chain):
         return "research_pipeline_provider_timeout"
     if any(type(item).__name__ == "StructuredResponseFailure" for item in chain):
         return "research_pipeline_plan_contract_exhausted"
     return "research_pipeline_execution_failed"
+
+
+def _pipeline_exception_chain(exc: BaseException) -> List[BaseException]:
+    """Return one bounded exception chain without following cycles."""
+
+    chain: List[BaseException] = []
+    current: Optional[BaseException] = exc
+    while current is not None and current not in chain and len(chain) < 8:
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def _safe_pipeline_attempt_metadata(exc: BaseException) -> List[Dict[str, Any]]:
+    """Extract only the approved, response-free structured-attempt fields."""
+
+    for item in _pipeline_exception_chain(exc):
+        attempts = getattr(item, "attempts", None)
+        if isinstance(attempts, (list, tuple)):
+            return safe_structured_attempt_metadata(attempts)
+        projected = getattr(item, "easyicu_structured_attempt_metadata", None)
+        if isinstance(projected, list):
+            # Re-validate even producer-projected rows at the same closed-enum
+            # owner boundary; exception attributes are mutable and untrusted.
+            return safe_structured_attempt_metadata(projected)
+    return []
+
+
+def _pipeline_failure_category(exc: BaseException) -> str:
+    """Return a closed diagnostic category for one bounded exception chain."""
+
+    categories = [
+        safe_provider_error_category(item) for item in _pipeline_exception_chain(exc)
+    ]
+    for preferred in (
+        "provider_budget",
+        "timeout",
+        "rate_limit",
+        "connection",
+        "provider_http",
+        "authorization",
+        "structured_response",
+        "validation",
+        "parse",
+    ):
+        if preferred in categories:
+            return preferred
+    return "error"
 
 
 def _write_pipeline_failure_diagnostic(
@@ -269,23 +304,25 @@ def _write_pipeline_failure_diagnostic(
 ) -> Optional[str]:
     """Persist bounded host diagnostics for a failed real pipeline run.
 
-    Structured retry notes contain validator findings but not raw model output
-    or prompts. Keeping that distinction lets an operator diagnose why a plan
-    was rejected without turning the Web timeline into a reasoning transcript.
+    Exception messages and notes are never public diagnostic channels: either
+    can contain provider echoes, prompt fragments, validator inputs, private
+    reasoning, paths, patient text, or credentials.
     """
 
-    notes: List[str] = []
-    for item in list(getattr(exc, "__notes__", ()) or ())[:8]:
-        clean = _failure_note(item)
-        if clean:
-            notes.append(clean)
+    attempts = _safe_pipeline_attempt_metadata(exc)
+    diagnostic_message = "The governed Research Agent operation failed."
+    message_sha256 = hashlib.sha256(
+        f"{type(exc).__name__}: {exc}".encode("utf-8")
+    ).hexdigest()
     payload = {
-        "schema_version": "easyicu.web-research-pipeline-failure/1",
+        "schema_version": "easyicu.web-research-pipeline-failure/2",
         "status": "failed",
         "code": code,
-        "failure_type": type(exc).__name__,
-        "message": _failure_note(exc, limit=1_200),
-        "structured_retry_history": notes,
+        "failure_type": _pipeline_failure_category(exc),
+        "message": diagnostic_message,
+        "message_sha256": message_sha256,
+        "structured_retry_history": [],
+        "structured_attempts": attempts,
         "raw_model_output_recorded": False,
         "prompt_recorded": False,
         "patient_rows_recorded": False,
@@ -1822,7 +1859,84 @@ def _register_pending(entry: _PendingRun) -> None:
         _PENDING[str(entry.pending.run_id)] = entry
         while len(_PENDING) > _MAX_PENDING:
             oldest = min(_PENDING.items(), key=lambda item: item[1].created_at)[0]
-            _PENDING.pop(oldest, None)
+            evicted = _PENDING.pop(oldest, None)
+            if evicted is not None and evicted.provider_hard_stop is not None:
+                _finish_web_provider_hard_stop(
+                    evicted.provider_hard_stop,
+                    error="pending_review_evicted",
+                )
+
+
+def _start_web_provider_hard_stop(
+    *,
+    wrapper_dir: Path,
+    job_id: str,
+    declaration_sha256: str,
+) -> Any:
+    """Start the one durable Provider task shared by acquisition and Pipeline."""
+
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLedger,
+    )
+
+    runtime_dir = wrapper_dir / ".runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        runtime_dir.chmod(0o700)
+    except OSError:
+        pass
+    task_id = f"web-{_slug(job_id)}"
+    ledger = ProviderHardStopLedger(
+        path=(runtime_dir / "provider_hard_stop_ledger.json").resolve(),
+        task_ids=(task_id,),
+        limits=provider_adapter.web_research_agent_hard_stop_limits(),
+        batch_id=task_id,
+        declaration_sha256=declaration_sha256,
+    )
+    return ledger.start_task(task_id)
+
+
+def _finish_web_provider_hard_stop(
+    task: Optional[Any],
+    *,
+    error: Optional[str] = None,
+) -> None:
+    """Idempotently close one Web task with a closed diagnostic category."""
+
+    if task is None:
+        return
+    snapshot = task.ledger.snapshot()
+    rows = snapshot.get("tasks")
+    current = next(
+        (
+            row
+            for row in (rows if isinstance(rows, list) else [])
+            if isinstance(row, Mapping) and row.get("task_id") == task.task_id
+        ),
+        None,
+    )
+    if isinstance(current, Mapping) and current.get("status") in {
+        "completed",
+        "failed",
+        "batch_canary_blocked",
+        "budget_exhausted",
+    }:
+        return
+    task.finish(error=error)
+
+
+def _pause_web_provider_hard_stop(task: Optional[Any]) -> None:
+    """Pause active Provider time while the Web run awaits human review."""
+
+    if task is not None:
+        task.pause()
+
+
+def _resume_web_provider_hard_stop(task: Optional[Any]) -> None:
+    """Resume active Provider time immediately before pipeline execution."""
+
+    if task is not None:
+        task.resume()
 
 
 def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
@@ -2026,6 +2140,7 @@ def make_research_pipeline_run_runner(
             dict(provider),
             environ=research_provider_environment,
         )
+        provider_hard_stop = None
         try:
             from easyicu.research_agent import ResearchAgentPipeline
             from easyicu.research_agent.acquisition.foundation import (
@@ -2034,6 +2149,27 @@ def make_research_pipeline_run_runner(
             from easyicu.research_agent.orchestration.config import PipelineConfig
             from easyicu.research_agent.orchestration.services import PipelineServices
             from easyicu.research_agent.orchestration.workflow import HumanReviewPending
+            from easyicu.research_agent.providers.hard_stop import HardStopClient
+
+            provider_hard_stop = _start_web_provider_hard_stop(
+                wrapper_dir=wrapper_dir,
+                job_id=str(job.id),
+                declaration_sha256=(
+                    study_context_owner.scientific_configuration_sha256(study)
+                ),
+            )
+            provider_public["provider_hard_stop"] = {
+                "schema_version": "easyicu.web-provider-hard-stop-policy/1",
+                "required": True,
+                "enforced": True,
+                "scope": "acquisition_through_pipeline_terminal",
+            }
+            hard_stop_limits = provider_hard_stop.ledger.limits
+            acquisition_client = HardStopClient(
+                client,
+                role="acquisition",
+                task=provider_hard_stop,
+            )
 
             _progress(
                 job,
@@ -2043,7 +2179,7 @@ def make_research_pipeline_run_runner(
             acquisition = acquire_universe_for_question(
                 export_dir=Path(export_path).expanduser(),
                 question=question,
-                llm=client,
+                llm=acquisition_client,
                 output_dir=wrapper_dir / "pipeline_input",
                 stem="web_research_universe",
                 target_outcome=target,
@@ -2069,6 +2205,10 @@ def make_research_pipeline_run_runner(
                 patient_grouping=patient_grouping,
             )
             if acquisition.blocked or acquisition.universe_path is None:
+                _finish_web_provider_hard_stop(
+                    provider_hard_stop,
+                    error="data_foundation_blocked",
+                )
                 return _write_projection(
                     wrapper_dir=wrapper_dir,
                     study=study,
@@ -2146,10 +2286,35 @@ def make_research_pipeline_run_runner(
                     bool(literature_search_authorized)
                     and bound_preplan_literature is None
                 ),
+                max_provider_attempts_per_run=(
+                    hard_stop_limits.max_provider_attempts_per_run
+                ),
+                max_provider_attempts_per_batch=(
+                    hard_stop_limits.max_provider_attempts_per_batch
+                ),
+                max_total_tokens_per_run=hard_stop_limits.max_total_tokens_per_run,
+                max_total_tokens_per_batch=(
+                    hard_stop_limits.max_total_tokens_per_batch
+                ),
+                max_estimated_cost_usd_per_batch=(
+                    hard_stop_limits.max_estimated_cost_usd_per_batch
+                ),
+                max_wall_clock_seconds_per_task=(
+                    hard_stop_limits.max_wall_clock_seconds_per_task
+                ),
+                provider_input_cost_usd_per_million_tokens=(
+                    hard_stop_limits.input_cost_usd_per_million_tokens
+                ),
+                provider_output_cost_usd_per_million_tokens=(
+                    hard_stop_limits.output_cost_usd_per_million_tokens
+                ),
             )
             pipeline = ResearchAgentPipeline.from_config(
                 config,
-                services=PipelineServices(llm=client),
+                services=PipelineServices(
+                    llm=client,
+                    provider_hard_stop=provider_hard_stop,
+                ),
             )
             preferences = _research_user_preferences(
                 study,
@@ -2207,6 +2372,7 @@ def make_research_pipeline_run_runner(
             )
             if isinstance(outcome, HumanReviewPending):
                 run_dir = Path(outcome.run_dir)
+                _pause_web_provider_hard_stop(provider_hard_stop)
                 entry = _PendingRun(
                     pipeline=pipeline,
                     pending=outcome,
@@ -2215,6 +2381,7 @@ def make_research_pipeline_run_runner(
                     provider=provider_public,
                     acquisition=acquisition,
                     created_at=time.time(),
+                    provider_hard_stop=provider_hard_stop,
                 )
                 _register_pending(entry)
                 return _write_projection(
@@ -2225,6 +2392,7 @@ def make_research_pipeline_run_runner(
                     run_dir=run_dir,
                     pending=outcome,
                 )
+            _finish_web_provider_hard_stop(provider_hard_stop)
             return _write_projection(
                 wrapper_dir=wrapper_dir,
                 study=study,
@@ -2233,8 +2401,16 @@ def make_research_pipeline_run_runner(
                 run_dir=Path(outcome.manifest_path).parent,
             )
         except ResearchPipelineRunError:
+            _finish_web_provider_hard_stop(
+                provider_hard_stop,
+                error="research_pipeline_error",
+            )
             raise
         except Exception as exc:
+            _finish_web_provider_hard_stop(
+                provider_hard_stop,
+                error=_pipeline_failure_category(exc),
+            )
             code = _pipeline_failure_code(exc)
             diagnostic = _write_pipeline_failure_diagnostic(
                 wrapper_dir=wrapper_dir,
@@ -2263,13 +2439,13 @@ def make_research_pipeline_run_runner(
             else:
                 message = (
                     "The Research Agent pipeline stopped before it could produce a "
-                    f"governed result ({type(exc).__name__})."
+                    f"governed result ({_pipeline_failure_category(exc)})."
                 )
             raise ResearchPipelineRunError(
                 code,
                 message,
                 details={
-                    "failure_type": type(exc).__name__,
+                    "failure_type": _pipeline_failure_category(exc),
                     "diagnostic": diagnostic,
                 },
             ) from exc
@@ -2310,6 +2486,12 @@ def resume_research_pipeline(
             dict(current_study_context)
         )
         if current_digest != planned_digest:
+            with _PENDING_LOCK:
+                _PENDING.pop(key, None)
+            _finish_web_provider_hard_stop(
+                entry.provider_hard_stop,
+                error="configuration_superseded",
+            )
             raise ResearchPipelineRunError(
                 "research_pipeline_review_configuration_superseded",
                 "The scientific setup changed after this plan was generated; the old plan cannot be approved.",
@@ -2345,15 +2527,30 @@ def resume_research_pipeline(
         HumanReviewRejected,
     )
 
+    # Lease the live pause before resuming it. Two approval jobs for the same
+    # button click must not both drive one workflow or pause the Provider clock
+    # underneath each other. Recoverable failures and a new pause explicitly
+    # re-register the entry below.
+    with _PENDING_LOCK:
+        if _PENDING.get(key) is not entry:
+            raise ResearchPipelineRunError(
+                "research_pipeline_review_resume_in_progress",
+                "This plan review is already being resumed by another job.",
+            )
+        _PENDING.pop(key, None)
+
     try:
+        _resume_web_provider_hard_stop(entry.provider_hard_stop)
         outcome = entry.pipeline.resume_human_review(
             decisions,
             run_id=key,
             progress_callback=lambda event: _pipeline_progress(job, event),
         )
     except HumanReviewRejected:
-        with _PENDING_LOCK:
-            _PENDING.pop(key, None)
+        _finish_web_provider_hard_stop(
+            entry.provider_hard_stop,
+            error="human_review_rejected",
+        )
         return _write_projection(
             wrapper_dir=entry.wrapper_dir,
             study=entry.study,
@@ -2363,12 +2560,32 @@ def resume_research_pipeline(
             blocked_reason="human_plan_review_rejected",
         )
     except Exception as exc:
+        remains_resumable = bool(
+            getattr(entry.pipeline, "has_resumable_human_review", False)
+        )
+        if remains_resumable:
+            try:
+                _pause_web_provider_hard_stop(entry.provider_hard_stop)
+                _register_pending(entry)
+            except Exception:
+                remains_resumable = False
+        if not remains_resumable:
+            _finish_web_provider_hard_stop(
+                entry.provider_hard_stop,
+                error=_pipeline_failure_category(exc),
+            )
         raise ResearchPipelineRunError(
             "research_pipeline_review_resume_failed",
-            f"{type(exc).__name__}: {exc}",
+            "The governed Research Agent run could not resume after plan review.",
+            details={
+                "failure_type": _pipeline_failure_category(exc),
+                "review_resumable": remains_resumable,
+            },
         ) from exc
     if isinstance(outcome, HumanReviewPending):
+        _pause_web_provider_hard_stop(entry.provider_hard_stop)
         entry.pending = outcome
+        _register_pending(entry)
         return _write_projection(
             wrapper_dir=entry.wrapper_dir,
             study=entry.study,
@@ -2377,8 +2594,7 @@ def resume_research_pipeline(
             run_dir=Path(outcome.run_dir),
             pending=outcome,
         )
-    with _PENDING_LOCK:
-        _PENDING.pop(key, None)
+    _finish_web_provider_hard_stop(entry.provider_hard_stop)
     return _write_projection(
         wrapper_dir=entry.wrapper_dir,
         study=entry.study,
