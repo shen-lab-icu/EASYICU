@@ -4051,6 +4051,33 @@ def test_web_study_context_compiles_to_strict_user_preferences() -> None:
     }
 
 
+def test_web_typed_descriptive_family_overrides_free_text_risk_contrast_routing() -> None:
+    study = {
+        **_complete_study(),
+        "question": (
+            "What are the observed outcome risks and their risk difference "
+            "between exposure groups?"
+        ),
+        "analysis_goal": (
+            "Descriptive, unadjusted, noncausal absolute risks and risk difference."
+        ),
+        "analysis_design": {
+            "analysis_family": "descriptive_epidemiology",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "model_based",
+        },
+    }
+
+    compiled = agent_pipeline_runs._research_user_preferences(study)
+    validated = UserPreferences.model_validate(compiled)
+
+    assert validated.inferred_analysis_family == "descriptive_epidemiology"
+    constraints = json.loads(str(validated.data_constraints))
+    assert constraints["analysis_design"]["analysis_family"] == (
+        "descriptive_epidemiology"
+    )
+
+
 def test_web_materialization_window_never_declares_clinical_time_zero() -> None:
     study = {
         **_complete_study(),

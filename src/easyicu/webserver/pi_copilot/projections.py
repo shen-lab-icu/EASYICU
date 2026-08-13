@@ -200,6 +200,7 @@ def project_study_context(
             "analysis_design": {
                 key: _bounded_text(analysis_design.get(key), 80)
                 for key in (
+                    "analysis_family",
                     "analysis_unit",
                     "variance_estimator",
                     "cluster_unit",

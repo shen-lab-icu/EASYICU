@@ -156,7 +156,7 @@ _EXECUTION_CONCEPT_FIELDS = frozenset(
     {"outcome", "primary_exposure", "covariates"}
 )
 _ANALYSIS_DESIGN_FIELDS = frozenset(
-    {"analysis_unit", "variance_estimator", "cluster_unit"}
+    {"analysis_family", "analysis_unit", "variance_estimator", "cluster_unit"}
 )
 _COVARIATE_SELECTIONS = frozenset({"planner_selectable", "exact"})
 _COVARIATE_TEMPORAL_ROLES = frozenset(
@@ -878,6 +878,24 @@ def normalize_analysis_design(value: Any) -> Dict[str, str]:
                 "fields": missing,
             }
         )
+    analysis_family = ""
+    if value.get("analysis_family") not in (None, ""):
+        analysis_family = _identifier(
+            value.get("analysis_family"), field="analysis_design.analysis_family"
+        )
+        from easyicu.research_agent.planning.analysis_types import (
+            canonical_analysis_family,
+            list_analysis_types,
+        )
+
+        if canonical_analysis_family(analysis_family) != analysis_family:
+            raise StudyContextError(
+                {
+                    "error": "study_analysis_family_unsupported",
+                    "field": "analysis_design.analysis_family",
+                    "allowed": sorted(spec.key for spec in list_analysis_types()),
+                }
+            )
     analysis_unit = _identifier(
         value.get("analysis_unit"), field="analysis_design.analysis_unit"
     )
@@ -929,6 +947,7 @@ def normalize_analysis_design(value: Any) -> Dict[str, str]:
             }
         )
     return {
+        **({"analysis_family": analysis_family} if analysis_family else {}),
         "analysis_unit": analysis_unit,
         "variance_estimator": variance_estimator,
         **({"cluster_unit": cluster_unit} if cluster_unit else {}),

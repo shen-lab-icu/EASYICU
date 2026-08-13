@@ -589,6 +589,9 @@ def _build_planner_user_prompt(
         "encode the scientific comparison. THE COLUMN YOU GROUP ON IS NOT ALSO "
         "A ROW -- it would report each group as 100% itself. Name it in "
         "`group_by` or in `variables`, never in both. "
+        "That same step's `inputs` must explicitly list its `group_by` and "
+        "every `variables[*].name`, in addition to the typed cohort artifact; "
+        "a column named inside the spec is not implicitly an input. "
         "Levels follow the variable kind: a "
         "'categorical' row summarised 'count_percent' requires at least two "
         "closed levels; an 'ordinal' row summarised numerically may declare "
@@ -687,6 +690,8 @@ def _build_planner_user_prompt(
         "claim_ceiling='descriptive_only' and the typed limitation "
         "'post_baseline_exposure_opportunity_unresolved'; that contract does not "
         "authorize association or causal language. "
+        + _payload.descriptive_claim_shape_guide()
+        + " "
         "A primary cohort construction/eligibility + attrition step is also a "
         "strict execution boundary: it must declare exactly one materialised "
         "closed cohort product (" + _closed_cohort_product_sentence() + ") "
@@ -843,6 +848,9 @@ def _build_planner_user_prompt(
         "`one_per_role` requires an exact `role_column` and complete "
         "`expected_roles` roster. Never select the first row or assume a table "
         "has one result merely because the downstream step renders one figure. "
+        "Every item uses the exact keys `input_key` and `mode`, for example "
+        '`{"input_key":"table:exact_product","mode":"all_rows"}`; never '
+        "rename them to `input` and `cardinality`. "
         "Leave this array empty when no typed-table cardinality rule is needed.\n\n"
         "When the ResearchContext carries `materialized_inputs`, every raw "
         "dataframe field in `steps[*].inputs`, `table_one_spec`, "
@@ -1592,6 +1600,9 @@ class PlannerAgent:
             resolved_planning_contract_context,
             allowed_citation_keys,
             direct_comparator_keys=direct_comparator_keys,
+            required_method_layers=(
+                _payload.required_method_layers_for_context(context)
+            ),
         )
         messages = self.request_messages(
             context,
@@ -1659,6 +1670,9 @@ class PlannerAgent:
                 + _payload.literature_citation_retry_suffix(
                     allowed_citation_keys,
                     direct_comparator_keys=direct_comparator_keys,
+                    required_method_layers=(
+                        _payload.required_method_layers_for_context(context)
+                    ),
                 )
                 + _payload.planner_science_retry_guide()
             ),

@@ -997,8 +997,14 @@ def _preferred_family_key(context: ResearchContext) -> Optional[str]:
     for candidate in candidates:
         if not candidate:
             continue
-        key = _FAMILY_ALIASES.get(candidate.strip().lower())
-        if key and key in _REGISTRY:
+        # StudyContext persists the canonical registry key, while older entry
+        # points may still supply one of the supported aliases.  Resolve both
+        # through the same fail-closed owner used for explicit plan families.
+        # Looking only in ``_FAMILY_ALIASES`` silently discarded canonical keys
+        # that do not need an alias entry (notably ``descriptive_epidemiology``),
+        # then re-inferred an association family from predictor/outcome prose.
+        key = canonical_analysis_family(candidate)
+        if key is not None:
             return key
     return None
 
@@ -1147,7 +1153,9 @@ def infer_analysis_type(
             r"(?:not|unsupported|avoid)\b"
             r"|(?:不(?:作|做|进行|用于|支持|解释为?)|避免|无意).{0,24}因果"
             r"|因果.{0,16}(?:不成立|不支持|不解释)"
-            r"|(?:而非|不是|并非).{0,12}因果",
+            r"|(?:而非|不是|并非).{0,12}因果"
+            r"|非因果"
+            r"|(?:不得|禁止|拒绝).{0,24}因果",
             text,
             flags=re.IGNORECASE,
         )

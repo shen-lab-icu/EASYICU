@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from easyicu.research_agent.contracts.endpoint import EndpointSpec
 from easyicu.research_agent.contracts.claim_ceiling import DescriptiveClaimContract
 from easyicu.research_agent.agents.core import PlannerAgent
@@ -18,6 +20,7 @@ from easyicu.research_agent.planning.figure_strategy import (
     build_article_figure_strategy,
 )
 from easyicu.research_agent.planning.dependence_authority import (
+    DependenceAuthorityError,
     bind_context_dependence_authority,
     context_dependence_authority,
 )
@@ -405,6 +408,68 @@ def test_owner_issued_patient_id_role_creates_typed_identity_authority() -> None
     assert authority.group_source == "subject_id"
     assert authority.group_derivation == "identity"
     assert authority.delimiter is None
+
+
+def test_dependence_authority_preserves_the_typed_family_sibling_coordinate() -> None:
+    """One closed analysis-design envelope can serve its two distinct owners."""
+
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["subject_id", "stay_id"],
+                    "provenance": {
+                        "analysis_unit": "icu_stay",
+                        "patient_id_columns": ["subject_id"],
+                    },
+                }
+            ),
+            "user_preferences": UserPreferences(
+                covariates=[],
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_family": "descriptive_epidemiology",
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                        }
+                    }
+                ),
+            ),
+        }
+    )
+
+    authority = context_dependence_authority(context)
+
+    assert authority is not None
+    assert authority.group_source == "subject_id"
+
+
+def test_dependence_authority_still_rejects_an_unknown_envelope_coordinate() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_family": "descriptive_epidemiology",
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                            "model_output_invented_field": True,
+                        }
+                    }
+                )
+            )
+        }
+    )
+
+    with pytest.raises(
+        DependenceAuthorityError,
+        match="closed repeated-unit contract",
+    ):
+        context_dependence_authority(context)
 
 
 def test_typed_descriptive_ceiling_avoids_temporal_inference_claim() -> None:

@@ -26,7 +26,10 @@ from ..planning.literature_bindings import (
 )
 from ..planning.primary_result_contract import model_terms_retry_guide
 from ..planning.robustness_contract import RobustnessSpec
-from ..planning.scientific_review import required_method_layers_for_plan
+from ..planning.scientific_review import (
+    required_method_layers_for_context,
+    required_method_layers_for_plan,
+)
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -127,11 +130,39 @@ def render_methodological_principles(principles: Sequence[Any]) -> str:
     return "\n".join(lines)
 
 
+def _required_method_binding_options(
+    method_cards: Sequence[Any],
+    required_method_layers: Sequence[str],
+) -> dict[str, dict[str, list[str]]]:
+    """Project only run-available choices for context-required method layers."""
+
+    required = {
+        str(layer or "").strip()
+        for layer in required_method_layers
+        if str(layer or "").strip()
+    }
+    options: dict[str, dict[str, set[str]]] = {}
+    for card in method_cards:
+        if card.layer not in required:
+            continue
+        options.setdefault(card.layer, {}).setdefault(card.source_key, set()).update(
+            card.design_elements
+        )
+    return {
+        layer: {
+            key: sorted(elements)
+            for key, elements in sorted(sources.items())
+        }
+        for layer, sources in sorted(options.items())
+    }
+
+
 def bind_literature_citation_authority(
     planning_contract_context: str,
     allowed_keys: Sequence[str],
     *,
     direct_comparator_keys: Sequence[str] = (),
+    required_method_layers: Sequence[str] = (),
 ) -> str:
     """Append role-bound LiteratureBundle authority to the Planner profile.
 
@@ -152,6 +183,10 @@ def bind_literature_citation_authority(
     method_cards = [
         card for card in METHOD_CARDS if card.source_key in method_source_keys
     ]
+    required_binding_options = _required_method_binding_options(
+        method_cards,
+        required_method_layers,
+    )
     authority = (
         "PRE-PLAN LITERATURE CITATION AUTHORITY (exact, run-bound):\n"
         "- allowed_literature_citation_keys: "
@@ -173,11 +208,9 @@ def bind_literature_citation_authority(
         "an evidence artifact, analysis contract, study-design brief, or invented "
         "semantic label in that field. Auxiliary steps may use an empty list."
         + " Every scientific step MUST also emit literature_design_bindings. "
-        "Each record must use a bound citation_key, select one or more exact "
-        "design_elements (population, time_zero, exposure, outcome, estimand, "
-        "adjustment, dependence, missing_data, robustness, reporting), and state what was "
-        "applied plus any deliberate divergence. Do not invent or copy a source "
-        "quotation; the host joins the sealed excerpt."
+        + literature_design_binding_shape_guide()
+        + " Do not invent or copy a source quotation; the host joins the sealed "
+        "excerpt."
         + (
             " Every scientific step MUST include at least one exact "
             "allowed_method_source_key that supports its design or method; a "
@@ -216,6 +249,19 @@ def bind_literature_citation_authority(
             if method_cards
             else ""
         )
+        + (
+            "\n- case_applicable_required_method_layers: "
+            + json.dumps(sorted(required_binding_options), ensure_ascii=False)
+            + "\n- Cover every listed layer at least once through one of these "
+            "exact source/design-element options: "
+            + json.dumps(
+                required_binding_options,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            if required_binding_options
+            else ""
+        )
     )
     return "\n\n".join(
         value for value in (planning_contract_context, authority) if value
@@ -226,6 +272,7 @@ def literature_citation_retry_suffix(
     allowed_keys: Sequence[str],
     *,
     direct_comparator_keys: Sequence[str] = (),
+    required_method_layers: Sequence[str] = (),
 ) -> str:
     """Render exact citation keys in the structured-retry reminder."""
 
@@ -248,12 +295,16 @@ def literature_citation_retry_suffix(
         )
         for key in method_source_keys
     }
+    required_binding_options = _required_method_binding_options(
+        [card for card in METHOD_CARDS if card.source_key in method_source_keys],
+        required_method_layers,
+    )
     return (
         " Allowed literature_citation_keys for this run are exactly: "
         + json.dumps(list(allowed_keys), ensure_ascii=False)
         + "."
-        + " Each scientific step must also include literature_design_bindings "
-        "with citation_key, design_elements, application, and optional divergence."
+        + " Each scientific step must also include literature_design_bindings. "
+        + literature_design_binding_shape_guide()
         + (
             " Every scientific step must include at least one method-source key "
             "from: "
@@ -274,6 +325,48 @@ def literature_citation_retry_suffix(
             if direct_keys
             else ""
         )
+        + (
+            " Case-applicable method layers that must be covered at least once "
+            "are: "
+            + json.dumps(sorted(required_binding_options), ensure_ascii=False)
+            + ". Exact source/design-element options are: "
+            + json.dumps(
+                required_binding_options,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            + "."
+            if required_binding_options
+            else ""
+        )
+    )
+
+
+def literature_design_binding_shape_guide() -> str:
+    """Publish the one exact nested JSON shape owned by the literature contract."""
+
+    return (
+        "Each record must use exactly this JSON shape: "
+        '{"citation_key":"<same exact bound key>",'
+        '"design_elements":["<one or more exact allowed elements>"],'
+        '"application":"<how the source shapes this step>",'
+        '"divergence":null}. '
+        "`divergence` may instead be a concise string. The only permitted keys "
+        "are `citation_key`, `design_elements`, `application`, and `divergence`; "
+        "do not rename them."
+    )
+
+
+def descriptive_claim_shape_guide() -> str:
+    """Publish the exact nested JSON shape for a descriptive claim ceiling."""
+
+    return (
+        "When this ceiling is required, emit exactly "
+        '`"descriptive_claim":{"claim_ceiling":"descriptive_only",'
+        '"unresolved_limitations":'
+        '["post_baseline_exposure_opportunity_unresolved"]}`. '
+        "`unresolved_limitations` is an array; do not rename it to a singular "
+        "`limitation` field."
     )
 
 
@@ -323,10 +416,13 @@ def planner_science_retry_guide() -> str:
         "`TableOneSpec` already requires "
         "`missingness_display='n_percent_by_group'`; do not add undeclared "
         "`report_missing_by_group`. An `exposure_outcome_distribution_spec` "
-        "step must list its exact exposure and outcome in `inputs`. Preserve "
-        "observed scalar types (JSON numbers remain numbers). On retry retain "
+        "step must list its exact exposure and outcome in `inputs`. "
+        "A `table_one_spec` step must list its `group_by` and every "
+        "`variables[*].name` in that same step's `inputs`. "
+        "Preserve observed scalar types (JSON numbers remain numbers). On retry retain "
         "every article role and required `robustness_specs`; do not fix one "
-        "error by dropping an already-satisfied requirement."
+        "error by dropping an already-satisfied requirement. "
+        + descriptive_claim_shape_guide()
     )
     return (
         "\n\n"
@@ -741,6 +837,7 @@ __all__ = [
     "normalize_literature_citation_keys",
     "bind_literature_citation_authority",
     "literature_citation_retry_suffix",
+    "required_method_layers_for_context",
     "required_method_layers_for_plan",
     "validate_literature_citation_bindings",
 ]

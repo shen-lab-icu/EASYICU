@@ -264,6 +264,25 @@ def test_the_retry_reminder_closes_common_representation_seams():
     assert "required `robustness_specs`" in reminder
 
 
+def test_the_retry_reminder_publishes_table_one_inputs_and_descriptive_ceiling():
+    reminder = planner_science_retry_guide()
+
+    assert "`group_by` and every `variables[*].name`" in reminder
+    assert '"unresolved_limitations"' in reminder
+    assert '"post_baseline_exposure_opportunity_unresolved"' in reminder
+    assert "do not rename it to a singular `limitation`" in reminder
+
+
+def test_the_initial_directive_publishes_table_one_inputs_and_descriptive_ceiling(
+    directive,
+):
+    assert "every `variables[*].name`" in directive
+    assert '"unresolved_limitations"' in directive
+    assert '"post_baseline_exposure_opportunity_unresolved"' in directive
+    assert '{"input_key":"table:exact_product","mode":"all_rows"}' in directive
+    assert "never rename them to `input` and `cardinality`" in directive
+
+
 def test_the_retry_reminder_publishes_exact_nested_contract_shapes():
     reminder = planner_science_retry_guide()
 

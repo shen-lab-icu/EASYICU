@@ -960,6 +960,26 @@ def _research_user_preferences(
         preferences["must_have_outputs"] = analysis_goal
     if comparator:
         preferences["subgroup_sensitivity"] = comparator
+    raw_analysis_design = study.get("analysis_design")
+    analysis_design = (
+        raw_analysis_design if isinstance(raw_analysis_design, Mapping) else {}
+    )
+    analysis_family = _clean_text(analysis_design.get("analysis_family"), 80)
+    if analysis_family:
+        from easyicu.research_agent.planning.analysis_types import (
+            canonical_analysis_family,
+        )
+
+        if canonical_analysis_family(analysis_family) != analysis_family:
+            raise ResearchPipelineRunError(
+                "research_pipeline_analysis_family_invalid",
+                "The typed StudyContext analysis family is not a canonical Research Agent family.",
+                details={"field": "analysis_design.analysis_family"},
+            )
+        # ResearchContext already owns a typed family coordinate. Populate it
+        # from the user-approved StudyContext instead of asking free-text
+        # keyword inference to reinterpret a descriptive risk contrast.
+        preferences["inferred_analysis_family"] = analysis_family
     covariates = _configured_covariates(study)
     selection = str(
         study.get("covariate_selection") or "planner_selectable"
@@ -990,8 +1010,7 @@ def _research_user_preferences(
         constraints["cohort"] = dict(cohort)
     if isinstance(confirmations, Mapping) and confirmations:
         constraints["confirmations"] = dict(confirmations)
-    analysis_design = study.get("analysis_design")
-    if isinstance(analysis_design, Mapping) and analysis_design:
+    if analysis_design:
         constraints["analysis_design"] = dict(analysis_design)
     if patient_grouping is not None:
         coordinates = dict(patient_grouping.authority_coordinates)
