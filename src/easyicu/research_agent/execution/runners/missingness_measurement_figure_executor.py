@@ -34,8 +34,12 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...contracts.figure_plan import (
+    DATA_QUALITY_FIGURE_PANELS,
+    MEASUREMENT_PROCESS_AUDIT_INPUT,
+    MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+)
 from ...contracts.ownership_verdict import OwnershipVerdict
-from ...planning.figure_strategy import DATA_QUALITY_FIGURE_REQUIRED_INPUTS
 from ...schema import AnalysisStep
 from .deterministic_missingness import measurement_audit_product_filename
 from .figure_input_capability import TypedInputCapability
@@ -56,8 +60,9 @@ __all__ = [
 ]
 
 
-MISSINGNESS_MEASUREMENT_AUDIT_INPUT, MEASUREMENT_PROCESS_AUDIT_INPUT = (
-    DATA_QUALITY_FIGURE_REQUIRED_INPUTS
+DATA_QUALITY_FIGURE_REQUIRED_INPUTS = (
+    MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+    MEASUREMENT_PROCESS_AUDIT_INPUT,
 )
 # The one-panel renderer consumes the same typed audit product as panel A of
 # the two-panel renderer.  Keep a role-specific alias for call-site clarity,
@@ -886,7 +891,7 @@ def run_measurement_missingness_figure(
         height_mm=height_mm,
         panels=[
             {
-                "panel_id": "A",
+                "panel_id": DATA_QUALITY_FIGURE_PANELS[0].panel_id,
                 "title": "Measurement availability",
                 "role": "data_quality",
                 "claim": (
@@ -895,7 +900,9 @@ def run_measurement_missingness_figure(
                 ),
                 "evidence_ids": [source_path.name],
                 "metadata": {
-                    "chart_type": "availability_panel",
+                    "article_role": DATA_QUALITY_FIGURE_PANELS[0].article_role,
+                    "chart_type": DATA_QUALITY_FIGURE_PANELS[0].chart_type,
+                    "source_products": [input_key],
                     "source_data": [source_path.name],
                 },
             }
@@ -1038,9 +1045,30 @@ def run_missingness_measurement_figure(
     missing_counts = (
         pd.to_numeric(missing_rows["value_missing_n"]).astype(int).to_numpy()
     )
+    zero_missing_display = bool(len(missing_counts)) and all(
+        int(value) == 0 for value in missing_counts
+    )
+    if zero_missing_display:
+        # A zero-only missingness bar chart has no visible marks and can look
+        # like a rendering failure.  Re-express the same audited counts as
+        # completeness among eligible stays: 100% is derived exactly from
+        # measured + missing = eligible, never invented.  An all-not-applicable
+        # row has no eligible denominator and remains an explicit 0/N/A mark.
+        plotted_values = [
+            (
+                100.0
+                * float(per_variable[name]["available"])
+                / float(per_variable[name]["eligible"])
+                if int(per_variable[name]["eligible"]) > 0
+                else 0.0
+            )
+            for name in variables
+        ]
+    else:
+        plotted_values = [float(value) for value in missing_pct]
     bars = ax_a.barh(
         positions,
-        missing_pct,
+        plotted_values,
         color=palette["blue_soft"],
         height=0.62,
     )
@@ -1058,19 +1086,48 @@ def run_missingness_measurement_figure(
     )
     ax_a.invert_yaxis()
     ax_a.set_xlim(0, 100)
-    ax_a.set_xlabel("Stays with no source value (% of cohort)")
-    ax_a.set_title("Source missingness", loc="left", pad=4)
+    ax_a.set_xlabel(
+        "Eligible stays with a source value (%)"
+        if zero_missing_display
+        else "Stays with no source value (% of cohort)"
+    )
+    ax_a.set_title(
+        "Source completeness" if zero_missing_display else "Source missingness",
+        loc="left",
+        pad=4,
+    )
     ax_a.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
-    for bar, percentage, missing_n in zip(bars, missing_pct, missing_counts):
+    for variable, bar, percentage, plotted, missing_n in zip(
+        variables,
+        bars,
+        missing_pct,
+        plotted_values,
+        missing_counts,
+    ):
+        if zero_missing_display:
+            eligible_n = int(per_variable[variable]["eligible"])
+            label = (
+                "0 missing / 100% complete"
+                if eligible_n > 0
+                else "0 eligible / completeness N/A"
+            )
+            x = min(float(plotted) - 1.0, 97.0) if eligible_n > 0 else 1.0
+            horizontal_alignment = "right" if eligible_n > 0 else "left"
+        else:
+            label = f"{float(percentage):.1f}%  n={int(missing_n):,}"
+            x = min(float(percentage) + 1.0, 97.0)
+            horizontal_alignment = "left" if percentage < 88 else "right"
         ax_a.text(
-            min(float(percentage) + 1.0, 97.0),
+            x,
             bar.get_y() + bar.get_height() / 2,
-            f"{float(percentage):.1f}%  n={int(missing_n):,}",
+            label,
             va="center",
-            ha="left" if percentage < 88 else "right",
+            ha=horizontal_alignment,
             fontsize=6.1,
         )
-    if any(entry["conditional"] for entry in per_variable.values()):
+    if any(entry["conditional"] for entry in per_variable.values()) and not (
+        zero_missing_display
+    ):
         ax_a.set_xlabel(
             "Stays with no source value (% of cohort)\n"
             "† applies to only part of the cohort; see panel B"
@@ -1148,24 +1205,39 @@ def run_missingness_measurement_figure(
         height_mm=height_mm,
         panels=[
             {
-                "panel_id": "A",
-                "title": "Source missingness",
+                "panel_id": DATA_QUALITY_FIGURE_PANELS[0].panel_id,
+                "title": (
+                    "Source completeness"
+                    if zero_missing_display
+                    else "Source missingness"
+                ),
                 "role": "data_quality",
                 "claim": (
-                    "Each audited variable's source-missingness share is the "
-                    "parent table's own value, restated over the cohort it was "
-                    "computed against; measured and missing counts partition "
-                    "the variable's eligible stays, and eligible plus "
-                    "not-applicable stays partition the cohort."
+                    (
+                        "Every audited variable has zero missing source values; "
+                        "the visible bars report 100% completeness among eligible "
+                        "stays, while rows with no eligible stays remain N/A."
+                    )
+                    if zero_missing_display
+                    else (
+                        "Each audited variable's source-missingness share is the "
+                        "parent table's own value, restated over the cohort it was "
+                        "computed against; measured and missing counts partition "
+                        "the variable's eligible stays, and eligible plus "
+                        "not-applicable stays partition the cohort."
+                    )
                 ),
                 "evidence_ids": [missingness_panel_source.name],
                 "metadata": {
-                    "chart_type": "availability_panel",
+                    "article_role": DATA_QUALITY_FIGURE_PANELS[0].article_role,
+                    "chart_type": DATA_QUALITY_FIGURE_PANELS[0].chart_type,
+                    "source_products": [MISSINGNESS_MEASUREMENT_AUDIT_INPUT],
                     "source_data": [missingness_panel_source.name],
+                    "zero_missing_completeness_display": zero_missing_display,
                 },
             },
             {
-                "panel_id": "B",
+                "panel_id": DATA_QUALITY_FIGURE_PANELS[1].panel_id,
                 "title": "Measurement-process coverage",
                 "role": "data_quality",
                 "claim": (
@@ -1175,7 +1247,9 @@ def run_missingness_measurement_figure(
                 ),
                 "evidence_ids": [process_source.name],
                 "metadata": {
-                    "chart_type": "coverage_heatmap",
+                    "article_role": DATA_QUALITY_FIGURE_PANELS[1].article_role,
+                    "chart_type": DATA_QUALITY_FIGURE_PANELS[1].chart_type,
+                    "source_products": [MEASUREMENT_PROCESS_AUDIT_INPUT],
                     "source_data": [process_source.name],
                 },
             },
@@ -1194,6 +1268,14 @@ def run_missingness_measurement_figure(
             "measurements, not stays, and are not commensurable with this "
             "scale. The executor validates all source rows and introduces no "
             "cohort, variable, missing-data, or modeling decision."
+            + (
+                " Because every missing count is zero, panel A deterministically "
+                "shows eligible-stay completeness (100% when an eligible "
+                "denominator exists) instead of an invisible zero-length "
+                "missingness bar."
+                if zero_missing_display
+                else ""
+            )
         ),
     )
     outputs = save_publication_figure(
@@ -1232,6 +1314,7 @@ def run_missingness_measurement_figure(
             MEASUREMENT_PROCESS_AUDIT_INPUT: int(len(process_frame)),
         },
         "audited_variable_count": int(len(per_variable)),
+        "zero_missing_completeness_display": zero_missing_display,
         "measurement_process_cell_count": int(len(process_cells)),
         "source_data_files": source_files,
         "figure_files": figure_files,

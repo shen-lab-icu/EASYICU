@@ -296,7 +296,10 @@ def test_it_renders_from_the_one_table_alone(tmp_path: Path, monkeypatch) -> Non
     assert int(outcome_source["outcome_missing_n"].sum()) == 2
 
     contract = json.loads((out_dir / f"{PRODUCT}.figure_contract.json").read_text())
-    assert [panel["panel_id"] for panel in contract["panels"]] == ["A", "B"]
+    assert [panel["panel_id"] for panel in contract["panels"]] == [
+        "exposure_prevalence",
+        "outcome_absolute_risk",
+    ]
 
 
 def test_the_summary_and_note_carry_the_declared_design(

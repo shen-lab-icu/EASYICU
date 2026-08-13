@@ -50,6 +50,7 @@ from .envelope_sealing import (
     compile_sealed_step_result_shadow,
 )
 from .figure_preparation import _family_has_deterministic_figure_renderer
+from .figure_plan_binding import validate_step_planned_figure_contract_binding
 
 
 _PRIMARY_DETERMINISTIC_RUNNERS: set[str] = {
@@ -312,6 +313,13 @@ def _evaluate_final_deterministic_gates(
             step=step,
             out_dir=out_dir,
             run_dir=run_dir,
+            step_summary=step_summary,
+        )
+    )
+    contract_findings.extend(
+        validate_step_planned_figure_contract_binding(
+            step=step,
+            out_dir=out_dir,
             step_summary=step_summary,
         )
     )

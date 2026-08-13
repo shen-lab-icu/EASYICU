@@ -47,6 +47,7 @@ from .figure_preparation import (
     _figure_contract_source_data_canonicalization_candidate,
     _install_figure_contract_source_data_canonicalization,
 )
+from .figure_plan_binding import validate_step_planned_figure_contract_binding
 from .final_validation import _demote_step_contract_for_primary_runner
 from .publication_figure import validate_and_record_sealed_renderer_receipt
 from .host_services import ExecutePhaseHost
@@ -1697,6 +1698,11 @@ def _candidate_contract_setup_transition(
         execution_cohort_path=attempt.step_execution_cohort_path,
         figure_contract_validator=host.figure_contract_validator,
         figure_source_validator=host.figure_source_validator,
+    )
+    state.early_contract_findings += validate_step_planned_figure_contract_binding(
+        step=attempt.step,
+        out_dir=state.run_result.out_dir,
+        step_summary=state.visual_step_summary,
     )
     unowned_sealed_markers = host._unowned_sealed_authority_markers(
         state.visual_step_summary,

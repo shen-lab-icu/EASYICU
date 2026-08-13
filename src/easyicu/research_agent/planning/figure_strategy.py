@@ -16,6 +16,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..contracts.figure_plan import (
+    MEASUREMENT_PROCESS_AUDIT_INPUT,
+    MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+)
 from ..figures.contracts import figure_contract_paths, panel_chart_type, panel_text
 from ..schema import ResearchContext, ValidationFinding
 from .study_design import infer_study_design_family
@@ -29,8 +33,8 @@ ARTICLE_FIGURE_STRATEGY_AUDIT_SCHEMA_VERSION = "easyicu.article_figure_strategy_
 # sensitivity plot can therefore never masquerade as missingness/measurement
 # evidence simply because it contains the word "audit".
 DATA_QUALITY_FIGURE_REQUIRED_INPUTS = (
-    "table:missingness_measurement_audit",
-    "table:measurement_process_audit",
+    MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+    MEASUREMENT_PROCESS_AUDIT_INPUT,
 )
 DATA_QUALITY_FIGURE_PRODUCT = "figure:data_quality"
 
@@ -405,6 +409,7 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
                     "histogram",
                     "ridge",
                     "prevalence_panel",
+                    "dot_interval_absolute_risk",
                 ),
                 search_terms=("distribution", "prevalence", "density", "histogram"),
             ),

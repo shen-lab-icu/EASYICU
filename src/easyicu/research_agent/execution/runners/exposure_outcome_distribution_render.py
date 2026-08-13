@@ -29,6 +29,10 @@ from typing import Any, Mapping
 
 import pandas as pd
 
+from ...contracts.figure_plan import (
+    EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS,
+    EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,
+)
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...figures.publication import (
     add_panel_label,
@@ -59,7 +63,9 @@ __all__ = [
     "run_exposure_outcome_distribution_figure",
 ]
 
-EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT = EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT
+EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT = EXPOSURE_OUTCOME_DISTRIBUTION_INPUT
+if EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT != EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT:
+    raise RuntimeError("distribution figure input drifted from its producer output")
 
 #: Same rule as the missingness renderer: the figure product id is a
 #: Planner-owned label that becomes a filename, never a capability claim.
@@ -899,30 +905,46 @@ def run_exposure_outcome_distribution_figure(
         height_mm=86.0,
         panels=[
             {
-                "panel_id": "A",
+                "panel_id": EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[0].panel_id,
                 "title": "Exposure distribution",
-                "role": "baseline_context",
+                "role": EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[0].article_role,
                 "claim": (
                     "The parent's declared exposure levels partition the analysed "
                     "denominator, which each row carries with it."
                 ),
                 "evidence_ids": [prevalence_source.name],
                 "metadata": {
-                    "chart_type": "bar_prevalence",
+                    "article_role": (
+                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[0].article_role
+                    ),
+                    "chart_type": (
+                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[0].chart_type
+                    ),
+                    "source_products": list(
+                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[0].source_products
+                    ),
                     "source_data": [prevalence_source.name],
                 },
             },
             {
-                "panel_id": "B",
+                "panel_id": EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[1].panel_id,
                 "title": "Outcome rate by exposure",
-                "role": "descriptive_result",
+                "role": EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[1].article_role,
                 "claim": (
                     "Events, the denominator they are taken over, the unobserved "
                     "count and the interval are shown for every declared level."
                 ),
                 "evidence_ids": outcome_evidence,
                 "metadata": {
-                    "chart_type": "dot_interval_absolute_risk",
+                    "article_role": (
+                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[1].article_role
+                    ),
+                    "chart_type": (
+                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[1].chart_type
+                    ),
+                    "source_products": list(
+                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[1].source_products
+                    ),
                     "source_data": outcome_evidence,
                 },
             },

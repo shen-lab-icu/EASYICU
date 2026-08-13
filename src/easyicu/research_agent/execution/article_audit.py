@@ -23,6 +23,7 @@ from ..reporting.article_contract import (
     validate_run_against_article_contract,
 )
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
+from .figure_plan_binding import validate_planned_figure_contract_bindings
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,29 @@ def collect_run_article_audits(
                     "Run-level article figure strategy audit failed: "
                     f"{type(exc).__name__}: {exc}"
                 ),
+            )
+        )
+
+    try:
+        findings.extend(
+            validate_planned_figure_contract_bindings(
+                plan=plan,
+                run_dir=run_dir,
+                per_step_records=per_step_records,
+            )
+        )
+    except Exception as exc:
+        # The binding is scientific authority, not optional display QA.  A
+        # validator implementation failure must therefore stay fail-closed.
+        findings.append(
+            ValidationFinding(
+                validator="planned_figure_contract_binding",
+                severity="error",
+                message=(
+                    "Planned figure-contract binding audit failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+                detail={"reason": "binding_audit_failed"},
             )
         )
 
