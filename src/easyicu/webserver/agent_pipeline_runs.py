@@ -769,11 +769,6 @@ def _research_user_preferences(study: Mapping[str, Any]) -> Dict[str, Any]:
     elif covariates:
         preferences["covariates"] = list(covariates)
 
-    time_window = study.get("time_window")
-    if isinstance(time_window, Mapping) and time_window:
-        preferences["timing_and_design"] = json.dumps(
-            dict(time_window), ensure_ascii=False, sort_keys=True
-        )[:1_000]
     constraints: Dict[str, Any] = {}
     cohort = study.get("cohort")
     confirmations = study.get("confirmations")
@@ -784,6 +779,18 @@ def _research_user_preferences(study: Mapping[str, Any]) -> Dict[str, Any]:
     analysis_design = study.get("analysis_design")
     if isinstance(analysis_design, Mapping) and analysis_design:
         constraints["analysis_design"] = dict(analysis_design)
+    time_window = study.get("time_window")
+    if isinstance(time_window, Mapping) and time_window:
+        # StudyContext.time_window is owned by the Web materialization
+        # contract.  It bounds the physical feature extraction coordinate; it
+        # is not the phenotype's clinical definition anchor or the outcome
+        # follow-up horizon.  Keep it in data constraints so the Research
+        # Agent can audit the executed window without interpreting its ICU-
+        # admission anchor as the study's clinical time zero.
+        constraints["materialization_window"] = {
+            "role": "outer_observation_window",
+            **dict(time_window),
+        }
     if constraints:
         preferences["data_constraints"] = json.dumps(
             constraints, ensure_ascii=False, sort_keys=True
