@@ -3084,6 +3084,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["run"]["endpoint"] is None
     assert calls["run"]["user_preferences"]["covariates"] == ["age", "sex"]
     assert calls["config"].evidence_enforcement_mode == "strict"
+    assert calls["config"].writer_digest_widened is True
     assert calls["config"].enable_reproducibility_envelope is True
     assert calls["config"].require_human_plan_review is True
     assert calls["config"].required_primary_cohort_selection_mode == "all_input_rows"
