@@ -175,6 +175,19 @@ def repeat_units_possible(context: ResearchContext) -> bool:
 
 def patient_identity_available(context: ResearchContext) -> bool:
     provenance = context.cohort.provenance or {}
+    replacement = provenance.get("replacement_row_identity")
+    if isinstance(replacement, Mapping):
+        derivation = replacement.get("patient_group_derivation")
+        output_column = str(replacement.get("output_identity_column") or "")
+        if (
+            output_column in context.cohort.id_columns
+            and isinstance(derivation, Mapping)
+            and derivation.get("algorithm") == "prefix_before_:s"
+            and derivation.get("delimiter") == ":s"
+            and isinstance(replacement.get("mapping_file_sha256"), str)
+            and len(str(replacement.get("mapping_file_sha256"))) == 64
+        ):
+            return True
     values = [
         *context.cohort.id_columns,
         *[str(value) for value in provenance.get("patient_id_columns") or ()],

@@ -36,6 +36,7 @@ from .catalog import (
     assess_coverage,
     build_available_catalog,
 )
+from .patient_grouping import PatientGroupingBinding
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.factory import authorized_complete
 from ..contracts.endpoint import EndpointSpec
@@ -313,6 +314,7 @@ def acquire_universe_for_question(
     require_outcome: bool = True,
     emit_trajectory: bool = True,
     trajectory_window: Optional[tuple] = (-24.0, 168.0),
+    patient_grouping: Optional[PatientGroupingBinding] = None,
 ) -> AcquisitionResult:
     """Agent selects concepts, we check coverage, then materialise the universe.
 
@@ -460,6 +462,16 @@ def acquire_universe_for_question(
             selection_model=sel_model,
         )
 
+    if patient_grouping is not None and emit_trajectory:
+        raise MaterializedMetadataError(
+            "patient-grouped materialization cannot silently drop identity from "
+            "a requested longitudinal trajectory"
+        )
+    identity_kwargs = (
+        patient_grouping.materializer_kwargs()
+        if patient_grouping is not None
+        else {}
+    )
     paths = materialize_to_parquet(
         output_dir=output_dir,
         stem=stem,
@@ -479,6 +491,7 @@ def acquire_universe_for_question(
         emit_trajectory=emit_trajectory,
         trajectory_concepts=[*feature_concepts, *outcome_concepts],
         trajectory_window=trajectory_window,
+        **identity_kwargs,
     )
     try:
         materialized_provenance = json.loads(

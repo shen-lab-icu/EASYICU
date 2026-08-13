@@ -10,9 +10,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from easyicu.research_agent.acquisition.patient_grouping import (
+    PatientGroupingBinding,
+)
 from pydantic import ValidationError
 
-from easyicu.webserver import guided_sessions, settings
+from easyicu.webserver import agent_pipeline_runs, guided_sessions, settings
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
     HostTurnGrant,
@@ -2660,6 +2664,7 @@ def test_unsupported_runtime_design_does_not_consume_configure_grant(
         "question": "Is sepsis associated with mortality?",
         "outcome": "in-hospital mortality",
         "primary_exposure": "Sepsis-3",
+        "data_source": {"path": "/private/export", "database": "miiv"},
         "cohort": {"exclude_readmissions": False},
         "active_job_id": None,
     }
@@ -2693,23 +2698,37 @@ def test_unsupported_runtime_design_does_not_consume_configure_grant(
         execution,
     )
     assert blocked["code"] == "research_pipeline_cluster_variance_unsupported"
-    assert blocked["details"]["supported_variance_estimators"] == ["model_based"]
+    assert blocked["details"]["first_stay_restriction_status"] == (
+        "unverified_in_selected_export"
+    )
     assert "configure" in execution.allowed_actions
     assert writes == []
 
+    monkeypatch.setattr(
+        agent_pipeline_runs.source_identity_authority,
+        "resolve_patient_grouping_authority",
+        lambda **_kwargs: PatientGroupingBinding(
+            mapping_path=Path("/private/mapping.parquet"),
+            mapping_sha256="a" * 64,
+            mapping_stay_column="stay_id",
+            mapping_patient_column="patient_key",
+            authority_coordinates={"authority_ref": "owner/bridge/v1"},
+        ),
+    )
     saved = tool_module.execute_tool(
         "easyicu_update_study_context",
         {
-            "cohort": {"exclude_readmissions": True},
+            "cohort": {"exclude_readmissions": False},
             "analysis_design": {
                 "analysis_unit": "icu_stay",
-                "variance_estimator": "model_based",
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
             },
         },
         execution,
     )
     assert saved["code"] == "study_context_updated"
-    assert writes[0]["cohort"]["exclude_readmissions"] is True
+    assert writes[0]["analysis_design"]["variance_estimator"] == "cluster_robust"
 
 
 def test_preflight_delegates_to_the_existing_agent_submission_owner(

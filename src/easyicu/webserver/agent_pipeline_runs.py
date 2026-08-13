@@ -29,6 +29,9 @@ from easyicu.extensions import (
 
 from easyicu.research_agent.authority.secret_redaction import redact_text_secrets
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+from easyicu.research_agent.acquisition.patient_grouping import (
+    PatientGroupingBinding,
+)
 from easyicu.research_agent.planning.scientific_review import (
     PlanScientificReview,
     render_agent_plan_revision_contract,
@@ -41,6 +44,7 @@ from easyicu.webserver import (
     capabilities as capability_policy,
     literature_authority,
     provider_adapter,
+    source_identity_authority,
 )
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.ideas import mining as idea_mining
@@ -379,6 +383,42 @@ def _configured_sensitivity_specs(study: Mapping[str, Any]) -> tuple[Any, ...]:
         ) from exc
 
 
+def _patient_grouping_for_analysis_design(
+    study: Mapping[str, Any],
+) -> Optional[PatientGroupingBinding]:
+    raw = study.get("analysis_design")
+    design = raw if isinstance(raw, Mapping) else {}
+    if _clean_text(design.get("variance_estimator"), 80) != "cluster_robust":
+        return None
+    cluster_unit = _clean_text(design.get("cluster_unit"), 80)
+    if cluster_unit != "patient":
+        raise ResearchPipelineRunError(
+            "research_pipeline_cluster_unit_unsupported",
+            "The current Web runner supports cluster-robust inference only for a verified patient grouping.",
+            details={
+                "cluster_unit": cluster_unit or None,
+                "supported_cluster_units": ["patient"],
+            },
+        )
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    export_path = _clean_text(source.get("path"), 2_000)
+    database = _clean_text(source.get("database"), 80)
+    if not export_path or not database:
+        return None
+    try:
+        return source_identity_authority.resolve_patient_grouping_authority(
+            export_path=export_path,
+            database=database,
+        )
+    except source_identity_authority.PatientGroupingAuthorityError as exc:
+        raise ResearchPipelineRunError(
+            exc.code,
+            str(exc),
+            details=exc.details,
+        ) from exc
+
+
 def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
     """Fail closed on inference contracts the v1 Web runner cannot execute.
 
@@ -418,6 +458,33 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
             "The typed analysis design is missing its analysis unit or variance estimator.",
             details={"field": "analysis_design"},
         )
+    raw_cohort = study.get("cohort")
+    cohort = raw_cohort if isinstance(raw_cohort, Mapping) else {}
+    if cohort.get("exclude_readmissions") is True:
+        raise ResearchPipelineRunError(
+            "research_pipeline_first_stay_restriction_unverified",
+            (
+                "The selected export has an ICU-readmission indicator but no "
+                "owner-verified first ICU stay per patient coordinate. The two "
+                "are not interchangeable."
+            ),
+            details={
+                "field": "cohort.exclude_readmissions",
+                "first_stay_restriction_status": "unverified_in_selected_export",
+                "icu_readmission_is_first_patient_stay_authority": False,
+                "safe_alternatives": [
+                    {
+                        "id": "patient_clustered_all_stays",
+                        "requires": "verified_patient_grouping",
+                        "changes_scientific_question": False,
+                    },
+                    {
+                        "id": "descriptive_only_without_independence_sensitive_inference",
+                        "changes_scientific_question": True,
+                    },
+                ],
+            },
+        )
     dependence_finding = study_context_owner.analysis_dependence_finding(dict(study))
     if dependence_finding is not None:
         raise ResearchPipelineRunError(
@@ -433,20 +500,40 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
             },
         )
     if variance_estimator == "cluster_robust":
-        raise ResearchPipelineRunError(
-            "research_pipeline_cluster_variance_unsupported",
-            (
-                "This source and executor do not expose a verified grouping "
-                "coordinate for the requested cluster-robust inference."
-            ),
-            details={
-                "analysis_unit": analysis_unit,
-                "variance_estimator": variance_estimator,
-                "cluster_unit": cluster_unit or None,
-                "grouping_coordinate_status": "unavailable_or_unverified",
-                "supported_variance_estimators": ["model_based"],
-            },
-        )
+        grouping = _patient_grouping_for_analysis_design(study)
+        if grouping is None:
+            raise ResearchPipelineRunError(
+                "research_pipeline_cluster_variance_unsupported",
+                (
+                    "This source and executor do not expose a verified grouping "
+                    "coordinate for the requested cluster-robust inference."
+                ),
+                details={
+                    "analysis_unit": analysis_unit,
+                    "variance_estimator": variance_estimator,
+                    "cluster_unit": cluster_unit or None,
+                    "grouping_coordinate_status": "unavailable_or_unverified",
+                    "first_stay_restriction_status": "unverified_in_selected_export",
+                    "safe_alternatives": [
+                        {
+                            "id": "provide_verified_patient_grouping",
+                            "executable_now": False,
+                            "changes_scientific_question": False,
+                        },
+                        {
+                            "id": "descriptive_only_without_independence_sensitive_inference",
+                            "executable_now": True,
+                            "changes_scientific_question": True,
+                        },
+                    ],
+                },
+            )
+        return {
+            "analysis_unit": analysis_unit,
+            "variance_estimator": variance_estimator,
+            "cluster_unit": "patient",
+            "grouping_coordinate": grouping.output_identity_column,
+        }
     if variance_estimator != "model_based":
         raise ResearchPipelineRunError(
             "research_pipeline_variance_estimator_unsupported",
@@ -819,7 +906,11 @@ def _compile_data_constraints(constraints: Mapping[str, Any]) -> str:
     )
 
 
-def _research_user_preferences(study: Mapping[str, Any]) -> Dict[str, Any]:
+def _research_user_preferences(
+    study: Mapping[str, Any],
+    *,
+    patient_grouping: Optional[PatientGroupingBinding] = None,
+) -> Dict[str, Any]:
     """Compile StudyContext into the existing strict preference contract."""
 
     preferences: Dict[str, Any] = {}
@@ -865,6 +956,15 @@ def _research_user_preferences(study: Mapping[str, Any]) -> Dict[str, Any]:
     analysis_design = study.get("analysis_design")
     if isinstance(analysis_design, Mapping) and analysis_design:
         constraints["analysis_design"] = dict(analysis_design)
+    if patient_grouping is not None:
+        coordinates = dict(patient_grouping.authority_coordinates)
+        constraints["verified_patient_grouping"] = {
+            "coordinate": patient_grouping.output_identity_column,
+            "group_derivation": "prefix_before_:s",
+            "authority_ref": coordinates.get("authority_ref"),
+            "mapping_sha256": patient_grouping.mapping_sha256,
+            "provider_visible_values": False,
+        }
     time_window = study.get("time_window")
     if isinstance(time_window, Mapping) and time_window:
         # StudyContext.time_window is owned by the Web materialization
@@ -1779,7 +1879,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
                 for request in pending.requests
             ),
             "scientific_plan_review": _load_pending_scientific_review(
-                entry.run_dir, pending
+                Path(pending.run_dir), pending
             ),
         }
 
@@ -1814,7 +1914,12 @@ def make_research_pipeline_run_runner(
     sensitivity_specs = _configured_sensitivity_specs(study)
     window = _cohort_window(study)
     _validate_primary_concept_selection(study, primary_exposure)
-    _validate_analysis_design(study)
+    validated_analysis_design = _validate_analysis_design(study)
+    patient_grouping = (
+        _patient_grouping_for_analysis_design(study)
+        if validated_analysis_design.get("variance_estimator") == "cluster_robust"
+        else None
+    )
     # Compile and validate the display-to-execution boundary before JobManager
     # creates a background job. A prose label or stale concept therefore fails
     # at its owner instead of appearing later as an opaque pipeline crash.
@@ -1955,7 +2060,13 @@ def make_research_pipeline_run_runner(
                 cohort_window=window,
                 database=database,
                 require_outcome=foundation_profile["require_outcome"],
-                emit_trajectory=True,
+                # A verified composite patient/stay identity is needed by the
+                # cluster-robust model.  The current materializer deliberately
+                # refuses to attach a private mapping to a longitudinal table;
+                # this fixed stay-level design therefore requests no unused
+                # trajectory instead of silently publishing an ungrouped one.
+                emit_trajectory=patient_grouping is None,
+                patient_grouping=patient_grouping,
             )
             if acquisition.blocked or acquisition.universe_path is None:
                 return _write_projection(
@@ -2040,7 +2151,10 @@ def make_research_pipeline_run_runner(
                 config,
                 services=PipelineServices(llm=client),
             )
-            preferences = _research_user_preferences(study)
+            preferences = _research_user_preferences(
+                study,
+                patient_grouping=patient_grouping,
+            )
             _progress(
                 job,
                 step="research_pipeline",
@@ -2071,6 +2185,22 @@ def make_research_pipeline_run_runner(
                 endpoint=acquisition.endpoint,
                 primary_exposure=resolved_primary_exposure,
                 inclusion_criteria=_inclusion_criteria(study),
+                id_columns=(
+                    [patient_grouping.output_identity_column]
+                    if patient_grouping is not None
+                    else None
+                ),
+                concept_descriptions=(
+                    {
+                        patient_grouping.output_identity_column: (
+                            "Host-verified unique ICU-stay identity. Derive the "
+                            "patient cluster only from the prefix before ':s'; "
+                            "never report identifier values."
+                        )
+                    }
+                    if patient_grouping is not None
+                    else None
+                ),
                 user_preferences=preferences,
                 notes=_clean_text(study.get("analysis_goal"), 1_200) or None,
                 progress_callback=lambda event: _pipeline_progress(job, event),

@@ -2380,6 +2380,46 @@ def test_pending_plan_cannot_resume_after_scientific_setup_changes(
     )
 
 
+def test_pending_review_projects_from_the_typed_pause_run_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "pending-plan"
+    run_dir.mkdir()
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Review the digest-bound plan before analysis.",
+        authority_sha256="c" * 64,
+        payload={"reason": "operator_plan_approval_required"},
+    )
+    pending = HumanReviewPending(
+        run_id="run-pending-plan",
+        thread_id="thread-pending-plan",
+        run_dir=str(run_dir),
+        requests=(request,),
+    )
+    study = _complete_study()
+    monkeypatch.setitem(
+        agent_pipeline_runs._PENDING,
+        pending.run_id,
+        agent_pipeline_runs._PendingRun(
+            pipeline=SimpleNamespace(),
+            pending=pending,
+            wrapper_dir=tmp_path / "wrapper",
+            study=study,
+            provider={},
+            acquisition=SimpleNamespace(),
+            created_at=1.0,
+        ),
+    )
+
+    projected = agent_pipeline_runs.pending_review(pending.run_id)
+
+    assert projected is not None
+    assert projected["run_id"] == pending.run_id
+    assert projected["scientific_plan_review"] == {}
+
+
 def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3697,13 +3737,10 @@ def test_pipeline_factory_rejects_unimplemented_cluster_variance_before_job(
             provider={"provider": "openai", "external": True},
         )
 
-    assert exc.value.code == "research_pipeline_cluster_variance_unsupported"
+    assert exc.value.code == "research_pipeline_cluster_unit_unsupported"
     assert exc.value.details == {
-        "analysis_unit": "icu_stay",
-        "variance_estimator": "cluster_robust",
         "cluster_unit": "hospital_admission",
-        "grouping_coordinate_status": "unavailable_or_unverified",
-        "supported_variance_estimators": ["model_based"],
+        "supported_cluster_units": ["patient"],
     }
     assert foundation_called is False
 

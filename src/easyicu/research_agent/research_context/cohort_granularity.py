@@ -34,6 +34,7 @@ _STAY_ID_NAMES = frozenset(
     {
         "admissionid",
         "icustay_id",
+        "patient_stay_id",
         "patientunitstayid",
         "stay_id",
     }
