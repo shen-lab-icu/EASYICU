@@ -205,6 +205,18 @@ def bind_context_dependence_authority(
                 update={"dependence": authority}
             )
             changed = True
+        table_one = step.table_one_spec
+        if table_one is not None and table_one.p_values_required:
+            table_payload = table_one.model_dump(mode="python")
+            table_payload.update(
+                schema_version="easyicu.table_one/2",
+                p_values_required=False,
+                p_value_adjustment="not_applicable_repeated_units",
+            )
+            for variable in table_payload["variables"]:
+                variable["test"] = "none_descriptive_smd_only"
+            update["table_one_spec"] = type(table_one).model_validate(table_payload)
+            changed = True
         steps.append(step.model_copy(update=update) if update else step)
     return plan.model_copy(update={"steps": steps}) if changed else plan
 

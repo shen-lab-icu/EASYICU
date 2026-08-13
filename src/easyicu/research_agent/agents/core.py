@@ -852,6 +852,7 @@ def _build_planner_user_prompt(
         '`{"input_key":"table:exact_product","mode":"all_rows"}`; never '
         "rename them to `input` and `cardinality`. "
         "Leave this array empty when no typed-table cardinality rule is needed.\n\n"
+        + _payload.figure_panel_shape_guide() + " Leave `figure_panels` empty on non-visualization steps.\n\n"
         "When the ResearchContext carries `materialized_inputs`, every raw "
         "dataframe field in `steps[*].inputs`, `table_one_spec`, "
         "`model_requirements` outcome/exposure fields, and robustness "
@@ -1383,7 +1384,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "sensitivity_spec_ids",
         "model_requirements",
         "family_primary_result_requirement",
-        "input_consumption_contracts",
+        "input_consumption_contracts", "figure_panels",
         "table_one_spec",
         "trajectory_stability_spec",
         "exposure_outcome_distribution_spec",
@@ -1437,7 +1438,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "method",
         "sensitivity_spec_ids",
         "model_requirements",
-        "family_primary_result_requirement",
+        "family_primary_result_requirement", "figure_panels",
         "exposure_outcome_distribution_spec",
         "descriptive_claim",
     )
@@ -1467,7 +1468,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "inputs",
         "expected_outputs",
         "method",
-        "sensitivity_spec_ids",
+        "sensitivity_spec_ids", "figure_panels",
         "exposure_outcome_distribution_spec",
         "descriptive_claim",
     )
@@ -1660,7 +1661,8 @@ class PlannerAgent:
                 "design_elements, a concise application, and optional divergence), optional "
                 "model_requirements, optional "
                 "family_primary_result_requirement, optional "
-                "input_consumption_contracts, optional table_one_spec, optional "
+                "input_consumption_contracts, optional figure_panels, optional "
+                "table_one_spec, optional "
                 "trajectory_stability_spec, optional "
                 "exposure_outcome_distribution_spec, and optional "
                 "cohort_definition_spec), "

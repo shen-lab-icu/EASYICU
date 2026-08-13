@@ -34,6 +34,7 @@ from ..schema import (
     AnalysisPlan,
     AnalysisStep,
     ArtifactConsumptionContract,
+    PlannedFigurePanelSpec,
     PlannedModelRequirement,
     TableOneSpec,
     TableOneVariableSpec,
@@ -370,6 +371,20 @@ def descriptive_claim_shape_guide() -> str:
     )
 
 
+def figure_panel_shape_guide() -> str:
+    """Publish the exact case-neutral visual-semantics declaration."""
+
+    return (
+        "For every visualization panel, emit one `figure_panels` record with "
+        "exact keys `panel_id`, `figure_output`, `article_role`, `chart_type`, "
+        "and `source_products`. Copy `article_role` and one accepted "
+        "`chart_type` from the supplied ARTICLE FIGURE STRATEGY; "
+        "`figure_output` must be this step's exact `figure:*` output and every "
+        "`source_products` item must be this step's exact typed input. Input "
+        "or output names and intent prose do not establish a visual role."
+    )
+
+
 def planner_science_retry_guide() -> str:
     """Return schema-owned retry guidance outside the Planner god module."""
 
@@ -385,6 +400,8 @@ def planner_science_retry_guide() -> str:
         "rename `input_key` to `input` or `mode` to `cardinality`. Only "
         "`one_per_role` also declares `role_column` and `expected_roles`; "
         "`schema_version` is optional. "
+        + figure_panel_shape_guide()
+        + " "
         "Omit `AnalysisPlan.endpoint` or emit null."
     )
     binding_fields = (
@@ -580,6 +597,7 @@ def _normalise_plan_payload(
     allowed_step = _declared_field_names(AnalysisStep)
     allowed_model_requirement = _declared_field_names(PlannedModelRequirement)
     allowed_consumption_contract = _declared_field_names(ArtifactConsumptionContract)
+    allowed_figure_panel = _declared_field_names(PlannedFigurePanelSpec)
     allowed_table_one_spec = _declared_field_names(TableOneSpec)
     allowed_table_one_variable = _declared_field_names(TableOneVariableSpec)
     allowed_robustness_spec = _declared_field_names(RobustnessSpec)
@@ -588,6 +606,7 @@ def _normalise_plan_payload(
         "steps": [],
         "model_requirements": [],
         "input_consumption_contracts": [],
+        "figure_panels": [],
         "table_one_spec": [],
         "robustness_specs": [],
     }
@@ -672,6 +691,35 @@ def _normalise_plan_payload(
                 )
         if "input_consumption_contracts" in step_payload:
             step_payload["input_consumption_contracts"] = consumption_contracts
+        figure_panels = []
+        for panel_idx, raw_panel in enumerate(
+            step_payload.get("figure_panels", []) or []
+        ):
+            if not isinstance(raw_panel, dict):
+                figure_panels.append(raw_panel)
+                continue
+            panel_payload = {
+                key: value
+                for key, value in raw_panel.items()
+                if key in allowed_figure_panel
+            }
+            panel_id = (
+                raw_panel.get("panel_id")
+                or f"step[{idx}].figure_panels[{panel_idx}]"
+            )
+            _require_exact_scientific_keys(
+                raw_panel,
+                allowed=allowed_figure_panel,
+                path=f"steps[{idx}].figure_panels[{panel_idx}]({panel_id})",
+            )
+            if panel_payload:
+                figure_panels.append(panel_payload)
+            else:
+                dropped["figure_panels"].append(
+                    f"{panel_id}:empty_after_normalization"
+                )
+        if "figure_panels" in step_payload:
+            step_payload["figure_panels"] = figure_panels
         raw_table_one = step_payload.get("table_one_spec")
         if isinstance(raw_table_one, dict):
             _require_exact_scientific_keys(
