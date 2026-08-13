@@ -30,6 +30,7 @@ from easyicu.webserver.routes.demo_sources import (
     submission_router as demo_source_submission_router,
 )
 from easyicu.webserver.routes.extraction import router as extraction_router
+from easyicu.webserver.routes.extensions import router as extensions_router
 from easyicu.webserver.routes.guided import router as guided_router
 from easyicu.webserver.routes.ideas import router as ideas_router
 from easyicu.webserver.routes.jobs import lifecycle_router as job_lifecycle_router
@@ -129,6 +130,7 @@ async def no_store_native_ui_assets(request: Request, call_next):
 
 # Registration order is a compatibility contract; keep the root static mount last.
 app.include_router(system_router)
+app.include_router(extensions_router)
 app.include_router(local_data_router)
 app.include_router(reviews_router)
 app.include_router(extraction_router)

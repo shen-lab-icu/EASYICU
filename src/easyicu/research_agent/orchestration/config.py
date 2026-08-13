@@ -176,7 +176,17 @@ class PipelineConfig:
     # --- feature toggles -------------------------------------------------
     enable_literature: bool = True
     enable_visual_qa: bool = True
+    # Nature Figure is the public skill contract over the existing claim-first,
+    # code-backed publication renderer. Keep the legacy field name as the
+    # stable API used by CLI and benchmark callers.
     enable_publication_figure_skill: bool = True
+    # Nature Writing is an independent publication skill so a host can unplug
+    # its prose policy without weakening evidence/numeric audits.
+    enable_nature_writing_skill: bool = True
+    # Optional host-compiled, content-digest-bound user extension snapshot.
+    # Only the writing advisory is consumed by the pipeline; MCP tools remain
+    # in the receipt and are never promoted into scientific evidence here.
+    extension_activation: Optional[Dict[str, Any]] = None
     enable_vlm_visual_qa: Optional[bool] = None
     # Uploading a rendered figure is a separate decision from authorizing the
     # provider: the image can carry per-patient marks, small-cell strata or

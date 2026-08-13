@@ -246,6 +246,7 @@ _SYSTEM_GUIDE = _PROMPT_PACK["system"]
 _CODER_GUIDE = _PROMPT_PACK["coder"]
 _REPLANNER_GUIDE = _PROMPT_PACK["replanner"]
 _WRITER_GUIDE = _PROMPT_PACK["writer"]
+_NATURE_WRITING_GUIDE = _PROMPT_PACK["nature_writing"]
 
 _CODER_AUTHORITY_PRECEDENCE = (
     "ResearchContext user/run notes may contain binding user scientific "
@@ -2363,9 +2364,18 @@ class VisualizationAgent:
 class ManuscriptAgent:
     """Draft-only manuscript agent that stays human-supervised for discussion."""
 
-    def __init__(self, llm: LLMClient, *, language: str = "en") -> None:
+    def __init__(
+        self,
+        llm: LLMClient,
+        *,
+        language: str = "en",
+        nature_writing_enabled: bool = True,
+        user_writing_advisory: str = "",
+    ) -> None:
         self.llm = llm
         self.language = language
+        self.nature_writing_enabled = bool(nature_writing_enabled)
+        self.user_writing_advisory = str(user_writing_advisory or "")
 
     def build_packet(
         self,
@@ -2392,7 +2402,12 @@ class ManuscriptAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
     ) -> str:
-        return WriterAgent(self.llm, language=self.language).run(
+        return WriterAgent(
+            self.llm,
+            language=self.language,
+            nature_writing_enabled=self.nature_writing_enabled,
+            user_writing_advisory=self.user_writing_advisory,
+        ).run(
             context=context,
             evidence_ids=evidence_ids,
             evidence_digest=evidence_digest,
@@ -4259,10 +4274,19 @@ class WriterAgent:
     causal language for associations or cite non-existent evidence ids.
     """
 
-    def __init__(self, llm: LLMClient, *, language: str = "en") -> None:
+    def __init__(
+        self,
+        llm: LLMClient,
+        *,
+        language: str = "en",
+        nature_writing_enabled: bool = True,
+        user_writing_advisory: str = "",
+    ) -> None:
         self.llm = llm
         lang = (language or "en").lower()
         self.language = "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
+        self.nature_writing_enabled = bool(nature_writing_enabled)
+        self.user_writing_advisory = str(user_writing_advisory or "")
 
     def _call_section(
         self,
@@ -4280,7 +4304,18 @@ class WriterAgent:
         )
         reporting_context = scoped_reporting_context(context)
         messages = [
-            LLMMessage(role="system", content=_SYSTEM_GUIDE + _WRITER_GUIDE),
+            LLMMessage(
+                role="system",
+                content=(
+                    _SYSTEM_GUIDE
+                    + _WRITER_GUIDE
+                    + (
+                        "\n\n" + _NATURE_WRITING_GUIDE
+                        if self.nature_writing_enabled
+                        else ""
+                    )
+                ),
+            ),
             LLMMessage(
                 role="user",
                 content=(
@@ -4288,7 +4323,12 @@ class WriterAgent:
                     "manuscript in markdown. Do NOT write any other section.\n\n"
                     f"{instruction}\n\n"
                     f"{lang_inst}\n\n"
-                    "CITATION RULE:\n"
+                    + (
+                        self.user_writing_advisory + "\n\n"
+                        if self.user_writing_advisory
+                        else ""
+                    )
+                    + "CITATION RULE:\n"
                     "- `{evidence:<id>}` is an inline citation (like a footnote number).\n"
                     "- Write the actual number in prose, then cite: "
                     "`mortality was 12% {evidence:outcome_rate}`.\n"

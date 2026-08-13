@@ -31,7 +31,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-demo.js?v=20260811-science-readiness1" in index
     assert "js/screens-guided-pi-preview.js?v=20260811-science-readiness1" in index
     assert "js/screens-guided-pi.js?v=20260811-science-readiness1" in index
-    assert "js/api.js?v=20260810-research-workflow1" in index
+    assert "js/api.js?v=20260812-extension-manager1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"

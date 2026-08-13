@@ -35,6 +35,7 @@ from ..authority.evidence_store import (
     sha256_of_file,
 )
 from ..figures.skill import PublicationFigureSkill
+from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
 from ..literature import LiteratureAgent, LiteratureBundle
 from ..providers.mocks import MockLLMClient
@@ -446,6 +447,30 @@ def run_write_phase(
     runtime_state = execute_result.runtime_state
     per_step_records = execute_result.per_step_records
     critic = CriticAgent(role_resolver("analyzer"))
+    user_extension_receipt = pipeline._user_extension_activation.receipt
+    if evidence.get("user_extension_activation") is None:
+        evidence.register_json(
+            kind="log",
+            description=(
+                "Run-bound, path-free activation receipt for user-installed "
+                "Skills and MCP descriptors. MCP output is not scientific evidence."
+            ),
+            payload=user_extension_receipt,
+            filename="user_extension_activation.json",
+            evidence_id="user_extension_activation",
+            aliases=["user_extension_activation"],
+            producer="easyicu.extensions",
+            generation_mode="system",
+            prompt_pack_version=prompt_version,
+            metadata={
+                "activation_sha256": user_extension_receipt["activation_sha256"],
+                "active_skill_count": len(user_extension_receipt["skills"]),
+                "active_mcp_server_count": len(
+                    user_extension_receipt["mcp_servers"]
+                ),
+                "scientific_evidence_authority": False,
+            },
+        )
 
     def blocked_write_result(bound_path: Path, reason: str) -> _WritePhaseResult:
         critique = _blocked_manuscript_critique(reason)
@@ -573,11 +598,35 @@ def run_write_phase(
         )
 
     literature: Optional[LiteratureBundle] = None
+    publication_skill_activation = compile_publication_skill_activation(
+        nature_figure_enabled=pipeline._enable_publication_figure_skill,
+        nature_writing_enabled=pipeline._enable_nature_writing_skill,
+    )
+    activation_payload = publication_skill_activation.to_dict()
+    if evidence.get("publication_skill_activation") is None:
+        evidence.register_json(
+            kind="log",
+            description=(
+                "Run-bound activation receipt for the built-in Nature Figure "
+                "and Nature Writing publication skills."
+            ),
+            payload=activation_payload,
+            filename="publication_skill_activation.json",
+            evidence_id="publication_skill_activation",
+            aliases=["publication_skill_activation"],
+            producer="publication_skill_registry",
+            generation_mode="deterministic_skill",
+            prompt_pack_version=prompt_version,
+            metadata={
+                "active_skill_ids": activation_payload["active_skill_ids"],
+                "activation_sha256": activation_payload["activation_sha256"],
+            },
+        )
     if pipeline._enable_publication_figure_skill:
         try:
             emit_progress(
                 "figure",
-                "Rendering manuscript-facing publication figure bundle from registered evidence.",
+                "Nature Figure is rendering a manuscript-facing bundle from registered evidence.",
                 run_id=run_id,
             )
             figure_result = PublicationFigureSkill().run(
@@ -814,7 +863,14 @@ def run_write_phase(
         "Drafting manuscript scaffold.",
         run_id=run_id,
     )
-    writer = ManuscriptAgent(role_resolver("writer"), language=run_language)
+    writer = ManuscriptAgent(
+        role_resolver("writer"),
+        language=run_language,
+        nature_writing_enabled=pipeline._enable_nature_writing_skill,
+        user_writing_advisory=(
+            pipeline._user_extension_activation.writing_advisory
+        ),
+    )
     manuscript_packet: Optional[ManuscriptDraftPacket] = None
     if runtime_state.semantics is not None:
         manuscript_packet = writer.build_packet(

@@ -11,6 +11,8 @@
     language: 'en',
     data_mode: 'demo',
     science_skills_enabled: true,
+    nature_figure_skill_enabled: true,
+    nature_writing_skill_enabled: true,
     connector_pubmed_enabled: true,
     connector_zotero_enabled: false,
     mcp_tools_enabled: false,
@@ -51,6 +53,7 @@
     return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
   function T(en, zh) { return t(en, zh); }
+  function extensionUi() { return window.EU_SETTINGS_EXTENSIONS || {}; }
 
   function row(t, d, ctl) {
     return `<div class="set-row"><div class="sr-main"><div class="sr-t">${t}</div><div class="sr-d">${d}</div></div><div class="sr-ctl">${ctl}</div></div>`;
@@ -148,6 +151,18 @@
     return !!fallback;
   }
 
+  function savedSettingMessage(key) {
+    const labels = {
+      science_skills_enabled: T('Built-in research skills', '内置研究技能'),
+      nature_figure_skill_enabled: T('Nature Figure', 'Nature 图件'),
+      nature_writing_skill_enabled: T('Nature Writing', 'Nature 写作'),
+    };
+    const label = labels[key];
+    return label
+      ? T(`${label} saved.`, `${label}已保存。`)
+      : T('Setting saved.', '设置已保存。');
+  }
+
   function capStatus(on) {
     return `<span class="settings-cap-status ${on ? 'on' : 'off'}"><span class="dot"></span>${on ? dual('On', '开启') : dual('Off', '关闭')}</span>`;
   }
@@ -202,10 +217,17 @@
     const promptRules = Array.isArray(prompts.rules) ? prompts.rules.length : 0;
     const enabledCount = capabilityKeys().filter(([key, fallback]) => settingOn(key, fallback)).length;
     if (settingsCapabilityTab === 'skills') {
+      const skillsMasterOn = settingOn('science_skills_enabled', true);
+      const natureFigureOn = skillsMasterOn && settingOn('nature_figure_skill_enabled', true);
+      const natureWritingOn = skillsMasterOn && settingOn('nature_writing_skill_enabled', true);
+      const activeSkillCount = [natureFigureOn, natureWritingOn].filter(Boolean).length;
       return `<div class="settings-cap-rows">
-        ${capRow('science_skills_enabled', dual('Research skills', '研究技能'), dual('Reusable ICU workflows, figure-review protocols, and handoff templates stay available in Agent Science.', '在 Agent Science 中启用可复用 ICU 工作流、图件审阅 protocol 和交接模板。'), true)}
-        ${row(dual('Skill scope', '技能范围'), dual('Skills are local workflow templates. They do not send patient rows outside this machine.', '技能是本地工作流模板，不会把患者行发出本机。'), lockedCtl(dual('local template', '本地模板'), dual('Skills reuse local prompts and audit checklists.', '技能复用本地提示词和审计清单。')))}
-        ${row(dual('Runtime effect', '运行时效果'), dual('Turning this off removes reusable workflow cards from Agent Science and marks that coverage item unavailable.', '关闭后，Agent Science 会隐藏可复用工作流卡片，并把该覆盖项标记为不可用。'), truthCtl(settingOn('science_skills_enabled', true) ? dual('templates visible', '模板可见') : dual('templates hidden', '模板已隐藏')))}
+        ${capRow('science_skills_enabled', dual('Built-in research skills', '内置研究技能'), dual('Master switch for default Agent workflow skills and their Agent Science cards.', '控制默认 Agent 工作流技能及其 Agent Science 卡片的总开关。'), true)}
+        ${capRow('nature_figure_skill_enabled', dual('Nature Figure', 'Nature 图件'), dual('Plans a claim-first figure and renders numeric results only from registered source data and code.', '先规划论断与证据链；数值结果图只能由已登记源数据和代码生成。'), true)}
+        ${capRow('nature_writing_skill_enabled', dual('Nature Writing', 'Nature 写作'), dual('Adds paragraph-role, terminology, calibrated-claim, evidence, literature, and novelty rules to Writer.', '为 Writer 加入段落职责、术语一致性、措辞校准、证据、文献和创新性规则。'), true)}
+        ${row(dual('Run binding', '运行绑定'), dual('The active switches are frozen into each new Agent run and written to an evidence receipt. Existing runs do not change retroactively.', '每次新 Agent 运行都会固化当前开关并写入证据回执；已有运行不会被追溯修改。'), truthCtl(`${activeSkillCount}/2 ${dual('active by default', '默认启用')}`))}
+        ${row(dual('Skill scope', '技能范围'), dual('These skills coordinate local workflow contracts. They do not send patient rows outside this machine.', '这些技能编排本地工作流契约，不会把患者行发出本机。'), lockedCtl(dual('evidence-bound', '证据约束'), dual('Result figures and manuscript claims remain source-bound and audited.', '结果图与论文论断始终绑定来源并接受审计。')))}
+        ${extensionUi().renderSkills ? extensionUi().renderSkills() : ''}
       </div>`;
     }
     if (settingsCapabilityTab === 'connectors') {
@@ -222,6 +244,7 @@
         ${capRow('mcp_tools_enabled', dual('MCP tools layer', 'MCP 工具层'), dual('Enables the standard tool boundary for future external systems. Current patient-data workflows remain local.', '为后续外部系统启用标准工具边界；当前患者数据工作流仍保持本地。'), false)}
         ${row(dual('Tool allowlist', '工具白名单'), dual('External tools must be explicitly scoped before they can be used from research workflows.', '外部工具必须先明确作用域，之后才能在研究工作流中使用。'), lockedCtl(dual('required', '必须要求'), dual('Tool scope is an audit contract, not a cosmetic preference.', '工具作用域是审计契约，不是视觉选项。')))}
         ${row(dual('Backend policy', '后端策略'), dual('The API now returns allow/block decisions for the registered tool boundary.', 'API 现在会返回注册工具边界的允许/阻止决策。'), truthCtl(`${allowedTools} ${dual('allowed', '允许')} · ${blockedTools} ${dual('blocked', '阻止')}`))}
+        ${extensionUi().renderMcp ? extensionUi().renderMcp() : ''}
       </div>`;
     }
     if (settingsCapabilityTab === 'prompts') {
@@ -512,10 +535,13 @@
     afterRender(root) {
       const rerender = () => { if (typeof window.__euRender === 'function') window.__euRender(); };
       const setNotice = msg => { settingsNotice = msg || ''; rerender(); };
+      if (root.querySelector('[data-ext-manager]') && extensionUi().bind) {
+        extensionUi().bind(root, { rerender, setNotice });
+      }
       const persist = (key, value, msg) => {
         if (key && window.EU_API && window.EU_API.saveSetting) {
           window.EU_API.saveSetting(key, value).then(() => {
-            setNotice(msg || `${key.replace(/_/g, ' ')} saved`);
+            setNotice(msg || savedSettingMessage(key));
           }).catch(err =>
           {
             console.error('[EasyICU] saveSetting failed', key, err);
@@ -651,7 +677,7 @@
         input.addEventListener('change', () => {
           const key = input.getAttribute('data-setting-input');
           const value = input.type === 'number' ? Number(input.value) : input.value;
-          persist(key, value, `${key.replace(/_/g, ' ')} saved`);
+          persist(key, value, savedSettingMessage(key));
         });
       });
       root.querySelectorAll('[data-settings-reset]').forEach(btn => {

@@ -1471,6 +1471,12 @@ class ResearchAgentPipeline:
         self._enable_publication_figure_skill = bool(
             config.enable_publication_figure_skill
         )
+        self._enable_nature_writing_skill = bool(config.enable_nature_writing_skill)
+        from .user_extensions import compile_user_extension_activation
+
+        self._user_extension_activation = compile_user_extension_activation(
+            config.extension_activation
+        )
         self._vlm_client = services.vlm_client
         self._visual_qa_adapter = services.visual_qa_adapter
         # Deny-by-default: a rendered figure is not covered by the text
