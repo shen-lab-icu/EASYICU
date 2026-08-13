@@ -366,6 +366,11 @@ from .orchestration.scientific_plan_review_gate import (
     prepare_scientific_plan_review_gate,
 )
 from .figures.skill import PublicationFigureSkill
+from .figures.prior_output_support import (
+    figure_parent_candidate_step_dirs as _figure_parent_candidate_step_dirs,
+    publication_label as _publication_label,
+    short_figure_label as _short_figure_label,
+)
 from .reporting.bibtex import render_bibtex
 from .reporting.latex import scaffold_to_latex
 from .literature import (
@@ -5884,33 +5889,6 @@ def _publication_bundle_has_any_role(
     return bool(roles & required_roles)
 
 
-def _figure_parent_candidate_step_dirs(
-    *, steps_dir: Path, current_step_id: str
-) -> tuple[List[Path], bool]:
-    """Return direct parent only for split figures, else legacy prior steps.
-
-    A ``<analysis>_figure`` child is an ownership edge: it may render only the
-    standardized products emitted by ``<analysis>``.  Searching an older step
-    for a same-shaped CSV can silently switch estimand or cohort while remaining
-    formally source-backed.  Legacy terminal overview figures without an
-    existing direct parent retain run-wide rescue behavior.
-    """
-
-    parent_step_id = str(current_step_id or "").removesuffix("_figure")
-    direct_parent = steps_dir / parent_step_id
-    is_split = parent_step_id != str(current_step_id or "")
-    if is_split and direct_parent.is_dir():
-        return [direct_parent], True
-    return (
-        [
-            step_dir
-            for step_dir in sorted(steps_dir.iterdir())
-            if step_dir.is_dir() and step_dir.name != current_step_id
-        ],
-        False,
-    )
-
-
 def _render_prediction_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -10987,54 +10965,6 @@ def _render_publication_bundle_from_prior_outputs_for_step(
         if repair_id is not None:
             return repair_id
     return None
-
-
-def _publication_label(value: Any) -> str:
-    token = str(value or "").strip()
-    mapping = {
-        "sepsis3": "Sepsis-3",
-        "sep3_sofa2_max": "Sepsis-3",
-        "age": "Age",
-        "age_filled": "Age",
-        "age_per_10y": "Age, per 10 years",
-        "sex_m": "Male sex",
-        "sex_male": "Male sex",
-        "male": "Male sex",
-        "hr_first": "Heart rate",
-        "hr_first_filled": "Heart rate",
-        "hr_max_per_10bpm": "Maximum heart rate, per 10 bpm",
-        "map_first": "Mean arterial pressure",
-        "map_first_filled": "Mean arterial pressure",
-        "map_min": "Minimum mean arterial pressure",
-        "resp_max_per_5": "Maximum respiratory rate, per 5/min",
-        "temp_max_c": "Maximum temperature, per 1 deg C",
-        "lactate": "Lactate",
-        "lact": "Lactate",
-        "lact_max_mmol_l": "Maximum lactate, per 1 mmol/L",
-        "lact_measured": "Lactate measured",
-        "bun_max_per_10": "Maximum BUN, per 10 units",
-        "wbc_max_per_10": "Maximum WBC, per 10 units",
-        "sofa2": "SOFA-2",
-        "death": "In-hospital mortality",
-        "alt_adult_no_los_all_vitals_sepsis3_derivable": "No LOS threshold",
-        "alt_adult_los1_three_of_four_vitals_sepsis3_derivable": ">=3 of 4 vitals",
-        "alt_adult_los1_no_temp_requirement_sepsis3_derivable": "No temperature",
-        "alt_adult_los2_all_vitals_sepsis3_derivable": "ICU LOS >=2 d",
-    }
-    lower = token.lower()
-    if lower in mapping:
-        return mapping[lower]
-    cleaned = lower
-    for suffix in ("_filled", "_first", "_measured"):
-        cleaned = cleaned.removesuffix(suffix)
-    return cleaned.replace("_", " ").strip().title() or token
-
-
-def _short_figure_label(value: Any, *, limit: int = 38) -> str:
-    text = str(value or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[: max(1, limit - 1)].rstrip() + "..."
 
 
 def _truthy_figure_value(value: Any) -> bool:
