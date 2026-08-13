@@ -6,7 +6,9 @@ from easyicu.research_agent.plan_utils import (
     _prediction_contract_applies,
     _step_contract_findings,
     _step_contract_repair_guidance,
-    _step_declares_audit_panel,
+)
+from easyicu.research_agent.planning.figure_plan_shaping import (
+    step_declares_audit_panel,
 )
 from easyicu.research_agent.schema import AnalysisStep
 
@@ -445,5 +447,5 @@ def test_audit_panel_tokens_use_word_or_snake_case_boundaries():
         outputs=["table:review"],
     )
 
-    assert _step_declares_audit_panel(positive)
-    assert not _step_declares_audit_panel(near_match)
+    assert step_declares_audit_panel(positive)
+    assert not step_declares_audit_panel(near_match)

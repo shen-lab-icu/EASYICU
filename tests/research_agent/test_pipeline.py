@@ -4980,7 +4980,7 @@ def test_split_deduplicates_mixed_figure_in_favor_of_dedicated_renderer(ra):
 
 
 def test_final_plan_shape_rejects_empty_visualization_step(ra):
-    from easyicu.research_agent.plan_utils import (
+    from easyicu.research_agent.planning.final_plan_shape import (
         PlanShapeValidationError,
         validate_final_plan_shape,
     )
@@ -5007,7 +5007,7 @@ def test_final_plan_shape_rejects_empty_visualization_step(ra):
 
 
 def test_final_plan_shape_rejects_duplicate_figure_owners(ra):
-    from easyicu.research_agent.plan_utils import (
+    from easyicu.research_agent.planning.final_plan_shape import (
         PlanShapeValidationError,
         validate_final_plan_shape,
     )
