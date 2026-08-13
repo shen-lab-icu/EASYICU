@@ -190,7 +190,7 @@
       ['quality', h.t('Quality & provenance', '质量与溯源')],
     ];
     return `<div class="xdb-result-tabs" role="tablist" aria-label="${h.esc(h.t('Cross-database result sections', '跨库结果分区'))}">
-      ${tabs.map(([key, label]) => `<button type="button" role="tab" class="${state.tab === key ? 'active' : ''}" data-crossdb-result-tab="${key}" aria-selected="${state.tab === key ? 'true' : 'false'}">${h.esc(label)}</button>`).join('')}
+      ${tabs.map(([key, label]) => `<button type="button" role="tab" id="crossdb-result-tab-${key}" class="${state.tab === key ? 'active' : ''}" data-crossdb-result-tab="${key}" aria-controls="crossdb-result-panel-${key}" aria-selected="${state.tab === key ? 'true' : 'false'}" tabindex="${state.tab === key ? '0' : '-1'}">${h.esc(label)}</button>`).join('')}
     </div>`;
   }
 
@@ -217,7 +217,7 @@
     const gate = payload.compatibility_gate || {};
     const sharedModules = payload.shared_modules || [];
     return `
-      <section class="xdb-result-section" data-crossdb-result-panel="overview">
+      <section class="xdb-result-section" id="crossdb-result-panel-overview" role="tabpanel" aria-labelledby="crossdb-result-tab-overview" tabindex="0" data-crossdb-result-panel="overview">
         <div class="xdb-kpi-grid">
           <article><span>${h.t('Data sources', '数据源')}</span><strong>${h.fmtInt((payload.sources || []).length)}</strong><small>${h.t('independent exports or databases', '独立导出或数据库')}</small></article>
           <article><span>${h.t('Shared modules', '共享模块')}</span><strong>${h.fmtInt(sharedModules.length)}</strong><small>${h.t('available across every selected source', '在所有所选来源中可用')}</small></article>
@@ -267,7 +267,7 @@
     const rows = payload.availability || [];
     const scope = catalogScope(payload, config);
     return `
-      <section class="xdb-result-section" data-crossdb-result-panel="coverage">
+      <section class="xdb-result-section" id="crossdb-result-panel-coverage" role="tabpanel" aria-labelledby="crossdb-result-tab-coverage" tabindex="0" data-crossdb-result-panel="coverage">
         <div class="xdb-section-head">
           <div><h2>${h.t('Module coverage matrix', '模块覆盖矩阵')}</h2><p>${h.t('Start here to see which clinical domains can be compared before inspecting individual feature distributions.', '先查看哪些临床模块能够跨库比较，再进入单个特征的分布检查。')}</p></div>
           <span class="pill">${h.fmtInt(rows.length)}${scope.partial ? ` / ${h.fmtInt(scope.totalModules)}` : ''} ${h.t('modules audited', '个模块已审计')}</span>
@@ -329,7 +329,7 @@
       .concat(modules.map(module => `<option value="${h.esc(module.module)}" ${state.module === module.module ? 'selected' : ''}>${h.esc(h.catalogModuleLabel(module.module))} (${h.fmtInt((module.features || []).length)})</option>`))
       .join('');
     return `
-      <section class="xdb-result-section" data-crossdb-result-panel="distributions">
+      <section class="xdb-result-section" id="crossdb-result-panel-distributions" role="tabpanel" aria-labelledby="crossdb-result-tab-distributions" tabindex="0" data-crossdb-result-panel="distributions">
         <div class="xdb-section-head">
           <div><h2>${h.t('Feature distribution comparison', '特征分布对比')}</h2><p>${h.t('Choose one feature at a time. The main chart overlays aggregate source distributions; the list covers the complete mapped catalog available in this run.', '每次选择一个特征。主图叠加各来源的聚合分布；左侧列表覆盖本次运行中可用的完整映射目录。')}</p></div>
           <span class="pill">${h.fmtInt(view.rows.length)} ${h.t('matching features', '个匹配特征')}</span>
@@ -368,7 +368,7 @@
     const gate = payload.compatibility_gate || {};
     const sourceMode = payload.source_type === 'raw_database_root' ? h.t('root hash', '根目录哈希') : h.t('path hash', '路径哈希');
     return `
-      <section class="xdb-result-section" data-crossdb-result-panel="quality">
+      <section class="xdb-result-section" id="crossdb-result-panel-quality" role="tabpanel" aria-labelledby="crossdb-result-tab-quality" tabindex="0" data-crossdb-result-panel="quality">
         <div class="xdb-section-head">
           <div><h2>${h.t('Quality, scope, and provenance', '质量、范围与溯源')}</h2><p>${h.t('Review source identity, aggregate summaries, and fail-closed restrictions before exporting or planning downstream analysis.', '导出或规划下游分析前，核查来源身份、聚合摘要和默认拦截范围。')}</p></div>
           <span class="pill ${gate.status === 'compatible' ? 'ok' : 'warn'}">${h.esc(h.statusLabel(gate.status || 'compatible'))}</span>
@@ -410,13 +410,41 @@
     if (config && typeof config.repaint === 'function') config.repaint();
   }
 
+  function focusTab(root, key) {
+    const focus = () => {
+      const active = root.querySelector(`[data-crossdb-result-tab="${key}"]`);
+      if (active && typeof active.focus === 'function') active.focus();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(focus);
+    else focus();
+  }
+
+  function activateTab(root, key, config, moveFocus) {
+    if (!TABS.has(key)) return;
+    const changed = key !== state.tab;
+    state.tab = key;
+    if (changed) repaint(config);
+    if (moveFocus) focusTab(root, key);
+  }
+
   function bind(root, payload, config) {
     if (!root) return;
-    root.querySelectorAll('[data-crossdb-result-tab]').forEach(button => button.addEventListener('click', () => {
+    const resultTabs = Array.from(root.querySelectorAll('[data-crossdb-result-tab]'));
+    resultTabs.forEach(button => button.addEventListener('click', () => {
       const next = button.dataset.crossdbResultTab;
-      if (!TABS.has(next) || next === state.tab) return;
-      state.tab = next;
-      repaint(config);
+      activateTab(root, next, config, false);
+    }));
+    resultTabs.forEach(button => button.addEventListener('keydown', event => {
+      const current = resultTabs.indexOf(button);
+      if (current < 0) return;
+      let nextIndex = null;
+      if (event.key === 'ArrowRight') nextIndex = (current + 1) % resultTabs.length;
+      if (event.key === 'ArrowLeft') nextIndex = (current - 1 + resultTabs.length) % resultTabs.length;
+      if (event.key === 'Home') nextIndex = 0;
+      if (event.key === 'End') nextIndex = resultTabs.length - 1;
+      if (nextIndex == null) return;
+      event.preventDefault();
+      activateTab(root, resultTabs[nextIndex].dataset.crossdbResultTab, config, true);
     }));
     root.querySelectorAll('[data-crossdb-scope]').forEach(button => button.addEventListener('click', () => {
       const next = button.dataset.crossdbScope;

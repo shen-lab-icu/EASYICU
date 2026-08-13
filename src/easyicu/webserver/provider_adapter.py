@@ -29,6 +29,8 @@ _DEFAULT_MAX_OUTPUT_TOKENS = 1200
 _MIN_MAX_OUTPUT_TOKENS = 128
 _ABSOLUTE_MAX_OUTPUT_TOKENS = 4000
 _DEFAULT_PROVIDER_ENV_FILE = Path.home() / ".easyicu" / "provider.env"
+_DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT = 240.0
+_LOOPBACK_RESEARCH_AGENT_REQUEST_TIMEOUT = 480.0
 
 
 class ProviderAdapterError(ValueError):
@@ -63,7 +65,7 @@ def require_external_credentials(
 def build_research_agent_provider_client(
     provider_meta: Dict[str, Any],
     *,
-    request_timeout: float = 240.0,
+    request_timeout: Optional[float] = None,
     environ: Optional[Mapping[str, str]] = None,
 ) -> tuple[Any, Dict[str, Any]]:
     """Construct the governed Research Agent client without exposing a key.
@@ -116,16 +118,26 @@ def build_research_agent_provider_client(
         )
         from easyicu.research_agent.providers.llm import OpenAIClient
 
-        if provider == "openai" and is_loopback_openai_base_url(base_url):
+        loopback = provider == "openai" and is_loopback_openai_base_url(base_url)
+        if loopback:
             # The endpoint and credential were both loaded from the server-owned
             # provider configuration after explicit Web opt-in. Tell the shared
             # factory this one configured loopback proxy is allowed to receive
             # its own authentication token rather than the no-auth dummy key.
             provider_environment[TRUST_LOOPBACK_PROXY_KEY_ENV] = "1"
+        effective_timeout = (
+            float(request_timeout)
+            if request_timeout is not None
+            else (
+                _LOOPBACK_RESEARCH_AGENT_REQUEST_TIMEOUT
+                if loopback
+                else _DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT
+            )
+        )
         client = build_provider_client(
             provider=provider,
             model=credentials["model"],
-            request_timeout=float(request_timeout),
+            request_timeout=effective_timeout,
             title="EasyICU Web Research Agent",
             client_cls=OpenAIClient,
             environment=provider_environment,
@@ -147,6 +159,7 @@ def build_research_agent_provider_client(
             "client": "easyicu.research_agent.providers.OpenAIClient",
             "client_constructed": True,
             "provider_gate": "research_agent_provider_ready",
+            "request_timeout_seconds": effective_timeout,
             "secrets_returned": False,
         }
     )

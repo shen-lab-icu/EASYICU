@@ -73,6 +73,20 @@ class AuthorityBinding(BaseModel):
     active_job_id: Optional[str] = None
 
 
+class PiProjectBindingHandoffReceipt(BaseModel):
+    """Path-free Agent/StudyContext handoff into one Pi research project."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.pi-project-binding-handoff/1"] = (
+        "easyicu.pi-project-binding-handoff/1"
+    )
+    project_id: str = Field(min_length=1, max_length=160)
+    project_title: str = Field(min_length=1, max_length=160)
+    study_context_id: str = Field(min_length=1, max_length=160)
+    study_context_revision: int = Field(ge=0)
+
+
 class PiSessionRecord(BaseModel):
     """Bounded EasyICU metadata; Pi's JSONL remains separate UX state."""
 
@@ -165,6 +179,18 @@ class HostTurnGrant:
         with self._lock:
             return str(action) in self._capabilities
 
+    def was_provided(self, action: str) -> bool:
+        """Return whether the user supplied this action for the turn.
+
+        Unlike ``available_actions``, this remains true after a one-use grant
+        has been consumed.  It is used only by the host to carry the user's
+        explicit public-literature-search authorization into a subsequently
+        submitted full pipeline; it is never exposed to the model.
+        """
+
+        with self._lock:
+            return str(action) in self._provided
+
     @property
     def available_actions(self) -> frozenset[str]:
         with self._lock:
@@ -238,6 +264,7 @@ __all__ = [
     "MAX_MESSAGE_CHARS",
     "PROTOCOL_VERSION",
     "PiCopilotError",
+    "PiProjectBindingHandoffReceipt",
     "PiSessionRecord",
     "PiToolResult",
     "SESSION_SCHEMA_VERSION",

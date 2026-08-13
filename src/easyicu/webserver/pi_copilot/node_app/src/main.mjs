@@ -33,6 +33,8 @@ const CWD = resolve(process.env.EASYICU_PI_CWD || process.cwd());
 const RESEARCH_TOOL_NAMES = Object.freeze([
   "easyicu_workspace_status",
   "easyicu_list_data_sources",
+  "easyicu_list_source_concepts",
+  "easyicu_inspect_data_package",
   "easyicu_inspect_workflow",
   "easyicu_inspect_context",
   "easyicu_inspect_plan",
@@ -184,6 +186,23 @@ function safeSessionFile(rawPath) {
   return file;
 }
 
+function createPersistedSessionManager() {
+  // Pi defers a brand-new session file until the first assistant message. The
+  // EasyICU host, however, persists the path immediately and may restart before
+  // the first prompt is sent. Seed an exclusive empty file and let
+  // Pi's public `open` path initialize its header so the saved host binding is
+  // reopenable from the moment session.create returns.
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const sessionFile = join(SESSION_DIR, `${timestamp}_${randomUUID()}.jsonl`);
+  writeFileSync(sessionFile, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+  try {
+    return SessionManager.open(sessionFile, SESSION_DIR, CWD);
+  } catch (error) {
+    rmSync(sessionFile, { force: true });
+    throw error;
+  }
+}
+
 function integerEnv(name, fallback, minimum, maximum) {
   const parsed = Number.parseInt(process.env[name] || "", 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -295,15 +314,25 @@ function resourceLoader(agentMode, extensionSnapshot) {
       "At a governed confirmation gate, ask one direct question and stop. Do not repeat the full workflow, handoff report, or permission inventory unless the user asks for it. Never hide a blocker or weaken its exact stable code.",
       "Keep shared guidance case-neutral. Ask for unread study slots rather than filling defaults.",
       "Start each research request by inspecting the project workflow. Idea Mining is an optional EasyICU stage; when the user selects a mined idea, accept its digest-bound handoff before continuing setup. Study setup, extraction, plan, execution, validation, interpretation, and manuscript review remain receipt-driven stages.",
+      "Treat every scientific question as one ordinary research project and one ordinary conversation. Never propose or create evaluation dashboards, question-batch controls, or user-facing internal evaluation labels. Evaluation orchestration and scoring stay outside the Copilot product surface; inside Copilot, use only the user's scientific wording and the normal governed workflow.",
       "When study setup lacks a data source, call easyicu_list_data_sources and present its path-free registered choices. After the user selects one exact source_id, bind it with easyicu_update_study_context.bind_source_id; never guess a source path, version, database, or size.",
+      "Keep user-facing study labels separate from execution identity. Before saving a source-bound outcome, exposure, or covariate, call easyicu_list_source_concepts for the selected source and modules. Save the human wording in outcome, primary_exposure, and covariates, and save only exact returned identifiers in execution_concepts. Never guess, normalize, or translate a concept id yourself.",
+      "Covariate availability is not adjustment authority. Keep covariate_selection='planner_selectable' when the user has not explicitly approved an adjustment roster. Set covariate_selection='exact' only after the user explicitly chooses the complete roster and confirms one clinical confounding rationale and one baseline temporal role for every non-empty covariate. Save those decisions in covariate_rationales and covariate_temporal_roles; exact plus an empty roster is an explicit unadjusted analysis. Do not silently promote age, sex, severity, or any available concept into an adjustment set.",
+      "When the user chooses an analysis unit or an independence/robust/clustered variance assumption, save that commitment in typed analysis_design. Confirmations, cohort prose, and analysis_goal are not execution authority for it. For cluster-robust inference, save the semantic cluster_unit but never guess a private physical grouping column; the host must fail closed when the source and executor cannot prove support.",
+      "Repeated-unit dependence rule: if the typed cohort explicitly retains repeated ICU stays, do not recommend model-based or heteroskedasticity-robust variance as a closure for within-patient dependence. Ask one decision between an owner-supported first-stay restriction and patient-clustered inference; if the selected source cannot prove the required readmission indicator or patient grouping coordinate, report the capability blocker instead of steering the user toward the only executable but scientifically weaker option.",
+      "Typed time-window rule: StudyContext time_window is the bounded outer feature-materialization window, currently expressed as numeric hours from ICU admission. It is not a phenotype's clinical definition anchor and not an outcome follow-up horizon. Keep those three roles separate: concept clinical contracts own phenotype time zero, the exact outcome concept owns whole-stay outcome semantics, and time_window owns only the physical feature window. Never propose an unbounded discharge/death endpoint for time_window, never save suspected-infection onset as its physical anchor, and never imply that a 24-hour feature window censors later in-hospital deaths.",
+      "When plan review asks the user to choose a timing, repeated-stay, functional-form, missing-data, cohort, or outcome-definition sensitivity, save each explicit decision in typed sensitivity_specs. Use only exact source concept identifiers returned by EasyICU in execution_variables. Prose in analysis_goal is not sensitivity execution authority, and you must not invent a scientific choice the user has not made.",
       "Tool-first Idea Mining rule: when the user asks to discover, mine, compare, or propose research ideas, do not author a candidate from general model knowledge. If the one-turn idea grant is present, call easyicu_mine_ideas before writing the answer and ground the answer only in that EasyICU receipt. If the grant is absent, ask the user to enable it. Never imply that Idea Mining ran when no Idea Mining receipt exists.",
-      "Tool-first literature rule: when the user asks to search papers, prior art, or supporting literature, call easyicu_search_literature and let the host-held one-turn gate authoritatively allow or block it. The grant is intentionally not exposed in the conversation, so never infer or claim that it is absent before the tool returns a typed gate receipt. Report the exact receipt status and never call curated references a completed search. Ground support claims in the returned bounded evidence_excerpt when present; state when only title/metadata is available. If the receipt says idea_handoff_refresh_required, explain that the exact searched papers are not Plan authority until easyicu_accept_idea_handoff succeeds again with the same run_id/idea_id; do not run analysis first. For an existing Research Agent plan, call easyicu_inspect_literature and distinguish literature design support from patient/result evidence. Never invent a paper or a plan-to-paper mapping.",
+      "Tool-first literature rule: when the user asks to search papers, prior art, or supporting literature, call easyicu_search_literature and let the host-held one-turn gate authoritatively allow or block it. The grant is intentionally not exposed in the conversation, so never infer or claim that it is absent before the tool returns a typed gate receipt. Report the exact receipt status and never call curated references a completed search. easyicu_search_literature returns unreviewed retrieval candidates, not verified evidence or direct comparators: never say the papers support the question or have been retained as evidence until Research Agent screening against the sealed context says so. You may quote the bounded extractive excerpt as candidate metadata while naming this boundary. If the receipt says idea_handoff_refresh_required, explain that the exact searched candidates are not Plan authority until easyicu_accept_idea_handoff succeeds again with the same run_id/idea_id; do not run analysis first. If it binds study_literature_authority, report the receipt and stop the turn because the host must rebind the changed StudyContext before any plan or run tool. For an existing Research Agent plan, call easyicu_inspect_literature and distinguish screened design support from patient/result evidence. Never invent a paper or a plan-to-paper mapping.",
       "When the user explicitly selects a mined candidate, use easyicu_accept_idea_handoff with its exact run_id and idea_id if the one-turn idea grant is present. Do not manually copy or silently reinterpret the selected idea, and do not claim it is bound until the digest-bound acceptance receipt succeeds.",
       "When the user explicitly asks to run, rerun, execute, or analyze the already-configured current study, treat that as execution intent rather than a request to inspect an older run. Inspect the workflow only as needed to choose the next governed action, then call easyicu_run: use a full run when the provider-run grant is present and the required setup, export, and preflight are ready; otherwise start the required preflight or state the exact missing authority. Use easyicu_inspect_run only when the user asks for status, prior results, or failure diagnosis.",
-      "A persisted run_id is historical evidence, not proof of an active job. Never call easyicu_resume without an approved/rejected decision merely because a run_id exists. Reattach only when the workflow reports a live queued/running job; after a terminal failed, cancelled, blocked, or missing JobManager entry, an explicit user rerun request must call easyicu_run under the current one-turn run grant and preserve the older run as history.",
+      "Data-package review rule: after extraction completes or a validated registered export is reused, and before proposing or running a scientific Plan, call easyicu_inspect_data_package when the user asks to review denominator, concept availability, or missingness. Treat legacy positive-only event absence according to the returned owner semantics, never as missing measurement. Do not substitute run-artifact inspection for this pre-Plan data review, and do not report event rates or associations from it because the review intentionally withholds analysis results.",
+      "A persisted run_id is historical evidence, not proof of an active job. An easyicu_run submission receipt with run_id_status=pending_pipeline_start has no new scientific run id yet: report its job_id only and never copy the historical binding as the new run. Never call easyicu_resume without an approved/rejected decision merely because a run_id exists. Reattach only when the workflow reports a live queued/running job; after a terminal failed, cancelled, blocked, or missing JobManager entry, an explicit user rerun request must call easyicu_run under the current one-turn run grant and preserve the older run as history.",
+      "When the workflow reports plan_configuration_superseded or plan_review_not_resumable and the user asks for a new plan, call easyicu_request_replan. It may start a fresh full ResearchAgentPipeline run under a new run id and the current StudyContext digest; it never edits or reuses the old plan. Stop after the submission receipt so the new run can pause at its own human plan-review gate.",
+      "When the workflow reports failed_pipeline_requires_fresh_plan, treat the terminal failed run as immutable history rather than the current answer. If the user confirms the fresh-plan prompt, call easyicu_request_replan and stop after its submission receipt. If they have not confirmed, ask one direct question; do not keep interpreting the failed run or expose unvalidated numbers.",
       workspaceMode
         ? "For a webpage, calculator, dashboard, or interactive artifact: load the web-prototype skill, list files, write or edit the artifact, read it back, run the static check, and prepare its web preview. Label simulated formulas and values as unvalidated demo content."
-        : "Treat a scientific question as the start of a governed research workflow. Inspect the typed StudyContext first; map only facts the user actually supplied, ask concise follow-up questions for required missing slots, and save them only with the one-turn configure grant.",
+        : "Treat a scientific question as the start of a governed research workflow. Inspect the typed StudyContext first; map only facts the user actually supplied. When required scientific slots remain unresolved, ask exactly one highest-impact, independently answerable scientific decision and stop. Do not bundle cohort, estimand, timing, adjustment, dependence, or missing-data choices into one confirmation; never send a questionnaire or numbered list of confirmations. Save the answer only with the one-turn configure grant.",
       workspaceMode
         ? "Research tools remain available in workspace mode, but project files never replace EasyICU-owned plans, runs, gates, evidence, or scientific results."
         : "When the typed setup is ready, use the authorized EasyICU extraction tool if no active export exists. Start the deterministic preflight before any full run. A full Research Agent provider run requires its separate one-turn provider-run grant and its existing scientific-provider gate; Pi model credentials alone do not authorize scientific execution. If the pipeline pauses for a digest-bound plan review, summarize the exact pending request and wait for the user's explicit decision; only then call easyicu_resume with approved or rejected and a fresh provider-run grant. On later turns inspect validation, evidence, evidence-bound interpretation, and the Research Agent manuscript. The UI can open projected artifact references in its governed right-side preview.",
@@ -378,9 +407,58 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
     hours: Type.Optional(Type.Number()), observation_hours: Type.Optional(Type.Number()),
     anchor: optionalText(500), preset: optionalText(500), label: optionalText(500),
   }, { additionalProperties: false });
+  const executionConcepts = Type.Object({
+    outcome: optionalText(80),
+    primary_exposure: optionalText(80),
+    covariates: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 80 }), { maxItems: 64 }),
+    ),
+  }, { additionalProperties: false });
+  const analysisDesign = Type.Object({
+    analysis_unit: Type.Union([
+      Type.Literal("row"), Type.Literal("icu_stay"),
+      Type.Literal("hospital_admission"), Type.Literal("patient"),
+      Type.Literal("site"),
+    ]),
+    variance_estimator: Type.Union([
+      Type.Literal("model_based"),
+      Type.Literal("heteroskedasticity_robust"),
+      Type.Literal("cluster_robust"),
+    ]),
+    cluster_unit: Type.Optional(Type.Union([
+      Type.Literal("hospital_admission"), Type.Literal("patient"),
+      Type.Literal("site"), Type.Literal("custom"),
+    ])),
+  }, { additionalProperties: false });
+  const sensitivitySpec = Type.Object({
+    spec_id: Type.String({ minLength: 1, maxLength: 80, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$" }),
+    axis: Type.Union([
+      Type.Literal("timing"), Type.Literal("repeated_stays"),
+      Type.Literal("functional_form"), Type.Literal("missing_data"),
+      Type.Literal("cohort"), Type.Literal("outcome_definition"),
+    ]),
+    strategy: Type.Union([
+      Type.Literal("landmark"), Type.Literal("time_varying"),
+      Type.Literal("alternate_window"), Type.Literal("first_stay"),
+      Type.Literal("non_readmission_restriction"), Type.Literal("cluster_robust"),
+      Type.Literal("mixed_effects"), Type.Literal("restricted_cubic_spline"),
+      Type.Literal("fractional_polynomial"), Type.Literal("categorical"),
+      Type.Literal("complete_case"), Type.Literal("multiple_imputation"),
+      Type.Literal("inverse_probability_weighting"),
+      Type.Literal("alternate_eligibility"), Type.Literal("alternate_definition"),
+    ]),
+    execution_variables: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 80 }), { maxItems: 16 }),
+    ),
+    landmark_hours: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 8760 })),
+    require_alive_at_landmark: Type.Optional(Type.Boolean()),
+    exclude_negative_event_times: Type.Optional(Type.Boolean()),
+  }, { additionalProperties: false });
   const tools = [
     hostTool(sessionId, { name: "easyicu_workspace_status", label: "EasyICU workspace status", description: "Inspect the current EasyICU workspace and authoritative study/run binding without reading patient rows or source paths.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_list_data_sources", label: "List registered data sources", description: "List path-free, validated EasyICU export choices with database, version time, aggregate size, and module coverage. Never returns filesystem paths or patient rows.", parameters: empty }),
+    hostTool(sessionId, { name: "easyicu_list_source_concepts", label: "List source concepts", description: "List exact concept identifiers, modules, roles, and bounded descriptions physically available in one registered EasyICU export. Use these identifiers for execution_concepts; never infer them from labels.", parameters: Type.Object({ source_id: Type.String({ minLength: 1, maxLength: 80 }), modules: Type.Optional(Type.Array(Type.String({ maxLength: 80 }), { maxItems: 64 })), query: optionalText(160), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 80 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_inspect_data_package", label: "Review data package", description: "Review the bound registered export before planning: aggregate denominator, configured modules, concept availability, and owner-defined missingness semantics. Returns no patient rows, paths, event rates, group comparisons, or effect estimates.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_inspect_workflow", label: "Inspect research workflow", description: "Inspect the typed project workflow from scientific question through Idea Mining, setup, extraction, Research Agent analysis, interpretation, and manuscript review.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_inspect_context", label: "Inspect study context", description: "Read the PHI-safe projection of the bound typed StudyContext and its revision.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_inspect_plan", label: "Inspect scientific plan", description: "Read a bounded projection of the current or selected EasyICU plan artefact.", parameters: Type.Object({ run_id: optionalRunId }, { additionalProperties: false }) }),
@@ -399,6 +477,23 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
       cohort: Type.Optional(studyCohort), modules: Type.Optional(Type.Array(Type.String({ maxLength: 80 }), { maxItems: 64 })),
       outcome: optionalText(500), primary_exposure: optionalText(160),
       covariates: Type.Optional(Type.Array(Type.String({ maxLength: 160 }), { maxItems: 64 })),
+      covariate_selection: Type.Optional(Type.Union([
+        Type.Literal("planner_selectable"), Type.Literal("exact"),
+      ])),
+      covariate_rationales: Type.Optional(Type.Record(
+        Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$" }),
+        Type.String({ minLength: 8, maxLength: 500 }),
+      )),
+      covariate_temporal_roles: Type.Optional(Type.Record(
+        Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$" }),
+        Type.Union([
+          Type.Literal("baseline_static"),
+          Type.Literal("at_or_before_time_zero"),
+        ]),
+      )),
+      execution_concepts: Type.Optional(executionConcepts),
+      analysis_design: Type.Optional(analysisDesign),
+      sensitivity_specs: Type.Optional(Type.Array(sensitivitySpec, { maxItems: 16 })),
       time_window: Type.Optional(studyWindow), comparator: optionalText(500),
       export_format: optionalText(40), analysis_goal: optionalText(1200),
       confirmations: Type.Optional(Type.Record(Type.String({ maxLength: 80 }), Type.Boolean())),
@@ -406,14 +501,14 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
       bind_source_id: optionalText(80),
     }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_mine_ideas", executionMode: "sequential", label: "Mine research ideas", description: "Create one local, metadata-only Idea Mining candidate from the bound question or a bounded source seed. Requires the one-use Idea Mining grant and never produces a novelty or scientific result claim.", parameters: Type.Object({ topic: optionalText(1200), title: optionalText(220), excerpt: optionalText(1200), journal: optionalText(160), year: Type.Optional(Type.Integer({ minimum: 1800, maximum: 2200 })), doi: optionalText(240), pmid: optionalText(80) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_search_literature", executionMode: "sequential", label: "Search PubMed literature", description: "Run the Idea Mining PubMed metadata and bounded-abstract owner. With an accepted idea it persists a digest-bound prior-art receipt and requires that exact idea handoff to be accepted again before Plan/run; otherwise it performs discovery only. Use returned evidence_excerpt fields to explain what an article supports, while preserving the stated evidence boundary. Requires the separate one-turn literature-network grant; no full text, patient rows, or external LLM is used.", parameters: Type.Object({ topic: optionalText(1200), journal: optionalText(160), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_search_literature", executionMode: "sequential", label: "Search PubMed literature", description: "Run the Idea Mining PubMed metadata and bounded-abstract owner. Returned rows are unreviewed retrieval candidates, never verified evidence or direct comparators until Research Agent screens them against the sealed study. With an accepted idea it persists a digest-bound prior-art receipt and requires that exact idea handoff to be accepted again before Plan/run. Otherwise, a completed search binds an exact digest receipt to StudyContext, invalidates the current turn, and must be followed by host rebind before planning. Report the receipt and stop after either authority mutation. Requires the separate one-turn literature-network grant; no full text, patient rows, or external LLM is used.", parameters: Type.Object({ topic: optionalText(1200), journal: optionalText(160), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_prepare_idea_handoff", executionMode: "sequential", label: "Prepare idea plan", description: "Create the canonical metadata-only Idea Mining plan/handoff for conversational review. Requires the one-use Idea Mining grant; it does not start analysis or make reportable claims.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: optionalText(160), plan_edits: optionalText(1200) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_accept_idea_handoff", executionMode: "sequential", label: "Accept selected idea", description: "After the user explicitly selects an idea, bind its canonical digest and agreed fields to the current StudyContext. Requires the one-use Idea Mining grant and stops the turn for an authority rebind.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: Type.String({ minLength: 1, maxLength: 160 }), plan_edits: optionalText(1200) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_start_extraction", executionMode: "sequential", label: "Start feature extraction", description: "Submit the existing EasyICU feature extraction owner using only the bound typed StudyContext. Requires the one-use Extraction grant; raw paths never come from the model.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_run", executionMode: "sequential", label: "Start EasyICU run", description: "Submit an EasyICU preflight or the real ResearchAgentPipeline Plan -> Execute -> Validate -> Write workflow. Preflight requires the local-run grant. Full analysis requires the separate provider-run grant and the existing scientific provider gates. The host, not the model, selects the already verified provider configuration. Submission invalidates this turn's authority: report the receipt and stop until host rebind.", parameters: Type.Object({ run_type: Type.Optional(Type.Union([Type.Literal("preflight"), Type.Literal("full")])) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_resume", executionMode: "sequential", label: "Resume EasyICU work", description: "Reattach only to a live queued/running job, or submit an explicit approved/rejected decision for a same-process digest-bound Research Agent plan review. A historical or terminal run_id is not resumable and must not replace a newly authorized easyicu_run. A review decision needs a fresh provider-run grant.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })), run_id: optionalRunId, decision: Type.Optional(Type.Union([Type.Literal("approved"), Type.Literal("rejected")])), reviewer: Type.Optional(Type.String({ maxLength: 200 })), note: Type.Optional(Type.String({ maxLength: 1000 })) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_cancel", executionMode: "sequential", label: "Cancel EasyICU job", description: "Request cooperative cancellation of the specifically bound EasyICU job. Requires a host-held one-turn user authorization.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_request_replan", executionMode: "sequential", label: "Request replan", description: "Request re-planning through EasyICU authority. Version 1 returns a typed blocked result until a public replan owner exists.", parameters: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 1200 }) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_request_replan", executionMode: "sequential", label: "Request fresh plan", description: "For a superseded or non-resumable plan, start a new ResearchAgentPipeline planning run bound to the current StudyContext and a new run id. It never mutates or reuses the old plan and requires a fresh provider-run grant. Other in-place replan requests fail closed.", parameters: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 1200 }) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_list_extensions", label: "List frozen user extensions", description: "List the path-free Skill and MCP descriptors frozen into this Pi session, including content digests and explicit tool allowlists.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_load_skill", executionMode: "sequential", label: "Load frozen Skill", description: "Load the exact reviewed instructions for one conversation Skill frozen into this session. In workspace mode, the built-in web-prototype Skill is also available.", parameters: Type.Object({ name: Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z0-9][a-z0-9-]*$" }) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_call_mcp_tool", executionMode: "sequential", label: "Call allowlisted MCP tool", description: "Call one read-only external metadata tool from a server frozen into this session. The host enforces the MCP master switch, exact server/tool allowlist, bounded JSON, privacy projection, and one-turn authorization. MCP output never becomes current-study evidence automatically.", parameters: Type.Object({ server: Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z0-9][a-z0-9-]*$" }), tool: Type.String({ minLength: 1, maxLength: 128 }), arguments: Type.Optional(Type.Record(Type.String({ maxLength: 160 }), Type.Unknown())) }, { additionalProperties: false }) }),
@@ -504,7 +599,7 @@ async function createSession(params) {
   const { runtime, selected, config } = await getModelRuntime();
   const manager = params.session_file
     ? SessionManager.open(safeSessionFile(params.session_file), SESSION_DIR, CWD)
-    : SessionManager.create(CWD, SESSION_DIR);
+    : createPersistedSessionManager();
   const thinkingLevel = "off";
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: true },

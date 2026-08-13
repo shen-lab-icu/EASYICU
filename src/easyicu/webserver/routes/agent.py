@@ -123,6 +123,19 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
         )
     llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
     external_llm_opt_in = body_bool(body, "external_llm_opt_in")
+    literature_search_authorized = body_bool(
+        body,
+        "literature_search_authorized",
+    )
+    if literature_search_authorized and (
+        engine != "research_agent_pipeline"
+        or run_type != "full"
+        or not external_llm_opt_in
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "literature_search_authorization_scope_invalid"},
+        )
     credential_source = str(
         body.get("credential_source") or "scientific_provider"
     ).strip()
@@ -161,12 +174,24 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
             project_seed_dir
         )
         if engine == "research_agent_pipeline":
+            runner_kwargs: Dict[str, Any] = {
+                "export_path": path,
+                "study_context": study_context or {},
+                "project_root": project_root,
+                "provider": provider_meta,
+                "provider_environment": provider_environment,
+            }
+            if literature_search_authorized:
+                runner_kwargs["literature_search_authorized"] = True
+            plan_revision_source_run_id = str(
+                body.get("plan_revision_source_run_id") or ""
+            ).strip()
+            if plan_revision_source_run_id:
+                runner_kwargs["plan_revision_source_run_id"] = (
+                    plan_revision_source_run_id
+                )
             base_runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-                export_path=path,
-                study_context=study_context or {},
-                project_root=project_root,
-                provider=provider_meta,
-                provider_environment=provider_environment,
+                **runner_kwargs,
             )
         else:
             base_runner = agent_runs.make_agent_run_runner(
@@ -188,7 +213,11 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
     except agent_pipeline_runs.ResearchPipelineRunError as exc:
         raise HTTPException(
             status_code=400,
-            detail={"error": exc.code, "message": str(exc)},
+            detail={
+                "error": exc.code,
+                "message": str(exc),
+                **({"details": exc.details} if exc.details else {}),
+            },
         ) from exc
     start_gate = threading.Event()
     start_abort: Dict[str, Any] = {}
@@ -361,6 +390,17 @@ def jobs_agent_run_review(body: Dict[str, Any]) -> dict:
             status_code=400,
             detail={"error": "study_context_not_found"},
         )
+    current_scientific_digest = context_store.scientific_configuration_sha256(
+        study_context
+    )
+    if pending.get("scientific_configuration_sha256") != current_scientific_digest:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "research_pipeline_review_configuration_superseded",
+                "run_id": run_id,
+            },
+        )
     start_gate = threading.Event()
     start_abort: Dict[str, Any] = {}
 
@@ -381,6 +421,7 @@ def jobs_agent_run_review(body: Dict[str, Any]) -> dict:
                 reviewer=str(body.get("reviewer") or "local_web_reviewer"),
                 note=str(body.get("note") or ""),
                 job=job,
+                current_study_context=study_context,
             )
             terminal_stage = (
                 "review_blocked"

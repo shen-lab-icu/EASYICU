@@ -27,6 +27,7 @@ from easyicu.webserver import dataio
 from easyicu.webserver import crossdb_review
 from easyicu.webserver import catalog as catalog_module
 from easyicu.webserver import guided_sessions
+from easyicu.webserver import jobs as job_store
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import provider_gate
 from easyicu.webserver.patient_drilldown import _time_axis_payload
@@ -689,6 +690,105 @@ def test_guided_draft_registry_writes_metadata_only_without_row_payload(
     assert "stay_id" not in persisted_dump
     assert "subject_id" not in persisted_dump
     assert "hadm_id" not in persisted_dump
+
+
+def test_guided_project_list_hides_internal_evaluation_metadata_only(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(
+        guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json"
+    )
+    guided_sessions._CONFIG_PATH.parent.mkdir(parents=True)
+    guided_sessions._CONFIG_PATH.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "drafts": [
+                    {
+                        "id": "draft_product",
+                        "title": "Ordinary ICU research",
+                        "surface_visibility": "product",
+                        "updated_at": "2026-08-12T12:00:00Z",
+                    },
+                    {
+                        "id": "draft_evaluation",
+                        "title": "Internal evaluation run",
+                        "surface_visibility": "internal_evaluation",
+                        "updated_at": "2026-08-12T13:00:00Z",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    listed = TestClient(app).post("/api/guided/drafts/list", json={"limit": 10})
+
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()["drafts"]] == ["draft_product"]
+    persisted = json.loads(guided_sessions._CONFIG_PATH.read_text(encoding="utf-8"))
+    assert {row["id"] for row in persisted["drafts"]} == {
+        "draft_product",
+        "draft_evaluation",
+    }
+
+
+def test_guided_project_list_projects_scientific_lifecycle_not_storage_type(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(
+        guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json"
+    )
+    guided_sessions._CONFIG_PATH.parent.mkdir(parents=True)
+    guided_sessions._CONFIG_PATH.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "drafts": [
+                    {
+                        "id": "draft_results",
+                        "title": "Ordinary scientific question",
+                        "status": "metadata_only",
+                        "data_mode": "real",
+                        "updated_at": "2026-08-12T13:00:00Z",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "easyicu.webserver.pi_copilot.project_authority.ProjectAuthorityStore.resolve",
+        lambda _self, project_id: "study_results" if project_id == "draft_results" else None,
+    )
+    monkeypatch.setattr(
+        "easyicu.webserver.study_contexts.get_context",
+        lambda context_id: {"id": context_id, "data_source": {"source_id": "src"}},
+    )
+    monkeypatch.setattr(
+        "easyicu.webserver.agent_runs.list_run_history",
+        lambda **_kwargs: {
+            "runs": [
+                {
+                    "run_id": "run_results",
+                    "run_status": "analysis_only",
+                    "pending_review_reason_codes": [],
+                }
+            ]
+        },
+    )
+
+    listed = TestClient(app).post("/api/guided/drafts/list", json={"limit": 10})
+
+    assert listed.status_code == 200
+    row = listed.json()["drafts"][0]
+    assert row["status"] == "metadata_only"
+    assert row["workflow_status"] == "analysis_review"
+
+    persisted = json.loads(guided_sessions._CONFIG_PATH.read_text(encoding="utf-8"))
+    assert "workflow_status" not in persisted["drafts"][0]
 
 
 def test_guided_draft_registry_preserves_unicode_folder_slug(
@@ -1821,6 +1921,11 @@ def test_idea_mining_lists_only_existing_local_runs_and_projects(
     project_dir = tmp_path / "idea_cfg" / "agent_projects" / "real_project"
     project_dir.mkdir(parents=True)
     (project_dir / "project_seed.json").write_text('{"ok": true}', encoding="utf-8")
+    evaluation_dir = tmp_path / "idea_cfg" / "agent_projects" / "evaluation_project"
+    evaluation_dir.mkdir(parents=True)
+    (evaluation_dir / "project_seed.json").write_text(
+        '{"seed_kind": "canonical9_import"}', encoding="utf-8"
+    )
     (tmp_path / "idea_cfg" / "history.json").write_text(
         json.dumps(
             [
@@ -1836,6 +1941,12 @@ def test_idea_mining_lists_only_existing_local_runs_and_projects(
                 {
                     "study_id": "missing_project",
                     "project_dir": str(tmp_path / "missing_project"),
+                },
+                {
+                    "study_id": "evaluation_project",
+                    "project_dir": str(evaluation_dir),
+                    "seed_kind": "canonical9_import",
+                    "benchmark": {"task_id": "internal-evaluation-only"},
                 },
                 {"study_id": "real_project", "project_dir": str(project_dir)},
             ]
@@ -2129,10 +2240,18 @@ def test_data_scan_auto_classifies_supported_folder_layouts(tmp_path: Path) -> N
 
     prepared = tmp_path / "mimiciv_prepared"
     prepared.mkdir()
-    for table in ("icustays", "patients", "admissions", "diagnoses_icd"):
-        (prepared / f"{table}.parquet").write_bytes(b"placeholder")
+    prepared_tables = {
+        "icustays": pd.DataFrame({"stay_id": [1], "hadm_id": [10]}),
+        "patients": pd.DataFrame({"subject_id": [100], "anchor_age": [65]}),
+        "admissions": pd.DataFrame({"hadm_id": [10], "subject_id": [100]}),
+        "diagnoses_icd": pd.DataFrame({"hadm_id": [10], "icd_code": ["A41"]}),
+    }
+    for table, frame in prepared_tables.items():
+        frame.to_parquet(prepared / f"{table}.parquet", index=False)
     (prepared / "chartevents").mkdir()
-    (prepared / "chartevents" / "1.parquet").write_bytes(b"placeholder")
+    pd.DataFrame({"stay_id": [1], "charttime": ["2026-01-01"]}).to_parquet(
+        prepared / "chartevents" / "1.parquet", index=False
+    )
     prepared_result = dataio.scan_path(str(prepared))
     assert prepared_result["ok"] is True
     assert prepared_result["source"] == "prepared"
@@ -2141,8 +2260,12 @@ def test_data_scan_auto_classifies_supported_folder_layouts(tmp_path: Path) -> N
 
     raw = tmp_path / "mimiciv_raw"
     raw.mkdir()
-    for table in ("icustays", "patients", "admissions"):
-        (raw / f"{table}.csv.gz").write_bytes(b"not-real-gzip-but-sized")
+    for table, frame in {
+        "icustays": prepared_tables["icustays"],
+        "patients": prepared_tables["patients"],
+        "admissions": prepared_tables["admissions"],
+    }.items():
+        frame.to_csv(raw / f"{table}.csv.gz", index=False, compression="gzip")
     raw_result = dataio.scan_path(str(raw))
     assert raw_result["ok"] is True
     assert raw_result["source"] == "raw"
@@ -4230,7 +4353,7 @@ def test_export_runner_records_owner_confirmed_structural_unavailability(
                 "database": "miiv",
                 "status": "structurally_unavailable",
                 "reason_code": "outcome_concept_structurally_unavailable",
-                "supported_databases": ["eicu", "eicu_demo"],
+                "supported_databases": [],
             }
         ],
     }
@@ -4586,6 +4709,15 @@ def test_crossdb_review_summary_uses_registered_sources_without_row_payload(
     ]
     assert all("path" not in source for source in payload["sources"])
     assert all(len(source["path_hash"]) == 12 for source in payload["sources"])
+    receipt = payload["selection_receipt"]
+    assert receipt["schema_version"] == "crossdb-selection-v1"
+    assert receipt["source_count"] == 2
+    assert [source["label"] for source in receipt["sources"]] == [
+        "Primary MIIV",
+        "Comparator eICU",
+    ]
+    assert all("path" not in source for source in receipt["sources"])
+    assert len(receipt["selection_digest"]) == 64
     assert payload["shared_modules"] == [
         "demographics",
         "outcome",
@@ -4855,6 +4987,240 @@ def test_crossdb_raw_distribution_job_streams_progress_and_result(
     serialized = json.dumps(result)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
+
+
+def test_registered_crossdb_summary_job_streams_progress_and_selection_receipt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
+    eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
+    source_store.register_source(str(miiv), label="Primary MIIV", active=True)
+    source_store.register_source(str(eicu), label="Comparator eICU", active=False)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/jobs/crossdb-summary",
+        json={"paths": [str(miiv), str(eicu)], "deadline_seconds": 5},
+    )
+
+    assert response.status_code == 200
+    submitted = response.json()
+    assert submitted["kind"] == "crossdb-summary"
+    assert submitted["deadline_seconds"] == 5.0
+    assert submitted["deadline_at"] > time.time()
+    assert submitted["selection_receipt"]["source_count"] == 2
+    assert len(submitted["selection_receipt"]["selection_digest"]) == 64
+    assert submitted["source_lease"] == {
+        "schema_version": "crossdb-source-lease-v1",
+        "source_count": 2,
+        "selection_digest": submitted["selection_receipt"]["selection_digest"],
+        "active": True,
+    }
+    assert str(miiv) not in json.dumps(submitted)
+    assert str(eicu) not in json.dumps(submitted)
+
+    job_id = submitted["job_id"]
+    snap = submitted
+    for _ in range(100):
+        poll = client.get(f"/api/jobs/{job_id}")
+        assert poll.status_code == 200
+        snap = poll.json()
+        if snap["status"] != "running":
+            break
+        time.sleep(0.02)
+
+    assert snap["status"] == "done"
+    assert snap["result"]["ok"] is True
+    assert (
+        snap["result"]["selection_receipt"]["selection_digest"]
+        == submitted["selection_receipt"]["selection_digest"]
+    )
+    phases = {
+        event.get("phase")
+        for event in snap["events"]
+        if event.get("type") == "progress"
+    }
+    assert {"resolving", "summarizing", "finalizing"} <= phases
+    assert source_store.source_path_lease_count(str(miiv)) == 0
+    assert source_store.source_path_lease_count(str(eicu)) == 0
+
+
+def test_registered_crossdb_summary_cancel_keeps_path_lease_until_read_returns(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
+    eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
+    source_store.register_source(str(miiv), active=True)
+    source_store.register_source(str(eicu), active=False)
+    entered = threading.Event()
+    release = threading.Event()
+    original = cohort_review.cohort_review_summary
+
+    def slow_summary(body: dict[str, object]) -> dict[str, object]:
+        entered.set()
+        assert release.wait(5)
+        return original(body)
+
+    monkeypatch.setattr(cohort_review, "cohort_review_summary", slow_summary)
+    client = TestClient(app)
+    started = client.post(
+        "/api/jobs/crossdb-summary",
+        json={"paths": [str(miiv), str(eicu)], "deadline_seconds": 5},
+    )
+    assert started.status_code == 200
+    assert entered.wait(1)
+    assert source_store.source_path_lease_count(str(miiv)) == 1
+    blocked = source_store.remove_source(str(miiv))
+    assert blocked["ok"] is False
+    assert blocked["error"] == "source_path_leased"
+    assert blocked["lease_count"] == 1
+
+    job_id = started.json()["job_id"]
+    cancel = client.post(f"/api/jobs/{job_id}/cancel", json={"reason": "test_cancel"})
+    assert cancel.status_code == 200
+    snap = cancel.json()
+    for _ in range(100):
+        snap = client.get(f"/api/jobs/{job_id}").json()
+        if snap["status"] != "running":
+            break
+        time.sleep(0.02)
+
+    assert snap["status"] == "cancelled"
+    assert snap["result"]["cancelled"] is True
+    assert snap["result"]["cancelled_at"] == "summarizing"
+    assert source_store.remove_source(str(miiv))["error"] == "source_path_leased"
+
+    release.set()
+    for _ in range(100):
+        if source_store.source_path_lease_count(str(miiv)) == 0:
+            break
+        time.sleep(0.02)
+    assert source_store.source_path_lease_count(str(miiv)) == 0
+    assert source_store.remove_source(str(miiv))["ok"] is True
+
+
+def test_registered_crossdb_summary_deadline_fails_without_releasing_active_read(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    monkeypatch.setattr(job_store, "MANAGER", job_store.JobManager(max_running=1))
+    miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
+    eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
+    source_store.register_source(str(miiv), active=True)
+    source_store.register_source(str(eicu), active=False)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def stuck_summary(_: dict[str, object]) -> dict[str, object]:
+        entered.set()
+        assert release.wait(5)
+        return {}
+
+    monkeypatch.setattr(cohort_review, "cohort_review_summary", stuck_summary)
+    client = TestClient(app)
+    started = client.post(
+        "/api/jobs/crossdb-summary",
+        json={"paths": [str(miiv), str(eicu)], "deadline_seconds": 0.1},
+    )
+    assert started.status_code == 200
+    assert entered.wait(1)
+
+    job_id = started.json()["job_id"]
+    snap = started.json()
+    for _ in range(100):
+        snap = client.get(f"/api/jobs/{job_id}").json()
+        if snap["status"] != "running":
+            break
+        time.sleep(0.02)
+
+    assert snap["status"] == "failed"
+    assert "crossdb_summary_deadline_exceeded" in snap["error"]
+    assert snap["draining"] is True
+    assert source_store.source_path_lease_count(str(miiv)) == 1
+    blocked = client.post(
+        "/api/jobs/crossdb-summary",
+        json={"paths": [str(miiv), str(eicu)], "deadline_seconds": 5},
+    )
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["running"] == 1
+    release.set()
+    for _ in range(100):
+        if source_store.source_path_lease_count(str(miiv)) == 0:
+            break
+        time.sleep(0.02)
+    assert source_store.source_path_lease_count(str(miiv)) == 0
+    for _ in range(100):
+        snap = client.get(f"/api/jobs/{job_id}").json()
+        if not snap["draining"]:
+            break
+        time.sleep(0.02)
+    assert snap["draining"] is False
+
+
+def test_registered_crossdb_cancel_holds_capacity_until_reader_exits(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A terminal UI job may still own a live reader and its capacity token."""
+
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    monkeypatch.setattr(job_store, "MANAGER", job_store.JobManager(max_running=1))
+    miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
+    eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
+    source_store.register_source(str(miiv), active=True)
+    source_store.register_source(str(eicu), active=False)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def stuck_summary(_: dict[str, object]) -> dict[str, object]:
+        entered.set()
+        assert release.wait(5)
+        return {}
+
+    monkeypatch.setattr(cohort_review, "cohort_review_summary", stuck_summary)
+    client = TestClient(app)
+    first = client.post(
+        "/api/jobs/crossdb-summary",
+        json={"paths": [str(miiv), str(eicu)], "deadline_seconds": 5},
+    )
+    assert first.status_code == 200
+    assert entered.wait(1)
+    job_id = first.json()["job_id"]
+    assert client.post(f"/api/jobs/{job_id}/cancel", json={}).status_code == 200
+    for _ in range(100):
+        snapshot = client.get(f"/api/jobs/{job_id}").json()
+        if snapshot["status"] != "running":
+            break
+        time.sleep(0.02)
+    assert snapshot["status"] == "cancelled"
+    assert snapshot["draining"] is True
+
+    blocked = client.post(
+        "/api/jobs/crossdb-summary",
+        json={"paths": [str(miiv), str(eicu)], "deadline_seconds": 5},
+    )
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["running"] == 1
+
+    release.set()
+    for _ in range(100):
+        if not client.get(f"/api/jobs/{job_id}").json()["draining"]:
+            break
+        time.sleep(0.02)
+    assert client.get(f"/api/jobs/{job_id}").json()["draining"] is False
 
 
 def test_crossdb_raw_distribution_job_can_be_cancelled(
@@ -5911,7 +6277,10 @@ def test_agent_run_review_and_local_signoff_write_safe_artifact(
         json={"project_dir": str(run_dir), "artifact": "../quality_gate.json"},
     )
     assert rejected_artifact.status_code == 400
-    assert rejected_artifact.json()["detail"]["error"] == "artifact_not_allowed"
+    assert (
+        rejected_artifact.json()["detail"]["error"]
+        == "artifact_json_not_allowed"
+    )
 
     single_download = client.post(
         "/api/agent-runs/download-artifact",

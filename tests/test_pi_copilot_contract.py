@@ -17,6 +17,7 @@ from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
     HostTurnGrant,
     PiCopilotError,
+    PiProjectBindingHandoffReceipt,
     PiSessionRecord,
     ToolExecutionContext,
 )
@@ -151,6 +152,59 @@ def test_service_workspace_seal_survives_tool_context_composition(
     assert not (second / "workspace" / "projects").exists()
 
 
+def test_session_store_migrates_only_retired_specialization_fields(
+    tmp_path: Path,
+) -> None:
+    store_path = tmp_path / "sessions.json"
+    store_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.pi-copilot-store/1",
+                "sessions": [
+                    {
+                        "session_id": "pi-retired-specialization",
+                        "project_id": "project-a",
+                        "title": "Retired development-only conversation",
+                        "canonical_task_id": "retired-development-task",
+                        "canonical_input_sha256": "a" * 64,
+                        "canonical_job_id": None,
+                    },
+                    {
+                        "session_id": "pi-ordinary-after-migration",
+                        "project_id": "project-a",
+                        "title": "Ordinary research conversation",
+                        "canonical_task_id": None,
+                        "canonical_input_sha256": None,
+                        "canonical_job_id": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = PiCopilotService(
+        store_path=store_path,
+        gateway=FakeGateway(),
+    )
+
+    records = service._read_records()
+
+    assert [record.session_id for record in records] == [
+        "pi-ordinary-after-migration"
+    ]
+    assert records[0].title == "Ordinary research conversation"
+    assert set(records[0].model_dump()).isdisjoint(
+        {"canonical_task_id", "canonical_input_sha256", "canonical_job_id"}
+    )
+
+    raw = json.loads(store_path.read_text(encoding="utf-8"))
+    raw["sessions"][1]["unexpected_new_field"] = True
+    store_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(PiCopilotError) as caught:
+        service._read_records()
+    assert caught.value.code == "pi_session_store_invalid"
+
+
 def test_project_workflow_projects_active_job_for_session_timeline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -160,14 +214,30 @@ def test_project_workflow_projects_active_job_for_session_timeline(
         gateway=FakeGateway(),
     )
     service.project_store.bind("project-a", "study-a")
+    study = {
+        "id": "study-a",
+        "revision": 9,
+        "question": "A bounded ICU research question",
+        "purpose": "Review an existing configured project",
+        "data_source": {
+            "path": "/private/already-bound-export",
+            "label": "Existing export",
+            "database": "mimiciv",
+        },
+        "cohort": {"preset": "adult_icu", "cohort_size": 140},
+        "modules": ["vitals", "outcome"],
+        "outcome": "In-hospital mortality",
+        "time_window": {"hours": 24, "anchor": "ICU admission"},
+        "export_format": "parquet",
+        "analysis_goal": "Descriptive prognostic association",
+        "confirmations": {"study_design_reviewed": True},
+        "active_job_id": "job-demo",
+    }
+    baseline = json.loads(json.dumps(study))
     monkeypatch.setattr(
         service_module.study_contexts,
         "get_context",
-        lambda study_id: {
-            "id": study_id,
-            "question": "A bounded ICU research question",
-            "active_job_id": "job-demo",
-        },
+        lambda study_id: study,
     )
     monkeypatch.setattr(
         service_module.sources,
@@ -217,6 +287,19 @@ def test_project_workflow_projects_active_job_for_session_timeline(
             "reason_code": None,
         }
     ]
+    receipt = payload["workflow"]["study_setup_receipt"]
+    assert receipt["study_context_id"] == "study-a"
+    assert receipt["revision"] == 9
+    assert receipt["configuration"]["cohort"] == study["cohort"]
+    assert receipt["configuration"]["modules"] == study["modules"]
+    assert receipt["configuration"]["confirmations"] == study["confirmations"]
+    assert receipt["configuration"]["data_source"]["label"] == "Existing export"
+    assert "path" not in receipt["configuration"]["data_source"]
+    assert "/private/already-bound-export" not in json.dumps(payload)
+
+    repeated = service.get_project_workflow(project_id="project-a")
+    assert repeated["workflow"]["study_setup_receipt"] == receipt
+    assert study == baseline
 
 
 @pytest.fixture
@@ -464,6 +547,31 @@ def test_session_binding_tracks_the_current_run(
         "session": None,
         "current": "run-new",
     }
+
+
+def test_implicit_run_inspection_uses_latest_history_not_stale_session_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-latest-run",
+            binding=AuthorityBinding(
+                study_context_id="study-latest-run",
+                run_id="run-older",
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        tool_module,
+        "_run_rows",
+        lambda _context: [
+            {"run_id": "run-newest"},
+            {"run_id": "run-older"},
+        ],
+    )
+
+    assert tool_module._select_run(context) == {"run_id": "run-newest"}
+    assert tool_module._select_run(context, "run-older") == {"run_id": "run-older"}
 
 
 def test_session_retention_disposes_and_unlinks_evicted_jsonl(
@@ -900,6 +1008,144 @@ def test_concurrent_project_initialization_creates_one_study_context(
     assert service.project_store.resolve("project-concurrent") == "study-concurrent-1"
 
 
+def test_agent_handoff_binds_existing_study_context_without_creating_a_new_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    study = {
+        "id": "study-agent-handoff",
+        "revision": 7,
+        "title": "Cross-database mortality plan",
+    }
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "get_context",
+        lambda context_id: dict(study) if context_id == study["id"] else None,
+    )
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "upsert_context",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an Agent handoff must not create a second StudyContext"
+        ),
+    )
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "list_run_history",
+        lambda **_kwargs: {"runs": []},
+    )
+    receipt = PiProjectBindingHandoffReceipt(
+        project_id=study["id"],
+        project_title=study["title"],
+        study_context_id=study["id"],
+        study_context_revision=study["revision"],
+    )
+
+    initialized = service.initialize_project(
+        project_id=study["id"],
+        title=study["title"],
+        binding_receipt=receipt,
+    )
+
+    assert initialized["study_context_id"] == study["id"]
+    assert initialized["study_context_revision"] == 7
+    assert initialized["binding_receipt"] == receipt.model_dump(mode="json")
+    assert service.project_store.resolve(study["id"]) == study["id"]
+
+
+def test_agent_handoff_rejects_a_stale_revision_before_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "get_context",
+        lambda _context_id: {"id": "study-stale", "revision": 8},
+    )
+    receipt = PiProjectBindingHandoffReceipt(
+        project_id="study-stale",
+        project_title="Stale handoff",
+        study_context_id="study-stale",
+        study_context_revision=7,
+    )
+
+    with pytest.raises(PiCopilotError) as caught:
+        service.initialize_project(
+            project_id="study-stale",
+            title="Stale handoff",
+            binding_receipt=receipt,
+        )
+
+    assert caught.value.code == "pi_project_handoff_revision_conflict"
+    assert service.project_store.resolve("study-stale") is None
+
+
+def test_agent_handoff_revision_race_does_not_publish_a_project_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    revisions = iter((7, 8))
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "get_context",
+        lambda _context_id: {"id": "study-race", "revision": next(revisions)},
+    )
+    receipt = PiProjectBindingHandoffReceipt(
+        project_id="study-race",
+        project_title="Racing handoff",
+        study_context_id="study-race",
+        study_context_revision=7,
+    )
+
+    with pytest.raises(PiCopilotError) as caught:
+        service.initialize_project(
+            project_id="study-race",
+            title="Racing handoff",
+            binding_receipt=receipt,
+        )
+
+    assert caught.value.code == "pi_project_handoff_revision_conflict"
+    assert service.project_store.resolve("study-race") is None
+
+
+def test_agent_handoff_cannot_replace_an_existing_project_binding(
+    tmp_path: Path,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    service.project_store.bind("project-bound", "study-original")
+    receipt = PiProjectBindingHandoffReceipt(
+        project_id="project-bound",
+        project_title="Bound project",
+        study_context_id="study-forged",
+        study_context_revision=1,
+    )
+
+    with pytest.raises(PiCopilotError) as caught:
+        service.initialize_project(
+            project_id="project-bound",
+            title="Bound project",
+            binding_receipt=receipt,
+        )
+
+    assert caught.value.code == "pi_project_study_context_mismatch"
+    assert service.project_store.resolve("project-bound") == "study-original"
+
+
 def test_pi_conversations_are_immutably_scoped_to_one_project(
     tmp_path: Path,
 ) -> None:
@@ -1195,7 +1441,11 @@ def test_session_rejects_overlapping_prompts(
     assert job is not None and job.status == "done"
 
 
-def test_control_tools_fail_closed_without_owner_contracts() -> None:
+def test_control_tools_fail_closed_without_owner_contracts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: None)
+    monkeypatch.setattr(tool_module, "_run_rows", lambda _context: [])
     session = PiSessionRecord(
         session_id="pi-test",
         binding=AuthorityBinding(run_id="run-1"),
@@ -1224,10 +1474,231 @@ def test_control_tools_fail_closed_without_owner_contracts() -> None:
     assert replan_block["code"] == "scientific_replan_not_supported"
 
 
+def test_superseded_plan_replan_starts_fresh_pipeline_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver import study_contexts as study_owner
+    from easyicu.webserver.routes import agent as agent_routes
+
+    study = {
+        "id": "study-fresh-plan",
+        "revision": 3,
+        "question": "Is standard Sepsis-3 associated with mortality?",
+        "data_source": {"path": "/private/export", "database": "miiv"},
+    }
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: dict(study))
+    monkeypatch.setattr(
+        tool_module,
+        "_run_rows",
+        lambda _context: [
+            {
+                "run_id": "run-old-plan",
+                "study_id": study["id"],
+                "run_status": "human_review_pending",
+                "pending_review_reason_codes": ["operator_plan_approval_required"],
+                "scientific_configuration_sha256": "a" * 64,
+                "artifact_names": ["agent_plan.json"],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        tool_module.agent_pipeline_runs,
+        "pending_review",
+        lambda _run_id: {
+            "run_id": "run-old-plan",
+            "scientific_configuration_sha256": "a" * 64,
+            "resumable_here": True,
+        },
+    )
+    submitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        agent_routes,
+        "jobs_agent_run",
+        lambda payload: submitted.append(dict(payload))
+        or {
+            "job_id": "job-fresh-plan",
+            "kind": "agent-run",
+            "status": "queued",
+            "study_context_id": study["id"],
+            "study_context_revision": study["revision"],
+            "engine": "research_agent_pipeline",
+        },
+    )
+    assert study_owner.scientific_configuration_sha256(study) != "a" * 64
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-fresh-plan",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(
+                study_context_id=study["id"],
+                study_revision=study["revision"],
+                run_id="run-old-plan",
+            ),
+        ),
+        allowed_actions={"provider_run"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_request_replan",
+        {"reason": "The standard Sepsis definition replaced an experimental one."},
+        context,
+    )
+
+    assert result["code"] == "easyicu_full_run_submitted"
+    assert result["details"]["job_id"] == "job-fresh-plan"
+    assert submitted[0]["study_context_id"] == study["id"]
+    assert submitted[0]["run_type"] == "full"
+    assert submitted[0]["engine"] == "research_agent_pipeline"
+
+
+def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver.routes import agent as agent_routes
+
+    study = {
+        "id": "study-terminal-plan",
+        "revision": 21,
+        "question": "What is the prevalence and outcome association?",
+        "data_source": {"path": "/private/export", "database": "miiv"},
+    }
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: dict(study))
+    monkeypatch.setattr(
+        tool_module,
+        "_run_rows",
+        lambda _context: [
+            {
+                "run_id": "run-terminal-blocked",
+                "study_id": study["id"],
+                "run_status": "blocked",
+                "gate_status": "blocked",
+                "pending_review_reason_codes": [],
+                "scientific_configuration_sha256": "b" * 64,
+                "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
+            }
+        ],
+    )
+    submitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        agent_routes,
+        "jobs_agent_run",
+        lambda payload: submitted.append(dict(payload))
+        or {
+            "job_id": "job-terminal-retry",
+            "kind": "agent-run",
+            "status": "queued",
+            "study_context_id": study["id"],
+            "study_context_revision": study["revision"],
+            "engine": "research_agent_pipeline",
+        },
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-terminal-retry",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(
+                study_context_id=study["id"],
+                study_revision=study["revision"],
+                run_id="run-terminal-blocked",
+            ),
+        ),
+        allowed_actions={"provider_run"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_request_replan",
+        {"reason": "Retry the unchanged analysis after the old runtime failed."},
+        context,
+    )
+
+    assert result["code"] == "easyicu_full_run_submitted"
+    assert result["details"]["job_id"] == "job-terminal-retry"
+    assert submitted == [
+        {
+            "path": "/private/export",
+            "study_context_id": study["id"],
+            "question": study["question"],
+            "run_type": "full",
+            "llm_provider": "openai",
+            "external_llm_opt_in": True,
+            "engine": "research_agent_pipeline",
+            "credential_source": "pi_verified",
+        }
+    ]
+
+
+def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver import study_contexts as study_owner
+    from easyicu.webserver.routes import agent as agent_routes
+
+    study = {
+        "id": "study-current-plan",
+        "revision": 4,
+        "question": "What is the current association?",
+        "data_source": {"path": "/private/export", "database": "miiv"},
+    }
+    digest = study_owner.scientific_configuration_sha256(study)
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: dict(study))
+    monkeypatch.setattr(
+        tool_module,
+        "_run_rows",
+        lambda _context: [
+            {
+                "run_id": "run-current-review",
+                "study_id": study["id"],
+                "run_status": "human_review_pending",
+                "pending_review_reason_codes": ["operator_plan_approval_required"],
+                "scientific_configuration_sha256": digest,
+                "artifact_names": ["agent_plan.json"],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        tool_module.agent_pipeline_runs,
+        "pending_review",
+        lambda _run_id: {
+            "run_id": "run-current-review",
+            "scientific_configuration_sha256": digest,
+            "resumable_here": True,
+        },
+    )
+    submitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        agent_routes,
+        "jobs_agent_run",
+        lambda payload: submitted.append(dict(payload)),
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-current-review",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(
+                study_context_id=study["id"],
+                study_revision=study["revision"],
+                run_id="run-current-review",
+            ),
+        ),
+        allowed_actions={"provider_run"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_request_replan",
+        {"reason": "Start this exact plan again."},
+        context,
+    )
+
+    assert result["code"] == "scientific_replan_not_supported"
+    assert submitted == []
+
+
 def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
     research_tools = {
         "easyicu_workspace_status",
         "easyicu_list_data_sources",
+        "easyicu_list_source_concepts",
+        "easyicu_inspect_data_package",
         "easyicu_inspect_workflow",
         "easyicu_inspect_context",
         "easyicu_inspect_plan",
@@ -1251,9 +1722,11 @@ def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
         "easyicu_resume",
         "easyicu_cancel",
         "easyicu_request_replan",
+        "easyicu_list_extensions",
+        "easyicu_load_skill",
+        "easyicu_call_mcp_tool",
     }
     workspace_tools = {
-        "easyicu_load_skill",
         "easyicu_list_project_files",
         "easyicu_read_project_file",
         "easyicu_write_project_file",
@@ -1322,6 +1795,349 @@ def test_registered_data_source_choices_are_path_free(
     assert result["details"]["sources"][0]["aggregate"]["stays"] == 140
     assert result["details"]["sources"][1]["active"] is True
     assert "/private/" not in json.dumps(result)
+
+
+def test_source_concept_choices_are_exact_module_scoped_and_path_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+    from easyicu.research_agent.acquisition.catalog import (
+        AvailableCatalog,
+        CatalogConcept,
+    )
+
+    monkeypatch.setattr(
+        tool_module.sources,
+        "load_registry",
+        lambda: {
+            "sources": [
+                {
+                    "id": "src_demo",
+                    "path": "/private/demo-export",
+                    "database": "miiv",
+                    "ok": True,
+                    "modules": ["demographics", "outcome", "sepsis3_sofa2"],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="private-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id="death",
+                    description="in hospital mortality",
+                    file_name="outcome.parquet",
+                    column_role="event_status",
+                ),
+                CatalogConcept(
+                    concept_id="sep3_sofa2",
+                    description="Sepsis-3 using SOFA-2",
+                    file_name="sepsis3_sofa2.parquet",
+                    column_role="event_status",
+                    selection_mode="explicit_only",
+                    selection_note="Experimental SOFA-2 sensitivity phenotype.",
+                    canonical_alternative="sep3_sofa1",
+                ),
+                CatalogConcept(
+                    concept_id="age",
+                    description="Age",
+                    file_name="demographics.parquet",
+                    column_role="value",
+                ),
+            ],
+        ),
+    )
+    context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-concepts"))
+
+    result = tool_module.execute_tool(
+        "easyicu_list_source_concepts",
+        {
+            "source_id": "src_demo",
+            "modules": ["outcome", "sepsis3_sofa2"],
+            "query": "death mortality sepsis-3",
+            "limit": 20,
+        },
+        context,
+    )
+
+    assert result["code"] == "easyicu_source_concepts_listed"
+    assert [row["concept_id"] for row in result["details"]["concepts"]] == [
+        "death",
+        "sep3_sofa2",
+    ]
+    assert result["details"]["concepts"][0]["role"] == "event_status"
+    sofa2 = result["details"]["concepts"][1]
+    assert sofa2["selection_mode"] == "explicit_only"
+    assert sofa2["canonical_alternative"] == "sep3_sofa1"
+    assert "/private/" not in json.dumps(result)
+
+
+def test_conversational_setup_binds_verified_execution_concepts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+    from easyicu.research_agent.acquisition.catalog import (
+        AvailableCatalog,
+        CatalogConcept,
+    )
+
+    current = {
+        "id": "study-execution-bind",
+        "revision": 2,
+        "question": (
+            "Is the explicitly requested SOFA-2 Sepsis sensitivity phenotype "
+            "associated with mortality?"
+        ),
+        "active_job_id": None,
+        "data_source": {
+            "path": "/private/full-export",
+            "database": "miiv",
+        },
+        "modules": ["demographics", "outcome", "sepsis3_sofa2"],
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(concept_id="age", file_name="demographics.parquet"),
+                CatalogConcept(concept_id="sex", file_name="demographics.parquet"),
+                CatalogConcept(concept_id="death", file_name="outcome.parquet"),
+                CatalogConcept(
+                    concept_id="sep3_sofa2",
+                    file_name="sepsis3_sofa2.parquet",
+                ),
+            ],
+        ),
+    )
+
+    def upsert(raw: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        writes.append(dict(raw))
+        return {**current, **raw, "revision": 3}
+
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-execution-bind",
+            binding=AuthorityBinding(
+                study_context_id=current["id"],
+                study_revision=current["revision"],
+            ),
+        ),
+        allowed_actions={"configure"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "outcome": "In-hospital mortality",
+            "primary_exposure": (
+                "Experimental SOFA-2 Sepsis sensitivity phenotype in the first 24 hours"
+            ),
+            "covariates": ["Age", "Sex"],
+            "execution_concepts": {
+                "outcome": "death",
+                "primary_exposure": "sep3_sofa2",
+                "covariates": ["age", "sex"],
+            },
+        },
+        context,
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["outcome"] == "In-hospital mortality"
+    assert writes[0]["execution_concepts"] == {
+        "outcome": "death",
+        "primary_exposure": "sep3_sofa2",
+        "covariates": ["age", "sex"],
+    }
+
+
+def test_conversational_setup_surfaces_repeated_stay_dependence_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "_CONFIG_PATH",
+        tmp_path / "cfg" / "study-contexts.json",
+    )
+    current = tool_module.study_contexts.upsert_context(
+        {
+            "id": "study-repeat-stays",
+            "question": "Is ICU sepsis associated with hospital mortality?",
+            "cohort": {"age_min": 18, "exclude_readmissions": False},
+        },
+        active=True,
+    )
+    monkeypatch.setattr(
+        tool_module,
+        "_bound_context",
+        lambda _binding: tool_module.study_contexts.get_context(current["id"]),
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-repeat-stays",
+            binding=AuthorityBinding(
+                study_context_id=current["id"],
+                study_revision=current["revision"],
+            ),
+        ),
+        allowed_actions={"configure"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "analysis_design": {
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "model_based",
+            }
+        },
+        context,
+    )
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "study_repeated_stay_dependence_unaddressed"
+    assert result["details"]["field"] == "analysis_design"
+    persisted = tool_module.study_contexts.get_context(current["id"])
+    assert persisted is not None
+    assert persisted["analysis_design"] == {}
+    assert persisted["revision"] == current["revision"]
+
+
+def test_conversational_setup_merges_partial_nested_scientific_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-nested-patch",
+        "revision": 6,
+        "question": "Is an ICU phenotype associated with mortality?",
+        "active_job_id": None,
+        "cohort": {
+            "preset": "adult_icu_stays",
+            "label": "All eligible adult ICU stays",
+            "age_min": 18,
+            "exclude_readmissions": False,
+            "comparison_mode": "exposure_status",
+        },
+        "confirmations": {
+            "adult_age_min_18": True,
+            "first_eligible_icu_stay_only": False,
+        },
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: current)
+
+    def upsert(raw: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        writes.append(dict(raw))
+        return {**current, **raw, "revision": 7}
+
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "cohort": {"exclude_readmissions": True},
+            "confirmations": {"first_eligible_icu_stay_only": True},
+        },
+        ToolExecutionContext(
+            session=PiSessionRecord(
+                session_id="pi-nested-patch",
+                binding=AuthorityBinding(
+                    study_context_id=current["id"],
+                    study_revision=current["revision"],
+                ),
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["cohort"] == {
+        "preset": "adult_icu_stays",
+        "label": "All eligible adult ICU stays",
+        "age_min": 18,
+        "exclude_readmissions": True,
+        "comparison_mode": "exposure_status",
+    }
+    assert writes[0]["confirmations"] == {
+        "adult_age_min_18": True,
+        "first_eligible_icu_stay_only": True,
+    }
+
+
+def test_conversational_setup_rejects_generic_sepsis_sofa2_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+    from easyicu.research_agent.acquisition.catalog import (
+        AvailableCatalog,
+        CatalogConcept,
+    )
+
+    current = {
+        "id": "study-generic-sepsis",
+        "revision": 2,
+        "question": "Is standard Sepsis-3 associated with mortality?",
+        "active_job_id": None,
+        "data_source": {"path": "/private/full-export", "database": "miiv"},
+        "modules": ["outcome", "sepsis3_sofa2"],
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(concept_id="death", file_name="outcome.parquet"),
+                CatalogConcept(
+                    concept_id="sep3_sofa2",
+                    file_name="sepsis3_sofa2.parquet",
+                ),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or raw,
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-generic-sepsis",
+            binding=AuthorityBinding(
+                study_context_id=current["id"],
+                study_revision=current["revision"],
+            ),
+        ),
+        allowed_actions={"configure"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "primary_exposure": "Sepsis-3 using experimental SOFA-2",
+            "execution_concepts": {
+                "outcome": "death",
+                "primary_exposure": "sep3_sofa2",
+                "covariates": [],
+            },
+        },
+        context,
+    )
+
+    assert result["code"] == "concept_explicit_selection_required"
+    assert result["details"]["canonical_alternative"] == "sep3_sofa1"
+    assert writes == []
 
 
 def test_conversational_setup_binds_exact_registered_source_id(
@@ -1529,6 +2345,16 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
         "time_window": {"hours": 24, "anchor": "ICU admission"},
         "export_format": "parquet",
         "analysis_goal": "Adjusted association",
+        "sensitivity_specs": [
+            {
+                "spec_id": "landmark_24h",
+                "axis": "timing",
+                "strategy": "landmark",
+                "landmark_hours": 24,
+                "require_alive_at_landmark": True,
+                "exclude_negative_event_times": True,
+            }
+        ],
         "confirmations": {"guided_configuration_collected": True},
     }
 
@@ -1554,6 +2380,7 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
     assert writes[0][0]["id"] == "study-1"
     assert writes[0][0]["primary_exposure"] == "lactate"
     assert writes[0][0]["covariates"] == ["age", "sex"]
+    assert writes[0][0]["sensitivity_specs"][0]["spec_id"] == "landmark_24h"
     assert writes[0][1] == {
         "active": True,
         "expected_revision": 5,
@@ -1581,6 +2408,10 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
     assert workspace_grant.has_capability("workspace_write") is True
     assert workspace_grant.has_capability("configure") is False
     assert workspace_grant.consume_once("workspace_write") == "capability"
+    literature_grant = HostTurnGrant.from_actions(["literature"])
+    assert literature_grant.was_provided("literature") is True
+    assert literature_grant.consume_once("literature") == "granted"
+    assert literature_grant.was_provided("literature") is True
 
 
 def test_preflight_delegates_to_the_existing_agent_submission_owner(
@@ -1652,6 +2483,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
     full_result = tool_module.execute_tool("easyicu_run", {}, full_context)
 
     assert full_result["code"] == "easyicu_full_run_submitted"
+    assert full_result["details"]["run_id_status"] == "pending_pipeline_start"
     assert submitted_bodies[-1] == {
         "path": "/private/project-export",
         "study_context_id": "study-1",
@@ -1678,8 +2510,22 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
     )
 
     assert promoted_result["code"] == "easyicu_full_run_submitted"
+    assert promoted_result["details"]["run_id_status"] == "pending_pipeline_start"
     assert submitted_bodies[-1]["run_type"] == "full"
     assert submitted_bodies[-1]["engine"] == "research_agent_pipeline"
+
+    literature_context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-full-literature-test",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(study_context_id="study-1", study_revision=7),
+        ),
+        allowed_actions=frozenset({"provider_run", "literature"}),
+    )
+    literature_result = tool_module.execute_tool("easyicu_run", {}, literature_context)
+
+    assert literature_result["code"] == "easyicu_full_run_submitted"
+    assert submitted_bodies[-1]["literature_search_authorized"] is True
 
 
 def test_plan_review_run_projection_cannot_be_mistaken_for_executed_analysis(
@@ -1755,14 +2601,37 @@ def test_phi_and_projection_boundaries_reject_rows_identifiers_and_paths() -> No
             "question": "Aggregate lactate analysis",
             "primary_exposure": "lactate",
             "covariates": ["age", "sex"],
+            "sensitivity_specs": [
+                {
+                    "spec_id": "landmark_24h",
+                    "axis": "timing",
+                    "strategy": "landmark",
+                    "execution_variables": [],
+                    "landmark_hours": 24,
+                    "require_alive_at_landmark": True,
+                    "exclude_negative_event_times": True,
+                }
+            ],
             "data_source": {"database": "mimiciv", "path": "/private/export"},
             "cohort": {"cohort_size": 140},
+            "literature_authority": {
+                "schema_version": "easyicu.web-literature-authority/2",
+                "receipt_id": "lit_" + "a" * 24,
+                "receipt_sha256": "b" * 64,
+                "status": "searched",
+                "result_count": 3,
+                "searched_at": "2026-08-12T12:00:00+00:00",
+                "study_configuration_sha256": "c" * 64,
+            },
         }
     )
     assert "/private/export" not in json.dumps(projected)
     assert len(projected["data_source"]["path_digest"]) == 32
     assert projected["primary_exposure"] == "lactate"
     assert projected["covariates"] == ["age", "sex"]
+    assert projected["sensitivity_specs"][0]["spec_id"] == "landmark_24h"
+    assert projected["literature_authority"]["result_count"] == 3
+    assert "/private/" not in json.dumps(projected)
 
     projected_job = project_job(
         {
@@ -2023,6 +2892,61 @@ def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
             artifact_name="table1_summary.json",
         )
     assert privacy_blocked.value.code == "pi_research_artifact_privacy_blocked"
+
+
+def test_project_data_package_preview_is_revision_and_digest_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    service.project_store.bind("project-a", "study-a")
+    study = {
+        "id": "study-a",
+        "revision": 7,
+        "data_source": {"path": "/private/export", "database": "miiv"},
+    }
+    monkeypatch.setattr(service_module.study_contexts, "get_context", lambda _id: study)
+    from easyicu.webserver import data_package_review as review_owner
+
+    monkeypatch.setattr(
+        review_owner,
+        "build_registered_data_package_review",
+        lambda _study: {
+            "schema_version": "easyicu.data-package-review/1",
+            "status": "ready_for_plan",
+            "review_sha256": "d" * 64,
+            "source": {"path": "/private/export", "database": "miiv"},
+            "privacy": {
+                "raw_rows_returned": False,
+                "host_paths_returned": False,
+            },
+            "analysis_results_withheld": True,
+        },
+    )
+
+    payload = service.get_data_package_review(
+        project_id="project-a",
+        study_revision=7,
+        review_sha256="d" * 64,
+    )
+    assert payload["payload"]["source"] == {"database": "miiv"}
+    assert payload["governance"]["claim_ceiling"] == "pre_analysis_review"
+    assert "/private/" not in json.dumps(payload)
+
+    with pytest.raises(PiCopilotError) as stale:
+        service.get_data_package_review(
+            project_id="project-a", study_revision=6, review_sha256="d" * 64
+        )
+    assert stale.value.code == "pi_data_package_review_stale"
+
+    with pytest.raises(PiCopilotError) as drift:
+        service.get_data_package_review(
+            project_id="project-a", study_revision=7, review_sha256="e" * 64
+        )
+    assert drift.value.code == "pi_data_package_review_digest_mismatch"
 
 
 def test_unknown_tool_arguments_and_missing_plan_keep_owner_codes(

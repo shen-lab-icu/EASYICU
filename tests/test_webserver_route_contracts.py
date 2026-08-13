@@ -118,6 +118,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "/api/copilot/pi/projects/{project_id}/runs/{run_id}/artifacts/{artifact_name}",
         "get_pi_copilot_research_artifact",
     ),
+    (
+        "GET",
+        "/api/copilot/pi/projects/{project_id}/data-package-review",
+        "get_pi_copilot_data_package_review",
+    ),
+    (
+        "GET",
+        "/api/copilot/pi/projects/{project_id}/runs/{run_id}/documents/{document_name}",
+        "get_pi_copilot_research_document",
+    ),
     ("GET", "/api/copilot/pi/sessions", "get_pi_copilot_sessions"),
     ("GET", "/api/copilot/pi/sessions/{session_id}", "get_pi_copilot_session"),
     (
@@ -258,6 +268,11 @@ EXPECTED_DEMO_SOURCE_SUBMISSION_ROUTES = [
 EXPECTED_JOB_SUBMISSION_ROUTES = [
     ("POST", "/api/jobs/convert", "jobs_convert"),
     ("POST", "/api/jobs/extract", "jobs_extract"),
+    (
+        "POST",
+        "/api/jobs/crossdb-summary",
+        "jobs_crossdb_summary",
+    ),
     (
         "POST",
         "/api/jobs/crossdb-raw-distribution",
@@ -549,6 +564,7 @@ def test_route_owner_boundaries() -> None:
     assert '"/api/jobs/{job_id}' not in demo_source
     assert '"/api/jobs/convert"' in jobs_source
     assert '"/api/jobs/extract"' in jobs_source
+    assert '"/api/jobs/crossdb-summary"' in jobs_source
     assert '"/api/jobs/crossdb-raw-distribution"' in jobs_source
     assert '"/api/jobs/{job_id}' in jobs_source
     assert '"/api/jobs/agent-run"' not in jobs_source

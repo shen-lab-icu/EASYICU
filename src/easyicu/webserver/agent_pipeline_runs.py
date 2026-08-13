@@ -14,6 +14,7 @@ import csv
 import hashlib
 import json
 import re
+import stat
 import threading
 import time
 from dataclasses import dataclass
@@ -25,12 +26,28 @@ from easyicu.extensions import (
     ExtensionRegistry,
     ExtensionRegistryError,
 )
+
+from easyicu.research_agent.authority.secret_redaction import redact_text_secrets
+from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+from easyicu.research_agent.planning.scientific_review import (
+    PlanScientificReview,
+    render_agent_plan_revision_contract,
+)
 from easyicu.research_agent.publication_skills import (
     publication_skill_flags_from_settings,
 )
-from easyicu.webserver import capabilities as capability_policy, provider_adapter
+from easyicu.webserver import (
+    agent_runs,
+    capabilities as capability_policy,
+    literature_authority,
+    provider_adapter,
+)
+from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.ideas import mining as idea_mining
-from easyicu.webserver.literature_projection import load_run_literature_projection
+from easyicu.webserver.literature_projection import (
+    load_current_plan_authority,
+    load_run_literature_projection,
+)
 from easyicu.webserver.scientific_readiness_projection import (
     build_scientific_readiness_projection,
 )
@@ -41,6 +58,14 @@ _MAX_FIGURE_EMBED_BYTES = 420_000
 _MAX_FIGURE_EMBED_TOTAL = 1_400_000
 _MAX_TABLE_ROWS = 30
 _MAX_TABLE_COLUMNS = 12
+_MANUSCRIPT_DOCUMENT_SPECS = {
+    "manuscript_scaffold.pdf": ("application/pdf", 16 * 1024 * 1024),
+    "manuscript_scaffold.tex": ("text/x-tex; charset=utf-8", 2 * 1024 * 1024),
+    "manuscript_scaffold.bib": (
+        "application/x-bibtex; charset=utf-8",
+        2 * 1024 * 1024,
+    ),
+}
 _MAX_PENDING = 16
 _PENDING_LOCK = threading.RLock()
 _MATERIALIZED_FEATURE_SUFFIXES = tuple(
@@ -81,9 +106,16 @@ _UNSAFE_PROJECTION_PATTERNS = (
 class ResearchPipelineRunError(RuntimeError):
     """Stable Web-facing failure from the true Research Agent bridge."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        details: Optional[Mapping[str, Any]] = None,
+    ) -> None:
         super().__init__(message)
         self.code = str(code)
+        self.details = dict(details or {})
 
 
 @dataclass
@@ -125,6 +157,136 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     )
 
 
+def _pending_plan_authority(pending: Optional[Any]) -> Dict[str, Any]:
+    """Return the one exact typed plan bound into every paused request."""
+
+    if pending is None:
+        return {}
+    observed: Optional[PlanReviewAuthority] = None
+    for request in pending.requests:
+        payload = request.payload if isinstance(request.payload, Mapping) else {}
+        raw = payload.get("plan_review_authority")
+        if not isinstance(raw, Mapping):
+            continue
+        try:
+            authority = PlanReviewAuthority.model_validate(raw)
+        except ValueError:
+            return {}
+        if observed is not None and authority != observed:
+            return {}
+        observed = authority
+    return dict(observed.plan_payload) if observed is not None else {}
+
+
+def _pending_bound_evidence_sha256(
+    pending: Optional[Any], evidence_id: str
+) -> Optional[str]:
+    if pending is None:
+        return None
+    expected: Optional[str] = None
+    for request in pending.requests:
+        payload = request.payload if isinstance(request.payload, Mapping) else {}
+        raw = payload.get("plan_review_authority")
+        if not isinstance(raw, Mapping):
+            continue
+        try:
+            authority = PlanReviewAuthority.model_validate(raw)
+        except ValueError:
+            return None
+        observed = authority.evidence_sha256.get(evidence_id)
+        if not observed or (expected is not None and expected != observed):
+            return None
+        expected = observed
+    return expected
+
+
+def _load_pending_scientific_review(
+    run_dir: Optional[Path], pending: Optional[Any]
+) -> Dict[str, Any]:
+    """Project only the review file included in the paused plan authority."""
+
+    if run_dir is None or pending is None:
+        return {}
+    expected_sha = _pending_bound_evidence_sha256(pending, "scientific_plan_review")
+    if expected_sha is None:
+        return {}
+    path = run_dir / "scientific_plan_review.json"
+    try:
+        raw = path.read_bytes()
+        if len(raw) > _MAX_JSON_BYTES or hashlib.sha256(raw).hexdigest() != expected_sha:
+            return {}
+        review = PlanScientificReview.model_validate_json(raw)
+    except (FileNotFoundError, OSError, ValueError):
+        return {}
+    return review.model_dump(mode="json")
+
+
+def _failure_note(value: Any, *, limit: int = 6_000) -> str:
+    """Return a bounded, secret-free retry diagnostic without model output."""
+
+    text = redact_text_secrets(str(value or ""))
+    text = re.sub(
+        r"(?:file://)?/(?:Users|home|private|tmp|var|etc|opt|Volumes)/[^\s,;]+",
+        "[HOST_PATH]",
+        text,
+        flags=re.I,
+    )
+    return text.strip()[:limit]
+
+
+def _pipeline_failure_code(exc: BaseException) -> str:
+    chain: List[BaseException] = []
+    current: Optional[BaseException] = exc
+    while current is not None and current not in chain and len(chain) < 8:
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    if any("timeout" in type(item).__name__.casefold() for item in chain):
+        return "research_pipeline_provider_timeout"
+    if any(type(item).__name__ == "StructuredResponseFailure" for item in chain):
+        return "research_pipeline_plan_contract_exhausted"
+    return "research_pipeline_execution_failed"
+
+
+def _write_pipeline_failure_diagnostic(
+    *,
+    wrapper_dir: Path,
+    exc: BaseException,
+    code: str,
+) -> Optional[str]:
+    """Persist bounded host diagnostics for a failed real pipeline run.
+
+    Structured retry notes contain validator findings but not raw model output
+    or prompts. Keeping that distinction lets an operator diagnose why a plan
+    was rejected without turning the Web timeline into a reasoning transcript.
+    """
+
+    notes: List[str] = []
+    for item in list(getattr(exc, "__notes__", ()) or ())[:8]:
+        clean = _failure_note(item)
+        if clean:
+            notes.append(clean)
+    payload = {
+        "schema_version": "easyicu.web-research-pipeline-failure/1",
+        "status": "failed",
+        "code": code,
+        "failure_type": type(exc).__name__,
+        "message": _failure_note(exc, limit=1_200),
+        "structured_retry_history": notes,
+        "raw_model_output_recorded": False,
+        "prompt_recorded": False,
+        "patient_rows_recorded": False,
+        "secrets_recorded": False,
+    }
+    relative = "diagnostics/research_pipeline_failure.json"
+    try:
+        target = wrapper_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(target, payload)
+    except OSError:
+        return None
+    return relative
+
+
 def _safe_relative(root: Path, raw: Any) -> Optional[Path]:
     text = str(raw or "").strip().replace("\\", "/")
     if not text or text.startswith("/") or "\0" in text:
@@ -145,7 +307,9 @@ def _safe_relative(root: Path, raw: Any) -> Optional[Path]:
 
 
 def _target_outcome(study: Mapping[str, Any]) -> Optional[str]:
-    value = _clean_text(study.get("outcome"), 160)
+    execution = study.get("execution_concepts")
+    execution = execution if isinstance(execution, Mapping) else {}
+    value = _clean_text(execution.get("outcome") or study.get("outcome"), 160)
     if value.lower() in {
         "none",
         "n/a",
@@ -161,11 +325,22 @@ def _target_outcome(study: Mapping[str, Any]) -> Optional[str]:
 
 
 def _primary_exposure(study: Mapping[str, Any]) -> Optional[str]:
-    return _clean_text(study.get("primary_exposure"), 160) or None
+    execution = study.get("execution_concepts")
+    execution = execution if isinstance(execution, Mapping) else {}
+    return _clean_text(
+        execution.get("primary_exposure") or study.get("primary_exposure"),
+        160,
+    ) or None
 
 
 def _configured_covariates(study: Mapping[str, Any]) -> tuple[str, ...]:
-    raw = study.get("covariates")
+    execution = study.get("execution_concepts")
+    execution = execution if isinstance(execution, Mapping) else {}
+    raw = (
+        execution.get("covariates")
+        if "covariates" in execution
+        else study.get("covariates")
+    )
     if not isinstance(raw, (list, tuple)):
         return ()
     return tuple(
@@ -174,6 +349,134 @@ def _configured_covariates(study: Mapping[str, Any]) -> tuple[str, ...]:
             for value in raw
             if isinstance(value, str) and _clean_text(value, 160)
         )
+    )
+
+
+def _configured_sensitivity_specs(study: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Load only the typed sensitivity authority owned by StudyContext."""
+
+    from easyicu.research_agent.planning.sensitivity_authority import (
+        normalize_prespecified_sensitivities,
+    )
+
+    try:
+        return normalize_prespecified_sensitivities(study.get("sensitivity_specs"))
+    except (TypeError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_sensitivity_specs_invalid",
+            "The configured prespecified sensitivity contract is invalid.",
+            details={"field": "sensitivity_specs", "reason": str(exc)[:500]},
+        ) from exc
+
+
+def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
+    """Fail closed on inference contracts the v1 Web runner cannot execute.
+
+    This bridge must not translate an accepted robust/clustered request into an
+    ordinary model-based fit.  StudyContext owns the semantic commitment; a
+    future data-source adapter and association executor can add a digest-bound
+    physical grouping coordinate without changing this case-neutral boundary.
+    """
+
+    raw = study.get("analysis_design")
+    if not raw:
+        if _primary_exposure(study) and _target_outcome(study):
+            raise ResearchPipelineRunError(
+                "research_pipeline_analysis_design_required",
+                (
+                    "An exposure-outcome analysis requires a typed analysis "
+                    "unit and variance estimator before pipeline launch."
+                ),
+                details={
+                    "field": "analysis_design",
+                    "required_fields": ["analysis_unit", "variance_estimator"],
+                },
+            )
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ResearchPipelineRunError(
+            "research_pipeline_analysis_design_invalid",
+            "The typed analysis design is invalid.",
+            details={"field": "analysis_design"},
+        )
+    analysis_unit = _clean_text(raw.get("analysis_unit"), 80)
+    variance_estimator = _clean_text(raw.get("variance_estimator"), 80)
+    cluster_unit = _clean_text(raw.get("cluster_unit"), 80)
+    if not analysis_unit or not variance_estimator:
+        raise ResearchPipelineRunError(
+            "research_pipeline_analysis_design_incomplete",
+            "The typed analysis design is missing its analysis unit or variance estimator.",
+            details={"field": "analysis_design"},
+        )
+    dependence_finding = study_context_owner.analysis_dependence_finding(dict(study))
+    if dependence_finding is not None:
+        raise ResearchPipelineRunError(
+            "research_pipeline_repeated_stay_dependence_unaddressed",
+            (
+                "Repeat ICU stays are retained, but the typed inference "
+                "design does not address within-patient dependence."
+            ),
+            details={
+                key: value
+                for key, value in dependence_finding.items()
+                if key != "error"
+            },
+        )
+    if variance_estimator == "cluster_robust":
+        raise ResearchPipelineRunError(
+            "research_pipeline_cluster_variance_unsupported",
+            (
+                "This source and executor do not expose a verified grouping "
+                "coordinate for the requested cluster-robust inference."
+            ),
+            details={
+                "analysis_unit": analysis_unit,
+                "variance_estimator": variance_estimator,
+                "cluster_unit": cluster_unit or None,
+                "grouping_coordinate_status": "unavailable_or_unverified",
+                "supported_variance_estimators": ["model_based"],
+            },
+        )
+    if variance_estimator != "model_based":
+        raise ResearchPipelineRunError(
+            "research_pipeline_variance_estimator_unsupported",
+            "The current deterministic association executor does not implement the requested variance estimator.",
+            details={
+                "analysis_unit": analysis_unit,
+                "variance_estimator": variance_estimator,
+                "supported_variance_estimators": ["model_based"],
+            },
+        )
+    return {
+        "analysis_unit": analysis_unit,
+        "variance_estimator": variance_estimator,
+    }
+
+
+def _validate_primary_concept_selection(
+    study: Mapping[str, Any],
+    primary_exposure: Optional[str],
+) -> None:
+    """Enforce the concept owner's user-intent selection policy at launch."""
+
+    if not primary_exposure:
+        return
+    from easyicu.concept.selection_policy import evaluate_concept_selection
+
+    # Only the persisted scientific question can authorize an explicit-only
+    # variant. Exposure labels and analysis prose are model-produced fields;
+    # accepting them here would let a plan authorize its own semantic drift.
+    intent = str(study.get("question") or "")
+    decision = evaluate_concept_selection(primary_exposure, user_intent=intent)
+    if decision.allowed:
+        return
+    raise ResearchPipelineRunError(
+        decision.reason_code,
+        (
+            "The configured primary exposure is an explicit-only concept "
+            "variant that the user did not request."
+        ),
+        details=decision.to_dict(),
     )
 
 
@@ -197,7 +500,44 @@ def _source_concept_for_operational_column(
 def _cohort_window(study: Mapping[str, Any]) -> tuple[float, float]:
     raw = study.get("time_window")
     window = raw if isinstance(raw, Mapping) else {}
-    value = window.get("hours") or window.get("observation_hours") or 24
+    if not window:
+        raise ResearchPipelineRunError(
+            "research_pipeline_time_window_required",
+            "A typed study time window is required before pipeline launch.",
+            details={"field": "time_window"},
+        )
+    value = window.get("hours")
+    if value is None:
+        value = window.get("observation_hours")
+    if value is None:
+        raise ResearchPipelineRunError(
+            "research_pipeline_time_window_hours_required",
+            (
+                "The time-window label or preset has no executable duration; "
+                "hours or observation_hours must be explicitly bound."
+            ),
+            details={"field": "time_window.hours"},
+        )
+    if not _clean_text(window.get("anchor"), 160):
+        raise ResearchPipelineRunError(
+            "research_pipeline_time_window_anchor_required",
+            "The typed study time window requires an explicit scientific anchor.",
+            details={"field": "time_window.anchor"},
+        )
+    window_finding = study_context_owner.materialization_window_finding(dict(study))
+    if window_finding is not None:
+        raise ResearchPipelineRunError(
+            "research_pipeline_materialization_window_anchor_unsupported",
+            (
+                "The configured time-window anchor is not an executable "
+                "outer materialization coordinate for this pipeline."
+            ),
+            details={
+                key: value
+                for key, value in window_finding.items()
+                if key != "error"
+            },
+        )
     try:
         hours = float(value)
     except (TypeError, ValueError):
@@ -230,6 +570,7 @@ def _data_foundation_profile(
     target: Optional[str],
     primary_exposure: Optional[str] = None,
     covariates: tuple[str, ...] = (),
+    sensitivity_specs: tuple[Any, ...] = (),
 ) -> Dict[str, Any]:
     """Compile StudyContext modules into one typed materialization request."""
 
@@ -268,12 +609,38 @@ def _data_foundation_profile(
     outcome_concepts: List[str] = []
     required_feature_concepts: List[str] = []
     require_outcome = False
+    raw_cohort = study.get("cohort")
+    cohort = raw_cohort if isinstance(raw_cohort, Mapping) else {}
+    if cohort.get("exclude_readmissions") is True:
+        readmission_meta = by_id.get("icu_readmission")
+        if readmission_meta is None:
+            raise ResearchPipelineRunError(
+                "research_pipeline_readmission_indicator_unavailable",
+                (
+                    "The user-authorized first-stay restriction cannot run "
+                    "because the selected modules expose no owner-issued "
+                    "ICU-readmission indicator."
+                ),
+                details={
+                    "field": "cohort.exclude_readmissions",
+                    "required_concept": "icu_readmission",
+                },
+            )
+        readmission_module = Path(readmission_meta.file_name).stem.lower()
+        if readmission_module in {"demographics", "outcome"} and (
+            not readmission_meta.typed_metadata
+            or readmission_meta.column_role == "value"
+        ):
+            static_concepts.append("icu_readmission")
+        else:
+            required_feature_concepts.append("icu_readmission")
     if target:
         target_meta = by_id.get(target)
         if target_meta is None:
             raise ResearchPipelineRunError(
                 "research_pipeline_target_outside_configured_modules",
                 "The configured outcome is not available in the selected feature modules.",
+                details={"field": "execution_concepts.outcome", "concept_id": target},
             )
         target_module = Path(target_meta.file_name).stem.lower()
         if target_meta.column_role == "event_status":
@@ -284,10 +651,17 @@ def _data_foundation_profile(
         else:
             required_feature_concepts.append(target)
 
+    sensitivity_variables = tuple(
+        dict.fromkeys(
+            variable
+            for spec in sensitivity_specs
+            for variable in spec.execution_variables
+        )
+    )
     scientific_inputs = tuple(
         dict.fromkeys(
             value
-            for value in (primary_exposure, *covariates)
+            for value in (primary_exposure, *covariates, *sensitivity_variables)
             if value and value != target
         )
     )
@@ -298,10 +672,22 @@ def _data_foundation_profile(
             by_id=by_id,
         )
         if source_concept is None:
-            role = "primary_exposure" if concept_id == primary_exposure else "covariate"
+            role = (
+                "primary_exposure"
+                if concept_id == primary_exposure
+                else (
+                    "covariate"
+                    if concept_id in covariates
+                    else "sensitivity_variable"
+                )
+            )
             raise ResearchPipelineRunError(
                 f"research_pipeline_{role}_outside_configured_modules",
                 f"The configured {role.replace('_', ' ')} is not available in the selected feature modules.",
+                details={
+                    "field": f"execution_concepts.{role}",
+                    "concept_id": concept_id,
+                },
             )
         if concept_id == primary_exposure:
             primary_exposure_source_concept = source_concept
@@ -361,7 +747,26 @@ def _research_user_preferences(study: Mapping[str, Any]) -> Dict[str, Any]:
     if comparator:
         preferences["subgroup_sensitivity"] = comparator
     covariates = _configured_covariates(study)
-    if covariates:
+    selection = str(
+        study.get("covariate_selection") or "planner_selectable"
+    ).strip()
+    if selection not in {"planner_selectable", "exact"}:
+        raise ResearchPipelineRunError(
+            "research_pipeline_covariate_selection_invalid",
+            "StudyContext covariate_selection must be planner_selectable or exact.",
+        )
+    if selection == "exact":
+        # An exact empty roster is a positive user decision to run unadjusted.
+        # Merely serializing ``covariates=[]`` is not that authority.
+        preferences["covariates"] = list(covariates)
+        preferences["covariate_selection"] = "exact"
+        preferences["covariate_rationales"] = dict(
+            study.get("covariate_rationales") or {}
+        )
+        preferences["covariate_temporal_roles"] = dict(
+            study.get("covariate_temporal_roles") or {}
+        )
+    elif covariates:
         preferences["covariates"] = list(covariates)
 
     time_window = study.get("time_window")
@@ -376,10 +781,31 @@ def _research_user_preferences(study: Mapping[str, Any]) -> Dict[str, Any]:
         constraints["cohort"] = dict(cohort)
     if isinstance(confirmations, Mapping) and confirmations:
         constraints["confirmations"] = dict(confirmations)
+    analysis_design = study.get("analysis_design")
+    if isinstance(analysis_design, Mapping) and analysis_design:
+        constraints["analysis_design"] = dict(analysis_design)
     if constraints:
         preferences["data_constraints"] = json.dumps(
             constraints, ensure_ascii=False, sort_keys=True
         )[:2_400]
+    sensitivity_specs = _configured_sensitivity_specs(study)
+    if sensitivity_specs:
+        preferences["sensitivity_specs"] = [
+            spec.model_dump(mode="json") for spec in sensitivity_specs
+        ]
+        landmarks = {
+            float(spec.landmark_hours)
+            for spec in sensitivity_specs
+            if spec.strategy == "landmark" and spec.landmark_hours is not None
+        }
+        if len(landmarks) > 1:
+            raise ResearchPipelineRunError(
+                "research_pipeline_landmark_authority_ambiguous",
+                "The configured sensitivities declare more than one landmark origin.",
+                details={"field": "sensitivity_specs", "landmark_hours": sorted(landmarks)},
+            )
+        if landmarks:
+            preferences["landmark_hours"] = next(iter(landmarks))
     return preferences
 
 
@@ -412,6 +838,33 @@ def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
             if clean:
                 rows.append(f"{prefix}: {', '.join(clean)}")
     return rows[:32]
+
+
+def _primary_cohort_selection_mode(study: Mapping[str, Any]) -> str:
+    """Compile the user-owned Web cohort choice to the pipeline contract.
+
+    The acquisition owner has already materialised the configured source,
+    modules, outcome, and exposure.  Descriptive labels such as "has a
+    Sepsis-3 determination" must not become a second, Planner-invented row
+    filter.  Only explicit structured filtering fields in the StudyContext
+    authorize a predicate-filtered primary cohort; otherwise every bound input
+    row is the prespecified denominator.
+    """
+
+    raw = study.get("cohort")
+    cohort = raw if isinstance(raw, Mapping) else {}
+    explicit_filter_fields = (
+        "age_min",
+        "age_max",
+        "min_icu_los_hours",
+        "include_diagnoses",
+        "exclude_diagnoses",
+    )
+    if cohort.get("exclude_readmissions") is True:
+        return "predicate_filtered"
+    if any(cohort.get(field) not in (None, "", []) for field in explicit_filter_fields):
+        return "predicate_filtered"
+    return "all_input_rows"
 
 
 def _progress(job: Any, *, step: str, label: str, **extra: Any) -> None:
@@ -691,12 +1144,103 @@ def _gate_from_axes(axes: Mapping[str, Any], *, pending: bool) -> Dict[str, Any]
 
 def _artifact_record(path: Path) -> Dict[str, Any]:
     raw = path.read_bytes()
+    document_spec = _MANUSCRIPT_DOCUMENT_SPECS.get(path.name)
     return {
         "name": path.name,
         "sha256": hashlib.sha256(raw).hexdigest(),
         "bytes": len(raw),
-        "kind": "json",
+        "kind": "document" if document_spec is not None else "json",
+        "media_type": (
+            document_spec[0] if document_spec is not None else "application/json"
+        ),
     }
+
+
+def _validated_manuscript_documents(
+    run_dir: Optional[Path],
+) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Load only renderer-receipt-bound draft documents from a pipeline run."""
+
+    if run_dir is None:
+        return None, []
+    receipt_path = run_dir / "manuscript_pdf_receipt.json"
+    if not receipt_path.exists():
+        return None, []
+    receipt = _read_json(receipt_path, {})
+    security = receipt.get("security") if isinstance(receipt, Mapping) else None
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("schema_version") != "easyicu.manuscript_pdf_receipt.v1"
+        or receipt.get("status") != "rendered"
+        or receipt.get("draft_watermark") is not True
+        or not isinstance(security, Mapping)
+        or security.get("network_allowed") is not False
+        or security.get("shell_escape_allowed") is not False
+        or security.get("untrusted_input_mode") is not True
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_pdf_receipt_invalid",
+            "The manuscript PDF receipt is missing its draft or sandbox authority.",
+        )
+
+    receipt_rows = {
+        "manuscript_scaffold.pdf": receipt.get("pdf"),
+        "manuscript_scaffold.tex": receipt.get("source"),
+        "manuscript_scaffold.bib": receipt.get("bibliography"),
+    }
+    documents: List[Dict[str, Any]] = []
+    root = run_dir.resolve(strict=True)
+    for name, receipt_row in receipt_rows.items():
+        if receipt_row is None and name == "manuscript_scaffold.bib":
+            continue
+        if (
+            not isinstance(receipt_row, Mapping)
+            or receipt_row.get("name") != name
+            or not re.fullmatch(r"[0-9a-f]{64}", str(receipt_row.get("sha256") or ""))
+        ):
+            raise ResearchPipelineRunError(
+                "research_pipeline_pdf_receipt_binding_invalid",
+                f"The PDF receipt does not bind {name}.",
+            )
+        source = run_dir / name
+        try:
+            metadata = source.lstat()
+            resolved = source.resolve(strict=True)
+            resolved.relative_to(root)
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            raise ResearchPipelineRunError(
+                "research_pipeline_pdf_document_missing",
+                f"The receipt-bound manuscript document {name} is unavailable.",
+            ) from exc
+        _media_type, max_bytes = _MANUSCRIPT_DOCUMENT_SPECS[name]
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size > max_bytes
+        ):
+            raise ResearchPipelineRunError(
+                "research_pipeline_pdf_document_unsafe",
+                f"The manuscript document {name} failed the file boundary.",
+            )
+        raw = source.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != receipt_row.get("sha256"):
+            raise ResearchPipelineRunError(
+                "research_pipeline_pdf_document_digest_mismatch",
+                f"The manuscript document {name} no longer matches its receipt.",
+            )
+        if name.endswith(".pdf") and not raw.startswith(b"%PDF"):
+            raise ResearchPipelineRunError(
+                "research_pipeline_pdf_signature_invalid",
+                "The receipt-bound manuscript PDF has an invalid signature.",
+            )
+        documents.append(
+            {
+                "name": name,
+                "content": raw,
+                "media_type": _MANUSCRIPT_DOCUMENT_SPECS[name][0],
+            }
+        )
+    return receipt, documents
 
 
 def _projection_privacy_scan(payloads: Mapping[str, Any]) -> Dict[str, Any]:
@@ -803,6 +1347,9 @@ def _write_projection(
     run_context = {
         "run_id": run_id,
         "study_id": _clean_text(study.get("id"), 160),
+        "scientific_configuration_sha256": (
+            study_context_owner.scientific_configuration_sha256(study)
+        ),
         "mode": "research_agent_pipeline",
         "run_type": "full",
         "engine": "easyicu.research_agent.pipeline",
@@ -834,16 +1381,23 @@ def _write_projection(
             "time_window_hours": _cohort_window(study)[1],
         },
     }
-    plan = _read_json(run_dir / "analysis_plan.json", {}) if run_dir else {}
+    # At a plan-review pause the final manifest does not exist yet.  Recover
+    # the plan only from the digest-bound review authority; never fall back to
+    # the mutable initial file for this browser projection.
+    plan = (
+        _pending_plan_authority(pending)
+        if pending is not None
+        else (load_current_plan_authority(run_dir) if run_dir else {})
+    )
     literature_evidence = (
         load_run_literature_projection(
             run_dir=run_dir,
             run_id=run_id,
-            plan=plan if isinstance(plan, Mapping) else {},
+            plan=plan,
         )
         if run_dir
         else {
-            "schema_version": "easyicu.web-literature-evidence/2",
+            "schema_version": "easyicu.web-literature-evidence/5",
             "scope": "research_plan",
             "run_id": run_id,
             "status": "unavailable",
@@ -856,6 +1410,7 @@ def _write_projection(
             },
         }
     )
+    scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
     scientific_readiness = build_scientific_readiness_projection(
         run_id=run_id,
         run_dir=run_dir,
@@ -901,6 +1456,7 @@ def _write_projection(
         _read_json(run_dir / "evidence" / "evidence_index.json", []) if run_dir else []
     )
     evidence_count = len(evidence_index) if isinstance(evidence_index, list) else 0
+    pdf_receipt, manuscript_documents = _validated_manuscript_documents(run_dir)
     pending_requests = []
     if pending is not None:
         pending_requests = [
@@ -915,6 +1471,21 @@ def _write_projection(
                 ),
                 "summary": request.summary,
                 "authority_sha256": request.authority_sha256,
+                "approval_allowed": (
+                    request.payload.get("approval_allowed", True)
+                    if isinstance(request.payload, Mapping)
+                    else True
+                ),
+                "review_score": (
+                    request.payload.get("review_score")
+                    if isinstance(request.payload, Mapping)
+                    else None
+                ),
+                "finding_codes": (
+                    list(request.payload.get("finding_codes") or ())[:40]
+                    if isinstance(request.payload, Mapping)
+                    else []
+                ),
             }
             for request in pending.requests
         ]
@@ -925,11 +1496,22 @@ def _write_projection(
         "status": "human_review_pending" if pending is not None else gate["status"],
         "resume_scope": getattr(pending, "resume_scope", None),
         "pending_reviews": pending_requests,
+        "plan_approval_allowed": bool(
+            pending_requests
+            and all(item.get("approval_allowed", True) for item in pending_requests)
+        ),
+        "scientific_plan_review_status": scientific_plan_review.get("status"),
+        "scientific_plan_review_score": scientific_plan_review.get("score"),
         "readiness": axes,
         "scientific_readiness_status": scientific_readiness["status"],
         "evidence_count": evidence_count,
         "result_table_count": result_tables.get("table_count", 0),
         "figure_count": len(figure_gallery.get("figures") or []),
+        "manuscript_document_count": len(manuscript_documents),
+        "draft_pdf_available": any(
+            row.get("name") == "manuscript_scaffold.pdf"
+            for row in manuscript_documents
+        ),
         "provider": {
             key: provider.get(key)
             for key in (
@@ -947,8 +1529,13 @@ def _write_projection(
         "run_context.json": run_context,
         "cohort_summary.json": cohort_summary,
         "quality_gate.json": {"gate": gate, "quality": []},
-        "agent_plan.json": plan if isinstance(plan, dict) else {},
+        "agent_plan.json": dict(plan) if isinstance(plan, Mapping) else {},
         "literature_evidence.json": literature_evidence,
+        **(
+            {"scientific_plan_review.json": scientific_plan_review}
+            if scientific_plan_review
+            else {}
+        ),
         "scientific_readiness.json": scientific_readiness,
         "manuscript_draft.json": {
             "run_id": run_id,
@@ -963,6 +1550,8 @@ def _write_projection(
         "result_tables.json": result_tables,
         "source_run_manifest.json": source_manifest,
     }
+    if pdf_receipt is not None:
+        payloads["manuscript_pdf_receipt.json"] = pdf_receipt
     privacy_scan = _projection_privacy_scan(payloads)
     if not privacy_scan["passed"]:
         payloads = _privacy_blocked_payloads(
@@ -982,7 +1571,23 @@ def _write_projection(
         payloads["source_run_manifest.json"] = source_manifest
     for name, payload in payloads.items():
         _write_json(wrapper_dir / name, payload)
-    artifact_rows = [_artifact_record(wrapper_dir / name) for name in payloads]
+    # A resumed/reprojected wrapper may predate this pass.  Fixed document names
+    # are removed before the newly validated set is copied so a missing, stale,
+    # or privacy-withheld receipt can never leave an older PDF reachable.
+    for document_name in _MANUSCRIPT_DOCUMENT_SPECS:
+        stale = wrapper_dir / document_name
+        if stale.exists() or stale.is_symlink():
+            stale.unlink()
+    document_rows: List[Dict[str, Any]] = []
+    if privacy_scan["passed"]:
+        for document in manuscript_documents:
+            target = wrapper_dir / str(document["name"])
+            target.write_bytes(bytes(document["content"]))
+            document_rows.append(_artifact_record(target))
+    artifact_rows = [
+        *[_artifact_record(wrapper_dir / name) for name in payloads],
+        *document_rows,
+    ]
     ledger = {
         "schema_version": "easyicu.web-research-pipeline-ledger/1",
         "run_id": run_id,
@@ -1039,6 +1644,9 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         return {
             "run_id": pending.run_id,
             "study_id": _clean_text(entry.study.get("id"), 160),
+            "scientific_configuration_sha256": (
+                study_context_owner.scientific_configuration_sha256(entry.study)
+            ),
             "resume_scope": pending.resume_scope,
             "resumable_here": bool(pending.resumable_here),
             "requests": [
@@ -1047,9 +1655,41 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
                     "kind": request.kind,
                     "summary": request.summary,
                     "authority_sha256": request.authority_sha256,
+                    "reason_code": _clean_text(
+                        request.payload.get("reason")
+                        if isinstance(request.payload, Mapping)
+                        else None,
+                        160,
+                    ),
+                    "approval_allowed": (
+                        request.payload.get("approval_allowed", True)
+                        if isinstance(request.payload, Mapping)
+                        else True
+                    ),
+                    "review_score": (
+                        request.payload.get("review_score")
+                        if isinstance(request.payload, Mapping)
+                        else None
+                    ),
+                    "finding_codes": (
+                        list(request.payload.get("finding_codes") or ())[:40]
+                        if isinstance(request.payload, Mapping)
+                        else []
+                    ),
                 }
                 for request in pending.requests
             ],
+            "plan_approval_allowed": all(
+                (
+                    request.payload.get("approval_allowed", True)
+                    if isinstance(request.payload, Mapping)
+                    else True
+                )
+                for request in pending.requests
+            ),
+            "scientific_plan_review": _load_pending_scientific_review(
+                entry.run_dir, pending
+            ),
         }
 
 
@@ -1060,6 +1700,8 @@ def make_research_pipeline_run_runner(
     project_root: Optional[str],
     provider: Mapping[str, Any],
     provider_environment: Optional[Mapping[str, str]] = None,
+    literature_search_authorized: bool = False,
+    plan_revision_source_run_id: str = "",
 ) -> Any:
     """Build the JobManager runner for a real, evidence-bound pipeline run."""
 
@@ -1078,7 +1720,21 @@ def make_research_pipeline_run_runner(
     target = _target_outcome(study)
     primary_exposure = _primary_exposure(study)
     covariates = _configured_covariates(study)
+    sensitivity_specs = _configured_sensitivity_specs(study)
     window = _cohort_window(study)
+    _validate_primary_concept_selection(study, primary_exposure)
+    _validate_analysis_design(study)
+    # Compile and validate the display-to-execution boundary before JobManager
+    # creates a background job. A prose label or stale concept therefore fails
+    # at its owner instead of appearing later as an opaque pipeline crash.
+    foundation_profile = _data_foundation_profile(
+        export_path=export_path,
+        study=study,
+        target=target,
+        primary_exposure=primary_exposure,
+        covariates=covariates,
+        sensitivity_specs=sensitivity_specs,
+    )
     capability_settings = capability_policy.capability_settings()
     publication_skill_flags = publication_skill_flags_from_settings(
         capability_settings
@@ -1096,10 +1752,11 @@ def make_research_pipeline_run_runner(
             extension_snapshot
         )
     except ExtensionRegistryError as exc:
-        raise ResearchPipelineRunError(exc.code, exc.message) from exc
+        raise ResearchPipelineRunError(exc.code, exc.message, details=exc.details) from exc
     research_provider_environment = (
         dict(provider_environment) if provider_environment is not None else None
     )
+    source_run_id = _clean_text(plan_revision_source_run_id, 160)
 
     def runner(job: Any) -> Dict[str, Any]:
         root = (
@@ -1109,6 +1766,65 @@ def make_research_pipeline_run_runner(
         )
         wrapper_dir = root / _slug(study.get("id")) / f"run_{job.id}"
         wrapper_dir.mkdir(parents=True, exist_ok=True)
+        bound_plan_revision_contract = ""
+        if source_run_id:
+            history = agent_runs.list_run_history(
+                study_id=_clean_text(study.get("id"), 160),
+                project_root=project_root,
+                limit=100,
+            )
+            source_row = next(
+                (
+                    row
+                    for row in history.get("runs", [])
+                    if _clean_text(row.get("run_id"), 160) == source_run_id
+                ),
+                None,
+            )
+            if not isinstance(source_row, Mapping):
+                raise ResearchPipelineRunError(
+                    "plan_revision_source_not_found",
+                    "The exact prior scientific review could not be found.",
+                )
+            current_digest = study_context_owner.scientific_configuration_sha256(
+                study
+            )
+            if _clean_text(
+                source_row.get("scientific_configuration_sha256"), 80
+            ) != current_digest:
+                raise ResearchPipelineRunError(
+                    "plan_revision_source_configuration_superseded",
+                    "The scientific setup changed after the reviewed plan; its repair contract cannot be reused.",
+                )
+            source_review = agent_runs.read_run_review(
+                str(source_row.get("project_dir") or "")
+            )
+            review_payload = (
+                (source_review.get("artifact_payloads") or {}).get(
+                    "scientific_plan_review.json"
+                )
+                if source_review.get("ok")
+                else None
+            )
+            if not isinstance(review_payload, Mapping):
+                raise ResearchPipelineRunError(
+                    "plan_revision_scientific_review_missing",
+                    "The prior run has no digest-verified scientific review to compile.",
+                )
+            parsed_review = PlanScientificReview.model_validate(review_payload)
+            if parsed_review.approval_allowed:
+                raise ResearchPipelineRunError(
+                    "plan_revision_source_not_changes_required",
+                    "Only a non-approvable scientific review may seed a fresh plan revision.",
+                )
+            bound_plan_revision_contract = render_agent_plan_revision_contract(
+                parsed_review
+            )
+            if not bound_plan_revision_contract:
+                raise ResearchPipelineRunError(
+                    "plan_revision_has_no_agent_owned_findings",
+                    "The prior review contains no plan-owned finding the Agent may repair.",
+                )
         _progress(job, step="provider", label="Research Agent provider authorized")
         client, provider_public = provider_adapter.build_research_agent_provider_client(
             dict(provider),
@@ -1127,13 +1843,6 @@ def make_research_pipeline_run_runner(
                 job,
                 step="data_foundation",
                 label="Selecting concepts and materializing a typed analysis universe",
-            )
-            foundation_profile = _data_foundation_profile(
-                export_path=export_path,
-                study=study,
-                target=target,
-                primary_exposure=primary_exposure,
-                covariates=covariates,
             )
             acquisition = acquire_universe_for_question(
                 export_dir=Path(export_path).expanduser(),
@@ -1195,6 +1904,16 @@ def make_research_pipeline_run_runner(
                         or "The accepted Idea Mining literature receipt is invalid."
                     ),
                 ) from exc
+            if bound_preplan_literature is None:
+                try:
+                    bound_preplan_literature = (
+                        literature_authority.load_bound_literature(
+                            study=study,
+                            research_question=question,
+                        )
+                    )
+                except literature_authority.LiteratureAuthorityError as exc:
+                    raise ResearchPipelineRunError(exc.code, exc.message) from exc
             config = PipelineConfig(
                 workdir=wrapper_dir / "pipeline",
                 enable_publication_figure_skill=publication_skill_flags[
@@ -1207,7 +1926,24 @@ def make_research_pipeline_run_runner(
                 enable_reproducibility_envelope=True,
                 evidence_enforcement_mode="strict",
                 require_human_plan_review=True,
+                required_primary_cohort_selection_mode=(
+                    _primary_cohort_selection_mode(study)
+                ),
+                enable_pdf_render=True,
+                latex_draft_watermark=True,
                 bound_preplan_literature=bound_preplan_literature,
+                bound_plan_revision_contract=(
+                    bound_plan_revision_contract or None
+                ),
+                # The Web host carries this from the user's turn grant.  When
+                # an accepted Idea handoff already supplies a digest-bound
+                # search receipt, reuse it and do not silently issue a second
+                # search.  Otherwise a full Web study can now establish dated
+                # direct prior art before the Planner runs.
+                enable_pubmed=(
+                    bool(literature_search_authorized)
+                    and bound_preplan_literature is None
+                ),
             )
             pipeline = ResearchAgentPipeline.from_config(
                 config,
@@ -1217,7 +1953,10 @@ def make_research_pipeline_run_runner(
             _progress(
                 job,
                 step="research_pipeline",
-                label="Research Agent planning, execution, validation, and writing started",
+                label=(
+                    "Research Agent planning started; execution remains blocked "
+                    "pending human plan review"
+                ),
             )
             outcome = pipeline.run(
                 question=question,
@@ -1275,9 +2014,43 @@ def make_research_pipeline_run_runner(
         except ResearchPipelineRunError:
             raise
         except Exception as exc:
+            code = _pipeline_failure_code(exc)
+            diagnostic = _write_pipeline_failure_diagnostic(
+                wrapper_dir=wrapper_dir,
+                exc=exc,
+                code=code,
+            )
+            if code == "research_pipeline_provider_timeout":
+                _progress(
+                    job,
+                    step="planning",
+                    label=(
+                        "The model provider timed out; the run stopped without "
+                        "approving a plan or starting analysis."
+                    ),
+                    status="error",
+                )
+                message = (
+                    "The configured model provider timed out while the Research "
+                    "Agent was generating a contract-valid plan. No analysis was run."
+                )
+            elif code == "research_pipeline_plan_contract_exhausted":
+                message = (
+                    "The model used every bounded planning attempt without producing "
+                    "a contract-valid plan. No analysis was run."
+                )
+            else:
+                message = (
+                    "The Research Agent pipeline stopped before it could produce a "
+                    f"governed result ({type(exc).__name__})."
+                )
             raise ResearchPipelineRunError(
-                "research_pipeline_execution_failed",
-                f"{type(exc).__name__}: {exc}",
+                code,
+                message,
+                details={
+                    "failure_type": type(exc).__name__,
+                    "diagnostic": diagnostic,
+                },
             ) from exc
 
     return runner
@@ -1291,6 +2064,7 @@ def resume_research_pipeline(
     reviewer: str,
     note: str,
     job: Any,
+    current_study_context: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Resume one same-process plan review with digest-bound decisions."""
 
@@ -1307,6 +2081,22 @@ def resume_research_pipeline(
             "research_pipeline_review_study_mismatch",
             "The pending review belongs to a different research project.",
         )
+    if current_study_context is not None:
+        planned_digest = study_context_owner.scientific_configuration_sha256(
+            entry.study
+        )
+        current_digest = study_context_owner.scientific_configuration_sha256(
+            dict(current_study_context)
+        )
+        if current_digest != planned_digest:
+            raise ResearchPipelineRunError(
+                "research_pipeline_review_configuration_superseded",
+                "The scientific setup changed after this plan was generated; the old plan cannot be approved.",
+                details={
+                    "planned_scientific_configuration_sha256": planned_digest,
+                    "current_scientific_configuration_sha256": current_digest,
+                },
+            )
     resolved = str(decision or "").strip().lower()
     if resolved not in {"approved", "rejected"}:
         raise ResearchPipelineRunError(
@@ -1335,7 +2125,11 @@ def resume_research_pipeline(
     )
 
     try:
-        outcome = entry.pipeline.resume_human_review(decisions, run_id=key)
+        outcome = entry.pipeline.resume_human_review(
+            decisions,
+            run_id=key,
+            progress_callback=lambda event: _pipeline_progress(job, event),
+        )
     except HumanReviewRejected:
         with _PENDING_LOCK:
             _PENDING.pop(key, None)

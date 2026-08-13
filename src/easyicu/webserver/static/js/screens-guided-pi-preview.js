@@ -33,6 +33,8 @@
       const artifact = String(value.artifact || '').trim();
       if (!/^[A-Za-z0-9_.-]+\.json$/.test(artifact) || artifact.length > 160) return null;
       if (!demo || typeof demo.hasArtifact !== 'function' || !demo.hasArtifact(artifact)) return null;
+      const authorityClass = value.authority_class === 'literature_method'
+        ? 'literature_method' : 'literature_retrieval_candidate';
       return {
         kind: 'demo_artifact', artifact,
         run_id: String(value.run_id || demo.sourceRunId || '').slice(0, 160),
@@ -54,7 +56,7 @@
         relevance: String(value.relevance || '').slice(0, 1200),
         doi: String(value.doi || '').slice(0, 240),
         pmid: String(value.pmid || '').slice(0, 32),
-        media_type: 'text/html', authority_class: 'literature_metadata',
+        media_type: 'text/html', authority_class: authorityClass,
       };
     }
     if (value.kind === 'research_artifact') {
@@ -65,6 +67,31 @@
       return {
         kind: 'research_artifact', run_id: runId, artifact,
         label: String(value.label || artifact).slice(0, 160),
+        media_type: 'application/json',
+      };
+    }
+    if (value.kind === 'research_document') {
+      const runId = String(value.run_id || '').trim();
+      const artifact = String(value.artifact || '').trim();
+      if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(runId)) return null;
+      if (!/^manuscript_scaffold\.(pdf|tex|bib)$/.test(artifact)) return null;
+      return {
+        kind: 'research_document', run_id: runId, artifact,
+        label: String(value.label || artifact).slice(0, 160),
+        media_type: String(value.media_type || (artifact.endsWith('.pdf') ? 'application/pdf' : 'text/plain')).slice(0, 120),
+      };
+    }
+    if (value.kind === 'data_package_review') {
+      const studyContextId = String(value.study_context_id || '').trim();
+      const reviewSha256 = String(value.review_sha256 || '').trim().toLowerCase();
+      const studyRevision = Number(value.study_revision);
+      if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(studyContextId)) return null;
+      if (!/^[a-f0-9]{64}$/.test(reviewSha256)) return null;
+      if (!Number.isInteger(studyRevision) || studyRevision < 0) return null;
+      return {
+        kind: 'data_package_review', study_context_id: studyContextId,
+        study_revision: studyRevision, review_sha256: reviewSha256,
+        label: String(value.label || tr('Data package review', '数据包审阅')).slice(0, 160),
         media_type: 'application/json',
       };
     }
@@ -83,8 +110,10 @@
     };
   }
   function isResearchArtifact() { return !!state.resource && state.resource.kind === 'research_artifact'; }
+  function isResearchDocument() { return !!state.resource && state.resource.kind === 'research_document'; }
   function isDemoArtifact() { return !!state.resource && state.resource.kind === 'demo_artifact'; }
-  function isStructuredArtifact() { return isResearchArtifact() || isDemoArtifact(); }
+  function isDataPackageReview() { return !!state.resource && state.resource.kind === 'data_package_review'; }
+  function isStructuredArtifact() { return isResearchArtifact() || isDemoArtifact() || isDataPackageReview(); }
   function isLiteratureSource() { return !!state.resource && state.resource.kind === 'literature_source'; }
   function isHtml() {
     return !!state.resource && (
@@ -95,6 +124,11 @@
   }
   function previewUrl() {
     const api = window.EU_API || {};
+    if (isResearchDocument()) {
+      return api.piCopilotResearchDocumentUrl
+        ? api.piCopilotResearchDocumentUrl(state.projectId, state.resource.run_id, state.resource.artifact)
+        : '';
+    }
     return api.piCopilotWorkspacePreviewUrl
       ? api.piCopilotWorkspacePreviewUrl(state.projectId, state.resource.file)
       : '';
@@ -134,6 +168,9 @@
     }
     return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Product demo · Real engineering-canary aggregate', '产品演示 · 真实工程试跑聚合产物'))}</strong><span>${esc(tr('Read-only and non-reportable; not formal paper evidence.', '只读且不可报告；不是正式论文证据。'))}</span></div>`;
   }
+  function dataPackageProvenance() {
+    return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Registered export · Pre-analysis review', '已登记数据源 · 分析前审阅'))}</strong><span>${esc(tr('Aggregate denominator and availability only; event rates, comparisons, and effect estimates are withheld until the governed analysis.', '仅展示聚合分母与可用性；事件率、组间比较和效应量留待受治理分析。'))}</span></div>`;
+  }
   function render() {
     if (!state.host || !state.resource) return;
     setAsideOpen(true);
@@ -156,6 +193,8 @@
       body = renderer && typeof renderer.renderSource === 'function'
         ? renderer.renderSource(state.resource)
         : `<div class="gpi-preview-state error">${esc(tr('Literature renderer unavailable', '文献渲染器不可用'))}</div>`;
+    } else if (state.mode === 'document' && isResearchDocument()) {
+      body = `<iframe class="gpi-preview-frame gpi-preview-document-frame" src="${esc(previewUrl())}" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`;
     } else if (state.mode === 'web' && isHtml()) {
       body = `<iframe class="gpi-preview-frame" src="${esc(previewUrl())}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`;
     } else if (state.mode === 'structured' && isStructuredArtifact()) {
@@ -176,10 +215,12 @@
         : (state.artifact && state.artifact.text != null ? state.artifact.text : '');
       body = `<pre class="gpi-preview-code" tabindex="0"><code>${esc(text)}</code></pre>`;
     }
-    const reference = isStructuredArtifact()
+    const reference = isDataPackageReview()
+      ? `${state.resource.study_context_id} · rev ${state.resource.study_revision}`
+      : isStructuredArtifact() || isResearchDocument()
       ? `${state.resource.run_id} · ${state.resource.artifact}`
       : isLiteratureSource() ? state.resource.url : state.resource.file;
-    const provenance = isDemoArtifact() ? demoProvenance() : isResearchArtifact() ? researchProvenance() : isLiteratureSource() ? `
+    const provenance = isDemoArtifact() ? demoProvenance() : isDataPackageReview() ? dataPackageProvenance() : (isResearchArtifact() || isResearchDocument()) ? researchProvenance() : isLiteratureSource() ? `
       <div class="gpi-preview-provenance is-research" role="note">
         <strong>${tr('Literature metadata · Search receipt', '文献元数据 · 检索回执')}</strong>
         <span>${tr('Design evidence, separate from patient/result evidence.', '设计依据；与患者/结果证据分开治理。')}</span>
@@ -199,7 +240,7 @@
       <div class="gpi-preview-body">${body}</div>`;
   }
   async function loadResource() {
-    if (!state.resource || isLiteratureSource() || (!state.projectId && !isDemoArtifact())) return;
+    if (!state.resource || isLiteratureSource() || isResearchDocument() || (!state.projectId && !isDemoArtifact())) return;
     const ticket = ++state.request;
     state.loading = true; state.error = ''; render();
     try {
@@ -218,6 +259,11 @@
         if (!api.loadPiCopilotResearchArtifact) throw new Error(tr('The research artifact API is unavailable.', '研究产物接口不可用。'));
         payload = await api.loadPiCopilotResearchArtifact(
           state.projectId, state.resource.run_id, state.resource.artifact,
+        );
+      } else if (isDataPackageReview()) {
+        if (!api.loadPiCopilotDataPackageReview) throw new Error(tr('The data-package review API is unavailable.', '数据包审阅接口不可用。'));
+        payload = await api.loadPiCopilotDataPackageReview(
+          state.projectId, state.resource.study_revision, state.resource.review_sha256,
         );
       } else {
         if (!api.loadPiCopilotWorkspaceFile) throw new Error(tr('The workspace file API is unavailable.', '工作区文件接口不可用。'));
@@ -244,9 +290,9 @@
     state.payload = null;
     state.governance = null;
     state.error = '';
-    state.mode = safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'));
+    state.mode = safe.kind === 'research_document' ? 'document' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' || safe.kind === 'data_package_review' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code')));
     render();
-    if (state.mode !== 'web' && state.mode !== 'source') loadResource();
+    if (state.mode !== 'web' && state.mode !== 'source' && state.mode !== 'document') loadResource();
   }
   function close() {
     state.request += 1;

@@ -21,17 +21,31 @@
     return [row.venue, row.year, row.pmid ? `PMID ${row.pmid}` : '', row.doi ? `DOI ${row.doi}` : '']
       .filter(Boolean).map(esc).join(' · ');
   }
+  function roleLabel(value) {
+    const labels = {
+      direct_comparator: tr('Direct comparator candidate', '直接对照研究候选'),
+      method: tr('Method source', '方法学依据'),
+      definition: tr('Definition source', '定义依据'),
+      database: tr('Database source', '数据库依据'),
+      related_context: tr('Related context', '相关背景'),
+      curated_method_or_context: tr('Curated method / context', '预置方法 / 背景'),
+    };
+    return labels[String(value || '')] || String(value || tr('Literature', '文献'));
+  }
   function articleCard(row, indexByKey) {
     const url = safeUrl(row.source_url || row.url);
     const title = row.title || row.label || row.key || tr('Untitled source', '未命名文献');
     const relevance = row.relevance || '';
     const key = row.key || '';
+    const screening = row.screening && typeof row.screening === 'object' ? row.screening : null;
+    const evidenceRole = screening && screening.evidence_role;
     if (key && indexByKey) indexByKey.set(String(key), row);
     return `<article class="gpi-lit-card">
-      <div class="gpi-lit-card-head"><span class="gpi-lit-kind">${esc(tr('Literature', '文献'))}</span>${key ? `<code>${esc(key)}</code>` : ''}</div>
+      <div class="gpi-lit-card-head"><span class="gpi-lit-kind">${esc(roleLabel(evidenceRole))}</span>${key ? `<code>${esc(key)}</code>` : ''}</div>
       <h4>${esc(title)}</h4>
       ${sourceMeta(row) ? `<div class="gpi-lit-meta">${sourceMeta(row)}</div>` : ''}
       ${relevance ? `<p>${esc(relevance)}</p>` : ''}
+      ${screening ? `<details class="gpi-lit-screen"><summary>${esc(tr('Why this paper has this role', '为什么这篇文章被赋予此角色'))}</summary><p>${esc(screening.rationale || '')}</p><small>${esc(tr('P/E/O match: ', '人群/暴露/结局匹配：'))}${screening.population_match ? '✓' : '×'} / ${screening.exposure_match ? '✓' : '×'} / ${screening.outcome_match ? '✓' : '×'} · ${esc(tr('source excerpt ', '原文摘要片段 '))}${screening.design_excerpt_available ? '✓' : '×'} · ${esc(tr('eligible publication type ', '文献类型合格 '))}${screening.publication_type_eligible !== false ? '✓' : '×'}</small></details>` : ''}
       ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(tr('Open source record', '打开来源页面'))}<span aria-hidden="true">↗</span></a>` : `<span class="gpi-lit-no-link">${esc(tr('No verified source link in this artifact', '该产物没有已核验的来源链接'))}</span>`}
     </article>`;
   }
@@ -46,11 +60,14 @@
       : tr('No search was performed; do not describe this as a systematic search.', '本次没有执行检索，不得描述为系统检索。'));
     const sources = Array.isArray(search.sources_returning) ? search.sources_returning : [];
     const prisma = search.prisma && typeof search.prisma === 'object' ? search.prisma : null;
+    const queries = search.queries && typeof search.queries === 'object' ? search.queries : {};
+    const queryRows = Object.entries(queries).flatMap(([source, rows]) => (Array.isArray(rows) ? rows : []).map(query => ({ source, query })));
     return `<section class="gpi-lit-search ${searched ? 'searched' : 'curated'}">
       <div><span class="gpi-lit-status-dot" aria-hidden="true"></span><strong>${esc(title)}</strong></div>
       <p>${esc(detail)}</p>
       ${sources.length ? `<small>${esc(tr('Sources: ', '来源：'))}${sources.map(esc).join(', ')}</small>` : ''}
       ${prisma ? `<small>${esc(tr('Flow: ', '检索流：'))}${esc(JSON.stringify(prisma))}</small>` : ''}
+      ${queryRows.length ? `<details class="gpi-lit-queries"><summary>${esc(tr('Open exact search queries', '查看实际检索式'))}</summary>${queryRows.map(row => `<div><strong>${esc(row.source)}</strong><code>${esc(row.query)}</code></div>`).join('')}</details>` : ''}
     </section>`;
   }
   function planMap(payload, indexByKey) {
@@ -65,7 +82,8 @@
       <header><h3>${esc(tr('Plan decisions and supporting articles', '计划决策与支持文献'))}</h3><span>${esc(tr(`${boundCount} evidence-bound · ${auxiliaryCount} auxiliary`, `${boundCount} 个科学决策已绑定 · ${auxiliaryCount} 个辅助步骤`))}</span></header>
       <div class="gpi-lit-map-list">${rows.map(row => {
         const keys = Array.isArray(row.citation_keys) ? row.citation_keys : [];
-        const sources = keys.map(key => indexByKey.get(String(key))).filter(Boolean);
+        const bindings = Array.isArray(row.citation_bindings) ? row.citation_bindings : [];
+        const sources = bindings.length ? bindings : keys.map(key => indexByKey.get(String(key))).filter(Boolean);
         const auxiliary = String(row.planned_analysis_role || '') === 'auxiliary';
         return `<article class="gpi-lit-step ${keys.length ? 'bound' : 'unbound'}">
           <div><code>${esc(row.step_id || '')}</code>${row.planned_analysis_role ? `<span>${esc(row.planned_analysis_role)}</span>` : ''}</div>
@@ -73,7 +91,7 @@
           ${sources.length ? `<ul>${sources.map(source => {
             const url = safeUrl(source.source_url || source.url);
             const label = esc(source.title || source.key);
-            return `<li>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${label}<span aria-hidden="true">↗</span></a>` : `<strong>${label}</strong>`}<small>${esc(source.key || '')}</small></li>`;
+            return `<li>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${label}<span aria-hidden="true">↗</span></a>` : `<strong>${label}</strong>`}<small>${esc(source.key || '')} · ${esc(roleLabel(source.evidence_role || ((source.screening || {}).evidence_role)))}</small></li>`;
           }).join('')}</ul>` : `<div class="gpi-lit-unbound">${esc(auxiliary
             ? tr('Auxiliary execution or rendering step; it inherits the governed scientific plan and is not counted as a missing literature decision.', '辅助执行或呈现步骤；它继承受治理的科学计划，不计作文献决策缺口。')
             : tr('A scientific decision has no bound citation and requires review.', '该科学决策没有绑定文献，需要审阅。'))}</div>`}

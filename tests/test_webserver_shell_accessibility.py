@@ -50,6 +50,25 @@ def test_shell_exposes_current_route_and_disclosure_state() -> None:
     assert 'id="data-workspace-links"' in app_js
 
 
+def test_spa_navigation_updates_title_announces_route_and_moves_focus() -> None:
+    app_js = _asset("js", "app.js")
+    shell_css = _asset("css", "shell.css")
+
+    assert "const routeAnnouncer = document.createElement('div')" in app_js
+    assert "routeAnnouncer.setAttribute('aria-live', 'polite')" in app_js
+    assert "document.title = routeDocumentTitle(title)" in app_js
+    assert "focusRouteContent()" in app_js
+    assert "main.setAttribute('tabindex', '-1')" in app_js
+    assert "if (preserveRouteFocus) focusRouteContent()" in app_js
+    assert ".shell-sr-only" in shell_css
+
+
+def test_guided_fullscreen_route_has_one_focusable_page_heading() -> None:
+    guided = _asset("js", "screens-guided.js")
+
+    assert '<h1 class="shell-sr-only" tabindex="-1">${t(\'Guided Copilot\', \'研究引导\')}</h1>' in guided
+
+
 def test_data_and_language_segments_publish_pressed_state() -> None:
     app_js = _asset("js", "app.js")
 

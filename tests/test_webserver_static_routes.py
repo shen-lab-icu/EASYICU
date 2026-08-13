@@ -180,10 +180,10 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260802-gate-remedy" in index_html
+    assert "js/app.js?v=20260812-route-a11y1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260803-picker-owner" in index_html
-    assert "js/screens-agent.js?v=20260802-gate-remedy" in index_html
+    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -323,7 +323,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260802-gate-remedy" in index_html
+    assert "js/app.js?v=20260812-route-a11y1" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -343,7 +343,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20260808-project-rail1" in index_html
+        "js/screens-guided-projects.js?v=20260812-project-lifecycle1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -545,7 +545,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260812-extension-manager1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20260808-project-rail1" in index_html
+        "js/screens-guided-projects.js?v=20260812-project-lifecycle1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -654,8 +654,8 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260802-gate-remedy" in index_html
-    assert "css/agent.css?v=20260803-owner-migration" in index_html
+    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
+    assert "css/agent.css?v=20260812-natural-conversations1" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
@@ -803,8 +803,8 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-wf-cell" in agent_css
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
-    assert "css/agent.css?v=20260803-owner-migration" in index_html
-    assert "js/screens-agent.js?v=20260802-gate-remedy" in index_html
+    assert "css/agent.css?v=20260812-natural-conversations1" in index_html
+    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
 
     assert "ag-block-grid" not in app_js
     assert "Research Blocks" not in app_js
@@ -851,7 +851,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260811-plan-review3" in index_html
+    assert "js/screens-agent-render.js?v=20260812-data-package1" in index_html
 
 
 def test_native_agent_overview_renders_object_idea_plan_steps() -> None:
@@ -866,7 +866,7 @@ def test_native_agent_overview_renders_object_idea_plan_steps() -> None:
     assert "seedPlan.map(x => [x," not in agent_js
 
 
-def test_native_agent_canonical9_import_is_project_owned() -> None:
+def test_native_agent_historical_evaluation_import_uses_normal_project_surface() -> None:
     agent_js = _static_js("screens-agent.js")
     agent_css = _static_css("agent.css")
     agent_cap_css = _static_css("agent-capabilities.css")
@@ -902,9 +902,9 @@ def test_native_agent_canonical9_import_is_project_owned() -> None:
     assert "function questionTags(s, raw)" in agent_js
     assert "function renderStructuredQuestion(s)" in agent_js
     assert "function focusAgentBody()" in agent_js
-    assert "function presentationSummary(s)" in agent_js
+    assert "function importedResultSummary(s)" in agent_js
     assert "function featuredFigurePreview(live)" in agent_js
-    assert "benchmarkPanel(s)" in agent_js
+    assert "function benchmarkPanel(s)" not in agent_js
     assert "data-ag-open-seed-run" in agent_js
     assert (
         "artifactStructuredView(artifact.name || agArtifact.name || '', data.payload || {})"
@@ -938,12 +938,17 @@ def test_native_agent_canonical9_import_is_project_owned() -> None:
     assert "Idea seed" not in agent_js
     assert "Canonical run" not in agent_js
     assert "s.id === 'aki' ? 'kdigo' : 'lactate'" not in agent_js
-    assert "Agent Projects Canonical9 import module" in agent_css
+    assert "Figure 2 question package" not in agent_js
+    assert "Figure 2 问题包" not in agent_js
+    assert "clinical benchmark task" not in agent_js
+    assert "临床 benchmark 问题" not in agent_js
+    assert "Current canonical9 package" not in agent_js
+    assert "当前 canonical9 包" not in agent_js
     assert ".ag-list-context" in agent_css
     assert ".ag-term-strip" in agent_css
-    assert ".ag-bench-card" in agent_css
-    assert ".ag-bench-metrics" in agent_css
-    assert ".ag-score-grid" in agent_css
+    assert ".ag-bench-card" not in agent_css
+    assert ".ag-bench-metrics" not in agent_css
+    assert ".ag-score-grid" not in agent_css
     assert ".ag-figure-gallery" in agent_css
     assert ".ag-present-brief" in agent_css
     assert ".ag-wrap .ag-output-brief" in agent_css
@@ -956,6 +961,8 @@ def test_native_agent_canonical9_import_is_project_owned() -> None:
     assert ".ag-wrap .ag-q-section + .ag-q-section" in agent_question_css
     assert ".ag-wrap .ag-req-list" in agent_question_css
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
+    assert "css/agent.css?v=20260812-natural-conversations1" in index_html
+    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
 
     for name in (
         "benchmark_scorecard.json",
@@ -1085,6 +1092,13 @@ def test_native_settings_controls_are_backend_wired() -> None:
         "window.applySettingsState(window.EU_SETTINGS, { syncStorage: true })" in api_js
     )
     assert "window.EU_API.hydrateCapabilities = hydrateCapabilities" in api_js
+    assert "await hydrateCapabilities();" in api_js
+    assert "/api/capabilities/zotero/test" in api_js
+    assert "/api/capabilities/zotero/source" in api_js
+    assert "/api/capabilities/zotero/import" in api_js
+    assert "testZoteroConnection" in api_js
+    assert "zoteroSource" in api_js
+    assert "importZoteroSource" in api_js
     assert "/api/extensions/skills/install" in api_js
     assert "/api/extensions/mcp/install" in api_js
     assert "/api/extensions/mcp/test" in api_js
@@ -1094,13 +1108,6 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "data-ext-test-mcp" in extensions_js
     assert "allowed_tools" in extensions_js
     assert "Frozen into each new Pi session and Agent run" in extensions_js
-    assert "await hydrateCapabilities();" in api_js
-    assert "/api/capabilities/zotero/test" in api_js
-    assert "/api/capabilities/zotero/source" in api_js
-    assert "/api/capabilities/zotero/import" in api_js
-    assert "testZoteroConnection" in api_js
-    assert "zoteroSource" in api_js
-    assert "importZoteroSource" in api_js
     assert "capabilities: C0()" in settings_js
     assert "data-settings-zotero-test" in settings_js
     assert "data-settings-audit-refresh" in settings_js
@@ -1120,11 +1127,15 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert ".settings-zotero-test" in settings_css
     assert ".settings-audit-log" in settings_css
     assert ".settings-audit-list" in settings_css
+    assert ".settings-ext-manager" in settings_css
+    assert ".settings-ext-card" in settings_css
     assert ".settings-cap-panel" not in _static_css("pages.css")
     assert ".settings-cap-panel" not in _static_css("screens.css")
     assert ".settings-cap-panel" not in _static_css("redesign.css")
     assert ".settings-zotero-test" not in _static_css("screens.css")
     assert ".settings-audit-log" not in _static_css("redesign.css")
+    assert ".settings-ext-manager" not in _static_css("screens.css")
+    assert ".settings-ext-manager" not in _static_css("redesign.css")
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "All controls are demo-interactive" not in settings_js
 
@@ -1431,9 +1442,9 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "Already have data? Start with Extract Data." in app_js
     assert "wsi-sub" in app_js
     assert "css/ideas.css?v=20260803-owner-migration" in index_html
-    assert "css/shell.css?v=20260803-owner-migration" in index_html
+    assert "css/shell.css?v=20260812-route-a11y1" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260802-gate-remedy" in index_html
+    assert "js/app.js?v=20260812-route-a11y1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -1963,6 +1974,8 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
 
     assert "startCrossdbRawDistributionJob" in api_js
     assert "/api/jobs/crossdb-raw-distribution" in api_js
+    assert "startCrossdbReviewSummaryJob" in api_js
+    assert "/api/jobs/crossdb-summary" in api_js
     assert "scanCrossdbRawRoot" in api_js
     assert "/api/crossdb-review/raw-root-scan" in api_js
     assert "loadDemoCrossdb" in viz_js
@@ -2021,8 +2034,8 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
 
     assert "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260728-shared-echarts1" in index_html
-    assert "js/screens-viz-crossdb-results.js?v=20260802-gate-remedy" in index_html
-    assert "js/screens-viz.js?v=20260803-picker-owner" in index_html
+    assert "js/screens-viz-crossdb-results.js?v=20260812-tab-a11y1" in index_html
+    assert "js/screens-viz.js?v=20260812-crossdb-jobs" in index_html
     assert "css/crossdb.css?v=20260728-one-click-raw1" in index_html
     for selector in (
         ".crossdb-method-grid",
@@ -2070,7 +2083,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260803-picker-owner" in index_html
+    assert "js/screens-viz.js?v=20260812-crossdb-jobs" in index_html
 
 
 def test_native_cohort_groups_render_comparison_bar_chart() -> None:
@@ -2511,7 +2524,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
     assert "api.js?v=20260812-extension-manager1" in index_html
-    assert "screens-guided-projects.js?v=20260808-project-rail1" in index_html
+    assert "screens-guided-projects.js?v=20260812-project-lifecycle1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
@@ -2741,7 +2754,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient-tables.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20260803-picker-owner" in index_html
+    assert "js/screens-viz.js?v=20260812-crossdb-jobs" in index_html
     assert "bounded browser review', '浏览器有界审阅" in viz_js
     assert "function buildPatientDrilldown" in demo_drilldown_js
     assert "function demoTablePreviewRowContext" in demo_drilldown_js
@@ -2945,7 +2958,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260707-design" in index_html
-    assert "js/screens-viz.js?v=20260803-picker-owner" in index_html
+    assert "js/screens-viz.js?v=20260812-crossdb-jobs" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
@@ -3122,7 +3135,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert ".crossdb-offline-fallback" in crossdb_css
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
     assert "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2" in index_html
-    assert "js/screens-viz-crossdb-source.js?v=20260728-clarity2" in index_html
+    assert "js/screens-viz-crossdb-source.js?v=20260812-crossdb-jobs" in index_html
 
 
 def test_native_webapp_foreground_interrupt_returns_shell_status(monkeypatch) -> None:

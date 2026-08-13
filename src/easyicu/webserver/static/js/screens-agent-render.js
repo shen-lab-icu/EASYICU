@@ -300,6 +300,7 @@
     return null;
   }
   function fmtCount(value) {
+    if (value === null || value === undefined || value === '') return '—';
     const n = Number(value);
     return Number.isFinite(n) ? n.toLocaleString() : '—';
   }
@@ -330,8 +331,9 @@
       'evidence_ledger.json': t('Evidence ledger', '证据账本'),
       'agent_plan.json': t('Agent plan', 'Agent 计划'),
       'literature_evidence.json': t('Literature evidence', '文献证据'),
+      'scientific_plan_review.json': t('Scientific plan review', '科学计划审阅'),
       'manuscript_draft.json': t('Locked manuscript draft', '锁定论文草稿'),
-      'benchmark_scorecard.json': t('Benchmark scorecard', 'Benchmark 记分卡'),
+      'benchmark_scorecard.json': t('Evaluation scorecard', '评估记分卡'),
       'workflow_graph.json': t('Workflow graph', '工作流图谱'),
       'figure_gallery.json': t('Figure gallery', '图件画廊'),
       'result_tables.json': t('Research result tables', '科研结果表'),
@@ -362,12 +364,13 @@
     const labels = {
       'figure_gallery.json': t('Task-specific figures rendered from this completed run.', '这道问题已渲染出的任务特异图件。'),
       'result_tables.json': t('Bounded aggregate table previews from registered Research Agent evidence.', '来自 Research Agent 已登记证据的有界聚合表格预览。'),
-      'benchmark_scorecard.json': t('Plan, code, evidence binding, and safety scores for the question.', '这道问题的计划、代码、证据绑定与安全评分。'),
+      'benchmark_scorecard.json': t('Plan, code, evidence binding, and safety scores for this research run.', '本次研究运行的计划、代码、证据绑定与安全评分。'),
       'workflow_graph.json': t('Agent steps and handoffs from question to evidence review.', '从研究问题到证据审阅的 Agent 步骤与交接。'),
       'evidence_ledger.json': t('Artifact hashes, evidence ids, and privacy-audit status.', '产物哈希、证据 ID 与隐私审计状态。'),
       'quality_gate.json': t('Automated checks explaining why the run remains analysis-only.', '自动核验结果，说明为何仍保持 analysis-only。'),
       'agent_plan.json': t('The step-by-step analysis plan used by the Agent.', 'Agent 执行时使用的分步分析计划。'),
       'literature_evidence.json': t('Search provenance, article metadata, and exact plan-step citation bindings.', '检索溯源、文章元数据以及计划步骤的精确文献绑定。'),
+      'scientific_plan_review.json': t('Digest-bound multi-dimensional review before the plan can be approved.', '计划批准前的摘要绑定多维科学审阅。'),
       'manuscript_draft.json': t('Locked claims and evidence ids; not a reportable manuscript.', '锁定论断及其证据 ID；不是可报告论文草稿。'),
       'run_context.json': t('Question, cohort, source run, and local project metadata.', '研究问题、队列、原始运行与本地项目元数据。'),
       'cohort_summary.json': t('Denominator, cohort basis, and outcome availability.', '分母、队列依据与结局可用性。'),
@@ -384,6 +387,7 @@
       'quality_gate.json',
       'evidence_ledger.json',
       'agent_plan.json',
+      'scientific_plan_review.json',
       'literature_evidence.json',
       'manuscript_draft.json',
       'run_context.json',
@@ -550,6 +554,93 @@
     if (summary.length) {
       sections.push(artifactTable(t('Readable artifact summary', '可读产物摘要'), [t('Field', '字段'), t('Value', '值')], summary));
     }
+    if (n === 'scientific_plan_review.json') {
+      const dimensionLabels = {
+        literature: t('Literature relevance and recency', '文献相关性与时效性'),
+        novelty: t('Novelty position', '创新性定位'),
+        literature_to_plan: t('Literature-to-plan route', '文献到计划的借鉴链'),
+        icu_clinical_design: t('ICU clinical design', 'ICU 临床设计'),
+        statistical_design: t('Statistical design', '统计设计'),
+        robustness: t('Robustness', '稳健性'),
+        figures: t('Figure strategy', '图件策略'),
+        content_completeness: t('Article content completeness', '文章内容完整度'),
+      };
+      const dimensions = p.dimension_scores && typeof p.dimension_scores === 'object'
+        ? Object.entries(p.dimension_scores) : [];
+      const scoreInterpretation = p.facts && p.facts.score_interpretation
+        && typeof p.facts.score_interpretation === 'object'
+        ? p.facts.score_interpretation : {};
+      sections.push(artifactTable(
+        t('Assessment boundary', '评分边界'),
+        [t('Item', '项目'), t('Meaning', '含义')],
+        [
+          [t('Scope', '范围'), p.review_scope || 'pre_execution_plan'],
+          [t('Rendered figures assessed', '是否审阅实际渲染图'), p.rendered_outputs_assessed ? t('yes', '是') : t('no — N/A before execution', '否——执行前不适用')],
+          [t('Figure score', '图件评分'), scoreInterpretation.figures || t('Planned role coverage only.', '仅表示计划角色覆盖。')],
+          [t('Content score', '内容评分'), scoreInterpretation.content_completeness || t('Planned article-role coverage only.', '仅表示计划中的文章角色覆盖。')],
+        ]
+      ));
+      sections.push(artifactTable(
+        t('Top-journal plan scorecard', '顶刊计划多维评分'),
+        [t('Dimension', '维度'), t('Score', '评分'), t('Status', '状态')],
+        dimensions.map(([key, value]) => [
+          dimensionLabels[key] || key,
+          `${Number(value || 0)} / 100`,
+          Number(value || 0) >= 90 ? t('strong', '较强') : Number(value || 0) >= 70 ? t('needs review', '需复核') : t('weak / blocked', '薄弱 / 阻断'),
+        ]),
+        t('No dimension scores are present.', '没有逐维度评分。')
+      ));
+      const findings = Array.isArray(p.findings) ? p.findings : [];
+      sections.push(artifactTable(
+        t('Required changes before analysis', '分析前必须处理的问题'),
+        [t('Severity', '级别'), t('Owner lane', '责任通道'), t('Finding', '问题'), t('Why it matters', '影响'), t('Minimal remediation', '最小修复')],
+        findings.map(row => [row.severity || '', row.remediation_route || 'unclassified', row.code || '', row.message || '', row.remediation || '']),
+        t('No blockers or major findings.', '没有 blocker 或 major 问题。')
+      ));
+      const bindingSteps = p.facts && p.facts.literature_design_bindings
+        && Array.isArray(p.facts.literature_design_bindings.steps)
+        ? p.facts.literature_design_bindings.steps : [];
+      const bindingRows = [];
+      bindingSteps.forEach(step => {
+        (Array.isArray(step.citations) ? step.citations : []).forEach(row => {
+          bindingRows.push([
+            step.step_id || '', row.title || row.citation_key || '',
+            Array.isArray(row.design_elements) ? row.design_elements.join(', ') : '',
+            row.application || '', row.divergence || '',
+          ]);
+        });
+      });
+      sections.push(artifactTable(
+        t('What each article actually contributes to the plan', '每篇文献具体如何影响计划'),
+        [t('Step', '步骤'), t('Article', '文章'), t('Design element', '设计要素'), t('Applied as', '具体应用'), t('Deliberate divergence', '主动偏离')],
+        bindingRows,
+        t('No typed literature-to-design bindings are present.', '没有结构化的文献到设计绑定。')
+      ));
+    }
+    if (String(p.schema_version || '') === 'easyicu.data-package-review/1') {
+      const denominator = p.denominator && typeof p.denominator === 'object' ? p.denominator : {};
+      sections.push(artifactTable(
+        t('Data package checkpoint', '数据包检查点'),
+        [t('Item', '项目'), t('Value', '值')],
+        [
+          [t('Review status', '审阅状态'), p.status || ''],
+          [t('Analysis unit', '分析单位'), denominator.analysis_unit || ''],
+          [t('Aggregate denominator', '聚合分母'), denominator.count == null ? '' : Number(denominator.count).toLocaleString()],
+          [t('Review digest', '审阅摘要'), p.review_sha256 || ''],
+        ]
+      ));
+      const concepts = Array.isArray(p.concepts) ? p.concepts : [];
+      sections.push(artifactTable(
+        t('Configured concept availability', '已配置概念可用性'),
+        [t('Study role', '研究角色'), t('Concept', '概念'), t('Status', '状态'), t('Evaluable / denominator', '可评估 / 分母'), t('Missingness semantics', '缺失语义')],
+        concepts.map(row => [
+          row.study_role || '', row.concept_id || '', row.availability_status || '',
+          row.evaluable_count == null ? '' : `${Number(row.evaluable_count).toLocaleString()} / ${Number(row.denominator_count || 0).toLocaleString()}`,
+          row.interpretation || row.reason_code || '',
+        ]),
+        t('No execution concepts were configured.', '尚未配置执行概念。')
+      ));
+    }
     if (n.includes('figure_gallery')) {
       const figs = Array.isArray(p.figures) ? p.figures : [];
       sections.push(artifactTable(
@@ -598,7 +689,7 @@
         t('No per-dimension scores are present.', '没有逐维度评分。')
       ));
     }
-    if (n.includes('workflow') || n.includes('plan')) {
+    if ((n.includes('workflow') || n.includes('plan')) && n !== 'scientific_plan_review.json') {
       sections.push(artifactTable(
         t('Workflow steps', '工作流步骤'),
         [t('ID', 'ID'), t('Step', '步骤'), t('Status', '状态'), t('Evidence / output', '证据 / 产物')],

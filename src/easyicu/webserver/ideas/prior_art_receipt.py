@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-PRIOR_ART_BINDING_SCHEMA_VERSION = "easyicu.idea-prior-art-binding/1"
+PRIOR_ART_BINDING_SCHEMA_VERSION = "easyicu.idea-prior-art-binding/2"
 _MAX_RECEIPT_BYTES = 512_000
 _MAX_CITATIONS = 20
 
@@ -120,8 +120,26 @@ def load_bound_prior_art_literature(
             "The prior-art result count no longer matches the accepted handoff.",
         )
 
-    citations = [_citation(row) for row in results[:_MAX_CITATIONS]]
-    citations = [row for row in citations if row is not None]
+    citation_pairs = [
+        (_citation(row), row) for row in results[:_MAX_CITATIONS]
+    ]
+    citation_pairs = [
+        (citation, row)
+        for citation, row in citation_pairs
+        if citation is not None
+    ]
+    citations = [citation for citation, _row in citation_pairs]
+    screening_decisions = [
+        _screening_decision(citation, row)
+        for citation, row in citation_pairs
+    ]
+    queries = list(
+        dict.fromkeys(
+            _text(row.get("query"), 800)
+            for row in results[:_MAX_CITATIONS]
+            if _text(row.get("query"), 800)
+        )
+    )
     result_count = len(results)
     return {
         "research_question": _text(research_question, 2_000),
@@ -138,6 +156,7 @@ def load_bound_prior_art_literature(
             "curated_seed_count": 0,
             "sources_enabled": ["idea_mining_pubmed"],
             "sources_returning": ["idea_mining_pubmed"] if citations else [],
+            "search_queries": {"idea_mining_pubmed": queries},
             "search_conducted": True,
             "searched_at": searched_at,
             "note": (
@@ -145,6 +164,7 @@ def load_bound_prior_art_literature(
                 "receipt was digest-bound when the Idea handoff was accepted."
             ),
         },
+        "screening_decisions": screening_decisions,
     }
 
 
@@ -219,20 +239,72 @@ def _citation(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:
     )
     year = year_match.group(0) if year_match else "n/a"
     doi = _text(row.get("doi"), 240) or None
-    query = _text(row.get("query"), 800)
+    abstract_excerpt = _text(
+        row.get("design_excerpt") or row.get("abstract_excerpt"), 1_200
+    )
+    evidence_sentence = _text(row.get("evidence_sentence"), 500)
+    publication_types = list(
+        dict.fromkeys(
+            _text(value, 120)
+            for value in list(row.get("publication_types") or [])[:20]
+            if _text(value, 120)
+        )
+    )
     return {
         "key": f"idea_pubmed_{pmid}",
         "title": title,
         "year": year,
         "venue": _text(row.get("journal") or row.get("source"), 240) or None,
+        # Query text belongs in search provenance, never in a paper-content
+        # field. Mixing the two allowed the query's own exposure/outcome words
+        # to make an unrelated return look like a direct comparator.
         "relevance": (
-            f"Matched the accepted Idea Mining PubMed query: {query}"
-            if query
-            else "Returned by the accepted Idea Mining PubMed metadata search."
+            "Study-design excerpt: " + abstract_excerpt
+            if abstract_excerpt
+            else (
+                "Source excerpt: " + evidence_sentence
+                if evidence_sentence
+                else "PubMed title metadata only; no abstract excerpt retained."
+            )
         ),
         "doi": doi,
         "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
         "pmid": pmid,
+        "publication_types": publication_types,
+    }
+
+
+def _screening_decision(
+    citation: Mapping[str, Any],
+    row: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project only source-content screening facts into the Agent handoff.
+
+    The Web prior-art owner does not know the final ResearchContext descriptor
+    names, so it must not invent a publication inclusion verdict. It records a
+    conservative related-context decision; the Agent re-screens the same
+    digest-bound title/excerpt against its exact typed exposure and outcome.
+    """
+
+    return {
+        "citation_key": str(citation.get("key") or ""),
+        "source": "idea_mining_pubmed",
+        "disposition": "exclude",
+        "evidence_role": "related_context",
+        "rationale": (
+            "Web prior-art retrieval is a candidate handoff, not final direct-"
+            "comparator authority. The Agent must re-screen this source-backed "
+            "title/excerpt against its exact typed population, exposure, and outcome."
+        ),
+        "query": _text(row.get("query"), 800) or None,
+        "population_match": False,
+        "exposure_match": False,
+        "outcome_match": False,
+        "design_excerpt_available": bool(
+            _text(row.get("design_excerpt") or row.get("abstract_excerpt"), 1_200)
+            or _text(row.get("evidence_sentence"), 500)
+        ),
+        "publication_type_eligible": False,
     }
 
 

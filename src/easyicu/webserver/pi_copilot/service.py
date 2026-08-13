@@ -18,6 +18,7 @@ from easyicu.extensions import (
 )
 
 from easyicu.webserver import (
+    agent_pipeline_runs,
     agent_runs,
     guided_sessions,
     jobs,
@@ -31,6 +32,7 @@ from .contracts import (
     MAX_MESSAGE_CHARS,
     AuthorityBinding,
     PiCopilotError,
+    PiProjectBindingHandoffReceipt,
     PiSessionRecord,
     ToolExecutionContext,
     utc_now,
@@ -62,6 +64,9 @@ ALLOWED_TURN_ACTIONS = frozenset(
         "workspace_write",
         "mcp_read",
     }
+)
+_RETIRED_SESSION_METADATA_FIELDS = frozenset(
+    {"canonical_task_id", "canonical_input_sha256", "canonical_job_id"}
 )
 
 
@@ -142,8 +147,22 @@ class PiCopilotService:
             )
         records = []
         for row in rows[:MAX_SESSIONS]:
+            if isinstance(row, Mapping) and row.get("canonical_task_id"):
+                # A short-lived development-only UI specialization wrote these
+                # records before being retired. They never represented ordinary
+                # user conversations, so do not surface them as such.
+                continue
             try:
-                records.append(PiSessionRecord.model_validate(row))
+                migrated = (
+                    {
+                        key: value
+                        for key, value in row.items()
+                        if key not in _RETIRED_SESSION_METADATA_FIELDS
+                    }
+                    if isinstance(row, Mapping)
+                    else row
+                )
+                records.append(PiSessionRecord.model_validate(migrated))
             except Exception as exc:
                 raise PiCopilotError(
                     "pi_session_store_invalid",
@@ -442,6 +461,20 @@ class PiCopilotService:
             return str(rows[0].get("run_id") or "") or None
         return None
 
+    @staticmethod
+    def _explicit_context_binding_receipt(
+        study_context_id: str,
+    ) -> ProjectStudyContextMigrationReceipt:
+        requested_source = hashlib.sha256(
+            str(study_context_id).encode("utf-8")
+        ).hexdigest()
+        return ProjectStudyContextMigrationReceipt(
+            status="initialized",
+            source_schema="easyicu.explicit-studycontext-binding/1",
+            source_digest=requested_source,
+            migrated_fields=["study_context_id"],
+        )
+
     def _resolve_project_context(
         self,
         *,
@@ -449,6 +482,7 @@ class PiCopilotService:
         title: str,
         requested_study_context_id: Optional[str] = None,
         confirm_initialization: bool = False,
+        defer_requested_binding: bool = False,
     ) -> Dict[str, Any]:
         """Resolve only the Host-owned StudyContext for one research project."""
 
@@ -547,19 +581,14 @@ class PiCopilotService:
         if mapped_id:
             self.project_store.bind(project_id, str(context["id"]))
         elif requested_study_context_id:
-            requested_source = hashlib.sha256(
-                str(requested_study_context_id).encode("utf-8")
-            ).hexdigest()
-            self.project_store.bind(
-                project_id,
-                str(context["id"]),
-                migration_receipt=ProjectStudyContextMigrationReceipt(
-                    status="initialized",
-                    source_schema="easyicu.explicit-studycontext-binding/1",
-                    source_digest=requested_source,
-                    migrated_fields=["study_context_id"],
-                ),
-            )
+            if not defer_requested_binding:
+                self.project_store.bind(
+                    project_id,
+                    str(context["id"]),
+                    migration_receipt=self._explicit_context_binding_receipt(
+                        str(requested_study_context_id)
+                    ),
+                )
         else:
             self.project_store.bind(
                 project_id,
@@ -574,6 +603,7 @@ class PiCopilotService:
         project_id: str,
         title: str,
         confirm_initialization: bool = False,
+        binding_receipt: Optional[PiProjectBindingHandoffReceipt] = None,
     ) -> Dict[str, Any]:
         """Explicitly migrate/bind Guided metadata before any session GET."""
 
@@ -589,6 +619,7 @@ class PiCopilotService:
                 project_id=clean_project,
                 title=title,
                 confirm_initialization=confirm_initialization,
+                binding_receipt=binding_receipt,
             )
 
     def _initialize_project_locked(
@@ -597,6 +628,7 @@ class PiCopilotService:
         project_id: str,
         title: str,
         confirm_initialization: bool,
+        binding_receipt: Optional[PiProjectBindingHandoffReceipt] = None,
     ) -> Dict[str, Any]:
         """Run resolve/create/bind as one per-project initialization transaction."""
 
@@ -618,12 +650,101 @@ class PiCopilotService:
                 details={"project_id": clean_project},
             )
         requested_context_id = next(iter(legacy_context_ids), None)
+        if binding_receipt is not None:
+            if binding_receipt.project_id != clean_project:
+                raise PiCopilotError(
+                    "pi_project_handoff_mismatch",
+                    "The Agent handoff belongs to another research project.",
+                    status_code=409,
+                )
+            mapped_context_id = self.project_store.resolve(clean_project)
+            if (
+                mapped_context_id is not None
+                and mapped_context_id != binding_receipt.study_context_id
+            ):
+                raise PiCopilotError(
+                    "pi_project_study_context_mismatch",
+                    "The project is already bound to another StudyContext.",
+                    status_code=409,
+                    details={
+                        "project_id": clean_project,
+                        "mapped_study_context_id": mapped_context_id,
+                        "handoff_study_context_id": binding_receipt.study_context_id,
+                    },
+                )
+            if (
+                requested_context_id is not None
+                and requested_context_id != binding_receipt.study_context_id
+            ):
+                raise PiCopilotError(
+                    "pi_project_study_context_mismatch",
+                    "Saved Pi sessions disagree with the Agent handoff StudyContext.",
+                    status_code=409,
+                )
+            requested_context_id = binding_receipt.study_context_id
+            try:
+                handed_off_context = study_contexts.get_context(requested_context_id)
+            except study_contexts.StudyContextError as exc:
+                raise PiCopilotError(
+                    str(exc.detail.get("error") or "study_context_invalid"),
+                    "The Agent handoff StudyContext could not be loaded.",
+                    status_code=409,
+                    details=exc.detail,
+                ) from exc
+            if handed_off_context is None:
+                raise PiCopilotError(
+                    "pi_project_study_context_missing",
+                    "The Agent handoff StudyContext no longer exists.",
+                    status_code=409,
+                    details={"study_context_id": requested_context_id},
+                )
+            current_revision = int(handed_off_context.get("revision") or 0)
+            if current_revision != binding_receipt.study_context_revision:
+                raise PiCopilotError(
+                    "pi_project_handoff_revision_conflict",
+                    "The StudyContext changed after the Agent handoff was created.",
+                    status_code=409,
+                    details={
+                        "study_context_id": binding_receipt.study_context_id,
+                        "expected_revision": binding_receipt.study_context_revision,
+                        "current_revision": current_revision,
+                    },
+                )
         context = self._resolve_project_context(
             project_id=clean_project,
             title=title,
             requested_study_context_id=requested_context_id,
             confirm_initialization=confirm_initialization,
+            defer_requested_binding=binding_receipt is not None,
         )
+        if binding_receipt is not None and (
+            str(context.get("id") or "") != binding_receipt.study_context_id
+            or int(context.get("revision") or 0)
+            != binding_receipt.study_context_revision
+        ):
+            raise PiCopilotError(
+                "pi_project_handoff_revision_conflict",
+                "The StudyContext changed while the Agent handoff was being bound.",
+                status_code=409,
+                details={
+                    "study_context_id": binding_receipt.study_context_id,
+                    "expected_revision": binding_receipt.study_context_revision,
+                    "current_study_context_id": str(context.get("id") or ""),
+                    "current_revision": int(context.get("revision") or 0),
+                },
+            )
+        if binding_receipt is not None:
+            # The final revision check above must happen before the immutable
+            # project mapping is published. Otherwise a concurrent StudyContext
+            # update can reject the handoff while still leaving a new binding
+            # behind.
+            self.project_store.bind(
+                clean_project,
+                str(context["id"]),
+                migration_receipt=self._explicit_context_binding_receipt(
+                    binding_receipt.study_context_id
+                ),
+            )
         with self._lock:
             rows = self._read_records()
             migrated = 0
@@ -654,6 +775,12 @@ class PiCopilotService:
             "status": "ready",
             "project_id": clean_project,
             "study_context_id": str(context["id"]),
+            "study_context_revision": int(context.get("revision") or 0),
+            "binding_receipt": (
+                binding_receipt.model_dump(mode="json")
+                if binding_receipt is not None
+                else None
+            ),
             "migrated_sessions": migrated,
             "migration_receipt": (
                 binding.migration_receipt.model_dump(mode="json")
@@ -1186,11 +1313,18 @@ class PiCopilotService:
             limit=1,
         )
         rows = [row for row in (history.get("runs") or []) if isinstance(row, Mapping)]
+        latest_run = rows[0] if rows else None
+        plan_review_authority = (
+            agent_pipeline_runs.pending_review(latest_run.get("run_id"))
+            if latest_run
+            else None
+        )
         snapshot = build_research_workflow_snapshot(
             study=study,
             active_export_present=registered_export_matches_study(study, registry),
             active_job=active_job,
-            latest_run=rows[0] if rows else None,
+            latest_run=latest_run,
+            plan_review_authority=plan_review_authority,
         )
         return {
             "ok": True,
@@ -1209,6 +1343,72 @@ class PiCopilotService:
         return {
             "ok": True,
             "artifact": self.workspace.preview_file(clean, relative_file),
+        }
+
+    def get_data_package_review(
+        self,
+        *,
+        project_id: str,
+        study_revision: int,
+        review_sha256: str,
+    ) -> Dict[str, Any]:
+        """Rebuild an exact project-scoped aggregate data-package review."""
+
+        clean = self._assert_project_initialized(project_id)
+        study_context_id = self.project_store.resolve(clean)
+        study = (
+            study_contexts.get_context(study_context_id) if study_context_id else None
+        )
+        if not study:
+            raise PiCopilotError(
+                "pi_data_package_study_not_found",
+                "The research project has no bound StudyContext.",
+                status_code=404,
+            )
+        expected_revision = int(study_revision)
+        current_revision = int(study.get("revision") or 0)
+        if expected_revision != current_revision:
+            raise PiCopilotError(
+                "pi_data_package_review_stale",
+                "The data-package review is stale because the StudyContext changed.",
+                status_code=409,
+                details={
+                    "expected_revision": expected_revision,
+                    "current_revision": current_revision,
+                },
+            )
+        from easyicu.webserver.data_package_review import (
+            DataPackageReviewError,
+            build_registered_data_package_review,
+        )
+
+        try:
+            payload = build_registered_data_package_review(study)
+        except DataPackageReviewError as exc:
+            raise PiCopilotError(
+                exc.code,
+                exc.message,
+                status_code=409,
+                details=exc.details,
+            ) from exc
+        expected_digest = str(review_sha256 or "").strip().lower()
+        actual_digest = str(payload.get("review_sha256") or "")
+        if expected_digest != actual_digest:
+            raise PiCopilotError(
+                "pi_data_package_review_digest_mismatch",
+                "The requested data-package review no longer matches its owner digest.",
+                status_code=409,
+            )
+        return {
+            "ok": True,
+            "payload": self._browser_artifact_payload(payload),
+            "privacy": dict(payload.get("privacy") or {}),
+            "governance": {
+                "claim_ceiling": "pre_analysis_review",
+                "reportable": False,
+                "human_signoff": "not_applicable",
+                "analysis_results_withheld": True,
+            },
         }
 
     @staticmethod
@@ -1347,6 +1547,82 @@ class PiCopilotService:
             "governance": {
                 key: value for key, value in governance.items() if key != "ok"
             },
+        }
+
+    def get_research_document(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        document_name: str,
+    ) -> Dict[str, Any]:
+        """Return one fixed, receipt-bound manuscript document for preview."""
+
+        clean_project = self._assert_project_initialized(project_id)
+        study_context_id = self.project_store.resolve(clean_project)
+        clean_run = str(run_id or "").strip()
+        clean_name = str(document_name or "").strip()
+        history = agent_runs.list_run_history(study_id=study_context_id, limit=200)
+        row = next(
+            (
+                item
+                for item in (history.get("runs") or [])
+                if isinstance(item, Mapping) and item.get("run_id") == clean_run
+            ),
+            None,
+        )
+        if row is None:
+            raise PiCopilotError(
+                "pi_research_run_not_found",
+                "The requested EasyICU run does not belong to this research project.",
+                status_code=404,
+                details={"run_id": clean_run},
+            )
+        project_dir = str(row.get("project_dir") or "")
+        loaded = agent_runs.read_run_artifact_bytes(project_dir, clean_name)
+        if not loaded.get("ok"):
+            code = str(loaded.get("error") or "pi_research_document_unavailable")
+            raise PiCopilotError(
+                code,
+                "The requested EasyICU manuscript document is unavailable.",
+                status_code=404 if code == "artifact_not_found" else 400,
+                details={"document": clean_name},
+            )
+        review = agent_runs.read_run_review(project_dir)
+        if not review.get("ok"):
+            raise PiCopilotError(
+                str(review.get("error") or "pi_research_document_governance_unavailable"),
+                "The EasyICU run governance state is unavailable for this document.",
+                status_code=409,
+                details={"document": clean_name},
+            )
+        artifact = next(
+            (
+                item
+                for item in (review.get("artifacts") or [])
+                if isinstance(item, Mapping) and item.get("name") == clean_name
+            ),
+            None,
+        )
+        if artifact is None:
+            raise PiCopilotError(
+                "pi_research_document_unregistered",
+                "The manuscript document is not registered in this run ledger.",
+                status_code=409,
+                details={"document": clean_name},
+            )
+        governance = agent_runs.project_artifact_governance(review, artifact=artifact)
+        if not governance.get("ok"):
+            raise PiCopilotError(
+                str(governance.get("error") or "pi_research_document_governance_invalid"),
+                "The EasyICU governance projection is invalid for this document.",
+                status_code=409,
+                details={"document": clean_name},
+            )
+        return {
+            "content": loaded["content"],
+            "media_type": loaded["media_type"],
+            "claim_ceiling": governance.get("claim_ceiling") or "unsupported",
         }
 
     def _public_session(

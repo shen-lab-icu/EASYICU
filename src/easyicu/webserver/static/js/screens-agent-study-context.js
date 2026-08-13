@@ -7,6 +7,7 @@
   const jobContexts = new Map();
   const contextRuns = new Map();
   let runTokenSequence = 0;
+  let guidedHandoff = null;
 
   function createRunChannel() {
     let current = null;
@@ -132,6 +133,8 @@
   function project(context) {
     if (!context || !context.id) return null;
     const source = context.data_source || {};
+    const crossdbSelection = context.crossdb_selection || {};
+    const selectedSources = Array.isArray(crossdbSelection.sources) ? crossdbSelection.sources : [];
     const cohort = context.cohort || {};
     const currentStage = String(context.current_stage || 'plan');
     const lastRun = matchingLastRun(context);
@@ -144,7 +147,9 @@
     const stage = running ? 2 : (review || reviewBlocked ? 3 : 0);
     const title = context.title || context.question || 'StudyContext project';
     const question = context.question || context.analysis_goal || title;
-    const sourceLabel = source.label || source.database || 'StudyContext';
+    const sourceLabel = selectedSources.length
+      ? `${crossdbSelection.source_count || selectedSources.length} selected exports`
+      : (source.label || source.database || 'StudyContext');
     return {
       id: context.id,
       name: [title, title],
@@ -183,6 +188,12 @@
   }
 
   function sourceFor(study, fallback) {
+    // A Cross-DB receipt is the source boundary. Falling back to the active
+    // registry export here made a two-source plan look as if it were bound to
+    // one arbitrary export (including that export's path and stay count).
+    const selection = study && study.studyContext && study.studyContext.crossdb_selection;
+    const selectedSources = Array.isArray(selection && selection.sources) ? selection.sources : [];
+    if (study && (study.planOnly || selectedSources.length > 1)) return null;
     const bound = study && study.studyContext && study.studyContext.data_source;
     if (!bound || !bound.path) return fallback || null;
     const registry = window.EU_WORKSPACE_REGISTRY || {};
@@ -195,6 +206,48 @@
     const current = api.active ? api.active() : null;
     if (!current || current.id !== study.studyContext.id) return activate(study.studyContext.id);
     return api.persist ? api.persist() : Promise.resolve(current);
+  }
+
+  async function prepareGuidedHandoff(study) {
+    const projectId = String(study && (study.id || study.studyContext && study.studyContext.id) || '').trim();
+    if (!projectId) {
+      throw new Error('A research project is required for Guided Copilot handoff.');
+    }
+    const initialTitle = String(study.name && study.name[0] || projectId).trim();
+    if (!study.studyContext || !study.studyContext.id) {
+      guidedHandoff = Object.freeze({
+        schema_version: 'easyicu.guided-project-handoff/1',
+        project_id: projectId,
+        project_title: initialTitle.slice(0, 160) || projectId,
+        binding_receipt: null,
+      });
+      return guidedHandoff;
+    }
+    const context = await persistForRun(study);
+    if (!context || !context.id || !Number.isInteger(context.revision)) {
+      throw new Error('The StudyContext handoff could not be persisted.');
+    }
+    const title = String(context.title || study.name && study.name[0] || context.id).trim();
+    const bindingReceipt = Object.freeze({
+      schema_version: 'easyicu.pi-project-binding-handoff/1',
+      project_id: String(context.id),
+      project_title: title.slice(0, 160) || String(context.id),
+      study_context_id: String(context.id),
+      study_context_revision: context.revision,
+    });
+    guidedHandoff = Object.freeze({
+      schema_version: 'easyicu.guided-project-handoff/1',
+      project_id: bindingReceipt.project_id,
+      project_title: bindingReceipt.project_title,
+      binding_receipt: bindingReceipt,
+    });
+    return guidedHandoff;
+  }
+
+  function takeGuidedHandoff() {
+    const receipt = guidedHandoff;
+    guidedHandoff = null;
+    return receipt;
   }
 
   /* Returns null, or a typed refusal: {code, reason}. The code is what
@@ -312,7 +365,7 @@
 
   window.EU_AGENT_STUDY_CONTEXT = {
     activeId, activate, bindingNote, createJobMemory, createRunChannel, has, hydrate, markContextFinished, markContextRunning,
-    markFinished, markRunning, persistForRun, projects, runBlocker, sourceFor,
+    markFinished, markRunning, persistForRun, prepareGuidedHandoff, projects, runBlocker, sourceFor, takeGuidedHandoff,
     submissionWarning, subscribe, warningNote,
   };
 })();

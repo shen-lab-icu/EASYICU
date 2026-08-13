@@ -22,6 +22,7 @@ import socket
 import ssl
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib import parse, request
@@ -52,8 +53,10 @@ _AGENT_PROJECTS_ROOT = _CONFIG_DIR / "agent_project_seeds"
 _AGENT_PROJECTS_PATH = _CONFIG_DIR / "webserver_agent_project_seeds.json"
 
 _MAX_SOURCE_QUOTE = 420
+_MAX_DESIGN_EXCERPT = 1_200
 _MAX_FEATURE_STATS = 24
 _MAX_FETCH_BYTES = 256_000
+_MAX_PUBMED_FETCH_BYTES = 1_000_000
 _MAX_PDF_BYTES = 20 * 1024 * 1024
 _MAX_PDF_BASE64_CHARS = 4 * ((_MAX_PDF_BYTES + 2) // 3)
 _MAX_PDF_EXTRACT_PAGES = 8
@@ -117,6 +120,14 @@ _MATERIALIZED_CONCEPT_SUFFIXES = (
     "_max",
     "_min",
     "_n",
+)
+_MAX_DISCOVERY_QUERIES = 5
+_DISCOVERY_QUERY_STRATA = (
+    "broad_icu",
+    "direct_observational_comparator_all_years",
+    "direct_observational_comparator_recent",
+    "review_or_guideline",
+    "critical_care_database",
 )
 
 
@@ -495,15 +506,24 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
 
     errors: List[str] = []
     network_calls = 0
-    ids: List[str] = []
-    for query in queries[:3]:
+    query_hits: List[Tuple[str, str, List[str]]] = []
+    for index, query in enumerate(queries[:_MAX_DISCOVERY_QUERIES]):
+        stratum = (
+            _DISCOVERY_QUERY_STRATA[index]
+            if index < len(_DISCOVERY_QUERY_STRATA)
+            else f"prespecified_{index + 1}"
+        )
         try:
             found = _pubmed_esearch(query, limit=limit)
             network_calls += 1
-            ids.extend(found)
+            query_hits.append((stratum, query, found))
         except Exception as exc:
+            query_hits.append((stratum, query, []))
             errors.append(str(exc)[:240])
-    ids = _dedupe_strings(ids)[:limit]
+    ids, retrieval_by_pmid, query_strata = _stratified_pubmed_ids(
+        query_hits,
+        limit=limit,
+    )
     articles: List[Dict[str, Any]] = []
     if ids:
         try:
@@ -525,6 +545,11 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
     source_candidates: List[Dict[str, Any]] = []
     idea_candidates: List[Dict[str, Any]] = []
     for article in articles:
+        pmid = str(article.get("pmid") or "").strip()
+        retrieval = retrieval_by_pmid.get(pmid) or {
+            "queries": [],
+            "strata": [],
+        }
         source = _source_record(
             {
                 "source_type": "pubmed",
@@ -547,6 +572,8 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
                 or "",
             }
         )
+        source["design_excerpt"] = article.get("design_excerpt") or ""
+        source["publication_types"] = list(article.get("publication_types") or [])
         text = "\n".join(
             [
                 topic,
@@ -559,6 +586,8 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
         idea = _idea_from_source(source, text, hits, export_index)
         source["discovery_rank"] = len(source_candidates) + 1
         source["pubmed_metadata_only"] = True
+        source["matched_queries"] = list(retrieval["queries"])
+        source["matched_query_strata"] = list(retrieval["strata"])
         source_candidates.append(source)
         idea_candidates.append(
             {
@@ -589,7 +618,9 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
         "mode": "frontier_literature_discovery",
         "status": status,
         "search_performed": True,
+        "searched_at": _now(),
         "queries_to_run": queries,
+        "query_strata": query_strata,
         "network_calls": network_calls,
         "source_candidates": source_candidates,
         "idea_candidates": idea_candidates,
@@ -1105,9 +1136,19 @@ def create_agent_project(body: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def list_agent_projects(body: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    """List metadata-only Agent project seeds created from Idea Mining."""
+    """List product-facing metadata-only Agent project seeds.
+
+    Historical evaluation imports are experiment evidence, not user research
+    projects.  They remain on disk for the benchmark/evidence owners to audit,
+    but the product project rail must not turn them into a dedicated question
+    bank or imply that ordinary users choose from a fixed benchmark.
+    """
     limit = int((body or {}).get("limit") or 20)
-    seeds = _read_agent_projects()
+    seeds = [
+        row
+        for row in _read_agent_projects()
+        if row.get("seed_kind") != "canonical9_import" and not row.get("benchmark")
+    ]
     return {
         "ok": True,
         "projects": seeds[: max(1, min(limit, 100))],
@@ -3073,21 +3114,177 @@ def _discovery_queries(topic: str, journal: str, body: Dict[str, Any]) -> List[s
         )
     journal_filter = f' AND "{journal}"[Journal]' if journal else ""
     scope = _discovery_topic_clause(topic, body)
+    population_filter = _discovery_population_filter(topic, body)
+    observational_filter = (
+        " NOT (Review[Publication Type] OR Meta-Analysis[Publication Type] OR "
+        "Guideline[Publication Type] OR Practice Guideline[Publication Type] OR "
+        "Randomized Controlled Trial[Publication Type] OR Clinical Trial[Publication Type])"
+    )
+    comparator_intent_filter = (
+        " AND (prevalence[Title/Abstract] OR incidence[Title/Abstract] OR "
+        "association[Title/Abstract] OR associated[Title/Abstract] OR "
+        "risk[Title/Abstract] OR predict*[Title/Abstract] OR "
+        "prognos*[Title/Abstract])"
+    )
+    # The all-year direct-comparator stratum protects recall for foundational
+    # ICU cohort/validation studies; the second, recent stratum independently
+    # tests whether the current five-year literature is covered. Conflating
+    # those questions caused an older but directly relevant cohort to vanish
+    # from the candidate set. An explicit user date range remains authoritative
+    # and replaces the default recent window without deleting the all-year
+    # comparator stratum.
+    recent_start = datetime.now(timezone.utc).year - 5
+    direct_year_filter = year_filter or (
+        f' AND ("{recent_start}/01/01"[Date - Publication] : '
+        '"3000/12/31"[Date - Publication])'
+    )
     base = f'({scope}) AND (ICU[Title/Abstract] OR "critical care"[Title/Abstract] OR "intensive care"[Title/Abstract])'
+    direct = (
+        f"({scope}) AND "
+        "(cohort[Title/Abstract] OR observational[Title/Abstract] OR "
+        "retrospective[Title/Abstract] OR prospective[Title/Abstract] OR "
+        '"cross-sectional"[Title/Abstract]) '
+        "AND (ICU[Title/Abstract] OR \"critical care\"[Title/Abstract] OR "
+        '"intensive care"[Title/Abstract])'
+        + population_filter
+        + comparator_intent_filter
+        + observational_filter
+    )
     review = f"({scope}) AND (review[Publication Type] OR systematic review[Title/Abstract] OR guideline[Title/Abstract])"
-    db = f'({scope}) AND (MIMIC[Title/Abstract] OR eICU[Title/Abstract] OR "critical care database"[Title/Abstract])'
+    db = (
+        f'({scope}) AND (MIMIC[Title/Abstract] OR eICU[Title/Abstract] OR '
+        '"critical care database"[Title/Abstract]) AND '
+        "(cohort[Title/Abstract] OR observational[Title/Abstract] OR "
+        "retrospective[Title/Abstract] OR prospective[Title/Abstract])"
+        + population_filter
+        + comparator_intent_filter
+        + observational_filter
+    )
     return [
         base + journal_filter + year_filter,
+        direct + year_filter,
+        direct + direct_year_filter,
         review + journal_filter + year_filter,
         db + year_filter,
     ]
 
 
+def _discovery_population_filter(topic: str, body: Dict[str, Any]) -> str:
+    """Compile only an explicitly declared adult/pediatric population filter.
+
+    Population filters improve precision, but silently assuming adults would
+    make a pediatric project disappear from its own search.  The compiler
+    therefore reads only bounded user/study text and emits no filter when the
+    age population is not explicit.
+    """
+
+    population = " ".join(
+        str(value or "")
+        for value in (
+            topic,
+            body.get("population"),
+            body.get("cohort"),
+            body.get("population_scope"),
+        )
+    ).casefold()
+    if any(token in population for token in ("adult", "adults", "成人")):
+        return (
+            " AND (adult[Title/Abstract] OR adults[Title/Abstract])"
+            " NOT (child[Title/Abstract] OR children[Title/Abstract] OR "
+            "pediatric[Title/Abstract] OR paediatric[Title/Abstract] OR "
+            "neonat*[Title/Abstract])"
+        )
+    if any(
+        token in population
+        for token in ("pediatric", "paediatric", "children", "child", "儿科", "儿童")
+    ):
+        return (
+            " AND (child[Title/Abstract] OR children[Title/Abstract] OR "
+            "pediatric[Title/Abstract] OR paediatric[Title/Abstract])"
+            " NOT (adult[Title/Abstract] OR adults[Title/Abstract])"
+        )
+    return ""
+
+
+def _stratified_pubmed_ids(
+    query_hits: Iterable[Tuple[str, str, Iterable[str]]],
+    *,
+    limit: int,
+) -> Tuple[List[str], Dict[str, Dict[str, List[str]]], List[Dict[str, Any]]]:
+    """Retain PubMed hits across prespecified search strata.
+
+    Concatenating all results before truncation lets a broad first query occupy
+    the complete candidate budget, even when review and database-specific
+    searches ran successfully.  Round-robin retention makes the bounded search
+    faithful to its displayed design without inventing a relevance score or
+    hand-picking an E1 paper.  Every retained PMID keeps the exact query or
+    queries that retrieved it for the downstream digest-bound receipt.
+    """
+
+    capped = max(1, min(int(limit), 20))
+    rows: List[Tuple[str, str, List[str]]] = []
+    retrieval_by_pmid: Dict[str, Dict[str, List[str]]] = {}
+    for stratum, query, raw_ids in query_hits:
+        hits = _dedupe_strings(raw_ids)
+        clean_stratum = _clean(stratum, 80) or "prespecified"
+        clean_query = _clean(query, 1_500)
+        rows.append((clean_stratum, clean_query, hits))
+        for pmid in hits:
+            receipt = retrieval_by_pmid.setdefault(
+                pmid,
+                {"queries": [], "strata": []},
+            )
+            if clean_query and clean_query not in receipt["queries"]:
+                receipt["queries"].append(clean_query)
+            if clean_stratum not in receipt["strata"]:
+                receipt["strata"].append(clean_stratum)
+
+    retained: List[str] = []
+    seen: set[str] = set()
+    rank = 0
+    while len(retained) < capped:
+        advanced = False
+        for _, _, hits in rows:
+            if rank >= len(hits):
+                continue
+            advanced = True
+            pmid = hits[rank]
+            if pmid in seen:
+                continue
+            seen.add(pmid)
+            retained.append(pmid)
+            if len(retained) >= capped:
+                break
+        if not advanced:
+            break
+        rank += 1
+
+    summaries = [
+        {
+            "id": stratum,
+            "query": query,
+            "returned_count": len(hits),
+            "retained_count": sum(1 for pmid in retained if pmid in set(hits)),
+        }
+        for stratum, query, hits in rows
+    ]
+    return retained, retrieval_by_pmid, summaries
+
+
 def _discovery_topic_clause(topic: str, body: Dict[str, Any]) -> str:
     """Compile conversational study text into a bounded PubMed topic clause."""
 
-    exposure = _literature_concept_phrase(body.get("exposure"))
-    outcome = _literature_concept_phrase(body.get("outcome"))
+    # A study slot has both a user-facing clinical label and, once configured,
+    # an owner-validated execution concept.  Prefer the latter for search
+    # compilation.  Quoting an entire protocol label (for example, a long
+    # Sepsis-3 definition with its anchor) as one Title/Abstract phrase destroys
+    # recall and is not an honest representation of the concept being searched.
+    exposure = _literature_concept_phrase(
+        body.get("exposure_concept") or body.get("exposure")
+    )
+    outcome = _literature_concept_phrase(
+        body.get("outcome_concept") or body.get("outcome")
+    )
     clauses = [
         _pubmed_title_abstract_clause(value) for value in (exposure, outcome) if value
     ]
@@ -3098,9 +3295,13 @@ def _discovery_topic_clause(topic: str, body: Dict[str, Any]) -> str:
     outcome_hit = _pick_outcome(topic, hits)
     predictor_hit = _pick_predictor(hits, outcome_hit)
     inferred = [
-        _pubmed_title_abstract_clause(str(row.get("label") or ""))
+        _pubmed_title_abstract_clause(
+            _literature_concept_phrase(
+                row.get("concept_id") or row.get("label")
+            )
+        )
         for row in (predictor_hit, outcome_hit)
-        if row and row.get("label")
+        if row and (row.get("concept_id") or row.get("label"))
     ]
     if inferred:
         return " AND ".join(inferred[:2])
@@ -3177,7 +3378,9 @@ def _pubmed_article_records(ids: List[str]) -> List[Dict[str, Any]]:
     params = parse.urlencode({"db": "pubmed", "id": ",".join(ids), "retmode": "xml"})
     url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?" + params
     with request.urlopen(url, timeout=_NETWORK_TIMEOUT_SEC) as resp:
-        raw = resp.read(_MAX_FETCH_BYTES)
+        raw = resp.read(_MAX_PUBMED_FETCH_BYTES + 1)
+    if len(raw) > _MAX_PUBMED_FETCH_BYTES:
+        raise ValueError("PubMed metadata response exceeded the bounded XML budget")
     root = ET.fromstring(raw)
     rows: List[Dict[str, Any]] = []
     for article_node in root.findall(".//PubmedArticle"):
@@ -3210,6 +3413,14 @@ def _pubmed_article_records(ids: List[str]) -> List[Dict[str, Any]]:
             3000,
         )
         evidence = _best_evidence_sentence(abstract or title)
+        publication_types = _dedupe_strings(
+            _node_text(node)
+            for node in article.findall("./PublicationTypeList/PublicationType")
+        )
+        design_excerpt = _study_design_excerpt(
+            abstract or title,
+            focus_terms=("ICU", "critical care", "mortality", "death"),
+        )
         rows.append(
             {
                 "pmid": pmid,
@@ -3220,6 +3431,8 @@ def _pubmed_article_records(ids: List[str]) -> List[Dict[str, Any]]:
                 "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else None,
                 "abstract_excerpt": _clean(abstract, _MAX_PDF_EXCERPT),
                 "evidence_sentence": evidence,
+                "design_excerpt": design_excerpt,
+                "publication_types": publication_types[:12],
                 "full_text_stored": False,
             }
         )
@@ -3276,6 +3489,57 @@ def _best_evidence_sentence(text: str) -> str:
         if any(k.lower() in sentence.lower() for k in keywords):
             return _clean(sentence, _MAX_SOURCE_QUOTE)
     return _clean(sentences[0] if sentences else text, _MAX_SOURCE_QUOTE)
+
+
+_STUDY_DESIGN_TERMS = (
+    "patient",
+    "participant",
+    "cohort",
+    "observational",
+    "retrospective",
+    "prospective",
+    "cross-sectional",
+    "multicenter",
+    "multi-center",
+    "inclusion",
+    "exclusion",
+    "eligible",
+    "admission",
+    "follow-up",
+    "follow up",
+    "adult",
+)
+
+
+def _study_design_excerpt(
+    text: str,
+    *,
+    focus_terms: Iterable[str] = (),
+) -> str:
+    """Retain a bounded extractive P/E/O/design excerpt for later screening.
+
+    A single keyword sentence is useful for chat, but it can discard the
+    population or design sentence needed to decide whether a paper is a true
+    comparator.  This helper remains extractive: it selects source sentences
+    and never summarizes or invents study details.
+    """
+
+    sentences = re.split(r"(?<=[.!?])\s+", _clean(text, 4_000))
+    normalized_focus = [
+        " ".join(re.sub(r"[^a-z0-9]+", " ", str(term).casefold()).split())
+        for term in focus_terms
+        if str(term or "").strip()
+    ]
+    selected: List[str] = []
+    for sentence in sentences:
+        folded = sentence.casefold()
+        normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", folded).split())
+        if any(term in folded for term in _STUDY_DESIGN_TERMS) or any(
+            term and term in normalized for term in normalized_focus
+        ):
+            selected.append(sentence)
+    excerpt = " ".join(selected[:5]) or " ".join(sentences[:2])
+    return _clean(excerpt, _MAX_DESIGN_EXCERPT)
 
 
 @dataclass(frozen=True)
@@ -3653,7 +3917,7 @@ def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
     results: List[Dict[str, Any]] = []
     calls = 0
     errors: List[str] = []
-    for query in queries[:3]:
+    for query in queries[:_MAX_DISCOVERY_QUERIES]:
         try:
             ids = _pubmed_esearch(query, limit=5)
             calls += 1

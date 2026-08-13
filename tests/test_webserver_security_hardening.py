@@ -87,6 +87,24 @@ def test_native_web_accepts_bracketed_ipv6_loopback_host() -> None:
     assert response.status_code == 200
 
 
+def test_native_web_sets_defense_in_depth_headers_and_has_no_font_network_call() -> None:
+    response = TestClient(app).get("/")
+
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["permissions-policy"] == (
+        "camera=(), microphone=(), geolocation=()"
+    )
+    csp = response.headers["content-security-policy"]
+    assert "default-src 'self'" in csp
+    assert "script-src 'self'" in csp
+    assert "font-src 'self'" in csp
+    assert "object-src 'none'" in csp
+    assert "fonts.googleapis.com" not in response.text
+    assert "fonts.gstatic.com" not in response.text
+
+
 def test_native_web_cli_refuses_non_loopback_bind(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -136,6 +154,27 @@ def test_network_false_string_cannot_enable_idea_network(
 
     assert result["status"] == "blocked_network_opt_in_required"
     assert result["privacy"]["network_calls"] == 0
+
+
+def test_literature_query_prefers_typed_concepts_over_protocol_prose() -> None:
+    query = idea_mining._discovery_queries(
+        "Estimate the association in adult ICU stays.",
+        "",
+        {
+            "exposure": (
+                "Canonical EasyICU Sepsis-3: suspected infection plus "
+                "traditional SOFA >=2 point increase, anchored to onset"
+            ),
+            "outcome": "In-hospital mortality",
+            "exposure_concept": "sep3_sofa1",
+            "outcome_concept": "death",
+        },
+    )[0]
+
+    assert '"Sepsis-3"[Title/Abstract]' in query
+    assert '"mortality"[Title/Abstract]' in query
+    assert "Canonical EasyICU" not in query
+    assert "anchored to onset" not in query
 
 
 def test_export_cohort_false_strings_remain_false() -> None:
@@ -554,6 +593,27 @@ def test_job_manager_retains_only_bounded_completed_jobs() -> None:
     assert all(job.status == "done" for job in jobs)
     assert len(retained) == 2
     assert retained == jobs[-2:]
+
+
+def test_job_manager_preserves_a_stable_typed_failure_code() -> None:
+    manager = JobManager(max_completed=2)
+
+    class TypedFailure(RuntimeError):
+        code = "research_pipeline_provider_timeout"
+
+    def fail(_job):  # type: ignore[no-untyped-def]
+        raise TypedFailure("The provider timed out before analysis.")
+
+    job = manager.submit("typed-failure", fail)
+    deadline = time.time() + 2
+    while job.status == "running" and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert job.status == "failed"
+    assert job.error == (
+        "research_pipeline_provider_timeout: "
+        "The provider timed out before analysis."
+    )
 
 
 def test_job_manager_applies_running_job_backpressure() -> None:

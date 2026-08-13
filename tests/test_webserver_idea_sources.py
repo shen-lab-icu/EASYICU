@@ -710,10 +710,45 @@ def test_conversational_sepsis_scope_compiles_to_bounded_pubmed_queries() -> Non
         {"exposure": "sep3_sofa1_max", "outcome": "death"},
     )
 
-    assert len(queries) == 3
+    assert len(queries) == 5
     assert all('"Sepsis-3"[Title/Abstract]' in query for query in queries)
     assert all('"mortality"[Title/Abstract]' in query for query in queries)
+    assert any("observational[Title/Abstract]" in query for query in queries)
+    all_years, recent = queries[1:3]
+    assert "adult[Title/Abstract]" in all_years
+    assert "pediatric[Title/Abstract]" in all_years
+    assert "NOT (Review[Publication Type]" in all_years
+    assert "association[Title/Abstract]" in all_years
+    assert "prevalence[Title/Abstract]" in all_years
+    assert "Date - Publication" not in all_years
+    assert "2021/01/01" in recent
     assert all("请帮我" not in query for query in queries)
+
+
+def test_inferred_concept_search_uses_literature_identity_not_display_label() -> None:
+    queries = idea_mining._discovery_queries(
+        "adult ICU Sepsis-3 prevalence and in-hospital mortality",
+        "",
+        {"population": "adult ICU stays"},
+    )
+
+    assert all('"Sepsis-3"[Title/Abstract]' in query for query in queries)
+    assert all('"mortality"[Title/Abstract]' in query for query in queries)
+    assert all("Sepsis-3 (SOFA-1 based)" not in query for query in queries)
+    assert all("In-hospital Mortality" not in query for query in queries)
+
+
+def test_pediatric_literature_scope_does_not_compile_an_adult_filter() -> None:
+    queries = idea_mining._discovery_queries(
+        "儿童 ICU 脓毒症与院内死亡",
+        "",
+        {"exposure_concept": "sep3_sofa1", "outcome_concept": "death"},
+    )
+
+    direct = queries[1]
+    assert "pediatric[Title/Abstract]" in direct
+    assert "NOT (adult[Title/Abstract]" in direct
+    assert "AND (adult[Title/Abstract]" not in direct
 
 
 def test_generic_sepsis_maps_to_canonical_sofa1_and_preserves_explicit_adjustment() -> (
@@ -890,6 +925,11 @@ def test_idea_literature_discovery_maps_pubmed_candidates_metadata_only(
                     "A trial suggests early vasopressor and fluid-resuscitation strategy "
                     "may affect outcomes in adult septic shock."
                 ),
+                "design_excerpt": (
+                    "Adult ICU patients were randomized to early vasopressor and "
+                    "fluid-resuscitation strategies; mortality was the outcome."
+                ),
+                "publication_types": ["Randomized Controlled Trial"],
                 "full_text_stored": False,
             }
         ],
@@ -915,6 +955,10 @@ def test_idea_literature_discovery_maps_pubmed_candidates_metadata_only(
     assert payload["privacy"]["full_text_stored"] is False
     assert payload["source_candidates"][0]["pmid"] == "12345"
     assert "vasopressor" in payload["source_candidates"][0]["evidence_quote"].lower()
+    assert payload["source_candidates"][0]["publication_types"] == [
+        "Randomized Controlled Trial"
+    ]
+    assert "Adult ICU patients" in payload["source_candidates"][0]["design_excerpt"]
     idea = payload["idea_candidates"][0]["idea"]
     concept_ids = {row["concept_id"] for row in idea["mapped_concepts"]}
     assert {"vaso_ind", "death"} & concept_ids
@@ -922,6 +966,132 @@ def test_idea_literature_discovery_maps_pubmed_candidates_metadata_only(
     assert "stay_id" not in str(payload)
     assert "subject_id" not in str(payload)
     assert "tableRows" not in str(payload)
+
+
+def test_literature_discovery_round_robins_prespecified_query_strata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    returned = iter(
+        [
+            ["100", "101", "102"],
+            ["150", "151"],
+            ["175", "176"],
+            ["200", "201"],
+            ["300", "301"],
+        ]
+    )
+    fetched: list[str] = []
+
+    monkeypatch.setattr(
+        idea_mining,
+        "_pubmed_esearch",
+        lambda query, limit=5: next(returned),
+    )
+
+    def article_records(ids: list[str]) -> list[dict[str, object]]:
+        fetched.extend(ids)
+        return [
+            {
+                "pmid": pmid,
+                "title": f"Sepsis-3 mortality record {pmid}",
+                "journal": "Critical Care",
+                "year": 2025,
+                "abstract_excerpt": "Sepsis-3 and ICU mortality were evaluated.",
+                "evidence_sentence": "Sepsis-3 and ICU mortality were evaluated.",
+            }
+            for pmid in ids
+        ]
+
+    monkeypatch.setattr(idea_mining, "_pubmed_article_records", article_records)
+
+    payload = idea_mining.discover_literature(
+        {
+            "topic": "Sepsis-3 mortality",
+            "exposure_concept": "sep3_sofa1",
+            "outcome_concept": "death",
+            "allow_network": True,
+            "limit": 3,
+        }
+    )
+
+    assert fetched == ["100", "150", "175"]
+    assert [row["id"] for row in payload["query_strata"]] == [
+        "broad_icu",
+        "direct_observational_comparator_all_years",
+        "direct_observational_comparator_recent",
+        "review_or_guideline",
+        "critical_care_database",
+    ]
+    assert [row["retained_count"] for row in payload["query_strata"]] == [
+        1,
+        1,
+        1,
+        0,
+        0,
+    ]
+    assert [
+        row["matched_query_strata"] for row in payload["source_candidates"]
+    ] == [
+        ["broad_icu"],
+        ["direct_observational_comparator_all_years"],
+        ["direct_observational_comparator_recent"],
+    ]
+
+
+def test_literature_discovery_keeps_foundational_and_recent_comparator_strata() -> None:
+    queries = idea_mining._discovery_queries(
+        "Sepsis-3 mortality",
+        "",
+        {
+            "exposure_concept": "sep3_sofa1",
+            "outcome_concept": "death",
+            "population": "adult ICU stays",
+        },
+    )
+
+    assert len(queries) == 5
+    all_years = queries[1]
+    recent = queries[2]
+    assert "cohort[Title/Abstract]" in all_years
+    assert "Date - Publication" not in all_years
+    assert "cohort[Title/Abstract]" in recent
+    assert "Date - Publication" in recent
+
+
+def test_pubmed_metadata_retains_publication_type_and_design_excerpt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    xml = b"""<?xml version='1.0' encoding='UTF-8'?>
+    <PubmedArticleSet><PubmedArticle><MedlineCitation>
+      <PMID>12345</PMID><Article>
+        <ArticleTitle>Sepsis-3 and mortality in adult ICU patients</ArticleTitle>
+        <Abstract><AbstractText>We conducted a retrospective cohort study of adult ICU patients. Sepsis-3 was assessed at admission and hospital mortality was the outcome.</AbstractText></Abstract>
+        <Journal><JournalIssue><PubDate><Year>2025</Year></PubDate></JournalIssue><Title>Critical Care</Title></Journal>
+        <PublicationTypeList><PublicationType>Observational Study</PublicationType></PublicationTypeList>
+      </Article></MedlineCitation><PubmedData><ArticleIdList>
+        <ArticleId IdType='doi'>10.1000/example</ArticleId>
+      </ArticleIdList></PubmedData></PubmedArticle></PubmedArticleSet>"""
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self, limit: int = -1) -> bytes:
+            return xml if limit < 0 else xml[:limit]
+
+    monkeypatch.setattr(
+        idea_mining.request,
+        "urlopen",
+        lambda url, timeout=0: Response(),
+    )
+
+    row = idea_mining._pubmed_article_records(["12345"])[0]
+    assert row["publication_types"] == ["Observational Study"]
+    assert "retrospective cohort" in row["design_excerpt"]
+    assert "hospital mortality" in row["design_excerpt"]
 
 
 def test_idea_mining_maps_ards_peep_pdf_excerpt_to_respiratory_concepts(

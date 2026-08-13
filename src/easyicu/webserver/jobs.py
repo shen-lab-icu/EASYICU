@@ -16,6 +16,7 @@ machine. State is intentionally in-memory — a job does not outlive the process
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 import uuid
@@ -44,6 +45,11 @@ class Job:
         self.error: Optional[str] = None
         self.cancel_requested = False
         self.cancel_reason: Optional[str] = None
+        # Some runners return a terminal user-facing result while an
+        # uninterruptible reader finishes cooperatively in the background.
+        # Such a job remains a real local-capacity consumer until that reader
+        # exits, even though SSE has already published cancelled/failed.
+        self.draining = False
 
     def _append_event_locked(self, event: Dict[str, Any]) -> None:
         payload = dict(event)
@@ -108,6 +114,18 @@ class Job:
                 )
             return True
 
+    def begin_draining(self) -> None:
+        with self._lock:
+            self.draining = True
+
+    def end_draining(self) -> None:
+        with self._lock:
+            self.draining = False
+
+    def consumes_capacity(self) -> bool:
+        with self._lock:
+            return self.status == "running" or self.draining
+
     def is_cancel_requested(self) -> bool:
         with self._lock:
             return self.cancel_requested
@@ -131,6 +149,7 @@ class Job:
                 "error": self.error,
                 "cancel_requested": self.cancel_requested,
                 "cancel_reason": self.cancel_reason,
+                "draining": self.draining,
             }
 
 
@@ -153,7 +172,7 @@ class JobManager:
         job to ``failed``. Returns the Job immediately (non-blocking)."""
         with self._lock:
             self._prune_completed_locked()
-            running = sum(job.status == "running" for job in self._jobs.values())
+            running = sum(job.consumes_capacity() for job in self._jobs.values())
             if running >= self._max_running:
                 raise JobCapacityError(
                     max_running=self._max_running,
@@ -169,14 +188,22 @@ class JobManager:
             result = runner(job)
             job.complete_from_runner(result)
         except Exception as exc:  # noqa: BLE001 — surface any failure to the client
-            job.fail_from_runner(str(exc))
+            message = str(exc)
+            code = str(getattr(exc, "code", "") or "").strip()
+            if code and re.fullmatch(r"[a-z][a-z0-9_]{2,120}", code):
+                message = f"{code}: {message}"
+            job.fail_from_runner(message)
         finally:
             with self._lock:
                 self._prune_completed_locked()
 
     def _prune_completed_locked(self) -> None:
         completed = sorted(
-            (job for job in self._jobs.values() if job.status != "running"),
+            (
+                job
+                for job in self._jobs.values()
+                if job.status != "running" and not job.consumes_capacity()
+            ),
             key=lambda job: job.finished or job.created,
         )
         for job in completed[: max(0, len(completed) - self._max_completed)]:

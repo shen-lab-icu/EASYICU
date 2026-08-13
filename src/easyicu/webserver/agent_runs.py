@@ -49,8 +49,10 @@ _RUN_ARTIFACT_NAMES = [
     "quality_gate.json",
     "agent_plan.json",
     "literature_evidence.json",
+    "scientific_plan_review.json",
     "scientific_readiness.json",
     "manuscript_draft.json",
+    "manuscript_pdf_receipt.json",
     "benchmark_scorecard.json",
     "workflow_graph.json",
     "figure_gallery.json",
@@ -59,6 +61,24 @@ _RUN_ARTIFACT_NAMES = [
     "evidence_ledger.json",
     "human_signoff.json",
 ]
+
+# Generated manuscript documents are a separate, fixed browser boundary from
+# JSON review payloads.  They may be downloaded/previewed but are never parsed
+# as JSON or accepted from a browser-supplied path.
+_RUN_DOCUMENT_SPECS = {
+    "manuscript_scaffold.pdf": {
+        "media_type": "application/pdf",
+        "max_bytes": 16 * 1024 * 1024,
+    },
+    "manuscript_scaffold.tex": {
+        "media_type": "text/x-tex; charset=utf-8",
+        "max_bytes": 2 * 1024 * 1024,
+    },
+    "manuscript_scaffold.bib": {
+        "media_type": "application/x-bibtex; charset=utf-8",
+        "max_bytes": 2 * 1024 * 1024,
+    },
+}
 
 _SIGNOFF_CONFIRMATIONS = {
     "evidence_reviewed",
@@ -561,6 +581,9 @@ def read_run_review(project_dir: str) -> Dict[str, Any]:
         "run_id": run_context.get("run_id") or ledger.get("run_id"),
         "run_type": ledger.get("run_type") or "preflight",
         "study_id": run_context.get("study_id"),
+        "scientific_configuration_sha256": run_context.get(
+            "scientific_configuration_sha256"
+        ),
         "mode": run_context.get("mode"),
         "engine": run_context.get("engine"),
         "gate": gate,
@@ -709,6 +732,12 @@ def list_run_history(
 
 def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     """Return one whitelisted artifact as a bounded JSON viewer payload."""
+    if str(artifact_name or "").strip() not in _RUN_ARTIFACT_NAMES:
+        return {
+            "ok": False,
+            "error": "artifact_json_not_allowed",
+            "artifact": artifact_name,
+        }
     run_dir = _resolve_run_dir(project_dir)
     if run_dir is None:
         return {"ok": False, "error": "project_dir_required"}
@@ -769,7 +798,7 @@ def read_run_artifact_bytes(project_dir: str, artifact_name: str) -> Dict[str, A
         "ok": True,
         "name": artifact_path.name,
         "content": raw,
-        "media_type": "application/json",
+        "media_type": _artifact_media_type(artifact_path.name),
     }
 
 
@@ -1189,7 +1218,7 @@ def _safe_artifact_path(
     artifact_name: str,
 ) -> tuple[Optional[Path], Optional[str]]:
     name = str(artifact_name or "").strip()
-    if name not in _RUN_ARTIFACT_NAMES:
+    if name not in _RUN_ARTIFACT_NAMES and name not in _RUN_DOCUMENT_SPECS:
         return None, "artifact_not_allowed"
     if Path(name).name != name:
         return None, "artifact_not_allowed"
@@ -1200,7 +1229,7 @@ def _safe_artifact_path(
         return candidate, None
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
         return None, "artifact_path_unsafe"
-    if metadata.st_size > _MAX_RUN_ARTIFACT_BYTES:
+    if metadata.st_size > _artifact_max_bytes(name):
         return None, "artifact_too_large"
     try:
         resolved_root = run_dir.resolve(strict=True)
@@ -1233,12 +1262,13 @@ def _read_safe_artifact_bytes(
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             return None, None, "artifact_path_unsafe"
-        if metadata.st_size > _MAX_RUN_ARTIFACT_BYTES:
+        max_bytes = _artifact_max_bytes(path.name)
+        if metadata.st_size > max_bytes:
             return None, None, "artifact_too_large"
         with os.fdopen(descriptor, "rb", closefd=True) as handle:
             descriptor = -1
-            raw = handle.read(_MAX_RUN_ARTIFACT_BYTES + 1)
-        if len(raw) > _MAX_RUN_ARTIFACT_BYTES:
+            raw = handle.read(max_bytes + 1)
+        if len(raw) > max_bytes:
             return None, None, "artifact_too_large"
         return path, raw, None
     finally:
@@ -1248,11 +1278,21 @@ def _read_safe_artifact_bytes(
 
 def _run_artifacts(run_dir: Path) -> List[Dict[str, Any]]:
     artifacts = []
-    for name in _RUN_ARTIFACT_NAMES:
+    for name in [*_RUN_ARTIFACT_NAMES, *_RUN_DOCUMENT_SPECS]:
         path, raw, _path_error = _read_safe_artifact_bytes(run_dir, name)
         if path is not None and raw is not None:
             artifacts.append(_artifact_from_raw(path, run_dir, raw))
     return artifacts
+
+
+def _artifact_max_bytes(name: str) -> int:
+    spec = _RUN_DOCUMENT_SPECS.get(str(name))
+    return int(spec["max_bytes"]) if spec is not None else _MAX_RUN_ARTIFACT_BYTES
+
+
+def _artifact_media_type(name: str) -> str:
+    spec = _RUN_DOCUMENT_SPECS.get(str(name))
+    return str(spec["media_type"]) if spec is not None else "application/json"
 
 
 def _load_run_artifacts(run_dir: Path) -> Dict[str, Any]:
@@ -1451,6 +1491,9 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         "run_id": review.get("run_id") or run_dir.name,
         "run_label": str(review.get("run_id") or run_dir.name).replace("_", " "),
         "study_id": review.get("study_id"),
+        "scientific_configuration_sha256": review.get(
+            "scientific_configuration_sha256"
+        ),
         "mode": review.get("mode"),
         "engine": review.get("engine"),
         "run_type": review.get("run_type"),
@@ -1458,6 +1501,13 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         "gate_status": gate.get("status"),
         "run_status": source_manifest.get("status"),
         "pending_review_reason_codes": pending_reason_codes,
+        "plan_approval_allowed": source_manifest.get("plan_approval_allowed"),
+        "scientific_plan_review_status": source_manifest.get(
+            "scientific_plan_review_status"
+        ),
+        "scientific_plan_review_score": source_manifest.get(
+            "scientific_plan_review_score"
+        ),
         "readiness_status": readiness.get("status"),
         "signed": bool(review.get("signed")),
         "signoff_stale": bool(review.get("signoff_stale")),
@@ -1482,6 +1532,9 @@ def _public_review_payloads(
         public["run_context.json"] = {
             "run_id": row.get("run_id"),
             "study_id": row.get("study_id"),
+            "scientific_configuration_sha256": row.get(
+                "scientific_configuration_sha256"
+            ),
             "mode": row.get("mode"),
             "engine": row.get("engine"),
             "question": row.get("question"),
@@ -1509,6 +1562,10 @@ def _public_review_payloads(
         public["agent_plan.json"] = payloads["agent_plan.json"]
     if "literature_evidence.json" in payloads:
         public["literature_evidence.json"] = payloads["literature_evidence.json"]
+    if "scientific_plan_review.json" in payloads:
+        public["scientific_plan_review.json"] = payloads[
+            "scientific_plan_review.json"
+        ]
     if "scientific_readiness.json" in payloads:
         public["scientific_readiness.json"] = payloads[
             "scientific_readiness.json"

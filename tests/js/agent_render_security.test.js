@@ -72,4 +72,8 @@ assert.deepEqual(
   'plan previews must expose the typed step identity, intent, role, and outputs',
 );
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 6 }));
+assert.equal(renderer.fmtCount(null), '—', 'missing denominators must not render as zero');
+assert.equal(renderer.fmtCount(undefined), '—');
+assert.equal(renderer.fmtCount(''), '—');
+
+process.stdout.write(JSON.stringify({ ok: true, cases: 7 }));

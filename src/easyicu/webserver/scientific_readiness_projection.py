@@ -32,6 +32,8 @@ class ScientificReadinessFinding(BaseModel):
     message: str
     evidence_refs: list[str] = Field(default_factory=list, max_length=20)
     remediation: str
+    requires_user_authorization: bool = False
+    authorization_question: str | None = None
 
 
 class ScientificDomainReadiness(BaseModel):
@@ -316,6 +318,13 @@ def _analysis_status(
         for value in list(axes.get("display_suite_errors") or [])[:20]
         if _text(value, 500)
     ]
+    maturity = _read_json(run_dir, "scientific_maturity_audit.json")
+    maturity_status = _text(maturity.get("status"), 80)
+    maturity_score = maturity.get("score")
+    raw_maturity_findings = maturity.get("findings")
+    raw_maturity_findings = (
+        raw_maturity_findings if isinstance(raw_maturity_findings, list) else []
+    )
     findings: list[ScientificReadinessFinding] = []
     if recommendation in {"major_revision", "reject"} or major_count:
         findings.append(
@@ -345,18 +354,67 @@ def _analysis_status(
                 remediation="Repair the named display-suite defects from the owner audit.",
             )
         )
-    blocked = not analysis_validated or bool(
-        recommendation in {"major_revision", "reject"} or major_count
+    duplicate_codes = {
+        "TOP_JOURNAL_LITERATURE_SEARCH_NOT_ESTABLISHED",
+        "FINAL_PLAN_LITERATURE_BINDING_INCOMPLETE",
+        "ARTICLE_DISPLAY_SUITE_INCOMPLETE",
+        "INDEPENDENT_SCIENTIFIC_REVIEW_NOT_CLOSED",
+    }
+    for item in raw_maturity_findings[:30]:
+        if not isinstance(item, Mapping):
+            continue
+        code = _text(item.get("code"), 160)
+        severity = _text(item.get("severity"), 20)
+        if code in duplicate_codes or severity not in {"blocker", "major", "minor"}:
+            continue
+        evidence_refs = [
+            _text(value, 240)
+            for value in list(item.get("evidence_refs") or [])[:20]
+            if _text(value, 240)
+        ]
+        findings.append(
+            ScientificReadinessFinding(
+                code=code or "SCIENTIFIC_MATURITY_FINDING",
+                domain="analysis",
+                severity=severity,
+                message=_text(item.get("message"), 1_000),
+                evidence_refs=evidence_refs,
+                remediation=_text(item.get("remediation"), 1_000),
+                requires_user_authorization=bool(
+                    item.get("requires_user_authorization")
+                ),
+                authorization_question=(
+                    _text(item.get("authorization_question"), 1_000) or None
+                ),
+            )
+        )
+    maturity_blocker = any(finding.severity == "blocker" for finding in findings)
+    maturity_major = any(finding.severity == "major" for finding in findings)
+    blocked = (
+        not analysis_validated
+        or bool(recommendation in {"major_revision", "reject"} or major_count)
+        or maturity_blocker
+    )
+    domain_state: DomainState = (
+        "blocked" if blocked else ("review_required" if maturity_major else "passed")
     )
     domain = ScientificDomainReadiness(
         domain="analysis",
-        status="blocked" if blocked else "passed",
+        status=domain_state,
         summary=(
-            "Automated validation passed and no major reviewer finding remains."
-            if not blocked
-            else "Execution completeness does not close the open scientific review defects."
+            "Automated validation and the article-maturity audit passed."
+            if domain_state == "passed"
+            else (
+                "The analysis is technically valid but requires major scientific revision."
+                if domain_state == "review_required"
+                else "Execution completeness does not close the open scientific design defects."
+            )
         ),
-        evidence_refs=["run_status.json", "reviewer_report.json"],
+        evidence_refs=[
+            "run_status.json",
+            "reviewer_report.json",
+            "scientific_maturity_audit.json",
+        ],
     )
     return (
         domain,
@@ -367,6 +425,18 @@ def _analysis_status(
             "reviewer_major_or_reject_count": major_count,
             "display_suite_complete": display_complete,
             "display_suite_errors": display_errors,
+            "scientific_maturity_status": maturity_status or "not_available",
+            "scientific_maturity_score": maturity_score,
+            "scientific_maturity_dimension_scores": maturity.get("dimension_scores"),
+            "user_authorization_requests": [
+                {
+                    "code": finding.code,
+                    "question": finding.authorization_question,
+                }
+                for finding in findings
+                if finding.requires_user_authorization
+                and finding.authorization_question
+            ],
         },
     )
 
