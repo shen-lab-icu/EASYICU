@@ -63,7 +63,9 @@ def test_primary_cohort_predicates_extend_only_raw_contract_authority() -> None:
     ) == ("age",)
 
 
-def test_primary_cohort_predicate_contract_rejects_typed_or_invalid_coordinate() -> None:
+def test_primary_cohort_predicate_contract_rejects_typed_or_invalid_coordinate() -> (
+    None
+):
     from easyicu.research_agent.research_context.typed import (
         raw_contract_inputs_for_step,
     )
@@ -943,9 +945,7 @@ def test_host_standard_renderer_does_not_require_legacy_repair_receipt():
     receipt_guard = source.index(
         "if authorized_code_sha256 is None or state.repair_id is None:"
     )
-    parent_check = source.index(
-        "read_digest_bound_artifact_snapshot(", receipt_guard
-    )
+    parent_check = source.index("read_digest_bound_artifact_snapshot(", receipt_guard)
     identity_check = source.index(
         'visual_step_summary.get("sealed_renderer_repair")', parent_check
     )
@@ -957,12 +957,17 @@ def test_host_standard_renderer_does_not_require_legacy_repair_receipt():
 
 def test_locked_measurement_preflight_runs_before_every_coder_repair():
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution.step_candidate_recovery import (
+        StepCandidateRecovery,
+    )
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
     preflight = source.index("audit_locked_measurement_data_quality(")
-    first_coder_repair = source.index("coder.repair(")
+    first_repair_transport = source.index("_repair_with_capsule(", preflight)
+    owner_source = inspect.getsource(StepCandidateRecovery.repair_with_capsule)
 
-    assert preflight < first_coder_repair
+    assert preflight < first_repair_transport
+    assert "request.coder.repair(" in owner_source
 
 
 def test_sealed_figure_preflight_supersedes_stale_resume_capsule_candidate():

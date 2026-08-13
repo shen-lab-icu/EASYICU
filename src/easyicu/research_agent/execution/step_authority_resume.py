@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from ..authority.coder_authority import HostCoderAuthority
 from ..authority.evidence_store import sha256_of_file
@@ -15,8 +15,6 @@ from ..authority.provider_budget import (
 )
 from ..authority.run_input import (
     canonical_sha256,
-    engine_code_sha256,
-    validator_code_sha256,
 )
 from ..authority.step_attempt import CheckpointAuthority, StepAttemptState
 from ..authority.step_capsule import (
@@ -35,10 +33,8 @@ from ..authority.step_runtime import (
     prepare_step_authority_coordinates,
     repair_code_ref,
     seal_initial_generation_candidate,
-    seal_repair_candidate_from_receipt,
     select_explicit_step_capsule_for_targeted_resume,
 )
-from ..gates.concept import deterministic_gate_stamp as _deterministic_gate_stamp
 from ..schema import AnalysisStep, ResearchContext
 from .concept_audit import (
     verified_capsule_concept_audit_replay as _verified_capsule_concept_audit_replay,
@@ -52,6 +48,10 @@ class StepAuthorityResumeRequest:
     run_dir: Path
     step: AnalysisStep
     run_input_capsule_sha256: str
+    deterministic_gate_stamp: Mapping[str, str]
+    engine_code_sha256: str
+    validator_code_sha256: str
+    seal_repair_candidate: Callable[..., StepAuthorityCapsuleRef]
     coder_context: ResearchContext
     coder_authority: HostCoderAuthority
     coder_provider_identity_sha256: str
@@ -97,7 +97,7 @@ def _prepare_current_coordinates(
     run_input_capsule_sha256 = request.run_input_capsule_sha256
     step_attempt_state = request.step_attempt_state
 
-    gate_stamp = _deterministic_gate_stamp()
+    gate_stamp = request.deterministic_gate_stamp
     step_control_plane_fingerprint = canonical_sha256(
         {
             "schema": "easyicu.step_control_plane_fingerprint/1",
@@ -125,8 +125,8 @@ def _prepare_current_coordinates(
             "universe_sha256": sha256_of_file(universe_path),
         },
         deterministic_gate_fingerprint=step_control_plane_fingerprint,
-        engine_code_sha256=engine_code_sha256(),
-        validator_code_sha256=validator_code_sha256(),
+        engine_code_sha256=request.engine_code_sha256,
+        validator_code_sha256=request.validator_code_sha256,
         prompt_pack_version=prompt_version,
         prompt_pack=prompt_files,
     )
@@ -271,7 +271,7 @@ def _recover_pending_repair(
             receipt_state,
             attempt_id=pending_attempt,
         )
-        recovered_ref = seal_repair_candidate_from_receipt(
+        recovered_ref = request.seal_repair_candidate(
             historical_coordinates,
             parent_ref=step_attempt_state.current_capsule_ref,
             checkpoint_parent_ref=step_attempt_state.current_capsule_ref,
