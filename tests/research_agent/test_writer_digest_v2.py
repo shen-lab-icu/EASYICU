@@ -29,7 +29,7 @@ from easyicu.research_agent.authority.evidence_store import (
     EvidenceEnforcementError,
     EvidenceStore,
 )
-from easyicu.research_agent.reporting.write_phase import run_write_phase
+from easyicu.research_agent.reporting import write_phase
 from easyicu.research_agent.reporting.writer_evidence import (
     WRITER_DIGEST_PREFERRED_KEYS,
     _preferred_writer_evidence_names,
@@ -65,7 +65,7 @@ def _register_step_evidence(
 def test_write_phase_never_reads_append_only_evidence_without_current_ledger() -> None:
     """Every writer-side reader must share the current verified snapshot."""
 
-    source = inspect.getsource(run_write_phase)
+    source = inspect.getsource(write_phase)
 
     assert "evidence.current_verified_records(" in source
     assert "evidence.records()" not in source
