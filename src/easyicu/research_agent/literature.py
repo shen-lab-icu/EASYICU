@@ -844,6 +844,34 @@ def _screening_decision_for_record(
 
     exposure = _protocol_search_term(context, context.primary_exposure)
     outcome = _protocol_search_term(context, context.target_outcome)
+    return screen_source_backed_direct_comparator(
+        exposure=exposure,
+        outcome=outcome,
+        adult_required=_adult_population_required(context),
+        record=record,
+        source=source,
+        query=query,
+    )
+
+
+def screen_source_backed_direct_comparator(
+    *,
+    exposure: str,
+    outcome: str,
+    adult_required: bool,
+    record: CitationRecord,
+    source: str,
+    query: Optional[str],
+) -> LiteratureScreeningDecision:
+    """Screen one retrieved paper against an exact typed P/E/O scope.
+
+    This is the shared literature-owner boundary used both by Web retrieval to
+    decide whether a bounded comparator fallback is needed and by the sealed
+    ResearchContext screen.  Query membership is deliberately ignored: only
+    the retained title/abstract excerpt and source publication type can earn an
+    include decision.
+    """
+
     source_excerpt = str(record.relevance or "")
     blob = _normalise_clinical_text(" ".join([record.title, source_excerpt]))
     exposure_match = _clinical_exposure_role_matches(
@@ -858,7 +886,6 @@ def _screening_decision_for_record(
         token in padded_blob
         for token in (" intensive care ", " critical care ", " icu ")
     )
-    adult_required = _adult_population_required(context)
     adult_match = (not adult_required) or any(
         token in padded_blob for token in (" adult ", " adults ")
     )
@@ -1031,36 +1058,56 @@ def _clinical_exposure_role_matches(
     if not normalized_exposure:
         return False
     normalized_title = _normalise_clinical_text(title)
-    if not _clinical_axis_matches(
-        normalized_exposure, normalized_title, axis="exposure"
-    ):
-        title_has_exposure = False
-    else:
-        title_has_exposure = True
-    title_has_outcome = _clinical_axis_matches(
-        outcome, normalized_title, axis="outcome"
-    )
-    padded_title = f" {normalized_title} "
-    if title_has_exposure and (
-        title_has_outcome
-        or any(marker in padded_title for marker in _EXPOSURE_ROLE_MARKERS)
-    ):
+    if _text_assigns_studied_exposure(normalized_exposure, normalized_title):
         return True
 
     for sentence in re.split(r"(?<=[.!?;])\s+", str(source_excerpt or "")):
         normalized = _normalise_clinical_text(sentence)
         if not normalized:
             continue
-        padded = f" {normalized} "
-        if (
-            _clinical_axis_matches(
-                normalized_exposure, normalized, axis="exposure"
-            )
-            and _clinical_axis_matches(outcome, normalized, axis="outcome")
-            and any(marker in padded for marker in _EXPOSURE_ROLE_MARKERS)
-        ):
+        if _text_assigns_studied_exposure(normalized_exposure, normalized):
             return True
     return False
+
+
+def _text_assigns_studied_exposure(exposure: str, text: str) -> bool:
+    """Require a local analytic/design relation to the declared exposure.
+
+    Mere cohort phrases such as ``patients meeting <exposure> criteria`` do
+    not qualify.  That distinction prevents a treatment or biomarker paper
+    from becoming a comparator only because Sepsis-3 defined its population.
+    """
+
+    if not exposure or not _clinical_axis_matches(exposure, text, axis="exposure"):
+        return False
+    escaped = re.escape(exposure)
+    # Remove the narrow, source-backed phrases that use the declared exposure
+    # only to define eligibility.  Otherwise an outcome relation elsewhere in
+    # the same title (for example, "biomarker predicts mortality in patients
+    # meeting Sepsis-3 criteria") can accidentally promote the eligibility
+    # label to the studied exposure.
+    analytic_text = text
+    eligibility_patterns = (
+        rf"\b(?:patients?|participants?|subjects?|cohort)\b.{{0,40}}\b(?:meeting|met|fulfilling|satisfying)\b\s+(?:the\s+)?{escaped}(?:\s+(?:criteria|definition))?",
+        rf"\b(?:defined|diagnosed|classified)\b.{{0,30}}\b(?:according\s+to|using|by)\b\s+(?:the\s+)?{escaped}(?:\s+(?:criteria|definition))?",
+    )
+    for pattern in eligibility_patterns:
+        analytic_text = re.sub(pattern, " ", analytic_text)
+    if not _clinical_axis_matches(exposure, analytic_text, axis="exposure"):
+        return False
+    role = (
+        r"prevalence|incidence|epidemiolog(?:y|ic|ical)|application|robustness|"
+        r"validity|validation|performance|association|relationship|predict(?:s|ed|ive)?|"
+        r"primary exposure|studied exposure|risk"
+    )
+    action = r"assess(?:ed|ing)?|evaluat(?:e|ed|ing)|validat(?:e|ed|ing)|appl(?:y|ied|ication)|operationalis(?:e|ed|ing)|operationaliz(?:e|ed|ing)|compar(?:e|ed|ing)"
+    patterns = (
+        rf"\b(?:{role})\b.{{0,80}}\b{escaped}\b",
+        rf"\b(?:{action})\b.{{0,80}}\b{escaped}\b",
+        rf"\b{escaped}\b.{{0,80}}\b(?:{role})\b",
+        rf"\b{escaped}\b.{{0,80}}\b(?:{action})\b",
+    )
+    return any(re.search(pattern, analytic_text) for pattern in patterns)
 
 
 def _clinical_axis_matches(term: str, blob: str, *, axis: str) -> bool:
@@ -1253,14 +1300,16 @@ def _study_design_excerpt(
         for term in focus_terms
         if _normalise_clinical_text(term)
     ]
-    selected: List[str] = []
+    focus_selected: List[str] = []
+    design_selected: List[str] = []
     for sentence in sentences:
         sentence_folded = sentence.casefold()
         sentence_normalized = _normalise_clinical_text(sentence)
-        if any(term in sentence_folded for term in _PROTOCOL_SENTENCE_TERMS) or any(
-            focus in sentence_normalized for focus in normalized_focus
-        ):
-            selected.append(sentence)
+        if any(focus in sentence_normalized for focus in normalized_focus):
+            focus_selected.append(sentence)
+        elif any(term in sentence_folded for term in _PROTOCOL_SENTENCE_TERMS):
+            design_selected.append(sentence)
+    selected = list(dict.fromkeys([*focus_selected, *design_selected]))
     text = " ".join(selected[:5]) or " ".join(sentences[:2])
     return text[:max_chars].rstrip()
 

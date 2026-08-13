@@ -2129,6 +2129,21 @@ def _search_literature(
             }
             receipt_binding = idea_mining.prior_art_receipt_binding(bound_idea_run)
         else:
+            cohort_scope = (
+                study.get("cohort")
+                if isinstance(study.get("cohort"), Mapping)
+                else {}
+            )
+            data_source = (
+                study.get("data_source")
+                if isinstance(study.get("data_source"), Mapping)
+                else {}
+            )
+            analysis_design = (
+                study.get("analysis_design")
+                if isinstance(study.get("analysis_design"), Mapping)
+                else {}
+            )
             discovered = idea_mining.discover_literature(
                 {
                     "topic": topic,
@@ -2139,6 +2154,15 @@ def _search_literature(
                     ).strip(),
                     "outcome_concept": str(
                         execution_concepts.get("outcome") or ""
+                    ).strip(),
+                    "population": " ".join(
+                        str(cohort_scope.get(key) or "").strip()
+                        for key in ("label", "review", "preset")
+                        if str(cohort_scope.get(key) or "").strip()
+                    ),
+                    "database": str(data_source.get("database") or "").strip(),
+                    "analysis_family": str(
+                        analysis_design.get("analysis_family") or ""
                     ).strip(),
                     "journal": str(params.get("journal") or "").strip(),
                     "limit": requested_limit,
