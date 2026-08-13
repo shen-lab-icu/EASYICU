@@ -9,6 +9,7 @@ payloads and competing source owners are not.
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 from pathlib import Path
 from typing import Iterable
@@ -23,6 +24,7 @@ REQUIRED_PATHS = (
     Path("docs/repository_layout.md"),
     Path("docs/research_agent_capability_inventory.md"),
     Path(".codegraph/.gitignore"),
+    Path("tools/arch_baselines/research_agent_top_level_ownership.json"),
 )
 
 FORBIDDEN_TRACKED_PARTS = frozenset(
@@ -47,6 +49,10 @@ FORBIDDEN_TRACKED_ROOTS = frozenset(
 )
 
 FORBIDDEN_ROOT_FILES = frozenset({"design-qa.md"})
+
+TOP_LEVEL_OWNERSHIP_MANIFEST = Path(
+    "tools/arch_baselines/research_agent_top_level_ownership.json"
+)
 
 
 def _tracked_files(repo_root: Path) -> tuple[Path, ...]:
@@ -98,6 +104,34 @@ def audit_repository(
         ignore_text = codegraph_ignore.read_text(encoding="utf-8")
         if "*" not in ignore_text or "!.gitignore" not in ignore_text:
             findings.append(".codegraph/.gitignore must ignore local index payloads")
+
+    ownership_path = root / TOP_LEVEL_OWNERSHIP_MANIFEST
+    if ownership_path.exists():
+        try:
+            ownership = json.loads(ownership_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            findings.append(f"top-level ownership manifest is unreadable: {exc}")
+        else:
+            declared = ownership.get("modules")
+            if not isinstance(declared, dict):
+                findings.append("top-level ownership manifest lacks a modules object")
+            else:
+                package_root = root / "src" / "easyicu" / "research_agent"
+                actual = {
+                    path.name for path in package_root.glob("*.py") if path.is_file()
+                }
+                declared_names = set(declared)
+                for missing in sorted(actual - declared_names):
+                    findings.append(
+                        f"unowned research-agent top-level module: {missing}"
+                    )
+                for stale in sorted(declared_names - actual):
+                    findings.append(f"stale top-level module ownership row: {stale}")
+                for name, row in sorted(declared.items()):
+                    if not isinstance(row, dict) or not str(row.get("owner") or ""):
+                        findings.append(f"top-level module lacks an owner: {name}")
+                    if not isinstance(row, dict) or not str(row.get("reason") or ""):
+                        findings.append(f"top-level module lacks a reason: {name}")
 
     return tuple(dict.fromkeys(findings))
 

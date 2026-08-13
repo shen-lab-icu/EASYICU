@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Require an explicit disposition for every package-local zero-inbound module."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+
+
+ALLOWED_STATUSES = frozenset(
+    {
+        "optional-by-design",
+        "awaiting-wiring",
+        "entry-point",
+        "support-surface",
+        "external-consumer",
+        "compatibility",
+    }
+)
+
+DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityRow:
+    module: str
+    loc: int
+    status: str
+    owner: str
+    activation: str
+    tests: str
+    review: str
+
+    def covers(self, relative_path: str) -> bool:
+        if self.module.endswith("/*"):
+            return relative_path.startswith(self.module[:-1])
+        if self.module.endswith("/"):
+            return relative_path.startswith(self.module)
+        return relative_path == self.module
+
+
+def parse_inventory(path: Path) -> tuple[CapabilityRow, ...]:
+    rows: list[CapabilityRow] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line.startswith("| `"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) != 7:
+            continue
+        module = cells[0].strip("`")
+        status = cells[2].strip("`")
+        try:
+            loc = int(cells[1])
+        except ValueError:
+            continue
+        rows.append(
+            CapabilityRow(
+                module=module,
+                loc=loc,
+                status=status,
+                owner=cells[3],
+                activation=cells[4],
+                tests=cells[5],
+                review=cells[6],
+            )
+        )
+    return tuple(rows)
+
+
+def _current_graph(repo_root: Path) -> dict:
+    result = subprocess.run(
+        [
+            str(repo_root / ".venv" / "bin" / "python"),
+            str(repo_root / "tools" / "research_agent_module_graph.py"),
+        ],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+def zero_inbound_leaf_paths(graph: dict) -> tuple[str, ...]:
+    modules = graph.get("modules") or {}
+    indegree = {name: 0 for name in modules}
+    for edge in graph.get("edges") or ():
+        if not isinstance(edge, list) or len(edge) != 2:
+            continue
+        target = edge[1]
+        if target in indegree:
+            indegree[target] += 1
+    return tuple(
+        sorted(
+            relative
+            for module, relative in modules.items()
+            if indegree.get(module) == 0
+            and isinstance(relative, str)
+            and not relative.endswith("/__init__.py")
+            and relative != "__init__.py"
+        )
+    )
+
+
+def audit_capability_inventory(
+    repo_root: Path,
+    *,
+    today: date | None = None,
+    graph: dict | None = None,
+) -> tuple[str, ...]:
+    root = repo_root.resolve()
+    inventory_path = root / "docs" / "research_agent_capability_inventory.md"
+    rows = parse_inventory(inventory_path)
+    findings: list[str] = []
+    current_date = today or date.today()
+
+    if not rows:
+        findings.append("capability inventory has no parseable rows")
+        return tuple(findings)
+
+    duplicates = sorted(
+        module
+        for module in {row.module for row in rows}
+        if sum(r.module == module for r in rows) > 1
+    )
+    findings.extend(
+        f"duplicate capability inventory row: {name}" for name in duplicates
+    )
+
+    package_root = root / "src" / "easyicu" / "research_agent"
+    for row in rows:
+        if row.status not in ALLOWED_STATUSES:
+            findings.append(f"unknown capability status for {row.module}: {row.status}")
+        if not row.owner or not row.activation:
+            findings.append(f"capability row lacks owner/precondition: {row.module}")
+        if row.module.endswith("/*"):
+            exists = (package_root / row.module[:-2]).is_dir()
+        elif row.module.endswith("/"):
+            exists = (package_root / row.module).is_dir()
+        else:
+            exists = (package_root / row.module).is_file()
+        if not exists:
+            findings.append(
+                f"capability inventory points to missing path: {row.module}"
+            )
+        if DATE_PATTERN.fullmatch(row.review):
+            review_date = date.fromisoformat(row.review)
+            if review_date < current_date:
+                findings.append(
+                    f"capability review is overdue: {row.module} ({row.review})"
+                )
+        elif row.status not in {"entry-point", "compatibility"}:
+            findings.append(f"capability review date is invalid: {row.module}")
+
+    current_graph = graph if graph is not None else _current_graph(root)
+    for relative_path in zero_inbound_leaf_paths(current_graph):
+        if not any(row.covers(relative_path) for row in rows):
+            findings.append(
+                f"zero-inbound module lacks an explicit disposition: {relative_path}"
+            )
+
+    return tuple(dict.fromkeys(findings))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--repo-root", type=Path, default=Path(__file__).resolve().parents[1]
+    )
+    args = parser.parse_args()
+    findings = audit_capability_inventory(args.repo_root)
+    if findings:
+        for finding in findings:
+            print(f"ERROR: {finding}")
+        return 1
+    print("research-agent capability inventory: OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

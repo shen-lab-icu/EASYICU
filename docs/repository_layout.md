@@ -34,3 +34,7 @@ ignored.  CodeGraph keeps only `.codegraph/.gitignore` in Git.
    kept.  Static zero-reference counts alone never justify deletion.
 5. Generated build trees and stale canaries should be moved to a dated,
    recoverable workspace cleanup directory before permanent deletion.
+6. Every Python file directly under `research_agent/` must have a justified
+   public/shared/frozen owner in
+   `tools/arch_baselines/research_agent_top_level_ownership.json`. New private
+   implementation belongs in a responsibility package, not at the top level.
