@@ -4,11 +4,57 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pickle
+import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Union
 
 import pandas as pd
+
+from easyicu.content_identity import file_content_receipt, verify_content_receipt
+
+
+_CONTENT_RECEIPT_INDEX = ".easyicu_content_receipts.json"
+_CONTENT_RECEIPT_LOCK = threading.RLock()
+
+
+def _load_receipt_index(index_path: Optional[Path], root: Path) -> dict[str, dict]:
+    if index_path is None or not index_path.is_file():
+        return {}
+    try:
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if payload.get("schema_version") != 1 or payload.get("root") != str(root):
+        return {}
+    files = payload.get("files")
+    return files if isinstance(files, dict) else {}
+
+
+def _save_receipt_index(
+    index_path: Optional[Path], root: Path, receipts: dict[str, dict]
+) -> None:
+    if index_path is None:
+        return
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(
+        {"schema_version": 1, "root": str(root), "files": receipts},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    temporary = index_path.with_name(
+        f"{index_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    temporary.write_text(payload, encoding="utf-8")
+    os.replace(temporary, index_path)
+
+
+def _current_receipt(path: Path, previous: object) -> dict:
+    matches, current = verify_content_receipt(path, previous)
+    if matches and current is not None:
+        return current
+    return file_content_receipt(path)
 
 
 def get_cache_key(concepts: List[str], source: str, **kwargs) -> str:
@@ -32,28 +78,50 @@ def data_path_fingerprint(
     *,
     exclude_dir: Optional[Union[str, Path]] = None,
 ) -> str:
-    """Fingerprint dataset identity and relevant file metadata."""
+    """Fingerprint dataset content with a persistent stat-to-digest index."""
     root = Path(data_path).expanduser().resolve()
     excluded = Path(exclude_dir).expanduser().resolve() if exclude_dir else None
+    index_path = excluded / _CONTENT_RECEIPT_INDEX if excluded else None
+    excluded_subtree = (
+        excluded
+        if excluded is not None
+        and excluded != root
+        and excluded.is_relative_to(root)
+        else None
+    )
     digest = hashlib.sha256(str(root).encode())
-    if root.is_file():
-        stat = root.stat()
-        digest.update(f"{root.name}:{stat.st_size}:{stat.st_mtime_ns}".encode())
-        return digest.hexdigest()
 
     suffixes = {".parquet", ".csv", ".gz", ".json"}
-    files = (
-        path
-        for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix.lower() in suffixes
-        and (excluded is None or not path.is_relative_to(excluded))
-    )
-    for path in sorted(files, key=lambda item: str(item.relative_to(root))):
-        stat = path.stat()
-        relative = path.relative_to(root)
-        digest.update(f"{relative}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
-    return digest.hexdigest()
+    if root.is_file():
+        files = [root]
+    else:
+        files = [
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in suffixes
+            and (index_path is None or path != index_path)
+            and (
+                excluded_subtree is None
+                or not path.is_relative_to(excluded_subtree)
+            )
+        ]
+
+    with _CONTENT_RECEIPT_LOCK:
+        previous = _load_receipt_index(index_path, root)
+        current_receipts: dict[str, dict] = {}
+        for path in sorted(
+            files,
+            key=lambda item: item.name
+            if root.is_file()
+            else str(item.relative_to(root)),
+        ):
+            relative = path.name if root.is_file() else str(path.relative_to(root))
+            receipt = _current_receipt(path, previous.get(relative))
+            current_receipts[relative] = receipt
+            digest.update(f"{relative}:{receipt['sha256']}\n".encode())
+        _save_receipt_index(index_path, root, current_receipts)
+        return digest.hexdigest()
 
 
 def load_concept_cached_impl(

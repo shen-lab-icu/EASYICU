@@ -32,6 +32,16 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
+from easyicu.content_identity import (
+    ContentIdentityError,
+    file_content_receipt,
+    verify_content_receipt,
+)
+from easyicu.databases.detection import (
+    DatabaseDetectionError,
+    detect_database_identity,
+)
+
 if TYPE_CHECKING:
     import pyarrow
 
@@ -247,7 +257,11 @@ class DataConverter:
             verbose: Enable verbose logging
         """
         self.data_path = Path(data_path)
-        self.database = database or self._detect_database()
+        # Explicit aliases and auto-detected identities share the same owner.
+        # Bypassing detection when ``database`` was supplied left values such
+        # as ``mimic-iv`` unnormalised and silently disabled canonical
+        # partitioning rules keyed by ``miiv``.
+        self.database = self._detect_database(database)
         self.chunk_size = chunk_size
         # 2026-05-20: honor env var so users on slow external storage can
         # set EASYICU_CONV_WORKERS=1 without touching code or call sites.
@@ -427,75 +441,22 @@ class DataConverter:
         self._bucket_dir_cache = None
         self._shard_dir_cache = None
 
-    def _detect_database(self) -> str:
-        """Detect database type from directory structure."""
-        path_str = str(self.data_path).lower()
-        
-        compact_path = path_str.replace("-", "").replace("_", "")
-
-        def _mimic_generation_from_icustays() -> Optional[str]:
-            candidates = []
-            for pattern in (
-                "icustays.parquet",
-                "ICUSTAYS.parquet",
-                "icustays.csv",
-                "ICUSTAYS.csv",
-                "icustays.csv.gz",
-                "ICUSTAYS.csv.gz",
-            ):
-                candidates.extend(self.data_path.rglob(pattern))
-            for path in candidates:
-                try:
-                    if path.suffix == ".parquet":
-                        import pyarrow.parquet as pq
-
-                        columns = {
-                            name.lower() for name in pq.ParquetFile(path).schema.names
-                        }
-                    else:
-                        columns = {name.lower() for name in self._read_csv_header(path)}
-                except Exception:
-                    continue
-                if "stay_id" in columns:
-                    return "miiv"
-                if "icustay_id" in columns:
-                    return "mimic"
-            return None
-        if "eicu" in path_str:
-            return "eicu"
-        elif "miiv" in compact_path or "mimiciv" in compact_path:
-            return "miiv"
-        elif "mimiciii" in compact_path:
-            return "mimic"
-        elif "mimic" in path_str:
-            detected = _mimic_generation_from_icustays()
-            if detected is not None:
-                return detected
+    def _detect_database(self, database: Optional[str] = None) -> str:
+        """Detect the canonical database through the schema-first owner."""
+        try:
+            detected = detect_database_identity(
+                self.data_path,
+                database=database,
+                strict=False,
+            )
+        except DatabaseDetectionError:
+            raise
+        if detected == "unknown" and "mimic" in self.data_path.name.casefold():
             raise ValueError(
                 "Ambiguous MIMIC data path; pass database='miiv' or "
                 "database='mimic' explicitly"
             )
-        elif "aumc" in path_str:
-            return "aumc"
-        elif "hirid" in path_str:
-            return "hirid"
-        
-        # Try to detect from files
-        files = list(self.data_path.glob('*.csv*'))
-        file_names = [f.name.lower() for f in files]
-        
-        if any("patient.csv" in f for f in file_names):
-            return "eicu"
-        elif any("admissions.csv" in f for f in file_names):
-            detected = _mimic_generation_from_icustays()
-            if detected is not None:
-                return detected
-            raise ValueError(
-                "Admissions files alone do not distinguish MIMIC-III from "
-                "MIMIC-IV; pass database explicitly"
-            )
-        
-        return 'unknown'
+        return detected
     
     def _extract_hirid_archives(self) -> List[str]:
         """
@@ -1118,6 +1079,21 @@ class DataConverter:
         previous_status = previous.get("status")
         if previous_status in (ConversionStatus.CONVERTING, ConversionStatus.FAILED):
             return True, f"previous conversion is {previous_status}"
+        if previous_status == ConversionStatus.COMPLETED:
+            source_receipt = previous.get("source_content_receipt")
+            if source_receipt is None:
+                return True, "completed conversion is missing source content receipt"
+            try:
+                matches, current_receipt = verify_content_receipt(
+                    csv_path, source_receipt
+                )
+            except ContentIdentityError as exc:
+                return True, exc.code
+            if not matches:
+                return True, "source content changed since completed conversion"
+            if current_receipt is not None and current_receipt != source_receipt:
+                previous["source_content_receipt"] = current_receipt
+                self._record_status(file_key, previous)
 
         # A HiRID part-N.csv is already one physical source shard and maps to
         # exactly one observations/N.parquet or pharma/N.parquet target.  Do
@@ -1687,6 +1663,7 @@ class DataConverter:
         }
         
         try:
+            source_receipt = file_content_receipt(csv_path)
             # Update status
             result['status'] = ConversionStatus.CONVERTING
             self._record_status(file_key, result.copy())
@@ -1704,6 +1681,18 @@ class DataConverter:
             else:
                 # Single file conversion for smaller files
                 result = self._convert_file_single(csv_path, result)
+
+            if result.get("status") == ConversionStatus.COMPLETED:
+                matches, current_receipt = verify_content_receipt(
+                    csv_path, source_receipt
+                )
+                if not matches or current_receipt is None:
+                    raise ContentIdentityError(
+                        "source_changed_during_conversion",
+                        csv_path,
+                        f"Source changed during conversion: {csv_path}",
+                    )
+                result["source_content_receipt"] = current_receipt
             
         except Exception as e:
             result['status'] = ConversionStatus.FAILED

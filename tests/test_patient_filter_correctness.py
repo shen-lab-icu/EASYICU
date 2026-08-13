@@ -14,6 +14,7 @@ from easyicu.base import (
 from easyicu.config import load_src_cfg
 from easyicu.database_config import SUPPORTED_DATABASES
 from easyicu.databases.profiles import public_database_keys
+from easyicu.io.data_converter import DataConverter
 from easyicu.patient_filter import (
     FilterCriteria,
     PatientFilter,
@@ -53,6 +54,112 @@ def test_flat_mimic_iv_is_detected_by_stay_id_schema_before_admissions_marker(
     assert loader._detect_database(None, tmp_path) == "miiv"
 
 
+@pytest.mark.parametrize(
+    ("directory_name", "column", "canonical", "web_alias"),
+    [
+        ("mimic-iv", "icustay_id", "mimic", "miii"),
+        ("mimic-iii", "stay_id", "miiv", "miiv"),
+    ],
+)
+def test_database_schema_overrides_conflicting_directory_name_across_layers(
+    tmp_path, directory_name, column, canonical, web_alias
+) -> None:
+    from easyicu.webserver.dataio import _detect_database
+
+    prepared = tmp_path / directory_name
+    prepared.mkdir()
+    pd.DataFrame({column: [1]}).to_csv(prepared / "icustays.csv", index=False)
+    loader = BaseICULoader.__new__(BaseICULoader)
+    loader.verbose = False
+
+    assert loader._detect_database(None, prepared) == canonical
+    assert DataConverter(prepared, verbose=False).database == canonical
+    assert _detect_database(prepared) == web_alias
+
+
+def test_unrelated_eicu_ancestor_does_not_override_mimic_schema(tmp_path) -> None:
+    from easyicu.webserver.dataio import _detect_database
+
+    prepared = tmp_path / "eicu_archive" / "selected_export"
+    prepared.mkdir(parents=True)
+    pd.DataFrame({"stay_id": [1]}).to_csv(prepared / "icustays.csv", index=False)
+    loader = BaseICULoader.__new__(BaseICULoader)
+    loader.verbose = False
+
+    assert loader._detect_database(None, prepared) == "miiv"
+    assert DataConverter(prepared, verbose=False).database == "miiv"
+    assert _detect_database(prepared) == "miiv"
+
+
+def test_mimic_bucket_layout_does_not_override_the_stay_id_generation(
+    tmp_path,
+) -> None:
+    """MIMIC-III and IV may both use converter bucket directories."""
+
+    from easyicu.webserver.dataio import _detect_database
+
+    prepared = tmp_path / "prepared"
+    prepared.mkdir()
+    (prepared / "chartevents_bucket").mkdir()
+    pd.DataFrame({"stay_id": [1]}).to_csv(prepared / "icustays.csv", index=False)
+    loader = BaseICULoader.__new__(BaseICULoader)
+    loader.verbose = False
+
+    assert loader._detect_database(None, prepared) == "miiv"
+    assert DataConverter(prepared, verbose=False).database == "miiv"
+    assert _detect_database(prepared) == "miiv"
+
+
+def test_unreadable_identity_table_does_not_fall_back_to_the_directory_label(
+    tmp_path,
+) -> None:
+    from easyicu.webserver.dataio import _detect_database
+
+    prepared = tmp_path / "mimic-iv"
+    prepared.mkdir()
+    (prepared / "icustays.parquet").write_bytes(b"not parquet")
+    loader = BaseICULoader.__new__(BaseICULoader)
+    loader.verbose = False
+
+    for detect in (
+        lambda: loader._detect_database(None, prepared),
+        lambda: DataConverter(prepared, verbose=False).database,
+        lambda: _detect_database(prepared),
+    ):
+        with pytest.raises(DatabaseDetectionError) as caught:
+            detect()
+        assert caught.value.code == "database_detection_schema_unreadable"
+
+
+def test_schema_detection_accepts_official_uppercase_table_names_on_case_sensitive_hosts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = tmp_path / "prepared"
+    prepared.mkdir()
+    pd.DataFrame({"stay_id": [1]}).to_csv(
+        prepared / "ICUSTAYS.csv.gz", index=False, compression="gzip"
+    )
+    real_is_file = Path.is_file
+
+    def case_sensitive_is_file(path: Path) -> bool:
+        if path.parent == prepared:
+            actual_names = {entry.name for entry in prepared.iterdir()}
+            if path.name not in actual_names:
+                return False
+        return real_is_file(path)
+
+    # APFS is normally case-insensitive, so emulate Linux's exact-name lookup.
+    # The detector must enumerate children case-insensitively rather than rely
+    # on the host filesystem accepting a lower-case spelling.
+    monkeypatch.setattr(Path, "is_file", case_sensitive_is_file)
+    loader = BaseICULoader.__new__(BaseICULoader)
+    loader.verbose = False
+
+    assert loader._detect_database(None, prepared) == "miiv"
+    assert DataConverter(prepared, verbose=False).database == "miiv"
+
+
 def test_unknown_database_path_fails_closed_instead_of_defaulting_to_miiv(
     tmp_path,
 ) -> None:
@@ -76,6 +183,23 @@ def test_conflicting_database_markers_fail_closed(tmp_path) -> None:
     assert caught.value.candidates == ("aumc", "sic")
 
 
+def test_mixed_prepared_database_schemas_fail_closed(tmp_path) -> None:
+    """One directory must never be silently claimed by the first schema seen."""
+
+    pd.DataFrame({"stay_id": [1]}).to_csv(tmp_path / "icustays.csv", index=False)
+    pd.DataFrame({"patientunitstayid": [1]}).to_csv(
+        tmp_path / "patient.csv", index=False
+    )
+    loader = BaseICULoader.__new__(BaseICULoader)
+    loader.verbose = False
+
+    with pytest.raises(DatabaseDetectionError) as caught:
+        loader._detect_database(None, tmp_path)
+
+    assert caught.value.code == "database_detection_ambiguous"
+    assert caught.value.candidates == ("eicu", "miiv")
+
+
 def test_explicit_database_rejects_an_unrecognized_prepared_path(tmp_path) -> None:
     loader = BaseICULoader.__new__(BaseICULoader)
     loader.verbose = False
@@ -84,6 +208,12 @@ def test_explicit_database_rejects_an_unrecognized_prepared_path(tmp_path) -> No
         loader._setup_data_path(tmp_path, "miiv")
 
     assert caught.value.code == "database_path_unrecognized"
+
+
+def test_converter_normalizes_an_explicit_public_database_alias(tmp_path) -> None:
+    converter = DataConverter(tmp_path, database="mimic-iv", verbose=False)
+
+    assert converter.database == "miiv"
 
 
 @pytest.mark.parametrize(
