@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from ..contracts.declared_product import primary_analysis_cohort_plan_findings
+from ..contracts.primary_cohort import primary_analysis_cohort_plan_findings
 from ..contracts.runtime import ValidationFinding
 from ..plan_utils import (
     endpoint_contract_findings,
