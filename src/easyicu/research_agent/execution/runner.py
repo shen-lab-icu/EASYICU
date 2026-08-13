@@ -130,8 +130,10 @@ HOST_OWNED_RUNNER_ENV_KEYS = frozenset(
         "TMP",
         "TEMP",
         "PYTHONPATH",
+        "PYTHONHOME",
         "PYTHONNOUSERSITE",
         "PYTHONDONTWRITEBYTECODE",
+        "__PYVENV_LAUNCHER__",
         "MPLBACKEND",
         "MPLCONFIGDIR",
         "XDG_CACHE_HOME",
@@ -972,7 +974,7 @@ class CodeRunner:
                 extra_env_identity[key] = _path_bound_authority_value(value)
             python_binary = Path(self.python_executable).resolve(strict=True)
             payload = {
-                "schema": "easyicu.code_runner_authority/1",
+                "schema": "easyicu.code_runner_authority/2",
                 "interpreter": interpreter,
                 "python_entrypoint": {
                     "configured": self.python_executable,
@@ -1019,6 +1021,17 @@ class CodeRunner:
             Path(self.workdir).resolve(),
             Path(self.python_executable).resolve().parent,
         }
+        configured_python = Path(self.python_executable).expanduser()
+        if configured_python.is_absolute():
+            configured_prefix = configured_python.parent.parent
+            if configured_prefix.exists():
+                read_dirs.add(configured_prefix.resolve())
+            try:
+                runtime_prefix = configured_python.resolve(strict=True).parent.parent
+            except (OSError, RuntimeError):
+                runtime_prefix = None
+            if runtime_prefix is not None and runtime_prefix.exists():
+                read_dirs.add(runtime_prefix)
         read_files = {
             # CPython/conda enumerate the filesystem root while resolving the
             # executable prefix. Granting data access to this directory entry
@@ -1066,6 +1079,38 @@ class CodeRunner:
         rules.append("(deny network*)")
         return "\n".join(rules) + "\n"
 
+    def _macos_sandbox_python_launch(self) -> tuple[str, Dict[str, str]]:
+        """Return an outer-sandbox-safe Python target and venv coordinates.
+
+        Some signed desktop sandboxes allow ``sandbox-exec`` itself but deny
+        ``execvp`` when its target is a virtualenv's final ``bin/python``
+        symlink.  Executing the symlink's real binary avoids that outer policy,
+        but doing only that would silently leave the selected virtualenv.  On
+        macOS CPython, ``__PYVENV_LAUNCHER__`` preserves the configured venv;
+        ``PYTHONHOME`` pins its base runtime so prefix discovery never falls
+        back to the interpreter's build-time path.
+
+        The two variables are host-owned and rejected from ``extra_env``.  A
+        non-venv symlink needs only the canonical executable path.
+        """
+
+        configured = Path(self.python_executable).expanduser()
+        if not configured.is_absolute():
+            return self.python_executable, {}
+        try:
+            resolved = configured.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return self.python_executable, {}
+        if resolved == configured:
+            return str(resolved), {}
+
+        launch_env: Dict[str, str] = {}
+        venv_prefix = configured.parent.parent
+        if (venv_prefix / "pyvenv.cfg").is_file():
+            launch_env["__PYVENV_LAUNCHER__"] = str(configured)
+            launch_env["PYTHONHOME"] = str(resolved.parent.parent)
+        return str(resolved), launch_env
+
     def build_command(self, *, script_path: Path) -> List[str]:
         base = [self.python_executable, str(script_path)]
         if self.network_policy not in {"none", "disabled"}:
@@ -1073,6 +1118,8 @@ class CodeRunner:
         sandbox_exec = shutil.which("sandbox-exec")
         if sandbox_exec and sys.platform == "darwin":
             profile = self._macos_sandbox_profile(script_path=script_path)
+            sandbox_python, _ = self._macos_sandbox_python_launch()
+            base[0] = sandbox_python
             return [sandbox_exec, "-p", profile, *base]
         unshare = shutil.which("unshare")
         if unshare and sys.platform.startswith("linux"):
@@ -1208,6 +1255,9 @@ class CodeRunner:
         cmd = self.build_command(script_path=script_path)
         original_cmd = list(cmd)
         requested_isolation = self._isolation_backend_for_cmd(original_cmd)
+        if requested_isolation == "macos_sandbox_exec":
+            _, sandbox_launch_env = self._macos_sandbox_python_launch()
+            env.update(sandbox_launch_env)
         isolation_degraded = False
         isolation_degradation_reason: Optional[str] = None
         runner_failure_code: Optional[RunnerFailureCode] = None
