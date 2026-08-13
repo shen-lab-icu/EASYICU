@@ -33,6 +33,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1" in index
     assert "js/screens-guided-pi-preview.js?v=20260812-data-package1" in index
     assert "js/screens-guided-pi.js?v=20260812-natural-chat-artifacts1" in index
+    assert (
+        "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
+        in index
+    )
     assert "js/api.js?v=20260812-extension-manager1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
@@ -51,6 +55,22 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi.js"
     )
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
+
+
+def test_guided_project_refresh_continuity_has_a_small_dedicated_owner() -> None:
+    index = _read("index.html")
+    continuity = _read("js/screens-guided-project-continuity.js")
+    guided = _read("js/screens-guided.js")
+
+    assert index.index("js/screens-guided-project-continuity.js") < index.index(
+        "js/screens-guided.js"
+    )
+    assert "easyicu_guided_active_project:v1" in continuity
+    assert "window.EU_GUIDED_PROJECT_CONTINUITY" in continuity
+    assert "project_dir" not in continuity
+    assert "EU_GUIDED_PROJECT_CONTINUITY.remember" in guided
+    assert "continuity.remembered()" in guided
+    assert "openGuidedProjectMemory(rememberedRow, null, 'draft')" in guided
 
 
 def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
