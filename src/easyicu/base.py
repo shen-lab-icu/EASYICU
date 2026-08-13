@@ -19,62 +19,17 @@ import pandas as pd
 
 from .datasource import ICUDataSource
 from .concept import ConceptResolver, ConceptDictionary
-from .databases.profiles import normalize_database_key
+from .databases.detection import (
+    DatabaseDetectionError,
+    detect_database_identity,
+    peek_table_columns as _peek_table_columns,
+)
 from .resources import load_data_sources, load_dictionary
 from .runtime.cache_manager import get_cache_manager
 from .runtime.parallel_config import get_global_config, get_runtime_load_strategy
 from .table import ICUTable
 
 logger = logging.getLogger(__name__)
-
-
-class DatabaseDetectionError(ValueError):
-    """Prepared database identity or path could not be established safely."""
-
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        data_path: Optional[Union[str, Path]] = None,
-        candidates: Sequence[str] = (),
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.data_path = Path(data_path) if data_path is not None else None
-        self.candidates = tuple(sorted(set(candidates)))
-
-
-def _peek_table_columns(path: Path, table: str) -> set[str]:
-    """Read a prepared table schema without loading its rows."""
-
-    roots = (path, path / "icu", path / "hosp")
-    for root in roots:
-        for candidate in (root / f"{table}.parquet", root / table):
-            try:
-                import pyarrow.parquet as pq
-
-                if candidate.is_file():
-                    return {str(name).lower() for name in pq.read_schema(candidate).names}
-                if candidate.is_dir():
-                    shard = next(candidate.glob("*.parquet"), None)
-                    if shard is not None:
-                        return {
-                            str(name).lower() for name in pq.read_schema(shard).names
-                        }
-            except Exception:
-                continue
-        for suffix in (".csv", ".csv.gz"):
-            candidate = root / f"{table}{suffix}"
-            try:
-                if candidate.is_file():
-                    return {
-                        str(name).lower()
-                        for name in pd.read_csv(candidate, nrows=0).columns
-                    }
-            except Exception:
-                continue
-    return set()
 
 
 def _batch_patient_count(batch_ids: Union[List, Dict, None]) -> int:
@@ -147,128 +102,14 @@ class BaseICULoader:
         3. 环境变量
         4. 无充分证据时失败关闭
         """
-        if database:
-            try:
-                return normalize_database_key(database)
-            except KeyError as exc:
-                raise ValueError(f"Unsupported database: {database!r}") from exc
-        
-        # 尝试从 data_path 推断数据库类型。MIMIC stay-ID schema is the
-        # authoritative discriminator because table names overlap generations.
-        if data_path:
-            path = Path(data_path)
-            path_str = str(path).lower()
-
-            if path.is_dir():
-                mimic_columns = _peek_table_columns(path, "icustays")
-                mimic_schema_candidates = {
-                    database_name
-                    for column, database_name in (
-                        ("stay_id", "miiv"),
-                        ("icustay_id", "mimic"),
-                    )
-                    if column in mimic_columns
-                }
-                if len(mimic_schema_candidates) == 1:
-                    return next(iter(mimic_schema_candidates))
-                if len(mimic_schema_candidates) > 1:
-                    raise DatabaseDetectionError(
-                        "database_detection_ambiguous",
-                        f"Conflicting MIMIC stay identifiers in {path}.",
-                        data_path=path,
-                        candidates=mimic_schema_candidates,
-                    )
-
-            candidates: set[str] = set()
-
-            # Path names are supporting evidence. Avoid treating the generic
-            # MIMIC token inside a MIMIC-IV name as a second database.
-            miiv_patterns = ('miiv', 'mimiciv', 'mimic-iv', 'mimic_iv')
-            if any(pattern in path_str for pattern in miiv_patterns):
-                candidates.add('miiv')
-            elif any(
-                pattern in path_str
-                for pattern in ('mimiciii', 'mimic-iii', 'mimic_iii', '/mimic')
-            ):
-                candidates.add('mimic')
-            for db_name, patterns in {
-                'eicu': ('eicu', 'eicu-crd'),
-                'aumc': ('aumc', 'amsterdam'),
-                'hirid': ('hirid',),
-                'sic': ('sicdb', 'sic-db'),
-            }.items():
-                if any(pattern in path_str for pattern in patterns):
-                    candidates.add(db_name)
-
-            if path.is_dir():
-                patient_columns = _peek_table_columns(path, "patient")
-                if "patientunitstayid" in patient_columns:
-                    candidates.add("eicu")
-
-                marker_files = {
-                    'eicu': ('vitalPeriodic.parquet', 'vitalPeriodic.csv'),
-                    'aumc': ('numericitems',),
-                    'mimic': ('chartevents_bucket', 'labevents_bucket'),
-                    'hirid': (
-                        'general_table.csv',
-                        'general_table.parquet',
-                        'observations',
-                    ),
-                    'sic': ('cases.parquet', 'data_float_h_bucket'),
-                }
-                for db_name, markers in marker_files.items():
-                    if any((path / marker).exists() for marker in markers):
-                        candidates.add(db_name)
-
-            if len(candidates) == 1:
-                detected = next(iter(candidates))
-                if self.verbose:
-                    logger.info("Auto-detected database %s from %s", detected, path)
-                return detected
-            if len(candidates) > 1:
-                raise DatabaseDetectionError(
-                    "database_detection_ambiguous",
-                    f"Conflicting database evidence in {path}: {sorted(candidates)}.",
-                    data_path=path,
-                    candidates=candidates,
-                )
-
-        # Environment variables are evidence only when they identify one
-        # canonical database. Multiple configured databases require an explicit
-        # database argument.
-        environment_keys = {
-            'miiv': ('MIIV_PATH', 'MIMICIV_PATH'),
-            'mimic': ('MIMIC_PATH', 'MIMICIII_PATH'),
-            'eicu': ('EICU_PATH',),
-            'hirid': ('HIRID_PATH',),
-            'aumc': ('AUMC_PATH',),
-            'sic': ('SIC_PATH', 'SICDB_PATH'),
-        }
-        environment_candidates = {
-            db_name
-            for db_name, env_vars in environment_keys.items()
-            if any(os.getenv(env_var) for env_var in env_vars)
-        }
-        if len(environment_candidates) == 1:
-            detected = next(iter(environment_candidates))
-            if self.verbose:
-                logger.info("Auto-detected database %s from environment", detected)
-            return detected
-        if len(environment_candidates) > 1:
-            raise DatabaseDetectionError(
-                "database_detection_ambiguous",
-                "Multiple database-specific environment paths are configured; "
-                "supply database explicitly.",
-                data_path=data_path,
-                candidates=environment_candidates,
-            )
-
-        raise DatabaseDetectionError(
-            "database_detection_unavailable",
-            "Database could not be detected from prepared data evidence; supply "
-            "database explicitly.",
-            data_path=data_path,
+        detected = detect_database_identity(
+            data_path,
+            database=database,
+            use_environment=True,
         )
+        if self.verbose and data_path:
+            logger.info("Auto-detected database %s from %s", detected, data_path)
+        return detected
 
     def _setup_data_path(self, data_path: Optional[Union[str, Path]], database: str) -> Path:
         """Setup and validate data path

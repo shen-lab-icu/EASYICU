@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from easyicu.content_identity import file_content_receipt
 from easyicu.io.data_converter import DataConverter
 
 
@@ -283,6 +284,7 @@ def test_hirid_status_verification_uses_selected_parquet_candidate(
     converter._status[csv_path.name] = {
         "status": "completed",
         "row_count": 1,
+        "source_content_receipt": file_content_receipt(csv_path),
     }
 
     needs_conversion, reason = converter._is_conversion_needed(csv_path)

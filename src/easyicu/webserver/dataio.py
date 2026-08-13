@@ -226,68 +226,44 @@ def _has_glob(path: Path, pattern: str) -> bool:
 
 
 def _detect_database(path: Path) -> str:
-    """Light DB heuristic — mirrors DataConverter._detect_database without
-    constructing a converter (which would validate/scan the folder)."""
-    s = str(path).lower()
-    if "eicu" in s:
-        return "eicu"
-
-    # CONTENT BEATS NAME for the MIMIC pair. The two generations differ only in
-    # their stay-id column (stay_id vs icustay_id), and a path string is a weak
-    # signal: the token can come from an unrelated ancestor directory, and a
-    # prepared export is often filed under a name with no version at all.
-    # Read the schema first whenever the folder actually holds MIMIC tables.
-    by_schema = _detect_mimic_version_by_schema(path)
-    if by_schema:
-        return by_schema
-    if any(
-        token in s for token in ("mimiciii", "mimic-iii", "mimic_iii", "mimic3", "miii")
-    ):
-        return "miii"
-    if any(
-        token in s for token in ("mimiciv", "mimic-iv", "mimic_iv", "mimic4", "miiv")
-    ):
-        return "miiv"
-    if "aumc" in s:
-        return "aumc"
-    if "hirid" in s:
-        return "hirid"
-    if "sicdb" in s or "sic" in s:
-        return "sicdb"
-
-    names = []
-    try:
-        names = [
-            p.name.lower()
-            for p in list(path.glob("*.csv*")) + list(path.glob("*.parquet"))
-        ]
-        for sub in path.iterdir():
-            if sub.is_dir():
-                names.append(sub.name.lower() + "/")
-    except OSError:
-        pass
-    if any(n.startswith("patient.") or n == "patient/" for n in names):
-        return "eicu"
-    if any(n.startswith("general_table") or n.startswith("general/") for n in names):
-        return "hirid"
-    # An ambiguous "mimic" path is resolved by SCHEMA, not by table names.
-    # Both versions ship icustays/patients/admissions, so a converted MIMIC-IV
-    # in a flat parquet layout looks exactly like MIMIC-III by filename alone.
-    # The stay-id column is what actually differs, and it is what downstream
-    # extraction depends on.
-    has_admissions = any(
-        n.startswith("admissions.") or n == "admissions/" for n in names
+    """Map the canonical schema-first identity to Web surface aliases."""
+    from easyicu.databases.detection import (
+        DatabaseDetectionError,
+        detect_database_identity,
     )
-    if any(n in {"icu/", "hosp/"} for n in names):
-        return "miiv"
-    if has_admissions or any(n.startswith("icustays.") for n in names):
-        by_schema = _detect_mimic_version_by_schema(path)
-        if by_schema:
-            return by_schema
-        # Nothing on disk distinguishes the version — say so rather than
-        # guessing one whose ID column may be wrong.
-        return "unknown"
-    return "unknown"
+
+    detected = detect_database_identity(path, strict=False)
+    manifest_candidates: Set[str] = set()
+    for name in _MODULE_MANIFESTS:
+        manifest_path = path / name
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        declared = str(payload.get("database") or "").strip()
+        if not declared:
+            continue
+        try:
+            manifest_candidates.add(detect_database_identity(database=declared))
+        except ValueError as exc:
+            raise DatabaseDetectionError(
+                "database_detection_manifest_invalid",
+                f"Unsupported database identity {declared!r} in {manifest_path}.",
+                data_path=path,
+            ) from exc
+    candidates = set(manifest_candidates)
+    if detected != "unknown":
+        candidates.add(detected)
+    if len(candidates) > 1:
+        raise DatabaseDetectionError(
+            "database_detection_ambiguous",
+            f"Conflicting database evidence in {path}: {sorted(candidates)}.",
+            data_path=path,
+            candidates=candidates,
+        )
+    if candidates:
+        detected = next(iter(candidates))
+    return {"mimic": "miii", "sic": "sicdb"}.get(detected, detected)
 
 
 #: Columns that appear in exactly one MIMIC generation.
@@ -362,7 +338,22 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
 
-    db_key = _detect_database(path)
+    from easyicu.databases.detection import DatabaseDetectionError
+
+    try:
+        db_key = _detect_database(path)
+    except DatabaseDetectionError as exc:
+        return {
+            "ok": False,
+            "error": exc.code,
+            "path": str(path),
+            "candidates": list(exc.candidates),
+            "ready": False,
+            "privacy": {
+                "raw_rows_read": False,
+                "patient_identifiers_returned": False,
+            },
+        }
     db_label = _DB_LABELS.get(db_key, "Unknown")
 
     status = _check_data_status(path, db_key)
@@ -397,6 +388,25 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
             "layout": ["No recognized ICU tables", "未识别到 ICU 数据表"],
             "source": "unknown",
             "tables": 0,
+            "modules": 0,
+            "ready": False,
+            "missing_tables": missing_tables,
+            "privacy": {
+                "raw_rows_read": False,
+                "patient_identifiers_returned": False,
+            },
+        }
+
+    if db_key == "unknown":
+        return {
+            "ok": False,
+            "error": "database_detection_unavailable",
+            "path": str(path),
+            "db": db_label,
+            "db_key": db_key,
+            "layout": layout,
+            "source": source,
+            "tables": tables,
             "modules": 0,
             "ready": False,
             "missing_tables": missing_tables,

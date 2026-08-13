@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 from typing import Any, Mapping, Optional
 
 from .concept.schema import ConceptDictionary
@@ -44,6 +45,7 @@ class ClinicalConceptContract:
     version: str
     source_id: str
     source_table: Optional[str]
+    definition_time_anchor: Optional[str]
     status: str
     canonical_definition: bool
     requires_explicit_opt_in: bool
@@ -87,6 +89,11 @@ class ClinicalConceptContract:
             version=str(payload.get("version") or ""),
             source_id=str(payload.get("source_id") or ""),
             source_table=(str(payload["source_table"]) if payload.get("source_table") else None),
+            definition_time_anchor=(
+                str(payload["definition_time_anchor"])
+                if payload.get("definition_time_anchor")
+                else None
+            ),
             status=str(payload.get("status") or ""),
             canonical_definition=bool(payload.get("canonical_definition")),
             requires_explicit_opt_in=bool(payload.get("requires_explicit_opt_in")),
@@ -163,6 +170,10 @@ def validate_clinical_contracts(
             findings.append(f"{contract_id}:concepts_missing")
         if not contract.definition or not contract.version or not contract.source_id:
             findings.append(f"{contract_id}:definition_provenance_incomplete")
+        if contract.definition_time_anchor is not None and not re.fullmatch(
+            r"[a-z][a-z0-9_]{1,79}", contract.definition_time_anchor
+        ):
+            findings.append(f"{contract_id}:definition_time_anchor_invalid")
         if not contract.spec_golden_vectors:
             findings.append(f"{contract_id}:spec_golden_vectors_missing")
         for vector_path in contract.spec_golden_vectors:

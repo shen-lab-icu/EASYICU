@@ -10,8 +10,10 @@ import pytest
 
 from easyicu import api
 from easyicu.api import concepts as concept_api
+from easyicu.api.cache import data_path_fingerprint
 from easyicu.api import extraction as extraction_api
 from easyicu.config import load_src_cfg
+from easyicu.content_identity import file_content_receipt
 from easyicu.datasource import (
     FilterOp,
     FilterSpec,
@@ -258,6 +260,68 @@ def test_concept_cache_isolates_cohort_source_and_data_fingerprint(
     assert first["aligned"].all() and cached["aligned"].all()
 
 
+def test_concept_cache_invalidates_same_size_content_with_restored_mtime(
+    monkeypatch, tmp_path
+):
+    data_path = tmp_path / "data"
+    cache_path = tmp_path / "cache"
+    data_path.mkdir()
+    source_file = data_path / "stays.csv"
+    source_file.write_bytes(b"id,value\n1,old\n")
+    original_stat = source_file.stat()
+    calls = []
+
+    def fake_load_concepts(**kwargs):
+        calls.append(kwargs)
+        return pd.DataFrame({"stay_id": [len(calls)]})
+
+    monkeypatch.setattr(api, "load_concepts", fake_load_concepts)
+    api.load_concept_cached(
+        "hr",
+        "miiv",
+        data_path,
+        cache_dir=cache_path,
+        patient_ids=[1],
+        verbose=False,
+    )
+
+    source_file.write_bytes(b"id,value\n1,new\n")
+    os.utime(
+        source_file,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    api.load_concept_cached(
+        "hr",
+        "miiv",
+        data_path,
+        cache_dir=cache_path,
+        patient_ids=[1],
+        verbose=False,
+    )
+
+    assert len(calls) == 2
+
+
+def test_content_fingerprint_does_not_exclude_data_when_cache_is_an_ancestor(
+    tmp_path: Path,
+) -> None:
+    data_path = tmp_path / "data"
+    data_path.mkdir()
+    source_file = data_path / "stays.csv"
+    source_file.write_bytes(b"id,value\n1,old\n")
+    original_stat = source_file.stat()
+
+    before = data_path_fingerprint(data_path, exclude_dir=tmp_path)
+    source_file.write_bytes(b"id,value\n1,new\n")
+    os.utime(
+        source_file,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    after = data_path_fingerprint(data_path, exclude_dir=tmp_path)
+
+    assert after != before
+
+
 def test_concept_cache_does_not_truncate_digest_to_collision_prone_prefix(
     monkeypatch, tmp_path
 ):
@@ -327,9 +391,11 @@ def test_concept_cache_uses_opaque_parquet_name_by_default(monkeypatch, tmp_path
         verbose=False,
     )
 
-    cache_files = list(cache_path.iterdir())
+    receipt_index = cache_path / ".easyicu_content_receipts.json"
+    cache_files = [path for path in cache_path.iterdir() if path != receipt_index]
     assert len(calls) == 1
     assert first.equals(second)
+    assert receipt_index.is_file()
     assert len(cache_files) == 1
     assert cache_files[0].parent == cache_path
     assert cache_files[0].suffix == ".parquet"
@@ -356,7 +422,9 @@ def test_pickle_cache_is_explicit_and_uses_an_opaque_name(monkeypatch, tmp_path)
         verbose=False,
     )
 
-    cache_files = list(cache_path.iterdir())
+    receipt_index = cache_path / ".easyicu_content_receipts.json"
+    cache_files = [path for path in cache_path.iterdir() if path != receipt_index]
+    assert receipt_index.is_file()
     assert len(cache_files) == 1
     assert cache_files[0].name.endswith(".trusted.pkl")
     assert len(cache_files[0].name.removesuffix(".trusted.pkl")) == 64
@@ -940,6 +1008,7 @@ def test_converter_rejects_completed_single_file_with_row_count_mismatch(tmp_pat
         "status": ConversionStatus.COMPLETED,
         "row_count": 2,
         "shards": 0,
+        "source_content_receipt": file_content_receipt(csv_path),
     }
 
     needed, reason = converter._is_conversion_needed(csv_path)
@@ -970,6 +1039,7 @@ def test_converter_rejects_completed_shards_with_row_count_mismatch(tmp_path):
         "status": ConversionStatus.COMPLETED,
         "row_count": 3,
         "shards": 2,
+        "source_content_receipt": file_content_receipt(csv_path),
     }
     converter._invalidate_dir_caches()
 
@@ -983,6 +1053,27 @@ def test_converter_rejects_completed_shards_with_row_count_mismatch(tmp_path):
 
     assert needed is False
     assert reason == "sharded (2 files)"
+
+
+def test_converter_rebuilds_same_size_source_with_restored_mtime(tmp_path):
+    csv_path = tmp_path / "events.csv"
+    csv_path.write_bytes(b"id,value\n1,old\n")
+    converter = DataConverter(tmp_path, database="miiv", verbose=False)
+    first = converter.convert_all(force=True)
+    assert first[csv_path.name]["status"] == ConversionStatus.COMPLETED
+    original_stat = csv_path.stat()
+
+    csv_path.write_bytes(b"id,value\n1,new\n")
+    os.utime(csv_path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+    needed, reason = converter._is_conversion_needed(csv_path)
+    assert needed is True
+    assert reason == "source content changed since completed conversion"
+
+    second = converter.convert_all()
+    assert second[csv_path.name]["status"] == ConversionStatus.COMPLETED
+    converted = pd.read_parquet(tmp_path / "events.parquet")
+    assert converted["value"].tolist() == ["new"]
 
 
 def test_converter_manifest_keeps_existing_tables_and_counts_bad_rows(tmp_path):
