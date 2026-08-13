@@ -412,6 +412,7 @@ def test_pipeline_falls_back_when_planner_returns_empty(
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=router,
+        enable_literature=False,
         enable_deterministic_planner_fallback=True,
         max_code_repair_attempts=0,
     )
@@ -464,6 +465,7 @@ def test_pipeline_recovers_when_planner_parses_to_zero_steps(
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=router,
+        enable_literature=False,
         enable_deterministic_planner_fallback=True,
         max_code_repair_attempts=0,
     )

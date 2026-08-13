@@ -47,6 +47,7 @@ import threading
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -87,8 +88,7 @@ from .figures.distribution_availability import (
     _distribution_availability_figure_step_matches_parent,
 )
 from .figures.missingness_publication import (
-    render_missingness_publication_bundle_from_prior_outputs
-    as _render_missingness_publication_bundle_from_prior_outputs,
+    render_missingness_publication_bundle_from_prior_outputs as _render_missingness_publication_bundle_from_prior_outputs,
 )
 from .figures.sealed_registry import sealed_renderer_adapter
 from .replication.envelope import (
@@ -1391,6 +1391,19 @@ def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
     return legacy
 
 
+@dataclass(frozen=True)
+class _PlanGenerationResult:
+    """Immutable handoff between plan generation and host validation."""
+
+    plan: AnalysisPlan
+    reused_prior_plan: bool
+    reused_plan_path: Optional[Path]
+    migrated_plan_path: Optional[Path]
+    plan_generation_mode: str
+    used_mock_llm: bool
+    planner_prompt_metrics: Optional[Dict[str, Any]]
+
+
 class ResearchAgentPipeline:
     """One-shot orchestration. Construct, call :meth:`run`, read the result."""
 
@@ -2160,6 +2173,791 @@ class ResearchAgentPipeline:
         set_runtime_capability_snapshot_provider(lambda: frozen_snapshot)
         return frozen_snapshot
 
+    def _generate_or_resume_plan(
+        self,
+        *,
+        agent_context: Any,
+        allowed_literature_citation_keys: Sequence[str],
+        cohort_path: Path,
+        context: Any,
+        direct_comparator_literature_keys: Sequence[str],
+        emit_progress: Callable[..., None],
+        evidence: Any,
+        findings: List[ValidationFinding],
+        know_how_binding: PlannerKnowHowBinding,
+        llm_signature: str,
+        planning_contract_context: str,
+        planner_prompt_metrics: Optional[Dict[str, Any]],
+        prompt_version: str,
+        resume_from_step_id: Optional[str],
+        resume_state: Optional[Dict[str, Any]],
+        role_resolver: Callable[[str], Any],
+        run_dir: Path,
+        run_id: str,
+        skill_obj: Optional[ClinicalSkill],
+        used_mock_llm: bool,
+    ) -> _PlanGenerationResult:
+        """Resume or generate one plan without shaping or persisting it."""
+        # Resume: reuse the locked plan from the prior run instead of
+        # re-planning. A non-deterministic planner would otherwise emit a
+        # *different* plan on resume, whose step_ids no longer match the
+        # completed-step skip set — so the "resume" would silently re-run the
+        # whole analysis under new names. Reusing the saved plan keeps the
+        # already-completed step_ids aligned and continues from the failed step.
+        reused_prior_plan = False
+        reused_plan_path: Optional[Path] = None
+        migrated_plan_path: Optional[Path] = None
+        if resume_state is not None:
+            plan, _prior_plan_path = _load_compatible_resume_plan(
+                run_dir=run_dir,
+                resume_state=resume_state,
+                context=context,
+                evidence=evidence,
+                prompt_pack_version=PROMPT_PACK_VERSION,
+            )
+            if plan is not None and plan.steps:
+                restore_table_one_private_checkpoint(
+                    run_dir=run_dir,
+                    plan=plan,
+                    context=agent_context,
+                )
+                # The resumed plan is the one on disk, so it still carries the
+                # host's opaque placeholders; a resume that skipped this would
+                # execute a different declaration than the first attempt did.
+                for resumed_step in plan.steps:
+                    bind_step_declared_levels(resumed_step, agent_context)
+                know_how_binding.verify_resume(
+                    plan.know_how_decisions,
+                    enabled=self._enable_know_how,
+                )
+                reused_prior_plan = True
+                reused_plan_path = _prior_plan_path
+                plan_generation_mode = "resumed"
+                findings.append(
+                    ValidationFinding(
+                        validator="planner",
+                        severity="warning",
+                        message=(
+                            "Resuming prior run: reused the latest compatible "
+                            "saved analysis plan (skipped re-planning) so "
+                            "completed step_ids stay aligned and execution "
+                            "continues from the failed step."
+                        ),
+                        detail={
+                            "generation_mode": "resumed",
+                            "n_steps": len(plan.steps),
+                            "plan_path": (
+                                str(_prior_plan_path.relative_to(run_dir))
+                                if _prior_plan_path is not None
+                                and _prior_plan_path.is_relative_to(run_dir)
+                                else str(_prior_plan_path)
+                            ),
+                        },
+                    )
+                )
+            else:
+                raise LegacyResumePlanMigrationError(
+                    "resume checkpoint has no digest-verified analysis plan "
+                    "evidence compatible with every completed step"
+                )
+
+        if reused_prior_plan:
+            plan, migrated_plan_path, migrated_step_ids = (
+                _migrate_legacy_resume_model_requirements(
+                    plan=plan,
+                    context=agent_context,
+                    run_dir=run_dir,
+                    resume_state=resume_state,
+                    resume_from_step_id=resume_from_step_id,
+                    role_resolver=role_resolver,
+                    evidence=evidence,
+                    prompt_version=prompt_version,
+                    llm_signature=llm_signature,
+                    max_prompt_tokens=self._max_prompt_tokens_per_call,
+                )
+            )
+            if migrated_plan_path is not None:
+                plan_generation_mode = "resumed_planner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema_migration",
+                        severity="warning",
+                        message=(
+                            "Migrated legacy remaining adjusted-association "
+                            "step(s) to the planner-owned typed model roster."
+                        ),
+                        detail={
+                            "target_step_ids": list(migrated_step_ids),
+                            "plan_path": str(migrated_plan_path.relative_to(run_dir)),
+                        },
+                    )
+                )
+            plan, lock_restore_path = _restore_resume_plan_robustness_lock(
+                plan=plan,
+                run_dir=run_dir,
+                evidence=evidence,
+                prompt_version=prompt_version,
+                llm_signature=llm_signature,
+            )
+            if lock_restore_path is not None:
+                migrated_plan_path = lock_restore_path
+                plan_generation_mode = "resumed_planner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="robustness_spec_lock",
+                        severity="warning",
+                        message=(
+                            "Resume restored the verified plan-time robustness "
+                            "specifications after an older replan drifted from "
+                            "the immutable lock."
+                        ),
+                        detail={
+                            "plan_path": str(lock_restore_path.relative_to(run_dir)),
+                            "lock_path": "robustness_specs_locked.json",
+                        },
+                    )
+                )
+            plan, trajectory_migration_path, trajectory_migration_findings = (
+                _migrate_resume_trajectory_products(
+                    plan=plan,
+                    context=agent_context,
+                    run_dir=run_dir,
+                    evidence=evidence,
+                    prompt_version=prompt_version,
+                    llm_signature=llm_signature,
+                )
+            )
+            findings.extend(trajectory_migration_findings)
+            if trajectory_migration_path is not None:
+                migrated_plan_path = trajectory_migration_path
+                plan_generation_mode = "resumed_planner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="plan_contract",
+                        severity="warning",
+                        message=(
+                            "Resume migrated an older trajectory plan to the "
+                            "canonical replay-product schema without changing "
+                            "scientific ownership or step identities."
+                        ),
+                        detail={
+                            "kind": "resume_trajectory_schema_migration",
+                            "plan_path": str(
+                                trajectory_migration_path.relative_to(run_dir)
+                            ),
+                        },
+                    )
+                )
+            (
+                plan,
+                figure_edge_migration_path,
+                figure_edge_step_ids,
+            ) = _migrate_legacy_resume_figure_render_edges(
+                plan=plan,
+                run_dir=run_dir,
+                resume_state=resume_state,
+                resume_from_step_id=resume_from_step_id,
+                evidence=evidence,
+                prompt_version=prompt_version,
+                llm_signature=llm_signature,
+            )
+            if figure_edge_migration_path is not None:
+                migrated_plan_path = figure_edge_migration_path
+                plan_generation_mode = "resumed_planner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema_migration",
+                        severity="warning",
+                        message=(
+                            "Resume restored exact typed parent edges on "
+                            "legacy framework-split rendering steps."
+                        ),
+                        detail={
+                            "kind": "legacy_figure_render_edge",
+                            "target_step_ids": list(figure_edge_step_ids),
+                            "plan_path": str(
+                                figure_edge_migration_path.relative_to(run_dir)
+                            ),
+                        },
+                    )
+                )
+        elif skill_obj is not None:
+            plan_generation_mode = "deterministic_skill"
+            issues = skill_obj.validate_against(pd.read_parquet(cohort_path))
+            for msg in issues:
+                findings.append(
+                    ValidationFinding(
+                        validator="clinical_skill",
+                        severity="warning",
+                        message=msg,
+                    )
+                )
+            plan = skill_obj.plan(context)
+        else:
+            plan_generation_mode = "llm"
+            planner = PlannerAgent(role_resolver("planner"))
+
+            planner_progress = planner_retry_progress_callback(
+                emit_progress, run_id=run_id
+            )
+
+            try:
+                plan = planner.run(
+                    agent_context,
+                    **know_how_binding.planner_kwargs,
+                    allowed_literature_citation_keys=allowed_literature_citation_keys,
+                    direct_comparator_literature_keys=(
+                        direct_comparator_literature_keys
+                    ),
+                    enforce_article_contract=True,
+                    article_contract_context=context,
+                    planning_contract_context=planning_contract_context,
+                    progress_callback=planner_progress,
+                )
+                planner_prompt_metrics = know_how_binding.prompt_metrics(
+                    planner,
+                    agent_context,
+                    planning_contract_context=planning_contract_context,
+                )
+            except PlannerArticleContractError:
+                raise
+            except Exception as exc:
+                if not self._enable_deterministic_planner_fallback:
+                    raise
+                findings.append(
+                    ValidationFinding(
+                        validator="planner",
+                        severity="warning",
+                        message=(
+                            "Planner agent failed; using deterministic fallback plan: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                        detail={"generation_mode": "fallback"},
+                    )
+                )
+                plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
+                    agent_context,
+                    **know_how_binding.planner_kwargs,
+                    allowed_literature_citation_keys=(allowed_literature_citation_keys),
+                    direct_comparator_literature_keys=(
+                        direct_comparator_literature_keys
+                    ),
+                )
+                used_mock_llm = True
+                plan_generation_mode = "fallback"
+            dropped_plan_keys = getattr(planner, "last_dropped_plan_keys", None) or {}
+            dropped_keys = list(dropped_plan_keys.get("top_level", [])) + list(
+                dropped_plan_keys.get("steps", [])
+            )
+            if dropped_keys:
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema",
+                        severity="warning",
+                        message=(
+                            "Planner returned unsupported plan fields that were dropped "
+                            "before schema validation."
+                        ),
+                        detail={"dropped_keys": dropped_keys},
+                    )
+                )
+            # A hosted model occasionally emits structurally-broken plan JSON
+            # (e.g. a stray time-window at the top level and no usable steps
+            # array) that normalises to 0 steps. An empty plan must never run:
+            # retry the real planner once, then fall back to the deterministic
+            # plan so the pipeline always executes a real analysis.
+            if not plan.steps and self._enable_deterministic_planner_fallback:
+                retry_plan = None
+                try:
+                    retry_plan = planner.run(
+                        agent_context,
+                        **know_how_binding.planner_kwargs,
+                        allowed_literature_citation_keys=allowed_literature_citation_keys,
+                        direct_comparator_literature_keys=(
+                            direct_comparator_literature_keys
+                        ),
+                        enforce_article_contract=True,
+                        article_contract_context=context,
+                        planning_contract_context=planning_contract_context,
+                    )
+                except Exception:
+                    retry_plan = None
+                if retry_plan is not None and retry_plan.steps:
+                    plan = retry_plan
+                    findings.append(
+                        ValidationFinding(
+                            validator="planner",
+                            severity="warning",
+                            message="Planner returned an empty plan; recovered on retry.",
+                            detail={"generation_mode": "retry"},
+                        )
+                    )
+                else:
+                    findings.append(
+                        ValidationFinding(
+                            validator="planner",
+                            severity="warning",
+                            message=(
+                                "Planner returned an empty plan (0 steps after schema "
+                                "validation) twice; using deterministic fallback plan."
+                            ),
+                            detail={"generation_mode": "fallback"},
+                        )
+                    )
+                    plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
+                        agent_context,
+                        **know_how_binding.planner_kwargs,
+                        allowed_literature_citation_keys=(
+                            allowed_literature_citation_keys
+                        ),
+                        direct_comparator_literature_keys=(
+                            direct_comparator_literature_keys
+                        ),
+                    )
+                    used_mock_llm = True
+                    plan_generation_mode = "fallback"
+            # Structured-纳排 retry: if the plan implies an analysis cohort (a
+            # cohort / eligibility / attrition step) but left plan.cohort
+            # unstructured, the 纳排 is unenforceable free text. Give the planner
+            # one focused retry; adopt it only if it actually structures the
+            # cohort, so a good plan is never discarded when the retry doesn't.
+            if (
+                not used_mock_llm
+                and _plan_expects_analysis_cohort(plan)
+                and _cohort_definition_is_empty(plan)
+            ):
+                cohort_retry = None
+                try:
+                    cohort_retry = planner.run(
+                        agent_context,
+                        **know_how_binding.planner_kwargs,
+                        allowed_literature_citation_keys=allowed_literature_citation_keys,
+                        direct_comparator_literature_keys=(
+                            direct_comparator_literature_keys
+                        ),
+                        enforce_article_contract=True,
+                        article_contract_context=context,
+                        planning_contract_context=planning_contract_context,
+                    )
+                except Exception:
+                    cohort_retry = None
+                if (
+                    cohort_retry is not None
+                    and cohort_retry.steps
+                    and not _cohort_definition_is_empty(cohort_retry)
+                ):
+                    plan = cohort_retry
+                    findings.append(
+                        ValidationFinding(
+                            validator="cohort_contract",
+                            severity="warning",
+                            message=(
+                                "Planner initially left the analysis cohort "
+                                "unstructured; recovered structured inclusion/"
+                                "exclusion on retry."
+                            ),
+                            detail={"generation_mode": "cohort_retry"},
+                        )
+                    )
+        return _PlanGenerationResult(
+            plan=plan,
+            reused_prior_plan=reused_prior_plan,
+            reused_plan_path=reused_plan_path,
+            migrated_plan_path=migrated_plan_path,
+            plan_generation_mode=plan_generation_mode,
+            used_mock_llm=used_mock_llm,
+            planner_prompt_metrics=planner_prompt_metrics,
+        )
+
+    def _validate_and_persist_plan(
+        self,
+        *,
+        generation: _PlanGenerationResult,
+        agent_context: Any,
+        allowed_literature_citation_keys: Sequence[str],
+        analysis_blueprint: Any,
+        article_contract: Any,
+        article_figure_strategy: Any,
+        cohort_path: Path,
+        context: Any,
+        context_path: Path,
+        cost_meter: Optional[CostMeter],
+        direct_comparator_literature_keys: Sequence[str],
+        emit_progress: Callable[..., None],
+        evidence: Any,
+        findings: List[ValidationFinding],
+        know_how_binding: PlannerKnowHowBinding,
+        llm_signature: str,
+        long_trajectory_bound: bool,
+        preplan_literature: Optional[LiteratureBundle],
+        prompt_files: Sequence[Path],
+        prompt_version: str,
+        repro_envelope: Optional[ReproEnvelope],
+        resume_state: Optional[Dict[str, Any]],
+        role_resolver: Callable[[str], Any],
+        run_dir: Path,
+        run_id: str,
+        skill_obj: Optional[ClinicalSkill],
+        study_design_brief: Any,
+    ) -> _PlanPhaseResult:
+        """Shape, validate, bind, and persist the generated analysis plan."""
+        plan = generation.plan
+        reused_prior_plan = generation.reused_prior_plan
+        reused_plan_path = generation.reused_plan_path
+        migrated_plan_path = generation.migrated_plan_path
+        plan_generation_mode = generation.plan_generation_mode
+        used_mock_llm = generation.used_mock_llm
+        planner_prompt_metrics = generation.planner_prompt_metrics
+        # Skip the plan-shaping transforms when resuming: the saved plan is
+        # already in its final, transformed form, and re-running split/cap/
+        # ensure_* could rename or reorder step_ids and break the resume skip
+        # set. A freshly generated plan still gets the full treatment.
+        if not reused_prior_plan:
+            plan, plan_contract_findings = _enforce_advanced_plan_contract(
+                plan=plan,
+                context=context,
+                long_trajectory_bound=long_trajectory_bound,
+            )
+            findings.extend(plan_contract_findings)
+            plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+            findings.extend(split_findings)
+            plan, report_input_findings = _augment_report_typed_product_inputs(
+                plan=plan
+            )
+            findings.extend(report_input_findings)
+            # Force a declared figure step whenever the publication-figure skill
+            # will produce one regardless of the plan: the scorer reads
+            # analysis_plan.json, and a question-only heuristic misses tasks
+            # that never say "figure" yet still require one. Likewise
+            # ensure a declared audit/robustness panel, since that evidence is
+            # produced (locked robustness specs, data-quality summaries) but the
+            # plan often never presents it.
+            plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
+                plan=plan,
+                context=context,
+                force=self._enable_publication_figure_skill,
+            )
+            findings.extend(figure_guard_findings)
+            plan, audit_panel_findings = _ensure_audit_panel_step_in_plan(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(audit_panel_findings)
+
+            cap = self._max_total_steps
+            plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
+            findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
+            plan, trajectory_product_findings = augment_trajectory_plan_products(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(trajectory_product_findings)
+            # The probe-aware replanner receives these structural issues before
+            # execution. Keep the initial snapshot advisory so a successfully
+            # repaired plan is not blocked by its superseded pre-probe shape.
+            findings.extend(
+                finding.model_copy(
+                    update={
+                        "validator": "plan_contract_pending",
+                        "severity": "warning",
+                        "detail": {
+                            **dict(finding.detail or {}),
+                            "pending_probe_replan": True,
+                        },
+                    }
+                )
+                for finding in trajectory_plan_dag_findings(
+                    plan=plan,
+                    context=context,
+                    long_trajectory_bound=long_trajectory_bound,
+                )
+            )
+            plan = ensure_cohort_definition(plan)
+            plan = ensure_robustness_specs(plan)
+            # Final gate: if the plan implies a cohort but still has no
+            # structured inclusion/exclusion (the retry above didn't recover
+            # it), record a loud, auditable contract error instead of silently
+            # running the analysis on the full universe.
+            findings.extend(_cohort_definition_contract_findings(plan))
+        # The endpoint half of the same declaration, checked for every plan
+        # rather than only inside the cohort branch above: a family can require
+        # a typed endpoint whether or not it also defines an analysis cohort.
+        findings.extend(endpoint_contract_findings(plan, context=context))
+        # Planner output was validated before shaping, but the host has since
+        # split mixed outputs, closed typed dependencies, and applied the step
+        # cap. Never offer a human an approval request for a transform-corrupted
+        # plan (for example a visualization step whose sole figure declaration
+        # was moved away during de-duplication).
+        validate_final_plan_shape(plan)
+        if study_design_brief is not None:
+            if (
+                plan.analysis_type
+                and article_contract is not None
+                and plan.analysis_type != article_contract.source_analysis_type
+            ):
+                # The pre-plan contract is a prompt profile.  Once the Planner
+                # has selected a valid analysis type, seal a separate final
+                # contract instead of letting provisional inference retain
+                # scientific headline authority.
+                final_brief = build_study_design_brief(
+                    context,
+                    analysis_type=plan.analysis_type,
+                )
+                final_contract = build_article_analysis_contract(
+                    context,
+                    brief=final_brief,
+                    analysis_type=plan.analysis_type,
+                )
+                final_strategy = build_article_figure_strategy(
+                    context,
+                    analysis_family=final_brief.analysis_family,
+                )
+                final_blueprint = build_analysis_blueprint(
+                    context,
+                    brief=final_brief,
+                    contract=final_contract,
+                    figure_strategy=final_strategy,
+                )
+                final_payloads = (
+                    (
+                        "study_design_brief_final",
+                        "study_design_brief.final.json",
+                        final_brief,
+                    ),
+                    (
+                        "article_analysis_contract_final",
+                        "article_analysis_contract.final.json",
+                        final_contract,
+                    ),
+                    (
+                        "article_figure_strategy_final",
+                        "article_figure_strategy.final.json",
+                        final_strategy,
+                    ),
+                    (
+                        "analysis_blueprint_final",
+                        "analysis_blueprint.final.json",
+                        final_blueprint,
+                    ),
+                )
+                for evidence_id, filename, payload in final_payloads:
+                    final_path = run_dir / filename
+                    final_path.write_text(
+                        payload.model_dump_json(indent=2),
+                        encoding="utf-8",
+                    )
+                    if evidence.get(evidence_id) is None:
+                        evidence.register_file(
+                            kind="log",
+                            description=(
+                                "Planner-final article design authority bound to "
+                                f"analysis_type={plan.analysis_type}."
+                            ),
+                            source_path=final_path,
+                            evidence_id=evidence_id,
+                            producer="planner_contract_finalizer",
+                            generation_mode="deterministic_skill",
+                        )
+                study_design_brief = final_brief
+                article_contract = final_contract
+                article_figure_strategy = final_strategy
+                analysis_blueprint = final_blueprint
+            findings.extend(
+                validate_plan_against_study_design_brief(
+                    plan=plan,
+                    brief=study_design_brief,
+                )
+            )
+        if article_contract is not None:
+            findings.extend(
+                validate_plan_against_article_contract(
+                    plan=plan,
+                    contract=article_contract,
+                )
+            )
+        if analysis_blueprint is not None:
+            findings.extend(
+                validate_plan_against_analysis_blueprint(
+                    plan=plan,
+                    blueprint=analysis_blueprint,
+                )
+            )
+        if self._required_primary_cohort_selection_mode is not None:
+            observed_mode = str(getattr(plan.cohort, "selection_mode", "") or "")
+            if observed_mode != self._required_primary_cohort_selection_mode:
+                raise CohortAuthorityError(
+                    "Planner primary cohort selection mode does not match the "
+                    "caller-bound contract: expected "
+                    f"{self._required_primary_cohort_selection_mode!r}, observed "
+                    f"{observed_mode!r}"
+                )
+            if not cohort_definition_has_explicit_selection(plan.cohort):
+                raise CohortAuthorityError(
+                    "Planner primary cohort selection is not explicit"
+                )
+        validate_plan_against_adjustment_authority(plan=plan, context=agent_context)
+        self._scientific_runtime_authorities.validate_plan(plan)
+        plan_path = (
+            migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
+        )
+        for planned_step in plan.steps:
+            bind_table_one_execution_spec(planned_step, agent_context)
+            bind_step_declared_levels(planned_step, agent_context)
+        write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
+        if not reused_prior_plan:
+            plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+        if evidence.get("analysis_plan") is None:
+            evidence.register_file(
+                kind="log",
+                description=(
+                    f"Analysis plan from ClinicalSkill '{skill_obj.key}'."
+                    if skill_obj
+                    else "Analysis plan emitted by PlannerAgent."
+                ),
+                source_path=plan_path,
+                evidence_id="analysis_plan",
+                producer="planner" if skill_obj is None else "clinical_skill",
+                generation_mode=plan_generation_mode,
+                prompt_pack_version=prompt_version,
+                metadata={
+                    "llm_signature": llm_signature,
+                    "used_mock_llm": used_mock_llm,
+                },
+            )
+        if self._config.require_human_plan_review:
+            review_gate = prepare_scientific_plan_review_gate(
+                context=context,
+                plan=plan,
+                literature=preplan_literature,
+                figure_strategy=article_figure_strategy,
+                run_dir=run_dir,
+                evidence=evidence,
+            )
+            findings.append(review_gate.finding)
+        know_how_binding.persist_prompt_metrics(
+            planner_prompt_metrics,
+            run_dir=run_dir,
+            evidence=evidence,
+        )
+        write_locked_cohort_definition(
+            run_dir=run_dir,
+            plan=plan,
+            evidence=evidence,
+            prompt_pack_version=prompt_version,
+            llm_signature=llm_signature,
+        )
+        write_locked_robustness_specs(
+            run_dir=run_dir,
+            plan=plan,
+            evidence=evidence,
+            prompt_pack_version=prompt_version,
+            llm_signature=llm_signature,
+        )
+        # Materialize the locked cohort definition into the canonical analysis
+        # cohort so the declared inclusion/exclusion is enforced once, on the
+        # data every downstream step reads — instead of relying on each
+        # LLM-generated step to re-apply 纳排 (which run10/run11 showed it does
+        # not, so the primary model ran on the full universe). The full universe
+        # stays reachable via EASYICU_UNIVERSE_PARQUET for robustness steps.
+        if not reused_prior_plan:
+            analysis_cohort = materialize_locked_analysis_cohort(
+                run_dir=run_dir,
+                plan=plan,
+                universe_path=cohort_path,
+                context=context,
+            )
+            if analysis_cohort["status"] == "applied":
+                findings.append(
+                    ValidationFinding(
+                        validator="cohort_materializer",
+                        severity="info",
+                        message=(
+                            "Applied the locked cohort definition: analysis cohort "
+                            f"n={analysis_cohort['n_cohort']} of universe "
+                            f"n={analysis_cohort['n_universe']}. Downstream steps read "
+                            "the filtered cohort (COHORT_PARQUET); the full universe "
+                            "stays available as EASYICU_UNIVERSE_PARQUET."
+                        ),
+                        detail={
+                            "n_universe": analysis_cohort["n_universe"],
+                            "n_analysis_cohort": analysis_cohort["n_cohort"],
+                            "cohort_definition_sha256": analysis_cohort[
+                                "cohort_definition_sha256"
+                            ],
+                            "materialized_cohort_authority_ref": analysis_cohort[
+                                "authority_ref"
+                            ],
+                        },
+                    )
+                )
+            elif analysis_cohort["status"] == "error":
+                # The comment above this block records why the materializer
+                # exists: run10/run11 left 纳排 to each generated step, and the
+                # primary model silently ran on the full universe. Falling back
+                # to "downstream steps must apply it themselves" on failure
+                # reinstates exactly that path, on a run that has already
+                # *locked* a cohort definition. A locked cohort that cannot be
+                # applied is a stop, not a warning.
+                findings.append(
+                    ValidationFinding(
+                        validator="cohort_materializer",
+                        severity="error",
+                        message=(
+                            "Could not apply the locked cohort definition to the "
+                            "universe. The run is stopped rather than analysing "
+                            "the unfiltered universe under a cohort the plan "
+                            f"declared. Reason: {analysis_cohort['error']}"
+                        ),
+                        detail={
+                            "reason": "locked_cohort_not_materialized",
+                            "materializer_error": str(analysis_cohort["error"]),
+                            "cohort_definition_sha256": analysis_cohort.get(
+                                "cohort_definition_sha256"
+                            ),
+                        },
+                    )
+                )
+                raise CohortAuthorityError(
+                    "the locked cohort definition could not be materialised "
+                    f"({analysis_cohort['error']}); refusing to continue on the "
+                    "unfiltered universe"
+                )
+        emit_progress(
+            "plan",
+            f"Analysis plan ready with {len(plan.steps)} step(s).",
+            run_id=run_id,
+            total_steps=len(plan.steps),
+        )
+
+        started_at = datetime.now(timezone.utc)
+        if resume_state and resume_state.get("started_at"):
+            try:
+                started_at = datetime.fromisoformat(resume_state["started_at"])
+            except Exception:
+                pass
+
+        return _PlanPhaseResult(
+            context=context,
+            agent_context=agent_context,
+            context_path=context_path,
+            evidence=evidence,
+            findings=findings,
+            plan=plan,
+            plan_path=plan_path,
+            llm_signature=llm_signature,
+            used_mock_llm=used_mock_llm,
+            prompt_version=prompt_version,
+            prompt_files=prompt_files,
+            role_resolver=role_resolver,
+            cost_meter=cost_meter,
+            repro_envelope=repro_envelope,
+            started_at=started_at,
+            resume_state=resume_state,
+            allowed_literature_citation_keys=tuple(allowed_literature_citation_keys),
+            direct_comparator_literature_keys=tuple(direct_comparator_literature_keys),
+            preplan_literature=preplan_literature,
+        )
+
     def _run_plan_phase(
         self,
         *,
@@ -2453,7 +3251,9 @@ class ResearchAgentPipeline:
                     tavily_include_domains=self._tavily_include_domains,
                     bound_seed=self._bound_preplan_literature,
                 )
-                allowed_literature_citation_keys = [citation.key for citation in preplan_literature.citations]
+                allowed_literature_citation_keys = [
+                    citation.key for citation in preplan_literature.citations
+                ]
                 direct_comparator_literature_keys = [
                     decision.citation_key
                     for decision in preplan_literature.screening_decisions
@@ -2890,719 +3690,56 @@ class ResearchAgentPipeline:
         else:
             role_resolver = stopped_role_resolver
 
-        # Resume: reuse the locked plan from the prior run instead of
-        # re-planning. A non-deterministic planner would otherwise emit a
-        # *different* plan on resume, whose step_ids no longer match the
-        # completed-step skip set — so the "resume" would silently re-run the
-        # whole analysis under new names. Reusing the saved plan keeps the
-        # already-completed step_ids aligned and continues from the failed step.
-        reused_prior_plan = False
-        reused_plan_path: Optional[Path] = None
-        migrated_plan_path: Optional[Path] = None
-        if resume_state is not None:
-            plan, _prior_plan_path = _load_compatible_resume_plan(
-                run_dir=run_dir,
-                resume_state=resume_state,
-                context=context,
-                evidence=evidence,
-                prompt_pack_version=PROMPT_PACK_VERSION,
-            )
-            if plan is not None and plan.steps:
-                restore_table_one_private_checkpoint(
-                    run_dir=run_dir,
-                    plan=plan,
-                    context=agent_context,
-                )
-                # The resumed plan is the one on disk, so it still carries the
-                # host's opaque placeholders; a resume that skipped this would
-                # execute a different declaration than the first attempt did.
-                for resumed_step in plan.steps:
-                    bind_step_declared_levels(resumed_step, agent_context)
-                know_how_binding.verify_resume(
-                    plan.know_how_decisions,
-                    enabled=self._enable_know_how,
-                )
-                reused_prior_plan = True
-                reused_plan_path = _prior_plan_path
-                plan_generation_mode = "resumed"
-                findings.append(
-                    ValidationFinding(
-                        validator="planner",
-                        severity="warning",
-                        message=(
-                            "Resuming prior run: reused the latest compatible "
-                            "saved analysis plan (skipped re-planning) so "
-                            "completed step_ids stay aligned and execution "
-                            "continues from the failed step."
-                        ),
-                        detail={
-                            "generation_mode": "resumed",
-                            "n_steps": len(plan.steps),
-                            "plan_path": (
-                                str(_prior_plan_path.relative_to(run_dir))
-                                if _prior_plan_path is not None
-                                and _prior_plan_path.is_relative_to(run_dir)
-                                else str(_prior_plan_path)
-                            ),
-                        },
-                    )
-                )
-            else:
-                raise LegacyResumePlanMigrationError(
-                    "resume checkpoint has no digest-verified analysis plan "
-                    "evidence compatible with every completed step"
-                )
-
-        if reused_prior_plan:
-            plan, migrated_plan_path, migrated_step_ids = (
-                _migrate_legacy_resume_model_requirements(
-                    plan=plan,
-                    context=agent_context,
-                    run_dir=run_dir,
-                    resume_state=resume_state,
-                    resume_from_step_id=resume_from_step_id,
-                    role_resolver=role_resolver,
-                    evidence=evidence,
-                    prompt_version=prompt_version,
-                    llm_signature=llm_signature,
-                    max_prompt_tokens=self._max_prompt_tokens_per_call,
-                )
-            )
-            if migrated_plan_path is not None:
-                plan_generation_mode = "resumed_planner_migration"
-                findings.append(
-                    ValidationFinding(
-                        validator="planner_schema_migration",
-                        severity="warning",
-                        message=(
-                            "Migrated legacy remaining adjusted-association "
-                            "step(s) to the planner-owned typed model roster."
-                        ),
-                        detail={
-                            "target_step_ids": list(migrated_step_ids),
-                            "plan_path": str(migrated_plan_path.relative_to(run_dir)),
-                        },
-                    )
-                )
-            plan, lock_restore_path = _restore_resume_plan_robustness_lock(
-                plan=plan,
-                run_dir=run_dir,
-                evidence=evidence,
-                prompt_version=prompt_version,
-                llm_signature=llm_signature,
-            )
-            if lock_restore_path is not None:
-                migrated_plan_path = lock_restore_path
-                plan_generation_mode = "resumed_planner_migration"
-                findings.append(
-                    ValidationFinding(
-                        validator="robustness_spec_lock",
-                        severity="warning",
-                        message=(
-                            "Resume restored the verified plan-time robustness "
-                            "specifications after an older replan drifted from "
-                            "the immutable lock."
-                        ),
-                        detail={
-                            "plan_path": str(lock_restore_path.relative_to(run_dir)),
-                            "lock_path": "robustness_specs_locked.json",
-                        },
-                    )
-                )
-            plan, trajectory_migration_path, trajectory_migration_findings = (
-                _migrate_resume_trajectory_products(
-                    plan=plan,
-                    context=agent_context,
-                    run_dir=run_dir,
-                    evidence=evidence,
-                    prompt_version=prompt_version,
-                    llm_signature=llm_signature,
-                )
-            )
-            findings.extend(trajectory_migration_findings)
-            if trajectory_migration_path is not None:
-                migrated_plan_path = trajectory_migration_path
-                plan_generation_mode = "resumed_planner_migration"
-                findings.append(
-                    ValidationFinding(
-                        validator="plan_contract",
-                        severity="warning",
-                        message=(
-                            "Resume migrated an older trajectory plan to the "
-                            "canonical replay-product schema without changing "
-                            "scientific ownership or step identities."
-                        ),
-                        detail={
-                            "kind": "resume_trajectory_schema_migration",
-                            "plan_path": str(
-                                trajectory_migration_path.relative_to(run_dir)
-                            ),
-                        },
-                    )
-                )
-            (
-                plan,
-                figure_edge_migration_path,
-                figure_edge_step_ids,
-            ) = _migrate_legacy_resume_figure_render_edges(
-                plan=plan,
-                run_dir=run_dir,
-                resume_state=resume_state,
-                resume_from_step_id=resume_from_step_id,
-                evidence=evidence,
-                prompt_version=prompt_version,
-                llm_signature=llm_signature,
-            )
-            if figure_edge_migration_path is not None:
-                migrated_plan_path = figure_edge_migration_path
-                plan_generation_mode = "resumed_planner_migration"
-                findings.append(
-                    ValidationFinding(
-                        validator="planner_schema_migration",
-                        severity="warning",
-                        message=(
-                            "Resume restored exact typed parent edges on "
-                            "legacy framework-split rendering steps."
-                        ),
-                        detail={
-                            "kind": "legacy_figure_render_edge",
-                            "target_step_ids": list(figure_edge_step_ids),
-                            "plan_path": str(
-                                figure_edge_migration_path.relative_to(run_dir)
-                            ),
-                        },
-                    )
-                )
-        elif skill_obj is not None:
-            plan_generation_mode = "deterministic_skill"
-            issues = skill_obj.validate_against(pd.read_parquet(cohort_path))
-            for msg in issues:
-                findings.append(
-                    ValidationFinding(
-                        validator="clinical_skill",
-                        severity="warning",
-                        message=msg,
-                    )
-                )
-            plan = skill_obj.plan(context)
-        else:
-            plan_generation_mode = "llm"
-            planner = PlannerAgent(role_resolver("planner"))
-
-            planner_progress = planner_retry_progress_callback(emit_progress, run_id=run_id)
-
-            try:
-                plan = planner.run(
-                    agent_context,
-                    **know_how_binding.planner_kwargs,
-                    allowed_literature_citation_keys=allowed_literature_citation_keys,
-                    direct_comparator_literature_keys=(
-                        direct_comparator_literature_keys
-                    ),
-                    enforce_article_contract=True,
-                    article_contract_context=context,
-                    planning_contract_context=planning_contract_context,
-                    progress_callback=planner_progress,
-                )
-                planner_prompt_metrics = know_how_binding.prompt_metrics(
-                    planner,
-                    agent_context,
-                    planning_contract_context=planning_contract_context,
-                )
-            except PlannerArticleContractError:
-                raise
-            except Exception as exc:
-                if not self._enable_deterministic_planner_fallback:
-                    raise
-                findings.append(
-                    ValidationFinding(
-                        validator="planner",
-                        severity="warning",
-                        message=(
-                            "Planner agent failed; using deterministic fallback plan: "
-                            f"{type(exc).__name__}: {exc}"
-                        ),
-                        detail={"generation_mode": "fallback"},
-                    )
-                )
-                plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
-                    agent_context,
-                    **know_how_binding.planner_kwargs,
-                    allowed_literature_citation_keys=(
-                        allowed_literature_citation_keys
-                    ),
-                    direct_comparator_literature_keys=(
-                        direct_comparator_literature_keys
-                    ),
-                )
-                used_mock_llm = True
-                plan_generation_mode = "fallback"
-            dropped_plan_keys = getattr(planner, "last_dropped_plan_keys", None) or {}
-            dropped_keys = list(dropped_plan_keys.get("top_level", [])) + list(
-                dropped_plan_keys.get("steps", [])
-            )
-            if dropped_keys:
-                findings.append(
-                    ValidationFinding(
-                        validator="planner_schema",
-                        severity="warning",
-                        message=(
-                            "Planner returned unsupported plan fields that were dropped "
-                            "before schema validation."
-                        ),
-                        detail={"dropped_keys": dropped_keys},
-                    )
-                )
-            # A hosted model occasionally emits structurally-broken plan JSON
-            # (e.g. a stray time-window at the top level and no usable steps
-            # array) that normalises to 0 steps. An empty plan must never run:
-            # retry the real planner once, then fall back to the deterministic
-            # plan so the pipeline always executes a real analysis.
-            if not plan.steps and self._enable_deterministic_planner_fallback:
-                retry_plan = None
-                try:
-                    retry_plan = planner.run(
-                        agent_context,
-                        **know_how_binding.planner_kwargs,
-                        allowed_literature_citation_keys=allowed_literature_citation_keys,
-                        direct_comparator_literature_keys=(
-                            direct_comparator_literature_keys
-                        ),
-                        enforce_article_contract=True,
-                        article_contract_context=context,
-                        planning_contract_context=planning_contract_context,
-                    )
-                except Exception:
-                    retry_plan = None
-                if retry_plan is not None and retry_plan.steps:
-                    plan = retry_plan
-                    findings.append(
-                        ValidationFinding(
-                            validator="planner",
-                            severity="warning",
-                            message="Planner returned an empty plan; recovered on retry.",
-                            detail={"generation_mode": "retry"},
-                        )
-                    )
-                else:
-                    findings.append(
-                        ValidationFinding(
-                            validator="planner",
-                            severity="warning",
-                            message=(
-                                "Planner returned an empty plan (0 steps after schema "
-                                "validation) twice; using deterministic fallback plan."
-                            ),
-                            detail={"generation_mode": "fallback"},
-                        )
-                    )
-                    plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
-                        agent_context,
-                        **know_how_binding.planner_kwargs,
-                        allowed_literature_citation_keys=(
-                            allowed_literature_citation_keys
-                        ),
-                        direct_comparator_literature_keys=(
-                            direct_comparator_literature_keys
-                        ),
-                    )
-                    used_mock_llm = True
-                    plan_generation_mode = "fallback"
-            # Structured-纳排 retry: if the plan implies an analysis cohort (a
-            # cohort / eligibility / attrition step) but left plan.cohort
-            # unstructured, the 纳排 is unenforceable free text. Give the planner
-            # one focused retry; adopt it only if it actually structures the
-            # cohort, so a good plan is never discarded when the retry doesn't.
-            if (
-                not used_mock_llm
-                and _plan_expects_analysis_cohort(plan)
-                and _cohort_definition_is_empty(plan)
-            ):
-                cohort_retry = None
-                try:
-                    cohort_retry = planner.run(
-                        agent_context,
-                        **know_how_binding.planner_kwargs,
-                        allowed_literature_citation_keys=allowed_literature_citation_keys,
-                        direct_comparator_literature_keys=(
-                            direct_comparator_literature_keys
-                        ),
-                        enforce_article_contract=True,
-                        article_contract_context=context,
-                        planning_contract_context=planning_contract_context,
-                    )
-                except Exception:
-                    cohort_retry = None
-                if (
-                    cohort_retry is not None
-                    and cohort_retry.steps
-                    and not _cohort_definition_is_empty(cohort_retry)
-                ):
-                    plan = cohort_retry
-                    findings.append(
-                        ValidationFinding(
-                            validator="cohort_contract",
-                            severity="warning",
-                            message=(
-                                "Planner initially left the analysis cohort "
-                                "unstructured; recovered structured inclusion/"
-                                "exclusion on retry."
-                            ),
-                            detail={"generation_mode": "cohort_retry"},
-                        )
-                    )
-        # Skip the plan-shaping transforms when resuming: the saved plan is
-        # already in its final, transformed form, and re-running split/cap/
-        # ensure_* could rename or reorder step_ids and break the resume skip
-        # set. A freshly generated plan still gets the full treatment.
-        if not reused_prior_plan:
-            plan, plan_contract_findings = _enforce_advanced_plan_contract(
-                plan=plan,
-                context=context,
-                long_trajectory_bound=long_trajectory_bound,
-            )
-            findings.extend(plan_contract_findings)
-            plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
-            findings.extend(split_findings)
-            plan, report_input_findings = _augment_report_typed_product_inputs(
-                plan=plan
-            )
-            findings.extend(report_input_findings)
-            # Force a declared figure step whenever the publication-figure skill
-            # will produce one regardless of the plan: the scorer reads
-            # analysis_plan.json, and a question-only heuristic misses tasks
-            # that never say "figure" yet still require one. Likewise
-            # ensure a declared audit/robustness panel, since that evidence is
-            # produced (locked robustness specs, data-quality summaries) but the
-            # plan often never presents it.
-            plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
-                plan=plan,
-                context=context,
-                force=self._enable_publication_figure_skill,
-            )
-            findings.extend(figure_guard_findings)
-            plan, audit_panel_findings = _ensure_audit_panel_step_in_plan(
-                plan=plan,
-                context=context,
-            )
-            findings.extend(audit_panel_findings)
-
-            cap = self._max_total_steps
-            plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
-            findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
-            plan, trajectory_product_findings = augment_trajectory_plan_products(
-                plan=plan,
-                context=context,
-            )
-            findings.extend(trajectory_product_findings)
-            # The probe-aware replanner receives these structural issues before
-            # execution. Keep the initial snapshot advisory so a successfully
-            # repaired plan is not blocked by its superseded pre-probe shape.
-            findings.extend(
-                finding.model_copy(
-                    update={
-                        "validator": "plan_contract_pending",
-                        "severity": "warning",
-                        "detail": {
-                            **dict(finding.detail or {}),
-                            "pending_probe_replan": True,
-                        },
-                    }
-                )
-                for finding in trajectory_plan_dag_findings(
-                    plan=plan,
-                    context=context,
-                    long_trajectory_bound=long_trajectory_bound,
-                )
-            )
-            plan = ensure_cohort_definition(plan)
-            plan = ensure_robustness_specs(plan)
-            # Final gate: if the plan implies a cohort but still has no
-            # structured inclusion/exclusion (the retry above didn't recover
-            # it), record a loud, auditable contract error instead of silently
-            # running the analysis on the full universe.
-            findings.extend(_cohort_definition_contract_findings(plan))
-        # The endpoint half of the same declaration, checked for every plan
-        # rather than only inside the cohort branch above: a family can require
-        # a typed endpoint whether or not it also defines an analysis cohort.
-        findings.extend(endpoint_contract_findings(plan, context=context))
-        # Planner output was validated before shaping, but the host has since
-        # split mixed outputs, closed typed dependencies, and applied the step
-        # cap. Never offer a human an approval request for a transform-corrupted
-        # plan (for example a visualization step whose sole figure declaration
-        # was moved away during de-duplication).
-        validate_final_plan_shape(plan)
-        if study_design_brief is not None:
-            if (
-                plan.analysis_type
-                and article_contract is not None
-                and plan.analysis_type != article_contract.source_analysis_type
-            ):
-                # The pre-plan contract is a prompt profile.  Once the Planner
-                # has selected a valid analysis type, seal a separate final
-                # contract instead of letting provisional inference retain
-                # scientific headline authority.
-                final_brief = build_study_design_brief(
-                    context,
-                    analysis_type=plan.analysis_type,
-                )
-                final_contract = build_article_analysis_contract(
-                    context,
-                    brief=final_brief,
-                    analysis_type=plan.analysis_type,
-                )
-                final_strategy = build_article_figure_strategy(
-                    context,
-                    analysis_family=final_brief.analysis_family,
-                )
-                final_blueprint = build_analysis_blueprint(
-                    context,
-                    brief=final_brief,
-                    contract=final_contract,
-                    figure_strategy=final_strategy,
-                )
-                final_payloads = (
-                    (
-                        "study_design_brief_final",
-                        "study_design_brief.final.json",
-                        final_brief,
-                    ),
-                    (
-                        "article_analysis_contract_final",
-                        "article_analysis_contract.final.json",
-                        final_contract,
-                    ),
-                    (
-                        "article_figure_strategy_final",
-                        "article_figure_strategy.final.json",
-                        final_strategy,
-                    ),
-                    (
-                        "analysis_blueprint_final",
-                        "analysis_blueprint.final.json",
-                        final_blueprint,
-                    ),
-                )
-                for evidence_id, filename, payload in final_payloads:
-                    final_path = run_dir / filename
-                    final_path.write_text(
-                        payload.model_dump_json(indent=2),
-                        encoding="utf-8",
-                    )
-                    if evidence.get(evidence_id) is None:
-                        evidence.register_file(
-                            kind="log",
-                            description=(
-                                "Planner-final article design authority bound to "
-                                f"analysis_type={plan.analysis_type}."
-                            ),
-                            source_path=final_path,
-                            evidence_id=evidence_id,
-                            producer="planner_contract_finalizer",
-                            generation_mode="deterministic_skill",
-                        )
-                study_design_brief = final_brief
-                article_contract = final_contract
-                article_figure_strategy = final_strategy
-                analysis_blueprint = final_blueprint
-            findings.extend(
-                validate_plan_against_study_design_brief(
-                    plan=plan,
-                    brief=study_design_brief,
-                )
-            )
-        if article_contract is not None:
-            findings.extend(
-                validate_plan_against_article_contract(
-                    plan=plan,
-                    contract=article_contract,
-                )
-            )
-        if analysis_blueprint is not None:
-            findings.extend(
-                validate_plan_against_analysis_blueprint(
-                    plan=plan,
-                    blueprint=analysis_blueprint,
-                )
-            )
-        if self._required_primary_cohort_selection_mode is not None:
-            observed_mode = str(getattr(plan.cohort, "selection_mode", "") or "")
-            if observed_mode != self._required_primary_cohort_selection_mode:
-                raise CohortAuthorityError(
-                    "Planner primary cohort selection mode does not match the "
-                    "caller-bound contract: expected "
-                    f"{self._required_primary_cohort_selection_mode!r}, observed "
-                    f"{observed_mode!r}"
-                )
-            if not cohort_definition_has_explicit_selection(plan.cohort):
-                raise CohortAuthorityError(
-                    "Planner primary cohort selection is not explicit"
-                )
-        validate_plan_against_adjustment_authority(plan=plan, context=agent_context)
-        self._scientific_runtime_authorities.validate_plan(plan)
-        plan_path = (
-            migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
-        )
-        for planned_step in plan.steps:
-            bind_table_one_execution_spec(planned_step, agent_context)
-            bind_step_declared_levels(planned_step, agent_context)
-        write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
-        if not reused_prior_plan:
-            plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
-        if evidence.get("analysis_plan") is None:
-            evidence.register_file(
-                kind="log",
-                description=(
-                    f"Analysis plan from ClinicalSkill '{skill_obj.key}'."
-                    if skill_obj
-                    else "Analysis plan emitted by PlannerAgent."
-                ),
-                source_path=plan_path,
-                evidence_id="analysis_plan",
-                producer="planner" if skill_obj is None else "clinical_skill",
-                generation_mode=plan_generation_mode,
-                prompt_pack_version=prompt_version,
-                metadata={
-                    "llm_signature": llm_signature,
-                    "used_mock_llm": used_mock_llm,
-                },
-            )
-        if self._config.require_human_plan_review:
-            review_gate = prepare_scientific_plan_review_gate(
-                context=context,
-                plan=plan,
-                literature=preplan_literature,
-                figure_strategy=article_figure_strategy,
-                run_dir=run_dir,
-                evidence=evidence,
-            )
-            findings.append(review_gate.finding)
-        know_how_binding.persist_prompt_metrics(
-            planner_prompt_metrics,
-            run_dir=run_dir,
-            evidence=evidence,
-        )
-        write_locked_cohort_definition(
-            run_dir=run_dir,
-            plan=plan,
-            evidence=evidence,
-            prompt_pack_version=prompt_version,
-            llm_signature=llm_signature,
-        )
-        write_locked_robustness_specs(
-            run_dir=run_dir,
-            plan=plan,
-            evidence=evidence,
-            prompt_pack_version=prompt_version,
-            llm_signature=llm_signature,
-        )
-        # Materialize the locked cohort definition into the canonical analysis
-        # cohort so the declared inclusion/exclusion is enforced once, on the
-        # data every downstream step reads — instead of relying on each
-        # LLM-generated step to re-apply 纳排 (which run10/run11 showed it does
-        # not, so the primary model ran on the full universe). The full universe
-        # stays reachable via EASYICU_UNIVERSE_PARQUET for robustness steps.
-        if not reused_prior_plan:
-            analysis_cohort = materialize_locked_analysis_cohort(
-                run_dir=run_dir,
-                plan=plan,
-                universe_path=cohort_path,
-                context=context,
-            )
-            if analysis_cohort["status"] == "applied":
-                findings.append(
-                    ValidationFinding(
-                        validator="cohort_materializer",
-                        severity="info",
-                        message=(
-                            "Applied the locked cohort definition: analysis cohort "
-                            f"n={analysis_cohort['n_cohort']} of universe "
-                            f"n={analysis_cohort['n_universe']}. Downstream steps read "
-                            "the filtered cohort (COHORT_PARQUET); the full universe "
-                            "stays available as EASYICU_UNIVERSE_PARQUET."
-                        ),
-                        detail={
-                            "n_universe": analysis_cohort["n_universe"],
-                            "n_analysis_cohort": analysis_cohort["n_cohort"],
-                            "cohort_definition_sha256": analysis_cohort[
-                                "cohort_definition_sha256"
-                            ],
-                            "materialized_cohort_authority_ref": analysis_cohort[
-                                "authority_ref"
-                            ],
-                        },
-                    )
-                )
-            elif analysis_cohort["status"] == "error":
-                # The comment above this block records why the materializer
-                # exists: run10/run11 left 纳排 to each generated step, and the
-                # primary model silently ran on the full universe. Falling back
-                # to "downstream steps must apply it themselves" on failure
-                # reinstates exactly that path, on a run that has already
-                # *locked* a cohort definition. A locked cohort that cannot be
-                # applied is a stop, not a warning.
-                findings.append(
-                    ValidationFinding(
-                        validator="cohort_materializer",
-                        severity="error",
-                        message=(
-                            "Could not apply the locked cohort definition to the "
-                            "universe. The run is stopped rather than analysing "
-                            "the unfiltered universe under a cohort the plan "
-                            f"declared. Reason: {analysis_cohort['error']}"
-                        ),
-                        detail={
-                            "reason": "locked_cohort_not_materialized",
-                            "materializer_error": str(analysis_cohort["error"]),
-                            "cohort_definition_sha256": analysis_cohort.get(
-                                "cohort_definition_sha256"
-                            ),
-                        },
-                    )
-                )
-                raise CohortAuthorityError(
-                    "the locked cohort definition could not be materialised "
-                    f"({analysis_cohort['error']}); refusing to continue on the "
-                    "unfiltered universe"
-                )
-        emit_progress(
-            "plan",
-            f"Analysis plan ready with {len(plan.steps)} step(s).",
-            run_id=run_id,
-            total_steps=len(plan.steps),
-        )
-
-        started_at = datetime.now(timezone.utc)
-        if resume_state and resume_state.get("started_at"):
-            try:
-                started_at = datetime.fromisoformat(resume_state["started_at"])
-            except Exception:
-                pass
-
-        return _PlanPhaseResult(
-            context=context,
+        generation = self._generate_or_resume_plan(
             agent_context=agent_context,
-            context_path=context_path,
+            allowed_literature_citation_keys=allowed_literature_citation_keys,
+            cohort_path=cohort_path,
+            context=context,
+            direct_comparator_literature_keys=direct_comparator_literature_keys,
+            emit_progress=emit_progress,
             evidence=evidence,
             findings=findings,
-            plan=plan,
-            plan_path=plan_path,
+            know_how_binding=know_how_binding,
             llm_signature=llm_signature,
-            used_mock_llm=used_mock_llm,
+            planning_contract_context=planning_contract_context,
+            planner_prompt_metrics=planner_prompt_metrics,
             prompt_version=prompt_version,
-            prompt_files=prompt_files,
-            role_resolver=role_resolver,
-            cost_meter=cost_meter,
-            repro_envelope=repro_envelope,
-            started_at=started_at,
+            resume_from_step_id=resume_from_step_id,
             resume_state=resume_state,
-            allowed_literature_citation_keys=tuple(
-                allowed_literature_citation_keys
-            ),
-            direct_comparator_literature_keys=tuple(
-                direct_comparator_literature_keys
-            ),
+            role_resolver=role_resolver,
+            run_dir=run_dir,
+            run_id=run_id,
+            skill_obj=skill_obj,
+            used_mock_llm=used_mock_llm,
+        )
+        return self._validate_and_persist_plan(
+            generation=generation,
+            agent_context=agent_context,
+            allowed_literature_citation_keys=allowed_literature_citation_keys,
+            analysis_blueprint=analysis_blueprint,
+            article_contract=article_contract,
+            article_figure_strategy=article_figure_strategy,
+            cohort_path=cohort_path,
+            context=context,
+            context_path=context_path,
+            cost_meter=cost_meter,
+            direct_comparator_literature_keys=direct_comparator_literature_keys,
+            emit_progress=emit_progress,
+            evidence=evidence,
+            findings=findings,
+            know_how_binding=know_how_binding,
+            llm_signature=llm_signature,
+            long_trajectory_bound=long_trajectory_bound,
             preplan_literature=preplan_literature,
+            prompt_files=prompt_files,
+            prompt_version=prompt_version,
+            repro_envelope=repro_envelope,
+            resume_state=resume_state,
+            role_resolver=role_resolver,
+            run_dir=run_dir,
+            run_id=run_id,
+            skill_obj=skill_obj,
+            study_design_brief=study_design_brief,
         )
 
     def _execute_phase_services(self) -> ExecutePhaseServices:
@@ -6780,8 +6917,6 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
         encoding="utf-8",
     )
     return "cohort_flow_publication_bundle_from_parent_outputs_v1"
-
-
 
 
 def _render_phenotype_publication_bundle_from_prior_outputs(
