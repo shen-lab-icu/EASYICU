@@ -19,6 +19,9 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.research_agent.execution import phase as pipeline_execute
+from easyicu.research_agent.execution.step_candidate_recovery import (
+    StepCandidateRecovery,
+)
 from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
@@ -34,6 +37,29 @@ from easyicu.research_agent.repairs.coordination import (
 from easyicu.research_agent.schema import ValidationFinding
 
 STEP_ID = "02_exposure_derivation_and_qc"
+
+
+def _repair_orchestration_tree() -> ast.Module:
+    """Parse the execute host and its typed candidate-recovery owner together."""
+
+    source = "\n\n".join(
+        (
+            inspect.getsource(pipeline_execute.run_execute_phase),
+            inspect.getsource(StepCandidateRecovery),
+        )
+    )
+    return ast.parse(source)
+
+
+def _is_repair_call(node: ast.Call) -> bool:
+    return (
+        isinstance(node.func, ast.Name) and node.func.id == "_repair_with_capsule"
+    ) or (
+        isinstance(node.func, ast.Attribute)
+        and node.func.attr == "repair_with_capsule"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "self"
+    )
 
 
 def _authority_binding(
@@ -301,13 +327,21 @@ def test_consume_rejects_authority_for_wrong_attempt_or_class(tmp_path):
 
 
 def test_every_pipeline_llm_repair_reservation_is_authority_bound():
-    tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
+    tree = _repair_orchestration_tree()
     calls = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "_consume_llm_repair_budget"
+        and (
+            (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "_consume_llm_repair_budget"
+            )
+            or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "consume_llm_repair_budget"
+            )
+        )
     ]
 
     assert len(calls) == 7
@@ -338,9 +372,7 @@ def test_every_pipeline_llm_repair_reservation_is_authority_bound():
     coder_categories = sorted(
         keyword.value.value
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "_repair_with_capsule"
+        if isinstance(node, ast.Call) and _is_repair_call(node)
         for keyword in node.keywords
         if keyword.arg == "provider_category"
         and isinstance(keyword.value, ast.Constant)
@@ -389,13 +421,11 @@ def test_runtime_repair_uses_empty_typed_authority_side_channel():
 
 
 def test_every_pipeline_coder_repair_binds_current_logical_attempt():
-    tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
+    tree = _repair_orchestration_tree()
     calls = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "_repair_with_capsule"
+        if isinstance(node, ast.Call) and _is_repair_call(node)
     ]
 
     assert len(calls) == 6
@@ -563,8 +593,9 @@ def test_repair_coordinator_keeps_patch_as_default_without_audit_reservation():
     result = coordinator.repair(
         code="import os\nvalue = 1\n",
         patch_call=lambda: calls.append("patch") or "not-json",
-        full_rewrite_call=lambda _reason: calls.append("rewrite")
-        or "import os\nvalue = 2\n",
+        full_rewrite_call=lambda _reason: (
+            calls.append("rewrite") or "import os\nvalue = 2\n"
+        ),
     )
 
     assert calls == ["patch", "rewrite"]
@@ -640,8 +671,9 @@ def test_patch_response_full_script_requires_authorized_rewrite_transport():
     result = coordinator.repair(
         code="import os\nvalue = 1\n",
         patch_call=lambda: calls.append("patch") or "import os\nvalue = 2\n",
-        full_rewrite_call=lambda _reason: calls.append("rewrite")
-        or "import os\nvalue = 3\n",
+        full_rewrite_call=lambda _reason: (
+            calls.append("rewrite") or "import os\nvalue = 3\n"
+        ),
     )
 
     assert calls == ["patch", "rewrite"]

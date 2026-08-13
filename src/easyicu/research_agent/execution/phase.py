@@ -442,6 +442,10 @@ from .step_authority_resume import (
     StepAuthorityResumeRequest,
     prepare_step_authority_resume,
 )
+from .step_candidate_recovery import (
+    StepCandidateRecovery,
+    StepCandidateRecoveryRequest,
+)
 from .resume_revalidation import (
     ResumeDeterministicRevalidationResult as _ResumeDeterministicRevalidationResult,
     ResumeRevalidationServices,
@@ -4583,6 +4587,10 @@ def run_execute_phase(
                         run_dir=run_dir,
                         step=step,
                         run_input_capsule_sha256=run_input_capsule_sha256,
+                        deterministic_gate_stamp=_deterministic_gate_stamp(),
+                        engine_code_sha256=engine_code_sha256(),
+                        validator_code_sha256=validator_code_sha256(),
+                        seal_repair_candidate=seal_repair_candidate_from_receipt,
                         coder_context=coder_context,
                         coder_authority=coder_authority,
                         coder_provider_identity_sha256=(coder_provider_identity_sha256),
@@ -4731,136 +4739,51 @@ def run_execute_phase(
                 + json.dumps(payload, indent=2, ensure_ascii=False, default=str)
             )
 
-        def _use_quarantined_draft(draft: QuarantinedConceptDraft) -> str:
-            quarantine_state.resumed_draft_used = True
-            quarantine_state.draft_active = True
-            quarantine_state.repair_succeeded = False
-            budget_snapshot = provider_budget.snapshot()
-            historical_repair_names = deterministic_concept_reaudit_authority(
-                code_sha256=draft.sha256,
-                current_repair_count=0,
-                current_repair_names=(),
-                prior_step_record=prior_step_record,
-                prior_step_records=prior_attempt_records,
-                provider_used=budget_snapshot["used"],
-                provider_limit=budget_snapshot["limit"],
-            )
-            reaudit_errors = deterministic_concept_reaudit_pending_errors(
-                draft.findings,
-                provider_used=budget_snapshot["used"],
-                provider_limit=budget_snapshot["limit"],
-            )
-            active_findings = (
-                reaudit_errors
-                if historical_repair_names and reaudit_errors
-                else draft.findings
-            )
-            quarantine_state.pending_errors = [
-                ValidationFinding.model_validate(payload) for payload in active_findings
-            ]
-            # Historical errors remain binding regression constraints, but
-            # their old source coordinates are not findings on the current
-            # digest and must never enter an exact minimal-patch ticket.
-            _remember_concept_constraints(
-                [
-                    ValidationFinding.model_validate(payload)
-                    for payload in draft.findings
-                ]
-            )
-            if historical_repair_names and reaudit_errors:
-                # The append-only checkpoint proves this exact draft was
-                # materially changed by the named deterministic repair in the
-                # prior attempt.  Preserve that lifecycle state so a passing
-                # digest-bound re-audit can retire the quarantine normally.
-                quarantine_state.repair_materially_changed = True
-                step_record["resumed_deterministic_concept_reaudit"] = {
-                    "code_sha256": draft.sha256,
-                    "repair_names": list(historical_repair_names),
-                    "diagnostic_code": (
-                        "deterministic_repair_budget_only_quarantine_v1"
-                    ),
-                }
-            step_record["resumed_quarantined_draft"] = True
-            step_record["quarantined_draft_sha256"] = draft.sha256
-            step_record["quarantined_draft_relative_path"] = draft.relative_path
-            step_record["quarantined_requires_repair"] = True
-            step_record["quarantined_repair_succeeded"] = False
-            emit_progress(
-                "coder",
-                f"Resuming rejected draft for mandatory repair: {step.step_id}.",
-                status="warning",
+        candidate_recovery = StepCandidateRecovery(
+            StepCandidateRecoveryRequest(
+                step=step,
+                run_dir=run_dir,
                 run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
+                step_current=step_current,
                 total_steps=total_steps,
+                requested_resume_from_step_id=requested_resume_from_step_id,
+                prior_step_record=prior_step_record,
+                prior_attempt_records=prior_attempt_records,
+                provider_budget=provider_budget,
+                step_repair_budget=step_repair_budget,
+                step_record=step_record,
+                findings=findings,
+                shared_lock=shared_lock,
+                worker_progress=worker_progress,
+                quarantine_state=quarantine_state,
+                resume_controller=resume_controller,
+                analysis_family=local_runtime_state.analysis_family,
+                coder=coder,
+                coder_context=coder_context,
+                coder_authority=coder_authority,
+                step_attempt_state=step_attempt_state,
+                checkpoint_authority=checkpoint_authority,
+                deterministic_runner_repair_enabled=(
+                    pipeline._enable_deterministic_runner_repair
+                ),
+                emit_progress=emit_progress,
+                remember_concept_constraints=_remember_concept_constraints,
+                consume_llm_repair_budget=_consume_llm_repair_budget,
+                sync_provider_budget=_sync_provider_budget,
+                authorize_automatic_repair=_authorize_automatic_repair,
+                record_repair=_record_repair,
             )
-            return draft.code
+        )
+
+        def _use_quarantined_draft(draft: QuarantinedConceptDraft) -> str:
+            return candidate_recovery.use_quarantined_draft(draft)
 
         def _use_resumed_code(
             resumed_code: Tuple[str, Dict[str, Any]],
             *,
             error: Optional[BaseException] = None,
         ) -> str:
-            worker_progress.resumed_code_reuse_used = True
-            prior_code, resumed_record = resumed_code
-            step_record["generation_mode"] = "resumed_code_reuse"
-            step_record["resumed_code_evidence_id"] = resumed_record.get("evidence_id")
-            step_record["resumed_code_relative_path"] = resumed_record.get(
-                "relative_path"
-            )
-            resumed_evidence_generation_mode = str(
-                resumed_record.get("generation_mode") or ""
-            )
-            resumed_from_generation_mode = resumed_evidence_generation_mode
-            if resumed_evidence_generation_mode == "resumed_code_reuse":
-                resumed_metadata = resumed_record.get("metadata")
-                if isinstance(resumed_metadata, dict):
-                    resumed_from_generation_mode = str(
-                        resumed_metadata.get("resumed_from_generation_mode") or ""
-                    )
-            step_record["resumed_code_evidence_generation_mode"] = (
-                resumed_evidence_generation_mode
-            )
-            step_record["resumed_from_generation_mode"] = resumed_from_generation_mode
-            detail = {
-                "step_id": step.step_id,
-                "resume_from_step_id": requested_resume_from_step_id,
-                "evidence_id": resumed_record.get("evidence_id"),
-                "relative_path": resumed_record.get("relative_path"),
-                "resumed_from_generation_mode": resumed_from_generation_mode,
-            }
-            if error is None:
-                message = (
-                    "Explicit resume reused prior agent-generated code "
-                    f"(source mode: {resumed_from_generation_mode}) for step "
-                    f"{step.step_id} before requesting a new coder script."
-                )
-            else:
-                detail["error"] = str(error)
-                message = (
-                    f"Coder agent failed for step {step.step_id}; reused prior "
-                    "agent-generated code from resume evidence "
-                    f"(source mode: {resumed_from_generation_mode})."
-                )
-            with shared_lock:
-                findings.append(
-                    ValidationFinding(
-                        validator="coder",
-                        severity="warning",
-                        message=message,
-                        detail=detail,
-                    )
-                )
-            emit_progress(
-                "coder",
-                f"Reused prior generated analysis script for {step.step_id}.",
-                status="warning",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-            )
-            return prior_code
+            return candidate_recovery.use_resumed_code(resumed_code, error=error)
 
         def _repair_with_capsule(
             *,
@@ -4876,228 +4799,36 @@ def run_execute_phase(
             provider_category: str,
             logical_repair_attempt_id: int,
         ) -> str:
-            coordinates = step_attempt_state.coordinates
-            try:
-                return coder.repair(
-                    context=context,
-                    step=step,
-                    host_authority=coder_authority,
-                    code=code,
-                    run_log=run_log,
-                    repair_authority=repair_authority,
-                    current_repair_authority=current_repair_authority,
-                    attempt=attempt,
-                    provider_budget=provider_budget,
-                    provider_category=provider_category,
-                    logical_repair_attempt_id=logical_repair_attempt_id,
-                    persist_candidate=(
-                        (
-                            lambda candidate: persist_candidate_code(
-                                coordinates, candidate
-                            )
-                        )
-                        if coordinates is not None
-                        else None
-                    ),
-                    on_candidate_completed=(
-                        lambda ref, _mode, logical_id: (
-                            (
-                                checkpoint_authority.seal_completed_repair_candidate(
-                                    ref,
-                                    logical_id,
-                                    failure_status=failure_status,
-                                )
-                            )
-                            if coordinates is not None
-                            else None
-                        )
-                    ),
-                )
-            except Exception:
-                checkpoint_authority.clear_failed_repair_transport(
-                    logical_repair_attempt_id
-                )
-                raise
+            return candidate_recovery.repair_with_capsule(
+                failure_status=failure_status,
+                context=context,
+                step=step,
+                code=code,
+                run_log=run_log,
+                repair_authority=repair_authority,
+                current_repair_authority=current_repair_authority,
+                attempt=attempt,
+                provider_budget=provider_budget,
+                provider_category=provider_category,
+                logical_repair_attempt_id=logical_repair_attempt_id,
+            )
 
         def _reserve_compatibility_repair(
             before_code: str,
             repair_ticket: str,
             repair_authority: RepairPromptAuthority,
         ) -> Optional[int]:
-            if not _consume_llm_repair_budget(
-                "compatibility",
-                before_code=before_code,
-                repair_ticket=repair_ticket,
-                repair_authority=repair_authority,
-                provider_category="compatibility_repair",
-                failure_status="concept_failed",
-            ):
-                return None
-            return step_repair_budget.llm_repair_attempts
+            return candidate_recovery.reserve_compatibility_repair(
+                before_code,
+                repair_ticket,
+                repair_authority,
+            )
 
         def _resume_deterministic_repair_code() -> Optional[str]:
-            if (
-                requested_resume_from_step_id != step.step_id
-                or not pipeline._enable_deterministic_runner_repair
-            ):
-                return None
-            resumed_code = resume_controller.prior_code_for_step(step.step_id)
-            if resumed_code is None:
-                return None
-            prior_code, _resumed_record = resumed_code
-            candidate = resume_deterministic_repair_candidate(
-                code=prior_code,
-                step_dir=run_dir / "steps" / step.step_id,
-                analysis_family=local_runtime_state.analysis_family,
-            )
-            if candidate is None:
-                return None
-            repair, source, trigger = candidate
-            repair = _authorize_automatic_repair(
-                repair,
-                step=step,
-                source=source,
-                before_code=prior_code,
-            )
-            if repair is None:
-                return None
-            repair_name, repaired_code = repair
-            _use_resumed_code(resumed_code)
-            worker_progress.preexecution_runner_repair_name = repair_name
-            step_record["runner_repair"] = repair_name
-            step_record["resume_deterministic_repair"] = repair_name
-            _record_repair(
-                repair_id=repair_name,
-                step_id=step.step_id,
-                trigger=trigger,
-                transformation=(
-                    "Reused the explicitly resumed step's prior generated code "
-                    "after deterministic runtime/summary repair, before requesting a "
-                    "new coder script."
-                ),
-                before_code=prior_code,
-                after_code=repaired_code,
-                selection_rule=(
-                    "only when the prior step_summary triggers a case-neutral "
-                    "deterministic summary repair"
-                ),
-            )
-            with shared_lock:
-                findings.append(
-                    ValidationFinding(
-                        validator="coder",
-                        severity="info",
-                        message=(
-                            f"Applied deterministic resume repair for "
-                            f"step {step.step_id}: {repair_name}."
-                        ),
-                        detail={
-                            "step_id": step.step_id,
-                            "repair_id": repair_name,
-                            "source": source,
-                        },
-                    )
-                )
-            emit_progress(
-                "runner_repair",
-                (
-                    f"Applied deterministic resume repair for "
-                    f"{step.step_id}: {repair_name}."
-                ),
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-            )
-            return repaired_code
+            return candidate_recovery.resume_deterministic_repair_code()
 
         def _resume_critic_repair_code() -> Optional[str]:
-            """Repair the selected prior script from structured Critic feedback."""
-
-            report = resume_controller.prior_negative_critic_report_for_step(
-                step.step_id
-            )
-            if report is None:
-                return None
-            resumed_code = resume_controller.prior_code_for_step(step.step_id)
-            if resumed_code is None:
-                return None
-            prior_code = resumed_code[0]
-            critique_log = (
-                "PRIOR CRITIC REVIEW (binding repair requirements):\n"
-                + json.dumps(report, indent=2, ensure_ascii=False, default=str)
-            )
-            critic_repair_authority = RepairPromptAuthority.create(
-                typed_ticket=[
-                    {
-                        "reason": "OUTPUT_CONTRACT_INVALID",
-                        "validator": "critic_resume",
-                        "detail": {"critic_report": report},
-                    }
-                ]
-            )
-            if not _consume_llm_repair_budget(
-                "critic_resume",
-                before_code=prior_code,
-                repair_ticket=critique_log,
-                repair_authority=critic_repair_authority,
-                provider_category="critic_resume_repair",
-                failure_status="critic_failed",
-            ):
-                return None
-            prior_code = _use_resumed_code(resumed_code)
-            emit_progress(
-                "coder",
-                f"Repairing prior Critic findings for {step.step_id}.",
-                status="warning",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-            )
-            try:
-                repaired = _repair_with_capsule(
-                    failure_status="critic_failed",
-                    context=coder_context,
-                    step=step,
-                    code=prior_code,
-                    run_log=critique_log,
-                    repair_authority=critic_repair_authority,
-                    attempt=1,
-                    provider_budget=provider_budget,
-                    provider_category="critic_resume_repair",
-                    logical_repair_attempt_id=(step_repair_budget.llm_repair_attempts),
-                )
-                _sync_provider_budget()
-            except (
-                ProviderCallBudgetReceiptError,
-                StepAuthorityRuntimeError,
-                StepAuthorityCapsuleError,
-            ):
-                raise
-            except Exception as exc:
-                _sync_provider_budget()
-                with shared_lock:
-                    findings.append(
-                        ValidationFinding(
-                            validator="critic_resume_repair",
-                            severity="warning",
-                            message=(
-                                "Prior Critic-guided repair was unavailable; "
-                                "falling back to ordinary code generation."
-                            ),
-                            detail={
-                                "step_id": step.step_id,
-                                "error_type": type(exc).__name__,
-                                "error": str(exc)[:300],
-                            },
-                        )
-                    )
-                return None
-            worker_progress.critic_resume_repair_used = True
-            step_record["critic_resume_repair"] = True
-            step_record["critic_resume_repair_status"] = report.get("status")
-            return repaired
+            return candidate_recovery.resume_critic_repair_code()
 
         def _publication_figure_preflight_supported() -> bool:
             # Preflight may replace the coder, so names/prose are insufficient.
