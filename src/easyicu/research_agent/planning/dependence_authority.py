@@ -26,6 +26,13 @@ class DependenceAuthorityError(ValueError):
 class _AnalysisDesign(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    # Sibling coordinate owned by ``analysis_types``.  The Web StudyContext
+    # transports the scientific family and repeated-unit design in the same
+    # closed ``analysis_design`` envelope.  Dependence authority must preserve
+    # that known coordinate without interpreting it; family validation remains
+    # with its owner.  All other unknown keys are still rejected below by the
+    # model's ``extra='forbid'`` contract.
+    analysis_family: str | None = None
     analysis_unit: Literal[
         "row", "icu_stay", "hospital_admission", "patient", "site"
     ]

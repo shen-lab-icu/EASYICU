@@ -7,6 +7,9 @@ import json
 import pytest
 
 from easyicu.research_agent.agents.core import PlannerAgent, ReplannerAgent
+from easyicu.research_agent.agents.plan_payload import (
+    bind_literature_citation_authority,
+)
 from easyicu.research_agent.planning.replan_gate import (
     replan_candidate_contract_findings,
 )
@@ -242,6 +245,39 @@ def test_planner_receives_exact_preplan_literature_authority() -> None:
         in prompt
     )
     assert len(llm.calls) == 2
+
+
+def test_initial_literature_authority_publishes_the_exact_nested_binding_shape() -> None:
+    authority = bind_literature_citation_authority(
+        "",
+        ["strobe_2007"],
+    )
+
+    assert (
+        '{"citation_key":"<same exact bound key>",'
+        '"design_elements":["<one or more exact allowed elements>"],'
+        '"application":"<how the source shapes this step>",'
+        '"divergence":null}'
+        in authority
+    )
+    assert '"applied"' not in authority
+    assert '"deliberate_divergence"' not in authority
+
+
+def test_initial_authority_names_context_required_dependence_binding() -> None:
+    authority = bind_literature_citation_authority(
+        "",
+        ["strobe_2007", "record_2015"],
+        required_method_layers=["reporting_standard", "dependence"],
+    )
+
+    assert (
+        'case_applicable_required_method_layers: ["dependence", '
+        '"reporting_standard"]'
+    ) in authority
+    assert '"dependence": {"strobe_2007": ["dependence"]}' in authority
+    assert '"reporting_standard"' in authority
+    assert '"record_2015": ["reporting"]' in authority
 
 
 def test_primary_plan_must_bind_a_screened_direct_comparator() -> None:

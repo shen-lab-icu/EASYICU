@@ -665,6 +665,8 @@ def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> 
     assert "A persisted run_id is historical evidence, not proof of an active job" in entrypoint
     assert "run_id_status=pending_pipeline_start" in entrypoint
     assert "save that commitment in typed analysis_design" in entrypoint
+    assert "typed analysis_design.analysis_family" in entrypoint
+    assert "Never upgrade a descriptive unadjusted noncausal contrast" in entrypoint
     assert "Never call easyicu_resume without an approved/rejected decision" in entrypoint
     assert "an explicit user rerun request must call easyicu_run" in entrypoint
     assert "Treat every scientific question as one ordinary research project" in entrypoint
@@ -700,7 +702,8 @@ def test_system_prompt_keeps_copilot_replies_concise_while_preserving_blockers()
     assert "independently answerable scientific decision" in entrypoint
     assert "Do not bundle cohort, estimand, timing, adjustment" in entrypoint
     assert "do not recommend model-based or heteroskedasticity-robust variance" in entrypoint
-    assert "instead of steering the user toward the only executable" in entrypoint
+    assert "offer only the safe_alternatives returned by the host" in entrypoint
+    assert "instead of inventing an executable cohort" in entrypoint
     assert "Typed time-window rule" in entrypoint
     assert "It is not a phenotype's clinical definition anchor" in entrypoint
     assert "never save suspected-infection onset as its physical anchor" in entrypoint

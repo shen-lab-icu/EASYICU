@@ -381,6 +381,25 @@ def repeated_unit_design_closed(
     return applicable
 
 
+def required_method_layers_for_context(
+    context: ResearchContext,
+) -> tuple[str, ...]:
+    """Return method layers already fixed before plan generation.
+
+    These decisions come from sealed study authority, so publishing them in the
+    initial Planner contract avoids spending a retry merely to discover that a
+    required method card was applicable. Plan-dependent decisions remain in
+    :func:`required_method_layers_for_plan`.
+    """
+
+    required = {"reporting_standard"}
+    if post_baseline_exposure(context)[0]:
+        required.add("time_alignment")
+    if repeat_units_possible(context):
+        required.add("dependence")
+    return tuple(sorted(required))
+
+
 def required_method_layers_for_plan(
     plan: AnalysisPlan,
     context: ResearchContext,
@@ -390,11 +409,7 @@ def required_method_layers_for_plan(
     steps = scientific_steps(plan)
     if not steps:
         return ()
-    required = {"reporting_standard"}
-    if post_baseline_exposure(context)[0]:
-        required.add("time_alignment")
-    if repeat_units_possible(context):
-        required.add("dependence")
+    required = set(required_method_layers_for_context(context))
     if any(step.model_requirements for step in steps):
         required.add("interpretation")
         if any(
@@ -1604,6 +1619,7 @@ __all__ = [
     "render_plan_scientific_guardrails",
     "render_agent_plan_revision_contract",
     "remediation_route_for_finding",
+    "required_method_layers_for_context",
     "required_method_layers_for_plan",
     "scientific_steps",
     "timing_design_closed",

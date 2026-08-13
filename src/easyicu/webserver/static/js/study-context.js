@@ -58,7 +58,7 @@
     outcome: 'text', primary_exposure: 'text', covariates: 'text_list',
   };
   const ANALYSIS_DESIGN_SCHEMA = {
-    analysis_unit: 'text', variance_estimator: 'text', cluster_unit: 'text',
+    analysis_family: 'text', analysis_unit: 'text', variance_estimator: 'text', cluster_unit: 'text',
   };
   const IDEA_HANDOFF_SCHEMA = {
     schema_version: 'text', run_id: 'text', idea_id: 'text',

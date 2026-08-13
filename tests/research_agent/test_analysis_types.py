@@ -211,6 +211,8 @@ def test_contrastive_causal_disclaimers_do_not_select_the_causal_family(ra):
         "Summarise the cohort with non_causal=true and descriptive outputs.",
         "Describe the exposure-outcome distribution. Do Not draw Causal "
         "conclusions from it.",
+        "只报告描述性、未调整、非因果的组别绝对风险和风险差。",
+        "不得生成因果结论，只汇总队列的观察分布。",
     )
     for text in disclaimed:
         assert ra.infer_analysis_type(_ctx(text)).key != "causal_inference", text
@@ -437,6 +439,59 @@ def test_infer_analysis_type_respects_user_preference_hint(ra):
     )
     spec = ra.infer_analysis_type(ctx, target_outcome="death")
     assert spec.key == "validation"
+
+
+def test_canonical_descriptive_preference_governs_all_preplan_contracts(ra):
+    """A canonical key must not be mistaken for an unsupported alias.
+
+    The Web StudyContext stores exact registry keys.  A live descriptive run
+    reached ResearchContext with ``descriptive_epidemiology`` intact, but the
+    preference resolver looked only in the alias table and discarded it.  The
+    downstream study/article contracts therefore re-inferred an association
+    solely because the context also contained an exposure and outcome.
+    """
+
+    from easyicu.research_agent.planning.study_design import (
+        build_study_design_brief,
+    )
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+    )
+
+    schema = ra.schema
+    ctx = ra.ResearchContext(
+        research_question=(
+            "Describe observed absolute mortality risks in exposed and "
+            "unexposed ICU stays; report an unadjusted, noncausal risk difference."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=10, n_stays=12
+        ),
+        variables=[
+            ra.ConceptDescriptor(
+                name="exposure", role=schema.VariableRole.OTHER, dtype="int64"
+            ),
+            ra.ConceptDescriptor(
+                name="death", role=schema.VariableRole.OUTCOME, dtype="int64"
+            ),
+        ],
+        primary_exposure="exposure",
+        target_outcome="death",
+        user_preferences=schema.UserPreferences(
+            inferred_analysis_family="descriptive_epidemiology",
+            must_have_outputs=(
+                "Observed absolute risks and an unadjusted, noncausal risk difference."
+            ),
+        ),
+    )
+
+    assert ra.infer_analysis_type(ctx).key == "descriptive_epidemiology"
+    brief = build_study_design_brief(ctx)
+    contract = build_article_analysis_contract(ctx, brief=brief)
+    assert brief.analysis_family == "descriptive"
+    assert contract.source_analysis_type == "descriptive_epidemiology"
+    assert contract.analysis_family == "descriptive"
+    assert "primary_estimand" not in contract.required_roles
 
 
 def test_infer_analysis_type_prefers_validation_over_prediction_keywords(ra):

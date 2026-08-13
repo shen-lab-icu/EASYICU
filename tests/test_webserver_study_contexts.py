@@ -101,6 +101,7 @@ def test_study_context_api_persists_lists_and_handoffs_metadata(tmp_path: Path) 
                 "covariates": ["age", "sex", "age"],
             },
             "analysis_design": {
+                "analysis_family": "association_study",
                 "analysis_unit": "icu_stay",
                 "variance_estimator": "cluster_robust",
                 "cluster_unit": "hospital_admission",
@@ -161,6 +162,7 @@ def test_study_context_api_persists_lists_and_handoffs_metadata(tmp_path: Path) 
         "covariates": ["age", "sex"],
     }
     assert context["analysis_design"] == {
+        "analysis_family": "association_study",
         "analysis_unit": "icu_stay",
         "variance_estimator": "cluster_robust",
         "cluster_unit": "hospital_admission",
@@ -347,6 +349,27 @@ def test_study_context_analysis_design_relations_fail_closed(
 
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == error
+
+
+def test_study_context_analysis_family_must_be_one_canonical_owner_key() -> None:
+    response = TestClient(app).post(
+        "/api/study-contexts",
+        json={
+            "id": "study_analysis_family_contract",
+            "question": "Describe an exposure and outcome without effect claims.",
+            "analysis_design": {
+                "analysis_family": "descriptive",
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "model_based",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error"] == "study_analysis_family_unsupported"
+    assert detail["field"] == "analysis_design.analysis_family"
+    assert "descriptive_epidemiology" in detail["allowed"]
 
 
 def test_study_context_rejects_independent_variance_when_repeat_stays_retained() -> None:

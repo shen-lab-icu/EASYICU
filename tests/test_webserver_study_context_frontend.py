@@ -110,6 +110,7 @@ def test_study_context_transport_and_payload_use_backend_canonical_fields() -> N
     assert "cleanSchemaObject(raw.cohort, COHORT_SCHEMA)" in owner
     assert "cleanSchemaObject(raw.execution_concepts, EXECUTION_CONCEPTS_SCHEMA)" in owner
     assert "cleanSchemaObject(raw.analysis_design, ANALYSIS_DESIGN_SCHEMA)" in owner
+    assert "analysis_family: 'text'" in owner
     assert "sensitivity_specs: cleanSensitivitySpecs(raw.sensitivity_specs)" in owner
     assert "covariate_selection: ['planner_selectable', 'exact'].includes" in owner
     assert "api.saveStudyContext({ id: context.id })" in owner
