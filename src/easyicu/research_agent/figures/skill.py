@@ -21,8 +21,8 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 import pandas as pd
 
 from ..audits.validators import FigureContractQualityValidator
-from ..authority.evidence_store import (
-    EvidenceStore,
+from ..authority.evidence_store import EvidenceStore
+from ..authority.source_fingerprints import (
     registered_source_fingerprints_match as _source_fingerprints_match,
 )
 from ..contracts.declared_product import typed_product
