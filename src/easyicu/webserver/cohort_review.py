@@ -421,19 +421,49 @@ def _summary_cache_key(
     path: Path, desc: Dict[str, Any], requested_feature_ids: Tuple[str, ...] | None
 ) -> Tuple[Any, ...]:
     summary = desc.get("summary") or {}
-    manifest_mtime = None
+    manifest_identities: List[Tuple[Any, ...]] = []
     for name in ("_manifest.json", "easyicu_export_manifest.json"):
         manifest_path = path / name
         if manifest_path.exists():
             try:
-                manifest_mtime = max(
-                    manifest_mtime or 0, manifest_path.stat().st_mtime_ns
+                stat = manifest_path.stat()
+                manifest_identities.append(
+                    (
+                        name,
+                        int(stat.st_size),
+                        int(stat.st_mtime_ns),
+                        int(stat.st_ctime_ns),
+                        int(stat.st_dev),
+                        int(stat.st_ino),
+                    )
                 )
             except OSError:
-                pass
+                manifest_identities.append((name, "unreadable"))
+    file_identities: List[Tuple[Any, ...]] = []
+    for item in desc.get("files") or []:
+        if not isinstance(item, dict) or not item.get("file"):
+            continue
+        relative = str(item["file"])
+        source_file = path / relative
+        try:
+            stat = source_file.stat()
+            file_identities.append(
+                (
+                    relative,
+                    int(stat.st_size),
+                    int(stat.st_mtime_ns),
+                    int(stat.st_ctime_ns),
+                    int(stat.st_dev),
+                    int(stat.st_ino),
+                    str(item.get("parquet_sha256") or ""),
+                )
+            )
+        except OSError:
+            file_identities.append((relative, "unreadable"))
     return (
         str(path.resolve() if path.exists() else path),
-        manifest_mtime,
+        tuple(manifest_identities),
+        tuple(file_identities),
         desc.get("generated"),
         summary.get("stays"),
         summary.get("modules"),
@@ -2179,12 +2209,10 @@ def _survival_analysis_payload(
             "label": "28-day mortality",
             "event_candidates": _MORT28_COLUMNS,
             "time_candidates": _MORT28_TIME_COLUMNS,
-            "fallback_event_candidates": _HOSP_DEATH_COLUMNS,
-            "fallback_time_candidates": _HOSP_LOS_COLUMNS,
             "time_label": "Days to 28-day death/censoring",
             "display_horizon_days": _SURVIVAL_28D_WINDOW_DAYS,
             "window_label": "28-day window",
-            "allow_hospital_time_window_derivation": True,
+            "fixed_horizon_event": True,
         },
     ]
     outcomes = [_survival_outcome_option(outcome, spec, entity_ids) for spec in specs]
@@ -2202,12 +2230,10 @@ def _survival_analysis_payload(
         event_col = str(option.get("event_column") or "")
         time_col = str(option.get("time_column") or "")
         event_by_entity = (
-            dataio._stay_bool(outcome, event_col, missing_false=True)
+            dataio._stay_bool(outcome, event_col, missing_false=False)
             if event_col
             else {}
         )
-        for entity_id in entity_ids:
-            event_by_entity.setdefault(entity_id, False)
         time_by_entity = (
             dataio._stay_numeric(outcome, time_col, "max") if time_col else {}
         )
@@ -2215,6 +2241,7 @@ def _survival_analysis_payload(
             event_by_entity,
             time_by_entity,
             horizon_days=dataio._num(option.get("display_horizon_days")),
+            fixed_horizon_event=bool(option.get("fixed_horizon_event")),
         )
         for group in group_options:
             if group.get("status") != "ready":
@@ -2273,7 +2300,7 @@ def _survival_analysis_payload(
         "notes": [
             "Kaplan-Meier/log-rank requires both an event indicator and a time-to-event or censoring time.",
             "Hospital mortality is displayed on a 30-day visualization window by default; events after the window are censored at the window boundary.",
-            "28-day mortality can be derived from hospital mortality and hospital LOS when dedicated 28-day columns are absent.",
+            "28-day mortality requires a dedicated fixed-horizon event flag and follow-up/death time; hospital mortality and LOS are not sufficient.",
             "Log-rank is unadjusted and exploratory; manuscript use still needs the evidence-bound agent gate.",
         ],
     }
@@ -2295,6 +2322,7 @@ def _survival_outcome_option(
             "status": "missing",
             "reason": "Outcome module is not present in the registered export.",
         },
+        "fixed_horizon_event": bool(spec.get("fixed_horizon_event")),
     }
     if outcome is None or getattr(outcome, "empty", True):
         return {
@@ -2303,11 +2331,6 @@ def _survival_outcome_option(
         }
 
     event_col = _first_column(outcome, spec["event_candidates"])
-    derived_from = None
-    if not event_col and spec.get("allow_hospital_time_window_derivation"):
-        event_col = _first_column(outcome, spec.get("fallback_event_candidates", ()))
-        if event_col:
-            derived_from = "hospital_mortality_time_window"
     if not event_col:
         if spec["id"] == "icu_death":
             return {
@@ -2330,15 +2353,12 @@ def _survival_outcome_option(
             "expected_event_columns": list(spec["event_candidates"]),
         }
     time_col = _first_column(outcome, spec["time_candidates"])
-    if not time_col and spec.get("allow_hospital_time_window_derivation"):
-        time_col = _first_column(outcome, spec.get("fallback_time_candidates", ()))
     event_summary = _survival_event_summary(
         outcome,
         entity_ids,
         event_col=event_col,
         time_col=time_col,
         spec=spec,
-        derived_from=derived_from,
     )
     if not time_col:
         if spec["id"] == "icu_death":
@@ -2357,19 +2377,19 @@ def _survival_outcome_option(
             "expected_time_columns": list(spec["time_candidates"]),
         }
 
-    event_by_entity = dataio._stay_bool(outcome, event_col, missing_false=True)
-    for entity_id in entity_ids:
-        event_by_entity.setdefault(entity_id, False)
+    event_by_entity = dataio._stay_bool(outcome, event_col, missing_false=False)
     time_by_entity = dataio._stay_numeric(outcome, time_col, "max")
     event_by_entity, time_by_entity = _windowed_survival_vectors(
         event_by_entity,
         time_by_entity,
         horizon_days=dataio._num(spec.get("display_horizon_days")),
+        fixed_horizon_event=bool(spec.get("fixed_horizon_event")),
     )
     usable = [
         entity_id
         for entity_id in entity_ids
-        if dataio._num(time_by_entity.get(entity_id)) is not None
+        if entity_id in event_by_entity
+        and dataio._num(time_by_entity.get(entity_id)) is not None
         and float(time_by_entity[entity_id]) >= 0
     ]
     event_count = sum(
@@ -2383,7 +2403,7 @@ def _survival_outcome_option(
             "event_summary": event_summary,
             "usable_entities": len(usable),
             "event_count": event_count,
-            "reason": "Fewer than two cohort entities have valid survival time values.",
+            "reason": "Fewer than two cohort entities have both an observed event flag and a valid survival time.",
         }
     return {
         **base,
@@ -2396,7 +2416,6 @@ def _survival_outcome_option(
         "event_count": event_count,
         "display_horizon_days": dataio._num(spec.get("display_horizon_days")),
         "window_label": spec.get("window_label"),
-        "derived_from": derived_from,
     }
 
 
@@ -2407,30 +2426,34 @@ def _survival_event_summary(
     event_col: str,
     time_col: str | None,
     spec: Dict[str, Any],
-    derived_from: str | None,
 ) -> Dict[str, Any]:
-    event_by_entity = dataio._stay_bool(outcome, event_col, missing_false=True)
-    denominator_ids = list(entity_ids)
-    basis = "event_flag"
-    time_label = None
-    time_column = None
-    if derived_from == "hospital_mortality_time_window" and time_col:
+    event_by_entity = dataio._stay_bool(outcome, event_col, missing_false=False)
+    excluded_inconsistent = 0
+    if time_col and bool(spec.get("fixed_horizon_event")):
         time_by_entity = dataio._stay_numeric(outcome, time_col, "max")
-        event_by_entity, windowed_time = _windowed_survival_vectors(
+        horizon_days = dataio._num(spec.get("display_horizon_days"))
+        excluded_inconsistent = _fixed_horizon_inconsistency_count(
             event_by_entity,
             time_by_entity,
-            horizon_days=dataio._num(spec.get("display_horizon_days")),
+            horizon_days=horizon_days,
         )
-        denominator_ids = [
-            entity_id
-            for entity_id in entity_ids
-            if dataio._num(windowed_time.get(entity_id)) is not None
-        ]
-        basis = "derived_time_window"
-        time_label = spec.get("window_label")
-        time_column = time_col
-    for entity_id in denominator_ids:
-        event_by_entity.setdefault(entity_id, False)
+        event_by_entity, _ = _windowed_survival_vectors(
+            event_by_entity,
+            time_by_entity,
+            horizon_days=horizon_days,
+            fixed_horizon_event=True,
+        )
+    denominator_ids = [
+        entity_id for entity_id in entity_ids if entity_id in event_by_entity
+    ]
+    basis = (
+        "fixed_horizon_event_and_followup"
+        if bool(spec.get("fixed_horizon_event")) and time_col
+        else "event_flag"
+    )
+    fixed_horizon = bool(spec.get("fixed_horizon_event"))
+    time_label = spec.get("window_label") if time_col and fixed_horizon else None
+    time_column = time_col if bool(spec.get("fixed_horizon_event")) else None
     denominator = len(denominator_ids)
     event_count = sum(
         1 for entity_id in denominator_ids if event_by_entity.get(entity_id) is True
@@ -2445,7 +2468,32 @@ def _survival_event_summary(
         "denominator": denominator,
         "event_count": event_count,
         "event_rate_pct": pct,
+        **(
+            {"excluded_inconsistent_entities": excluded_inconsistent}
+            if bool(spec.get("fixed_horizon_event")) and time_col
+            else {}
+        ),
     }
+
+
+def _fixed_horizon_inconsistency_count(
+    event_by_entity: Dict[str, bool],
+    time_by_entity: Dict[str, float],
+    *,
+    horizon_days: float | None,
+) -> int:
+    if horizon_days is None or horizon_days <= 0:
+        return 0
+    inconsistent = 0
+    for entity_id, event in event_by_entity.items():
+        time_value = dataio._num(time_by_entity.get(entity_id))
+        if time_value is None or time_value < 0:
+            continue
+        if (event is True and time_value > horizon_days) or (
+            event is not True and time_value < horizon_days
+        ):
+            inconsistent += 1
+    return inconsistent
 
 
 def _windowed_survival_vectors(
@@ -2453,17 +2501,33 @@ def _windowed_survival_vectors(
     time_by_entity: Dict[str, float],
     *,
     horizon_days: float | None,
+    fixed_horizon_event: bool = False,
 ) -> Tuple[Dict[str, bool], Dict[str, float]]:
-    if horizon_days is None or horizon_days <= 0:
-        return event_by_entity, time_by_entity
     windowed_events: Dict[str, bool] = {}
     windowed_times: Dict[str, float] = {}
     for entity_id, raw_time in time_by_entity.items():
+        if entity_id not in event_by_entity:
+            continue
         time_value = dataio._num(raw_time)
         if time_value is None or time_value < 0:
             continue
+        if horizon_days is None or horizon_days <= 0:
+            windowed_events[entity_id] = event_by_entity[entity_id] is True
+            windowed_times[entity_id] = float(time_value)
+            continue
+        if fixed_horizon_event and (
+            (event_by_entity[entity_id] is True and time_value > horizon_days)
+            or (event_by_entity[entity_id] is not True and time_value < horizon_days)
+        ):
+            # A fixed-horizon flag already states whether the event occurred by
+            # the horizon. A later "true" event or an earlier "false" censoring
+            # time contradicts that flag; treating either as survival would
+            # silently change the endpoint. Keep the entity unknown instead.
+            continue
         in_window = time_value <= horizon_days
-        windowed_events[entity_id] = bool(event_by_entity.get(entity_id) is True and in_window)
+        windowed_events[entity_id] = bool(
+            event_by_entity[entity_id] is True and in_window
+        )
         windowed_times[entity_id] = min(float(time_value), float(horizon_days))
     return windowed_events, windowed_times
 
@@ -2609,6 +2673,8 @@ def _survival_curve_payload(
     for label, members in group_option.get("_members", []):
         records = []
         for entity_id in members:
+            if entity_id not in event_by_entity:
+                continue
             time_value = dataio._num(time_by_entity.get(entity_id))
             if time_value is None or time_value < 0:
                 continue

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -216,6 +217,32 @@ def test_feature_coverage_separates_observed_all_null_and_unsupported(
     )
     assert rows["lact"]["status"] == "not_materialized"
     assert payload["provenance"]["patient_rows_returned"] is False
+
+
+def test_feature_coverage_cache_invalidates_same_size_restored_mtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export = tmp_path / "export"
+    export.mkdir()
+    source = export / "vitals.parquet"
+    source.write_bytes(b"old-content")
+    original = source.stat()
+    description = {"files": [{"file": source.name, "module": "vitals"}]}
+    calls: list[int] = []
+
+    def fake_build(_root: Path, _description: Any) -> dict[str, Any]:
+        calls.append(len(calls) + 1)
+        return {"call": calls[-1]}
+
+    monkeypatch.setattr(coverage, "_build_feature_coverage", fake_build)
+    assert coverage.build_feature_coverage(export, description)["call"] == 1
+
+    source.write_bytes(b"new-content")
+    os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    assert coverage.build_feature_coverage(export, description)["call"] == 2
+    assert len(calls) == 2
 
 
 def test_drilldown_summary_uses_export_wide_catalog_coverage(
