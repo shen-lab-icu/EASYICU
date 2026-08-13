@@ -17,6 +17,12 @@ from easyicu.research_agent.acquisition.foundation import (
     _extract_json,
     acquire_universe_for_question,
 )
+from easyicu.research_agent.acquisition.patient_grouping import (
+    PatientGroupingBinding,
+)
+from easyicu.research_agent.intake.materialized_metadata import (
+    MaterializedMetadataError,
+)
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 
@@ -575,3 +581,84 @@ def test_acquisition_requires_caller_owned_outcome_and_has_no_static_science_def
     assert parameters["target_outcome"].default is inspect.Parameter.empty
     assert parameters["outcome_concepts"].default is inspect.Parameter.empty
     assert parameters["static_concepts"].default == ()
+
+
+def test_acquisition_forwards_verified_patient_grouping_to_materializer(
+    monkeypatch, tmp_path
+):
+    mapping = tmp_path / "mapping.parquet"
+    mapping.write_bytes(b"mapping")
+    grouping = PatientGroupingBinding(
+        mapping_path=mapping,
+        mapping_sha256="a" * 64,
+        mapping_stay_column="stay_id",
+        mapping_patient_column="patient_key",
+        authority_coordinates={"authority_ref": "owner/bridge/v1"},
+    )
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("death", "age"),
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    captured = {}
+    universe = tmp_path / "universe.parquet"
+    provenance = tmp_path / "universe_provenance.json"
+    universe.write_bytes(b"legacy-parquet-placeholder")
+    provenance.write_text(
+        json.dumps({"columns": ["patient_stay_id", "age", "death"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **kwargs: captured.update(kwargs)
+        or {"parquet": universe, "provenance": provenance},
+    )
+
+    result = acquire_universe_for_question(
+        export_dir=tmp_path,
+        question="q",
+        llm=_stub('{"selected_concepts": ["death", "age"]}'),
+        output_dir=tmp_path,
+        target_outcome="death",
+        outcome_concepts=["death"],
+        static_concepts=["age"],
+        emit_trajectory=False,
+        patient_grouping=grouping,
+    )
+
+    assert result.blocked is False
+    assert captured["replacement_identity_path"] == mapping
+    assert captured["replacement_identity_sha256"] == "a" * 64
+    assert captured["output_identity_column"] == "patient_stay_id"
+
+
+def test_acquisition_does_not_silently_ungroup_requested_trajectory(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("death", "age"),
+    )
+    grouping = PatientGroupingBinding(
+        mapping_path=tmp_path / "mapping.parquet",
+        mapping_sha256="a" * 64,
+        mapping_stay_column="stay_id",
+        mapping_patient_column="patient_key",
+    )
+
+    with pytest.raises(MaterializedMetadataError, match="longitudinal trajectory"):
+        acquire_universe_for_question(
+            export_dir=tmp_path,
+            question="q",
+            llm=_stub('{"selected_concepts": ["death", "age"]}'),
+            output_dir=tmp_path,
+            target_outcome="death",
+            outcome_concepts=["death"],
+            static_concepts=["age"],
+            emit_trajectory=True,
+            patient_grouping=grouping,
+        )

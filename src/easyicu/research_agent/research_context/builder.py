@@ -624,6 +624,22 @@ def build_research_context(
                     "materialized_cohort_provenance_sha256": (
                         legacy_materialization_provenance["provenance_sha256"]
                     ),
+                    **(
+                        {
+                            "replacement_row_identity": dict(
+                                legacy_materialization_provenance[
+                                    "replacement_row_identity"
+                                ]
+                            )
+                        }
+                        if isinstance(
+                            legacy_materialization_provenance.get(
+                                "replacement_row_identity"
+                            ),
+                            dict,
+                        )
+                        else {}
+                    ),
                 }
                 if legacy_materialization_provenance is not None
                 else {}
@@ -886,6 +902,7 @@ def _guess_id_columns(df: pd.DataFrame) -> List[str]:
             "hadm_id",
             "stay_id",
             "subject_id",
+            "patient_stay_id",
             "patientunitstayid",
             "uniquepid",
             "admissionid",
