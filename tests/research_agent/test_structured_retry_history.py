@@ -332,8 +332,86 @@ def test_structured_failure_captures_safe_provider_metadata_per_attempt(
                 "total_tokens": 28,
             },
             "transport_attempts": 2,
+            "violation_sha256": (
+                "b7b6859180b747b49401775dda829994d1f7c8ad3044110b38c51b503105785b"
+            ),
         }
     ]
+
+
+def test_validation_projection_records_only_closed_stage_field_paths_and_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "sk-private-field-and-message"
+
+    class _ValidationFailure(ValueError):
+        easyicu_structured_validation_stage = "schema_validation"
+
+        def errors(self):
+            return [
+                {
+                    "loc": ("steps", 2, "figure_panels", 0, "chart_type"),
+                    "type": "literal_error",
+                    "msg": secret,
+                    "input": secret,
+                },
+                {
+                    "loc": (secret,),
+                    "type": secret,
+                    "msg": secret,
+                },
+            ]
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.providers.structured_retry.authorized_complete",
+        lambda *_args, **_kwargs: '{"plan": "private"}',
+    )
+
+    with pytest.raises(StructuredResponseFailure) as raised:
+        call_llm_with_structured_retry(
+            object(),
+            [],
+            parser=lambda _raw: (_ for _ in ()).throw(_ValidationFailure(secret)),
+            role="planner",
+            max_retries=0,
+        )
+
+    projected = safe_structured_attempt_metadata(raised.value.attempts)
+    assert projected[0]["validation_stage"] == "schema_validation"
+    assert projected[0]["validation_issues"] == [
+        {
+            "location": ["steps", 2, "figure_panels", 0, "chart_type"],
+            "issue_type": "literal_error",
+        },
+        {"location": ["<other>"], "issue_type": "other"},
+    ]
+    assert len(projected[0]["violation_sha256"]) == 64
+    assert secret not in str(projected)
+
+
+def test_validation_stage_is_inferred_from_the_contract_owner_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def validate_literature_citation_bindings() -> None:
+        raise ValueError("private citation payload")
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.providers.structured_retry.authorized_complete",
+        lambda *_args, **_kwargs: "{}",
+    )
+
+    with pytest.raises(StructuredResponseFailure) as raised:
+        call_llm_with_structured_retry(
+            object(),
+            [],
+            parser=lambda _raw: validate_literature_citation_bindings(),
+            role="planner",
+            max_retries=0,
+        )
+
+    projected = safe_structured_attempt_metadata(raised.value.attempts)
+    assert projected[0]["validation_stage"] == "literature_authority"
+    assert "private citation payload" not in str(projected)
 
 
 def test_transport_failure_attaches_response_free_terminal_attempt(

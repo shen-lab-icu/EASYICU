@@ -2885,7 +2885,7 @@ def test_planner_failure_artifact_persists_only_safe_attempt_metadata(
 
     assert relative == "diagnostics/research_pipeline_failure.json"
     payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "easyicu.web-research-pipeline-failure/2"
+    assert payload["schema_version"] == "easyicu.web-research-pipeline-failure/3"
     assert payload["structured_attempts"] == [
         {
             "attempt": 1,

@@ -57,6 +57,13 @@ from .llm import (
     current_provider_call_receipt,
     safe_provider_finish_reason,
 )
+from .structured_diagnostics import (
+    infer_validation_stage,
+    safe_projected_validation_issues,
+    safe_validation_issues,
+    safe_validation_stage,
+    violation_sha256,
+)
 
 T = TypeVar("T")
 
@@ -253,6 +260,9 @@ class StructuredAttempt:
     finish_reason: Optional[str] = None
     usage_summary: Optional[Dict[str, int]] = None
     transport_attempts: int = 1
+    validation_stage: Optional[str] = None
+    validation_issues: Optional[List[Dict[str, Any]]] = None
+    violation_sha256: Optional[str] = None
 
 
 def safe_provider_error_category(value: Any) -> Optional[str]:
@@ -354,6 +364,9 @@ def safe_structured_attempt_metadata(
             raw_finish = source.get("finish_reason")
             raw_usage = source.get("usage")
             raw_transport_attempts = source.get("transport_attempts")
+            raw_validation_stage = source.get("validation_stage")
+            raw_validation_issues = source.get("validation_issues")
+            raw_violation_sha256 = source.get("violation_sha256")
         else:
             attempt_index = _bounded_int(item.attempt, minimum=0, default=0) + 1
             raw_chars = item.raw_chars
@@ -361,6 +374,9 @@ def safe_structured_attempt_metadata(
             raw_finish = item.finish_reason
             raw_usage = item.usage_summary
             raw_transport_attempts = item.transport_attempts
+            raw_validation_stage = item.validation_stage
+            raw_validation_issues = item.validation_issues
+            raw_violation_sha256 = item.violation_sha256
         error_class = safe_provider_error_category(raw_error)
         finish_reason = safe_provider_finish_reason(raw_finish)
         usage = {
@@ -371,18 +387,28 @@ def safe_structured_attempt_metadata(
             and not isinstance(value, bool)
             and value >= 0
         }
-        projected.append(
-            {
-                "attempt": attempt_index,
-                "raw_chars": _bounded_int(raw_chars, minimum=0, default=0),
-                "error_class": error_class,
-                "finish_reason": finish_reason,
-                "usage": usage,
-                "transport_attempts": _bounded_int(
-                    raw_transport_attempts, minimum=1, default=1
-                ),
-            }
-        )
+        row: Dict[str, Any] = {
+            "attempt": attempt_index,
+            "raw_chars": _bounded_int(raw_chars, minimum=0, default=0),
+            "error_class": error_class,
+            "finish_reason": finish_reason,
+            "usage": usage,
+            "transport_attempts": _bounded_int(
+                raw_transport_attempts, minimum=1, default=1
+            ),
+        }
+        validation_stage = safe_validation_stage(raw_validation_stage)
+        if validation_stage is not None:
+            row["validation_stage"] = validation_stage
+        validation_issues = safe_projected_validation_issues(raw_validation_issues)
+        if validation_issues:
+            row["validation_issues"] = validation_issues
+        violation_sha256 = str(raw_violation_sha256 or "").strip().lower()
+        if len(violation_sha256) == 64 and all(
+            char in "0123456789abcdef" for char in violation_sha256
+        ):
+            row["violation_sha256"] = violation_sha256
+        projected.append(row)
     return projected
 
 
@@ -693,6 +719,8 @@ def call_llm_with_structured_retry(
             # so the retry cannot be shown a different rejection from the one
             # that was recorded.
             rendered_failure = render_parse_failure(exc)
+            validation_stage = infer_validation_stage(exc)
+            validation_issues = safe_validation_issues(exc)
             attempts.append(
                 StructuredAttempt(
                     attempt=i,
@@ -703,6 +731,9 @@ def call_llm_with_structured_retry(
                     finish_reason=finish_reason,
                     usage_summary=usage_summary,
                     transport_attempts=transport_attempts,
+                    validation_stage=validation_stage,
+                    validation_issues=validation_issues,
+                    violation_sha256=violation_sha256(rendered_failure),
                 )
             )
             _notify_progress(

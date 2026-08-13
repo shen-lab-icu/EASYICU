@@ -315,7 +315,7 @@ def _write_pipeline_failure_diagnostic(
         f"{type(exc).__name__}: {exc}".encode("utf-8")
     ).hexdigest()
     payload = {
-        "schema_version": "easyicu.web-research-pipeline-failure/2",
+        "schema_version": "easyicu.web-research-pipeline-failure/3",
         "status": "failed",
         "code": code,
         "failure_type": _pipeline_failure_category(exc),
