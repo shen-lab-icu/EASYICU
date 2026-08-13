@@ -46,7 +46,11 @@ from .article_contract import (
     article_contract_audit_payload,
     summarize_article_contract_coverage,
 )
-from .display_suite import summarize_display_suite_status
+from .display_suite import (
+    DISPLAY_SUITE_AUDIT_REGISTRATION,
+    display_suite_audit_payload,
+    summarize_display_suite_status,
+)
 from .completion import (
     count_missing_evidence_markers as _count_missing_evidence_markers,
     count_writer_attempts,
@@ -75,7 +79,12 @@ from .result_integrity import (
     primary_result_plausibility_errors,
     primary_survival_estimate_integrity_errors,
 )
-from .scientific_maturity import build_scientific_maturity_audit
+from .scientific_maturity import (
+    SCIENTIFIC_MATURITY_AUDIT_REGISTRATION,
+    build_scientific_maturity_audit,
+    scientific_maturity_audit_from_gates,
+    scientific_maturity_readiness_gates,
+)
 from .step_summaries import (
     authoritative_step_summaries as _authoritative_step_summaries,
     step_authority_records as _step_authority_records,
@@ -90,6 +99,7 @@ from ..authority.runtime_artifacts import (
     current_successful_step_records,
     load_run_artifact_authority,
     verified_run_evidence_path,
+    write_json_artifact,
 )
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 
@@ -1949,6 +1959,9 @@ def _compute_readiness_gates(
         display_suite=display_suite,
         publication_bundle=publication,
     )
+    scientific_maturity_gates = scientific_maturity_readiness_gates(
+        scientific_maturity
+    )
     # Read the FULL findings list, not `active_findings`: supersession retires a
     # finding when its step later succeeds, and a dropped step never ran, so no
     # later success can speak for it. What *can* speak for it is a later plan
@@ -1971,7 +1984,7 @@ def _compute_readiness_gates(
             ],
             plan_not_truncated=not plan_truncation["plan_truncated"],
         )
-        and scientific_maturity.article_grade
+        and scientific_maturity_gates["scientific_maturity_article_grade"]
     )
     return {
         **execution,
@@ -1994,14 +2007,7 @@ def _compute_readiness_gates(
         "replan_budget_hit": replan_budget_hit,
         "replan_budget_advisory": replan_budget_hit and not replan_budget_exhausted,
         "publication_ready": publication_ready,
-        "scientific_maturity_article_grade": scientific_maturity.article_grade,
-        "scientific_maturity_status": scientific_maturity.status,
-        "scientific_maturity_score": scientific_maturity.score,
-        "scientific_maturity_dimension_scores": scientific_maturity.dimension_scores,
-        "scientific_maturity_findings": [
-            finding.model_dump(mode="json") for finding in scientific_maturity.findings
-        ],
-        "scientific_maturity_facts": scientific_maturity.facts,
+        **scientific_maturity_gates,
         "manuscript_generated": manuscript_generated,
         **manuscript_text_gate,
         "writer_probe_mode": bool(writer_probe_mode),
@@ -2152,85 +2158,14 @@ def write_readiness_artifacts(
     )
     artifact_paths["numeric_audit"] = str(numeric_audit_path.relative_to(run_dir))
 
-    display_suite_path = run_dir / "display_suite_audit.json"
-    display_suite_payload = {
-        "schema_version": "easyicu.display_suite_audit/2",
-        "display_suite_complete": gates["display_suite_complete"],
-        "table_count": gates["display_table_count"],
-        "figure_contract_count": gates["display_figure_contract_count"],
-        "result_figure_contract_count": gates["display_result_figure_contract_count"],
-        "primary_publication_figure_contract_count": gates[
-            "display_primary_publication_figure_contract_count"
-        ],
-        "supporting_figure_contract_count": gates[
-            "display_supporting_figure_contract_count"
-        ],
-        "other_figure_contract_count": gates["display_other_figure_contract_count"],
-        "primary_publication_contract_paths": gates[
-            "display_primary_publication_contract_paths"
-        ],
-        "supporting_figure_contract_paths": gates[
-            "display_supporting_figure_contract_paths"
-        ],
-        "other_figure_contract_paths": gates["display_other_figure_contract_paths"],
-        "contract_panel_count": gates["display_contract_panel_count"],
-        "primary_publication_panel_count": gates[
-            "display_primary_publication_panel_count"
-        ],
-        "supporting_panel_count": gates["display_supporting_panel_count"],
-        "contract_role_count": gates["display_contract_role_count"],
-        "primary_publication_role_count": gates[
-            "display_primary_publication_role_count"
-        ],
-        "supporting_role_count": gates["display_supporting_role_count"],
-        "chart_types": gates["display_chart_types"],
-        "primary_publication_chart_types": gates[
-            "display_primary_publication_chart_types"
-        ],
-        "supporting_chart_types": gates["display_supporting_chart_types"],
-        "absolute_risk_visual_present": gates["display_absolute_risk_visual_present"],
-        "primary_publication_absolute_risk_visual_present": gates[
-            "display_primary_publication_absolute_risk_visual_present"
-        ],
-        "supporting_absolute_risk_visual_present": gates[
-            "display_supporting_absolute_risk_visual_present"
-        ],
-        "primary_publication_result_figure_contract_count": gates[
-            "display_primary_publication_result_figure_contract_count"
-        ],
-        "supporting_result_figure_contract_count": gates[
-            "display_supporting_result_figure_contract_count"
-        ],
-        "categories": gates["display_categories"],
-        "table_one_expected": gates["display_table_one_expected"],
-        "table_one_present": gates["display_table_one_present"],
-        "audit_context_present": gates["display_audit_context_present"],
-        "errors": gates["display_suite_errors"],
-    }
-    display_suite_path.write_text(
-        json.dumps(display_suite_payload, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
+    display_suite_path = write_json_artifact(
+        run_dir / "display_suite_audit.json", display_suite_audit_payload(gates)
     )
     artifact_paths["display_suite_audit"] = str(display_suite_path.relative_to(run_dir))
 
-    scientific_maturity_path = run_dir / "scientific_maturity_audit.json"
-    scientific_maturity_payload = {
-        "schema_version": "easyicu.scientific_maturity/1",
-        "status": gates["scientific_maturity_status"],
-        "article_grade": gates["scientific_maturity_article_grade"],
-        "score": gates["scientific_maturity_score"],
-        "dimension_scores": gates["scientific_maturity_dimension_scores"],
-        "findings": gates["scientific_maturity_findings"],
-        "facts": gates["scientific_maturity_facts"],
-    }
-    scientific_maturity_path.write_text(
-        json.dumps(
-            scientific_maturity_payload,
-            indent=2,
-            ensure_ascii=False,
-            default=str,
-        ),
-        encoding="utf-8",
+    scientific_maturity_path = write_json_artifact(
+        run_dir / "scientific_maturity_audit.json",
+        scientific_maturity_audit_from_gates(gates),
     )
     artifact_paths["scientific_maturity_audit"] = str(
         scientific_maturity_path.relative_to(run_dir)
@@ -2392,18 +2327,8 @@ def write_readiness_artifacts(
             "Numeric-claim audit for manuscript gating.",
             numeric_audit_path,
         ),
-        (
-            "display_suite_audit",
-            "statistic",
-            "Article display-suite coverage audit for publication gating.",
-            display_suite_path,
-        ),
-        (
-            "scientific_maturity_audit",
-            "statistic",
-            "Typed literature, ICU-design, robustness, figure, and review maturity audit.",
-            scientific_maturity_path,
-        ),
+        (*DISPLAY_SUITE_AUDIT_REGISTRATION, display_suite_path),
+        (*SCIENTIFIC_MATURITY_AUDIT_REGISTRATION, scientific_maturity_path),
         (
             "claim_ledger",
             "table",

@@ -41,6 +41,12 @@ from .novelty_positioning import novelty_authority_digests
 
 Severity = Literal["blocker", "major", "minor"]
 
+SCIENTIFIC_MATURITY_AUDIT_REGISTRATION = (
+    "scientific_maturity_audit",
+    "statistic",
+    "Typed literature, ICU-design, robustness, figure, and review maturity audit.",
+)
+
 
 class ScientificMaturityFinding(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -67,6 +73,44 @@ class ScientificMaturityAudit(BaseModel):
     dimension_scores: dict[str, int]
     findings: list[ScientificMaturityFinding] = Field(default_factory=list)
     facts: dict[str, Any] = Field(default_factory=dict)
+
+
+def scientific_maturity_readiness_gates(
+    audit: ScientificMaturityAudit,
+) -> dict[str, Any]:
+    """Return the stable readiness projection owned by this audit contract."""
+
+    return {
+        "scientific_maturity_article_grade": audit.article_grade,
+        "scientific_maturity_status": audit.status,
+        "scientific_maturity_score": audit.score,
+        "scientific_maturity_dimension_scores": audit.dimension_scores,
+        "scientific_maturity_findings": [
+            finding.model_dump(mode="json") for finding in audit.findings
+        ],
+        "scientific_maturity_facts": audit.facts,
+    }
+
+
+def scientific_maturity_audit_from_gates(
+    gates: Mapping[str, Any],
+) -> ScientificMaturityAudit:
+    """Reconstitute the canonical persisted audit from readiness gates.
+
+    Validation happens in the owner model so a missing or malformed projection
+    cannot be silently written as a scientific audit.
+    """
+
+    return ScientificMaturityAudit.model_validate(
+        {
+            "status": gates["scientific_maturity_status"],
+            "article_grade": gates["scientific_maturity_article_grade"],
+            "score": gates["scientific_maturity_score"],
+            "dimension_scores": gates["scientific_maturity_dimension_scores"],
+            "findings": gates["scientific_maturity_findings"],
+            "facts": gates["scientific_maturity_facts"],
+        }
+    )
 
 
 def _read_json(run_dir: Path, name: str) -> Mapping[str, Any]:
@@ -1284,7 +1328,10 @@ def build_scientific_maturity_audit(
 
 
 __all__ = [
+    "SCIENTIFIC_MATURITY_AUDIT_REGISTRATION",
     "ScientificMaturityAudit",
     "ScientificMaturityFinding",
     "build_scientific_maturity_audit",
+    "scientific_maturity_audit_from_gates",
+    "scientific_maturity_readiness_gates",
 ]
