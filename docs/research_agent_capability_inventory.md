@@ -25,7 +25,7 @@ each leaf name against `src/easyicu` (excluding `research_agent`), `tests/`,
 entry points (`cli`, `replication_cli`) are reached through
 `[project.scripts]`, not imports.
 
-Measured 2026-08-13 at `f3ecd3c`.
+Measured 2026-08-13 at `e743498`.
 
 ## Status vocabulary
 
@@ -35,6 +35,8 @@ Measured 2026-08-13 at `f3ecd3c`.
 | `awaiting-wiring` | Implemented and tested; blocked on a named decision before an owner can call it. |
 | `entry-point` | Reached through `[project.scripts]` or a generated code template, not an import. |
 | `support-surface` | Used by tests/tools as a public surface; no production caller is expected. |
+| `external-consumer` | Called by production code outside `research_agent`, so package-local in-degree is intentionally zero. |
+| `compatibility` | A documented, fail-closed compatibility surface with an explicit removal target. |
 
 ## Inventory
 
@@ -49,6 +51,7 @@ Measured 2026-08-13 at `f3ecd3c`.
 | `evaluation_scorecard.py` | 1628 | `optional-by-design` | evaluation | Tier-2 scoring over completed artifacts. Paper-facing scorer authority lives outside the installed engine, under `benchmarks/`. | 7 | 2026-11-01 |
 | `evaluation/tier2_jury.py` | 649 | `optional-by-design` | evaluation | Jury/rubric adapter; opt-in per run. | 8 | 2026-11-01 |
 | `evaluation/cross_model_panel.py` | 294 | `optional-by-design` | evaluation | Cross-model concordance; opt-in per run. | 5 | 2026-11-01 |
+| `acquisition/foundation.py` | 603 | `external-consumer` | acquisition | Production Web run launcher and `run_discovery_to_manuscript.py` own the pre-sandbox acquisition call; the core Agent must not import backward into its host. | 10 | 2026-11-01 |
 | `discovery/idea_mining_source_status.py` | 1144 | `awaiting-wiring` | idea-mining | Idea-mining lane. Needs the differentiated fresh Idea end-to-end run before any of this becomes a production path. | 1 | 2026-10-01 |
 | `discovery/idea_mining_extended_feasibility.py` | 680 | `awaiting-wiring` | idea-mining | Same lane. | 5 | 2026-10-01 |
 | `discovery/idea_mining_data_first_route.py` | 627 | `awaiting-wiring` | idea-mining | Same lane. | 3 | 2026-10-01 |
@@ -56,7 +59,11 @@ Measured 2026-08-13 at `f3ecd3c`.
 | `discovery/idea_mining_longitudinal.py` | 349 | `awaiting-wiring` | idea-mining | Same lane. | 2 | 2026-10-01 |
 | `discovery/longitudinal_handoff.py` | 263 | `awaiting-wiring` | idea-mining | Same lane. | 1 | 2026-10-01 |
 | `authority/source_status_sdk.py` | 240 | `support-surface` | authority | Public SDK surface for source-status receipts. One test; confirm whether an external consumer is intended, otherwise reclassify. | 1 | 2026-10-01 |
+| `reporting/result_card.py` | 281 | `external-consumer` | reporting | Pi Copilot renders this aggregate-only card from outside `research_agent`; keeping the dependency outward prevents reporting from importing Web. | 2 | 2026-11-01 |
+| `replication/discovery.py` | 698 | `entry-point` | replication | Lazily exported by `replication.__getattr__` and called by `replication_cli`; direct package imports are intentionally absent. | 3 | — |
+| `cli.py` | 426 | `entry-point` | agent | `easyicu-research-agent` in `[project.scripts]`. | 2 | — |
 | `script_runtime.py` | 106 | `support-surface` | agent | Runtime shim imported by generated scripts, not by the engine. | 3 | 2026-11-01 |
+| `graph.py` | 55 | `compatibility` | orchestration | Retired LangGraph builder fails closed while human-review model imports remain compatible; removal target is 2.0 in `docs/deprecation_policy.md`. | 1 | 2.0 |
 | `scientific_adapters/*` | 52 | `support-surface` | scientific-adapters | Third-party adapters loaded through `importlib.import_module` (dowhy / pandera / sksurv); invisible to import scans by construction. | 10 | 2026-11-01 |
 | `replication_cli.py` | 228 | `entry-point` | replication | `easyicu-research-replication` in `[project.scripts]`. | 3 | — |
 | `case_plugins/` | 26 | `support-surface` | case-plugins | Plugin discovery surface. | 7 | 2026-11-01 |

@@ -22,10 +22,16 @@ def test_hygiene_audit_rejects_competing_and_generated_tracked_roots(
         "docs/repository_layout.md",
         "docs/research_agent_capability_inventory.md",
         ".codegraph/.gitignore",
+        "tools/arch_baselines/research_agent_top_level_ownership.json",
     ):
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("*\n!.gitignore\n", encoding="utf-8")
+        payload = (
+            '{"modules": {}}'
+            if path.name == "research_agent_top_level_ownership.json"
+            else "*\n!.gitignore\n"
+        )
+        path.write_text(payload, encoding="utf-8")
 
     (tmp_path / "benchmark").mkdir()
     findings = audit_repository(
