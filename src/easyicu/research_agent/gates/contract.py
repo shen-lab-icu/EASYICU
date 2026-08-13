@@ -60,8 +60,8 @@ from ..contracts.runtime import ValidationFinding
 from ..cohort.schema import ANALYSIS_COHORT_FILENAME
 from ..contracts.declared_product import (
     primary_analysis_cohort_integrity_findings,
-    primary_analysis_cohort_producer_uses_universe,
 )
+from ..contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
 from ..robustness.membership import replay_locked_memberships
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..plan_utils import (

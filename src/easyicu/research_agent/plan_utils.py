@@ -38,8 +38,6 @@ from .authority.step_recovery import StepRecoverySignature
 from .contracts.declared_product import (
     PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
-    _is_primary_analysis_cohort_method,
-    _primary_analysis_cohort_attrition_candidate,
     declared_product_contract_findings,
     effect_adjustment_family,
     effect_bearing_name,
@@ -49,6 +47,10 @@ from .contracts.declared_product import (
     effect_role_family,
     is_failed_step_status,
     typed_product,
+)
+from .contracts.primary_cohort import (
+    _is_primary_analysis_cohort_method,
+    _primary_analysis_cohort_attrition_candidate,
 )
 from .icu_rules import (
     detect_outcome_as_predictor,

@@ -21,11 +21,11 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     merge_host_table_contract,
-    locked_primary_cohort_product,
     typed_product_binding_contract,
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
 )
+from ..contracts.primary_cohort import locked_primary_cohort_product
 from ..contracts.artifact_consumption import (
     ArtifactConsumptionError,
     verify_artifact_consumption,

@@ -99,9 +99,9 @@ from ..research_context.prompt_scope import (
 )
 from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
-    primary_analysis_cohort_plan_findings,
     typed_product as _canonical_typed_product,
 )
+from ..contracts.primary_cohort import primary_analysis_cohort_plan_findings
 from ..contracts.result_envelope import STATISTIC_PAYLOAD_KEY_ALIASES
 from ..planning.robustness_contract import (
     COMPLETE_CASE_STRATEGY as _COMPLETE_CASE_STRATEGY,

@@ -206,11 +206,13 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     authorize_declared_figure_product_slots,
-    primary_analysis_cohort_plan_findings,
-    primary_analysis_cohort_producer_uses_universe,
     typed_product_binding_contract,
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
+)
+from ..contracts.primary_cohort import (
+    primary_analysis_cohort_plan_findings,
+    primary_analysis_cohort_producer_uses_universe,
 )
 from ..authority.evidence_store import (
     EvidenceAuthorityIntegrityError,

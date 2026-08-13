@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping
 
 from ..authority.evidence_store import sha256_of_file
-from ..contracts.declared_product import (
+from ..contracts.primary_cohort import (
     primary_analysis_cohort_producer_uses_universe,
     reserved_primary_cohort_product,
 )
