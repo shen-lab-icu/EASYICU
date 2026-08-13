@@ -7,6 +7,8 @@ Only a digest-bound approval can become a selectable software resource.
 
 from __future__ import annotations
 
+from ..authority.filesystem import publish_write_once_bytes
+
 import hashlib
 import json
 import os
@@ -340,29 +342,13 @@ def write_capability_request(path: Path, request: CapabilityRequest) -> None:
 
     path = Path(path)
     payload = request.model_dump_json(indent=2).encode("utf-8") + b"\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.read_bytes() != payload:
-            raise FileExistsError("capability request path already has other bytes")
-        return
-    fd, temp_name = tempfile.mkstemp(prefix=".capability-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temp_name, path)
-        except FileExistsError:
-            if path.read_bytes() != payload:
-                raise FileExistsError(
-                    "capability request path already has other bytes"
-                ) from None
-    finally:
-        try:
-            os.unlink(temp_name)
-        except FileNotFoundError:
-            pass
+    publish_write_once_bytes(
+        path,
+        payload,
+        temp_prefix=".capability-",
+        conflict_error=FileExistsError,
+        conflict_message="capability request path already has other bytes",
+    )
 
 
 def write_capability_activation(path: Path, activation: CapabilityActivation) -> None:
@@ -370,29 +356,13 @@ def write_capability_activation(path: Path, activation: CapabilityActivation) ->
 
     path = Path(path)
     payload = activation.model_dump_json(indent=2).encode("utf-8") + b"\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.read_bytes() != payload:
-            raise FileExistsError("capability activation path has other bytes")
-        return
-    fd, temp_name = tempfile.mkstemp(prefix=".capability-activation-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temp_name, path)
-        except FileExistsError:
-            if path.read_bytes() != payload:
-                raise FileExistsError(
-                    "capability activation path has other bytes"
-                ) from None
-    finally:
-        try:
-            os.unlink(temp_name)
-        except FileNotFoundError:
-            pass
+    publish_write_once_bytes(
+        path,
+        payload,
+        temp_prefix=".capability-activation-",
+        conflict_error=FileExistsError,
+        conflict_message="capability activation path has other bytes",
+    )
 
 
 def write_capability_approval(path: Path, approval: CapabilityApproval) -> None:
@@ -400,29 +370,13 @@ def write_capability_approval(path: Path, approval: CapabilityApproval) -> None:
 
     path = Path(path)
     payload = approval.model_dump_json(indent=2).encode("utf-8") + b"\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.read_bytes() != payload:
-            raise FileExistsError("capability approval path has other bytes")
-        return
-    fd, temp_name = tempfile.mkstemp(prefix=".capability-approval-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temp_name, path)
-        except FileExistsError:
-            if path.read_bytes() != payload:
-                raise FileExistsError(
-                    "capability approval path has other bytes"
-                ) from None
-    finally:
-        try:
-            os.unlink(temp_name)
-        except FileNotFoundError:
-            pass
+    publish_write_once_bytes(
+        path,
+        payload,
+        temp_prefix=".capability-approval-",
+        conflict_error=FileExistsError,
+        conflict_message="capability approval path has other bytes",
+    )
 
 
 __all__ = [
