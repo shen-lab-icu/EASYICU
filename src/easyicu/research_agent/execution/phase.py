@@ -91,19 +91,15 @@ from ..repairs.source import (
     _deterministic_summary_repair,
     deterministic_contract_repair,
 )
-from ..repairs.semantic_boundary import SemanticRepairRecorder
 from ..repairs.attempt_record import record_deterministic_runner_repair_attempt
 from .code_hygiene import reorder_forward_references
 from .article_audit import RunArticleAuditResult, collect_run_article_audits
 from ..repairs.coordination import (
-    RepairAuthorityBinding,
-    StepRepairBudget,
     authorized_deterministic_concept_repair,
     resume_deterministic_repair_candidate,
 )
 from .concept_audit_cache import LLMConceptAuditCache
 from .development_sample import (
-    DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE,
     materialize_development_execution_sample,
     record_development_sample_authority,
 )
@@ -118,7 +114,6 @@ from .failure_classification import classify_runtime_failure
 from .cohort_routing import (
     bind_step_execution_cohort as _bind_step_execution_cohort,
     bound_step_execution_cohort_path as _bound_step_execution_cohort_path,
-    step_execution_cohort_path as _step_execution_cohort_path,
 )
 from .concept_audit import (
     ConceptAuditAuthority,
@@ -435,8 +430,12 @@ from ..authority.provider_budget import (
 )
 from .provider_budget_runtime import (
     monotonic_step_llm_repair_history as _monotonic_step_llm_repair_history,
-    prepare_step_provider_budget,
     step_snapshot_requires_provider_receipt as _step_snapshot_requires_provider_receipt,
+)
+from .repair_reservation import StepRepairReservation
+from .step_attempt_bootstrap import (
+    RAW_UNIVERSE_EXECUTION_ROLE,
+    prepare_step_attempt_bootstrap,
 )
 from .step_authority_resume import (
     StepAuthorityResumeRequest,
@@ -640,7 +639,7 @@ _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
 _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
 _COHORT_TRANSLATION_PROVIDER_CATEGORY = "cohort_definition_translation"
 _HOST_COHORT_TRANSLATION_BUDGET_STEP_ID = "host_cohort_definition_translation"
-_RAW_UNIVERSE_EXECUTION_ROLE = "raw_universe_for_primary_analysis_cohort_producer"
+_RAW_UNIVERSE_EXECUTION_ROLE = RAW_UNIVERSE_EXECUTION_ROLE
 
 
 def _submit_in_current_context(executor: Any, callback: Any, *args: Any) -> Any:
@@ -4026,86 +4025,24 @@ def run_execute_phase(
 
     def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
         nonlocal runtime_state
-        with shared_lock:
-            resume_history = (
-                list(
-                    plan_result.resume_state.get("step_attempt_history")
-                    or plan_result.resume_state.get("per_step_records")
-                    or []
-                )
+        attempt_bootstrap = prepare_step_attempt_bootstrap(
+            resume_state=(
+                plan_result.resume_state
                 if isinstance(plan_result.resume_state, Mapping)
-                else []
-            )
-            candidate_history = resume_history + list(per_step_records)
-            prior_attempt_records = [
-                record
-                for record in candidate_history
-                if isinstance(record, Mapping)
-                and str(record.get("step_id") or "") == step.step_id
-            ]
-            prior_step_record = next(
-                (
-                    record
-                    for record in current_step_records(prior_attempt_records)
-                    if str(record.get("step_id") or "") == step.step_id
-                ),
-                None,
-            )
-        prior_attempt_sequences = [
-            int(record.get("attempt_sequence"))
-            for record in prior_attempt_records
-            if isinstance(record.get("attempt_sequence"), int)
-            and int(record.get("attempt_sequence")) >= 1
-        ]
-        attempt_sequence = (
-            max(prior_attempt_sequences, default=len(prior_attempt_records)) + 1
-        )
-        attempt_id = f"{run_id}:{step.step_id}:{attempt_sequence}"
-        review_checkpoint_id = f"{attempt_id}:deterministic_review"
-        step_record: Dict[str, Any] = {
-            "step_id": step.step_id,
-            "intent": step.intent,
-            "planned_analysis_role": step.planned_analysis_role,
-            "attempt_id": attempt_id,
-            "attempt_sequence": attempt_sequence,
-            "review_checkpoint_id": review_checkpoint_id,
-            "plan_scientific_signature": (
-                _serializable_plan_scientific_scope_signature(plan)
+                else None
             ),
-        }
-
-        step_execution_cohort_path = _step_execution_cohort_path(
+            per_step_records=per_step_records,
+            shared_lock=shared_lock,
             step=step,
             plan=plan,
+            run_id=run_id,
             run_dir=run_dir,
             universe_path=universe_path,
             cohort_path=cohort_path,
-        )
-        if step_execution_cohort_path == universe_path:
-            step_record.update(
-                {
-                    "execution_cohort_role": _RAW_UNIVERSE_EXECUTION_ROLE,
-                    "execution_cohort_sha256": sha256_of_file(universe_path),
-                    "authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path),
-                }
-            )
-        elif primary_analysis_cohort_producer_uses_universe(step=step, plan=plan):
-            step_record.update(
-                {
-                    "execution_cohort_role": (
-                        DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE
-                    ),
-                    "execution_cohort_sha256": sha256_of_file(cohort_path),
-                    "authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path),
-                    "paper_authority": False,
-                }
-            )
-        budget_runtime = prepare_step_provider_budget(
-            prior_attempt_records=prior_attempt_records,
-            prior_step_record=prior_step_record,
-            run_dir=run_dir,
-            step_id=step.step_id,
-            step_record=step_record,
+            plan_scientific_signature=(
+                _serializable_plan_scientific_scope_signature(plan)
+            ),
+            findings=findings,
             max_provider_calls=pipeline._max_step_provider_calls,
             max_llm_repairs=pipeline._max_step_llm_repair_attempts,
             reserve_concept_audit=pipeline._enable_llm_concept_audit,
@@ -4113,24 +4050,20 @@ def run_execute_phase(
                 resume_controller.explicitly_reruns_step(step.step_id)
             ),
         )
+        prior_attempt_records = attempt_bootstrap.prior_attempt_records
+        prior_step_record = attempt_bootstrap.prior_step_record
+        attempt_id = attempt_bootstrap.attempt_id
+        review_checkpoint_id = attempt_bootstrap.review_checkpoint_id
+        step_record = attempt_bootstrap.step_record
+        step_execution_cohort_path = attempt_bootstrap.execution_cohort_path
+        budget_runtime = attempt_bootstrap.budget_runtime
         provider_budget = budget_runtime.provider_budget
         step_repair_budget = budget_runtime.repair_budget
         provider_receipt_path = budget_runtime.receipt_path
         provider_receipt_relative_path = budget_runtime.receipt_relative_path
         reserved_final_category = budget_runtime.reserved_final_category
         provider_receipt_integrity_error = budget_runtime.integrity_error
-        step_repair_budget.bind_semantic_escalation_recorder(
-            SemanticRepairRecorder(
-                step_record=step_record,
-                findings=findings,
-                lock=shared_lock,
-                step_id=step.step_id,
-                attempt_id=attempt_id,
-            )
-        )
         _sync_provider_budget = step_repair_budget.sync_provider
-
-        _sync_provider_budget()
         if provider_receipt_integrity_error is not None:
             step_record.update(
                 {
@@ -4247,82 +4180,6 @@ def run_execute_phase(
         _logical_llm_repair_budget_available = step_repair_budget.logical_available
         _provider_repair_call_available = step_repair_budget.provider_available
         _llm_repair_budget_available = step_repair_budget.available
-
-        def _consume_llm_repair_budget(
-            repair_class: str,
-            *,
-            before_code: str,
-            repair_ticket: str,
-            repair_authority: RepairPromptAuthority,
-            current_repair_authority: Optional[RepairPromptAuthority] = None,
-            provider_category: str,
-            failure_status: str,
-        ) -> bool:
-            """Reserve one repair bound to its exact host-owned authority."""
-
-            checkpoint_authority.ensure_candidate(
-                before_code,
-                reason="pre_repair_authority_binding",
-            )
-            binding = RepairAuthorityBinding(
-                step_id=step.step_id,
-                attempt_id=step_repair_budget.next_attempt_id,
-                repair_class=str(repair_class),
-                provider_category=provider_category,
-                before_code_sha256=sha256_of_bytes(before_code.encode("utf-8")),
-                step_spec_sha256=canonical_sha256(step.model_dump(mode="json")),
-                resolved_inputs_sha256=resolved_inputs_sha256,
-                coder_context_sha256=(
-                    step_attempt_state.coordinates.scoped_coder_context.sha256
-                    if step_attempt_state.coordinates is not None
-                    else canonical_sha256(
-                        {
-                            "research_context": coder_context.model_dump(mode="json"),
-                            "host_coder_authority": coder_authority.payload(),
-                        }
-                    )
-                ),
-                repair_ticket_sha256=_repair_prompt_binding_sha256(
-                    untrusted_diagnostic=repair_ticket,
-                    repair_authority=repair_authority,
-                    current_repair_authority=current_repair_authority,
-                ),
-                engine_validator_sha256=(
-                    step_attempt_state.coordinates.deterministic_gate_fingerprint
-                    if step_attempt_state.coordinates is not None
-                    else canonical_sha256(
-                        {
-                            "schema": "easyicu.step_control_plane_fingerprint/1",
-                            "deterministic_gate_fingerprint": (
-                                _deterministic_gate_stamp()[
-                                    "deterministic_gate_fingerprint"
-                                ]
-                            ),
-                            "coder_provider_identity_sha256": (
-                                coder_provider_identity_sha256
-                            ),
-                        }
-                    )
-                ),
-                prompt_pack_version=prompt_version,
-                run_input_capsule_sha256=run_input_capsule_sha256,
-            )
-            consumed = step_repair_budget.consume(
-                repair_class,
-                authority_binding=binding,
-            )
-            if consumed:
-                checkpoint_authority.checkpoint_state(
-                    "repair_transport_pending",
-                    extra={
-                        "capsule_pending_repair_attempt_id": (
-                            step_repair_budget.llm_repair_attempts
-                        ),
-                        "capsule_pending_repair_binding_sha256": binding.sha256,
-                        "capsule_pending_repair_failure_status": failure_status,
-                    },
-                )
-            return consumed
 
         monotonic_concept_constraints = _persisted_monotonic_concept_constraints(
             prior_step_record
@@ -4654,6 +4511,20 @@ def run_execute_phase(
                 if run_input_capsule_sha256 is None
                 else "agentic_cli_transport_untracked"
             )
+        repair_reservation = StepRepairReservation(
+            step=step,
+            repair_budget=step_repair_budget,
+            checkpoint_authority=checkpoint_authority,
+            attempt_state=step_attempt_state,
+            coder_context=coder_context,
+            coder_authority=coder_authority,
+            resolved_inputs_sha256=resolved_inputs_sha256,
+            coder_provider_identity_sha256=coder_provider_identity_sha256,
+            prompt_version=prompt_version,
+            run_input_capsule_sha256=run_input_capsule_sha256,
+            deterministic_gate_stamp=_deterministic_gate_stamp(),
+        )
+        _consume_llm_repair_budget = repair_reservation.consume
         local_runtime_state = supervisor.prepare_step_state(
             state=runtime_state,
             context=context,

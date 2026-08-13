@@ -1924,22 +1924,33 @@ def test_primary_cohort_coder_receives_verified_physical_predicate_receipt(
 
 def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked():
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import step_attempt_bootstrap
+    from easyicu.research_agent.execution.cohort_routing import (
+        step_execution_cohort_path,
+    )
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
+    bootstrap_source = inspect.getsource(
+        step_attempt_bootstrap.prepare_step_attempt_bootstrap
+    )
     authority_source = inspect.getsource(
         pipeline_execute._execution_input_authority_integrity_finding
     )
-    routing_source = inspect.getsource(pipeline_execute._step_execution_cohort_path)
+    routing_source = inspect.getsource(step_execution_cohort_path)
 
-    assert "step_execution_cohort_path = _step_execution_cohort_path(" in source
+    assert "prepare_step_attempt_bootstrap(" in source
+    assert "execution_cohort_path = step_execution_cohort_path(" in bootstrap_source
     assert "primary_analysis_cohort_producer_uses_universe" in routing_source
     assert "return universe_path" in routing_source
     assert "return cohort_path" in routing_source
     assert "only downstream" in routing_source
     assert "cohort_path=step_execution_cohort_path" in source
-    assert '"execution_cohort_sha256": sha256_of_file(universe_path)' in source
     assert (
-        '"authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path)' in source
+        '"execution_cohort_sha256": sha256_of_file(universe_path)' in bootstrap_source
+    )
+    assert (
+        '"authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path)'
+        in bootstrap_source
     )
     assert "current_universe_sha256 = sha256_of_file(universe_path)" in authority_source
     assert "current_cohort_sha256 = sha256_of_file(cohort_path)" in authority_source
