@@ -3748,7 +3748,6 @@ def test_web_study_context_compiles_to_strict_user_preferences() -> None:
         "extra_notes",
         "must_have_outputs",
         "subgroup_sensitivity",
-        "timing_and_design",
         "data_constraints",
         "covariates",
         "covariate_selection",
@@ -3757,12 +3756,46 @@ def test_web_study_context_compiles_to_strict_user_preferences() -> None:
     }
     assert validated.extra_notes == "Demo-only product validation."
     assert "not_for_manuscript" in str(validated.data_constraints)
+    assert validated.timing_and_design is None
+    constraints = json.loads(str(validated.data_constraints))
+    assert constraints["materialization_window"] == {
+        "role": "outer_observation_window",
+        "hours": 24,
+        "anchor": "ICU admission",
+    }
     assert validated.covariates == ["age", "sex"]
     assert validated.covariate_selection == "exact"
     assert validated.covariate_temporal_roles == {
         "age": "baseline_static",
         "sex": "baseline_static",
     }
+
+
+def test_web_materialization_window_never_declares_clinical_time_zero() -> None:
+    study = {
+        **_complete_study(),
+        "question": (
+            "Classify Sepsis-3 at suspected-infection onset while materializing "
+            "features over the first 24 hours after ICU admission."
+        ),
+        "primary_exposure": "sep3_sofa1",
+        "execution_concepts": {
+            "outcome": "death",
+            "primary_exposure": "sep3_sofa1",
+            "covariates": ["age", "sex"],
+        },
+    }
+
+    compiled = agent_pipeline_runs._research_user_preferences(study)
+    validated = UserPreferences.model_validate(compiled)
+
+    assert validated.timing_and_design is None
+    constraints = json.loads(str(validated.data_constraints))
+    assert constraints["materialization_window"]["anchor"] == "ICU admission"
+    assert (
+        constraints["materialization_window"]["role"]
+        == "outer_observation_window"
+    )
 
 
 def test_web_study_context_preserves_an_explicit_empty_adjustment_set() -> None:
