@@ -379,7 +379,7 @@ def _citation(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:
         )
     )
     doi = _text(row.get("doi"), 240) or None
-    return {
+    citation = {
         "key": f"web_pubmed_{pmid}",
         "title": title,
         "year": year_match.group(0) if year_match else "n/a",
@@ -404,6 +404,10 @@ def _citation(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:
             if _text(value, 80)
         ],
     }
+    screening = _screening_audit(row.get("direct_comparator_screen"))
+    if screening is not None:
+        citation["direct_comparator_screen"] = screening
+    return citation
 
 
 def _validated_citation(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:
@@ -421,6 +425,7 @@ def _validated_citation(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:
         "publication_types",
         "matched_queries",
         "matched_query_strata",
+        "direct_comparator_screen",
     }
     if not required.issubset(row) or not set(row).issubset(allowed):
         return None
@@ -440,6 +445,10 @@ def _validated_citation(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:
         for value in publication_types[:20]
     ):
         return None
+    if "direct_comparator_screen" in row:
+        screening = _screening_audit(row.get("direct_comparator_screen"))
+        if screening is None or screening["citation_key"] != key:
+            return None
     return {
         "key": key,
         "title": _text(row.get("title"), 500),
@@ -452,6 +461,52 @@ def _validated_citation(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:
         "publication_types": list(
             dict.fromkeys(_text(value, 120) for value in publication_types[:20])
         ),
+    }
+
+
+def _screening_audit(value: Any) -> Optional[dict[str, Any]]:
+    """Normalize one bounded, source-backed retrieval screen for the receipt.
+
+    The audit remains digest-bound metadata; it is intentionally not projected
+    into ``CitationRecord`` or treated as final Research Agent authority. The
+    sealed-context screen still runs again after handoff.
+    """
+
+    if not isinstance(value, Mapping):
+        return None
+    disposition = _text(value.get("disposition"), 24)
+    evidence_role = _text(value.get("evidence_role"), 40)
+    flags = (
+        "population_match",
+        "exposure_match",
+        "outcome_match",
+        "design_excerpt_available",
+        "publication_type_eligible",
+    )
+    if (
+        disposition not in {"include", "exclude"}
+        or evidence_role not in {"direct_comparator", "related_context"}
+        or any(not isinstance(value.get(name), bool) for name in flags)
+    ):
+        return None
+    qualifies = all(bool(value.get(name)) for name in flags)
+    if (disposition == "include") != qualifies:
+        return None
+    if (evidence_role == "direct_comparator") != qualifies:
+        return None
+    citation_key = _text(value.get("citation_key"), 120)
+    source = _text(value.get("source"), 80)
+    rationale = _text(value.get("rationale"), 1_500)
+    if not citation_key or not source or not rationale:
+        return None
+    return {
+        "citation_key": citation_key,
+        "source": source,
+        "disposition": disposition,
+        "evidence_role": evidence_role,
+        "rationale": rationale,
+        "query": _text(value.get("query"), 1_200) or None,
+        **{name: bool(value.get(name)) for name in flags},
     }
 
 

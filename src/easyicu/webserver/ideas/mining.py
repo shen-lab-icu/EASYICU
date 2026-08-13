@@ -32,6 +32,7 @@ from easyicu.concept import catalog as concept_catalog
 from easyicu.research_agent.discovery.discovery_handoff import DiscoveryHandoffPacket
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
+from easyicu.webserver.ideas import direct_evidence_search
 from easyicu.webserver.ideas.handoff import (
     CanonicalHandoffIntegrityError,
     build_web_handoff_packet,
@@ -524,10 +525,12 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
         query_hits,
         limit=limit,
     )
+    typed_search_scope = {**body, "topic": topic}
+    focus_terms = direct_evidence_search.focus_terms(typed_search_scope)
     articles: List[Dict[str, Any]] = []
     if ids:
         try:
-            articles = _pubmed_article_records(ids)
+            articles = _pubmed_article_records(ids, focus_terms=focus_terms)
             # _pubmed_article_records issues a single efetch request; the counter
             # must reflect that (the privacy audit over-reported 2 calls).
             network_calls += 1
@@ -539,6 +542,87 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
             except Exception as inner:
                 errors.append(str(inner)[:240])
                 articles = []
+
+    # A broad topic search can honestly return only definitions, methods, or
+    # papers that use the exposure as an eligibility label.  While the same
+    # user-authorized network action is still active, run one bounded exact
+    # comparator stratum only when source-backed screening found no eligible
+    # P/E/O record.  The Research Agent will independently re-screen the
+    # retained records against its sealed ResearchContext; this retrieval-stage
+    # decision can schedule the fallback but cannot grant publication authority.
+    preliminary = [
+        direct_evidence_search.screen_article(article, typed_search_scope)
+        for article in articles
+    ]
+    if (
+        direct_evidence_search.scope_complete(typed_search_scope)
+        and not any(row.get("disposition") == "include" for row in preliminary)
+    ):
+        fallback_query = direct_evidence_search.build_query(typed_search_scope)
+        fallback_ids: List[str] = []
+        try:
+            fallback_ids = _pubmed_esearch(
+                fallback_query,
+                limit=min(20, max(12, limit * 2)),
+            )
+            network_calls += 1
+        except Exception as exc:
+            errors.append(str(exc)[:240])
+        existing_ids = {str(row.get("pmid") or "") for row in articles}
+        retained_fallback_ids = [
+            pmid for pmid in fallback_ids if pmid not in existing_ids
+        ][:limit]
+        fallback_articles: List[Dict[str, Any]] = []
+        if retained_fallback_ids:
+            try:
+                fallback_articles = _pubmed_article_records(
+                    retained_fallback_ids,
+                    focus_terms=focus_terms,
+                )
+                network_calls += 1
+            except Exception as exc:
+                errors.append(str(exc)[:240])
+        fallback_decisions = [
+            direct_evidence_search.screen_article(article, typed_search_scope)
+            for article in fallback_articles
+        ]
+        ranked_fallback = [
+            article
+            for article, decision in zip(fallback_articles, fallback_decisions)
+            if decision.get("disposition") == "include"
+        ] + [
+            article
+            for article, decision in zip(fallback_articles, fallback_decisions)
+            if decision.get("disposition") != "include"
+        ]
+        # Keep the public ``limit`` contract while giving a valid exact
+        # comparator priority over unrelated broad-query returns.
+        articles = [*ranked_fallback, *articles][:limit]
+        fallback_retained = {
+            str(row.get("pmid") or "") for row in ranked_fallback[:limit]
+        }
+        for pmid in fallback_ids:
+            receipt = retrieval_by_pmid.setdefault(
+                pmid,
+                {"queries": [], "strata": []},
+            )
+            if fallback_query not in receipt["queries"]:
+                receipt["queries"].append(fallback_query)
+            if direct_evidence_search.DIRECT_COMPARATOR_FALLBACK_STRATUM not in receipt["strata"]:
+                receipt["strata"].append(
+                    direct_evidence_search.DIRECT_COMPARATOR_FALLBACK_STRATUM
+                )
+        query_strata.append(
+            {
+                "id": direct_evidence_search.DIRECT_COMPARATOR_FALLBACK_STRATUM,
+                "query": fallback_query,
+                "returned_count": len(fallback_ids),
+                "retained_count": sum(
+                    1 for pmid in fallback_ids if pmid in fallback_retained
+                ),
+            }
+        )
+        queries.append(fallback_query)
 
     export = _active_export()
     export_index = _export_index(export)
@@ -588,6 +672,9 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
         source["pubmed_metadata_only"] = True
         source["matched_queries"] = list(retrieval["queries"])
         source["matched_query_strata"] = list(retrieval["strata"])
+        source["direct_comparator_screen"] = (
+            direct_evidence_search.screen_article(article, typed_search_scope)
+        )
         source_candidates.append(source)
         idea_candidates.append(
             {
@@ -3178,32 +3265,7 @@ def _discovery_population_filter(topic: str, body: Dict[str, Any]) -> str:
     age population is not explicit.
     """
 
-    population = " ".join(
-        str(value or "")
-        for value in (
-            topic,
-            body.get("population"),
-            body.get("cohort"),
-            body.get("population_scope"),
-        )
-    ).casefold()
-    if any(token in population for token in ("adult", "adults", "成人")):
-        return (
-            " AND (adult[Title/Abstract] OR adults[Title/Abstract])"
-            " NOT (child[Title/Abstract] OR children[Title/Abstract] OR "
-            "pediatric[Title/Abstract] OR paediatric[Title/Abstract] OR "
-            "neonat*[Title/Abstract])"
-        )
-    if any(
-        token in population
-        for token in ("pediatric", "paediatric", "children", "child", "儿科", "儿童")
-    ):
-        return (
-            " AND (child[Title/Abstract] OR children[Title/Abstract] OR "
-            "pediatric[Title/Abstract] OR paediatric[Title/Abstract])"
-            " NOT (adult[Title/Abstract] OR adults[Title/Abstract])"
-        )
-    return ""
+    return direct_evidence_search.population_filter({**body, "topic": topic})
 
 
 def _stratified_pubmed_ids(
@@ -3371,7 +3433,11 @@ def _dedupe_strings(values: Iterable[str]) -> List[str]:
     return out
 
 
-def _pubmed_article_records(ids: List[str]) -> List[Dict[str, Any]]:
+def _pubmed_article_records(
+    ids: List[str],
+    *,
+    focus_terms: Iterable[str] = (),
+) -> List[Dict[str, Any]]:
     """Fetch PubMed metadata plus bounded abstracts via EFetch XML."""
     if not ids:
         return []
@@ -3419,7 +3485,13 @@ def _pubmed_article_records(ids: List[str]) -> List[Dict[str, Any]]:
         )
         design_excerpt = _study_design_excerpt(
             abstract or title,
-            focus_terms=("ICU", "critical care", "mortality", "death"),
+            focus_terms=(
+                *tuple(focus_terms),
+                "ICU",
+                "critical care",
+                "mortality",
+                "death",
+            ),
         )
         rows.append(
             {
@@ -3530,14 +3602,16 @@ def _study_design_excerpt(
         for term in focus_terms
         if str(term or "").strip()
     ]
-    selected: List[str] = []
+    focus_selected: List[str] = []
+    design_selected: List[str] = []
     for sentence in sentences:
         folded = sentence.casefold()
         normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", folded).split())
-        if any(term in folded for term in _STUDY_DESIGN_TERMS) or any(
-            term and term in normalized for term in normalized_focus
-        ):
-            selected.append(sentence)
+        if any(term and term in normalized for term in normalized_focus):
+            focus_selected.append(sentence)
+        elif any(term in folded for term in _STUDY_DESIGN_TERMS):
+            design_selected.append(sentence)
+    selected = list(dict.fromkeys([*focus_selected, *design_selected]))
     excerpt = " ".join(selected[:5]) or " ".join(sentences[:2])
     return _clean(excerpt, _MAX_DESIGN_EXCERPT)
 

@@ -1183,3 +1183,39 @@ def test_adult_protocol_excludes_pediatric_direct_comparator(ra):
     assert decision.exposure_match is True
     assert decision.outcome_match is True
     assert decision.disposition == "exclude"
+
+
+def test_exposure_used_only_as_eligibility_does_not_become_comparator(ra):
+    from easyicu.research_agent.literature import (
+        CitationRecord,
+        screen_source_backed_direct_comparator,
+    )
+
+    record = CitationRecord(
+        key="rar_biomarker",
+        title=(
+            "Red cell distribution width ratio predicts mortality in adult "
+            "patients meeting Sepsis-3 criteria in intensive care"
+        ),
+        year="2024",
+        relevance=(
+            "Study-design excerpt: Adult ICU patients meeting Sepsis-3 criteria "
+            "were included. The association between red cell distribution width "
+            "ratio and hospital mortality was estimated."
+        ),
+        publication_types=["Observational Study"],
+    )
+
+    decision = screen_source_backed_direct_comparator(
+        exposure="Sepsis-3",
+        outcome="hospital mortality",
+        adult_required=True,
+        record=record,
+        source="pubmed",
+        query="focused query",
+    )
+
+    assert decision.population_match is True
+    assert decision.outcome_match is True
+    assert decision.exposure_match is False
+    assert decision.disposition == "exclude"

@@ -909,7 +909,7 @@ def test_idea_literature_discovery_maps_pubmed_candidates_metadata_only(
     monkeypatch.setattr(
         idea_mining,
         "_pubmed_article_records",
-        lambda ids: [
+        lambda ids, *, focus_terms=(): [
             {
                 "pmid": "12345",
                 "title": "Vasopressors and Fluids in Early Septic Shock",
@@ -988,7 +988,9 @@ def test_literature_discovery_round_robins_prespecified_query_strata(
         lambda query, limit=5: next(returned),
     )
 
-    def article_records(ids: list[str]) -> list[dict[str, object]]:
+    def article_records(
+        ids: list[str], *, focus_terms=()
+    ) -> list[dict[str, object]]:
         fetched.extend(ids)
         return [
             {
@@ -1036,6 +1038,96 @@ def test_literature_discovery_round_robins_prespecified_query_strata(
         ["direct_observational_comparator_all_years"],
         ["direct_observational_comparator_recent"],
     ]
+
+
+def test_literature_discovery_runs_typed_direct_fallback_after_source_screen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def search(query: str, limit: int = 5) -> list[str]:
+        calls.append(query)
+        if len(calls) <= 5:
+            return [f"10{len(calls)}"]
+        return ["900", "901"]
+
+    def article_records(
+        ids: list[str], *, focus_terms=()
+    ) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for pmid in ids:
+            if pmid == "900":
+                rows.append(
+                    {
+                        "pmid": pmid,
+                        "title": (
+                            "Sepsis-3 prevalence and hospital mortality among "
+                            "adult ICU stays"
+                        ),
+                        "year": 2024,
+                        "design_excerpt": (
+                            "An observational cohort of adult ICU stays estimated "
+                            "Sepsis-3 prevalence and hospital mortality."
+                        ),
+                        "abstract_excerpt": (
+                            "An observational cohort of adult ICU stays estimated "
+                            "Sepsis-3 prevalence and hospital mortality."
+                        ),
+                        "publication_types": ["Observational Study"],
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "pmid": pmid,
+                        "title": "Vasopressin timing and mortality in septic shock",
+                        "year": 2025,
+                        "design_excerpt": (
+                            "Adult ICU patients meeting Sepsis-3 criteria received "
+                            "vasopressin; timing was associated with mortality."
+                        ),
+                        "abstract_excerpt": (
+                            "Adult ICU patients meeting Sepsis-3 criteria received "
+                            "vasopressin; timing was associated with mortality."
+                        ),
+                        "publication_types": ["Observational Study"],
+                    }
+                )
+        return rows
+
+    monkeypatch.setattr(idea_mining, "_pubmed_esearch", search)
+    monkeypatch.setattr(idea_mining, "_pubmed_article_records", article_records)
+
+    payload = idea_mining.discover_literature(
+        {
+            "topic": "adult ICU Sepsis-3 hospital mortality",
+            "exposure_concept": "sep3_sofa1",
+            "outcome_concept": "death",
+            "outcome": "in-hospital mortality",
+            "population": "adult ICU stays",
+            "database": "miiv",
+            "analysis_family": "descriptive_epidemiology",
+            "allow_network": True,
+            "limit": 3,
+        }
+    )
+
+    assert len(calls) == 6
+    assert '"Sepsis-3"[Title/Abstract]' in calls[-1]
+    assert '"hospital mortality"[Title/Abstract]' in calls[-1]
+    assert '"MIMIC-IV"[Title/Abstract]' in calls[-1]
+    assert "epidemiolog*[Title/Abstract]" in calls[-1]
+    assert payload["query_strata"][-1]["id"] == (
+        "typed_direct_observational_comparator"
+    )
+    assert payload["source_candidates"][0]["pmid"] == "900"
+    assert payload["source_candidates"][0]["direct_comparator_screen"][
+        "disposition"
+    ] == "include"
+    unrelated = next(
+        row for row in payload["source_candidates"] if row["pmid"] != "900"
+    )
+    assert unrelated["direct_comparator_screen"]["disposition"] == "exclude"
 
 
 def test_literature_discovery_keeps_foundational_and_recent_comparator_strata() -> None:

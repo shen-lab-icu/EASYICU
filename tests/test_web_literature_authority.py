@@ -74,6 +74,22 @@ def _discovered() -> dict:
                     '("Sepsis-3"[Title/Abstract] AND "mortality"[Title/Abstract])'
                 ],
                 "matched_query_strata": ["broad_icu"],
+                "direct_comparator_screen": {
+                    "citation_key": "web_pubmed_26903338",
+                    "source": "web_pubmed_retrieval",
+                    "disposition": "exclude",
+                    "evidence_role": "related_context",
+                    "rationale": (
+                        "The source-backed excerpt does not establish the declared "
+                        "exposure as the studied variable."
+                    ),
+                    "query": None,
+                    "population_match": True,
+                    "exposure_match": False,
+                    "outcome_match": True,
+                    "design_excerpt_available": True,
+                    "publication_type_eligible": True,
+                },
             }
         ],
     }
@@ -111,6 +127,16 @@ def test_web_literature_receipt_round_trips_to_agent_bundle() -> None:
     }
     assert binding["study_context_id"] == study["id"]
     assert binding["study_context_revision"] == study["revision"]
+    receipt = json.loads(
+        (
+            literature_authority._AUTHORITY_ROOT
+            / f"{binding['receipt_id']}.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert receipt["citations"][0]["direct_comparator_screen"]["disposition"] == (
+        "exclude"
+    )
+    assert "direct_comparator_screen" not in bundle["citations"][0]
     trace = bundle["authority_trace"]
     assert trace == {
         "schema_version": literature_authority.LITERATURE_AUTHORITY_SCHEMA_VERSION,
