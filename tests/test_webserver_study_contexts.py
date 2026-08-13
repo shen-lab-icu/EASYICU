@@ -599,7 +599,8 @@ def test_scientific_change_atomically_clears_server_owned_literature_receipt() -
         "result_count": 1,
         "searched_at": "2026-08-12T12:00:00+00:00",
         "study_configuration_sha256": context_store.literature_search_scope_sha256(
-            created
+            created,
+            schema_version="easyicu.web-literature-authority/2",
         ),
     }
     bound = context_store.bind_literature_authority(
@@ -624,6 +625,58 @@ def test_scientific_change_atomically_clears_server_owned_literature_receipt() -
 
     assert lifecycle["literature_authority"] == binding
     assert changed["literature_authority"] == {}
+
+
+def test_planning_change_preserves_v3_retrieval_receipt() -> None:
+    created = context_store.upsert_context(
+        {
+            "id": "study_literature_planning",
+            "question": "Is Sepsis-3 associated with mortality?",
+            "primary_exposure": "Sepsis-3",
+            "outcome": "In-hospital mortality",
+            "execution_concepts": {
+                "primary_exposure": "sep3_sofa1",
+                "outcome": "death",
+                "covariates": [],
+            },
+        }
+    )
+    binding = {
+        "schema_version": "easyicu.web-literature-authority/3",
+        "receipt_id": "lit_" + "a" * 24,
+        "receipt_sha256": "b" * 64,
+        "study_context_id": created["id"],
+        "study_context_revision": created["revision"],
+        "status": "searched",
+        "result_count": 1,
+        "searched_at": "2026-08-12T12:00:00+00:00",
+        "study_configuration_sha256": context_store.literature_search_scope_sha256(
+            created
+        ),
+    }
+    bound = context_store.bind_literature_authority(
+        created["id"],
+        binding,
+        expected_revision=created["revision"],
+    )
+
+    changed = context_store.upsert_context(
+        {
+            "id": created["id"],
+            "analysis_design": {
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
+            },
+            "covariates": ["age", "sex"],
+            "time_window": {"hours": 24, "anchor": "ICU admission"},
+        },
+        expected_revision=bound["revision"],
+        require_revision=True,
+        lifecycle_write=False,
+    )
+
+    assert changed["literature_authority"] == binding
 
 
 def test_public_study_context_api_cannot_forge_literature_authority() -> None:

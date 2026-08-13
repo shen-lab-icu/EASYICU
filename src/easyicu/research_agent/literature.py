@@ -129,6 +129,27 @@ class LiteratureSearchProvenance(BaseModel):
     note: str = ""
 
 
+class LiteratureAuthorityTrace(BaseModel):
+    """Host coordinates for one verified, upstream retrieval receipt.
+
+    This trace intentionally carries no screening disposition.  The exact
+    ResearchContext owns all record eligibility and evidence-role decisions.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # v2 receipts predate source StudyContext coordinates, so accepting that
+    # schema here would let a caller manufacture an apparently bound trace for
+    # authority the receipt never carried.  v2 remains load-compatible as a
+    # seed, but correctly has ``authority_trace=None``.
+    schema_version: Literal["easyicu.web-literature-authority/3"]
+    receipt_id: str = Field(pattern=r"^lit_[a-f0-9]{24}$")
+    receipt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    study_context_id: str
+    study_context_revision: int = Field(ge=0)
+    retrieval_scope_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class LiteratureScreeningDecision(BaseModel):
     """Deterministic, inspectable eligibility decision for one retrieved record."""
 
@@ -171,6 +192,14 @@ class LiteratureBundle(BaseModel):
     search_provenance: Optional[LiteratureSearchProvenance] = Field(
         default=None,
         description="Which sources produced these references, and whether any ran.",
+    )
+    authority_trace: Optional[LiteratureAuthorityTrace] = Field(
+        default=None,
+        description=(
+            "Host-verified retrieval authority coordinates. These identify the "
+            "receipt that supplied candidate records; they confer no comparator, "
+            "novelty, eligibility, or scientific-screening decision."
+        ),
     )
     screening_decisions: List[LiteratureScreeningDecision] = Field(
         default_factory=list,
@@ -1795,6 +1824,12 @@ class LiteratureAgent:
             citations=merged,
             prisma=prisma,
             search_provenance=provenance,
+            authority_trace=(
+                self.bound_seed.authority_trace.model_dump(mode="json")
+                if self.bound_seed is not None
+                and self.bound_seed.authority_trace is not None
+                else None
+            ),
             screening_decisions=screening_decisions,
         )
 
@@ -2150,6 +2185,7 @@ def _dedupe(items: Sequence[str]) -> List[str]:
 
 __all__ = [
     "CitationRecord",
+    "LiteratureAuthorityTrace",
     "LiteratureBundle",
     "LiteratureScreeningDecision",
     "HypothesisBlueprintAgent",

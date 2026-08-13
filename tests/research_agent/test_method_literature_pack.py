@@ -171,6 +171,14 @@ def test_digest_bound_web_search_seed_is_available_to_preplan_planning() -> None
                 "searched_at": "2026-08-12T12:00:00+00:00",
                 "note": "Digest-bound Web search.",
             },
+            "authority_trace": {
+                "schema_version": "easyicu.web-literature-authority/3",
+                "receipt_id": "lit_" + "a" * 24,
+                "receipt_sha256": "b" * 64,
+                "study_context_id": "study-e1",
+                "study_context_revision": 7,
+                "retrieval_scope_sha256": "c" * 64,
+            },
             "screening_decisions": [
                 {
                     "citation_key": "idea_pubmed_lactate_mortality_2024",
@@ -209,6 +217,7 @@ def test_digest_bound_web_search_seed_is_available_to_preplan_planning() -> None
     assert bundle.prisma is not None
     assert bundle.prisma["identified"] == 1
     assert bundle.prisma["included"] == 1
+    assert bundle.authority_trace == seed.authority_trace
 
 
 def test_bound_seed_upstream_include_cannot_promote_an_irrelevant_record() -> None:
