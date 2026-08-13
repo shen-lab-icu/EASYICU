@@ -3132,7 +3132,16 @@ def _deterministic_runner_repair(
     resolved_input_bindings: Mapping[str, Any] | None = None,
     on_semantic_escalation: Optional[Callable[[SemanticRepairEscalation], None]] = None,
 ) -> Optional[tuple[str, str]]:
-    """Return a runtime repair only when it cannot change scientific design."""
+    """Return a runtime repair only when it cannot change scientific design.
+
+    One repair is declined on purpose and has no entry below: projecting
+    Matplotlib artists back into source-data rows. Artists are rendering output,
+    not scientific source evidence, so recovering bar heights or scatter offsets
+    after the fact would let a figure validate with no table-level lineage. A
+    step that can only describe its own drawing must fail closed and be
+    re-planned from a registered table.
+    ``test_matplotlib_patch_source_rows_repair.py`` pins that refusal here.
+    """
 
     candidate = _deterministic_runner_repair_candidate(
         code=code,
