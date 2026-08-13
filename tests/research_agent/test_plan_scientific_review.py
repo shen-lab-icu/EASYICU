@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 from easyicu.research_agent.contracts.endpoint import EndpointSpec
+from easyicu.research_agent.contracts.claim_ceiling import DescriptiveClaimContract
+from easyicu.research_agent.agents.core import PlannerAgent
 from easyicu.research_agent.contracts.model_terms import ModelTermSpec
 from easyicu.research_agent.literature import (
     CitationRecord,
@@ -10,9 +14,16 @@ from easyicu.research_agent.literature import (
     LiteratureScreeningDecision,
     LiteratureSearchProvenance,
 )
-from easyicu.research_agent.planning.figure_strategy import build_article_figure_strategy
+from easyicu.research_agent.planning.figure_strategy import (
+    build_article_figure_strategy,
+)
+from easyicu.research_agent.planning.dependence_authority import (
+    bind_context_dependence_authority,
+    context_dependence_authority,
+)
 from easyicu.research_agent.planning.scientific_review import (
     build_plan_scientific_review,
+    repeated_unit_design_closed,
     render_agent_plan_revision_contract,
     render_plan_scientific_guardrails,
 )
@@ -53,9 +64,7 @@ def _context() -> ResearchContext:
                 analysis_window="icu_admission[0,24]h",
                 analysis_window_role="exposure_definition",
             ),
-            ConceptDescriptor(
-                name="death", role=VariableRole.OUTCOME, dtype="int64"
-            ),
+            ConceptDescriptor(name="death", role=VariableRole.OUTCOME, dtype="int64"),
             ConceptDescriptor(
                 name="age", role=VariableRole.DEMOGRAPHIC, dtype="float64"
             ),
@@ -244,7 +253,6 @@ def test_e1_like_plan_is_nonapprovable_for_clinical_timing_and_dependence() -> N
     assert {
         "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
         "REPEATED_STAY_IDENTITY_UNAVAILABLE",
-        "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY",
         "ADJUSTMENT_SET_NOT_USER_CONFIRMED",
         "CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED",
         "FIGURE_ROLE_COVERAGE_INCOMPLETE",
@@ -271,12 +279,640 @@ def test_e1_like_plan_is_nonapprovable_for_clinical_timing_and_dependence() -> N
     )
     assert review.review_scope == "pre_execution_plan"
     assert review.rendered_outputs_assessed is False
-    assert "not assessed until execution" in (
-        review.facts["score_interpretation"]["figures"]
+    assert (
+        "not assessed until execution"
+        in (review.facts["score_interpretation"]["figures"])
     )
 
 
-def test_typed_sensitivity_steps_close_timing_and_nonreadmission_authority() -> None:
+def test_free_text_cannot_create_a_required_sensitivity_axis() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "cohort": {
+                            "review": (
+                                "First ICU stay is not part of the current "
+                                "sensitivity analysis."
+                            )
+                        }
+                    }
+                ),
+                must_have_outputs=(
+                    "Describe missing values; do not add a complete-case "
+                    "sensitivity unless the user later requests one."
+                ),
+                sensitivity_specs=[],
+            )
+        }
+    )
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=_plan(),
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+
+    assert review.facts["sensitivity"]["requested"] == []
+    assert "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY" not in {
+        item.code for item in review.findings
+    }
+
+
+def test_free_text_cannot_authorize_cluster_robust_covariance() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["subject_id", "stay_id"],
+                    "provenance": {"analysis_unit": "icu_stay"},
+                }
+            ),
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=(
+                    "Do not use patient-cluster-robust covariance in this analysis."
+                ),
+            ),
+        }
+    )
+
+    bound = bind_context_dependence_authority(plan=_plan(), context=context)
+
+    assert bound.steps[0].model_requirements[0].dependence is None
+
+
+def test_identifier_name_alone_cannot_create_patient_group_authority() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["subject_id", "stay_id"],
+                    "provenance": {"analysis_unit": "icu_stay"},
+                }
+            ),
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                        }
+                    }
+                ),
+            ),
+        }
+    )
+
+    assert context_dependence_authority(context) is None
+
+
+def test_owner_issued_patient_id_role_creates_typed_identity_authority() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["subject_id", "stay_id"],
+                    "provenance": {
+                        "analysis_unit": "icu_stay",
+                        "patient_id_columns": ["subject_id"],
+                    },
+                }
+            ),
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                        }
+                    }
+                ),
+            ),
+        }
+    )
+
+    authority = context_dependence_authority(context)
+
+    assert authority is not None
+    assert authority.group_source == "subject_id"
+    assert authority.group_derivation == "identity"
+    assert authority.delimiter is None
+
+
+def test_typed_descriptive_ceiling_avoids_temporal_inference_claim() -> None:
+    plan = AnalysisPlan(
+        research_question=_context().research_question,
+        analysis_type="descriptive_study",
+        steps=[
+            AnalysisStep(
+                step_id="descriptive_distribution",
+                planned_analysis_role="primary",
+                intent="Report only observed group distributions.",
+                inputs=["cohort:analysis_set", "exposure", "death"],
+                expected_outputs=["table:distribution_prevalence"],
+                method="descriptive_distribution",
+                descriptive_claim=DescriptiveClaimContract(
+                    unresolved_limitations=(
+                        "post_baseline_exposure_opportunity_unresolved",
+                    )
+                ),
+            )
+        ],
+    )
+
+    review = build_plan_scientific_review(
+        context=_context(),
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(_context()),
+    )
+
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" not in {
+        item.code for item in review.findings
+    }
+    assert review.facts["temporal_inference_required"] is False
+    assert review.facts["descriptive_only_step_ids"] == ["descriptive_distribution"]
+
+
+def _absolute_risk_distribution_step(*, descriptive: bool = True) -> AnalysisStep:
+    return AnalysisStep(
+        step_id="absolute_risk_distribution",
+        planned_analysis_role="primary",
+        intent="Report observed prevalence, absolute risks, and risk difference.",
+        inputs=["cohort:analysis_set", "exposure", "death"],
+        expected_outputs=["table:exposure_outcome_distribution"],
+        method="descriptive",
+        descriptive_claim=(
+            DescriptiveClaimContract(
+                unresolved_limitations=(
+                    "post_baseline_exposure_opportunity_unresolved",
+                )
+            )
+            if descriptive
+            else None
+        ),
+        exposure_outcome_distribution_spec={
+            "exposure": "exposure",
+            "exposure_levels": [0, 1],
+            "outcome": "death",
+            "outcome_levels": [0, 1],
+            "outcome_positive_value": 1,
+            "level_match_policy": "exact_typed",
+            "denominator_policy": "all_declared_rows",
+            "missing_outcome_policy": "structural_absence_is_non_event",
+            "risk_difference_contrast": {
+                "reference_exposure_level": 0,
+                "comparison_exposure_level": 1,
+            },
+            "confidence_level": 0.95,
+        },
+    )
+
+
+def test_descriptive_absolute_risk_with_supporting_tables_does_not_invent_inference() -> (
+    None
+):
+    plan = AnalysisPlan(
+        research_question=_context().research_question,
+        analysis_type="descriptive_study",
+        steps=[
+            _absolute_risk_distribution_step(),
+            AnalysisStep(
+                step_id="cohort_description",
+                planned_analysis_role="secondary",
+                intent="Describe the bound analytic denominator.",
+                inputs=["cohort:analysis_set"],
+                expected_outputs=["table:cohort_summary"],
+                method="descriptive_summary",
+            ),
+            AnalysisStep(
+                step_id="measurement_missingness",
+                planned_analysis_role="secondary",
+                intent="Audit variable availability.",
+                inputs=["cohort:analysis_set"],
+                expected_outputs=["table:missingness_audit"],
+                method="measurement_audit",
+            ),
+        ],
+    )
+
+    review = build_plan_scientific_review(
+        context=_context(),
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(_context()),
+    )
+
+    codes = {item.code for item in review.findings}
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" not in codes
+    assert review.facts["temporal_inference_required"] is False
+    assert review.facts["descriptive_only_step_ids"] == ["absolute_risk_distribution"]
+
+
+def test_absolute_risk_difference_without_typed_ceiling_remains_inferential() -> None:
+    plan = AnalysisPlan(
+        research_question=_context().research_question,
+        analysis_type="descriptive_study",
+        steps=[_absolute_risk_distribution_step(descriptive=False)],
+    )
+
+    review = build_plan_scientific_review(
+        context=_context(),
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(_context()),
+    )
+
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in {
+        item.code for item in review.findings
+    }
+    assert review.facts["temporal_inference_required"] is True
+
+
+def test_descriptive_label_cannot_hide_an_association_without_temporal_design() -> None:
+    base = _plan()
+    primary = base.steps[0].model_copy(
+        update={
+            "descriptive_claim": DescriptiveClaimContract(
+                unresolved_limitations=(
+                    "post_baseline_exposure_opportunity_unresolved",
+                )
+            )
+        }
+    )
+    plan = base.model_copy(update={"steps": [primary, *base.steps[1:]]})
+
+    review = build_plan_scientific_review(
+        context=_context(),
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(_context()),
+    )
+
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in {
+        item.code for item in review.findings
+    }
+    assert review.facts["temporal_inference_required"] is True
+
+
+def test_bound_cluster_contract_closes_repeated_stay_design_without_prose() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["patient_stay_id"],
+                    "provenance": {
+                        "analysis_unit": "icu_stay",
+                        "replacement_row_identity": {
+                            "output_identity_column": "patient_stay_id",
+                            "mapping_file_sha256": "a" * 64,
+                            "patient_group_derivation": {
+                                "algorithm": "prefix_before_:s",
+                                "delimiter": ":s",
+                            },
+                        },
+                    },
+                }
+            ),
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                        }
+                    }
+                ),
+            ),
+        }
+    )
+    base = _plan()
+    primary = base.steps[0]
+    requirement = primary.model_requirements[0].model_copy(
+        update={"method_family": "statsmodels_logit_mle"}
+    )
+    plan = base.model_copy(
+        update={
+            "steps": [
+                primary.model_copy(update={"model_requirements": [requirement]}),
+                *base.steps[1:],
+            ]
+        }
+    )
+
+    bound = bind_context_dependence_authority(plan=plan, context=context)
+    dependence = bound.steps[0].model_requirements[0].dependence
+
+    assert dependence is not None
+    assert dependence.variance_estimator == "cluster_robust"
+    assert dependence.group_source == "patient_stay_id"
+    assert dependence.group_derivation == "prefix_before_delimiter"
+    assert dependence.delimiter == ":s"
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=bound,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+    codes = {item.code for item in review.findings}
+    assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in codes
+    assert review.facts["repeated_unit_design_executable"] is True
+
+
+def test_host_binds_patient_dependence_into_descriptive_risk_product() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["patient_stay_id"],
+                    "provenance": {
+                        "analysis_unit": "icu_stay",
+                        "replacement_row_identity": {
+                            "output_identity_column": "patient_stay_id",
+                            "mapping_file_sha256": "c" * 64,
+                            "patient_group_derivation": {
+                                "algorithm": "prefix_before_:s",
+                                "delimiter": ":s",
+                            },
+                        },
+                    },
+                }
+            ),
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                        }
+                    }
+                ),
+            ),
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_study",
+        steps=[_absolute_risk_distribution_step()],
+    )
+
+    bound = bind_context_dependence_authority(plan=plan, context=context)
+    spec = bound.steps[0].exposure_outcome_distribution_spec
+
+    assert spec is not None and spec.dependence is not None
+    assert spec.dependence.group_source == "patient_stay_id"
+    assert spec.dependence.group_derivation == "prefix_before_delimiter"
+    assert spec.dependence.delimiter == ":s"
+    assert spec.repeated_unit_interval_method == "patient_cluster_robust_wald"
+    review = build_plan_scientific_review(
+        context=context,
+        plan=bound,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+    codes = {item.code for item in review.findings}
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" not in codes
+    assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in codes
+    assert review.facts["repeated_unit_design_executable"] is True
+
+
+def test_host_binds_dependence_for_marginal_risks_even_without_a_contrast() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["patient_stay_id"],
+                    "provenance": {
+                        "analysis_unit": "icu_stay",
+                        "replacement_row_identity": {
+                            "output_identity_column": "patient_stay_id",
+                            "mapping_file_sha256": "d" * 64,
+                            "patient_group_derivation": {
+                                "algorithm": "prefix_before_:s",
+                                "delimiter": ":s",
+                            },
+                        },
+                    },
+                }
+            ),
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                        }
+                    }
+                ),
+            ),
+        }
+    )
+    step = _absolute_risk_distribution_step()
+    distribution = step.exposure_outcome_distribution_spec
+    assert distribution is not None
+    step = step.model_copy(
+        update={
+            "exposure_outcome_distribution_spec": distribution.model_copy(
+                update={"risk_difference_contrast": None}
+            )
+        }
+    )
+    bound = bind_context_dependence_authority(
+        plan=AnalysisPlan(
+            research_question=context.research_question,
+            analysis_type="descriptive_study",
+            steps=[step],
+        ),
+        context=context,
+    )
+
+    spec = bound.steps[0].exposure_outcome_distribution_spec
+    assert spec is not None and spec.risk_difference_contrast is None
+    assert spec.dependence is not None
+    assert spec.dependence.group_source == "patient_stay_id"
+    review = build_plan_scientific_review(
+        context=context,
+        plan=bound,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+    assert review.facts["repeated_unit_design_executable"] is True
+
+
+def test_one_clustered_step_cannot_mask_an_unclosed_scientific_model() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["patient_stay_id"],
+                    "provenance": {
+                        "analysis_unit": "icu_stay",
+                        "replacement_row_identity": {
+                            "output_identity_column": "patient_stay_id",
+                            "mapping_file_sha256": "e" * 64,
+                            "patient_group_derivation": {
+                                "algorithm": "prefix_before_:s",
+                                "delimiter": ":s",
+                            },
+                        },
+                    },
+                }
+            ),
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                        }
+                    }
+                ),
+            ),
+        }
+    )
+    distribution = bind_context_dependence_authority(
+        plan=AnalysisPlan(
+            research_question=context.research_question,
+            analysis_type="descriptive_study",
+            steps=[_absolute_risk_distribution_step()],
+        ),
+        context=context,
+    ).steps[0]
+    unclosed_model = _plan().steps[0]
+    plan = _plan().model_copy(update={"steps": [distribution, unclosed_model]})
+
+    assert repeated_unit_design_closed(context, plan) is False
+    review = build_plan_scientific_review(
+        context=context,
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+    assert "REPEATED_STAY_METHOD_NOT_DECLARED" in {
+        finding.code for finding in review.findings
+    }
+
+
+def test_one_step_cannot_close_models_while_leaving_marginal_cis_unclosed() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["patient_stay_id"],
+                    "provenance": {
+                        "analysis_unit": "icu_stay",
+                        "replacement_row_identity": {
+                            "output_identity_column": "patient_stay_id",
+                            "mapping_file_sha256": "f" * 64,
+                            "patient_group_derivation": {
+                                "algorithm": "prefix_before_:s",
+                                "delimiter": ":s",
+                            },
+                        },
+                    },
+                }
+            ),
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                        }
+                    }
+                ),
+            ),
+        }
+    )
+    bound_model = bind_context_dependence_authority(
+        plan=_plan(),
+        context=context,
+    ).steps[0]
+    distribution = _absolute_risk_distribution_step().exposure_outcome_distribution_spec
+    assert distribution is not None and distribution.dependence is None
+    mixed = bound_model.model_copy(
+        update={"exposure_outcome_distribution_spec": distribution}
+    )
+    plan = _plan().model_copy(update={"steps": [mixed]})
+
+    assert repeated_unit_design_closed(context, plan) is False
+
+
+def test_planner_parse_binds_cluster_authority_into_the_plan_digest() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["patient_stay_id"],
+                    "provenance": {
+                        "analysis_unit": "icu_stay",
+                        "replacement_row_identity": {
+                            "output_identity_column": "patient_stay_id",
+                            "mapping_file_sha256": "b" * 64,
+                            "patient_group_derivation": {
+                                "algorithm": "prefix_before_:s",
+                                "delimiter": ":s",
+                            },
+                        },
+                    },
+                }
+            ),
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                        }
+                    }
+                ),
+            ),
+        }
+    )
+    payload = _plan().model_dump(mode="json")
+    for step in payload["steps"]:
+        step["literature_citation_keys"] = []
+        step["literature_design_bindings"] = []
+    payload["steps"][0]["model_requirements"][0]["method_family"] = (
+        "statsmodels_logit_mle"
+    )
+    raw = json.dumps(payload)
+
+    parsed = PlannerAgent.__new__(PlannerAgent)._parse(
+        raw,
+        context,
+        allowed_literature_citation_keys=[],
+        direct_comparator_literature_keys=[],
+    )
+
+    assert parsed.steps[0].model_requirements[0].dependence is not None
+    assert parsed.steps[0].model_requirements[0].dependence.group_source == (
+        "patient_stay_id"
+    )
+
+
+def test_typed_sensitivities_do_not_hide_unclosed_primary_designs() -> None:
     context = _context()
     context = context.model_copy(
         update={
@@ -349,8 +985,11 @@ def test_typed_sensitivity_steps_close_timing_and_nonreadmission_authority() -> 
     )
 
     codes = {item.code for item in review.findings}
-    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" not in codes
-    assert "REPEATED_STAY_IDENTITY_UNAVAILABLE" not in codes
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in codes
+    # The sensitivity restriction is executable, but it does not change the
+    # repeated-stay analysis set of the primary model. Every relevant primary
+    # executor must close its own dependence rather than borrowing this step.
+    assert "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes
     assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in codes
     assert "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY" not in codes
     assert review.facts["sensitivity"]["executed_spec_ids"] == [
@@ -567,8 +1206,7 @@ def test_automated_clinical_definition_does_not_impersonate_clinician_review() -
     conformance = next(
         item
         for item in review.findings
-        if item.code
-        == "CLINICAL_DEFINITION_DATABASE_CONFORMANCE_NOT_ESTABLISHED"
+        if item.code == "CLINICAL_DEFINITION_DATABASE_CONFORMANCE_NOT_ESTABLISHED"
     )
     assert conformance.severity == "major"
     assert conformance.remediation_route == "independent_review"

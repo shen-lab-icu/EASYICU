@@ -24,17 +24,27 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import statsmodels.api as sm
 
 from pydantic import ValidationError
 
 from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilityScope
+from easyicu.research_agent.authority.scientific_claims import (
+    derive_scientific_claim_drafts,
+)
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
     EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
+    STRUCTURAL_TOTAL_COVARIANCE,
+    _dependence_groups,
     _distribution_rows,
     exposure_outcome_distribution_executor_code,
     exposure_outcome_distribution_executor_owns_step,
     run_exposure_outcome_distribution_from_env,
     wilson_interval,
+)
+from easyicu.research_agent.execution.runners.adjusted_association_executor import (
+    AdjustedAssociationError,
+    _cluster_groups,
 )
 from easyicu.research_agent.execution.runners.selection import (
     select_standard_executor,
@@ -47,6 +57,8 @@ from easyicu.research_agent.schema import (
     AnalysisStep,
     ExposureOutcomeDistributionSpec,
 )
+from easyicu.research_agent.contracts.claim_ceiling import DescriptiveClaimContract
+from easyicu.research_agent.contracts.dependence import PlannedDependenceRequirement
 
 STEP_ID = "03_drug_readmission_distribution"
 EXPOSURE = "anticoagulant_exposed"
@@ -239,6 +251,30 @@ def test_a_scientific_or_widened_contract_is_refused() -> None:
         _step(method="adjusted_association_models")
     )
     assert not exposure_outcome_distribution_executor_owns_step(
+        _step(planned_analysis_role="primary")
+    )
+    assert exposure_outcome_distribution_executor_owns_step(
+        _step(
+            planned_analysis_role="primary",
+            descriptive_claim=DescriptiveClaimContract(
+                unresolved_limitations=(
+                    "post_baseline_exposure_opportunity_unresolved",
+                )
+            ),
+        )
+    )
+    assert not exposure_outcome_distribution_executor_owns_step(
+        _step(
+            planned_analysis_role="primary",
+            method="distribution",
+            descriptive_claim=DescriptiveClaimContract(
+                unresolved_limitations=(
+                    "post_baseline_exposure_opportunity_unresolved",
+                )
+            ),
+        )
+    )
+    assert not exposure_outcome_distribution_executor_owns_step(
         _step(
             expected_outputs=[
                 "table:exposure_outcome_distribution",
@@ -356,6 +392,10 @@ def test_the_product_is_self_contained(monkeypatch, tmp_path: Path) -> None:
     assert overall["n_rows"] == 20
     assert overall["outcome_events"] == 4
     assert overall["outcome_missing_n"] == 2
+    assert overall["exposure_pct"] == 100.0
+    assert overall["exposure_interval_covariance"] == STRUCTURAL_TOTAL_COVARIANCE
+    assert pd.isna(overall["exposure_ci_low_pct"])
+    assert pd.isna(overall["exposure_ci_high_pct"])
 
     # The design travels with the numbers, identically on every row.
     assert exposed["outcome_column"] == OUTCOME
@@ -411,6 +451,225 @@ def test_the_denominator_policy_changes_the_reported_rate(
 
     assert _exposed_rate(over_all, tmp_path / "a") == pytest.approx(30.0)  # 3/10
     assert _exposed_rate(over_observed, tmp_path / "b") == pytest.approx(100.0 * 3 / 9)
+
+
+def test_a_declared_risk_difference_is_comparison_minus_reference(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The host reports the exact typed contrast; it never sorts the levels."""
+
+    contrast = {
+        "reference_exposure_level": 0,
+        "comparison_exposure_level": 1,
+        "effect_measure": "risk_difference",
+        "interval_method": "linear_probability_wald",
+    }
+    summary = _run(
+        monkeypatch,
+        tmp_path,
+        _frame(),
+        risk_difference_contrast=contrast,
+    )
+    table = _table(summary, tmp_path)
+    row = table.iloc[0]
+    assert row["risk_difference_pct"] == pytest.approx(20.0)
+    assert row["risk_difference_covariance"] == "hc1"
+    assert pd.isna(row["risk_difference_cluster_count"])
+    assert row["risk_difference_ci_low_pct"] < 20.0 < row["risk_difference_ci_high_pct"]
+    assert table["risk_difference_pct"].nunique() == 1
+    assert int(row["risk_difference_reference_index"]) == 0
+    assert int(row["risk_difference_comparison_index"]) == 1
+
+    # Independent reproduction of the declared HC1 identity-link contrast.
+    frame = _frame()
+    fitted = sm.OLS(
+        frame[OUTCOME].fillna(0).astype(float).to_numpy(),
+        sm.add_constant(frame[EXPOSURE].astype(float).to_numpy(), has_constant="add"),
+    ).fit(cov_type="HC1", use_t=False)
+    assert row["risk_difference_pct"] == pytest.approx(100.0 * fitted.params[1])
+    assert row["risk_difference_standard_error_pct"] == pytest.approx(
+        100.0 * fitted.bse[1]
+    )
+    estimates = summary["descriptive_estimates"]
+    assert estimates["schema_version"] == (
+        "easyicu.exposure_outcome_descriptive_estimates/1"
+    )
+    assert estimates["analysis_set"] == "bound_typed_cohort"
+    assert estimates["risk_difference"]["direction"] == ("comparison_minus_reference")
+    assert estimates["risk_difference"]["interpretation_ceiling"] == (
+        "descriptive_unadjusted_not_causal"
+    )
+    assert summary["interpretation_ceiling"] == ("descriptive_unadjusted_not_causal")
+    claims = derive_scientific_claim_drafts(summary)
+    assert [claim.claim_type for claim in claims] == [
+        "descriptive_absolute_risk",
+        "descriptive_absolute_risk",
+        "descriptive_risk_difference",
+    ]
+    assert all(claim.direction == "descriptive_only" for claim in claims)
+    assert all(claim.adjusted_for == [] for claim in claims)
+
+
+def test_patient_cluster_robust_risk_difference_uses_only_bound_grouping(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Repeated stays change uncertainty through the exact typed authority."""
+
+    frame = pd.DataFrame(
+        {
+            EXPOSURE: [0, 0, 1, 1, 0, 1, 0, 1],
+            OUTCOME: [0, 1, 0, 1, 0, 1, 1, 1],
+            "opaque_row_identity": [
+                "p01:s1",
+                "p01:s2",
+                "p02:s1",
+                "p02:s2",
+                "p03:s1",
+                "p03:s2",
+                "p04:s1",
+                "p04:s2",
+            ],
+        }
+    )
+    contrast = {
+        "reference_exposure_level": 0,
+        "comparison_exposure_level": 1,
+    }
+    dependence = {
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "patient",
+        "group_source": "opaque_row_identity",
+        "group_derivation": "prefix_before_delimiter",
+        "delimiter": ":s",
+    }
+    summary = _run(
+        monkeypatch,
+        tmp_path,
+        frame,
+        risk_difference_contrast=contrast,
+        dependence=dependence,
+    )
+    table = _table(summary, tmp_path)
+    row = table.iloc[0]
+    assert row["risk_difference_covariance"] == "cluster_robust"
+    assert row["risk_difference_cluster_count"] == 4
+    assert row["dependence_group_source"] == "opaque_row_identity"
+    assert row["dependence_group_derivation"] == "prefix_before_delimiter"
+    assert set(table["interval_method"]) == {"patient_cluster_robust_wald"}
+    level_rows = table[table["row_role"] == "exposure_level"]
+    overall = table[table["row_role"] == "overall"].iloc[0]
+    assert set(level_rows["exposure_interval_covariance"]) == {"cluster_robust"}
+    assert set(level_rows["exposure_interval_cluster_count"]) == {4}
+    assert overall["exposure_interval_covariance"] == STRUCTURAL_TOTAL_COVARIANCE
+    assert pd.isna(overall["exposure_ci_low_pct"])
+    assert pd.isna(overall["exposure_ci_high_pct"])
+    assert set(table["outcome_interval_covariance"]) == {"cluster_robust"}
+    assert set(table["outcome_interval_cluster_count"]) == {3, 4}
+
+    x = frame[EXPOSURE].astype(float).to_numpy()
+    y = frame[OUTCOME].astype(float).to_numpy()
+    fitted = sm.OLS(y, sm.add_constant(x, has_constant="add")).fit(
+        cov_type="cluster",
+        cov_kwds={
+            "groups": ["p01", "p01", "p02", "p02", "p03", "p03", "p04", "p04"],
+            "use_correction": True,
+            "df_correction": True,
+        },
+        use_t=False,
+    )
+    assert row["risk_difference_standard_error_pct"] == pytest.approx(
+        100.0 * fitted.bse[1]
+    )
+
+    exposed = frame[EXPOSURE] == 1
+    exposed_fit = sm.OLS(
+        frame.loc[exposed, OUTCOME].astype(float).to_numpy(),
+        [[1.0]] * int(exposed.sum()),
+    ).fit(
+        cov_type="cluster",
+        cov_kwds={
+            "groups": ["p02", "p02", "p03", "p04"],
+            "use_correction": True,
+            "df_correction": True,
+        },
+        use_t=False,
+    )
+    exposed_row = table[
+        (table["row_role"] == "exposure_level") & (table["exposure_level"] == 1)
+    ].iloc[0]
+    assert exposed_row["outcome_standard_error_pct"] == pytest.approx(
+        100.0 * exposed_fit.bse[0]
+    )
+    estimates = summary["descriptive_estimates"]
+    assert all(
+        item["interval_method"] == "patient_cluster_robust_wald"
+        and item["covariance"] == "cluster_robust"
+        for key in ("exposure_prevalence", "outcome_absolute_risks")
+        for item in estimates[key]
+    )
+
+
+def test_cluster_robust_contrast_fails_closed_without_exact_grouping(
+    monkeypatch, tmp_path: Path
+) -> None:
+    frame = _frame()
+    with pytest.raises(RuntimeError, match="group_source is absent"):
+        _run(
+            monkeypatch,
+            tmp_path,
+            frame,
+            risk_difference_contrast={
+                "reference_exposure_level": 0,
+                "comparison_exposure_level": 1,
+            },
+            dependence={
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
+                "group_source": "not_in_the_cohort",
+                "group_derivation": "identity",
+            },
+        )
+
+
+def test_risk_difference_levels_must_belong_to_the_closed_exposure() -> None:
+    with pytest.raises(ValidationError, match="must both belong to exposure_levels"):
+        ExposureOutcomeDistributionSpec.model_validate(
+            {
+                **_SPEC,
+                "risk_difference_contrast": {
+                    "reference_exposure_level": 0,
+                    "comparison_exposure_level": 2,
+                },
+            }
+        )
+
+
+def test_dependence_also_governs_marginal_intervals_without_a_contrast(
+    monkeypatch, tmp_path: Path
+) -> None:
+    frame = _frame().assign(patient_id=[f"p{index // 2}" for index in range(20)])
+    summary = _run(
+        monkeypatch,
+        tmp_path,
+        frame,
+        dependence={
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "patient",
+            "group_source": "patient_id",
+            "group_derivation": "identity",
+        },
+    )
+    table = _table(summary, tmp_path)
+
+    assert summary["descriptive_estimates"]["risk_difference"] is None
+    assert summary["interval_method"] == "patient_cluster_robust_wald"
+    assert summary["independent_interval_method"] == "wilson"
+    assert set(table["interval_method"]) == {"patient_cluster_robust_wald"}
+    level_rows = table[table["row_role"] == "exposure_level"]
+    overall = table[table["row_role"] == "overall"].iloc[0]
+    assert set(level_rows["exposure_interval_covariance"]) == {"cluster_robust"}
+    assert overall["exposure_interval_covariance"] == STRUCTURAL_TOTAL_COVARIANCE
+    assert set(table["outcome_interval_covariance"]) == {"cluster_robust"}
 
 
 def test_the_declared_event_value_is_honoured_not_assumed(
@@ -740,6 +999,133 @@ def test_a_fully_observed_exposure_reports_zero_excluded() -> None:
     rows = _distribution_rows(frame, spec=_distribution_spec())
 
     assert {row["missing_exposure_excluded_n"] for row in rows} == {0}
+
+
+def test_missing_exposure_reconciles_the_published_analysis_set(
+    monkeypatch, tmp_path: Path
+) -> None:
+    summary = _run(
+        monkeypatch,
+        tmp_path,
+        _frame_with_unobserved_exposure().rename(
+            columns={"sep3": EXPOSURE, "death": OUTCOME}
+        ),
+        missing_exposure_policy="exclude_from_denominator",
+    )
+
+    assert summary["analysis_set"] == (
+        "exposure_observed_rows_within_bound_typed_cohort"
+    )
+    assert summary["cohort_n"] == 5
+    assert summary["source_row_count_reconciliation"] == {
+        "source_rows": 7,
+        "analyzed_rows": 5,
+        "excluded_missing_exposure_rows": 2,
+        "filtering_performed": True,
+    }
+    assert summary["descriptive_estimates"]["analysis_set"] == summary["analysis_set"]
+
+
+def test_empty_declared_level_fails_with_an_owned_denominator_error() -> None:
+    frame = pd.DataFrame({EXPOSURE: [0, 0, 0], OUTCOME: [0, 1, 0]})
+
+    with pytest.raises(RuntimeError, match="no analysed rows"):
+        _distribution_rows(frame, spec=ExposureOutcomeDistributionSpec.model_validate(_SPEC))
+
+
+def test_patient_cluster_boundary_outcome_refuses_zero_width_interval() -> None:
+    frame = pd.DataFrame(
+        {
+            EXPOSURE: [0, 0, 1, 1, 0, 1],
+            OUTCOME: [0, 0, 0, 0, 0, 0],
+            "patient_id": ["p1", "p2", "p3", "p4", "p5", "p6"],
+        }
+    )
+    spec = ExposureOutcomeDistributionSpec.model_validate(
+        {
+            **_SPEC,
+            "dependence": {
+                "group_source": "patient_id",
+                "group_derivation": "identity",
+            },
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="degenerate.*zero or one"):
+        _distribution_rows(frame, spec=spec)
+
+
+def test_risk_difference_refuses_zero_width_robust_uncertainty() -> None:
+    frame = pd.DataFrame(
+        {
+            EXPOSURE: [0, 0, 1, 1, 0, 1],
+            OUTCOME: [0, 0, 0, 0, 0, 0],
+        }
+    )
+    spec = ExposureOutcomeDistributionSpec.model_validate(
+        {
+            **_SPEC,
+            "risk_difference_contrast": {
+                "reference_exposure_level": 0,
+                "comparison_exposure_level": 1,
+            },
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="zero-width uncertainty"):
+        _distribution_rows(frame, spec=spec)
+
+
+def test_all_covariance_consumers_resolve_the_same_typed_patient_groups() -> None:
+    frame = pd.DataFrame(
+        {
+            "patient_id": pd.Series([1, "1", 2, "2"], dtype="object"),
+            EXPOSURE: [0, 0, 1, 1],
+            OUTCOME: [0, 1, 0, 1],
+        }
+    )
+    dependence = PlannedDependenceRequirement(
+        group_source="patient_id",
+        group_derivation="identity",
+    )
+    spec = _distribution_spec(dependence=dependence)
+
+    adjusted, _ = _cluster_groups(frame=frame, dependence=dependence)
+    marginal, count = _dependence_groups(
+        frame,
+        spec=spec,
+        analysis_mask=pd.Series(True, index=frame.index),
+    )
+
+    assert adjusted.tolist() == marginal.tolist()
+    assert count == adjusted.nunique() == 4
+
+
+def test_all_covariance_consumers_reject_non_string_prefix_identities() -> None:
+    frame = pd.DataFrame(
+        {
+            "patient_stay_id": pd.Series(
+                ["p1:s1", 101, "p2:s1", "p2:s2"], dtype="object"
+            ),
+            EXPOSURE: [0, 0, 1, 1],
+            OUTCOME: [0, 1, 0, 1],
+        }
+    )
+    dependence = PlannedDependenceRequirement(
+        group_source="patient_stay_id",
+        group_derivation="prefix_before_delimiter",
+        delimiter=":s",
+    )
+    spec = _distribution_spec(dependence=dependence)
+
+    with pytest.raises(AdjustedAssociationError, match="original.*string"):
+        _cluster_groups(frame=frame, dependence=dependence)
+    with pytest.raises(RuntimeError, match="original.*string"):
+        _dependence_groups(
+            frame,
+            spec=spec,
+            analysis_mask=pd.Series(True, index=frame.index),
+        )
 
 
 def test_there_is_no_policy_that_pools_an_unobserved_exposure() -> None:

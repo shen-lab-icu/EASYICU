@@ -672,7 +672,21 @@ def _build_planner_user_prompt(
         "not infer the exposure, the outcome, the event value, or any policy "
         "from column names or from input order. Preserve observed scalar types "
         "exactly, as for table_one_spec: a boolean column is never matched by "
-        "a numeric level. "
+        "a numeric level. When the research question asks for an absolute-risk "
+        "DIFFERENCE, the spec must additionally declare exactly one "
+        "risk_difference_contrast with typed reference_exposure_level and "
+        "comparison_exposure_level (reported as comparison minus reference), "
+        "effect_measure='risk_difference', and "
+        "interval_method='linear_probability_wald'. Do not sort or infer those "
+        "levels. Do not declare `dependence`: when the StudyContext carries a "
+        "typed repeated-unit analysis_design and verified patient grouping, the "
+        "host binds that exact covariance authority after parsing; otherwise an "
+        "invented grouping must fail closed. If a post-baseline exposure remains "
+        "descriptive because exposure opportunity is unresolved, a PRIMARY "
+        "distribution step must carry descriptive_claim with "
+        "claim_ceiling='descriptive_only' and the typed limitation "
+        "'post_baseline_exposure_opportunity_unresolved'; that contract does not "
+        "authorize association or causal language. "
         "A primary cohort construction/eligibility + attrition step is also a "
         "strict execution boundary: it must declare exactly one materialised "
         "closed cohort product (" + _closed_cohort_product_sentence() + ") "
@@ -1087,6 +1101,12 @@ def _build_planner_user_prompt(
         '        "level_match_policy": "exact_typed",\n'
         '        "denominator_policy": "all_declared_rows",\n'
         '        "missing_outcome_policy": "structural_absence_is_non_event",\n'
+        '        "risk_difference_contrast": {\n'
+        '          "reference_exposure_level": "<closed level 1>",\n'
+        '          "comparison_exposure_level": "<closed level 2>",\n'
+        '          "effect_measure": "risk_difference",\n'
+        '          "interval_method": "linear_probability_wald"\n'
+        "        },\n"
         '        "confidence_level": 0.95\n'
         "      },\n"
         '      "cohort_definition_spec": null\n'
@@ -1359,6 +1379,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "table_one_spec",
         "trajectory_stability_spec",
         "exposure_outcome_distribution_spec",
+        "descriptive_claim",
         # Omitted here, a spec the previous attempt got right is dropped from
         # the projection and has to be rediscovered on the retry.
         "cohort_definition_spec",
@@ -1409,6 +1430,8 @@ def _planner_retry_response_projection(raw: str) -> str:
         "sensitivity_spec_ids",
         "model_requirements",
         "family_primary_result_requirement",
+        "exposure_outcome_distribution_spec",
+        "descriptive_claim",
     )
     projection["steps"] = [
         {key: step[key] for key in minimal_step_keys if key in step}
@@ -1437,6 +1460,8 @@ def _planner_retry_response_projection(raw: str) -> str:
         "expected_outputs",
         "method",
         "sensitivity_spec_ids",
+        "exposure_outcome_distribution_spec",
+        "descriptive_claim",
     )
     projection["steps"] = [
         {key: step[key] for key in compact_step_keys if key in step}
@@ -1697,6 +1722,15 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
+        # Repeated-unit covariance is study authority, not Planner prose.  The
+        # binder parses only the closed JSON design in ResearchContext and
+        # projects its verified row-identity derivation into the plan digest.
+        # A stale or invented declaration fails here, before review/execution.
+        from ..planning.dependence_authority import (
+            bind_context_dependence_authority,
+        )
+
+        plan = bind_context_dependence_authority(plan=plan, context=context)
         _payload.validate_literature_citation_bindings(
             plan,
             _payload.normalize_literature_citation_keys(

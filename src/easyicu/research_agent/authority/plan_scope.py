@@ -215,6 +215,7 @@ _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
         "literature_citation_keys",
         "literature_design_bindings",
         "sensitivity_spec_ids",
+        "descriptive_claim",
         "model_requirements",
         "family_primary_result_requirement",
         "input_consumption_contracts",

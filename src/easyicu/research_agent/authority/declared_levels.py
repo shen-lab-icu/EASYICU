@@ -332,10 +332,32 @@ def _bound_distribution_spec(
         resolved_levels=outcome_levels,
         field="outcome_positive_value",
     )
+    contrast = spec.risk_difference_contrast
+    resolved_contrast = contrast
+    if contrast is not None:
+        resolved_contrast = contrast.model_copy(
+            update={
+                "reference_exposure_level": _resolve_opaque_scalar(
+                    name=spec.exposure,
+                    declared=contrast.reference_exposure_level,
+                    levels=list(spec.exposure_levels),
+                    resolved_levels=exposure_levels,
+                    field="risk_difference_contrast.reference_exposure_level",
+                ),
+                "comparison_exposure_level": _resolve_opaque_scalar(
+                    name=spec.exposure,
+                    declared=contrast.comparison_exposure_level,
+                    levels=list(spec.exposure_levels),
+                    resolved_levels=exposure_levels,
+                    field="risk_difference_contrast.comparison_exposure_level",
+                ),
+            }
+        )
     if (
         exposure_levels == list(spec.exposure_levels)
         and outcome_levels == list(spec.outcome_levels)
         and _typed_token(positive) == _typed_token(spec.outcome_positive_value)
+        and resolved_contrast == contrast
     ):
         return None
     return spec.model_copy(
@@ -343,6 +365,7 @@ def _bound_distribution_spec(
             "exposure_levels": exposure_levels,
             "outcome_levels": outcome_levels,
             "outcome_positive_value": positive,
+            "risk_difference_contrast": resolved_contrast,
         }
     )
 

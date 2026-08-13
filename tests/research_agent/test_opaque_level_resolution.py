@@ -486,8 +486,33 @@ def test_the_distribution_design_resolves_levels_and_its_positive_value() -> Non
     assert step.exposure_outcome_distribution_spec.exposure_levels == _BINARY_TOKENS
 
 
+def test_the_distribution_design_resolves_its_risk_difference_levels() -> None:
+    """The host must not leave new scalar contrast fields as opaque tokens."""
+
+    step = _distribution_step(
+        risk_difference_contrast={
+            "reference_exposure_level": _BINARY_TOKENS[0],
+            "comparison_exposure_level": _BINARY_TOKENS[1],
+        }
+    )
+    bind_step_declared_levels(step, _distribution_context())
+    bound = execution_distribution_spec(step)
+
+    assert bound.risk_difference_contrast.reference_exposure_level == 0.0
+    assert bound.risk_difference_contrast.comparison_exposure_level == 1.0
+    assert (
+        step.exposure_outcome_distribution_spec.risk_difference_contrast.reference_exposure_level
+        == _BINARY_TOKENS[0]
+    )
+
+
 def test_the_generated_distribution_code_carries_no_placeholder() -> None:
-    step = _distribution_step()
+    step = _distribution_step(
+        risk_difference_contrast={
+            "reference_exposure_level": _BINARY_TOKENS[0],
+            "comparison_exposure_level": _BINARY_TOKENS[1],
+        }
+    )
     bind_step_declared_levels(step, _distribution_context())
 
     assert "__easyicu_level_" not in exposure_outcome_distribution_executor_code(step)

@@ -165,6 +165,10 @@ from .planning.adjustment_authority import (
     validate_plan_against_adjustment_authority,
 )
 from .planning.cohort_contract import cohort_definition_has_explicit_selection
+from .planning.dependence_authority import (
+    DependenceAuthorityError,
+    bind_context_dependence_authority,
+)
 from .reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
@@ -2679,6 +2683,21 @@ class ResearchAgentPipeline:
             # it), record a loud, auditable contract error instead of silently
             # running the analysis on the full universe.
             findings.extend(_cohort_definition_contract_findings(plan))
+        # One boundary for every plan source: LLM, deterministic skill and
+        # digest-verified resume. Planner parsing also binds early for prompt
+        # diagnostics, but execution authority cannot depend on which producer
+        # happened to create the plan.
+        bound_dependence_plan = bind_context_dependence_authority(
+            plan=plan,
+            context=agent_context,
+        )
+        if reused_prior_plan and bound_dependence_plan != plan:
+            raise DependenceAuthorityError(
+                "digest-verified resume plan lacks the current repeated-unit "
+                "authority projection; start a fresh plan rather than changing "
+                "a previously executed plan in memory"
+            )
+        plan = bound_dependence_plan
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.
