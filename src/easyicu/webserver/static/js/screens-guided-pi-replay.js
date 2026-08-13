@@ -72,5 +72,24 @@
     }] : [];
   }
 
-  window.EU_GUIDED_PI_REPLAY = { hydrate, lifecycleTurns };
+  function childJobPresentation(job, tr) {
+    const translate = typeof tr === 'function' ? tr : (en => en);
+    const reviewPending = Boolean(job && job.human_review_pending);
+    const created = Number(job && job.created_at_epoch);
+    const finished = Number(job && job.finished_at_epoch);
+    return {
+      expanded: reviewPending,
+      durationKnown: Number.isFinite(created) && Number.isFinite(finished) && finished >= created,
+      startedAt: Number.isFinite(created) ? created * 1000 : null,
+      endedAt: Number.isFinite(finished) ? finished * 1000 : null,
+      title: reviewPending
+        ? translate('Analysis plan ready for review', '分析计划已就绪，等待审阅')
+        : '',
+      terminalLabel: reviewPending
+        ? translate('Plan contract passed; analysis is paused for human review', '计划合同已通过；分析已暂停，等待人工审阅')
+        : '',
+    };
+  }
+
+  window.EU_GUIDED_PI_REPLAY = { hydrate, lifecycleTurns, childJobPresentation };
 })();

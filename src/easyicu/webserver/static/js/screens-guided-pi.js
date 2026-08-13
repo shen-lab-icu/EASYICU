@@ -628,7 +628,7 @@
       }
       const toolSteps = visibleSteps.filter(step => step.kind === 'tool');
       const pipelineSteps = visibleSteps.filter(step => step.kind === 'pipeline');
-      const completedTitle = row.childJobId
+      const completedTitle = row.displayTitle || (row.childJobId
         ? tr('EasyICU research task finished', 'EasyICU 科研任务已结束')
         : toolSteps.length === 1
         ? activityStepLabel(toolSteps[0])
@@ -636,7 +636,7 @@
           ? toolSteps.map(step => completedToolLabel(step.toolName, step.resource)).join(tr(' and ', '、'))
           : toolSteps.length > 2
             ? tr(`Used ${toolSteps.length} EasyICU tools`, `已使用 ${toolSteps.length} 个 EasyICU 工具`)
-            : tr('Answered without using tools', '仅回答，未执行操作');
+            : tr('Answered without using tools', '仅回答，未执行操作'));
       const title = failed ? tr('This turn needs attention', '本轮需要处理') : completedTitle;
       const steps = visibleSteps.map(activityStepRow).join('');
       return `<details class="gpi-activity ${failed ? 'error' : 'complete'}" ${failed || row.expanded ? 'open' : ''}>
@@ -644,7 +644,7 @@
           <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(failed ? 'alert' : activityIcon(toolSteps[0] || pipelineSteps[0] || latest), 15)}</span>
           <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
           <span class="gpi-activity-title">${esc(title)}</span>
-          <span class="gpi-activity-meta">${esc(tr(`${visibleSteps.length} steps`, `${visibleSteps.length} 个步骤`))} · ${esc(durationText(row.startedAt, row.endedAt))}</span>
+          <span class="gpi-activity-meta">${esc(tr(`${visibleSteps.length} steps`, `${visibleSteps.length} 个步骤`))}${row.durationKnown === false ? '' : ` · ${esc(durationText(row.startedAt, row.endedAt))}`}</span>
         </summary>
         <div class="gpi-activity-body">
           ${steps ? `<ol>${steps}</ol>` : ''}
@@ -1345,6 +1345,14 @@
     if (!job || !job.present || !job.job_id || !state.session) return;
     const jobId = String(job.job_id);
     const activity = childActivity(jobId, String(job.kind || ''));
+    const replayOwner = window.EU_GUIDED_PI_REPLAY;
+    const presentation = replayOwner && typeof replayOwner.childJobPresentation === 'function'
+      ? replayOwner.childJobPresentation(job, tr) : {};
+    activity.expanded = Boolean(presentation.expanded);
+    activity.durationKnown = Boolean(presentation.durationKnown);
+    if (presentation.startedAt != null) activity.startedAt = presentation.startedAt;
+    if (presentation.endedAt != null) activity.endedAt = presentation.endedAt;
+    if (presentation.title) activity.displayTitle = presentation.title;
     const progress = Array.isArray(job.progress) ? job.progress : [];
     progress.forEach((event, index) => {
       const step = String(event.step || event.type || 'pipeline').slice(0, 80);
@@ -1363,17 +1371,17 @@
       completeRunningPipelineSteps(activity);
       upsertActivityStep(activity, {
         id: 'projected-terminal', kind: 'pipeline', step: 'terminal',
-        label: job.status === 'done'
+        label: presentation.terminalLabel || (job.status === 'done'
           ? tr('EasyICU research task completed', 'EasyICU 科研任务已完成')
           : job.status === 'cancelled'
             ? tr('EasyICU research task cancelled', 'EasyICU 科研任务已取消')
-            : tr('EasyICU research task failed', 'EasyICU 科研任务失败'),
+            : tr('EasyICU research task failed', 'EasyICU 科研任务失败')),
         status: job.status === 'done' ? 'complete' : 'error', at: Date.now(),
         code: String(job.gate_status || job.error_code || job.status || ''), owner: String(job.kind || 'EasyICU'),
         resources: Array.isArray(job.artifact_refs) ? job.artifact_refs : [],
       });
       activity.status = job.status === 'done' ? 'complete' : (job.status === 'cancelled' ? 'cancelled' : 'error');
-      activity.endedAt = Date.now();
+      if (presentation.endedAt == null) activity.endedAt = Date.now();
     }
   }
   async function refreshSession(preserveTimeline) {

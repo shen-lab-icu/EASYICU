@@ -347,6 +347,8 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "job_id": snapshot.get("id"),
             "kind": snapshot.get("kind"),
             "status": snapshot.get("status"),
+            "created_at_epoch": snapshot.get("created"),
+            "finished_at_epoch": snapshot.get("finished"),
             "cancel_requested": bool(snapshot.get("cancel_requested")),
             "cancel_reason_code": stable_code(snapshot.get("cancel_reason")),
             "error_code": _safe_error_code(snapshot.get("error")),
