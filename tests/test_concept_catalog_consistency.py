@@ -26,7 +26,7 @@ from easyicu.concept.catalog import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "src" / "easyicu" / "data"
-BENCHMARK_DIR = REPO_ROOT / "benchmark"
+CATALOG_DIR = REPO_ROOT / "benchmarks" / "catalogs"
 STATIC_DATA_CATALOG_JS = (
     REPO_ROOT / "src" / "easyicu" / "webserver" / "static" / "js" / "data-catalog.js"
 )
@@ -78,7 +78,7 @@ def _data_source_tables() -> dict[str, dict]:
 
 
 def _miiv_source_catalog() -> set[tuple[str, int]]:
-    payload = json.loads((BENCHMARK_DIR / "source_item_catalog_miiv.json").read_text())
+    payload = json.loads((CATALOG_DIR / "source_item_catalog_miiv.json").read_text())
     catalog: set[tuple[str, int]] = set()
     for item in payload.get("items", []):
         itemid = item.get("itemid")
