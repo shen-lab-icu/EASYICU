@@ -336,7 +336,6 @@ from .plan_utils import (
     _cohort_definition_contract_findings,
     endpoint_contract_findings,
     _cohort_definition_is_empty,
-    _ensure_audit_panel_step_in_plan,
     _ensure_publication_figure_step_in_plan,
     _effect_figure_semantics_supported_by_inputs,
     _effect_figure_semantics_supported_by_model_roster,
@@ -356,8 +355,11 @@ from .plan_utils import (
     _step_expects_figure,
     _step_produces_figure,
     effect_output_authorized,
-    validate_final_plan_shape,
 )
+from .planning.figure_plan_shaping import (
+    ensure_data_quality_figure_step as _ensure_audit_panel_step_in_plan,
+)
+from .planning.final_plan_shape import validate_final_plan_shape
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
 from .figures.skill import PublicationFigureSkill
 from .reporting.bibtex import render_bibtex

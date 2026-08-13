@@ -7,11 +7,10 @@ from typing import Sequence
 from ..contracts.declared_product import primary_analysis_cohort_plan_findings
 from ..contracts.runtime import ValidationFinding
 from ..plan_utils import (
-    PlanShapeValidationError,
     endpoint_contract_findings,
-    validate_final_plan_shape,
     _typed_plan_dag_findings,
 )
+from .final_plan_shape import PlanShapeValidationError, validate_final_plan_shape
 from .adjustment_authority import (
     AdjustmentAuthorityError,
     validate_plan_against_adjustment_authority,

@@ -7,7 +7,7 @@ and no audit panel — even though the publication-figure skill produces a figur
 and the run produces robustness/data-quality evidence. The scorer reads
 ``analysis_plan.json``, so the fix declares both at plan phase:
 ``_ensure_publication_figure_step_in_plan(force=...)`` and
-``_ensure_audit_panel_step_in_plan``.
+``ensure_data_quality_figure_step``.
 """
 
 from __future__ import annotations
@@ -15,10 +15,13 @@ from __future__ import annotations
 from easyicu.research_agent.evaluation_scorecard import score_plan
 from easyicu.research_agent.icu_agent_bench import ICUAgentBenchTask
 from easyicu.research_agent.plan_utils import (
-    _ensure_audit_panel_step_in_plan,
     _ensure_publication_figure_step_in_plan,
-    _step_declares_audit_panel,
     _step_produces_figure,
+)
+from easyicu.research_agent.planning.figure_plan_shaping import (
+    dedicated_renderer_consumes_typed_source,
+    ensure_data_quality_figure_step,
+    step_declares_audit_panel,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -95,8 +98,8 @@ def test_data_quality_figure_guard_binds_typed_sources_then_is_idempotent():
     plan = _plan_with_typed_data_quality_sources()
     ctx = _Ctx(plan.research_question)
 
-    with_audit, findings = _ensure_audit_panel_step_in_plan(plan=plan, context=ctx)
-    assert any(_step_declares_audit_panel(s) for s in with_audit.steps)
+    with_audit, findings = ensure_data_quality_figure_step(plan=plan, context=ctx)
+    assert any(step_declares_audit_panel(s) for s in with_audit.steps)
     figure = with_audit.steps[-1]
     assert figure.expected_outputs == ["figure:data_quality"]
     assert figure.inputs == [
@@ -106,14 +109,14 @@ def test_data_quality_figure_guard_binds_typed_sources_then_is_idempotent():
     assert findings and findings[0].validator == "data_quality_figure_contract"
 
     # Idempotent: a plan that already declares an audit panel is left alone.
-    again, findings2 = _ensure_audit_panel_step_in_plan(plan=with_audit, context=ctx)
+    again, findings2 = ensure_data_quality_figure_step(plan=with_audit, context=ctx)
     assert len(again.steps) == len(with_audit.steps)
     assert findings2 == []
 
 
 def test_data_quality_figure_guard_never_invents_an_unbound_renderer():
     plan = _table_only_plan()
-    shaped, findings = _ensure_audit_panel_step_in_plan(
+    shaped, findings = ensure_data_quality_figure_step(
         plan=plan,
         context=_Ctx(plan.research_question),
     )
@@ -122,7 +125,7 @@ def test_data_quality_figure_guard_never_invents_an_unbound_renderer():
     assert findings[0].detail["reason_code"] == (
         "data_quality_figure_source_not_closed"
     )
-    assert not any(_step_declares_audit_panel(step) for step in shaped.steps)
+    assert not any(step_declares_audit_panel(step) for step in shaped.steps)
 
 
 def test_plan_dimension_lifts_after_both_guards():
@@ -146,7 +149,7 @@ def test_plan_dimension_lifts_after_both_guards():
     plan = _plan_with_typed_data_quality_sources()
     ctx = _Ctx(plan.research_question)
     plan, _ = _ensure_publication_figure_step_in_plan(plan=plan, context=ctx, force=True)
-    plan, _ = _ensure_audit_panel_step_in_plan(plan=plan, context=ctx)
+    plan, _ = ensure_data_quality_figure_step(plan=plan, context=ctx)
 
     after = score_plan(
         task,
@@ -156,3 +159,24 @@ def test_plan_dimension_lifts_after_both_guards():
     assert after.signals["result_figure_count"] >= 1
     assert after.signals["has_audit_panel"] is True
     assert after.subscore > before.subscore
+
+
+def test_typed_source_detects_one_explicit_renderer_only():
+    source = "table:robustness_matrix"
+    renderer = AnalysisStep(
+        step_id="04_robustness_figure",
+        intent="Render the verified robustness matrix.",
+        method="visualization",
+        inputs=[source],
+        expected_outputs=["figure:robustness"],
+    )
+    assert dedicated_renderer_consumes_typed_source([renderer], source=source)
+
+    ambiguous_renderer = renderer.model_copy(
+        update={
+            "expected_outputs": ["figure:robustness", "figure:second_view"]
+        }
+    )
+    assert not dedicated_renderer_consumes_typed_source(
+        [ambiguous_renderer], source=source
+    )
