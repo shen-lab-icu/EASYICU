@@ -3688,6 +3688,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedDrafts = { loading: false, error: null, data: data };
       renderSessions();
       if (guidedFolderDialogMode) renderGuidedFolderDialog();
+      const continuity = window.EU_GUIDED_PROJECT_CONTINUITY;
+      const rememberedId = !selectedGuidedDraft && continuity && continuity.remembered
+        ? continuity.remembered()
+        : '';
+      if (rememberedId) {
+        const rememberedRow = localDraftRows().find(row => row && row.id === rememberedId);
+        if (rememberedRow) {
+          selectedGuidedDraft = rememberedRow;
+          selectedGuidedRun = null;
+          openGuidedProjectMemory(rememberedRow, null, 'draft');
+        } else if (continuity.forget) {
+          continuity.forget(rememberedId);
+        }
+      }
     }).catch(err => {
       guidedDrafts = { loading: false, error: err.message || String(err), data: null };
       renderSessions();
@@ -3711,6 +3725,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         throw new Error((result && (result.reason || result.error)) || 'remove_failed');
       }
       if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) {
+        if (window.EU_GUIDED_PROJECT_CONTINUITY) {
+          window.EU_GUIDED_PROJECT_CONTINUITY.forget(row.id);
+        }
         selectedGuidedDraft = null;
         if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
           window.EU_GUIDED_PI.bindProject(null);
@@ -4055,6 +4072,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       projectId
     ).trim();
     if (projectId && window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
+      if (window.EU_GUIDED_PROJECT_CONTINUITY) {
+        window.EU_GUIDED_PROJECT_CONTINUITY.remember(projectId);
+      }
       window.EU_GUIDED_PI.bindProject({ id: projectId, title: projectTitle });
     }
     renderAside();
