@@ -9,6 +9,8 @@ import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.execution.runners.cohort_flow_figure_executor import (
+    COHORT_ACCOUNTING_COMPLETE,
+    COHORT_ACCOUNTING_DENOMINATOR_ONLY,
     COHORT_FLOW_INPUT,
     cohort_flow_figure_executor_owns_step,
     run_cohort_flow_figure,
@@ -54,11 +56,15 @@ def _frame() -> pd.DataFrame:
     )
 
 
-def _binding(tmp_path: Path) -> tuple[Path, dict[str, object], dict[str, object]]:
+def _binding(
+    tmp_path: Path,
+    *,
+    frame: pd.DataFrame | None = None,
+) -> tuple[Path, dict[str, object], dict[str, object]]:
     run_dir = tmp_path / "run"
     source = run_dir / "steps" / "01_define_analysis_cohort" / "outputs" / "flow.csv"
     source.parent.mkdir(parents=True)
-    frame = _frame()
+    frame = _frame() if frame is None else frame
     frame.to_csv(source, index=False)
     record = EvidenceStore(run_dir).register_file(
         kind="table",
@@ -136,7 +142,61 @@ def test_exact_cohort_flow_selects_and_renders_without_llm(tmp_path: Path) -> No
     source = pd.read_csv(out_dir / "cohort_accounting_source_data.csv")
     assert source["n_remaining"].tolist() == [140, 128, 120]
     assert summary["source_rows_consumed"] == 3
+    assert summary["cohort_accounting_completeness"] == COHORT_ACCOUNTING_COMPLETE
+    assert summary["paper_grade_cohort_accounting"] is True
+    assert summary["upstream_attrition_available"] is True
+    assert summary["rendering_mode"] == "sequential_attrition_bars"
     assert (out_dir / "cohort_accounting.figure_contract.json").is_file()
+
+
+def test_single_denominator_is_not_promoted_to_complete_cohort_accounting(
+    tmp_path: Path,
+) -> None:
+    step = _step()
+    singleton = pd.DataFrame(
+        [[0, "universe", 94_458, 0, 94_458]],
+        columns=[
+            "step_order",
+            "predicate_kind",
+            "n_before",
+            "n_excluded",
+            "n_remaining",
+        ],
+    )
+    run_dir, manifest, _binding_row = _binding(tmp_path, frame=singleton)
+    out_dir = run_dir / "steps" / step.step_id / "outputs"
+
+    summary = run_cohort_flow_figure(
+        out_dir=out_dir,
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=step.step_id,
+        figure_product="cohort_accounting",
+    )
+
+    assert summary["cohort_accounting_completeness"] == (
+        COHORT_ACCOUNTING_DENOMINATOR_ONLY
+    )
+    assert summary["paper_grade_cohort_accounting"] is False
+    assert summary["upstream_attrition_available"] is False
+    assert summary["rendering_mode"] == "denominator_only_node"
+    source = pd.read_csv(out_dir / "cohort_accounting_source_data.csv")
+    assert source["display_label"].tolist() == ["Analysis denominator only"]
+    assert source["n_remaining"].tolist() == [94_458]
+    contract = json.loads(
+        (out_dir / "cohort_accounting.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    panel = contract["panels"][0]
+    assert panel["metadata"]["paper_grade_cohort_accounting"] is False
+    assert panel["metadata"]["accounting_completeness"] == (
+        COHORT_ACCOUNTING_DENOMINATOR_ONLY
+    )
+    assert "must not be described as complete" in panel["review_risk"]
+    assert "upstream eligibility and attrition are unavailable" in contract[
+        "core_claim"
+    ].lower()
 
 
 def test_owner_and_runner_fail_closed_on_widening_or_arithmetic_drift(
