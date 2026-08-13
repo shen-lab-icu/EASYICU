@@ -472,7 +472,12 @@ def test_code_runner_resolves_symlinked_python_parent(ra, tmp_path: Path):
 
     assert runner.python_executable == str(runtime_dir / Path(sys.executable).name)
     command = runner.build_command(script_path=tmp_path / "analysis.py")
-    assert command[-2] == runner.python_executable
+    expected_launch_target = (
+        str(Path(runner.python_executable).resolve())
+        if Path(command[0]).name == "sandbox-exec"
+        else runner.python_executable
+    )
+    assert command[-2] == expected_launch_target
     assert str(linked_python) not in command
 
 
@@ -489,6 +494,81 @@ def test_code_runner_preserves_bare_python_command(ra, tmp_path: Path):
     assert runner.python_executable == "custom-python"
     command = runner.build_command(script_path=tmp_path / "analysis.py")
     assert command[-2] == "custom-python"
+
+
+def test_macos_sandbox_resolves_final_venv_symlink_without_leaving_venv(
+    ra, tmp_path: Path, monkeypatch
+):
+    """The sandbox target is real while the selected venv remains authoritative."""
+
+    import easyicu.research_agent.execution.runner as runner_mod
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+    venv_prefix = tmp_path / "selected-venv"
+    venv_bin = venv_prefix / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_prefix / "pyvenv.cfg").write_text(
+        f"home = {Path(sys.executable).resolve().parent}\n",
+        encoding="utf-8",
+    )
+    configured_python = venv_bin / "python"
+    configured_python.symlink_to(Path(sys.executable).resolve())
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        python_executable=str(configured_python),
+        allow_unsafe_host_fallback=False,
+    )
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def _fake_run(cmd, *, cwd, env, timeout):
+        calls.append((list(cmd), dict(env)))
+        Path(env["STEP_OUT_DIR"], "ok.txt").write_text("ok", encoding="utf-8")
+        return SimpleNamespace(stdout="ok\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/sandbox-exec" if name == "sandbox-exec" else None,
+    )
+    monkeypatch.setattr(
+        runner_mod, "_run_capturing_with_descendant_reaping", _fake_run
+    )
+
+    result = runner.run(step_id="venv_symlink", code="print('ok')\n")
+
+    assert result.succeeded
+    assert result.effective_isolation == "macos_sandbox_exec"
+    assert result.isolation_degraded is False
+    assert len(calls) == 1
+    command, child_env = calls[0]
+    assert command[-2] == str(Path(sys.executable).resolve())
+    assert command[-2] != str(configured_python)
+    assert child_env["__PYVENV_LAUNCHER__"] == str(configured_python)
+    assert child_env["PYTHONHOME"] == str(Path(sys.executable).resolve().parent.parent)
+    assert f'(subpath "{venv_prefix}")' in command[2]
+    assert f'(subpath "{Path(sys.executable).resolve().parent.parent}")' in command[2]
+
+
+@pytest.mark.parametrize("reserved_key", ["PYTHONHOME", "__PYVENV_LAUNCHER__"])
+def test_code_runner_rejects_host_owned_python_launch_env(
+    ra, tmp_path: Path, reserved_key: str
+):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+
+    with pytest.raises(ValueError, match=reserved_key):
+        ra.CodeRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort_path,
+            extra_env={reserved_key: "/attacker/runtime"},
+        )
 
 
 def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
