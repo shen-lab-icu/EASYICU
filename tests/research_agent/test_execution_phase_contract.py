@@ -912,17 +912,19 @@ def test_locked_measurement_data_quality_classifier_is_structural():
 def test_locked_measurement_data_quality_terminates_before_code_repair():
     from easyicu.research_agent.execution import phase as pipeline_execute
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    source = inspect.getsource(pipeline_execute._candidate_contract_repair_transition)
     route_start = source.index(
-        "locked_data_quality_issues = (", source.index("early_contract_errors = [")
+        "locked_data_quality_issues = host._locked_measurement_data_quality_issues("
     )
-    route_end = source.index("if sealed_renderer_authorized_code_sha256", route_start)
+    route_end = source.index(
+        "if attempt.sealed_renderer_authorized_code_sha256", route_start
+    )
     terminal_route = source[route_start:route_end]
 
     assert "measurement_provenance_repair_suppressed" in terminal_route
     assert '"diagnostic_only": True' in terminal_route
     assert '"locked_cohort_data_quality_failed"' in terminal_route
-    assert "return step_record" in terminal_route
+    assert "return _CandidateLoopAction.RETURN" in terminal_route
     assert "_deterministic_summary_repair" not in terminal_route
     assert "deterministic_contract_repair" not in terminal_route
     assert "coder.repair" not in terminal_route
@@ -961,7 +963,16 @@ def test_locked_measurement_preflight_runs_before_every_coder_repair():
         StepCandidateRecovery,
     )
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    source = inspect.getsource(pipeline_execute.run_execute_phase) + "\n".join(
+        inspect.getsource(stage)
+        for stage in (
+            pipeline_execute._candidate_concept_audit_transition,
+            pipeline_execute._candidate_execute_transition,
+            pipeline_execute._candidate_visual_transition,
+            pipeline_execute._candidate_contract_repair_transition,
+            pipeline_execute._candidate_failure_transition,
+        )
+    )
     preflight = source.index("audit_locked_measurement_data_quality(")
     first_repair_transport = source.index("_repair_with_capsule(", preflight)
     owner_source = inspect.getsource(StepCandidateRecovery.repair_with_capsule)
@@ -1214,7 +1225,16 @@ def test_execute_phase_preserves_repair_provenance_across_concept_and_runtime():
         run_concept_repair_loop,
     )
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    source = inspect.getsource(pipeline_execute.run_execute_phase) + "\n".join(
+        inspect.getsource(stage)
+        for stage in (
+            pipeline_execute._candidate_concept_audit_transition,
+            pipeline_execute._candidate_execute_transition,
+            pipeline_execute._candidate_visual_transition,
+            pipeline_execute._candidate_contract_repair_transition,
+            pipeline_execute._candidate_failure_transition,
+        )
+    )
     concept_source = inspect.getsource(run_concept_repair_loop)
 
     # Initial concept, post-mutation concept, visual, contract, and runtime
@@ -1270,7 +1290,7 @@ def test_agent_generated_code_keeps_llm_interpretation_path():
 def test_execute_phase_routes_figure_contracts_through_early_repair_loop():
     from easyicu.research_agent.execution import phase as pipeline_execute
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    source = inspect.getsource(pipeline_execute._candidate_contract_setup_transition)
     early_gate = source.index("early_contract_errors = [")
     before_early_gate = source[:early_gate]
 
@@ -1323,7 +1343,9 @@ def test_execute_phase_deterministically_requires_typed_exposure_consumption():
     shared_source = inspect.getsource(
         pipeline_execute._deterministic_code_gate_findings
     )
-    execute_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    execute_source = inspect.getsource(
+        pipeline_execute.run_execute_phase
+    ) + inspect.getsource(pipeline_execute._candidate_concept_audit_transition)
     concept_execution_source = inspect.getsource(
         concept_audit_execution.ConceptAuditCoordinator.findings_for_code
     )
@@ -1791,7 +1813,9 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
     # Early repair screening remains in the orchestration loop; the final
     # read-only review is owned by the reusable deterministic gate evaluator.
     # Each wires in the shared sequence and passes its resolved cohort path.
-    direct_calls = _shared_gate_calls(pipeline_execute.run_execute_phase)
+    direct_calls = _shared_gate_calls(
+        pipeline_execute._candidate_contract_setup_transition
+    )
     evaluator_calls = _shared_gate_calls(
         pipeline_execute._evaluate_final_deterministic_gates
     )
@@ -1803,8 +1827,11 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
     evaluator_keywords = {
         keyword.arg: keyword.value for keyword in evaluator_calls[0].keywords
     }
-    assert isinstance(direct_keywords.get("execution_cohort_path"), ast.Name)
-    assert direct_keywords["execution_cohort_path"].id == "step_execution_cohort_path"
+    direct_path = direct_keywords.get("execution_cohort_path")
+    assert isinstance(direct_path, ast.Attribute)
+    assert isinstance(direct_path.value, ast.Name)
+    assert direct_path.value.id == "attempt"
+    assert direct_path.attr == "step_execution_cohort_path"
     assert isinstance(evaluator_keywords.get("execution_cohort_path"), ast.Name)
     assert evaluator_keywords["execution_cohort_path"].id == "execution_cohort_path"
 
@@ -1935,7 +1962,10 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
         step_execution_cohort_path,
     )
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    candidate_source = inspect.getsource(pipeline_execute._candidate_execute_transition)
+    source = (
+        inspect.getsource(pipeline_execute.run_execute_phase) + "\n" + candidate_source
+    )
     bootstrap_source = inspect.getsource(
         step_attempt_bootstrap.prepare_step_attempt_bootstrap
     )
@@ -1950,7 +1980,7 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
     assert "return universe_path" in routing_source
     assert "return cohort_path" in routing_source
     assert "only downstream" in routing_source
-    assert "cohort_path=step_execution_cohort_path" in source
+    assert "cohort_path=attempt.step_execution_cohort_path" in source
     assert (
         '"execution_cohort_sha256": sha256_of_file(universe_path)' in bootstrap_source
     )
@@ -1967,24 +1997,26 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
     assert "primary_cohort_execution_receipt = (" in source
     assert "host_verified_cohort_execution_receipt=(" in source
 
-    runner_call = source.index("run_result = step_executor.execute(")
-    cohort_authority_check = source.index(
-        "cohort_authority_finding = _execution_input_authority_integrity_finding(",
+    runner_call = candidate_source.index(
+        "state.run_result = host.step_executor.execute("
+    )
+    cohort_authority_check = candidate_source.index(
+        "cohort_authority_finding = host._execution_input_authority_integrity_finding(",
         runner_call,
     )
-    trajectory_authority_check = source.index(
+    trajectory_authority_check = candidate_source.index(
         "trajectory_authority_finding = (",
         cohort_authority_check,
     )
-    authority_gate = source.index(
+    authority_gate = candidate_source.index(
         "if authority_findings:",
         trajectory_authority_check,
     )
-    unsafe_output_exit = source.index(
-        "if not run_result.outputs_safe_to_collect:", runner_call
+    unsafe_output_exit = candidate_source.index(
+        "if not state.run_result.outputs_safe_to_collect:", runner_call
     )
-    authority_latch = source.index(
-        "run_input_authority_state.mark_corrupted(", authority_gate
+    authority_latch = candidate_source.index(
+        "host.run_input_authority_state.mark_corrupted(", authority_gate
     )
     assert (
         runner_call
@@ -1995,31 +2027,42 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
         < unsafe_output_exit
     )
     assert (
-        "if run_result.outputs_safe_to_collect:"
-        in source[authority_gate:unsafe_output_exit]
+        "if state.run_result.outputs_safe_to_collect:"
+        in candidate_source[authority_gate:unsafe_output_exit]
     )
     assert (
-        "_clear_output_dir(run_result.out_dir)"
-        in source[authority_gate:unsafe_output_exit]
+        "_clear_output_dir(state.run_result.out_dir)"
+        in candidate_source[authority_gate:unsafe_output_exit]
     )
     assert (
         "_seal_actual_execution_result()"
-        not in source[authority_gate:unsafe_output_exit]
+        not in candidate_source[authority_gate:unsafe_output_exit]
     )
 
 
 def test_every_runner_build_receives_the_selected_trajectory_authority():
     from easyicu.research_agent.execution import phase as pipeline_execute
 
-    tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
+    tree = ast.parse(
+        inspect.getsource(pipeline_execute.run_execute_phase)
+        + "\n"
+        + inspect.getsource(pipeline_execute._candidate_execute_transition)
+    )
     runner_builds = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "pipeline"
         and node.func.attr == "_build_runner"
+        and (
+            (isinstance(node.func.value, ast.Name) and node.func.value.id == "pipeline")
+            or (
+                isinstance(node.func.value, ast.Attribute)
+                and isinstance(node.func.value.value, ast.Name)
+                and node.func.value.value.id == "host"
+                and node.func.value.attr == "pipeline"
+            )
+        )
     ]
 
     # Initial, post-materialization, and per-step runner construction are the
@@ -2033,8 +2076,14 @@ def test_every_runner_build_receives_the_selected_trajectory_authority():
         binding_call = starred[0]
         assert isinstance(binding_call, ast.Call)
         assert isinstance(binding_call.func, ast.Attribute)
-        assert isinstance(binding_call.func.value, ast.Name)
-        assert binding_call.func.value.id == "run_input_authority_state"
+        owner = binding_call.func.value
+        if isinstance(owner, ast.Name):
+            assert owner.id == "run_input_authority_state"
+        else:
+            assert isinstance(owner, ast.Attribute)
+            assert isinstance(owner.value, ast.Name)
+            assert owner.value.id == "host"
+            assert owner.attr == "run_input_authority_state"
         assert binding_call.func.attr == "runner_bindings"
 
 
