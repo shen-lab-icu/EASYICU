@@ -72,12 +72,19 @@ def test_method_source_cannot_claim_a_design_element_outside_its_card() -> None:
         "design_elements"
     ] = ["adjustment"]
 
-    with pytest.raises(ValueError, match="do not support"):
+    with pytest.raises(ValueError, match="do not support") as exc_info:
         PlannerAgent.__new__(PlannerAgent)._parse(
             json.dumps(payload),
             _context(),
-            allowed_literature_citation_keys=["strobe_2007"],
+            allowed_literature_citation_keys=[
+                "strobe_2007",
+                "durrleman_splines_1989",
+            ],
         )
+
+    detail = str(exc_info.value)
+    assert "source supports: dependence,estimand,outcome,reporting" in detail
+    assert "adjustment=['durrleman_splines_1989']" in detail
 
 
 def test_strobe_dependence_card_is_not_confused_with_reporting_card() -> None:

@@ -264,6 +264,18 @@ def test_the_retry_reminder_closes_common_representation_seams():
     assert "required `robustness_specs`" in reminder
 
 
+def test_the_retry_reminder_publishes_exact_nested_contract_shapes():
+    reminder = planner_science_retry_guide()
+
+    assert '`{"input_key": "table:exact_product", "mode": "all_rows"}`' in reminder
+    assert "never rename `input_key` to `input`" in reminder
+    assert "`all_rows`, `single_row`, and `one_per_role`" in reminder
+    assert "must be JSON strings" in reminder
+    assert '`["0", "1"]`' in reminder
+    assert "preserve their source scalar types" in reminder
+    assert "non-empty `spec_id`, `axis`, and `description`" in reminder
+
+
 # ---------------------------------------------------------------------------
 # A constant the Planner cannot choose is not dictated to it
 # ---------------------------------------------------------------------------
