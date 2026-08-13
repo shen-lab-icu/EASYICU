@@ -740,7 +740,10 @@
     };
     if (code === 'operator_plan_approval_required') return {
       code, grants: ['provider_run'],
-      message: tr('I approve the current evidence-bound plan. Continue the analysis.', '我批准当前证据绑定的计划，请继续分析。'),
+      message: tr(
+        'I approve this exact evidence-bound plan without changing the study configuration. Decline optional study-authority additions for this run, preserve every open scientific finding as a limitation, and resume the current plan.',
+        '我批准当前这份证据绑定的计划，不修改研究配置。本轮不新增可选的科学设定；请把所有未闭合的科学问题保留为局限，并继续执行当前计划。',
+      ),
       title: tr('The evidence-bound plan is ready. Continue to analysis?', '证据绑定的计划已准备好，是否继续分析？'),
       note: tr('Approving resumes this plan only. Scientific and human-review gates remain in force.', '批准只会继续当前计划；科学闸门和人工审阅门禁仍然有效。'),
       approve: tr('Approve and continue', '批准并继续'),
