@@ -626,18 +626,19 @@ def test_resume_rebinds_progress_to_the_current_transport_job(tmp_path):
     """Post-review execution events belong to the resume job, not the old one."""
 
     from easyicu.research_agent.pipeline import ResearchAgentPipeline
+    from easyicu.research_agent.orchestration.progress import (
+        ResumableProgressChannel,
+    )
 
     old_events: list[dict] = []
     current_events: list[dict] = []
-    progress_sink = {"callback": old_events.append}
+    progress_channel = ResumableProgressChannel(old_events.append)
 
     class _ResumingWorkflow:
         state = "paused"
 
         def resume(self, *_args, **_kwargs):
-            progress_sink["callback"](
-                {"stage": "coder", "message": "Generating analysis code."}
-            )
+            progress_channel.emit("coder", "Generating analysis code.")
             self.state = "completed"
             return "done"
 
@@ -653,7 +654,7 @@ def test_resume_rebinds_progress_to_the_current_transport_job(tmp_path):
         "pending": _Pending(),
         "runtime_capabilities": (),
         "runtime_bundle": None,
-        "progress_sink": progress_sink,
+        "progress_sink": progress_channel,
     }
     agent._pipeline_result_or_pending = lambda outcome, **_kwargs: outcome
 
@@ -663,9 +664,11 @@ def test_resume_rebinds_progress_to_the_current_transport_job(tmp_path):
 
     assert result == "done"
     assert old_events == []
-    assert current_events == [
-        {"stage": "coder", "message": "Generating analysis code."}
-    ]
+    assert len(current_events) == 1
+    assert current_events[0]["stage"] == "coder"
+    assert current_events[0]["message"] == "Generating analysis code."
+    assert current_events[0]["status"] == "running"
+    assert current_events[0]["timestamp"]
 
 
 def test_p0_full_pause_and_resume_through_the_real_workflow(tmp_path):

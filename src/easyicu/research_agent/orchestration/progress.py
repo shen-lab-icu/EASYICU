@@ -2,9 +2,78 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from datetime import datetime, timezone
+from typing import Any, Callable, Optional
 
+from ..authority.run_heartbeat import record_active_run_progress
+from ..authority.runtime_artifacts import AuditLogger
 from ..providers.structured_retry import StructuredRetryProgress
+
+
+class ResumableProgressChannel:
+    """Per-run progress transport that can be rebound after a review pause.
+
+    The channel owns only UI/audit transport.  Replacing its callback cannot
+    replace the workflow, plan, evidence store, or digest-bound invokers that
+    the human approved.
+    """
+
+    def __init__(
+        self,
+        callback: Optional[Callable[[dict[str, Any]], None]] = None,
+    ) -> None:
+        self._callback = callback
+        self._audit_logger: Optional[AuditLogger] = None
+
+    def bind_audit_logger(self, audit_logger: AuditLogger) -> None:
+        self._audit_logger = audit_logger
+
+    def replace_callback(
+        self,
+        callback: Optional[Callable[[dict[str, Any]], None]],
+    ) -> None:
+        self._callback = callback
+
+    def emit(self, stage: str, message: str, **extra: Any) -> None:
+        status = str(extra.get("status", "running"))
+        step_id = str(extra.get("step_id")) if extra.get("step_id") else None
+        record_active_run_progress(
+            stage=stage,
+            message=message,
+            status=status,
+            step_id=step_id,
+            phase_timeout_seconds=extra.get("phase_timeout_seconds"),
+            run_id=(str(extra.get("run_id")) if extra.get("run_id") else None),
+        )
+        if self._audit_logger is not None:
+            try:
+                self._audit_logger.emit(
+                    phase=stage,
+                    event=message,
+                    status=status,
+                    step_id=step_id,
+                    detail={
+                        key: value
+                        for key, value in extra.items()
+                        if key not in {"status", "step_id"}
+                    },
+                )
+            except Exception:
+                pass
+        if self._callback is None:
+            return
+        payload_extra = dict(extra)
+        payload = {
+            "stage": stage,
+            "message": message,
+            "status": payload_extra.pop("status", "running"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **payload_extra,
+        }
+        try:
+            self._callback(payload)
+        except Exception:
+            pass
 
 
 def planner_retry_progress_callback(
@@ -43,4 +112,4 @@ def planner_retry_progress_callback(
     return callback
 
 
-__all__ = ["planner_retry_progress_callback"]
+__all__ = ["ResumableProgressChannel", "planner_retry_progress_callback"]
