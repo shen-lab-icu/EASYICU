@@ -167,7 +167,7 @@ def test_execute_phase_delegates_article_audits_to_the_owner_module() -> None:
     from easyicu.research_agent.execution.phase import run_execute_phase
 
     source = inspect.getsource(run_execute_phase)
-    assert "collect_run_article_audits(" in source
+    assert "_collect_and_persist_run_article_audits(" in source
     assert "summarize_article_contract_coverage(" not in source
     assert "validate_run_against_article_figure_strategy(" not in source
 
