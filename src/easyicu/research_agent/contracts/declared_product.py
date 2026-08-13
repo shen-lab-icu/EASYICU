@@ -33,6 +33,12 @@ from .typed_schema import (
     typed_product_prompt_facts,
     typed_product_schema_receipt,
 )
+from .product_files import (
+    FIGURE_SUFFIXES as _FIGURE_SUFFIXES,
+    KNOWN_FILE_SUFFIXES as _KNOWN_FILE_SUFFIXES,
+    descriptor_path_is_compatible as _descriptor_path_is_compatible,
+    file_kinds as _file_kinds,
+)
 
 _FIGURE_KINDS = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
 #: Terminal step statuses.  Host-issued spellings must be listed explicitly:
@@ -70,27 +76,6 @@ _PRODUCT_DESCRIPTOR_FIELDS = frozenset(
     }
 )
 _DIRECT_FIGURE_KEYS = frozenset({"figure_file", "figure_path"})
-_FIGURE_SUFFIXES = frozenset({".png", ".svg", ".pdf", ".tif", ".tiff"})
-_KNOWN_FILE_SUFFIXES = frozenset(
-    {
-        *_FIGURE_SUFFIXES,
-        ".csv",
-        ".tsv",
-        ".parquet",
-        ".feather",
-        ".json",
-        ".jsonl",
-        ".md",
-        ".txt",
-        ".log",
-        ".pkl",
-        ".pickle",
-        ".joblib",
-        ".npy",
-        ".npz",
-    }
-)
-
 # Typed-product capabilities are shared by planning, Coder guidance, and the
 # execution-time evidence resolver.  Keep the parser permissive so callers can
 # report an unsupported ``kind:name`` token precisely, but keep the capabilities
@@ -1511,47 +1496,6 @@ def _file_stem(value: object) -> str:
     if suffix in _KNOWN_FILE_SUFFIXES:
         name = name[: -len(suffix)]
     return _normalise(name)
-
-
-def _file_kinds(value: object) -> frozenset[str]:
-    suffix = Path(str(value or "").strip()).suffix.lower()
-    if suffix in _FIGURE_SUFFIXES:
-        return frozenset({"figure"})
-    if suffix in {".csv", ".tsv"}:
-        return frozenset({"table", "artifact", "dataset", "test"})
-    if suffix in {".parquet", ".feather"}:
-        return frozenset({"artifact", "dataset", "table"})
-    if suffix in {".pkl", ".pickle", ".joblib"}:
-        return frozenset({"model", "artifact"})
-    if suffix in {".npy", ".npz"}:
-        return frozenset({"artifact", "dataset", "model"})
-    if suffix in {".md", ".txt", ".log", ".jsonl"}:
-        return frozenset({"log", "artifact"})
-    if suffix == ".json":
-        return frozenset({"artifact", "manifest", "log", "model", "test"})
-    return frozenset()
-
-
-_AUDIT_PHYSICAL_FILE_KINDS = frozenset({"log", "table"})
-_REPORT_PHYSICAL_FILE_KINDS = frozenset({"log"})
-
-
-def _descriptor_path_is_compatible(*, kind: str, path: str) -> bool:
-    """Return whether an exact typed descriptor can use *path*.
-
-    ``audit`` and ``report`` are semantic product roles rather than file
-    suffixes.  They are authorised only by an explicit typed descriptor, while
-    their physical payloads use ordinary table/log formats.  Keeping these
-    compatibilities here avoids teaching suffix-only inference that every CSV
-    is an audit or every Markdown file is a report.
-    """
-
-    physical_kinds = _file_kinds(path)
-    if kind == "audit":
-        return bool(physical_kinds & _AUDIT_PHYSICAL_FILE_KINDS)
-    if kind == "report":
-        return bool(physical_kinds & _REPORT_PHYSICAL_FILE_KINDS)
-    return kind in physical_kinds
 
 
 def _is_file_path(value: object) -> bool:

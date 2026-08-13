@@ -29,10 +29,8 @@ from typing import Any, Dict, Mapping, Optional
 import pandas as pd
 
 from ..contracts.runtime import RunResult
-from ..contracts.declared_product import (
-    _descriptor_path_is_compatible,
-    typed_product,
-)
+from ..contracts.declared_product import typed_product
+from ..contracts.product_files import descriptor_path_is_compatible
 from ..schema import AnalysisStep
 
 _OUTPUT_REGISTRY_CANONICALIZATION_REPAIR_ID = (
@@ -326,7 +324,7 @@ def _canonicalize_exact_declared_output_registry(
             stat = resolved.stat()
         except (OSError, ValueError):
             return False
-        if not resolved.is_file() or not _descriptor_path_is_compatible(
+        if not resolved.is_file() or not descriptor_path_is_compatible(
             kind=kind,
             path=resolved.name,
         ):
