@@ -186,9 +186,13 @@ def test_registry_renderer_identity_drift_fails_closed(
     assert findings[0].detail["reported_implementation_sha256"] == "changed-sha"
 
 
-def test_execute_step_delegates_legacy_receipt_policy_to_figure_owner() -> None:
-    from easyicu.research_agent.execution.phase import run_execute_phase
+def test_candidate_loop_delegates_legacy_receipt_policy_to_figure_owner() -> None:
+    from easyicu.research_agent.execution import candidate_loop, publication_figure
 
-    source = inspect.getsource(run_execute_phase)
+    assert (
+        candidate_loop.validate_and_record_sealed_renderer_receipt
+        is publication_figure.validate_and_record_sealed_renderer_receipt
+    )
+    source = inspect.getsource(candidate_loop._candidate_contract_setup_transition)
     assert "validate_and_record_sealed_renderer_receipt(" in source
     assert "legacy_sealed_renderer_receipt" not in source

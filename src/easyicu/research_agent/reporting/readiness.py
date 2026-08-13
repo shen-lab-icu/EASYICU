@@ -62,8 +62,10 @@ from .completion import (
 )
 from ..authority.evidence_store import (
     EvidenceStore,
-    registered_source_fingerprints_match as _source_fingerprints_match,
     sha256_of_file,
+)
+from ..authority.source_fingerprints import (
+    registered_source_fingerprints_match as _source_fingerprints_match,
 )
 from ..authority.step_recovery import StepRecoverySignature
 from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND

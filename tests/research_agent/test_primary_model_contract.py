@@ -1288,7 +1288,7 @@ def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
     import ast
     import inspect
 
-    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import candidate_loop, final_validation
 
     def _audit_calls(function, validator_name: str) -> list[ast.Call]:
         tree = ast.parse(inspect.getsource(function))
@@ -1319,7 +1319,7 @@ def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
     # steps this is the execution cohort; a cohort-producing step deliberately
     # retains the full universe even when later development execution is sampled.
     shared_audits = _audit_calls(
-        pipeline_execute._step_deterministic_contract_findings,
+        final_validation._step_deterministic_contract_findings,
         "primary_model_contract_validator",
     )
     assert len(shared_audits) == 1
@@ -1327,19 +1327,26 @@ def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
     assert isinstance(shared_keywords.get("cohort_path"), ast.Name)
     assert shared_keywords["cohort_path"].id == "integrity_universe_path"
 
-    # The mutable execution loop still owns one early repair gate and the
-    # extracted read-only evaluator owns the single final authority gate; each
-    # wires in the shared sequence and passes its already-resolved cohort path.
-    early_calls = _shared_gate_calls(pipeline_execute.run_execute_phase)
+    # The candidate-loop owner still owns one early repair gate and the
+    # final-validation owner owns the single final authority gate; each wires
+    # in the shared sequence and passes its already-resolved cohort path.
+    early_calls = _shared_gate_calls(
+        candidate_loop._candidate_contract_setup_transition
+    )
     final_calls = _shared_gate_calls(
-        pipeline_execute._evaluate_final_deterministic_gates
+        final_validation._evaluate_final_deterministic_gates
     )
     assert len(early_calls) == 1
     assert len(final_calls) == 1
     early_keywords = {keyword.arg: keyword.value for keyword in early_calls[0].keywords}
     final_keywords = {keyword.arg: keyword.value for keyword in final_calls[0].keywords}
-    assert isinstance(early_keywords.get("execution_cohort_path"), ast.Name)
-    assert early_keywords["execution_cohort_path"].id == "step_execution_cohort_path"
+    early_path = early_keywords.get("execution_cohort_path")
+    assert isinstance(early_path, ast.Attribute)
+    assert isinstance(early_path.value, ast.Name)
+    assert (early_path.value.id, early_path.attr) == (
+        "attempt",
+        "step_execution_cohort_path",
+    )
     assert isinstance(final_keywords.get("execution_cohort_path"), ast.Name)
     assert final_keywords["execution_cohort_path"].id == "execution_cohort_path"
 
