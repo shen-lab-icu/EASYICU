@@ -8,6 +8,7 @@ without choosing scientific criteria itself.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -34,6 +35,55 @@ class RegisteredProductPathResolver(Protocol):
         allowed_kinds: frozenset[str],
         out_dir: Path,
     ) -> list[str]: ...
+
+
+@dataclass(frozen=True)
+class _FindingFactory:
+    """Create stable fail-closed findings for one cohort-construction step."""
+
+    step_id: str
+
+    def __call__(
+        self, issue: str, message: str, **detail: Any
+    ) -> list[ValidationFinding]:
+        return [
+            ValidationFinding(
+                validator="primary_analysis_cohort_integrity",
+                severity="error",
+                message=message,
+                detail={"issue": issue, "step_id": self.step_id, **detail},
+            )
+        ]
+
+
+@dataclass(frozen=True)
+class _CohortReplayAuthority:
+    """Immutable host replay facts consumed by downstream product validators."""
+
+    universe: Any
+    authoritative: Any
+    replayed: Any
+    raw_n: int
+    locked_n: int
+    identity_column: str
+    authoritative_identity: Any
+    expected_remaining_counts: tuple[int, ...]
+    expected_exclusion_counts: tuple[int, ...]
+    expected_criterion_ids: tuple[str, ...]
+    accepted_criterion_ids: tuple[tuple[str, ...], ...]
+    criterion_aliases: tuple[tuple[str, str], ...]
+
+    def canonicalise_reported_rule_ids(
+        self, reported: Sequence[str]
+    ) -> list[str] | None:
+        lookup = dict(self.criterion_aliases)
+        canonical: list[str] = []
+        for rule_id in reported:
+            resolved = lookup.get(rule_id)
+            if resolved is None:
+                return None
+            canonical.append(resolved)
+        return canonical
 
 
 def _integral_count(value: Any) -> int | None:
@@ -149,328 +199,23 @@ def _assert_exact_frame_values_equal(left: Any, right: Any) -> None:
                 )
 
 
-def primary_analysis_cohort_integrity_findings(
+def _validate_attrition_products(
     *,
     step: AnalysisStep,
-    plan: Any,
     step_summary: Mapping[str, Any],
     out_dir: Path,
-    universe_path: Path,
-    authoritative_cohort_path: Path,
-    context: Any = None,
     registered_product_paths: RegisteredProductPathResolver,
+    authority: _CohortReplayAuthority,
+    finding: _FindingFactory,
 ) -> list[ValidationFinding]:
-    """Verify one Agent-produced primary cohort against host-locked authority.
+    """Validate every declared cohort-flow table against the host replay."""
 
-    This gate never chooses eligibility.  It replays the Planner-owned typed
-    cohort definition on the raw universe, then checks the produced row identity
-    and declared attrition accounting before the attempt may become current.
-    """
+    import pandas as pd
 
-    if not _primary_analysis_cohort_attrition_step(step):
-        return []
-
-    def finding(issue: str, message: str, **detail: Any) -> list[ValidationFinding]:
-        return [
-            ValidationFinding(
-                validator="primary_analysis_cohort_integrity",
-                severity="error",
-                message=message,
-                detail={"issue": issue, "step_id": step.step_id, **detail},
-            )
-        ]
-
-    owner_finding = _primary_analysis_cohort_product_owner_finding(
-        step=step,
-        plan=plan,
-        validator="primary_analysis_cohort_integrity",
-    )
-    if owner_finding is not None:
-        return [owner_finding]
-
-    try:
-        import pandas as pd
-
-        from ..cohort.schema import (
-            CohortDefinition,
-            _planner_declared_context_column_bindings,
-            _resolve_predicate_column,
-            build_cohort,
-            coerce_cohort_definition,
-        )
-
-        universe = pd.read_parquet(universe_path).reset_index(drop=True)
-        authoritative = pd.read_parquet(authoritative_cohort_path).reset_index(
-            drop=True
-        )
-        definition = coerce_cohort_definition(getattr(plan, "cohort", None))
-        replayed = universe.copy()
-        expected_remaining_counts = [int(len(replayed))]
-        expected_exclusion_counts = [0]
-        expected_criterion_ids: list[str] = []
-        accepted_criterion_ids: list[tuple[str, ...]] = []
-        if definition is not None:
-            column_bindings = _planner_declared_context_column_bindings(
-                definition=definition,
-                plan=plan,
-                context=context,
-                columns=replayed.columns,
-            )
-            ordered_predicates = [
-                ("include", predicate) for predicate in definition.inclusion
-            ] + [("exclude", predicate) for predicate in definition.exclusion]
-            for order, (kind, predicate) in enumerate(ordered_predicates, start=1):
-                before_n = int(len(replayed))
-                resolved_column = _resolve_predicate_column(
-                    replayed.columns,
-                    predicate.concept_id,
-                    predicate.aggregation,
-                    column_bindings=column_bindings,
-                )
-                if resolved_column is None:
-                    raise ValueError(
-                        "locked cohort predicate has no host-resolved materialized "
-                        f"column: {predicate.concept_id!r}"
-                    )
-                one = CohortDefinition(
-                    name=f"criterion_{order}",
-                    inclusion=(predicate,) if kind == "include" else (),
-                    exclusion=(predicate,) if kind == "exclude" else (),
-                )
-                replayed = build_cohort(
-                    one,
-                    replayed,
-                    column_bindings=column_bindings,
-                ).reset_index(drop=True)
-                after_n = int(len(replayed))
-                concept = _normalise(predicate.concept_id)
-                canonical_id = f"{kind}_{order:02d}_{concept}"
-                resolved_id = f"{kind}_{order:02d}_{_normalise(resolved_column)}"
-                expected_criterion_ids.append(canonical_id)
-                accepted_criterion_ids.append(
-                    tuple(dict.fromkeys((canonical_id, resolved_id)))
-                )
-                expected_remaining_counts.append(after_n)
-                expected_exclusion_counts.append(before_n - after_n)
-    except Exception as exc:
-        return finding(
-            "authority_replay_unavailable",
-            "The primary analysis-cohort product could not be verified against "
-            "the raw universe and Planner-locked cohort definition.",
-            error_type=type(exc).__name__,
-            error=str(exc)[:300],
-        )
-
-    criterion_alias_to_canonical: dict[str, str] = {}
-    for canonical_id, aliases in zip(
-        expected_criterion_ids,
-        accepted_criterion_ids,
-        strict=True,
-    ):
-        for alias in aliases:
-            existing = criterion_alias_to_canonical.setdefault(alias, canonical_id)
-            if existing != canonical_id:
-                return finding(
-                    "attrition_rule_identity_ambiguous",
-                    "Host-resolved cohort predicate columns do not provide a "
-                    "unique attrition-rule identity.",
-                    ambiguous_alias=alias,
-                    canonical_criterion_ids=[existing, canonical_id],
-                )
-
-    def canonicalise_reported_rule_ids(
-        reported: Sequence[str],
-    ) -> list[str] | None:
-        canonical: list[str] = []
-        for rule_id in reported:
-            resolved = criterion_alias_to_canonical.get(rule_id)
-            if resolved is None:
-                return None
-            canonical.append(resolved)
-        return canonical
-
-    raw_n = int(len(universe))
-    locked_n = int(len(authoritative))
-    if len(replayed) != locked_n:
-        return finding(
-            "locked_cohort_replay_count_mismatch",
-            "The Planner-locked cohort replay does not match the authoritative "
-            "materialised cohort denominator.",
-            raw_universe_n=raw_n,
-            replayed_cohort_n=int(len(replayed)),
-            authoritative_cohort_n=locked_n,
-        )
-
-    identity_column = next(
-        (
-            candidate
-            for candidate in ("stay_id", "encounter_id", "row_id")
-            if all(
-                candidate in frame.columns
-                and not frame[candidate].isna().any()
-                and not frame[candidate].duplicated().any()
-                for frame in (replayed, authoritative)
-            )
-        ),
-        None,
-    )
-    if identity_column is None:
-        return finding(
-            "row_identity_unverifiable",
-            "The primary analysis cohort has no shared unique row identity; "
-            "cohort membership cannot be sealed safely.",
-        )
-
-    expected_identity = (
-        replayed[identity_column].astype("string").reset_index(drop=True)
-    )
-    authoritative_identity = (
-        authoritative[identity_column].astype("string").reset_index(drop=True)
-    )
-    if not expected_identity.equals(authoritative_identity):
-        return finding(
-            "authoritative_cohort_identity_mismatch",
-            "The materialised analysis cohort does not match the row identities "
-            "obtained by replaying the Planner-locked definition.",
-            identity_column=identity_column,
-            raw_universe_n=raw_n,
-            authoritative_cohort_n=locked_n,
-        )
-    try:
-        _assert_exact_frame_values_equal(
-            replayed.loc[:, authoritative.columns].reset_index(drop=True),
-            authoritative,
-        )
-    except (AssertionError, KeyError) as exc:
-        return finding(
-            "authoritative_cohort_value_mismatch",
-            "The materialised analysis cohort changes host columns relative to "
-            "the Planner-locked cohort replay.",
-            error=str(exc)[:300],
-        )
-
-    declared_cohort_products = {
-        product[1]
-        for raw in (step.expected_outputs or [])
-        if (product := _primary_analysis_cohort_product_matches_plan(raw, plan=plan))
-        is not None
-    }
-    if len(declared_cohort_products) != 1:
-        return finding(
-            "analysis_cohort_product_ambiguous",
-            "The primary analysis-cohort product must have exactly one "
-            "registered typed identity.",
-            declared_products=sorted(declared_cohort_products),
-        )
-    cohort_product = next(iter(declared_cohort_products))
-    cohort_candidates = registered_product_paths(
-        step_summary,
-        product_name=cohort_product,
-        allowed_kinds=_PRIMARY_ANALYSIS_COHORT_DATA_KINDS,
-        out_dir=out_dir,
-    )
-    if len(cohort_candidates) != 1:
-        return finding(
-            "analysis_cohort_product_ambiguous",
-            "The declared primary analysis-cohort product must resolve to exactly one "
-            "registered output file.",
-            product=cohort_product,
-            candidates=cohort_candidates,
-        )
-    try:
-        produced_path = contained_regular_output_file(
-            Path(out_dir), cohort_candidates[0]
-        )
-        if produced_path.suffix.lower() == ".parquet":
-            produced = pd.read_parquet(produced_path).reset_index(drop=True)
-        elif produced_path.suffix.lower() == ".feather":
-            produced = pd.read_feather(produced_path).reset_index(drop=True)
-        elif produced_path.suffix.lower() in {".csv", ".tsv"}:
-            produced = pd.read_csv(
-                produced_path,
-                sep="\t" if produced_path.suffix.lower() == ".tsv" else ",",
-            ).reset_index(drop=True)
-        else:
-            raise ValueError("unsupported analysis-cohort file type")
-    except Exception as exc:
-        return finding(
-            "analysis_cohort_product_unreadable",
-            "The declared analysis_cohort product is unreadable or outside the "
-            "step output directory.",
-            error_type=type(exc).__name__,
-            error=str(exc)[:300],
-        )
-    if (
-        identity_column not in produced.columns
-        or produced[identity_column].isna().any()
-        or produced[identity_column].duplicated().any()
-        or not produced[identity_column]
-        .astype("string")
-        .reset_index(drop=True)
-        .equals(authoritative_identity)
-    ):
-        return finding(
-            "analysis_cohort_identity_mismatch",
-            "The produced analysis_cohort does not preserve the exact ordered row "
-            "identity of the Planner-locked cohort.",
-            identity_column=identity_column,
-            produced_cohort_n=int(len(produced)),
-            authoritative_cohort_n=locked_n,
-        )
-    try:
-        _assert_exact_frame_values_equal(
-            produced.loc[:, authoritative.columns].reset_index(drop=True),
-            authoritative,
-        )
-    except (AssertionError, KeyError) as exc:
-        return finding(
-            "analysis_cohort_value_mismatch",
-            "The produced analysis_cohort changes or omits authoritative cohort "
-            "columns; only additional derived columns are allowed.",
-            error=str(exc)[:300],
-        )
-
-    reported_raw_n, raw_denominators_by_field, raw_denominator_issue = (
-        _coherent_integral_mapping_counts(
-            step_summary,
-            _PRIMARY_RAW_DENOMINATOR_FIELDS,
-        )
-    )
-    reported_final_n, final_denominators_by_field, final_denominator_issue = (
-        _coherent_integral_mapping_counts(
-            step_summary,
-            _PRIMARY_FINAL_DENOMINATOR_FIELDS,
-        )
-    )
-    if (
-        raw_denominator_issue == "nonintegral"
-        or final_denominator_issue == "nonintegral"
-    ):
-        return finding(
-            "cohort_denominator_fields_nonintegral",
-            "The primary cohort summary contains a non-integral structural "
-            "denominator in one of its synonymous fields.",
-            raw_denominators_by_field=raw_denominators_by_field,
-            final_denominators_by_field=final_denominators_by_field,
-        )
-    if raw_denominator_issue == "disagree" or final_denominator_issue == "disagree":
-        return finding(
-            "cohort_denominator_fields_disagree",
-            "The primary cohort summary contains contradictory synonymous "
-            "structural denominator fields.",
-            raw_denominators_by_field=raw_denominators_by_field,
-            final_denominators_by_field=final_denominators_by_field,
-        )
-    if reported_raw_n != raw_n or reported_final_n != locked_n:
-        return finding(
-            "cohort_denominator_mismatch",
-            "The primary cohort summary does not report the raw-universe and "
-            "locked final denominators exactly.",
-            expected_universe_n=raw_n,
-            reported_universe_n=reported_raw_n,
-            expected_final_n=locked_n,
-            reported_final_n=reported_final_n,
-        )
+    expected_remaining_counts = list(authority.expected_remaining_counts)
+    expected_exclusion_counts = list(authority.expected_exclusion_counts)
+    expected_criterion_ids = list(authority.expected_criterion_ids)
+    accepted_criterion_ids = list(authority.accepted_criterion_ids)
 
     declared_flow_products = {
         name
@@ -595,8 +340,8 @@ def primary_analysis_cohort_integrity_findings(
             if (
                 product in {"cohort_denominator", "cohort_denominators"}
                 and len(table) == 1
-                and table_raw_n == raw_n
-                and table_final_n == locked_n
+                and table_raw_n == authority.raw_n
+                and table_final_n == authority.locked_n
             ):
                 continue
             return finding(
@@ -647,15 +392,15 @@ def primary_analysis_cohort_integrity_findings(
         # after one rule.  When exclusions are explicit, each transition must
         # reconcile row by row; a matching grand total alone is insufficient.
         if remaining_column is not None:
-            if integral_counts[0] != raw_n or integral_counts[-1] != locked_n:
+            if integral_counts[0] != authority.raw_n or integral_counts[-1] != authority.locked_n:
                 return finding(
                     "attrition_endpoints_mismatch",
                     f"The declared {product} table does not run from the raw "
                     "universe to the locked analysis cohort.",
                     product=product,
-                    expected_universe_n=raw_n,
+                    expected_universe_n=authority.raw_n,
                     reported_first_n=integral_counts[0],
-                    expected_final_n=locked_n,
+                    expected_final_n=authority.locked_n,
                     reported_last_n=integral_counts[-1],
                 )
             if any(
@@ -713,7 +458,7 @@ def primary_analysis_cohort_integrity_findings(
             has_terminal_row = False
             if (
                 len(reported_remaining) == len(expected_remaining_counts) + 1
-                and reported_remaining[-1] == locked_n
+                and reported_remaining[-1] == authority.locked_n
                 and reported_exclusions[-1] == 0
             ):
                 has_terminal_row = True
@@ -748,7 +493,7 @@ def primary_analysis_cohort_integrity_findings(
                 reported_boundary_id = (
                     reported_predicate_ids[0] if reported_predicate_ids else None
                 )
-                canonical_reported_predicates = canonicalise_reported_rule_ids(
+                canonical_reported_predicates = authority.canonicalise_reported_rule_ids(
                     reported_predicate_ids[1:]
                 )
                 allowed_terminal_ids = {
@@ -787,7 +532,7 @@ def primary_analysis_cohort_integrity_findings(
                 starts = [
                     _integral_count(value) for value in table[start_column].tolist()
                 ]
-                expected_starts = [raw_n, *integral_counts[:-1]]
+                expected_starts = [authority.raw_n, *integral_counts[:-1]]
                 if (
                     any(value is None for value in starts)
                     or [int(value) for value in starts if value is not None]
@@ -836,7 +581,7 @@ def primary_analysis_cohort_integrity_findings(
                 reported_remaining = list(integral_counts)
                 if (
                     len(reported_remaining) == len(expected_remaining_counts) + 1
-                    and reported_remaining[-1] == locked_n
+                    and reported_remaining[-1] == authority.locked_n
                 ):
                     reported_remaining.pop()
                 if reported_remaining == expected_remaining_counts:
@@ -884,20 +629,20 @@ def primary_analysis_cohort_integrity_findings(
         reported_excluded_counts = [integral_counts[index] for index in excluded_rows]
         reported_excluded = sum(reported_excluded_counts)
         if (
-            reported_denominator != raw_n
-            or reported_retained != locked_n
-            or reported_excluded != raw_n - locked_n
+            reported_denominator != authority.raw_n
+            or reported_retained != authority.locked_n
+            or reported_excluded != authority.raw_n - authority.locked_n
         ):
             return finding(
                 "attrition_partitions_do_not_conserve",
                 f"The declared {product} partitions do not reconcile the raw "
                 "and final cohort denominators.",
                 product=product,
-                expected_universe_n=raw_n,
+                expected_universe_n=authority.raw_n,
                 reported_universe_n=reported_denominator,
-                expected_retained_n=locked_n,
+                expected_retained_n=authority.locked_n,
                 reported_retained_n=reported_retained,
-                expected_excluded_n=raw_n - locked_n,
+                expected_excluded_n=authority.raw_n - authority.locked_n,
                 reported_excluded_n=reported_excluded,
             )
         category_column = canonical_identity_column
@@ -934,7 +679,7 @@ def primary_analysis_cohort_integrity_findings(
                 _normalise(table.iloc[index][category_column])
                 for index in excluded_rows
             ]
-            canonical_reported_rule_ids = canonicalise_reported_rule_ids(
+            canonical_reported_rule_ids = authority.canonicalise_reported_rule_ids(
                 reported_rule_ids
             )
             if (
@@ -983,8 +728,335 @@ def primary_analysis_cohort_integrity_findings(
 
     return []
 
+def primary_analysis_cohort_integrity_findings(
+    *,
+    step: AnalysisStep,
+    plan: Any,
+    step_summary: Mapping[str, Any],
+    out_dir: Path,
+    universe_path: Path,
+    authoritative_cohort_path: Path,
+    context: Any = None,
+    registered_product_paths: RegisteredProductPathResolver,
+) -> list[ValidationFinding]:
+    """Verify one Agent-produced primary cohort against host-locked authority.
+
+    This gate never chooses eligibility.  It replays the Planner-owned typed
+    cohort definition on the raw universe, then checks the produced row identity
+    and declared attrition accounting before the attempt may become current.
+    """
+
+    if not _primary_analysis_cohort_attrition_step(step):
+        return []
+
+    finding = _FindingFactory(step.step_id)
+
+    owner_finding = _primary_analysis_cohort_product_owner_finding(
+        step=step,
+        plan=plan,
+        validator="primary_analysis_cohort_integrity",
+    )
+    if owner_finding is not None:
+        return [owner_finding]
+
+    try:
+        import pandas as pd
+
+        from ..cohort.schema import (
+            CohortDefinition,
+            _planner_declared_context_column_bindings,
+            _resolve_predicate_column,
+            build_cohort,
+            coerce_cohort_definition,
+        )
+
+        universe = pd.read_parquet(universe_path).reset_index(drop=True)
+        authoritative = pd.read_parquet(authoritative_cohort_path).reset_index(
+            drop=True
+        )
+        definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+        replayed = universe.copy()
+        expected_remaining_counts = [int(len(replayed))]
+        expected_exclusion_counts = [0]
+        expected_criterion_ids: list[str] = []
+        accepted_criterion_ids: list[tuple[str, ...]] = []
+        if definition is not None:
+            column_bindings = _planner_declared_context_column_bindings(
+                definition=definition,
+                plan=plan,
+                context=context,
+                columns=replayed.columns,
+            )
+            ordered_predicates = [
+                ("include", predicate) for predicate in definition.inclusion
+            ] + [("exclude", predicate) for predicate in definition.exclusion]
+            for order, (kind, predicate) in enumerate(ordered_predicates, start=1):
+                before_n = int(len(replayed))
+                resolved_column = _resolve_predicate_column(
+                    replayed.columns,
+                    predicate.concept_id,
+                    predicate.aggregation,
+                    column_bindings=column_bindings,
+                )
+                if resolved_column is None:
+                    raise ValueError(
+                        "locked cohort predicate has no host-resolved materialized "
+                        f"column: {predicate.concept_id!r}"
+                    )
+                one = CohortDefinition(
+                    name=f"criterion_{order}",
+                    inclusion=(predicate,) if kind == "include" else (),
+                    exclusion=(predicate,) if kind == "exclude" else (),
+                )
+                replayed = build_cohort(
+                    one,
+                    replayed,
+                    column_bindings=column_bindings,
+                ).reset_index(drop=True)
+                after_n = int(len(replayed))
+                concept = _normalise(predicate.concept_id)
+                canonical_id = f"{kind}_{order:02d}_{concept}"
+                resolved_id = f"{kind}_{order:02d}_{_normalise(resolved_column)}"
+                expected_criterion_ids.append(canonical_id)
+                accepted_criterion_ids.append(
+                    tuple(dict.fromkeys((canonical_id, resolved_id)))
+                )
+                expected_remaining_counts.append(after_n)
+                expected_exclusion_counts.append(before_n - after_n)
+    except Exception as exc:
+        return finding(
+            "authority_replay_unavailable",
+            "The primary analysis-cohort product could not be verified against "
+            "the raw universe and Planner-locked cohort definition.",
+            error_type=type(exc).__name__,
+            error=str(exc)[:300],
+        )
+
+    criterion_alias_to_canonical: dict[str, str] = {}
+    for canonical_id, aliases in zip(
+        expected_criterion_ids,
+        accepted_criterion_ids,
+        strict=True,
+    ):
+        for alias in aliases:
+            existing = criterion_alias_to_canonical.setdefault(alias, canonical_id)
+            if existing != canonical_id:
+                return finding(
+                    "attrition_rule_identity_ambiguous",
+                    "Host-resolved cohort predicate columns do not provide a "
+                    "unique attrition-rule identity.",
+                    ambiguous_alias=alias,
+                    canonical_criterion_ids=[existing, canonical_id],
+                )
+
+    raw_n = int(len(universe))
+    locked_n = int(len(authoritative))
+    if len(replayed) != locked_n:
+        return finding(
+            "locked_cohort_replay_count_mismatch",
+            "The Planner-locked cohort replay does not match the authoritative "
+            "materialised cohort denominator.",
+            raw_universe_n=raw_n,
+            replayed_cohort_n=int(len(replayed)),
+            authoritative_cohort_n=locked_n,
+        )
+
+    identity_column = next(
+        (
+            candidate
+            for candidate in ("stay_id", "encounter_id", "row_id")
+            if all(
+                candidate in frame.columns
+                and not frame[candidate].isna().any()
+                and not frame[candidate].duplicated().any()
+                for frame in (replayed, authoritative)
+            )
+        ),
+        None,
+    )
+    if identity_column is None:
+        return finding(
+            "row_identity_unverifiable",
+            "The primary analysis cohort has no shared unique row identity; "
+            "cohort membership cannot be sealed safely.",
+        )
+
+    expected_identity = (
+        replayed[identity_column].astype("string").reset_index(drop=True)
+    )
+    authoritative_identity = (
+        authoritative[identity_column].astype("string").reset_index(drop=True)
+    )
+    if not expected_identity.equals(authoritative_identity):
+        return finding(
+            "authoritative_cohort_identity_mismatch",
+            "The materialised analysis cohort does not match the row identities "
+            "obtained by replaying the Planner-locked definition.",
+            identity_column=identity_column,
+            raw_universe_n=raw_n,
+            authoritative_cohort_n=locked_n,
+        )
+    try:
+        _assert_exact_frame_values_equal(
+            replayed.loc[:, authoritative.columns].reset_index(drop=True),
+            authoritative,
+        )
+    except (AssertionError, KeyError) as exc:
+        return finding(
+            "authoritative_cohort_value_mismatch",
+            "The materialised analysis cohort changes host columns relative to "
+            "the Planner-locked cohort replay.",
+            error=str(exc)[:300],
+        )
+
+    authority = _CohortReplayAuthority(
+        universe=universe,
+        authoritative=authoritative,
+        replayed=replayed,
+        raw_n=raw_n,
+        locked_n=locked_n,
+        identity_column=identity_column,
+        authoritative_identity=authoritative_identity,
+        expected_remaining_counts=tuple(expected_remaining_counts),
+        expected_exclusion_counts=tuple(expected_exclusion_counts),
+        expected_criterion_ids=tuple(expected_criterion_ids),
+        accepted_criterion_ids=tuple(accepted_criterion_ids),
+        criterion_aliases=tuple(criterion_alias_to_canonical.items()),
+    )
+
+    declared_cohort_products = {
+        product[1]
+        for raw in (step.expected_outputs or [])
+        if (product := _primary_analysis_cohort_product_matches_plan(raw, plan=plan))
+        is not None
+    }
+    if len(declared_cohort_products) != 1:
+        return finding(
+            "analysis_cohort_product_ambiguous",
+            "The primary analysis-cohort product must have exactly one "
+            "registered typed identity.",
+            declared_products=sorted(declared_cohort_products),
+        )
+    cohort_product = next(iter(declared_cohort_products))
+    cohort_candidates = registered_product_paths(
+        step_summary,
+        product_name=cohort_product,
+        allowed_kinds=_PRIMARY_ANALYSIS_COHORT_DATA_KINDS,
+        out_dir=out_dir,
+    )
+    if len(cohort_candidates) != 1:
+        return finding(
+            "analysis_cohort_product_ambiguous",
+            "The declared primary analysis-cohort product must resolve to exactly one "
+            "registered output file.",
+            product=cohort_product,
+            candidates=cohort_candidates,
+        )
+    try:
+        produced_path = contained_regular_output_file(
+            Path(out_dir), cohort_candidates[0]
+        )
+        if produced_path.suffix.lower() == ".parquet":
+            produced = pd.read_parquet(produced_path).reset_index(drop=True)
+        elif produced_path.suffix.lower() == ".feather":
+            produced = pd.read_feather(produced_path).reset_index(drop=True)
+        elif produced_path.suffix.lower() in {".csv", ".tsv"}:
+            produced = pd.read_csv(
+                produced_path,
+                sep="\t" if produced_path.suffix.lower() == ".tsv" else ",",
+            ).reset_index(drop=True)
+        else:
+            raise ValueError("unsupported analysis-cohort file type")
+    except Exception as exc:
+        return finding(
+            "analysis_cohort_product_unreadable",
+            "The declared analysis_cohort product is unreadable or outside the "
+            "step output directory.",
+            error_type=type(exc).__name__,
+            error=str(exc)[:300],
+        )
+    if (
+        identity_column not in produced.columns
+        or produced[identity_column].isna().any()
+        or produced[identity_column].duplicated().any()
+        or not produced[identity_column]
+        .astype("string")
+        .reset_index(drop=True)
+        .equals(authoritative_identity)
+    ):
+        return finding(
+            "analysis_cohort_identity_mismatch",
+            "The produced analysis_cohort does not preserve the exact ordered row "
+            "identity of the Planner-locked cohort.",
+            identity_column=identity_column,
+            produced_cohort_n=int(len(produced)),
+            authoritative_cohort_n=locked_n,
+        )
+    try:
+        _assert_exact_frame_values_equal(
+            produced.loc[:, authoritative.columns].reset_index(drop=True),
+            authoritative,
+        )
+    except (AssertionError, KeyError) as exc:
+        return finding(
+            "analysis_cohort_value_mismatch",
+            "The produced analysis_cohort changes or omits authoritative cohort "
+            "columns; only additional derived columns are allowed.",
+            error=str(exc)[:300],
+        )
+
+    reported_raw_n, raw_denominators_by_field, raw_denominator_issue = (
+        _coherent_integral_mapping_counts(
+            step_summary,
+            _PRIMARY_RAW_DENOMINATOR_FIELDS,
+        )
+    )
+    reported_final_n, final_denominators_by_field, final_denominator_issue = (
+        _coherent_integral_mapping_counts(
+            step_summary,
+            _PRIMARY_FINAL_DENOMINATOR_FIELDS,
+        )
+    )
+    if (
+        raw_denominator_issue == "nonintegral"
+        or final_denominator_issue == "nonintegral"
+    ):
+        return finding(
+            "cohort_denominator_fields_nonintegral",
+            "The primary cohort summary contains a non-integral structural "
+            "denominator in one of its synonymous fields.",
+            raw_denominators_by_field=raw_denominators_by_field,
+            final_denominators_by_field=final_denominators_by_field,
+        )
+    if raw_denominator_issue == "disagree" or final_denominator_issue == "disagree":
+        return finding(
+            "cohort_denominator_fields_disagree",
+            "The primary cohort summary contains contradictory synonymous "
+            "structural denominator fields.",
+            raw_denominators_by_field=raw_denominators_by_field,
+            final_denominators_by_field=final_denominators_by_field,
+        )
+    if reported_raw_n != raw_n or reported_final_n != locked_n:
+        return finding(
+            "cohort_denominator_mismatch",
+            "The primary cohort summary does not report the raw-universe and "
+            "locked final denominators exactly.",
+            expected_universe_n=raw_n,
+            reported_universe_n=reported_raw_n,
+            expected_final_n=locked_n,
+            reported_final_n=reported_final_n,
+        )
+
+    return _validate_attrition_products(
+        step=step,
+        step_summary=step_summary,
+        out_dir=out_dir,
+        registered_product_paths=registered_product_paths,
+        authority=authority,
+        finding=finding,
+    )
+
 __all__ = [
     "RegisteredProductPathResolver",
     "primary_analysis_cohort_integrity_findings",
 ]
-
