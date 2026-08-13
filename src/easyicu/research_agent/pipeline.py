@@ -174,7 +174,10 @@ from .orchestration.config import (
     assert_step_provider_budget_funds_its_repairs,
 )
 from .orchestration.services import PipelineServices
-from .orchestration.progress import planner_retry_progress_callback
+from .orchestration.progress import (
+    ResumableProgressChannel,
+    planner_retry_progress_callback,
+)
 from .orchestration.scientific_runtime import ScientificRuntimeAuthorities
 from .orchestration.workflow import PipelineRunOutcome
 from .resources.capability_runtime import CapabilityWorkflowRuntime
@@ -462,7 +465,6 @@ from .authority.run_lock import (
 )
 from .authority.run_heartbeat import (
     bind_active_run_heartbeat,
-    record_active_run_progress,
     run_heartbeat_scope,
 )
 from .audits.validators import (
@@ -4129,58 +4131,8 @@ class ResearchAgentPipeline:
         run_language = self._normalise_manuscript_language(
             manuscript_language or self._manuscript_language
         )
-        audit_logger: Optional[AuditLogger] = None
-
-        # A plan review pauses ``run`` and is later resumed by a different Web
-        # job.  Keep the callback behind a per-run mutable sink so resume can
-        # hand subsequent execution/writing events to that new job without
-        # changing any of the digest-bound scientific invokers closed over by
-        # the workflow.  The sink belongs to this run (not the pipeline
-        # instance), so another concurrent run cannot steal its timeline.
-        progress_sink: Dict[str, Any] = {"callback": progress_callback}
-
-        def _emit_progress(stage: str, message: str, **extra: Any) -> None:
-            progress_status = str(extra.get("status", "running"))
-            progress_step_id = (
-                str(extra.get("step_id")) if extra.get("step_id") else None
-            )
-            record_active_run_progress(
-                stage=stage,
-                message=message,
-                status=progress_status,
-                step_id=progress_step_id,
-                phase_timeout_seconds=extra.get("phase_timeout_seconds"),
-                run_id=(str(extra.get("run_id")) if extra.get("run_id") else None),
-            )
-            if audit_logger is not None:
-                try:
-                    audit_logger.emit(
-                        phase=stage,
-                        event=message,
-                        status=progress_status,
-                        step_id=progress_step_id,
-                        detail={
-                            k: v
-                            for k, v in extra.items()
-                            if k not in {"status", "step_id"}
-                        },
-                    )
-                except Exception:
-                    pass
-            active_progress_callback = progress_sink.get("callback")
-            if active_progress_callback is None:
-                return
-            payload = {
-                "stage": stage,
-                "message": message,
-                "status": extra.pop("status", "running"),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            payload.update(extra)
-            try:
-                active_progress_callback(payload)
-            except Exception:
-                pass
+        progress_channel = ResumableProgressChannel(progress_callback)
+        _emit_progress = progress_channel.emit
 
         _emit_progress("run", "Starting research-agent run.")
 
@@ -4406,6 +4358,7 @@ class ResearchAgentPipeline:
                 path=str(cohort_path),
             )
         audit_logger = AuditLogger(run_dir / "audit_log.jsonl")
+        progress_channel.bind_audit_logger(audit_logger)
 
         cache_key: Optional[str] = None
         if self._enable_cache and not resume_run_id:
@@ -4834,7 +4787,7 @@ class ResearchAgentPipeline:
             workflow=workflow,
             run_id=run_id,
             run_dir=run_dir,
-            progress_sink=progress_sink,
+            progress_channel=progress_channel,
         )
 
     def _pipeline_result_or_pending(
@@ -4844,7 +4797,7 @@ class ResearchAgentPipeline:
         workflow: Any,
         run_id: str,
         run_dir: Path,
-        progress_sink: Optional[Dict[str, Any]] = None,
+        progress_channel: Optional[ResumableProgressChannel] = None,
     ) -> Any:
         """Return the run's result, or the typed pause that replaced it.
 
@@ -4897,7 +4850,7 @@ class ResearchAgentPipeline:
             # Mutable indirection owned by this paused run.  Resume may replace
             # only the transport callback; the workflow, plan and scientific
             # authority remain the exact objects reviewed by the operator.
-            "progress_sink": progress_sink,
+            "progress_sink": progress_channel,
         }
         return pending
 
@@ -4970,9 +4923,14 @@ class ResearchAgentPipeline:
         # writing there. ``run`` returns when it pauses, releasing its lease,
         # which is exactly why resume has to take one of its own.
         workflow = pending_state["workflow"]
-        progress_sink = pending_state.get("progress_sink")
-        if progress_callback is not None and isinstance(progress_sink, dict):
-            progress_sink["callback"] = progress_callback
+        progress_channel = pending_state.get("progress_sink")
+        if progress_callback is not None:
+            if isinstance(progress_channel, ResumableProgressChannel):
+                progress_channel.replace_callback(progress_callback)
+            elif isinstance(progress_channel, dict):
+                # Same-process pauses created before a hot reload retain the
+                # historical mutable callback sink.
+                progress_channel["callback"] = progress_callback
         try:
             with run_heartbeat_scope(run_id=pending.run_id):
                 bind_active_run_heartbeat(
@@ -4988,7 +4946,11 @@ class ResearchAgentPipeline:
                 workflow=workflow,
                 run_id=pending.run_id,
                 run_dir=Path(pending.run_dir),
-                progress_sink=progress_sink,
+                progress_channel=(
+                    progress_channel
+                    if isinstance(progress_channel, ResumableProgressChannel)
+                    else None
+                ),
             )
         except HumanReviewRejected:
             # The workflow has recorded the rejection and discarded its live
