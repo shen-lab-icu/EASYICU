@@ -463,6 +463,20 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
     }
 
 
+def validate_analysis_design_for_execution(
+    study: Mapping[str, Any],
+) -> Dict[str, str]:
+    """Public, read-only capability gate for the current Web runner.
+
+    Copilot uses this before spending a one-turn configuration grant so it can
+    tell the user that a scientifically requested design is not executable by
+    the selected source/runner.  The launch path calls the same owner logic
+    again; this preview never weakens the authoritative launch gate.
+    """
+
+    return _validate_analysis_design(study)
+
+
 def _validate_primary_concept_selection(
     study: Mapping[str, Any],
     primary_exposure: Optional[str],
@@ -2302,4 +2316,5 @@ __all__ = [
     "pending_review",
     "refresh_literature_evidence_projection",
     "resume_research_pipeline",
+    "validate_analysis_design_for_execution",
 ]

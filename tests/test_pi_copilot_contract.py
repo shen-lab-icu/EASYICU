@@ -2582,6 +2582,136 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
     assert literature_grant.was_provided("literature") is True
 
 
+def test_rejected_sensitivity_does_not_consume_configure_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-1",
+        "revision": 5,
+        "question": "Is sepsis associated with mortality?",
+        "active_job_id": None,
+    }
+    session = PiSessionRecord(
+        session_id="pi-test",
+        binding=AuthorityBinding(study_context_id="study-1", study_revision=5),
+    )
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    writes = []
+
+    def upsert(raw, **kwargs):
+        writes.append(dict(raw))
+        return {**current, **raw, "revision": 6}
+
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
+    execution = ToolExecutionContext(
+        session=session,
+        allowed_actions=frozenset({"configure"}),
+    )
+
+    rejected = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "sensitivity_specs": [
+                {
+                    "spec_id": "first_stay",
+                    "axis": "repeated_stays",
+                    "strategy": "first_stay",
+                    "execution_variables": [],
+                }
+            ]
+        },
+        execution,
+    )
+
+    assert rejected["code"] == "study_sensitivity_specs_invalid"
+    assert (
+        "first_stay sensitivity requires execution_variables"
+        in rejected["details"]["reason"]
+    )
+    assert "configure" in execution.allowed_actions
+    assert writes == []
+
+    saved = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "sensitivity_specs": [
+                {
+                    "spec_id": "first_stay",
+                    "axis": "repeated_stays",
+                    "strategy": "first_stay",
+                    "execution_variables": ["icu_readmission"],
+                }
+            ]
+        },
+        execution,
+    )
+    assert saved["code"] == "study_context_updated"
+    assert writes[0]["sensitivity_specs"][0]["execution_variables"] == [
+        "icu_readmission"
+    ]
+
+
+def test_unsupported_runtime_design_does_not_consume_configure_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-1",
+        "revision": 5,
+        "question": "Is sepsis associated with mortality?",
+        "outcome": "in-hospital mortality",
+        "primary_exposure": "Sepsis-3",
+        "cohort": {"exclude_readmissions": False},
+        "active_job_id": None,
+    }
+    session = PiSessionRecord(
+        session_id="pi-test",
+        binding=AuthorityBinding(study_context_id="study-1", study_revision=5),
+    )
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    writes = []
+
+    def upsert(raw, **kwargs):
+        writes.append(dict(raw))
+        return {**current, **raw, "revision": 6}
+
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
+    execution = ToolExecutionContext(
+        session=session,
+        allowed_actions=frozenset({"configure"}),
+    )
+
+    blocked = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "cohort": {"exclude_readmissions": False},
+            "analysis_design": {
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
+            },
+        },
+        execution,
+    )
+    assert blocked["code"] == "research_pipeline_cluster_variance_unsupported"
+    assert blocked["details"]["supported_variance_estimators"] == ["model_based"]
+    assert "configure" in execution.allowed_actions
+    assert writes == []
+
+    saved = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "cohort": {"exclude_readmissions": True},
+            "analysis_design": {
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "model_based",
+            },
+        },
+        execution,
+    )
+    assert saved["code"] == "study_context_updated"
+    assert writes[0]["cohort"]["exclude_readmissions"] is True
+
+
 def test_preflight_delegates_to_the_existing_agent_submission_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
