@@ -36,6 +36,9 @@ from .publication import (
 )
 from .base import first_exact_column as _first_col
 from .display_labels import display_label as _display_label
+from .exposure_outcome_distribution import (
+    normalise_distribution_risk_difference,
+)
 from .strata import (
     normalise_strata_frame as _normalise_strata_frame,
     strata_score_label as _strata_score_label,
@@ -580,6 +583,10 @@ class PublicationFigureSkill:
         if plot_df.empty:
             raise ValueError("primary association table has no plottable rows")
         axis_meta = _association_axis_metadata(plot_df)
+        typed_distribution = (
+            plot_df.attrs.get("source_contract")
+            == "exposure_outcome_distribution"
+        )
         plot_df = plot_df.reset_index(drop=True)
         plot_df["is_primary"] = False
         if not plot_df.empty:
@@ -626,7 +633,8 @@ class PublicationFigureSkill:
                     display_labels=plan.display_labels,
                 )
                 if not strata_df.empty:
-                    source_records.append(strata_record)
+                    if strata_record.evidence_id != source_record.evidence_id:
+                        source_records.append(strata_record)
                     strata_df.to_csv(
                         out_dir / "publication_figure_source_stratified_outcome.csv",
                         index=False,
@@ -788,7 +796,12 @@ class PublicationFigureSkill:
         # the right interval header remain distinct in compact journal panels.
         # The target outcome is already explicit in the figure contract and
         # caption; repeating a long endpoint name here caused real SVG overlap.
-        ax.set_title(f"{estimate_label} association", loc="left", pad=4)
+        primary_panel_title = (
+            f"{estimate_label} risk difference"
+            if typed_distribution
+            else f"{estimate_label} association"
+        )
+        ax.set_title(primary_panel_title, loc="left", pad=4)
         add_panel_label(ax, "A", x=-0.08)
         ax.margins(x=0.08)
         ax.grid(
@@ -819,18 +832,35 @@ class PublicationFigureSkill:
         predictor = str(plot_df["label"].iloc[0])
         outcome = context.target_outcome or "the target outcome"
         core_claim = (
-            f"The primary EasyICU association estimate for {predictor} and "
-            f"{outcome} is rendered from registered analysis evidence."
+            (
+                f"The prespecified unadjusted risk difference for {predictor} "
+                f"and {outcome} is rendered with absolute outcome risks from "
+                "registered analysis evidence."
+            )
+            if typed_distribution
+            else (
+                f"The primary EasyICU association estimate for {predictor} and "
+                f"{outcome} is rendered from registered analysis evidence."
+            )
         )
         panels = [
             {
                 "panel_id": "A",
-                "title": f"{estimate_label} association",
+                "title": primary_panel_title,
                 "role": "primary_estimand",
                 "chart_type": "dot_interval",
                 "claim": (
-                    f"The {estimate_label.lower()} association estimate and interval "
-                    "are drawn from the registered primary association table."
+                    (
+                        "The prespecified unadjusted risk difference in percentage "
+                        "points and its 95% confidence interval are drawn from the "
+                        "typed distribution table."
+                    )
+                    if typed_distribution
+                    else (
+                        f"The {estimate_label.lower()} association estimate and "
+                        "interval are drawn from the registered primary association "
+                        "table."
+                    )
                 ),
                 "evidence_ids": [source_record.evidence_id],
                 "review_risk": "Interpretability depends on the upstream model specification and validator findings.",
@@ -845,8 +875,16 @@ class PublicationFigureSkill:
                     "role": "descriptive_result",
                     "chart_type": "event_rate_panel",
                     "claim": (
-                        f"Observed outcome risk by {score_label} is shown before "
-                        f"the {estimate_label.lower()} relative estimate."
+                        (
+                            f"Observed outcome risk by {score_label} is shown with "
+                            "95% confidence intervals and analysed denominators to "
+                            "contextualize the unadjusted risk difference."
+                        )
+                        if typed_distribution
+                        else (
+                            f"Observed outcome risk by {score_label} is shown before "
+                            f"the {estimate_label.lower()} relative estimate."
+                        )
                     ),
                     "evidence_ids": [strata_record.evidence_id],
                     "review_risk": "Sparse high-score strata should be interpreted with their denominators.",
@@ -870,9 +908,18 @@ class PublicationFigureSkill:
             panels=panels,
             source_data=[record.evidence_id for record in source_records],
             statistics_note=(
-                "The panel is generated after analysis validation from an "
-                "EvidenceStore-registered source table; it is not drawn from "
-                "writer prose."
+                (
+                    "Panel A uses the prespecified comparison-minus-reference risk "
+                    "difference in percentage points and its 95% confidence interval; "
+                    "Panel B uses level-specific outcome rates, 95% confidence "
+                    "intervals, and analysed denominators from the same typed table."
+                )
+                if typed_distribution
+                else (
+                    "The panel is generated after analysis validation from an "
+                    "EvidenceStore-registered source table; it is not drawn from "
+                    "writer prose."
+                )
             ),
         )
         paths = save_publication_figure(
@@ -2834,6 +2881,13 @@ def _normalise_association_frame(
 ) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=["label", "estimate", "lower", "upper"])
+    typed_distribution = normalise_distribution_risk_difference(
+        frame,
+        primary_exposure=primary_exposure,
+        display_labels=display_labels,
+    )
+    if typed_distribution is not None:
+        return typed_distribution
     cols = {str(c).lower(): c for c in frame.columns}
     primary_token = _match_token(primary_exposure)
     if primary_token:
@@ -2942,11 +2996,6 @@ def _normalise_association_frame(
             "estimate_ci_high",
         ],
     )
-    if estimate_col is None:
-        numeric_cols = [
-            c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c])
-        ]
-        estimate_col = numeric_cols[0] if numeric_cols else None
     if label_col is None:
         label_col = estimate_col
     if estimate_col is None or label_col is None:
@@ -3195,6 +3244,21 @@ def _draw_strata_panel(
     import numpy as np
 
     y_values = frame["rate"].astype(float)
+    has_intervals = {"lower", "upper"} <= set(frame.columns) and bool(
+        frame[["lower", "upper"]].notna().all().all()
+    )
+    lower_values = (
+        frame["lower"].astype(float) if has_intervals else y_values.copy()
+    )
+    upper_values = (
+        frame["upper"].astype(float) if has_intervals else y_values.copy()
+    )
+    interval_errors = np.vstack(
+        [
+            (y_values - lower_values).clip(lower=0).to_numpy(),
+            (upper_values - y_values).clip(lower=0).to_numpy(),
+        ]
+    )
     score_label = _strata_score_label(frame)
     if bool(frame.attrs.get("score_is_numeric", True)):
         x = frame["score"].astype(float)
@@ -3206,10 +3270,36 @@ def _draw_strata_panel(
             marker="o",
             markersize=3.4,
         )
+        if has_intervals:
+            ax.errorbar(
+                x,
+                y_values,
+                yerr=interval_errors,
+                fmt="none",
+                ecolor=palette.get("blue", "#0F4D92"),
+                elinewidth=0.9,
+                capsize=2.0,
+                zorder=3,
+            )
+        if "n" in frame.columns:
+            for x_value, rate, denominator in zip(x, y_values, frame["n"]):
+                if pd.notna(denominator) and float(denominator) > 0:
+                    ax.annotate(
+                        f"n={int(denominator):,}",
+                        (float(x_value), float(rate)),
+                        xytext=(4, 4),
+                        textcoords="offset points",
+                        fontsize=5.8,
+                        color=palette.get("neutral", "#8F8F8F"),
+                    )
         ax.set_xlabel(score_label)
         ax.set_ylabel(f"{outcome_label} rate")
         ymax = max(
-            0.05, min(1.0, float(y_values.max()) * 1.25 if len(y_values) else 0.05)
+            0.05,
+            min(
+                1.0,
+                float(upper_values.max()) * 1.25 if len(upper_values) else 0.05,
+            ),
         )
         ax.set_ylim(0, ymax)
         ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0, decimals=0))
@@ -3228,18 +3318,36 @@ def _draw_strata_panel(
             color=palette.get("neutral_light", "#D8D8D8"),
             linewidth=1.2,
         )
-        ax.plot(
+        ax.errorbar(
             y_values,
             y,
-            "o",
+            xerr=interval_errors if has_intervals else None,
+            fmt="o",
             color=palette.get("blue", "#0F4D92"),
+            ecolor=palette.get("blue", "#0F4D92"),
+            elinewidth=0.9,
+            capsize=2.0 if has_intervals else 0,
             markersize=3.8,
         )
-        ax.set_yticks(y, frame["score"].astype(str).tolist())
+        labels = frame["score"].astype(str).tolist()
+        if "n" in frame.columns:
+            labels = [
+                (
+                    f"{label} (n={int(denominator):,})"
+                    if pd.notna(denominator) and float(denominator) > 0
+                    else label
+                )
+                for label, denominator in zip(labels, frame["n"])
+            ]
+        ax.set_yticks(y, labels)
         ax.invert_yaxis()
         ax.set_xlabel(f"{outcome_label} rate")
         xmax = max(
-            0.05, min(1.0, float(y_values.max()) * 1.35 if len(y_values) else 0.05)
+            0.05,
+            min(
+                1.0,
+                float(upper_values.max()) * 1.35 if len(upper_values) else 0.05,
+            ),
         )
         ax.set_xlim(0, xmax)
         ax.xaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0, decimals=0))
