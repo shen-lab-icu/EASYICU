@@ -81,15 +81,19 @@ def test_pipeline_requires_matching_declarative_limits_and_live_service(
         **_pipeline_limit_options(limits),
     )
     explicit_auditor = ScriptedMockLLMClient(["{}"])
+    explicit_vlm = ScriptedMockLLMClient(["{}"])
     pipeline = ra.ResearchAgentPipeline.from_config(
         config,
         services=PipelineServices(
             llm=ScriptedMockLLMClient(["{}"]),
+            vlm_client=explicit_vlm,
             llm_concept_auditor_client=explicit_auditor,
             provider_hard_stop=task,
         ),
     )
     assert isinstance(pipeline._llm_concept_auditor_client, HardStopClient)
+    assert isinstance(pipeline._vlm_client, HardStopClient)
+    assert pipeline._vlm_client._inner is explicit_vlm
 
     with pytest.raises(ValueError, match="supplied together"):
         ra.ResearchAgentPipeline.from_config(
@@ -618,6 +622,190 @@ def test_provider_request_timeout_is_capped_by_task_wall_clock(
 
     assert client.complete(_message(), max_tokens=8) == "ok"
     assert 0.0 < captured["timeout"] <= 60.0
+
+
+def test_each_web_500_retry_is_charged_to_provider_hard_stop(tmp_path, monkeypatch):
+    from easyicu.research_agent.providers.factory import build_provider_client
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    class _Completions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                failure = RuntimeError("provider internal failure")
+                failure.status_code = 500
+                raise failure
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="ok"),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            )
+
+    completions = _Completions()
+    transport = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+    inner = build_provider_client(
+        provider="openai",
+        model="gpt-5.6-luna",
+        request_timeout=30.0,
+        title="Web retry hard-stop contract",
+        client_cls=OpenAIClient,
+        environment={"OPENAI_BASE_URL": "http://127.0.0.1:8317/v1"},
+        max_retries=1,
+        retryable_http_status_codes=(500, 502, 503, 504),
+        stream_enabled=False,
+        allow_environment_overrides=False,
+    )
+    ledger = _ledger(tmp_path)
+    client = HardStopClient(inner, role="planner", task=ledger.start_task("E1"))
+
+    assert client.complete(_message(), max_tokens=8) == "ok"
+    assert completions.calls == 2
+    assert ledger.snapshot()["totals"]["provider_attempts"] == 2
+
+
+def test_vision_transport_is_reserved_settled_and_stopped_before_overrun(
+    tmp_path, monkeypatch
+):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopExceeded,
+    )
+    from easyicu.research_agent.providers.factory import build_provider_client
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    class _Completions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **_kwargs):
+            self.calls += 1
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"findings": []}'),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=20,
+                    completion_tokens=4,
+                    total_tokens=24,
+                ),
+            )
+
+    completions = _Completions()
+    transport = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
+    inner = build_provider_client(
+        provider="openai",
+        model="gpt-4o",
+        request_timeout=30.0,
+        title="vision hard-stop contract",
+        client_cls=OpenAIClient,
+        environment={"OPENAI_BASE_URL": "http://127.0.0.1:8317/v1"},
+        max_retries=0,
+        stream_enabled=False,
+        allow_environment_overrides=False,
+    )
+    ledger = _ledger(
+        tmp_path,
+        limits=_limits(
+            max_provider_attempts_per_run=1,
+            max_provider_attempts_per_batch=1,
+        ),
+    )
+    client = HardStopClient(inner, role="visual_qa", task=ledger.start_task("E1"))
+    image_path = tmp_path / "figure.png"
+    image_path.write_bytes(b"not-real-image-bytes")
+
+    assert (
+        client.complete_with_images(
+            prompt="Review this figure.",
+            image_paths=[image_path],
+            max_tokens=64,
+        )
+        == '{"findings": []}'
+    )
+    first = ledger.snapshot()
+    call = first["tasks"][0]["calls"][0]
+    assert completions.calls == 1
+    assert first["totals"]["provider_attempts"] == 1
+    assert call["state"] == "completed"
+    assert call["reported_total_tokens"] == 24
+    assert call["prompt_payload_bytes"] == len("Review this figure.".encode())
+    assert str(image_path) not in json.dumps(first)
+
+    with pytest.raises(ProviderHardStopExceeded, match="RUN_PROVIDER_ATTEMPT_LIMIT"):
+        client.complete_with_images(
+            prompt="Do not send this request.",
+            image_paths=[image_path],
+            max_tokens=64,
+        )
+    assert completions.calls == 1
+
+
+def test_hard_stop_wrapper_does_not_promote_a_text_client_to_vision(
+    tmp_path,
+):
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from easyicu.research_agent.providers.llm import llm_supports_vision
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
+    client = HardStopClient(
+        ScriptedMockLLMClient(['{"findings": []}']),
+        role="visual_qa",
+        task=_ledger(tmp_path).start_task("E1"),
+    )
+
+    assert llm_supports_vision(client) is False
+
+
+def test_human_review_pause_does_not_consume_active_execution_time(
+    tmp_path, monkeypatch
+):
+    from easyicu.research_agent.authority import provider_hard_stop as owner
+
+    clock = [100.0]
+    monkeypatch.setattr(owner.time, "monotonic", lambda: clock[0])
+    ledger = _ledger(
+        tmp_path,
+        limits=_limits(max_wall_clock_seconds_per_task=60.0),
+    )
+    task = ledger.start_task("E1")
+    clock[0] = 105.0
+    task.pause()
+    paused = ledger.snapshot()["tasks"][0]
+    assert paused["status"] == "paused"
+    assert paused["elapsed_seconds"] == pytest.approx(5.0)
+    assert ledger.snapshot()["terminal"] is False
+
+    # A long human wait changes wall time but is not active Provider execution.
+    clock[0] = 10_005.0
+    task.resume()
+    clock[0] = 10_006.0
+    assert task.assert_active() == pytest.approx(54.0)
+    task.finish(error="test_finished")
+    final = ledger.snapshot()["tasks"][0]
+    assert final["status"] == "failed"
+    assert final["elapsed_seconds"] == pytest.approx(6.0)
 
 
 def test_wall_clock_exhaustion_is_terminal_and_persisted(tmp_path):

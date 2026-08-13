@@ -353,6 +353,10 @@ class ProviderHardStopLedger:
             raise ValueError("Provider hard-stop ledger path must be absolute")
         self.limits = limits
         self._lock = Lock()
+        # Live monotonic clocks exist only while Provider-backed execution is
+        # active.  Human-review pauses persist their cumulative active seconds
+        # in the ledger and deliberately hold no live clock, so time spent by a
+        # reviewer cannot consume the execution stop-loss.
         self._task_started_monotonic: Dict[str, float] = {}
         now = _utc_now()
         initial_payload: Dict[str, object] = {
@@ -372,6 +376,7 @@ class ProviderHardStopLedger:
                     "started_at": None,
                     "finished_at": None,
                     "elapsed_seconds": None,
+                    "paused_at": None,
                     "error": None,
                     "blocked_by": None,
                     "score_summary": {},
@@ -558,9 +563,72 @@ class ProviderHardStopLedger:
                 )
             task["status"] = "running"
             task["started_at"] = _utc_now()
+            task["paused_at"] = None
             self._task_started_monotonic[normalized] = time.monotonic()
             self._persist_locked()
         return TaskProviderHardStop(self, normalized)
+
+    def pause_task(self, task_id: str) -> None:
+        """Pause one live task without charging human-review wait time."""
+
+        normalized = str(task_id).strip()
+        with self._lock:
+            task = self._task_locked(normalized)
+            if task.get("status") == "paused":
+                return
+            if task.get("status") != "running":
+                raise ProviderHardStopLedgerError(
+                    f"Provider hard-stop task cannot pause from {task.get('status')!r}"
+                )
+            elapsed = self._elapsed_locked(normalized)
+            task["status"] = "paused"
+            task["paused_at"] = _utc_now()
+            task["elapsed_seconds"] = round(elapsed, 6)
+            self._task_started_monotonic.pop(normalized, None)
+            self._persist_locked()
+
+    def resume_task(self, task_id: str) -> None:
+        """Resume a paused task under its cumulative active-time ceiling."""
+
+        normalized = str(task_id).strip()
+        with self._lock:
+            task = self._task_locked(normalized)
+            if task.get("status") == "running":
+                return
+            if task.get("status") != "paused":
+                raise ProviderHardStopLedgerError(
+                    f"Provider hard-stop task cannot resume from {task.get('status')!r}"
+                )
+            try:
+                prior_elapsed = float(task.get("elapsed_seconds") or 0.0)
+            except (TypeError, ValueError) as exc:
+                raise ProviderHardStopLedgerError(
+                    "Paused Provider hard-stop task elapsed time is invalid"
+                ) from exc
+            if not math.isfinite(prior_elapsed) or prior_elapsed < 0.0:
+                raise ProviderHardStopLedgerError(
+                    "Paused Provider hard-stop task elapsed time is invalid"
+                )
+            if prior_elapsed >= self.limits.max_wall_clock_seconds_per_task:
+                task["status"] = "budget_exhausted"
+                task["finished_at"] = _utc_now()
+                task["error"] = "TASK_WALL_CLOCK_EXHAUSTED"
+                self._persist_locked()
+                raise ProviderHardStopExceeded(
+                    code="TASK_WALL_CLOCK_EXHAUSTED",
+                    detail=(
+                        f"task {task_id!r} active execution reached "
+                        f"{prior_elapsed:.3f}s; limit="
+                        f"{self.limits.max_wall_clock_seconds_per_task:.3f}s"
+                    ),
+                )
+            task["status"] = "running"
+            task["paused_at"] = None
+            task["elapsed_seconds"] = None
+            self._task_started_monotonic[normalized] = (
+                time.monotonic() - prior_elapsed
+            )
+            self._persist_locked()
 
     def mark_task_blocked(self, task_id: str, *, blocked_by: str) -> None:
         with self._lock:
@@ -964,18 +1032,32 @@ class ProviderHardStopLedger:
             self.assert_task_active(task_id)
         with self._lock:
             task = self._task_locked(task_id)
-            if task.get("status") != "running":
+            status = str(task.get("status") or "")
+            if status not in {"running", "paused"}:
                 if task.get("status") == "budget_exhausted":
                     return
                 raise ProviderHardStopLedgerError(
                     f"Provider hard-stop task cannot finish from {task.get('status')!r}"
                 )
-            elapsed = self._elapsed_locked(task_id)
+            if status == "paused":
+                if error is None:
+                    raise ProviderHardStopLedgerError(
+                        "A paused Provider hard-stop task cannot complete successfully"
+                    )
+                try:
+                    elapsed = float(task.get("elapsed_seconds") or 0.0)
+                except (TypeError, ValueError) as exc:
+                    raise ProviderHardStopLedgerError(
+                        "Paused Provider hard-stop task elapsed time is invalid"
+                    ) from exc
+            else:
+                elapsed = self._elapsed_locked(task_id)
             task["status"] = "failed" if error is not None else "completed"
             task["finished_at"] = _utc_now()
             task["elapsed_seconds"] = round(elapsed, 6)
             task["error"] = _safe_error_summary(error)
             task["score_summary"] = _safe_score_summary(score)
+            self._task_started_monotonic.pop(str(task_id), None)
             self._persist_locked()
 
     def snapshot(self) -> Dict[str, object]:
@@ -1076,6 +1158,16 @@ class TaskProviderHardStop:
     def cap_timeout(self, requested_seconds: float) -> float:
         remaining = self.assert_active()
         return max(0.001, min(float(requested_seconds), remaining))
+
+    def pause(self) -> None:
+        """Pause active execution while a human decision is outstanding."""
+
+        self.ledger.pause_task(self.task_id)
+
+    def resume(self) -> None:
+        """Resume execution without charging the intervening human wait."""
+
+        self.ledger.resume_task(self.task_id)
 
     def finish(
         self,

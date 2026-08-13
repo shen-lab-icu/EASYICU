@@ -1841,6 +1841,10 @@ def _benchmark_execution_identity(
     provider: str | None = None,
     model: str | None = None,
     reasoning_effort_profile: str = "provider_default",
+    request_timeout: float = 120.0,
+    transport_max_attempts: int = 1,
+    stream_enabled: bool = False,
+    provider_environment: Optional[Mapping[str, str]] = None,
 ):
     from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
     from easyicu.research_agent.providers.factory import (
@@ -1856,6 +1860,10 @@ def _benchmark_execution_identity(
             provider=provider,
             model=model,
             reasoning_effort_profile=reasoning_effort_profile,
+            request_timeout=request_timeout,
+            transport_max_attempts=transport_max_attempts,
+            stream_enabled=stream_enabled,
+            environment=provider_environment,
         )
     return ExecutionIdentity.create(
         submission_profile_name=options.get("submission_profile_name"),
@@ -2393,6 +2401,13 @@ def _make_llm(
     stream_enabled: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
 ):
+    if not isinstance(transport_max_attempts, int) or isinstance(
+        transport_max_attempts, bool
+    ):
+        raise ValueError("transport_max_attempts must be a positive integer")
+    total_transport_attempts = transport_max_attempts
+    if total_transport_attempts <= 0:
+        raise ValueError("transport_max_attempts must be a positive integer")
     _bootstrap_imports()
     from easyicu.research_agent import (  # type: ignore
         LLMRouter,
@@ -2408,6 +2423,10 @@ def _make_llm(
     if provider == "mock":
         return MockLLMClient()
     try:
+        # The CLI option is deliberately expressed as total physical attempts,
+        # while OpenAIClient's conventional ``max_retries`` contract counts
+        # only attempts after the initial request.
+        transport_max_retries = total_transport_attempts - 1
         effort_by_role = reasoning_effort_by_role(reasoning_effort_profile)
         if not effort_by_role:
             return build_provider_client(
@@ -2417,7 +2436,7 @@ def _make_llm(
                 title="EasyICU research-agent benchmark",
                 client_cls=OpenAIClient,
                 environment=provider_environment,
-                max_retries=int(transport_max_attempts),
+                max_retries=transport_max_retries,
                 stream_enabled=bool(stream_enabled),
                 allow_environment_overrides=False,
             )
@@ -2430,7 +2449,7 @@ def _make_llm(
                 client_cls=OpenAIClient,
                 environment=provider_environment,
                 extra_body={"reasoning": {"effort": effort}},
-                max_retries=int(transport_max_attempts),
+                max_retries=transport_max_retries,
                 stream_enabled=bool(stream_enabled),
                 allow_environment_overrides=False,
             )
@@ -5713,6 +5732,10 @@ def _run_one_item_from_cohort(
         provider=provider,
         model=model,
         reasoning_effort_profile=reasoning_effort_profile,
+        request_timeout=request_timeout,
+        transport_max_attempts=transport_max_attempts,
+        stream_enabled=stream_enabled,
+        provider_environment=provider_environment,
     )
     if reuse_existing and not resume_run_id:
         if "naive" in selected:

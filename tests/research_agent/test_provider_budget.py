@@ -1027,7 +1027,7 @@ def test_a_paid_call_may_finish_its_own_retries(monkeypatch):
         api_key="non-secret-test-key",
         base_url="http://127.0.0.1:8317/v1",
         request_timeout=1.0,
-        max_retries=3,
+        max_retries=2,
     )
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
@@ -1044,7 +1044,7 @@ def test_a_paid_call_may_finish_its_own_retries(monkeypatch):
             ),
         )
 
-    assert completions.calls == 3, "max_retries=3 is what bounds the attempts"
+    assert completions.calls == 3, "one initial attempt plus max_retries=2"
     assert budget.used == 1, "and the ask still cost exactly one slot"
 
     # An exhausted allowance still refuses the NEXT ask, which is the real gate.

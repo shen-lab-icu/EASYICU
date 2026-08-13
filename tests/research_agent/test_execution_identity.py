@@ -144,11 +144,66 @@ def test_preflight_provider_coordinates_match_the_constructed_client() -> None:
             provider="openai",
             model="local-model",
             environment=environment,
+            request_timeout=60.0,
         ),
         **common,
     )
 
     assert actual.identity_sha256 == preflight.identity_sha256
+
+
+def test_transport_policy_changes_execution_identity() -> None:
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    environment = {"OPENAI_BASE_URL": "http://127.0.0.1:8317/v1"}
+    once = build_provider_client(
+        provider="openai",
+        model="local-model",
+        request_timeout=60.0,
+        title="EasyICU test",
+        client_cls=OpenAIClient,
+        environment=environment,
+        max_retries=0,
+        retryable_http_status_codes=(500, 502, 503, 504),
+        allow_environment_overrides=False,
+    )
+    twice = build_provider_client(
+        provider="openai",
+        model="local-model",
+        request_timeout=60.0,
+        title="EasyICU test",
+        client_cls=OpenAIClient,
+        environment=environment,
+        max_retries=1,
+        retryable_http_status_codes=(500, 502, 503, 504),
+        allow_environment_overrides=False,
+    )
+
+    one_identity = _identity(provider_client=once)
+    two_identity = _identity(provider_client=twice)
+
+    assert one_identity.identity_sha256 != two_identity.identity_sha256
+    assert one_identity.provider_authorization["clients"][0]["transport_policy"][
+        "transport_max_attempts"
+    ] == 1
+    assert two_identity.provider_authorization["clients"][0]["transport_policy"][
+        "transport_max_attempts"
+    ] == 2
+
+
+def test_historical_v2_provider_manifest_execution_identity_still_validates() -> None:
+    historical = _identity()
+
+    restored = ExecutionIdentity.model_validate(
+        historical.model_dump(mode="json"),
+        strict=True,
+    )
+
+    assert (
+        restored.provider_authorization["schema_version"]
+        == "easyicu.provider_authorization_manifest/2"
+    )
+    assert restored.identity_sha256 == historical.identity_sha256
 
 
 def test_reasoning_effort_profile_changes_execution_identity() -> None:
@@ -186,6 +241,14 @@ def test_unmanaged_custom_provider_can_never_receive_paper_authority() -> None:
         "destination": "external",
         "authorization_mode": "unmanaged",
         "authorization_sha256": "",
+        "transport_policy": {
+            "schema_version": "easyicu.provider_transport_policy/1",
+            "transport": "unmanaged",
+            "request_timeout_seconds": None,
+            "transport_max_attempts": None,
+            "retryable_http_status_codes": None,
+            "stream_enabled": None,
+        },
     }
     assert identity.paper_eligible is False
 

@@ -33,6 +33,7 @@ from ..providers.factory import (
     authorized_complete_with_images,
     provider_transport_destination,
 )
+from ..providers.llm import llm_supports_vision
 from ..schema import ValidationFinding
 from .figure_egress import (
     TRANSPORT_COMPLETED,
@@ -657,7 +658,12 @@ class VLMVisualQAAdapter:
             return []
         prompt = self._prompt(paths)
         findings: List[ValidationFinding] = []
-        send_images = hasattr(self.llm, "complete_with_images")
+        # Transparent accounting wrappers expose the image-call method so they
+        # can meter it, but must not thereby turn a text-only child into a VLM.
+        send_images = bool(
+            llm_supports_vision(self.llm)
+            and hasattr(self.llm, "complete_with_images")
+        )
         authorized: List[Dict[str, str]] = []
         if send_images:
             # Provider authorization answers "may this client reach that URL".

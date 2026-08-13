@@ -1518,6 +1518,19 @@ class ResearchAgentPipeline:
             config.extension_activation
         )
         self._vlm_client = services.vlm_client
+        if (
+            self._provider_hard_stop is not None
+            and self._vlm_client is not None
+            and not isinstance(self._vlm_client, HardStopClient)
+        ):
+            # An explicitly injected VLM bypasses the normal analyzer role
+            # resolver. Keep its image and text transports under the same
+            # task/batch stop-loss as every other Provider-backed role.
+            self._vlm_client = HardStopClient(
+                self._vlm_client,
+                role="visual_qa",
+                task=self._provider_hard_stop,
+            )
         self._visual_qa_adapter = services.visual_qa_adapter
         # Deny-by-default: a rendered figure is not covered by the text
         # outbound projection, so uploading its bytes to an external VLM is a
@@ -1540,7 +1553,7 @@ class ResearchAgentPipeline:
         if config.enable_vlm_visual_qa is None:
             self._enable_vlm_visual_qa = bool(
                 services.visual_qa_adapter is not None
-                or llm_supports_vision(services.vlm_client)
+                or llm_supports_vision(self._vlm_client)
                 or llm_supports_vision(services.llm)
             )
         else:
@@ -5018,6 +5031,20 @@ class ResearchAgentPipeline:
             "progress_sink": progress_channel,
         }
         return pending
+
+    @property
+    def has_resumable_human_review(self) -> bool:
+        """Whether the live workflow still owns an answerable review pause."""
+
+        state = self._pending_human_review
+        if not isinstance(state, Mapping):
+            return False
+        workflow = state.get("workflow")
+        pending = state.get("pending")
+        return bool(
+            getattr(workflow, "state", None) == "paused"
+            and getattr(pending, "resumable_here", False)
+        )
 
     @_one_capability_job
     def resume_human_review(
