@@ -8,6 +8,7 @@ import os
 import secrets
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
@@ -43,7 +44,8 @@ from .project_authority import (
     ProjectStudyContextMigrationReceipt,
 )
 from .provider_config import PiProviderConfigStore
-from .projections import project_job, reject_sensitive_message
+from .projections import project_job, project_pi_replay_event, reject_sensitive_message
+from .replay_store import PiConversationReplayStore
 from .workspace import ProjectWorkspace
 from .workflow import (
     build_research_workflow_snapshot,
@@ -66,7 +68,12 @@ ALLOWED_TURN_ACTIONS = frozenset(
     }
 )
 _RETIRED_SESSION_METADATA_FIELDS = frozenset(
-    {"canonical_task_id", "canonical_input_sha256", "canonical_job_id"}
+    {
+        "canonical_task_id",
+        "canonical_input_sha256",
+        "canonical_job_id",
+        "last_turn_events",
+    }
 )
 
 
@@ -81,6 +88,7 @@ class PiCopilotService:
         provider_store: Optional[PiProviderConfigStore] = None,
         project_store: Optional[ProjectAuthorityStore] = None,
         extension_registry: Optional[ExtensionRegistry] = None,
+        replay_store: Optional[PiConversationReplayStore] = None,
     ) -> None:
         self.store_path = (
             Path(store_path)
@@ -99,10 +107,16 @@ class PiCopilotService:
             else self.store_path.with_name(f"{self.store_path.stem}.projects.json")
         )
         self.extension_registry = extension_registry or ExtensionRegistry()
+        self.replay_store = replay_store or PiConversationReplayStore(
+            None
+            if store_path is None
+            else self.store_path.with_name(f"{self.store_path.stem}.replay")
+        )
         self._lock = threading.RLock()
         self._active_message_jobs: Dict[str, str] = {}
         self._busy_sessions: set[str] = set()
         self._pending_retirements: Dict[str, PiSessionRecord] = {}
+        self._replay_child_watchers: set[tuple[str, str]] = set()
         self._project_initialization_locks: Dict[str, threading.RLock] = {}
         workspace_base = Path(
             getattr(
@@ -234,15 +248,18 @@ class PiCopilotService:
             evicted: list[PiSessionRecord] = []
             if overflow:
                 for candidate in reversed(rows):
-                    if candidate.session_id in self._busy_sessions:
+                    if (
+                        candidate.session_id in self._busy_sessions
+                        or candidate.pinned_for_presentation
+                    ):
                         continue
                     evicted.append(candidate)
                     if len(evicted) == overflow:
                         break
                 if len(evicted) != overflow:
                     raise PiCopilotError(
-                        "pi_session_retention_busy",
-                        "Pi session retention cannot evict an active conversation.",
+                        "pi_session_retention_protected",
+                        "Pi session retention cannot evict an active or presentation-pinned conversation.",
                         status_code=409,
                     )
                 evicted_ids = {row.session_id for row in evicted}
@@ -259,6 +276,7 @@ class PiCopilotService:
             if record.session_id in self._busy_sessions:
                 self._pending_retirements[record.session_id] = record
                 return
+        self.replay_store.retire(record.session_id)
         try:
             self.gateway.request(
                 "session.dispose",
@@ -931,7 +949,9 @@ class PiCopilotService:
                 "session_file": record.pi_session_file,
                 "thinking_level": "off",
                 "agent_mode": record.agent_mode,
-                "extension_snapshot": record.extension_activation.model_dump(mode="json"),
+                "extension_snapshot": record.extension_activation.model_dump(
+                    mode="json"
+                ),
             },
             timeout=30,
         )
@@ -1118,10 +1138,47 @@ class PiCopilotService:
             with self._lock:
                 self._active_message_jobs[record.session_id] = job.id
 
+            started = self._get_record(record.session_id)
+            started.active_message_job_id = job.id
+            started.last_turn_status = "running"
+            started.last_turn_allowed_actions = sorted(requested_actions)
+            self._save_record(started)
+            self.replay_store.start_turn(
+                session_id=record.session_id,
+                project_id=str(record.project_id),
+                job_id=job.id,
+                allowed_actions=sorted(requested_actions),
+            )
+
             def emit(event: Dict[str, Any]) -> None:
                 if job.cancel_requested:
                     return
                 job.emit({"type": "pi_event", "event": event})
+                projected = project_pi_replay_event(event)
+                if projected is None:
+                    return
+                self.replay_store.append_event(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job_id=job.id,
+                    event=projected,
+                )
+                child_job_id = str(projected.get("job_id") or "").strip()
+                if (
+                    projected.get("type") == "tool_end"
+                    and child_job_id
+                    and projected.get("code")
+                    in {
+                        "easyicu_extraction_submitted",
+                        "easyicu_run_submitted",
+                        "easyicu_full_run_submitted",
+                    }
+                ):
+                    self._watch_child_job_for_replay(
+                        session_id=record.session_id,
+                        project_id=str(record.project_id),
+                        job_id=child_job_id,
+                    )
 
             try:
                 job.emit(
@@ -1145,6 +1202,8 @@ class PiCopilotService:
                     str(state.get("session_file") or "") or refreshed.pi_session_file
                 )
                 refreshed.last_message_job_id = job.id
+                refreshed.active_message_job_id = job.id
+                refreshed.last_turn_status = "running"
                 self._save_record(refreshed)
                 transcript = state.get("transcript")
                 if isinstance(transcript, list):
@@ -1152,8 +1211,7 @@ class PiCopilotService:
                         (
                             row
                             for row in reversed(transcript)
-                            if isinstance(row, dict)
-                            and row.get("role") == "assistant"
+                            if isinstance(row, dict) and row.get("role") == "assistant"
                         ),
                         None,
                     )
@@ -1167,11 +1225,38 @@ class PiCopilotService:
                                 or "pi_model_provider_error"
                             )
                         )
+                refreshed.active_message_job_id = None
+                refreshed.last_turn_status = (
+                    "cancelled" if job.cancel_requested else "done"
+                )
+                self._save_record(refreshed)
+                self.replay_store.finish_turn(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job_id=job.id,
+                    status="cancelled" if job.cancel_requested else "done",
+                )
                 return {
                     "session": self._public_session(refreshed, gateway_state=state),
                     "message_status": "aborted" if job.cancel_requested else "done",
                 }
             finally:
+                try:
+                    terminal = self._get_record(record.session_id)
+                    if terminal.active_message_job_id == job.id:
+                        terminal.active_message_job_id = None
+                        terminal.last_turn_status = (
+                            "cancelled" if job.cancel_requested else "failed"
+                        )
+                        self._save_record(terminal)
+                        self.replay_store.finish_turn(
+                            session_id=record.session_id,
+                            project_id=str(record.project_id),
+                            job_id=job.id,
+                            status=terminal.last_turn_status,
+                        )
+                except PiCopilotError:
+                    pass
                 pending_retirement = False
                 with self._lock:
                     if self._active_message_jobs.get(record.session_id) == job.id:
@@ -1206,6 +1291,104 @@ class PiCopilotService:
             "status": job.status,
             "session_id": record.session_id,
         }
+
+    def _watch_child_job_for_replay(
+        self,
+        *,
+        session_id: str,
+        project_id: str,
+        job_id: str,
+    ) -> None:
+        """Archive one bounded child-job projection even if the tab closes."""
+
+        watcher_key = (session_id, job_id)
+        with self._lock:
+            if watcher_key in self._replay_child_watchers:
+                return
+            self._replay_child_watchers.add(watcher_key)
+
+        def watch() -> None:
+            missing_deadline = time.monotonic() + 5
+            try:
+                while True:
+                    child = jobs.MANAGER.get(job_id)
+                    if child is None:
+                        if time.monotonic() >= missing_deadline:
+                            return
+                        time.sleep(0.1)
+                        continue
+                    if child.status in {"done", "failed", "cancelled"}:
+                        self.replay_store.archive_child_job(
+                            session_id=session_id,
+                            project_id=project_id,
+                            job=project_job(child.snapshot()),
+                        )
+                        return
+                    time.sleep(0.2)
+            except PiCopilotError:
+                return
+            finally:
+                with self._lock:
+                    self._replay_child_watchers.discard(watcher_key)
+
+        threading.Thread(
+            target=watch,
+            name=f"pi-replay-{job_id[:24]}",
+            daemon=True,
+        ).start()
+
+    def archive_child_job(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        job_id: str,
+    ) -> Dict[str, Any]:
+        """Persist a safe job projection only for this conversation's child."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        replay = self.replay_store.snapshot(
+            session_id=record.session_id,
+            project_id=str(record.project_id),
+        )
+        archived = next(
+            (
+                row
+                for row in replay.get("child_jobs", [])
+                if isinstance(row, Mapping) and row.get("job_id") == job_id
+            ),
+            None,
+        )
+        child = jobs.MANAGER.get(str(job_id or "").strip())
+        if child is None:
+            if archived is not None:
+                return {"ok": True, "job": dict(archived), "already_archived": True}
+            raise PiCopilotError(
+                "pi_replay_child_job_unavailable",
+                "The child job is no longer available to archive.",
+                status_code=404,
+            )
+        projected = project_job(child.snapshot())
+        saved = self.replay_store.archive_child_job(
+            session_id=record.session_id,
+            project_id=str(record.project_id),
+            job=projected,
+        )
+        return {"ok": True, "job": saved, "already_archived": False}
+
+    def set_presentation_pin(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        pinned: bool,
+    ) -> Dict[str, Any]:
+        """Protect or release one conversation from ordinary retention eviction."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        record.pinned_for_presentation = bool(pinned)
+        self._save_record(record)
+        return {"ok": True, "session": self._public_session(record)}
 
     def abort_session(
         self,
@@ -1256,17 +1439,23 @@ class PiCopilotService:
                 if row.project_id == clean_project_id
             ][:max_items]
         records = [
-            self._scoped_record(row.session_id, project_id=clean_project_id)
+            self._reconcile_replay_execution(
+                self._scoped_record(row.session_id, project_id=clean_project_id)
+            )
             for row in records
         ]
         return {
             "ok": True,
             "count": len(records),
-            "sessions": [self._public_session(row) for row in records],
+            "sessions": [
+                self._public_session(row, include_replay=False) for row in records
+            ],
         }
 
     def get_session(self, session_id: str, *, project_id: str) -> Dict[str, Any]:
-        record = self._scoped_record(session_id, project_id=project_id)
+        record = self._reconcile_replay_execution(
+            self._scoped_record(session_id, project_id=project_id)
+        )
         state = self._ensure_open(record)
         return {
             "ok": True,
@@ -1591,7 +1780,9 @@ class PiCopilotService:
         review = agent_runs.read_run_review(project_dir)
         if not review.get("ok"):
             raise PiCopilotError(
-                str(review.get("error") or "pi_research_document_governance_unavailable"),
+                str(
+                    review.get("error") or "pi_research_document_governance_unavailable"
+                ),
                 "The EasyICU run governance state is unavailable for this document.",
                 status_code=409,
                 details={"document": clean_name},
@@ -1614,7 +1805,9 @@ class PiCopilotService:
         governance = agent_runs.project_artifact_governance(review, artifact=artifact)
         if not governance.get("ok"):
             raise PiCopilotError(
-                str(governance.get("error") or "pi_research_document_governance_invalid"),
+                str(
+                    governance.get("error") or "pi_research_document_governance_invalid"
+                ),
                 "The EasyICU governance projection is invalid for this document.",
                 status_code=409,
                 details={"document": clean_name},
@@ -1630,8 +1823,23 @@ class PiCopilotService:
         record: PiSessionRecord,
         *,
         gateway_state: Optional[Mapping[str, Any]] = None,
+        include_replay: bool = True,
     ) -> Dict[str, Any]:
         state = gateway_state or {}
+        replay = (
+            self.replay_store.snapshot(
+                session_id=record.session_id,
+                project_id=str(record.project_id),
+            )
+            if include_replay
+            else {"turns": [], "child_jobs": []}
+        )
+        replay_turns = replay.get("turns") or []
+        latest_replay_turn = (
+            replay_turns[-1]
+            if replay_turns and isinstance(replay_turns[-1], Mapping)
+            else {}
+        )
         return {
             "session_id": record.session_id,
             "project_id": record.project_id,
@@ -1662,6 +1870,13 @@ class PiCopilotService:
             "created_at": record.created_at,
             "updated_at": record.updated_at,
             "last_message_job_id": record.last_message_job_id,
+            "active_message_job_id": record.active_message_job_id,
+            "last_turn_status": record.last_turn_status,
+            "last_turn_allowed_actions": list(record.last_turn_allowed_actions),
+            "last_turn_events": list(latest_replay_turn.get("events") or []),
+            "conversation_replay": replay,
+            "archived_child_jobs": list(replay.get("child_jobs") or []),
+            "pinned_for_presentation": record.pinned_for_presentation,
             "session_storage": "private_local_jsonl",
             "scientific_authority": "EasyICU",
             "extension_activation": {
@@ -1695,6 +1910,32 @@ class PiCopilotService:
                 else None
             ),
         }
+
+    def _reconcile_replay_execution(self, record: PiSessionRecord) -> PiSessionRecord:
+        """Reconcile persisted UX continuity with the process-local JobManager."""
+
+        active_job_id = str(record.active_message_job_id or "").strip()
+        if not active_job_id or record.last_turn_status != "running":
+            return record
+        job = jobs.MANAGER.get(active_job_id)
+        if job is not None and job.status == "running":
+            return record
+        record.active_message_job_id = None
+        if job is not None and job.status in {"done", "failed", "cancelled"}:
+            record.last_turn_status = job.status
+        else:
+            # The generic JobManager is intentionally process-local. A persisted
+            # running pointer with no matching job therefore means the Web
+            # process restarted; never leave the presentation showing "running".
+            record.last_turn_status = "interrupted"
+        saved = self._save_record(record)
+        self.replay_store.finish_turn(
+            session_id=record.session_id,
+            project_id=str(record.project_id),
+            job_id=active_job_id,
+            status=str(record.last_turn_status),
+        )
+        return saved
 
     def close(self) -> None:
         self.gateway.close()

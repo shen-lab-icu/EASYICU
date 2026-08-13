@@ -316,6 +316,65 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     )
 
 
+def project_pi_replay_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return one bounded UX replay event without text deltas or tool arguments."""
+
+    event_type = stable_code(event.get("type"))
+    if event_type not in {
+        "run_start",
+        "turn_start",
+        "assistant_start",
+        "tool_start",
+        "tool_progress",
+        "tool_end",
+        "message_end",
+        "turn_end",
+        "agent_cycle_end",
+        "run_end",
+        "compaction_start",
+        "compaction_end",
+        "retry",
+    }:
+        return None
+    payload: Dict[str, Any] = {
+        "type": event_type,
+        "at": _bounded_text(event.get("at"), 64),
+    }
+    for key in (
+        "turn_index",
+        "phase",
+        "attempt",
+        "max_attempts",
+        "tool_call_id",
+        "tool_name",
+        "status",
+        "code",
+        "owner",
+        "stop_reason",
+        "error_code",
+        "job_id",
+    ):
+        value = event.get(key)
+        if value is None or isinstance(value, (dict, list)):
+            continue
+        if key in {"turn_index", "phase", "attempt", "max_attempts"}:
+            try:
+                payload[key] = int(value)
+            except (TypeError, ValueError):
+                continue
+        else:
+            payload[key] = _bounded_text(value, 240)
+    if event.get("reason") is not None:
+        payload["reason_code"] = stable_code(event.get("reason"))
+    if event.get("is_error") is not None:
+        payload["is_error"] = bool(event.get("is_error"))
+    if event.get("will_retry") is not None:
+        payload["will_retry"] = bool(event.get("will_retry"))
+    if event.get("aborted") is not None:
+        payload["aborted"] = bool(event.get("aborted"))
+    return ensure_safe_projection(payload)
+
+
 def project_capabilities(payload: Mapping[str, Any]) -> Dict[str, Any]:
     settings = payload.get("settings")
     settings = settings if isinstance(settings, Mapping) else {}

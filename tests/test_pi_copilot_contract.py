@@ -24,6 +24,7 @@ from easyicu.webserver.pi_copilot.contracts import (
 from easyicu.webserver.pi_copilot.projections import (
     ensure_safe_projection,
     project_job,
+    project_pi_replay_event,
     project_run_row,
     project_study_context,
     reject_sensitive_message,
@@ -176,7 +177,7 @@ def test_session_store_migrates_only_retired_specialization_fields(
                         "canonical_task_id": None,
                         "canonical_input_sha256": None,
                         "canonical_job_id": None,
-                    }
+                    },
                 ],
             }
         ),
@@ -189,9 +190,7 @@ def test_session_store_migrates_only_retired_specialization_fields(
 
     records = service._read_records()
 
-    assert [record.session_id for record in records] == [
-        "pi-ordinary-after-migration"
-    ]
+    assert [record.session_id for record in records] == ["pi-ordinary-after-migration"]
     assert records[0].title == "Ordinary research conversation"
     assert set(records[0].model_dump()).isdisjoint(
         {"canonical_task_id", "canonical_input_sha256", "canonical_job_id"}
@@ -1309,6 +1308,11 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
     record = service._get_record(session_id)
     assert record.last_message_job_id == submitted["job_id"]
     assert record.binding.active_job_id is None
+    assert record.last_turn_status == "done"
+    assert record.last_turn_allowed_actions == ["run"]
+    public = service.get_session(session_id, project_id="project-grants")["session"]
+    assert public["active_message_job_id"] is None
+    assert public["last_turn_allowed_actions"] == ["run"]
 
     class RecordingManager:
         def __init__(self) -> None:
@@ -1389,6 +1393,163 @@ def test_provider_error_marks_message_job_failed_without_raw_network_detail(
 
     assert job is not None and job.status == "failed"
     assert job.error == "pi_model_provider_unavailable"
+    record = service._get_record(session_id)
+    assert record.last_turn_status == "failed"
+    assert record.active_message_job_id is None
+
+
+def test_orphaned_replay_execution_is_marked_interrupted(tmp_path: Path) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    session_id = service.create_session(
+        project_id="project-replay", external_llm_opt_in=True
+    )["session"]["session_id"]
+    record = service._get_record(session_id)
+    record.active_message_job_id = "process-local-job-that-no-longer-exists"
+    record.last_turn_status = "running"
+    service._save_record(record)
+
+    public = service.get_session(session_id, project_id="project-replay")["session"]
+
+    assert public["active_message_job_id"] is None
+    assert public["last_turn_status"] == "interrupted"
+
+
+def test_pi_replay_projection_excludes_text_deltas_and_sensitive_shapes() -> None:
+    assert (
+        project_pi_replay_event(
+            {"type": "text_delta", "at": "2026-08-13T00:00:00Z", "delta": "private"}
+        )
+        is None
+    )
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-13T00:00:01Z",
+            "tool_call_id": "call_1",
+            "tool_name": "easyicu_inspect_data_package",
+            "status": "ok",
+            "code": "easyicu_data_package_review_ready",
+            "owner": "easyicu.webserver.data_package_review",
+            "job_id": "job_1",
+            "summary": "must not persist free-form output",
+            "resource": {"path": "/private/source"},
+        }
+    )
+    assert projected == {
+        "type": "tool_end",
+        "at": "2026-08-13T00:00:01Z",
+        "tool_call_id": "call_1",
+        "tool_name": "easyicu_inspect_data_package",
+        "status": "ok",
+        "code": "easyicu_data_package_review_ready",
+        "owner": "easyicu.webserver.data_package_review",
+        "job_id": "job_1",
+    }
+
+
+def test_pi_replay_survives_service_restart_and_archives_only_safe_child_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store_path = tmp_path / "sessions.json"
+    service = PiCopilotService(store_path=store_path, gateway=FakeGateway())
+    session_id = service.create_session(
+        project_id="project-replay-archive",
+        external_llm_opt_in=True,
+    )["session"]["session_id"]
+    service.replay_store.start_turn(
+        session_id=session_id,
+        project_id="project-replay-archive",
+        job_id="message-job-1",
+        allowed_actions=["run", "provider_run"],
+    )
+    service.replay_store.append_event(
+        session_id=session_id,
+        project_id="project-replay-archive",
+        job_id="message-job-1",
+        event={
+            "type": "tool_end",
+            "at": "2026-08-13T01:00:00Z",
+            "tool_call_id": "call-1",
+            "tool_name": "easyicu_run",
+            "status": "ok",
+            "code": "easyicu_full_run_submitted",
+            "owner": "easyicu.webserver.agent_pipeline_runs",
+            "job_id": "child-job-1",
+        },
+    )
+    service.replay_store.finish_turn(
+        session_id=session_id,
+        project_id="project-replay-archive",
+        job_id="message-job-1",
+        status="done",
+    )
+
+    child = service_module.jobs.Job("child-job-1", "research-agent-pipeline")
+    child.emit(
+        {
+            "type": "progress",
+            "step": "plan",
+            "label": "Evidence-bound plan prepared",
+            "path": "/private/must-not-persist.json",
+        }
+    )
+    child.finish(
+        "done",
+        result={"project_dir": "/private/result", "patient_id": "hidden"},
+    )
+
+    class ChildManager:
+        def get(self, job_id: str) -> Any:
+            return child if job_id == child.id else None
+
+    monkeypatch.setattr(service_module.jobs, "MANAGER", ChildManager())
+    archived = service.archive_child_job(
+        session_id,
+        project_id="project-replay-archive",
+        job_id=child.id,
+    )
+    assert archived["job"]["status"] == "done"
+    assert "result" not in archived["job"]
+    assert "/private" not in json.dumps(archived)
+
+    restarted = PiCopilotService(store_path=store_path, gateway=FakeGateway())
+    public = restarted.get_session(
+        session_id,
+        project_id="project-replay-archive",
+    )["session"]
+    assert public["conversation_replay"]["turns"][0]["allowed_actions"] == [
+        "provider_run",
+        "run",
+    ]
+    assert public["archived_child_jobs"][0]["job_id"] == child.id
+    assert len(public["conversation_replay"]["replay_sha256"]) == 64
+
+
+def test_presentation_pin_protects_conversation_from_retention_eviction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(service_module, "MAX_SESSIONS", 2)
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    pinned = PiSessionRecord(
+        session_id="pi-pinned",
+        project_id="project-a",
+        pinned_for_presentation=True,
+    )
+    service._save_record(pinned)
+    service._save_record(PiSessionRecord(session_id="pi-old", project_id="project-a"))
+    service._save_record(PiSessionRecord(session_id="pi-new", project_id="project-a"))
+
+    records = service._read_records()
+    assert [row.session_id for row in records] == ["pi-new", "pi-pinned"]
+    assert records[1].pinned_for_presentation is True
 
 
 def test_session_rejects_overlapping_prompts(
@@ -1514,15 +1675,17 @@ def test_superseded_plan_replan_starts_fresh_pipeline_run(
     monkeypatch.setattr(
         agent_routes,
         "jobs_agent_run",
-        lambda payload: submitted.append(dict(payload))
-        or {
-            "job_id": "job-fresh-plan",
-            "kind": "agent-run",
-            "status": "queued",
-            "study_context_id": study["id"],
-            "study_context_revision": study["revision"],
-            "engine": "research_agent_pipeline",
-        },
+        lambda payload: (
+            submitted.append(dict(payload))
+            or {
+                "job_id": "job-fresh-plan",
+                "kind": "agent-run",
+                "status": "queued",
+                "study_context_id": study["id"],
+                "study_context_revision": study["revision"],
+                "engine": "research_agent_pipeline",
+            }
+        ),
     )
     assert study_owner.scientific_configuration_sha256(study) != "a" * 64
     context = ToolExecutionContext(
@@ -1582,15 +1745,17 @@ def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
     monkeypatch.setattr(
         agent_routes,
         "jobs_agent_run",
-        lambda payload: submitted.append(dict(payload))
-        or {
-            "job_id": "job-terminal-retry",
-            "kind": "agent-run",
-            "status": "queued",
-            "study_context_id": study["id"],
-            "study_context_revision": study["revision"],
-            "engine": "research_agent_pipeline",
-        },
+        lambda payload: (
+            submitted.append(dict(payload))
+            or {
+                "job_id": "job-terminal-retry",
+                "kind": "agent-run",
+                "status": "queued",
+                "study_context_id": study["id"],
+                "study_context_revision": study["revision"],
+                "engine": "research_agent_pipeline",
+            }
+        ),
     )
     context = ToolExecutionContext(
         session=PiSessionRecord(
@@ -2277,9 +2442,12 @@ def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
         "validation_status": "unvalidated",
         "claim_ceiling": "unsupported",
     }
-    assert "Ready" in tool_module.execute_tool(
-        "easyicu_read_project_file", {"file": "index.html"}, granted
-    )["details"]["text"]
+    assert (
+        "Ready"
+        in tool_module.execute_tool(
+            "easyicu_read_project_file", {"file": "index.html"}, granted
+        )["details"]["text"]
+    )
 
 
 def test_workspace_tool_rejects_path_escape_before_host_file_access(
