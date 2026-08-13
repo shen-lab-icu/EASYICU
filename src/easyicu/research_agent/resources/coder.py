@@ -19,6 +19,7 @@ from typing import Any, Iterable, Literal, Mapping, MutableMapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..authority.coder_authority import HostCoderAuthority
+from ..authority.filesystem import publish_write_once_bytes
 from ..authority.plausibility import FlagOnlyPlausibilityScope
 from ..authority.typed_binding import (
     _coder_authority_with_typed_parent_schema_receipts,
@@ -504,31 +505,16 @@ def build_coder_resource_bundle(
 
 
 def _write_once(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.read_bytes() != payload:
-            raise CoderResourceIntegrityError(
-                f"Coder resource receipt changed at {path}"
-            )
-        return
-    fd, temp_name = tempfile.mkstemp(prefix=".coder-resource-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temp_name, path)
-        except FileExistsError:
-            if path.read_bytes() != payload:
-                raise CoderResourceIntegrityError(
-                    f"Coder resource receipt raced with different bytes at {path}"
-                ) from None
-    finally:
-        try:
-            os.unlink(temp_name)
-        except FileNotFoundError:
-            pass
+    publish_write_once_bytes(
+        path,
+        payload,
+        temp_prefix=".coder-resource-",
+        conflict_error=CoderResourceIntegrityError,
+        conflict_message=f"Coder resource receipt changed at {path}",
+        race_message=(
+            f"Coder resource receipt raced with different bytes at {path}"
+        ),
+    )
 
 
 def persist_coder_resource_bundle(
