@@ -120,6 +120,31 @@ class FigureEgressPolicy:
     #: written at authorization time says "these were allowed to go", and
     #: reading it as "these were sent" overstates every failed upload.
     uploaded: List[Dict[str, str]] = field(default_factory=list)
+    #: One entry per image the gate REFUSED, with the reason. A refusal is the
+    #: event this ledger exists to audit -- an unregistered image, a digest that
+    #: no longer matches, a stale checkpoint artefact -- and it used to leave no
+    #: trace at all: the caller demoted ``FigureEgressError`` to a warning and
+    #: fell back to metadata-only review, so the receipt could not tell "no
+    #: figure was ever considered" apart from "three were refused". Recorded
+    #: separately from ``uploaded`` because a refusal has no transport outcome:
+    #: nothing was authorized, so nothing can later complete or fail.
+    refused: List[Dict[str, str]] = field(default_factory=list)
+
+    def record_refusal(
+        self, *, path: str, reason: str, destination: str, evidence_id: str = ""
+    ) -> Dict[str, str]:
+        """Record one image this gate refused to release, and why."""
+
+        item = {
+            "path": str(path),
+            "reason": str(reason),
+            "destination": str(destination),
+        }
+        if evidence_id:
+            item["evidence_id"] = str(evidence_id)
+        item["refusal_id"] = f"{len(self.refused) + 1:04d}"
+        self.refused.append(item)
+        return item
 
     def record_upload(
         self, entries: Sequence[Mapping[str, str]]
@@ -385,68 +410,99 @@ def authorize_figure_upload(
     indexed = _figure_records(policy.evidence)
 
     for raw_path in paths:
-        path = Path(raw_path)
         try:
-            resolved = path.resolve(strict=True)
-        except OSError as exc:
-            raise FigureEgressError(f"figure {path} cannot be read: {exc}") from exc
-        try:
-            relative = resolved.relative_to(run_dir)
-        except ValueError as exc:
-            raise FigureEgressError(
-                f"figure {path} is outside the run directory {run_dir}; only "
-                "artefacts this run produced and registered may be uploaded"
-            ) from exc
-
-        record = indexed.get(str(relative))
-        if record is None:
-            raise FigureEgressError(
-                f"figure {relative} is not a registered evidence artefact; an "
-                "unregistered image has no provenance and must not be uploaded"
+            entries.append(
+                _authorize_one_figure(
+                    raw_path,
+                    policy=policy,
+                    run_dir=run_dir,
+                    indexed=indexed,
+                    destination=destination,
+                )
             )
-        if str(record.kind) != "figure":
-            raise FigureEgressError(
-                f"evidence {record.evidence_id} is kind={record.kind!r}, not a "
-                "figure; only registered figures may be uploaded"
+        except FigureEgressError as exc:
+            # A refusal is the event the ledger exists to record. Log it before
+            # re-raising: the caller demotes this to a warning and falls back to
+            # metadata-only review, so without this row the receipt cannot tell
+            # "nothing was considered" from "this image was refused".
+            policy.record_refusal(
+                path=str(raw_path),
+                reason=str(exc),
+                destination=destination,
             )
-
-        actual = sha256_of_file(resolved)
-        if actual != str(record.sha256):
-            raise FigureEgressError(
-                f"figure {relative} no longer matches its registered digest "
-                f"({actual[:12]}… != {str(record.sha256)[:12]}…); the bytes about "
-                "to be uploaded are not the audited artefact"
-            )
-
-        active = policy.active_step_evidence_ids
-        if active is not None and str(record.evidence_id) not in active:
-            raise FigureEgressError(
-                f"figure evidence {record.evidence_id} does not belong to the "
-                "active checkpoint; a stale artefact must not be uploaded"
-            )
-
-        audit = _verify_host_privacy_authorization(
-            record, evidence=policy.evidence, run_dir=run_dir
-        )
-
-        entries.append(
-            {
-                "path": str(relative),
-                "evidence_id": str(record.evidence_id),
-                "sha256": actual,
-                "destination": destination,
-                "privacy_audit_evidence_id": audit["evidence_id"],
-                "privacy_audit_sha256": audit["sha256"],
-                "privacy_audit_version": audit["audit_version"],
-                "transport": TRANSPORT_AUTHORIZED,
-            }
-        )
+            raise
 
     if policy is not None:
         # Return the policy's own rows, so the caller closes the exact attempts
         # that were opened rather than something merely equal to them.
         return policy.record_upload(entries)
     return entries
+
+
+def _authorize_one_figure(
+    raw_path: Any,
+    *,
+    policy: "FigureEgressPolicy",
+    run_dir: Path,
+    indexed: Dict[str, Any],
+    destination: str,
+) -> Dict[str, str]:
+    """Clear one image, or raise the exact reason it may not leave."""
+
+    path = Path(raw_path)
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise FigureEgressError(f"figure {path} cannot be read: {exc}") from exc
+    try:
+        relative = resolved.relative_to(run_dir)
+    except ValueError as exc:
+        raise FigureEgressError(
+            f"figure {path} is outside the run directory {run_dir}; only "
+            "artefacts this run produced and registered may be uploaded"
+        ) from exc
+
+    record = indexed.get(str(relative))
+    if record is None:
+        raise FigureEgressError(
+            f"figure {relative} is not a registered evidence artefact; an "
+            "unregistered image has no provenance and must not be uploaded"
+        )
+    if str(record.kind) != "figure":
+        raise FigureEgressError(
+            f"evidence {record.evidence_id} is kind={record.kind!r}, not a "
+            "figure; only registered figures may be uploaded"
+        )
+
+    actual = sha256_of_file(resolved)
+    if actual != str(record.sha256):
+        raise FigureEgressError(
+            f"figure {relative} no longer matches its registered digest "
+            f"({actual[:12]}… != {str(record.sha256)[:12]}…); the bytes about "
+            "to be uploaded are not the audited artefact"
+        )
+
+    active = policy.active_step_evidence_ids
+    if active is not None and str(record.evidence_id) not in active:
+        raise FigureEgressError(
+            f"figure evidence {record.evidence_id} does not belong to the "
+            "active checkpoint; a stale artefact must not be uploaded"
+        )
+
+    audit = _verify_host_privacy_authorization(
+        record, evidence=policy.evidence, run_dir=run_dir
+    )
+
+    return {
+        "path": str(relative),
+        "evidence_id": str(record.evidence_id),
+        "sha256": actual,
+        "destination": destination,
+        "privacy_audit_evidence_id": audit["evidence_id"],
+        "privacy_audit_sha256": audit["sha256"],
+        "privacy_audit_version": audit["audit_version"],
+        "transport": TRANSPORT_AUTHORIZED,
+    }
 
 
 class FigureEgressReceiptError(RuntimeError):
@@ -504,13 +560,21 @@ def register_figure_egress_receipt(
     for item in uploads:
         key = str(item.get("transport") or TRANSPORT_UNKNOWN)
         counts[key] = counts.get(key, 0) + 1
+    refusals = [dict(item) for item in (getattr(policy, "refused", ()) or ())]
     payload = {
-        "schema": "easyicu.figure_egress_receipt/3",
+        "schema": "easyicu.figure_egress_receipt/4",
         "phase": phase,
         "allow_external_upload": bool(policy.allow_external_upload),
         "authorized_count": len(uploads),
         "transport_counts": dict(sorted(counts.items())),
         "uploads": uploads,
+        # A refused image never becomes an upload, so without these the receipt
+        # reads identically whether the gate saw nothing or turned three images
+        # away. The caller demotes the refusal to a warning and continues on
+        # metadata only, which is a defensible run decision and a terrible
+        # audit trail if it leaves no row.
+        "refused_count": len(refusals),
+        "refused": refusals,
     }
     evidence_id = (
         "figure_egress_receipt"
