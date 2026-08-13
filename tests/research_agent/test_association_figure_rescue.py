@@ -20,11 +20,13 @@ from easyicu.research_agent.audits.validators import (
 from easyicu.research_agent.contracts.declared_product import (
     bind_declared_figure_products,
 )
+from easyicu.research_agent.figures.missingness_publication import (
+    render_missingness_publication_bundle_from_prior_outputs as missingness_rescue,
+)
 from easyicu.research_agent.pipeline import (
     _context_axis_label,
     _render_authorized_sealed_publication_bundle,
     _render_cohort_overlap_publication_bundle_from_prior_outputs as cohort_overlap_rescue,
-    _render_missingness_publication_bundle_from_prior_outputs as missingness_rescue,
     _render_publication_bundle_from_prior_outputs_for_step as routed_rescue,
     _render_association_publication_bundle_from_prior_outputs as rescue,
     _render_sensitivity_publication_bundle_from_prior_outputs as sensitivity_rescue,
