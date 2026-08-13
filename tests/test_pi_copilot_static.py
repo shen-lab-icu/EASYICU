@@ -90,6 +90,12 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "syncProjectWorkflowAside" in pi_owner
     assert "completed_required_stages" in pi_owner
     assert "operator_plan_approval_required" in pi_owner
+    assert (
+        "I approve this exact evidence-bound plan without changing the study configuration"
+        in pi_owner
+    )
+    assert "本轮不新增可选的科学设定" in pi_owner
+    assert "preserve every open scientific finding as a limitation" in pi_owner
     assert "reviewResources" in pi_owner
     assert "打开分析计划" in pi_owner
     assert "打开文献绑定" in pi_owner

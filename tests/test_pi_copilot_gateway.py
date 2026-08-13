@@ -675,8 +675,14 @@ def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> 
     assert "treat the terminal failed run as immutable history" in entrypoint
     assert "covariate_rationales" in entrypoint
     assert "covariate_temporal_roles" in entrypoint
-    assert "save each explicit decision in typed sensitivity_specs" in entrypoint
+    assert "save only an explicit positive choice" in entrypoint
     assert "sensitivity_spec" in entrypoint
+
+
+def test_system_prompt_keeps_declined_optional_sensitivity_out_of_study_context() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+    assert "the user declines, that is not a sensitivity spec or a StudyContext change" in entrypoint
+    assert "call easyicu_resume with decision='approved'" in entrypoint
 
 
 def test_research_system_prompt_requires_tool_first_idea_mining() -> None:
