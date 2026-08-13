@@ -10,6 +10,7 @@ from easyicu.research_agent.contracts.endpoint import EndpointSpec
 from easyicu.research_agent.contracts.claim_ceiling import DescriptiveClaimContract
 from easyicu.research_agent.agents.core import PlannerAgent
 from easyicu.research_agent.contracts.model_terms import ModelTermSpec
+from easyicu.research_agent.contracts.figure_plan import PlannedFigurePanelSpec
 from easyicu.research_agent.literature import (
     CitationRecord,
     LiteratureBundle,
@@ -177,6 +178,15 @@ def _plan(*, typed_bindings: bool = True) -> AnalysisPlan:
                 inputs=["table:adjusted_association_estimates"],
                 expected_outputs=["figure:primary_estimand"],
                 method="visualization",
+                figure_panels=[
+                    PlannedFigurePanelSpec(
+                        panel_id="primary_estimand",
+                        figure_output="figure:primary_estimand",
+                        article_role="primary_estimand",
+                        chart_type="forest",
+                        source_products=["table:adjusted_association_estimates"],
+                    )
+                ],
             ),
             AnalysisStep(
                 step_id="missingness",
@@ -580,6 +590,26 @@ def test_descriptive_absolute_risk_with_supporting_tables_does_not_invent_infere
     assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" not in codes
     assert review.facts["temporal_inference_required"] is False
     assert review.facts["descriptive_only_step_ids"] == ["absolute_risk_distribution"]
+    assert "primary_analysis" not in review.facts["content_roles"]["missing_roles"]
+    assert "primary_analysis" not in review.facts["content_roles"]["required_roles"]
+    assert review.facts["content_roles"]["source_analysis_type"] == (
+        "descriptive_epidemiology"
+    )
+    assert review.facts["robustness_readiness"] == {
+        "status": "blocked",
+        "reason": "no_typed_sensitivity_authority",
+        "family": "descriptive",
+        "family_requirements": [
+            "denominator definition sensitivity",
+            "missingness/measurement availability sensitivity",
+        ],
+        "required_axis_count": 2,
+        "executable_axes": [],
+        "declared_authority_ids": [],
+        "effect_style_grid_required": False,
+    }
+    assert "ROBUSTNESS_AXES_TOO_NARROW" not in codes
+    assert "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED" in codes
 
 
 def test_absolute_risk_difference_without_typed_ceiling_remains_inferential() -> None:
@@ -752,6 +782,155 @@ def test_host_binds_patient_dependence_into_descriptive_risk_product() -> None:
     assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" not in codes
     assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in codes
     assert review.facts["repeated_unit_design_executable"] is True
+
+
+def _traditional_table_one_step() -> AnalysisStep:
+    return AnalysisStep(
+        step_id="table_one",
+        planned_analysis_role="auxiliary",
+        intent="Describe the cohort by exposure group.",
+        inputs=["cohort:analysis_set", "exposure", "age"],
+        expected_outputs=["table:table_one"],
+        method="descriptive",
+        table_one_spec={
+            "group_by": "exposure",
+            "group_levels": [0, 1],
+            "variables": [
+                {
+                    "name": "age",
+                    "variable_kind": "continuous",
+                    "summary": "median_iqr",
+                    "test": "mann_whitney_or_kruskal",
+                }
+            ],
+        },
+    )
+
+
+def test_host_turns_repeated_unit_table_one_into_descriptive_smd_only() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["patient_stay_id"],
+                    "provenance": {
+                        "analysis_unit": "icu_stay",
+                        "replacement_row_identity": {
+                            "output_identity_column": "patient_stay_id",
+                            "mapping_file_sha256": "9" * 64,
+                            "patient_group_derivation": {
+                                "algorithm": "prefix_before_:s",
+                                "delimiter": ":s",
+                            },
+                        },
+                    },
+                }
+            ),
+            "user_preferences": UserPreferences(
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_family": "descriptive_epidemiology",
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                        }
+                    }
+                )
+            ),
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_study",
+        steps=[_traditional_table_one_step(), _absolute_risk_distribution_step()],
+    )
+
+    bound = bind_context_dependence_authority(plan=plan, context=context)
+    table_one = bound.steps[0].table_one_spec
+
+    assert table_one is not None
+    assert table_one.schema_version == "easyicu.table_one/2"
+    assert table_one.p_values_required is False
+    assert table_one.p_value_adjustment == "not_applicable_repeated_units"
+    assert {variable.test for variable in table_one.variables} == {
+        "none_descriptive_smd_only"
+    }
+    assert repeated_unit_design_closed(context, bound) is True
+    review = build_plan_scientific_review(
+        context=context,
+        plan=bound,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+    assert "TABLE_ONE_INDEPENDENT_TESTS_IGNORE_REPEATED_UNITS" not in {
+        finding.code for finding in review.findings
+    }
+
+
+def test_scientific_review_blocks_unbound_independent_table_one_tests() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": ["patient_stay_id"],
+                    "provenance": {
+                        "analysis_unit": "icu_stay",
+                        "replacement_row_identity": {
+                            "output_identity_column": "patient_stay_id",
+                            "mapping_file_sha256": "8" * 64,
+                            "patient_group_derivation": {
+                                "algorithm": "prefix_before_:s",
+                                "delimiter": ":s",
+                            },
+                        },
+                    },
+                }
+            ),
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_study",
+        steps=[_traditional_table_one_step()],
+    )
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+
+    assert "TABLE_ONE_INDEPENDENT_TESTS_IGNORE_REPEATED_UNITS" in {
+        finding.code for finding in review.findings
+    }
+    assert review.facts["repeated_unit_design_executable"] is False
+
+
+def test_independent_unit_table_one_keeps_its_declared_tests() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "n_patients": _context().cohort.n_stays,
+                    "inclusion_criteria": [],
+                    "provenance": {"analysis_unit": "patient"},
+                }
+            ),
+            "user_preferences": None,
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_study",
+        steps=[_traditional_table_one_step()],
+    )
+
+    unchanged = bind_context_dependence_authority(plan=plan, context=context)
+
+    assert unchanged.steps[0].table_one_spec == plan.steps[0].table_one_spec
+    assert unchanged.steps[0].table_one_spec.p_values_required is True
 
 
 def test_host_binds_dependence_for_marginal_risks_even_without_a_contrast() -> None:
@@ -956,6 +1135,7 @@ def test_planner_parse_binds_cluster_authority_into_the_plan_digest() -> None:
         }
     )
     payload = _plan().model_dump(mode="json")
+    payload["steps"].append(_traditional_table_one_step().model_dump(mode="json"))
     for step in payload["steps"]:
         step["literature_citation_keys"] = []
         step["literature_design_bindings"] = []
@@ -975,6 +1155,13 @@ def test_planner_parse_binds_cluster_authority_into_the_plan_digest() -> None:
     assert parsed.steps[0].model_requirements[0].dependence.group_source == (
         "patient_stay_id"
     )
+    parsed_table_one = parsed.steps[-1].table_one_spec
+    assert parsed_table_one is not None
+    assert parsed_table_one.schema_version == "easyicu.table_one/2"
+    assert parsed_table_one.p_values_required is False
+    assert [variable.test for variable in parsed_table_one.variables] == [
+        "none_descriptive_smd_only"
+    ]
 
 
 def test_typed_sensitivities_do_not_hide_unclosed_primary_designs() -> None:
@@ -1193,6 +1380,17 @@ def test_explicit_distribution_figure_covers_descriptive_role_without_prose() ->
                     method="visualization",
                     inputs=["table:exposure_outcome_distribution"],
                     expected_outputs=["figure:exposure_outcome_panel"],
+                    figure_panels=[
+                        PlannedFigurePanelSpec(
+                            panel_id="exposure_outcome_panel",
+                            figure_output="figure:exposure_outcome_panel",
+                            article_role="descriptive_result",
+                            chart_type="prevalence_panel",
+                            source_products=[
+                                "table:exposure_outcome_distribution"
+                            ],
+                        )
+                    ],
                 ),
             ]
         }
@@ -1206,6 +1404,45 @@ def test_explicit_distribution_figure_covers_descriptive_role_without_prose() ->
 
     assert "descriptive_result" in review.facts["figure_roles"]["covered_roles"]
     assert "descriptive_result" not in review.facts["figure_roles"]["missing_roles"]
+
+
+def test_generic_overview_inputs_do_not_infer_figure_roles_or_chart_breadth() -> None:
+    context = _context()
+    plan = _plan().model_copy(
+        update={
+            "steps": [
+                *_plan().steps,
+                AnalysisStep(
+                    step_id="overview",
+                    planned_analysis_role="auxiliary",
+                    intent="Render a generic overview.",
+                    method="visualization",
+                    inputs=[
+                        "table:cohort_flow",
+                        "table:missingness_audit",
+                        "table:exposure_outcome_distribution",
+                    ],
+                    expected_outputs=["figure:overview"],
+                ),
+            ]
+        }
+    )
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+
+    facts = review.facts["figure_roles"]
+    assert facts["typed_panel_count"] == 1
+    assert facts["covered_roles"] == ["primary_estimand"]
+    assert facts["chart_types"] == ["forest"]
+    assert facts["distinct_chart_types_complete"] is False
+    codes = {item.code for item in review.findings}
+    assert "FIGURE_ROLE_COVERAGE_INCOMPLETE" in codes
+    assert "FIGURE_CHART_TYPES_TOO_NARROW" in codes
 
 
 def test_revision_contract_contains_only_agent_owned_findings() -> None:

@@ -55,37 +55,6 @@ _PRIMARY_PUBLICATION_MIN_ROLES = {
     "descriptive": 2,
 }
 
-# Owner vocabulary for typed plan products.  Article strategies intentionally
-# use reader-facing phrases ("outcome by exposure"), while plan products use
-# stable snake-case identities (``exposure_outcome_distribution``).  Matching
-# only literal prose under-credits real figures; searching the whole plan
-# over-credits tables that are never rendered.  Keep the bridge here, beside
-# the role strategy it interprets, and apply it only to explicit figure steps.
-_PLAN_PRODUCT_HINTS_BY_ROLE: dict[str, tuple[str, ...]] = {
-    "descriptive_result": (
-        "exposure_outcome_distribution",
-        "exposure_outcome_panel",
-        "absolute_risk",
-        "event_rate",
-        "prevalence",
-    ),
-    "primary_estimand": (
-        "adjusted_association",
-        "primary_association",
-        "primary_estimand",
-        "effect_estimate",
-    ),
-    "robustness": ("robustness", "sensitivity"),
-    "data_quality": (
-        "missingness",
-        "measurement_process",
-        "data_quality",
-        "availability",
-        "coverage",
-    ),
-}
-
-
 class FigureRoleStrategy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -114,37 +83,34 @@ def _normalise_role_match_text(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
 
 
-def figure_step_covers_role(step: Any, role: FigureRoleStrategy) -> bool:
-    """Whether one explicit figure step carries a role's typed evidence.
+def figure_panel_covers_role(panel: Any, role: FigureRoleStrategy) -> bool:
+    """Whether one typed panel exactly satisfies a strategy role."""
 
-    Intent text is deliberately excluded: a model saying it will make a data
-    quality figure is not equivalent to declaring the source table and figure
-    product that the runtime can execute and audit.
+    expected_role = _normalise_role_match_text(role.role).replace(" ", "_")
+    declared_role = _normalise_role_match_text(
+        getattr(panel, "article_role", "")
+    ).replace(" ", "_")
+    if declared_role != expected_role:
+        return False
+    chart_type = _normalise_role_match_text(
+        getattr(panel, "chart_type", "")
+    ).replace(" ", "_")
+    return _acceptable_chart_match(role, chart_type)
+
+
+def figure_step_covers_role(step: Any, role: FigureRoleStrategy) -> bool:
+    """Whether a figure step explicitly declares this role and chart grammar.
+
+    Input and output product names are lineage coordinates, not visual
+    semantics.  A renderer that consumes a cohort-flow, missingness, and result
+    table is not thereby three article panels.  Only the Planner's typed panel
+    declarations can satisfy plan-time figure coverage; execution later checks
+    the resulting FigureContract and source data independently.
     """
 
-    outputs = [str(value) for value in getattr(step, "expected_outputs", ())]
-    if not any(value.startswith("figure:") for value in outputs):
-        return False
-    text = _normalise_role_match_text(
-        " ".join(
-            [
-                str(getattr(step, "step_id", "") or ""),
-                str(getattr(step, "method", "") or ""),
-                *[str(value) for value in getattr(step, "inputs", ())],
-                *outputs,
-            ]
-        )
-    )
-    raw_terms = (
-        role.role,
-        *role.search_terms,
-        *role.acceptable_chart_types,
-        *role.required_text_terms,
-        *_PLAN_PRODUCT_HINTS_BY_ROLE.get(role.role, ()),
-    )
     return any(
-        term and term in text
-        for term in (_normalise_role_match_text(value) for value in raw_terms)
+        figure_panel_covers_role(panel, role)
+        for panel in getattr(step, "figure_panels", ())
     )
 
 
@@ -860,6 +826,7 @@ __all__ = [
     "DATA_QUALITY_FIGURE_REQUIRED_INPUTS",
     "FigureRoleStrategy",
     "build_article_figure_strategy",
+    "figure_panel_covers_role",
     "figure_step_covers_role",
     "render_article_figure_strategy_for_prompt",
     "summarize_article_figure_strategy_coverage",

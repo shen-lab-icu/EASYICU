@@ -49,6 +49,7 @@ _TESTS = {
         "chi_square",
         "fisher_exact",
     },
+    "none_descriptive_smd_only": {"not_reported_repeated_units"},
 }
 _NOT_TESTABLE = {"not_testable_empty_group", "not_testable_no_variation"}
 
@@ -486,7 +487,13 @@ def table_one_output_findings(
         proven_no_variation = (
             variable.summary == "count_percent" and active_overall_categories < 2
         )
-        if declared_empty_group:
+        if not spec.p_values_required:
+            valid_p_value = (
+                rows["p_value"].isna().all()
+                and not rows["test_name"].isna().any()
+                and test_names == {"not_reported_repeated_units"}
+            )
+        elif declared_empty_group:
             valid_p_value = len(p_values) == 0 and empty_comparison_group
         elif declared_no_variation:
             valid_p_value = len(p_values) == 0 and proven_no_variation
@@ -501,7 +508,12 @@ def table_one_output_findings(
                 _error(
                     step,
                     "table_one_p_value_invalid",
-                    f"Table 1 requires one bounded P value for {variable.name!r}.",
+                    (
+                        f"Table 1 must omit independent-row P values for "
+                        f"{variable.name!r} under its repeated-unit contract."
+                        if not spec.p_values_required
+                        else f"Table 1 requires one bounded P value for {variable.name!r}."
+                    ),
                     variable=variable.name,
                 )
             )

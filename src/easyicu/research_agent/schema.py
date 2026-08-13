@@ -45,6 +45,7 @@ from .contracts.exposure_outcome_distribution import (
     ExposureOutcomeDistributionSpec,
 )
 from .contracts.family_primary import FamilyPrimaryResultRequirement
+from .contracts.figure_plan import PlannedFigurePanelSpec
 from .contracts.model_terms import ModelTermSpec, validate_model_term_roster
 from .contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND as PLANNED_MODEL_REQUIREMENTS_OUTPUT,
@@ -104,6 +105,7 @@ TableOneTest = Literal[
     "welch_t_or_anova",
     "mann_whitney_or_kruskal",
     "chi_square_with_fisher_exact_for_sparse_2x2",
+    "none_descriptive_smd_only",
 ]
 TABLE_ONE_CLOSED_OUTPUTS = frozenset(
     {
@@ -1325,14 +1327,18 @@ class TableOneVariableSpec(BaseModel):
             "welch_t_or_anova",
             "mann_whitney_or_kruskal",
         }
+        no_test = self.test == "none_descriptive_smd_only"
         if self.variable_kind == "continuous":
-            if not numeric_summary or not numeric_test or self.levels:
+            if not numeric_summary or not (numeric_test or no_test) or self.levels:
                 raise ValueError(
                     "continuous Table 1 variables require a numeric summary/test "
                     "and must not declare categorical levels"
                 )
         elif self.summary == "count_percent":
-            if self.test != "chi_square_with_fisher_exact_for_sparse_2x2":
+            if self.test not in {
+                "chi_square_with_fisher_exact_for_sparse_2x2",
+                "none_descriptive_smd_only",
+            }:
                 raise ValueError(
                     "count/percent Table 1 variables require the categorical test"
                 )
@@ -1345,7 +1351,7 @@ class TableOneVariableSpec(BaseModel):
             if (
                 self.variable_kind != "ordinal"
                 or not numeric_summary
-                or not numeric_test
+                or not (numeric_test or no_test)
             ):
                 raise ValueError(
                     "only ordinal variables may use a numeric Table 1 summary/test "
@@ -1389,15 +1395,19 @@ class TableOneSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["easyicu.table_one/1"] = "easyicu.table_one/1"
+    schema_version: Literal["easyicu.table_one/1", "easyicu.table_one/2"] = (
+        "easyicu.table_one/1"
+    )
     group_by: str
     group_levels: List[Any] = Field(min_length=2)
     variables: List[TableOneVariableSpec] = Field(min_length=1)
     include_overall: Literal[True] = True
     missing_group_policy: Literal["fail_closed", "exclude_and_report"] = "fail_closed"
     missingness_display: Literal["n_percent_by_group"] = "n_percent_by_group"
-    p_values_required: Literal[True] = True
-    p_value_adjustment: Literal["none_descriptive_table"] = "none_descriptive_table"
+    p_values_required: bool = True
+    p_value_adjustment: Literal[
+        "none_descriptive_table", "not_applicable_repeated_units"
+    ] = "none_descriptive_table"
     standardized_difference_mode: Literal["auto_binary_groups"] = "auto_binary_groups"
 
     @field_validator("group_levels")
@@ -1415,6 +1425,29 @@ class TableOneSpec(BaseModel):
             raise ValueError("Table 1 variable names must be unique")
         if self.group_by in names:
             raise ValueError("Table 1 group_by must not also be a row variable")
+        no_test = [
+            item.name
+            for item in self.variables
+            if item.test == "none_descriptive_smd_only"
+        ]
+        if self.schema_version == "easyicu.table_one/1":
+            if (
+                not self.p_values_required
+                or self.p_value_adjustment != "none_descriptive_table"
+                or no_test
+            ):
+                raise ValueError(
+                    "Table One /1 requires the declared independent-row tests"
+                )
+        elif (
+            self.p_values_required
+            or self.p_value_adjustment != "not_applicable_repeated_units"
+            or len(no_test) != len(self.variables)
+        ):
+            raise ValueError(
+                "Table One /2 is descriptive/SMD-only for repeated units and "
+                "must not declare an inferential test"
+            )
         return self
 
 
@@ -1947,6 +1980,15 @@ class AnalysisStep(BaseModel):
             "source to one row."
         ),
     )
+    figure_panels: List[PlannedFigurePanelSpec] = Field(
+        default_factory=list,
+        max_length=16,
+        description=(
+            "Typed article role, chart family, figure product, and exact source "
+            "products for every planned figure panel. Figure names, input table "
+            "names, and intent prose are not substitutes for this declaration."
+        ),
+    )
     table_one_spec: Optional[TableOneSpec] = Field(
         default=None,
         description=(
@@ -2164,6 +2206,42 @@ class AnalysisStep(BaseModel):
                 raise ValueError(
                     "visualization input_consumption_contracts must cover every "
                     "exact typed table input"
+                )
+        if self.figure_panels:
+            method_head = str(self.method or "").strip().lower().split(" with ", 1)[0]
+            if method_head != "visualization":
+                raise ValueError(
+                    "figure_panels are valid only on method='visualization' steps"
+                )
+            panel_ids = [panel.panel_id for panel in self.figure_panels]
+            if len(panel_ids) != len(set(panel_ids)):
+                raise ValueError("figure_panels panel_id values must be unique per step")
+            declared_outputs = set(self.expected_outputs)
+            declared_inputs = set(self.inputs)
+            undeclared_outputs = sorted(
+                {
+                    panel.figure_output
+                    for panel in self.figure_panels
+                    if panel.figure_output not in declared_outputs
+                }
+            )
+            if undeclared_outputs:
+                raise ValueError(
+                    "figure_panels figure_output values must be declared in "
+                    f"expected_outputs; missing {undeclared_outputs!r}"
+                )
+            undeclared_sources = sorted(
+                {
+                    source
+                    for panel in self.figure_panels
+                    for source in panel.source_products
+                    if source not in declared_inputs
+                }
+            )
+            if undeclared_sources:
+                raise ValueError(
+                    "figure_panels source_products must be exact step inputs; "
+                    f"missing {undeclared_sources!r}"
                 )
         requirement_ids = [item.requirement_id for item in self.model_requirements]
         if len(requirement_ids) != len(set(requirement_ids)):
@@ -3145,6 +3223,7 @@ __all__ = [
     "ResearchContext",
     "HypothesisBlueprint",
     "FamilyPrimaryResultRequirement",
+    "PlannedFigurePanelSpec",
     "SURVIVAL_ANALYSIS_RECEIPT_PRODUCT",
     "SurvivalAnalysisReceipt",
     "AnalysisStep",

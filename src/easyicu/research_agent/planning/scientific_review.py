@@ -29,13 +29,14 @@ from ..research_context.temporal_semantics import (
     window_extends_after_anchor,
 )
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
-from .figure_strategy import ArticleFigureStrategy, figure_step_covers_role
+from .figure_strategy import ArticleFigureStrategy
 from .dependence_authority import (
     context_patient_group_authority,
     dependence_matches_context,
 )
 from .method_literature import method_binding_support
 from .novelty_contract import NOVELTY_REVIEW_DIMENSIONS
+from .publication_readiness import build_publication_readiness_facts
 from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
 
 
@@ -325,7 +326,13 @@ def _sensitivity_specs(context: ResearchContext) -> tuple[Any, ...]:
 def repeated_unit_design_closed(
     context: ResearchContext, plan: Optional[AnalysisPlan]
 ) -> bool:
-    applicable = False
+    table_one_steps = [
+        step for step in (plan.steps if plan is not None else ())
+        if step.table_one_spec is not None
+    ]
+    if any(step.table_one_spec.p_values_required for step in table_one_steps):
+        return False
+    applicable = bool(table_one_steps)
     for step in scientific_steps(plan):
         if not executable_scientific_step(step):
             continue
@@ -622,6 +629,7 @@ def _sensitivity_facts(
     typed_specs = {spec.spec_id: spec for spec in _sensitivity_specs(context)}
     executed_spec_ids: set[str] = set()
     executable: set[str] = set()
+    typed_executable: set[str] = set()
     protocol_only: set[str] = set()
     for step in scientific_steps(plan):
         text = " ".join(
@@ -652,14 +660,24 @@ def _sensitivity_facts(
                     executed_spec_ids.add(spec_id)
         else:
             protocol_only.update(axes)
-    for spec in plan.robustness_specs:
-        text = " ".join((spec.spec_id, spec.axis, spec.description)).casefold()
-        if spec.axis == "missing" or "complete case" in text:
-            executable.add("missing")
-        if spec.axis == "cohort" and "readmission" in text:
-            executable.add("readmission")
-        if spec.axis == "cohort" and any(token in text for token in ("timing", "landmark")):
-            executable.add("timing")
+    replay_steps = [
+        step
+        for step in plan.steps
+        if _method_head(step) == "robustness_sensitivity"
+        and step.robustness_replay_spec is not None
+        and _has_scientific_output(step)
+    ]
+    plan_spec_axes = {
+        {"missing": "missing", "cohort": "cohort", "outcome": "outcome_definition"}[
+            spec.axis
+        ]
+        for spec in plan.robustness_specs
+    }
+    if len(replay_steps) == 1:
+        executable.update(plan_spec_axes)
+        typed_executable.update(plan_spec_axes)
+    else:
+        protocol_only.update(plan_spec_axes)
     # A temporal phrase in a generic generated-code step is not proof that the
     # estimator closes immortal-time/exposure-opportunity bias.
     if "timing" in executable and not timing_design_closed(plan):
@@ -675,82 +693,22 @@ def _sensitivity_facts(
         if spec_id in executed_spec_ids
     }
     executable.update(typed_axes)
+    typed_executable.update(typed_axes)
     return {
         "requested": sorted(requested),
         "executable": sorted(executable),
+        "typed_executable": sorted(typed_executable),
         "protocol_only": sorted(protocol_only - executable),
         "missing_required": sorted(requested - executable),
         "typed_spec_ids": sorted(typed_specs),
         "executed_spec_ids": sorted(executed_spec_ids),
         "missing_spec_ids": missing_spec_ids,
-    }
-
-
-def _figure_role_facts(
-    plan: AnalysisPlan,
-    strategy: Optional[ArticleFigureStrategy],
-) -> dict[str, Any]:
-    if strategy is None:
-        return {
-            "required_roles": [],
-            "covered_roles": [],
-            "missing_roles": [],
-            "figure_step_count": 0,
-        }
-    figure_steps = [
-        step
-        for step in plan.steps
-        if any(str(value).startswith("figure:") for value in step.expected_outputs)
-    ]
-    required = [item for item in strategy.role_strategies if item.required]
-    covered = [
-        role.role
-        for role in required
-        if any(figure_step_covers_role(step, role) for step in figure_steps)
-    ]
-    required_roles = sorted(item.role for item in required)
-    covered_roles = sorted(set(covered))
-    return {
-        "required_roles": required_roles,
-        "covered_roles": covered_roles,
-        "missing_roles": sorted(set(required_roles) - set(covered_roles)),
-        "figure_step_count": len(figure_steps),
-        "assessment_scope": "planned_roles_only_not_rendered_visual_quality",
-        "rendered_visual_qa_required_post_execution": True,
-    }
-
-
-def _content_role_facts(plan: AnalysisPlan) -> dict[str, Any]:
-    products = {
-        str(value).casefold()
-        for step in plan.steps
-        for value in step.expected_outputs
-    }
-    text = " ".join(products)
-    covered = {
-        role
-        for role, tokens in {
-            "cohort_accounting": ("cohort_flow", "attrition"),
-            "baseline_characteristics": ("table_one", "baseline_characteristics"),
-            "data_quality": ("missingness", "measurement", "availability"),
-            "descriptive_absolute_results": ("exposure_outcome_distribution", "absolute_risk", "prevalence"),
-            "primary_analysis": ("adjusted_association", "primary_estimate", "primary_result"),
-            "robustness": ("robustness", "sensitivity"),
-        }.items()
-        if any(token in text for token in tokens)
-    }
-    required = {
-        "cohort_accounting",
-        "baseline_characteristics",
-        "data_quality",
-        "descriptive_absolute_results",
-        "primary_analysis",
-        "robustness",
-    }
-    return {
-        "required_roles": sorted(required),
-        "covered_roles": sorted(covered),
-        "missing_roles": sorted(required - covered),
+        "plan_robustness_spec_ids": sorted(
+            spec.spec_id for spec in plan.robustness_specs
+        ),
+        "plan_robustness_replay_step_ids": sorted(
+            step.step_id for step in replay_steps
+        ),
     }
 
 
@@ -1027,8 +985,15 @@ def build_plan_scientific_review(
     method_facts = method_source_facts(plan, context)
     design_bindings = _literature_design_bindings(plan, literature)
     sensitivity = _sensitivity_facts(context, plan)
-    figure_roles = _figure_role_facts(plan, figure_strategy)
-    content_roles = _content_role_facts(plan)
+    publication_readiness = build_publication_readiness_facts(
+        context=context,
+        plan=plan,
+        figure_strategy=figure_strategy,
+        sensitivity=sensitivity,
+    )
+    robustness_readiness = publication_readiness["robustness"]
+    figure_roles = publication_readiness["figure_roles"]
+    content_roles = publication_readiness["content_roles"]
     linearity = _continuous_linearity_facts(plan)
     clinical_definitions = _clinical_definition_facts(context)
     time_anchor_alignment = primary_exposure_time_anchor_alignment(context)
@@ -1324,6 +1289,36 @@ def build_plan_scientific_review(
                 authorization_question="Should the new study use one stay per patient or retain stays with clustered/mixed estimation?",
             )
         )
+    repeated_unit_table_one_tests = [
+        step.step_id
+        for step in plan.steps
+        if step.table_one_spec is not None
+        and step.table_one_spec.p_values_required
+    ]
+    if repeats and repeated_unit_table_one_tests:
+        findings.append(
+            PlanScientificFinding(
+                code="TABLE_ONE_INDEPENDENT_TESTS_IGNORE_REPEATED_UNITS",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "Table 1 requests independent-row tests although the cohort "
+                    "retains repeated units: "
+                    + ", ".join(repeated_unit_table_one_tests)
+                    + "."
+                ),
+                evidence_refs=[
+                    "research_context.json.cohort",
+                    "analysis_plan.json.steps.table_one_spec",
+                ],
+                remediation=(
+                    "Use the host-bound descriptive/SMD-only Table 1 projection, "
+                    "or issue a new typed clustered-test contract; do not relabel "
+                    "Mann-Whitney, Welch, chi-square, or Fisher tests as clustered."
+                ),
+                remediation_route="agent_plan_revision",
+            )
+        )
     if sensitivity["missing_required"] or sensitivity["missing_spec_ids"]:
         findings.append(
             PlanScientificFinding(
@@ -1405,15 +1400,56 @@ def build_plan_scientific_review(
                 remediation="Add a prespecified spline/nonlinearity sensitivity with source binding, without changing the headline estimand after results are seen.",
             )
         )
-    if len(set(sensitivity["executable"])) < 2:
+    if (
+        robustness_readiness["status"] == "blocked"
+        and robustness_readiness["reason"] == "no_typed_sensitivity_authority"
+    ):
+        findings.append(
+            PlanScientificFinding(
+                code="ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
+                severity="major",
+                dimension="robustness",
+                message=(
+                    "The study-family playbook calls for robustness evidence, "
+                    "but no typed, executable sensitivity authority was "
+                    "prespecified for this study version."
+                ),
+                evidence_refs=[
+                    "study_design_brief.json.sensitivity_requirements",
+                    "research_context.json.user_preferences.sensitivity_specs",
+                    "analysis_plan.json.robustness_specs",
+                ],
+                remediation=(
+                    "Issue a new user-reviewed sensitivity authority for a "
+                    "task-supported denominator, missingness/measurement, "
+                    "outcome-definition, timing, or model axis. Descriptive "
+                    "studies must not invent an effect-estimate replay grid."
+                ),
+                requires_user_authorization=True,
+                authorization_question=(
+                    "Do you want to prespecify executable, study-family-appropriate "
+                    "sensitivity analyses in a new study version?"
+                ),
+            )
+        )
+    elif robustness_readiness["status"] == "too_narrow":
         findings.append(
             PlanScientificFinding(
                 code="ROBUSTNESS_AXES_TOO_NARROW",
                 severity="major",
                 dimension="robustness",
-                message="The proposed plan contains fewer than two distinct executable robustness axes.",
-                evidence_refs=["analysis_plan.json.robustness_specs"],
-                remediation="Prespecify task-supported cohort/timing, missing-data, outcome-definition, or functional-form alternatives before execution.",
+                message=(
+                    "The proposed plan has fewer typed executable robustness axes "
+                    "than its study-family playbook requires."
+                ),
+                evidence_refs=[
+                    "study_design_brief.json.sensitivity_requirements",
+                    "analysis_plan.json.robustness_specs",
+                ],
+                remediation=(
+                    "Prespecify only task-supported sensitivity alternatives "
+                    "appropriate to this study family before execution."
+                ),
             )
         )
     if figure_roles["missing_roles"]:
@@ -1425,6 +1461,27 @@ def build_plan_scientific_review(
                 message="Explicit figure steps do not cover required article roles: " + ", ".join(figure_roles["missing_roles"]),
                 evidence_refs=["article_figure_strategy.json", "analysis_plan.json"],
                 remediation="Plan source-data-bound figures for each missing role; table prose elsewhere does not count as a figure.",
+            )
+        )
+    if not figure_roles["distinct_chart_types_complete"]:
+        findings.append(
+            PlanScientificFinding(
+                code="FIGURE_CHART_TYPES_TOO_NARROW",
+                severity="major",
+                dimension="figures",
+                message=(
+                    "The typed figure plan declares fewer distinct valid chart "
+                    "families than the article figure strategy requires."
+                ),
+                evidence_refs=[
+                    "article_figure_strategy.json.minimum_distinct_chart_types",
+                    "analysis_plan.json.steps.figure_panels",
+                ],
+                remediation=(
+                    "Declare complementary typed panels with exact article roles, "
+                    "accepted chart types, figure outputs, and source products; "
+                    "renaming a table or generic overview does not count."
+                ),
             )
         )
     if content_roles["missing_roles"]:
@@ -1564,6 +1621,7 @@ def build_plan_scientific_review(
             "covariate_rationales": covariate_rationales,
             "covariate_temporal_roles": covariate_temporal_roles,
             "sensitivity": sensitivity,
+            "robustness_readiness": robustness_readiness,
             "linearity": linearity,
             "clinical_definitions": clinical_definitions,
             "figure_roles": figure_roles,
