@@ -294,6 +294,16 @@ def planner_science_retry_guide() -> str:
         "`schema_version` is optional. "
         "Omit `AnalysisPlan.endpoint` or emit null."
     )
+    binding_fields = (
+        "A `literature_design_bindings` record never cites a source by itself: "
+        "its `citation_key` must also appear in that same step's "
+        "`literature_citation_keys`. Adding or changing a design binding must "
+        "therefore update both fields together. `model_requirements` is legal "
+        "only on a step whose method is exactly "
+        "`adjusted_association_models` and whose expected outputs include "
+        "`table:adjusted_association_estimates`; every other step emits "
+        "`model_requirements: []` and uses its family-specific contract."
+    )
     model_representation_fields = (
         "Within `model_requirements`, categorical `exposure_levels`, "
         "`exposure_reference_level`, and `primary_contrast_level` are symbolic "
@@ -323,6 +333,8 @@ def planner_science_retry_guide() -> str:
         + model_terms_retry_guide()
         + "\n\n"
         + optional_fields
+        + "\n\n"
+        + binding_fields
         + "\n\n"
         + model_representation_fields
         + "\n\n"

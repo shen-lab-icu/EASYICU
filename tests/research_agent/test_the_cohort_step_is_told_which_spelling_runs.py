@@ -276,6 +276,16 @@ def test_the_retry_reminder_publishes_exact_nested_contract_shapes():
     assert "non-empty `spec_id`, `axis`, and `description`" in reminder
 
 
+def test_the_retry_reminder_keeps_citations_and_model_rosters_on_their_owner():
+    reminder = planner_science_retry_guide()
+
+    assert "must also appear in that same step's `literature_citation_keys`" in reminder
+    assert "update both fields together" in reminder
+    assert "method is exactly `adjusted_association_models`" in reminder
+    assert "`table:adjusted_association_estimates`" in reminder
+    assert "every other step emits `model_requirements: []`" in reminder
+
+
 # ---------------------------------------------------------------------------
 # A constant the Planner cannot choose is not dictated to it
 # ---------------------------------------------------------------------------
