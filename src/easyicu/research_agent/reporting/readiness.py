@@ -60,7 +60,11 @@ from .completion import (
     run_completion_axes,
     step_completion_projection,
 )
-from ..authority.evidence_store import EvidenceStore, sha256_of_file
+from ..authority.evidence_store import (
+    EvidenceStore,
+    registered_source_fingerprints_match as _source_fingerprints_match,
+    sha256_of_file,
+)
 from ..authority.step_recovery import StepRecoverySignature
 from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
@@ -595,29 +599,6 @@ def _blocked_outcome_manuscript_leaks(manuscript_text: str) -> List[str]:
 
 def _record_artifact_basename(record: Any) -> str:
     return Path(str(record.relative_path)).name.split("__", 1)[-1]
-
-
-def _source_fingerprints_match(
-    evidence: EvidenceStore, metadata: Dict[str, Any]
-) -> bool:
-    source_ids = metadata.get("source_evidence_ids")
-    if isinstance(source_ids, str):
-        ids = [source_ids]
-    elif isinstance(source_ids, (list, tuple, set)):
-        ids = [str(eid) for eid in source_ids if str(eid)]
-    else:
-        ids = []
-    single = metadata.get("source_evidence_id")
-    if single and str(single) not in ids:
-        ids.append(str(single))
-    fingerprints = metadata.get("source_evidence_sha256")
-    if not ids or not isinstance(fingerprints, dict) or not fingerprints:
-        return False
-    for evidence_id in ids:
-        source = evidence.get(evidence_id)
-        if source is None or fingerprints.get(evidence_id) != source.sha256:
-            return False
-    return True
 
 
 def _publication_figure_policy_matches(metadata: Dict[str, Any]) -> bool:

@@ -3226,8 +3226,45 @@ def _binding_caveat(record: EvidenceRecord, *, verbose: bool = False) -> str:
     return ""
 
 
+def registered_source_fingerprints_match(
+    evidence: "EvidenceStore", metadata: Mapping[str, Any]
+) -> bool:
+    """Whether an artifact's recorded source digests still match the store.
+
+    This is an evidence-store question, so the store owns it.  It was written
+    out twice -- once for the figure skill's own reuse check and once for the
+    readiness figure-bundle gate -- and both copies decide the same thing: a
+    figure may only be credited when every source it claims is still registered
+    under the exact digest it was built from.  Two copies of an integrity rule
+    is one copy too many.
+
+    Absent or empty coordinates are a negative answer, never a pass: an artifact
+    that names no source cannot have its sources verified.
+    """
+
+    source_ids = metadata.get("source_evidence_ids")
+    if isinstance(source_ids, str):
+        ids = [source_ids]
+    elif isinstance(source_ids, (list, tuple, set)):
+        ids = [str(eid) for eid in source_ids if str(eid)]
+    else:
+        ids = []
+    single = metadata.get("source_evidence_id")
+    if single and str(single) not in ids:
+        ids.append(str(single))
+    fingerprints = metadata.get("source_evidence_sha256")
+    if not ids or not isinstance(fingerprints, dict) or not fingerprints:
+        return False
+    for evidence_id in ids:
+        source = evidence.get(evidence_id)
+        if source is None or fingerprints.get(evidence_id) != source.sha256:
+            return False
+    return True
+
+
 __all__ = [
     "EvidenceStore",
+    "registered_source_fingerprints_match",
     "EvidenceAuthorityIntegrityError",
     "EvidenceEnforcementMode",
     "EvidenceEnforcementError",

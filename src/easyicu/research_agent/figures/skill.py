@@ -21,7 +21,10 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 import pandas as pd
 
 from ..audits.validators import FigureContractQualityValidator
-from ..authority.evidence_store import EvidenceStore
+from ..authority.evidence_store import (
+    EvidenceStore,
+    registered_source_fingerprints_match as _source_fingerprints_match,
+)
 from ..contracts.declared_product import typed_product
 from .publication import (
     PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
@@ -2446,30 +2449,6 @@ def _bundle_source_ids(bundle: Dict[str, Any]) -> List[str]:
             *list(bundle.get("source_records") or []),
         ]
     )
-
-
-def _source_fingerprints_match(
-    evidence: EvidenceStore,
-    metadata: Dict[str, Any],
-) -> bool:
-    source_ids = metadata.get("source_evidence_ids")
-    if isinstance(source_ids, str):
-        ids = [source_ids]
-    elif isinstance(source_ids, (list, tuple, set)):
-        ids = [str(eid) for eid in source_ids if str(eid)]
-    else:
-        ids = []
-    single = metadata.get("source_evidence_id")
-    if single and str(single) not in ids:
-        ids.append(str(single))
-    fingerprints = metadata.get("source_evidence_sha256")
-    if not ids or not isinstance(fingerprints, dict) or not fingerprints:
-        return False
-    for evidence_id in ids:
-        record = evidence.get(evidence_id)
-        if record is None or fingerprints.get(evidence_id) != record.sha256:
-            return False
-    return True
 
 
 def _figure_skill_policy_matches(metadata: Dict[str, Any]) -> bool:

@@ -7,6 +7,7 @@ from collections import Counter
 
 from ..schema import ValidationFinding
 from .typed_input_symbols import (
+    environment_key_node,
     resolved_input_symbols as _resolved_input_symbols,
     scope_id as _scope_id,
     subscript_key as _subscript_key,
@@ -24,31 +25,8 @@ def resolved_input_relative_path_root_findings(
 
     parents, _, binding_names, relative_path_names = _resolved_input_symbols(tree)
 
-    def environment_key(node: ast.AST) -> ast.Constant | None:
-        if (
-            isinstance(node, ast.Subscript)
-            and isinstance(node.value, ast.Attribute)
-            and isinstance(node.value.value, ast.Name)
-            and node.value.value.id == "os"
-            and node.value.attr == "environ"
-            and isinstance(node.slice, ast.Constant)
-            and node.slice.value == "EASYICU_EVIDENCE_DIR"
-        ):
-            return node.slice
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Attribute)
-            and isinstance(node.func.value.value, ast.Name)
-            and node.func.value.value.id == "os"
-            and node.func.value.attr == "environ"
-            and node.func.attr == "get"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and node.args[0].value == "EASYICU_EVIDENCE_DIR"
-        ):
-            return node.args[0]
-        return None
+    def environment_key(node: ast.AST) -> ast.AST | None:
+        return environment_key_node(node, "EASYICU_EVIDENCE_DIR")
 
     def is_binding_relative_path(node: ast.AST, *, scope: int) -> bool:
         if isinstance(node, ast.Name):
