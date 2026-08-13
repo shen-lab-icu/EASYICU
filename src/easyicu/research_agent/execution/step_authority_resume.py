@@ -77,14 +77,13 @@ class StepAuthorityResumeRequest:
     step_record: Dict[str, Any]
 
 
-def prepare_step_authority_resume(
+def _prepare_current_coordinates(
     request: StepAuthorityResumeRequest,
-) -> ResearchContext:
-    """Prepare current coordinates and recover only an exactly bound capsule."""
+) -> Mapping[str, str]:
+    """Bind current planner, context, inputs, gates, engine, and prompt bytes."""
 
     run_dir = request.run_dir
     step = request.step
-    run_input_capsule_sha256 = request.run_input_capsule_sha256
     coder_context = request.coder_context
     coder_authority = request.coder_authority
     coder_provider_identity_sha256 = request.coder_provider_identity_sha256
@@ -93,23 +92,10 @@ def prepare_step_authority_resume(
     resolved_input_evidence_ids = request.resolved_input_evidence_ids
     cohort_path = request.cohort_path
     universe_path = request.universe_path
-    resume_state = request.resume_state
-    requested_resume_from_step_id = request.requested_resume_from_step_id
-    prior_step_record = request.prior_step_record
-    prior_attempt_records = request.prior_attempt_records
     prompt_version = request.prompt_version
     prompt_files = request.prompt_files
-    provider_budget = request.provider_budget
-    provider_receipt_path = request.provider_receipt_path
-    reserved_final_category = request.reserved_final_category
-    llm_concept_auditor_identity_sha256 = request.llm_concept_auditor_identity_sha256
-    llm_concept_auditor_implementation_sha256 = (
-        request.llm_concept_auditor_implementation_sha256
-    )
-    concept_audit_environment_sha256 = request.concept_audit_environment_sha256
+    run_input_capsule_sha256 = request.run_input_capsule_sha256
     step_attempt_state = request.step_attempt_state
-    checkpoint_authority = request.checkpoint_authority
-    step_record = request.step_record
 
     gate_stamp = _deterministic_gate_stamp()
     step_control_plane_fingerprint = canonical_sha256(
@@ -144,6 +130,25 @@ def prepare_step_authority_resume(
         prompt_pack_version=prompt_version,
         prompt_pack=prompt_files,
     )
+    return gate_stamp
+
+
+def _select_resume_candidate(
+    request: StepAuthorityResumeRequest,
+    *,
+    gate_stamp: Mapping[str, str],
+) -> None:
+    """Select an explicit or checkpointed capsule under current gate identity."""
+
+    run_dir = request.run_dir
+    step = request.step
+    resume_state = request.resume_state
+    requested_resume_from_step_id = request.requested_resume_from_step_id
+    prior_step_record = request.prior_step_record
+    prior_attempt_records = request.prior_attempt_records
+    step_attempt_state = request.step_attempt_state
+    step_record = request.step_record
+
     step_attempt_state.selected_resume_capsule = load_checkpoint_selected_step_capsule(
         run_dir,
         step_id=step.step_id,
@@ -203,6 +208,21 @@ def prepare_step_authority_resume(
             )
         step_attempt_state.selected_resume_capsule = recovery_capsule
         step_record["resume_validator_invalid_candidate_reused"] = True
+
+
+def _recover_pending_repair(
+    request: StepAuthorityResumeRequest,
+) -> None:
+    """Seal a paid repair transport against its exact historical parent."""
+
+    run_dir = request.run_dir
+    step = request.step
+    prior_step_record = request.prior_step_record
+    provider_receipt_path = request.provider_receipt_path
+    reserved_final_category = request.reserved_final_category
+    step_attempt_state = request.step_attempt_state
+    checkpoint_authority = request.checkpoint_authority
+
     # A paid repair result belongs to the historical parent and
     # coordinates recorded before a crash. Recover that exact
     # candidate first; only then may current engine/validator drift
@@ -271,6 +291,26 @@ def prepare_step_authority_resume(
                 expected_step_id=step.step_id,
             )
         )
+
+
+def _adopt_resume_context(
+    request: StepAuthorityResumeRequest,
+    *,
+    coder_context: ResearchContext,
+) -> ResearchContext:
+    """Replay cached audit authority and adopt only provable control-plane drift."""
+
+    run_dir = request.run_dir
+    step = request.step
+    prior_step_record = request.prior_step_record
+    llm_concept_auditor_identity_sha256 = request.llm_concept_auditor_identity_sha256
+    llm_concept_auditor_implementation_sha256 = (
+        request.llm_concept_auditor_implementation_sha256
+    )
+    concept_audit_environment_sha256 = request.concept_audit_environment_sha256
+    step_attempt_state = request.step_attempt_state
+    step_record = request.step_record
+
     current_validator_identity = (
         llm_concept_auditor_implementation_sha256
         or canonical_sha256("llm_concept_auditor_unavailable")
@@ -332,6 +372,24 @@ def prepare_step_authority_resume(
     ):
         step_record["step_authority_capsule_cache_miss"] = "quarantine_not_migrated"
         step_attempt_state.selected_resume_capsule = None
+    return coder_context
+
+
+def _checkpoint_resume_candidate(
+    request: StepAuthorityResumeRequest,
+) -> None:
+    """Checkpoint a selected capsule or recover a paid initial generation."""
+
+    run_dir = request.run_dir
+    step = request.step
+    prior_step_record = request.prior_step_record
+    provider_budget = request.provider_budget
+    provider_receipt_path = request.provider_receipt_path
+    reserved_final_category = request.reserved_final_category
+    step_attempt_state = request.step_attempt_state
+    checkpoint_authority = request.checkpoint_authority
+    step_record = request.step_record
+
     if step_attempt_state.selected_resume_capsule is not None:
         step_attempt_state.current_capsule_ref = (
             step_attempt_state.selected_resume_capsule.ref
@@ -401,6 +459,21 @@ def prepare_step_authority_resume(
                 expected_step_id=step.step_id,
             )
         )
+
+
+def prepare_step_authority_resume(
+    request: StepAuthorityResumeRequest,
+) -> ResearchContext:
+    """Prepare current coordinates and recover only an exactly bound capsule."""
+
+    gate_stamp = _prepare_current_coordinates(request)
+    _select_resume_candidate(request, gate_stamp=gate_stamp)
+    _recover_pending_repair(request)
+    coder_context = _adopt_resume_context(
+        request,
+        coder_context=request.coder_context,
+    )
+    _checkpoint_resume_candidate(request)
     return coder_context
 
 
