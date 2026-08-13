@@ -86,6 +86,20 @@ class _CohortReplayAuthority:
         return canonical
 
 
+@dataclass(frozen=True)
+class _AttritionTableContext:
+    """Validated structural inputs shared by both attrition table schemas."""
+
+    product: str
+    table: Any
+    authority: _CohortReplayAuthority
+    finding: _FindingFactory
+    canonical_identity_column: str | None
+    normalised_identity_by_column: Mapping[str, list[str]]
+    count_column: str
+    integral_counts: tuple[int, ...]
+
+
 def _integral_count(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
@@ -199,6 +213,359 @@ def _assert_exact_frame_values_equal(left: Any, right: Any) -> None:
                 )
 
 
+def _validate_sequential_attrition(
+    context: _AttritionTableContext,
+) -> list[ValidationFinding]:
+    """Validate an ordered remaining/excluded flow against locked predicates."""
+
+    product = context.product
+    table = context.table
+    authority = context.authority
+    finding = context.finding
+    canonical_identity_column = context.canonical_identity_column
+    normalised_identity_by_column = context.normalised_identity_by_column
+    integral_counts = list(context.integral_counts)
+    expected_remaining_counts = list(authority.expected_remaining_counts)
+    expected_exclusion_counts = list(authority.expected_exclusion_counts)
+    expected_criterion_ids = list(authority.expected_criterion_ids)
+    accepted_criterion_ids = list(authority.accepted_criterion_ids)
+
+    if (
+        integral_counts[0] != authority.raw_n
+        or integral_counts[-1] != authority.locked_n
+    ):
+        return finding(
+            "attrition_endpoints_mismatch",
+            f"The declared {product} table does not run from the raw "
+            "universe to the locked analysis cohort.",
+            product=product,
+            expected_universe_n=authority.raw_n,
+            reported_first_n=integral_counts[0],
+            expected_final_n=authority.locked_n,
+            reported_last_n=integral_counts[-1],
+        )
+    if any(
+        current > previous
+        for previous, current in zip(integral_counts, integral_counts[1:], strict=False)
+    ):
+        return finding(
+            "attrition_counts_increase",
+            f"The declared {product} remaining-count sequence increases.",
+            product=product,
+        )
+    excluded_column, exclusions_by_column, exclusion_issue = (
+        _coherent_integral_count_columns(
+            table,
+            (
+                "n_excluded_at_step",
+                "n_removed_from_prior_stage",
+                "n_excluded_rows",
+            ),
+        )
+    )
+    if excluded_column is None:
+        return finding(
+            "attrition_exclusions_unverifiable",
+            f"The declared {product} table does not report per-step exclusions.",
+            product=product,
+        )
+    if exclusion_issue == "nonintegral":
+        return finding(
+            "attrition_exclusions_nonintegral",
+            f"The declared {product} table contains invalid per-step exclusion counts.",
+            product=product,
+            count_columns=list(exclusions_by_column),
+        )
+    if exclusion_issue == "disagree":
+        return finding(
+            "attrition_count_columns_disagree",
+            f"The declared {product} table has contradictory synonymous "
+            "per-step exclusion-count columns.",
+            product=product,
+            count_columns=list(exclusions_by_column),
+            values_by_column=exclusions_by_column,
+        )
+    integral_exclusions = [
+        int(value)
+        for value in exclusions_by_column[excluded_column]
+        if value is not None
+    ]
+    reported_remaining = list(integral_counts)
+    reported_exclusions = list(integral_exclusions)
+    has_terminal_row = False
+    if (
+        len(reported_remaining) == len(expected_remaining_counts) + 1
+        and reported_remaining[-1] == authority.locked_n
+        and reported_exclusions[-1] == 0
+    ):
+        has_terminal_row = True
+        reported_remaining.pop()
+        reported_exclusions.pop()
+    if reported_remaining != expected_remaining_counts:
+        return finding(
+            "attrition_stage_counts_mismatch",
+            f"The declared {product} remaining counts do not match the "
+            "ordered Planner-locked cohort predicates.",
+            product=product,
+            expected_remaining_counts=expected_remaining_counts,
+            reported_remaining_counts=reported_remaining,
+        )
+    if reported_exclusions != expected_exclusion_counts:
+        return finding(
+            "attrition_transitions_do_not_conserve",
+            f"The declared {product} exclusions do not match each "
+            "ordered Planner-locked cohort predicate.",
+            product=product,
+            expected_exclusions=expected_exclusion_counts,
+            reported_exclusions=reported_exclusions,
+        )
+    if canonical_identity_column is not None:
+        reported_rule_ids = normalised_identity_by_column[canonical_identity_column]
+        expected_rule_ids = ["universe", *expected_criterion_ids]
+        reported_predicate_ids = (
+            reported_rule_ids[:-1] if has_terminal_row else reported_rule_ids
+        )
+        reported_boundary_id = (
+            reported_predicate_ids[0] if reported_predicate_ids else None
+        )
+        canonical_reported_predicates = authority.canonicalise_reported_rule_ids(
+            reported_predicate_ids[1:]
+        )
+        allowed_terminal_ids = {
+            "analysis_cohort",
+            "final_analysis_cohort",
+            "final_cohort",
+            "primary_analysis_cohort",
+        }
+        terminal_id_valid = (
+            not has_terminal_row or reported_rule_ids[-1] in allowed_terminal_ids
+        )
+        if (
+            reported_boundary_id != "universe"
+            or canonical_reported_predicates != expected_criterion_ids
+            or not terminal_id_valid
+        ):
+            return finding(
+                "attrition_sequence_rule_ids_mismatch",
+                f"The declared {product} canonical identity sequence does "
+                "not bind each row to the corresponding Planner-locked "
+                "cohort predicate.",
+                product=product,
+                identity_column=canonical_identity_column,
+                expected_criterion_ids=expected_rule_ids,
+                accepted_criterion_ids=[
+                    ["universe"],
+                    *[list(aliases) for aliases in accepted_criterion_ids],
+                ],
+                reported_criterion_ids=reported_rule_ids,
+            )
+    start_column = "n_at_start_rows" if "n_at_start_rows" in table.columns else None
+    if start_column is not None:
+        starts = [_integral_count(value) for value in table[start_column].tolist()]
+        expected_starts = [authority.raw_n, *integral_counts[:-1]]
+        if (
+            any(value is None for value in starts)
+            or [int(value) for value in starts if value is not None] != expected_starts
+        ):
+            return finding(
+                "attrition_start_counts_do_not_conserve",
+                f"The declared {product} start counts do not match the "
+                "preceding remaining denominators.",
+                product=product,
+                expected_start_counts=expected_starts,
+            )
+    return []
+
+
+def _validate_partition_attrition(
+    context: _AttritionTableContext,
+) -> list[ValidationFinding]:
+    """Validate mutually exclusive denominator/retained/excluded partitions."""
+
+    product = context.product
+    table = context.table
+    authority = context.authority
+    finding = context.finding
+    canonical_identity_column = context.canonical_identity_column
+    integral_counts = list(context.integral_counts)
+    expected_remaining_counts = list(authority.expected_remaining_counts)
+    expected_exclusion_counts = list(authority.expected_exclusion_counts)
+    expected_criterion_ids = list(authority.expected_criterion_ids)
+    accepted_criterion_ids = list(authority.accepted_criterion_ids)
+
+    partition_count_column = context.count_column
+
+    # Partition schema: one denominator row, one retained row, and zero or
+    # more mutually exclusive excluded partitions.  A bare ``n`` column is
+    # never treated as an ordered flow because that would make arbitrary
+    # intermediate values unverifiable.
+    assert partition_count_column is not None
+    role_columns = [
+        name
+        for name in ("status", "partition_status", "row_role", "role")
+        if name in table.columns
+    ]
+    normalised_roles_by_column = {
+        name: [_normalise(value) for value in table[name].tolist()]
+        for name in role_columns
+    }
+    if len(role_columns) > 1:
+        reference = normalised_roles_by_column[role_columns[0]]
+        if any(
+            normalised_roles_by_column[name] != reference for name in role_columns[1:]
+        ):
+            return finding(
+                "attrition_role_columns_disagree",
+                f"The declared {product} partition table has contradictory "
+                "synonymous row-role columns.",
+                product=product,
+                role_columns=role_columns,
+                roles_by_column=normalised_roles_by_column,
+            )
+    role_column = role_columns[0] if role_columns else None
+    if role_column is None:
+        if partition_count_column == "n_rows":
+            reported_remaining = list(integral_counts)
+            if (
+                len(reported_remaining) == len(expected_remaining_counts) + 1
+                and reported_remaining[-1] == authority.locked_n
+            ):
+                reported_remaining.pop()
+            if reported_remaining == expected_remaining_counts:
+                return []
+            return finding(
+                "attrition_stage_counts_mismatch",
+                f"The declared {product} row-count sequence does not match "
+                "the ordered Planner-locked cohort predicates.",
+                product=product,
+                expected_remaining_counts=expected_remaining_counts,
+                reported_remaining_counts=reported_remaining,
+            )
+        return finding(
+            "attrition_partition_roles_unverifiable",
+            f"The declared {product} partition table has no explicit row roles.",
+            product=product,
+            count_column=partition_count_column,
+        )
+    roles = normalised_roles_by_column[role_column]
+    denominator_rows = [
+        index for index, role in enumerate(roles) if role == "denominator"
+    ]
+    retained_rows = [index for index, role in enumerate(roles) if role == "retained"]
+    excluded_rows = [index for index, role in enumerate(roles) if role == "excluded"]
+    if (
+        len(denominator_rows) != 1
+        or len(retained_rows) != 1
+        or len(denominator_rows) + len(retained_rows) + len(excluded_rows) != len(table)
+    ):
+        return finding(
+            "attrition_partition_roles_invalid",
+            f"The declared {product} partition table must contain exactly "
+            "one denominator row, one retained row, and only explicit "
+            "excluded partitions otherwise.",
+            product=product,
+            role_column=role_column,
+        )
+    reported_denominator = integral_counts[denominator_rows[0]]
+    reported_retained = integral_counts[retained_rows[0]]
+    reported_excluded_counts = [integral_counts[index] for index in excluded_rows]
+    reported_excluded = sum(reported_excluded_counts)
+    if (
+        reported_denominator != authority.raw_n
+        or reported_retained != authority.locked_n
+        or reported_excluded != authority.raw_n - authority.locked_n
+    ):
+        return finding(
+            "attrition_partitions_do_not_conserve",
+            f"The declared {product} partitions do not reconcile the raw "
+            "and final cohort denominators.",
+            product=product,
+            expected_universe_n=authority.raw_n,
+            reported_universe_n=reported_denominator,
+            expected_retained_n=authority.locked_n,
+            reported_retained_n=reported_retained,
+            expected_excluded_n=authority.raw_n - authority.locked_n,
+            reported_excluded_n=reported_excluded,
+        )
+    category_column = canonical_identity_column
+    if expected_criterion_ids and category_column is None:
+        return finding(
+            "attrition_partition_rule_ids_unverifiable",
+            f"The declared {product} partition table does not identify the "
+            "Planner-locked cohort rules attached to each exclusion.",
+            product=product,
+            expected_criterion_ids=expected_criterion_ids,
+        )
+    if expected_criterion_ids:
+        assert category_column is not None
+        denominator_id = _normalise(table.iloc[denominator_rows[0]][category_column])
+        retained_id = _normalise(table.iloc[retained_rows[0]][category_column])
+        if denominator_id != "universe" or retained_id not in {
+            "analysis_cohort",
+            "final_analysis_cohort",
+            "final_cohort",
+            "primary_analysis_cohort",
+        }:
+            return finding(
+                "attrition_partition_boundary_ids_mismatch",
+                f"The declared {product} canonical identity column does not "
+                "identify the universe and retained analysis cohort exactly.",
+                product=product,
+                identity_column=category_column,
+                reported_denominator_id=denominator_id,
+                reported_retained_id=retained_id,
+            )
+        reported_rule_ids = [
+            _normalise(table.iloc[index][category_column]) for index in excluded_rows
+        ]
+        canonical_reported_rule_ids = authority.canonicalise_reported_rule_ids(
+            reported_rule_ids
+        )
+        if (
+            canonical_reported_rule_ids is None
+            or len(canonical_reported_rule_ids) != len(set(canonical_reported_rule_ids))
+            or set(canonical_reported_rule_ids) != set(expected_criterion_ids)
+        ):
+            return finding(
+                "attrition_partition_rule_ids_mismatch",
+                f"The declared {product} excluded partitions do not identify "
+                "each Planner-locked cohort predicate exactly once.",
+                product=product,
+                expected_criterion_ids=expected_criterion_ids,
+                accepted_criterion_ids=[
+                    list(aliases) for aliases in accepted_criterion_ids
+                ],
+                reported_criterion_ids=reported_rule_ids,
+            )
+        reported_by_rule = dict(
+            zip(
+                canonical_reported_rule_ids,
+                reported_excluded_counts,
+                strict=True,
+            )
+        )
+        expected_by_rule = dict(
+            zip(
+                expected_criterion_ids,
+                expected_exclusion_counts[1:],
+                strict=True,
+            )
+        )
+    else:
+        reported_by_rule = {}
+        expected_by_rule = {}
+    if reported_by_rule != expected_by_rule:
+        return finding(
+            "attrition_partition_rule_counts_mismatch",
+            f"The declared {product} excluded partitions do not match the "
+            "Planner-locked cohort predicates.",
+            product=product,
+            expected_by_rule=expected_by_rule,
+            reported_by_rule=reported_by_rule,
+        )
+    return []
+
+
 def _validate_attrition_products(
     *,
     step: AnalysisStep,
@@ -211,11 +578,6 @@ def _validate_attrition_products(
     """Validate every declared cohort-flow table against the host replay."""
 
     import pandas as pd
-
-    expected_remaining_counts = list(authority.expected_remaining_counts)
-    expected_exclusion_counts = list(authority.expected_exclusion_counts)
-    expected_criterion_ids = list(authority.expected_criterion_ids)
-    accepted_criterion_ids = list(authority.accepted_criterion_ids)
 
     declared_flow_products = {
         name
@@ -388,376 +750,35 @@ def _validate_attrition_products(
                 count_column=count_column,
             )
 
-        # Sequential flow schema: every row records the population remaining
-        # after one rule.  When exclusions are explicit, each transition must
-        # reconcile row by row; a matching grand total alone is insufficient.
+        attrition_context = _AttritionTableContext(
+            product=product,
+            table=table,
+            authority=authority,
+            finding=finding,
+            canonical_identity_column=canonical_identity_column,
+            normalised_identity_by_column=normalised_identity_by_column,
+            count_column=count_column,
+            integral_counts=tuple(integral_counts),
+        )
         if remaining_column is not None:
-            if integral_counts[0] != authority.raw_n or integral_counts[-1] != authority.locked_n:
-                return finding(
-                    "attrition_endpoints_mismatch",
-                    f"The declared {product} table does not run from the raw "
-                    "universe to the locked analysis cohort.",
-                    product=product,
-                    expected_universe_n=authority.raw_n,
-                    reported_first_n=integral_counts[0],
-                    expected_final_n=authority.locked_n,
-                    reported_last_n=integral_counts[-1],
-                )
-            if any(
-                current > previous
-                for previous, current in zip(
-                    integral_counts, integral_counts[1:], strict=False
-                )
-            ):
-                return finding(
-                    "attrition_counts_increase",
-                    f"The declared {product} remaining-count sequence increases.",
-                    product=product,
-                )
-            excluded_column, exclusions_by_column, exclusion_issue = (
-                _coherent_integral_count_columns(
-                    table,
-                    (
-                        "n_excluded_at_step",
-                        "n_removed_from_prior_stage",
-                        "n_excluded_rows",
-                    ),
-                )
-            )
-            if excluded_column is None:
-                return finding(
-                    "attrition_exclusions_unverifiable",
-                    f"The declared {product} table does not report per-step "
-                    "exclusions.",
-                    product=product,
-                )
-            if exclusion_issue == "nonintegral":
-                return finding(
-                    "attrition_exclusions_nonintegral",
-                    f"The declared {product} table contains invalid per-step "
-                    "exclusion counts.",
-                    product=product,
-                    count_columns=list(exclusions_by_column),
-                )
-            if exclusion_issue == "disagree":
-                return finding(
-                    "attrition_count_columns_disagree",
-                    f"The declared {product} table has contradictory synonymous "
-                    "per-step exclusion-count columns.",
-                    product=product,
-                    count_columns=list(exclusions_by_column),
-                    values_by_column=exclusions_by_column,
-                )
-            integral_exclusions = [
-                int(value)
-                for value in exclusions_by_column[excluded_column]
-                if value is not None
-            ]
-            reported_remaining = list(integral_counts)
-            reported_exclusions = list(integral_exclusions)
-            has_terminal_row = False
-            if (
-                len(reported_remaining) == len(expected_remaining_counts) + 1
-                and reported_remaining[-1] == authority.locked_n
-                and reported_exclusions[-1] == 0
-            ):
-                has_terminal_row = True
-                reported_remaining.pop()
-                reported_exclusions.pop()
-            if reported_remaining != expected_remaining_counts:
-                return finding(
-                    "attrition_stage_counts_mismatch",
-                    f"The declared {product} remaining counts do not match the "
-                    "ordered Planner-locked cohort predicates.",
-                    product=product,
-                    expected_remaining_counts=expected_remaining_counts,
-                    reported_remaining_counts=reported_remaining,
-                )
-            if reported_exclusions != expected_exclusion_counts:
-                return finding(
-                    "attrition_transitions_do_not_conserve",
-                    f"The declared {product} exclusions do not match each "
-                    "ordered Planner-locked cohort predicate.",
-                    product=product,
-                    expected_exclusions=expected_exclusion_counts,
-                    reported_exclusions=reported_exclusions,
-                )
-            if canonical_identity_column is not None:
-                reported_rule_ids = normalised_identity_by_column[
-                    canonical_identity_column
-                ]
-                expected_rule_ids = ["universe", *expected_criterion_ids]
-                reported_predicate_ids = (
-                    reported_rule_ids[:-1] if has_terminal_row else reported_rule_ids
-                )
-                reported_boundary_id = (
-                    reported_predicate_ids[0] if reported_predicate_ids else None
-                )
-                canonical_reported_predicates = authority.canonicalise_reported_rule_ids(
-                    reported_predicate_ids[1:]
-                )
-                allowed_terminal_ids = {
-                    "analysis_cohort",
-                    "final_analysis_cohort",
-                    "final_cohort",
-                    "primary_analysis_cohort",
-                }
-                terminal_id_valid = (
-                    not has_terminal_row
-                    or reported_rule_ids[-1] in allowed_terminal_ids
-                )
-                if (
-                    reported_boundary_id != "universe"
-                    or canonical_reported_predicates != expected_criterion_ids
-                    or not terminal_id_valid
-                ):
-                    return finding(
-                        "attrition_sequence_rule_ids_mismatch",
-                        f"The declared {product} canonical identity sequence does "
-                        "not bind each row to the corresponding Planner-locked "
-                        "cohort predicate.",
-                        product=product,
-                        identity_column=canonical_identity_column,
-                        expected_criterion_ids=expected_rule_ids,
-                        accepted_criterion_ids=[
-                            ["universe"],
-                            *[list(aliases) for aliases in accepted_criterion_ids],
-                        ],
-                        reported_criterion_ids=reported_rule_ids,
-                    )
-            start_column = (
-                "n_at_start_rows" if "n_at_start_rows" in table.columns else None
-            )
-            if start_column is not None:
-                starts = [
-                    _integral_count(value) for value in table[start_column].tolist()
-                ]
-                expected_starts = [authority.raw_n, *integral_counts[:-1]]
-                if (
-                    any(value is None for value in starts)
-                    or [int(value) for value in starts if value is not None]
-                    != expected_starts
-                ):
-                    return finding(
-                        "attrition_start_counts_do_not_conserve",
-                        f"The declared {product} start counts do not match the "
-                        "preceding remaining denominators.",
-                        product=product,
-                        expected_start_counts=expected_starts,
-                    )
-            continue
-
-        # Partition schema: one denominator row, one retained row, and zero or
-        # more mutually exclusive excluded partitions.  A bare ``n`` column is
-        # never treated as an ordered flow because that would make arbitrary
-        # intermediate values unverifiable.
-        assert partition_count_column is not None
-        role_columns = [
-            name
-            for name in ("status", "partition_status", "row_role", "role")
-            if name in table.columns
-        ]
-        normalised_roles_by_column = {
-            name: [_normalise(value) for value in table[name].tolist()]
-            for name in role_columns
-        }
-        if len(role_columns) > 1:
-            reference = normalised_roles_by_column[role_columns[0]]
-            if any(
-                normalised_roles_by_column[name] != reference
-                for name in role_columns[1:]
-            ):
-                return finding(
-                    "attrition_role_columns_disagree",
-                    f"The declared {product} partition table has contradictory "
-                    "synonymous row-role columns.",
-                    product=product,
-                    role_columns=role_columns,
-                    roles_by_column=normalised_roles_by_column,
-                )
-        role_column = role_columns[0] if role_columns else None
-        if role_column is None:
-            if partition_count_column == "n_rows":
-                reported_remaining = list(integral_counts)
-                if (
-                    len(reported_remaining) == len(expected_remaining_counts) + 1
-                    and reported_remaining[-1] == authority.locked_n
-                ):
-                    reported_remaining.pop()
-                if reported_remaining == expected_remaining_counts:
-                    continue
-                return finding(
-                    "attrition_stage_counts_mismatch",
-                    f"The declared {product} row-count sequence does not match "
-                    "the ordered Planner-locked cohort predicates.",
-                    product=product,
-                    expected_remaining_counts=expected_remaining_counts,
-                    reported_remaining_counts=reported_remaining,
-                )
-            return finding(
-                "attrition_partition_roles_unverifiable",
-                f"The declared {product} partition table has no explicit row roles.",
-                product=product,
-                count_column=partition_count_column,
-            )
-        roles = normalised_roles_by_column[role_column]
-        denominator_rows = [
-            index for index, role in enumerate(roles) if role == "denominator"
-        ]
-        retained_rows = [
-            index for index, role in enumerate(roles) if role == "retained"
-        ]
-        excluded_rows = [
-            index for index, role in enumerate(roles) if role == "excluded"
-        ]
-        if (
-            len(denominator_rows) != 1
-            or len(retained_rows) != 1
-            or len(denominator_rows) + len(retained_rows) + len(excluded_rows)
-            != len(table)
-        ):
-            return finding(
-                "attrition_partition_roles_invalid",
-                f"The declared {product} partition table must contain exactly "
-                "one denominator row, one retained row, and only explicit "
-                "excluded partitions otherwise.",
-                product=product,
-                role_column=role_column,
-            )
-        reported_denominator = integral_counts[denominator_rows[0]]
-        reported_retained = integral_counts[retained_rows[0]]
-        reported_excluded_counts = [integral_counts[index] for index in excluded_rows]
-        reported_excluded = sum(reported_excluded_counts)
-        if (
-            reported_denominator != authority.raw_n
-            or reported_retained != authority.locked_n
-            or reported_excluded != authority.raw_n - authority.locked_n
-        ):
-            return finding(
-                "attrition_partitions_do_not_conserve",
-                f"The declared {product} partitions do not reconcile the raw "
-                "and final cohort denominators.",
-                product=product,
-                expected_universe_n=authority.raw_n,
-                reported_universe_n=reported_denominator,
-                expected_retained_n=authority.locked_n,
-                reported_retained_n=reported_retained,
-                expected_excluded_n=authority.raw_n - authority.locked_n,
-                reported_excluded_n=reported_excluded,
-            )
-        category_column = canonical_identity_column
-        if expected_criterion_ids and category_column is None:
-            return finding(
-                "attrition_partition_rule_ids_unverifiable",
-                f"The declared {product} partition table does not identify the "
-                "Planner-locked cohort rules attached to each exclusion.",
-                product=product,
-                expected_criterion_ids=expected_criterion_ids,
-            )
-        if expected_criterion_ids:
-            assert category_column is not None
-            denominator_id = _normalise(
-                table.iloc[denominator_rows[0]][category_column]
-            )
-            retained_id = _normalise(table.iloc[retained_rows[0]][category_column])
-            if denominator_id != "universe" or retained_id not in {
-                "analysis_cohort",
-                "final_analysis_cohort",
-                "final_cohort",
-                "primary_analysis_cohort",
-            }:
-                return finding(
-                    "attrition_partition_boundary_ids_mismatch",
-                    f"The declared {product} canonical identity column does not "
-                    "identify the universe and retained analysis cohort exactly.",
-                    product=product,
-                    identity_column=category_column,
-                    reported_denominator_id=denominator_id,
-                    reported_retained_id=retained_id,
-                )
-            reported_rule_ids = [
-                _normalise(table.iloc[index][category_column])
-                for index in excluded_rows
-            ]
-            canonical_reported_rule_ids = authority.canonicalise_reported_rule_ids(
-                reported_rule_ids
-            )
-            if (
-                canonical_reported_rule_ids is None
-                or len(canonical_reported_rule_ids)
-                != len(set(canonical_reported_rule_ids))
-                or set(canonical_reported_rule_ids) != set(expected_criterion_ids)
-            ):
-                return finding(
-                    "attrition_partition_rule_ids_mismatch",
-                    f"The declared {product} excluded partitions do not identify "
-                    "each Planner-locked cohort predicate exactly once.",
-                    product=product,
-                    expected_criterion_ids=expected_criterion_ids,
-                    accepted_criterion_ids=[
-                        list(aliases) for aliases in accepted_criterion_ids
-                    ],
-                    reported_criterion_ids=reported_rule_ids,
-                )
-            reported_by_rule = dict(
-                zip(
-                    canonical_reported_rule_ids,
-                    reported_excluded_counts,
-                    strict=True,
-                )
-            )
-            expected_by_rule = dict(
-                zip(
-                    expected_criterion_ids,
-                    expected_exclusion_counts[1:],
-                    strict=True,
-                )
-            )
+            schema_findings = _validate_sequential_attrition(attrition_context)
         else:
-            reported_by_rule = {}
-            expected_by_rule = {}
-        if reported_by_rule != expected_by_rule:
-            return finding(
-                "attrition_partition_rule_counts_mismatch",
-                f"The declared {product} excluded partitions do not match the "
-                "Planner-locked cohort predicates.",
-                product=product,
-                expected_by_rule=expected_by_rule,
-                reported_by_rule=reported_by_rule,
-            )
+            schema_findings = _validate_partition_attrition(attrition_context)
+        if schema_findings:
+            return schema_findings
 
     return []
 
-def primary_analysis_cohort_integrity_findings(
+
+def _replay_locked_cohort(
     *,
-    step: AnalysisStep,
     plan: Any,
-    step_summary: Mapping[str, Any],
-    out_dir: Path,
+    context: Any,
     universe_path: Path,
     authoritative_cohort_path: Path,
-    context: Any = None,
-    registered_product_paths: RegisteredProductPathResolver,
-) -> list[ValidationFinding]:
-    """Verify one Agent-produced primary cohort against host-locked authority.
-
-    This gate never chooses eligibility.  It replays the Planner-owned typed
-    cohort definition on the raw universe, then checks the produced row identity
-    and declared attrition accounting before the attempt may become current.
-    """
-
-    if not _primary_analysis_cohort_attrition_step(step):
-        return []
-
-    finding = _FindingFactory(step.step_id)
-
-    owner_finding = _primary_analysis_cohort_product_owner_finding(
-        step=step,
-        plan=plan,
-        validator="primary_analysis_cohort_integrity",
-    )
-    if owner_finding is not None:
-        return [owner_finding]
+    finding: _FindingFactory,
+) -> _CohortReplayAuthority | list[ValidationFinding]:
+    """Replay the Planner-owned cohort and seal its host row/value identity."""
 
     try:
         import pandas as pd
@@ -923,6 +944,27 @@ def primary_analysis_cohort_integrity_findings(
         accepted_criterion_ids=tuple(accepted_criterion_ids),
         criterion_aliases=tuple(criterion_alias_to_canonical.items()),
     )
+    return authority
+
+
+def _validate_produced_cohort(
+    *,
+    step: AnalysisStep,
+    plan: Any,
+    step_summary: Mapping[str, Any],
+    out_dir: Path,
+    registered_product_paths: RegisteredProductPathResolver,
+    authority: _CohortReplayAuthority,
+    finding: _FindingFactory,
+) -> list[ValidationFinding]:
+    """Verify the Agent product is the exact host-locked cohort plus derivations."""
+
+    import pandas as pd
+
+    identity_column = authority.identity_column
+    authoritative_identity = authority.authoritative_identity
+    authoritative = authority.authoritative
+    locked_n = authority.locked_n
 
     declared_cohort_products = {
         product[1]
@@ -1004,6 +1046,19 @@ def primary_analysis_cohort_integrity_findings(
             "columns; only additional derived columns are allowed.",
             error=str(exc)[:300],
         )
+    return []
+
+
+def _validate_summary_denominators(
+    *,
+    step_summary: Mapping[str, Any],
+    authority: _CohortReplayAuthority,
+    finding: _FindingFactory,
+) -> list[ValidationFinding]:
+    """Verify synonymous summary denominators agree with the host replay."""
+
+    raw_n = authority.raw_n
+    locked_n = authority.locked_n
 
     reported_raw_n, raw_denominators_by_field, raw_denominator_issue = (
         _coherent_integral_mapping_counts(
@@ -1046,6 +1101,70 @@ def primary_analysis_cohort_integrity_findings(
             expected_final_n=locked_n,
             reported_final_n=reported_final_n,
         )
+    return []
+
+
+def primary_analysis_cohort_integrity_findings(
+    *,
+    step: AnalysisStep,
+    plan: Any,
+    step_summary: Mapping[str, Any],
+    out_dir: Path,
+    universe_path: Path,
+    authoritative_cohort_path: Path,
+    context: Any = None,
+    registered_product_paths: RegisteredProductPathResolver,
+) -> list[ValidationFinding]:
+    """Verify one Agent-produced primary cohort against host-locked authority.
+
+    This gate never chooses eligibility.  It replays the Planner-owned typed
+    cohort definition on the raw universe, then checks the produced row identity
+    and declared attrition accounting before the attempt may become current.
+    """
+
+    if not _primary_analysis_cohort_attrition_step(step):
+        return []
+
+    finding = _FindingFactory(step.step_id)
+
+    owner_finding = _primary_analysis_cohort_product_owner_finding(
+        step=step,
+        plan=plan,
+        validator="primary_analysis_cohort_integrity",
+    )
+    if owner_finding is not None:
+        return [owner_finding]
+
+    replay_result = _replay_locked_cohort(
+        plan=plan,
+        context=context,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_cohort_path,
+        finding=finding,
+    )
+    if isinstance(replay_result, list):
+        return replay_result
+    authority = replay_result
+
+    product_findings = _validate_produced_cohort(
+        step=step,
+        plan=plan,
+        step_summary=step_summary,
+        out_dir=out_dir,
+        registered_product_paths=registered_product_paths,
+        authority=authority,
+        finding=finding,
+    )
+    if product_findings:
+        return product_findings
+
+    denominator_findings = _validate_summary_denominators(
+        step_summary=step_summary,
+        authority=authority,
+        finding=finding,
+    )
+    if denominator_findings:
+        return denominator_findings
 
     return _validate_attrition_products(
         step=step,
@@ -1055,6 +1174,7 @@ def primary_analysis_cohort_integrity_findings(
         authority=authority,
         finding=finding,
     )
+
 
 __all__ = [
     "RegisteredProductPathResolver",
