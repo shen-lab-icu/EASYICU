@@ -156,14 +156,35 @@ def resolve_patient_grouping_authority(
             details={"missing_fields": missing},
         )
 
-    selected_root = Path(export_path).expanduser().resolve(strict=True)
-    configured_root = Path(values["EXPORT_ROOT"]).expanduser().resolve(strict=True)
-    if selected_root != configured_root:
+    # First compare normalized selectors without requiring either source to
+    # exist.  One machine-level authority may be configured while a caller is
+    # merely validating a different (or not-yet-mounted) export.  Requiring
+    # that unrelated selector to exist would make the private configuration
+    # change otherwise deterministic validation results.  Once the selectors
+    # match, both are resolved strictly before any authority is issued.
+    selected_selector = Path(export_path).expanduser().resolve(strict=False)
+    configured_selector = Path(values["EXPORT_ROOT"]).expanduser().resolve(strict=False)
+    if selected_selector != configured_selector:
         return None
     selected_database = _database(database)
     configured_database = _database(values["DATABASE"])
     if selected_database != configured_database:
         return None
+    try:
+        selected_root = Path(export_path).expanduser().resolve(strict=True)
+        configured_root = Path(values["EXPORT_ROOT"]).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise PatientGroupingAuthorityError(
+            "patient_grouping_authority_export_unavailable",
+            "The export selected by the patient-grouping authority is unavailable.",
+            details={"database": selected_database},
+        ) from exc
+    if selected_root != configured_root:
+        raise PatientGroupingAuthorityError(
+            "patient_grouping_authority_export_selector_changed",
+            "The selected export no longer resolves to the configured grouping source.",
+            details={"database": selected_database},
+        )
 
     manifest_name = values["EXPORT_MANIFEST"]
     if _COMPONENT.fullmatch(manifest_name) is None:
