@@ -28,7 +28,7 @@ def _node_binary() -> str | None:
 
 def test_study_context_owner_is_wired_before_route_modules() -> None:
     index = _read("index.html")
-    assert "js/study-context.js?v=20260811-integrated-workflow1" in index
+    assert "js/study-context.js?v=20260812-natural-conversations1" in index
     assert index.index("js/api.js?") < index.index("js/study-context.js?")
     assert index.index("js/study-context.js?") < index.index("js/screens-extraction.js?")
     assert index.index("js/screens-extraction.js?") < index.index(
@@ -72,6 +72,10 @@ def test_study_context_transport_and_payload_use_backend_canonical_fields() -> N
         "'cohort'",
         "'modules'",
         "'outcome'",
+        "'covariate_selection'",
+        "'execution_concepts'",
+        "'analysis_design'",
+        "'sensitivity_specs'",
         "'time_window'",
         "'comparator'",
         "'current_stage'",
@@ -95,12 +99,19 @@ def test_study_context_transport_and_payload_use_backend_canonical_fields() -> N
     assert "function startNew(patch, options)" in owner
     assert "function activate(id)" in owner
     assert "api.listStudyContexts()" in owner
+    assert "const serverIds = new Set(serverContexts.map" in owner
+    assert "serverIds.has(context.id)" in owner
+    assert "|| isDirty(context.id)" in owner
     assert "sourceBoundary" in owner
     assert "sourceIdentity" in owner
     assert "questionBoundary" in owner
     assert "ROW_LEVEL_KEYS" in owner
     assert "assertMetadataOnly(raw, 'context')" in owner
     assert "cleanSchemaObject(raw.cohort, COHORT_SCHEMA)" in owner
+    assert "cleanSchemaObject(raw.execution_concepts, EXECUTION_CONCEPTS_SCHEMA)" in owner
+    assert "cleanSchemaObject(raw.analysis_design, ANALYSIS_DESIGN_SCHEMA)" in owner
+    assert "sensitivity_specs: cleanSensitivitySpecs(raw.sensitivity_specs)" in owner
+    assert "covariate_selection: ['planner_selectable', 'exact'].includes" in owner
     assert "api.saveStudyContext({ id: context.id })" in owner
     assert "requestContextRevision === contextRevision(context.id)" in owner
     assert "easyicu:study-context" in owner
@@ -163,6 +174,14 @@ def test_guided_and_agent_use_the_same_context_id_for_real_runs() -> None:
     assert "result && result.study_context_revision" in agent
     assert "createRunChannel" in agent_owner
     assert "createJobMemory" in agent_owner
+    assert "prepareGuidedHandoff" in agent_owner
+    assert "takeGuidedHandoff" in agent_owner
+    assert "easyicu.pi-project-binding-handoff/1" in agent_owner
+    assert 'data-ag-guided' in agent
+    assert 'data-nav="guided"' not in agent[agent.index('<div class="handoff">'):agent.index('</div>`;', agent.index('<div class="handoff">'))]
+    assert "prepareGuidedHandoff(selected)" in agent
+    assert "takeGuidedHandoff()" in guided
+    assert "binding_receipt: guidedBinding.binding_receipt || null" in guided
     assert "agJobMemory.get(studyId)" in agent
     assert "agRunChannel.isCurrent(runToken)" in agent
     assert "guidedRunChannel.isCurrent(runToken)" in guided
@@ -186,6 +205,7 @@ def test_crossdb_handoff_is_plan_only_and_non_crossdb_routes_clear_the_flag() ->
     extraction_owner = _read("js/screens-extraction-study-context.js")
     guided_owner = _read("js/screens-guided-study-context.js")
     agent_owner = _read("js/screens-agent-study-context.js")
+    agent = _read("js/screens-agent.js")
     # The plan-only handoff button lives with the crossdb results owner. It had
     # silently degraded to a bare data-nav during the owner split, so nothing
     # ever set crossdb_plan_only and the Agent-side gate below was unreachable.
@@ -200,6 +220,12 @@ def test_crossdb_handoff_is_plan_only_and_non_crossdb_routes_clear_the_flag() ->
     assert "crossdb_plan_only: false" in guided_owner
     assert "currentStage === 'crossdb_plan_only'" in agent_owner
     assert "function runBlocker(study)" in agent_owner
+    assert "crossdb_selection" in viz_owner
+    assert "crossdb_selection" in agent_owner
+    assert "EU_SOURCES.crossdbPaths" not in agent
+    assert "study.planOnly || selectedSources.length > 1" in agent_owner
+    assert "No single export path or stay count is substituted" in agent
+    assert "Cross-DB selection receipt bound" in agent
 
 
 def test_nonfatal_agent_submission_warnings_are_visible_in_both_surfaces() -> None:

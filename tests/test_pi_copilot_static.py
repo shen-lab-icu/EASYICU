@@ -22,15 +22,15 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260811-plan-review1" in index
+    assert "css/guided-pi.css?v=20260812-natural-chat-artifacts1" in index
     assert "css/guided-pi-demo.css?v=20260811-product-demo5" in index
-    assert "css/guided-pi-preview.css?v=20260809-scientific-trust1" in index
-    assert "css/guided-pi-literature.css?v=20260811-literature1" in index
-    assert "js/screens-guided-pi-literature.js?v=20260811-literature2" in index
+    assert "css/guided-pi-preview.css?v=20260811-research-docs1" in index
+    assert "css/guided-pi-literature.css?v=20260812-literature3" in index
+    assert "js/screens-guided-pi-literature.js?v=20260812-literature3" in index
     assert "js/screens-guided-pi-markdown.js?v=20260811-message-links1" in index
     assert "js/screens-guided-pi-demo.js?v=20260811-science-readiness1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260811-science-readiness1" in index
-    assert "js/screens-guided-pi.js?v=20260811-science-readiness1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260812-data-package1" in index
+    assert "js/screens-guided-pi.js?v=20260812-natural-chat-artifacts1" in index
     assert "js/api.js?v=20260812-extension-manager1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
@@ -72,6 +72,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "data-gpi-project-workflow-aside" in pi_owner
     assert "pi_model_provider_unavailable" in pi_owner
     assert "pi_shell_token_budget_exhausted" in pi_owner
+    assert "Research Agent 规划任务已提交" in pi_owner
+    assert "EasyICU 完整科研分析已提交" not in pi_owner
     assert "同一研究项目中新建后续对话" in pi_owner
     assert "external_llm_opt_in: true" in pi_owner
     assert pi_owner.count("project_id: projectId()") >= 4
@@ -114,6 +116,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert 'data-gpi-mode-switch="workspace"' in pi_owner
     assert "agentMode: 'research'" in pi_owner
     assert "pendingAuthorityRebind" in pi_owner
+    assert "event.host_rebind_after_turn === true" in pi_owner
     assert "easyicu_run_submitted" in pi_owner
     assert "easyicu_full_run_submitted" in pi_owner
     assert "easyicu_extraction_submitted" in pi_owner
@@ -156,6 +159,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "plan_ready" in pi_owner
     assert "provider_plan_ready" in pi_owner
     assert "生成 Agent 计划" in pi_owner
+    assert "plan_configuration_superseded" in pi_owner
+    assert "重新生成计划" in pi_owner
     assert "operator_plan_approval_required" in pi_owner
     assert "hydrateProjectedJob" in pi_owner
     assert "visibleSteps.length} steps" in pi_owner
@@ -173,9 +178,73 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
         "loadPiCopilotWorkspaceFile",
         "piCopilotWorkspacePreviewUrl",
         "loadPiCopilotResearchArtifact",
+        "loadPiCopilotDataPackageReview",
     ):
         assert method in api
     assert "fetch(" not in pi_owner
+
+
+def test_existing_project_study_setup_stays_in_bound_pi_conversation() -> None:
+    owner = _read("js/screens-guided-pi.js")
+
+    assert 'data-gpi-study-setup' in owner
+    assert "function studySetupReviewPrompt(workflow)" in owner
+    assert "function openStudySetupInConversation()" in owner
+    assert "setShell('pi')" in owner
+    assert "workflow && workflow.study_setup_receipt" in owner
+    assert "workflow && workflow.missing_setup_fields" in owner
+    assert "Preserve study_context_id and revision" in owner
+    assert "const prompt = studySetupReviewPrompt(state.workflow)" in owner
+    assert "sendText(prompt, ['configure'])" in owner
+    assert "event.target.closest('[data-gpi-study-setup]')" in owner
+    assert "openStudySetupInConversation();" in owner
+    assert ".then(() => { if (projectId() === next.id) render(); })" in owner
+    assert "legacy 0/8 aside" in owner
+    assert "data-gpi-project-workflow-loading" in owner
+    assert "Loading authoritative configuration…" in owner
+    assert "if (!workflow)" in owner
+    session_panel = owner[
+        owner.index("function sessionPanel()") : owner.index("function demoPanel()")
+    ]
+    assert 'data-gpi-legacy' not in session_panel
+
+
+def test_scientific_review_continues_as_one_question_in_chat() -> None:
+    owner = _read("js/screens-guided-pi.js")
+
+    assert "Answer next scientific question" in owner
+    assert "回答下一个科学问题" in owner
+    assert "review.authorization_questions" in owner
+    assert "questions[0].question" in owner
+    assert "请一次只问我一个尚未解决的科学设定问题" in owner
+
+
+def test_agent_handoff_receipt_is_forwarded_to_project_initialization() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    guided = _read("js/screens-guided.js")
+
+    assert "binding_receipt: state.project.binding_receipt || undefined" in owner
+    assert "binding_receipt: project.binding_receipt || null" in owner
+    assert "study_context_id: guidedBinding.binding_receipt && guidedBinding.binding_receipt.study_context_id" in guided
+    assert "study_context_revision: guidedBinding.binding_receipt && guidedBinding.binding_receipt.study_context_revision" in guided
+
+
+def test_agent_handoff_project_remains_visible_without_a_guided_folder() -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is unavailable")
+    result = subprocess.run(
+        [
+            node,
+            str(Path(__file__).resolve().parent / "js" / "guided_project_handoff.test.js"),
+            str(STATIC / "js" / "screens-guided-projects.js"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert result.stdout == '{"bound":true,"unbound":true,"empty":true}'
 
 
 def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
@@ -222,6 +291,24 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
         "css/tweaks.css",
     ):
         assert ".gpi-" not in _read(relative)
+
+
+def test_scientific_plan_review_has_a_readable_multidimensional_preview() -> None:
+    renderer = _read("js/screens-agent-render.js")
+
+    assert "scientific_plan_review.json" in renderer
+    assert "Top-journal plan scorecard" in renderer
+    assert "Required changes before analysis" in renderer
+    assert "What each article actually contributes to the plan" in renderer
+    assert "literature_design_bindings" in renderer
+    assert "Rendered figures assessed" in renderer
+    assert "score_interpretation" in renderer
+    pi_owner = _read("js/screens-guided-pi.js")
+    assert "plan_review_summary" in pi_owner
+    assert "gpi-confirmation-scorecard" in pi_owner
+    assert "authorization_questions" in pi_owner
+    assert "remediation_buckets" in pi_owner
+    assert "Agent can repair in a fresh plan" in pi_owner
 
 
 def test_pi_chat_uses_a_scrolling_transcript_and_bottom_composer() -> None:
@@ -335,12 +422,38 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "Table 1 · Baseline characteristics by Sepsis-3 indicator" not in demo
     assert "operator_plan_approved" in pi_owner
     assert "validated_analysis_complete" in pi_owner
+    assert "validated_analysis_ready" in pi_owner
     assert "interpretation_complete" in pi_owner
+    assert "evidence_bound_interpretation_ready" in pi_owner
+    assert "manuscript_draft_ready_for_review" in pi_owner
     assert "human_review_required" in pi_owner
     assert "prior_art_authority_not_established" in pi_owner
     assert "source_population_scope_open" in pi_owner
     assert "publication_analysis_incomplete" in pi_owner
     assert "paper_authority_not_granted" in pi_owner
+
+
+def test_guided_copilot_does_not_expose_benchmark_specific_navigation() -> None:
+    guided_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((STATIC / "js").glob("screens-guided*.js"))
+    )
+
+    assert "Canonical9" not in guided_sources
+    assert "打开 Canonical9 九题独立对话" not in guided_sources
+
+
+def test_pi_messages_project_governed_tool_artifacts_beside_the_answer() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    css = _read("css/guided-pi.css")
+
+    assert "turnResources" in owner
+    assert "currentTurnResources" in owner
+    assert "gpi-message-resources" in owner
+    assert "Referenced run artifacts" in owner
+    assert "result_tables.json" in owner
+    assert "figure_gallery.json" in owner
+    assert ".gpi-message-resources" in css
 
 
 def test_complete_research_demo_reuses_the_unchanged_agent_figure() -> None:

@@ -102,6 +102,24 @@ def project_study_context(
     cohort = cohort if isinstance(cohort, Mapping) else {}
     idea_handoff = context.get("idea_handoff")
     idea_handoff = idea_handoff if isinstance(idea_handoff, Mapping) else {}
+    literature_authority = context.get("literature_authority")
+    literature_authority = (
+        literature_authority
+        if isinstance(literature_authority, Mapping)
+        else {}
+    )
+    execution_concepts = context.get("execution_concepts")
+    execution_concepts = (
+        execution_concepts if isinstance(execution_concepts, Mapping) else {}
+    )
+    analysis_design = context.get("analysis_design")
+    analysis_design = (
+        analysis_design if isinstance(analysis_design, Mapping) else {}
+    )
+    sensitivity_specs = context.get("sensitivity_specs")
+    sensitivity_specs = (
+        sensitivity_specs if isinstance(sensitivity_specs, list) else []
+    )
     safe_cohort_keys = (
         "preset",
         "label",
@@ -153,6 +171,65 @@ def project_study_context(
                 _bounded_text(item, 160)
                 for item in (context.get("covariates") or [])
             ][:MAX_LIST_ITEMS],
+            "covariate_selection": (
+                _bounded_text(
+                    context.get("covariate_selection") or "planner_selectable",
+                    40,
+                )
+            ),
+            "execution_concepts": {
+                **(
+                    {"outcome": _bounded_text(execution_concepts.get("outcome"), 80)}
+                    if execution_concepts.get("outcome")
+                    else {}
+                ),
+                **(
+                    {
+                        "primary_exposure": _bounded_text(
+                            execution_concepts.get("primary_exposure"), 80
+                        )
+                    }
+                    if execution_concepts.get("primary_exposure")
+                    else {}
+                ),
+                "covariates": [
+                    _bounded_text(item, 80)
+                    for item in (execution_concepts.get("covariates") or [])
+                ][:MAX_LIST_ITEMS],
+            },
+            "analysis_design": {
+                key: _bounded_text(analysis_design.get(key), 80)
+                for key in (
+                    "analysis_unit",
+                    "variance_estimator",
+                    "cluster_unit",
+                )
+                if analysis_design.get(key)
+            },
+            "sensitivity_specs": [
+                {
+                    key: (
+                        [
+                            _bounded_text(item, 80)
+                            for item in (spec.get(key) or [])
+                        ][:16]
+                        if key == "execution_variables"
+                        else spec.get(key)
+                    )
+                    for key in (
+                        "spec_id",
+                        "axis",
+                        "strategy",
+                        "execution_variables",
+                        "landmark_hours",
+                        "require_alive_at_landmark",
+                        "exclude_negative_event_times",
+                    )
+                    if spec.get(key) is not None
+                }
+                for spec in sensitivity_specs[:16]
+                if isinstance(spec, Mapping)
+            ],
             "time_window": dict(context.get("time_window") or {}),
             "comparator": _bounded_text(context.get("comparator"), 500),
             "export_format": _bounded_text(context.get("export_format"), 40),
@@ -175,6 +252,19 @@ def project_study_context(
                 )
                 if idea_handoff.get(key) is not None
             },
+            "literature_authority": {
+                key: literature_authority.get(key)
+                for key in (
+                    "schema_version",
+                    "receipt_id",
+                    "receipt_sha256",
+                    "status",
+                    "result_count",
+                    "searched_at",
+                    "study_configuration_sha256",
+                )
+                if literature_authority.get(key) is not None
+            },
         }
     )
 
@@ -188,6 +278,12 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     for event in events[-20:]:
         if not isinstance(event, Mapping):
             continue
+        label = _bounded_text(event.get("label"), 240)
+        if label:
+            try:
+                reject_sensitive_message(label)
+            except PiCopilotError:
+                label = ""
         progress.append(
             {
                 key: event.get(key)
@@ -202,6 +298,7 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 if event.get(key) is not None
             }
             | {
+                **({"label": label} if label else {}),
                 "reason_code": stable_code(event.get("reason"))
             }
         )
@@ -248,15 +345,19 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
         for item in (row.get("pending_review_reason_codes") or [])
         if stable_code(item)
     ][:16]
-    waiting_for_plan_approval = (
+    waiting_for_plan_review = (
         str(row.get("run_status") or "") == "human_review_pending"
-        and "operator_plan_approval_required" in pending_review_reason_codes
+        and bool(
+            {"operator_plan_approval_required", "plan_scientific_changes_required"}
+            & set(pending_review_reason_codes)
+        )
     )
     projected = {
             key: row.get(key)
             for key in (
                 "run_id",
                 "study_id",
+                "scientific_configuration_sha256",
                 "mode",
                 "run_type",
                 "engine",
@@ -271,12 +372,15 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
                 "artifact_count",
                 "artifact_names",
                 "updated_at",
+                "plan_approval_allowed",
+                "scientific_plan_review_status",
+                "scientific_plan_review_score",
             )
             if row.get(key) is not None
         }
     if pending_review_reason_codes:
         projected["pending_review_reason_codes"] = pending_review_reason_codes
-    if waiting_for_plan_approval:
+    if waiting_for_plan_review:
         # Result/manuscript files are intentionally emitted as governed
         # placeholders at the plan stage.  Make the execution state explicit
         # so a conversational model cannot infer that analysis ran merely from
@@ -285,6 +389,9 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
             {
                 "execution_phase": "plan_review",
                 "human_plan_review_pending": True,
+                "plan_approval_allowed": bool(
+                    row.get("plan_approval_allowed") is not False
+                ),
                 "analysis_executed": False,
                 "scientific_results_available": False,
                 "artifact_semantics": "plan_stage_placeholders_not_analysis_results",

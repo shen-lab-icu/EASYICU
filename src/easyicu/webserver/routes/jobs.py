@@ -212,6 +212,31 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
     }
 
 
+@submission_router.post("/api/jobs/crossdb-summary")
+def jobs_crossdb_summary(body: Dict[str, Any]) -> dict:
+    """Start a leased, cancellable registered-export Cross-DB summary job."""
+    try:
+        runner = crossdb_review.make_crossdb_review_summary_runner(body)
+    except crossdb_review.CrossdbReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+    lease_receipt = runner.source_lease_receipt()
+    try:
+        job = submit_job("crossdb-summary", runner)
+    except Exception:
+        runner.release()
+        raise
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "selection_receipt": runner.selection_receipt,
+        "source_lease": lease_receipt,
+        "deadline_seconds": runner.deadline_seconds,
+        "deadline_at": runner.deadline_at,
+    }
+
+
 @submission_router.post("/api/jobs/crossdb-raw-distribution")
 def jobs_crossdb_raw_distribution(body: Dict[str, Any]) -> dict:
     """Start a raw local Cross-DB density aggregation job.

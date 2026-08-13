@@ -27,6 +27,11 @@ def _write_receipt(path: Path) -> None:
                             "journal": "JAMA",
                             "pubdate": "2016 Feb 23",
                             "query": '"Sepsis-3"[Title/Abstract] AND mortality[Title/Abstract]',
+                            "abstract_excerpt": (
+                                "Adult ICU patients with suspected infection were "
+                                "assessed for organ dysfunction and hospital mortality."
+                            ),
+                            "publication_types": ["Observational Study"],
                         }
                     ],
                 }
@@ -57,10 +62,25 @@ def test_prior_art_receipt_binding_projects_exact_pubmed_metadata(
     assert bundle["search_provenance"]["search_conducted"] is True
     assert bundle["search_provenance"]["searched_at"] == ("2026-08-11T12:00:00+00:00")
     assert bundle["search_provenance"]["sources_enabled"] == ["idea_mining_pubmed"]
+    assert bundle["search_provenance"]["search_queries"] == {
+        "idea_mining_pubmed": [
+            '"Sepsis-3"[Title/Abstract] AND mortality[Title/Abstract]'
+        ]
+    }
     assert bundle["citations"][0]["key"] == "idea_pubmed_26903338"
     assert bundle["citations"][0]["url"] == (
         "https://pubmed.ncbi.nlm.nih.gov/26903338/"
     )
+    assert "Matched the accepted" not in bundle["citations"][0]["relevance"]
+    assert bundle["citations"][0]["relevance"].startswith(
+        "Study-design excerpt:"
+    )
+    assert bundle["citations"][0]["publication_types"] == [
+        "Observational Study"
+    ]
+    assert bundle["screening_decisions"][0]["disposition"] == "exclude"
+    assert bundle["screening_decisions"][0]["evidence_role"] == "related_context"
+    assert bundle["screening_decisions"][0]["design_excerpt_available"] is True
 
 
 def test_prior_art_receipt_tamper_fails_closed(tmp_path: Path) -> None:

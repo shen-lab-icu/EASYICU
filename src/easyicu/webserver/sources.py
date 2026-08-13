@@ -7,6 +7,7 @@ bounded metadata; patient rows are not persisted here.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import threading
@@ -21,6 +22,52 @@ from easyicu.webserver import settings as settings_store
 _CONFIG_DIR = Path.home() / ".easyicu"
 _CONFIG_PATH = _CONFIG_DIR / "webserver_sources.json"
 _LOCK = threading.RLock()
+_PATH_LEASE_COUNTS: Dict[str, int] = {}
+
+
+class SourcePathLeaseError(Exception):
+    """Typed failure to lease an exact registered-source selection."""
+
+    def __init__(self, detail: Dict[str, Any]) -> None:
+        self.detail = detail
+        super().__init__(str(detail.get("error") or "source_path_lease_error"))
+
+
+class SourcePathLease:
+    """Process-local read lease for an immutable registered-source snapshot."""
+
+    def __init__(self, sources: List[Dict[str, Any]]) -> None:
+        self.sources = tuple(copy.deepcopy(sources))
+        self._paths = tuple(str(source["path"]) for source in sources)
+        self._release_lock = threading.Lock()
+        self._released = False
+
+    @property
+    def active(self) -> bool:
+        with self._release_lock:
+            return not self._released
+
+    def public_receipt(self, selection_digest: str) -> Dict[str, Any]:
+        return {
+            "schema_version": "crossdb-source-lease-v1",
+            "source_count": len(self.sources),
+            "selection_digest": str(selection_digest),
+            "active": self.active,
+        }
+
+    def release(self) -> None:
+        """Release once; duplicate cleanup paths are intentionally harmless."""
+        with self._release_lock:
+            if self._released:
+                return
+            with _LOCK:
+                for path in self._paths:
+                    count = int(_PATH_LEASE_COUNTS.get(path) or 0)
+                    if count <= 1:
+                        _PATH_LEASE_COUNTS.pop(path, None)
+                    else:
+                        _PATH_LEASE_COUNTS[path] = count - 1
+            self._released = True
 
 
 def _registry_locked(func):
@@ -429,9 +476,52 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
 
 
 @_registry_locked
+def acquire_path_lease(paths: Iterable[str]) -> SourcePathLease:
+    """Lease the exact currently registered paths and snapshot their metadata."""
+    requested = _dedup_paths(paths)
+    registry = load_registry()
+    registered = {
+        str(source.get("path")): source
+        for source in registry.get("sources") or []
+        if isinstance(source, dict) and source.get("ok") and source.get("path")
+    }
+    selected: List[Dict[str, Any]] = []
+    for path in requested:
+        source = registered.get(path)
+        if source is None:
+            raise SourcePathLeaseError(
+                {
+                    "error": "source_not_registered",
+                    "path_hash": hashlib.sha256(path.encode("utf-8")).hexdigest()[:12],
+                }
+            )
+        selected.append(source)
+    if not selected:
+        raise SourcePathLeaseError({"error": "source_path_lease_empty"})
+    for path in requested:
+        _PATH_LEASE_COUNTS[path] = int(_PATH_LEASE_COUNTS.get(path) or 0) + 1
+    return SourcePathLease(selected)
+
+
+@_registry_locked
+def source_path_lease_count(path: str) -> int:
+    """Return the process-local lease count for diagnostics and owner tests."""
+    return int(_PATH_LEASE_COUNTS.get(_norm_path(path)) or 0)
+
+
+@_registry_locked
 def remove_source(path: str) -> Dict[str, Any]:
     """Unregister one source without deleting or modifying its export folder."""
     norm = _norm_path(path)
+    lease_count = int(_PATH_LEASE_COUNTS.get(norm) or 0)
+    if lease_count:
+        return {
+            "ok": False,
+            "error": "source_path_leased",
+            "path": norm,
+            "lease_count": lease_count,
+            "reason": "A running Cross-DB job is still reading this source.",
+        }
     registry = load_registry()
     current = next(
         (s for s in registry.get("sources", []) if s.get("path") == norm), None

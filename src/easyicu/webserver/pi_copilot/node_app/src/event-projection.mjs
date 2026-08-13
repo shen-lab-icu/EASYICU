@@ -63,6 +63,16 @@ function safeArtifactName(value) {
   return /^[A-Za-z0-9_.-]+$/.test(name) ? name : "";
 }
 
+function safeResearchDocumentName(value) {
+  const name = boundedText(value, 80).trim();
+  return /^manuscript_scaffold\.(pdf|tex|bib)$/.test(name) ? name : "";
+}
+
+function safeSha256(value) {
+  const text = boundedText(value, 64).trim().toLowerCase();
+  return /^[a-f0-9]{64}$/.test(text) ? text : "";
+}
+
 function safeLiteratureUrl(value) {
   const text = boundedText(value, 500).trim();
   return /^https:\/\/pubmed\.ncbi\.nlm\.nih\.gov\/[0-9]{1,12}\/$/.test(text)
@@ -76,6 +86,8 @@ function projectedResource(value) {
     const url = safeLiteratureUrl(value.url);
     const title = boundedText(value.title || value.label, 500).trim();
     if (!url || !title) return undefined;
+    const authorityClass = value.authority_class === "literature_method"
+      ? "literature_method" : "literature_retrieval_candidate";
     return {
       kind: "literature_source",
       url,
@@ -87,7 +99,7 @@ function projectedResource(value) {
       doi: boundedText(value.doi, 240),
       pmid: boundedText(value.pmid, 32),
       media_type: "text/html",
-      authority_class: "literature_metadata",
+      authority_class: authorityClass,
     };
   }
   if (value.kind === "research_artifact") {
@@ -99,6 +111,37 @@ function projectedResource(value) {
       run_id: runId,
       artifact,
       label: boundedText(value.label || artifact, 160),
+      media_type: "application/json",
+    };
+  }
+  if (value.kind === "research_document") {
+    const runId = safeStableId(value.run_id);
+    const artifact = safeResearchDocumentName(value.artifact);
+    if (!runId || !artifact) return undefined;
+    return {
+      kind: "research_document",
+      run_id: runId,
+      artifact,
+      label: boundedText(value.label || artifact, 160),
+      media_type: boundedText(value.media_type || "application/octet-stream", 120),
+    };
+  }
+  if (value.kind === "data_package_review") {
+    const studyContextId = safeStableId(value.study_context_id);
+    const reviewSha256 = safeSha256(value.review_sha256);
+    const studyRevision = Number(value.study_revision);
+    if (
+      !studyContextId
+      || !reviewSha256
+      || !Number.isInteger(studyRevision)
+      || studyRevision < 0
+    ) return undefined;
+    return {
+      kind: "data_package_review",
+      study_context_id: studyContextId,
+      study_revision: studyRevision,
+      review_sha256: reviewSha256,
+      label: boundedText(value.label || "Data package review", 160),
       media_type: "application/json",
     };
   }
@@ -145,12 +188,14 @@ function toolReceipt(result) {
   const resource = projectedResource(details.resource || ownerDetails.resource);
   const resources = projectedResources(details.resources || ownerDetails.resources);
   const jobId = safeJobId(ownerDetails.job_id || details.job_id);
+  const hostRebindAfterTurn = ownerDetails.host_rebind_after_turn === true;
   return {
     status: boundedText(details.status || "", 40),
     code: boundedText(details.code || "", 160),
     summary: boundedText(details.summary || fallback, 2000),
     owner: boundedText(details.owner || "", 240),
     ...(jobId ? { job_id: jobId } : {}),
+    ...(hostRebindAfterTurn ? { host_rebind_after_turn: true } : {}),
     ...(resource ? { resource } : {}),
     ...(resources.length ? { resources } : {}),
   };

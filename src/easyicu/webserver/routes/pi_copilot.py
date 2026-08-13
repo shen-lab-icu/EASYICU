@@ -6,11 +6,14 @@ from html import escape as html_escape
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
 
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
-from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+from easyicu.webserver.pi_copilot.contracts import (
+    PiCopilotError,
+    PiProjectBindingHandoffReceipt,
+)
 
 router = APIRouter()
 
@@ -58,6 +61,24 @@ ArtifactNameText = Annotated[
         min_length=6,
         max_length=160,
         pattern=r"^[A-Za-z0-9_.-]+\.json$",
+    ),
+]
+ResearchDocumentNameText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=20,
+        max_length=64,
+        pattern=r"^manuscript_scaffold\.(?:pdf|tex|bib)$",
+    ),
+]
+Sha256Text = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-f0-9]{64}$",
     ),
 ]
 
@@ -115,6 +136,7 @@ class PiProjectInitializeRequest(BaseModel):
     project_id: ShortText
     title: str = "Pi Copilot"
     confirm_initialization: StrictBool = False
+    binding_receipt: PiProjectBindingHandoffReceipt | None = None
 
 
 class PiProviderConfigRequest(BaseModel):
@@ -212,6 +234,7 @@ def post_pi_copilot_project_initialize(
             project_id=body.project_id,
             title=body.title,
             confirm_initialization=body.confirm_initialization,
+            binding_receipt=body.binding_receipt,
         )
     except PiCopilotError as exc:
         _raise_http(exc)
@@ -293,6 +316,53 @@ def get_pi_copilot_research_artifact(
         )
     except PiCopilotError as exc:
         _raise_http(exc)
+
+
+@router.get("/api/copilot/pi/projects/{project_id}/data-package-review")
+def get_pi_copilot_data_package_review(
+    project_id: ShortText,
+    study_revision: Annotated[int, Query(ge=0)],
+    review_sha256: Sha256Text,
+) -> dict:
+    try:
+        return get_pi_copilot_service().get_data_package_review(
+            project_id=project_id,
+            study_revision=study_revision,
+            review_sha256=review_sha256,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.get(
+    "/api/copilot/pi/projects/{project_id}/runs/{run_id}/documents/{document_name}"
+)
+def get_pi_copilot_research_document(
+    project_id: ShortText,
+    run_id: RunIdText,
+    document_name: ResearchDocumentNameText,
+) -> Response:
+    try:
+        payload = get_pi_copilot_service().get_research_document(
+            project_id=project_id,
+            run_id=run_id,
+            document_name=document_name,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+    return Response(
+        content=payload["content"],
+        media_type=str(payload["media_type"]),
+        headers={
+            "Content-Disposition": f'inline; filename="{document_name}"',
+            "Content-Security-Policy": "sandbox; default-src 'none'; frame-ancestors 'self'",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "SAMEORIGIN",
+            "Referrer-Policy": "no-referrer",
+            "X-EasyICU-Claim-Ceiling": str(payload["claim_ceiling"]),
+        },
+    )
 
 
 @router.get("/api/copilot/pi/sessions")

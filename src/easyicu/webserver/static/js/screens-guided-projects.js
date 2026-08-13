@@ -15,9 +15,20 @@
   }
 
   function projectMeta(row, t) {
-    const status = row.status === 'metadata_only'
-      ? t('Setup only', '仅配置')
-      : (row.status === 'ready' ? t('Ready', '已就绪') : (row.status || t('Study', '研究')));
+    // A Guided draft remains metadata-only storage even after Pi binds a real
+    // StudyContext and Research Agent run.  Do not expose that persistence
+    // implementation as the project's scientific lifecycle status.
+    const status = row.workflow_status === 'analysis_review'
+      ? t('Results to review', '结果待审阅')
+      : row.workflow_status === 'plan_review'
+        ? t('Plan to review', '计划待审阅')
+        : row.workflow_status === 'analysis_running'
+          ? t('Analysis running', '分析中')
+          : row.workflow_status === 'configured'
+            ? t('Study configured', '研究已配置')
+            : row.status === 'metadata_only'
+              ? t('New project', '新项目')
+              : (row.status === 'ready' ? t('Ready', '已就绪') : (row.status || t('Study', '研究')));
     const mode = row.data_mode === 'demo'
       ? t('Demo data', '演示数据')
       : (row.data_mode === 'real' ? t('Local data', '本地数据') : (row.data_mode || ''));
@@ -30,12 +41,25 @@
     if (!host) return;
     const rows = ctx.localDraftRows();
     const activeId = ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.id;
+    const external = ctx.selectedGuidedDraft
+      && activeId
+      && !rows.some(row => row.id === activeId)
+      ? ctx.selectedGuidedDraft
+      : null;
+    const externalHtml = external ? `
+      <div class="gd-sessline">
+        <div class="gd-sess draft active" aria-current="true">
+          <span class="gd-sess-status" aria-hidden="true"></span>
+          <span class="gd-sess-body"><span class="ss-t">${esc(external.title || external.id)}</span><span class="ss-m">${external.study_context_id ? `${t('Bound StudyContext', '已绑定 StudyContext')} · r${esc(external.study_context_revision == null ? '—' : external.study_context_revision)}` : t('Project selected · setup continues here', '项目已选择 · 在此继续配置')}</span></span>
+          <span class="ss-time">${t('current', '当前')}</span>
+        </div>
+      </div>` : '';
     const draftHtml = ctx.guidedDrafts.loading
-      ? `<div class="gd-empty-local"><div class="ss-t">${t('Loading study folders', '正在加载研究文件夹')}</div><div class="ss-m">${t('Reading the local project registry.', '正在读取本地项目列表。')}</div></div>`
+      ? `${externalHtml}<div class="gd-empty-local"><div class="ss-t">${t('Loading study folders', '正在加载研究文件夹')}</div><div class="ss-m">${t('Reading the local project registry.', '正在读取本地项目列表。')}</div></div>`
       : ctx.guidedDrafts.error
-        ? `<div class="gd-empty-local warn"><div class="ss-t">${t('Study folders unavailable', '研究文件夹不可用')}</div><div class="ss-m">${esc(ctx.guidedDrafts.error)}</div></div>`
+        ? `${externalHtml}<div class="gd-empty-local warn"><div class="ss-t">${t('Study folders unavailable', '研究文件夹不可用')}</div><div class="ss-m">${esc(ctx.guidedDrafts.error)}</div></div>`
         : rows.length
-          ? rows.slice(0, 8).map((row, i) => {
+          ? externalHtml + rows.slice(0, 8).map((row, i) => {
             const active = activeId === row.id;
             const title = row.title || t('Guided study', '研究项目');
             const meta = projectMeta(row, t);
@@ -50,7 +74,7 @@
               <button class="gd-sess-action danger" type="button" data-remove-localdraft="${i}" title="${t('Remove from project list', '从项目列表移除')}" aria-label="${t('Remove from project list', '从项目列表移除')}: ${esc(title)}">${icon('close', 12)}</button>
             </div>`;
           }).join('')
-          : `<div class="gd-empty-local"><div class="ss-t">${t('No study folders yet', '还没有研究文件夹')}</div><div class="ss-m">${t('Create or open a project before starting a Pi conversation.', '开始 Pi 对话前，请先创建或打开一个项目。')}</div></div>`;
+          : (externalHtml || `<div class="gd-empty-local"><div class="ss-t">${t('No study folders yet', '还没有研究文件夹')}</div><div class="ss-m">${t('Create or open a project before starting a Pi conversation.', '开始 Pi 对话前，请先创建或打开一个项目。')}</div></div>`);
     host.innerHTML = `
       <div class="gd-project-heading"><span>${t('Research projects', '研究项目')}</span><button class="gd-refresh-mini" type="button" data-refreshdrafts title="${t('Refresh research projects', '刷新研究项目')}" aria-label="${t('Refresh research projects', '刷新研究项目')}">${icon('refresh', 12)}</button></div>
       <div class="gd-project-summary">${icon('folder', 14)}<div><strong>${t('Local research workspace', '本地研究工作区')}</strong><span>${t('Study setup, runs, and evidence stay here. Pi keeps the conversation.', '研究配置、运行和证据保存在这里；对话由 Pi 管理。')}</span></div></div>

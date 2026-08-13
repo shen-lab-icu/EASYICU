@@ -11,7 +11,7 @@
     showSetup: false, availableModels: [], project: null,
     projectInitialization: null, workflow: null,
     agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
-    demoMode: false, demoScrollTopPending: false,
+    demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
   };
 
   const ACCESS_MODE_GRANTS = Object.freeze({
@@ -172,7 +172,8 @@
     if (!resource) return '';
     if (resource.kind === 'literature_source') return `literature:${resource.pmid || resource.doi || resource.url || ''}`;
     if (resource.kind === 'demo_artifact') return `demo:${resource.artifact || ''}`;
-    return resource.kind === 'research_artifact'
+    if (resource.kind === 'data_package_review') return `data-package:${resource.study_context_id || ''}:${resource.study_revision || 0}:${resource.review_sha256 || ''}`;
+    return resource.kind === 'research_artifact' || resource.kind === 'research_document'
       ? `research:${resource.run_id || ''}:${resource.artifact || ''}`
       : `${resource.kind || 'file'}:${resource.file || ''}`;
   }
@@ -188,7 +189,7 @@
   }
   function resourceButton(resource, label) {
     if (!resource) return '';
-    const kind = resource.kind === 'demo_artifact' ? 'demo_artifact' : (resource.kind === 'research_artifact' ? 'research_artifact' : (resource.kind === 'literature_source' ? 'literature_source' : (resource.kind === 'webpage' ? 'webpage' : 'file')));
+    const kind = resource.kind === 'demo_artifact' ? 'demo_artifact' : (resource.kind === 'data_package_review' ? 'data_package_review' : (resource.kind === 'research_document' ? 'research_document' : (resource.kind === 'research_artifact' ? 'research_artifact' : (resource.kind === 'literature_source' ? 'literature_source' : (resource.kind === 'webpage' ? 'webpage' : 'file')))));
     return `<button class="gpi-resource-link" type="button"
       data-gpi-resource-kind="${esc(kind)}"
       data-gpi-resource-file="${esc(resource.file || '')}"
@@ -202,12 +203,16 @@
       data-gpi-resource-venue="${esc(resource.venue || '')}"
       data-gpi-resource-relevance="${esc(resource.relevance || '')}"
       data-gpi-resource-doi="${esc(resource.doi || '')}"
-      data-gpi-resource-pmid="${esc(resource.pmid || '')}">${esc(label || resourceLabel(resource))}</button>`;
+      data-gpi-resource-pmid="${esc(resource.pmid || '')}"
+      data-gpi-resource-study="${esc(resource.study_context_id || '')}"
+      data-gpi-resource-revision="${esc(resource.study_revision == null ? '' : resource.study_revision)}"
+      data-gpi-resource-digest="${esc(resource.review_sha256 || '')}">${esc(label || resourceLabel(resource))}</button>`;
   }
   function toolLabel(name, resource) {
     const labels = {
       easyicu_workspace_status: tr('Check workspace status', '检查工作区状态'),
       easyicu_list_data_sources: tr('List registered data sources', '列出已登记数据源'),
+      easyicu_inspect_data_package: tr('Review data package', '审阅数据包'),
       easyicu_inspect_workflow: tr('Inspect research workflow', '检查科研流程'),
       easyicu_inspect_context: tr('Inspect study context', '读取研究配置'),
       easyicu_inspect_plan: tr('Inspect scientific plan', '读取科学计划'),
@@ -352,7 +357,14 @@
     const messages = [];
     const tools = new Map();
     let activity = null;
+    let turnResources = [];
     let lastTimestamp = Date.now();
+    function addTurnResources(resources) {
+      (Array.isArray(resources) ? resources : []).forEach(resource => {
+        const key = resourceKey(resource);
+        if (key && !turnResources.some(item => resourceKey(item) === key)) turnResources.push(resource);
+      });
+    }
     function closeHistoryActivity(at) {
       if (!activity || activity.status !== 'running') return;
       const endedAt = Number(at || lastTimestamp || activity.startedAt);
@@ -366,6 +378,7 @@
       const text = parts.filter(p => p && p.type === 'text').map(p => p.text || '').join('');
       if (text && row.role === 'user') {
         closeHistoryActivity(rowAt);
+        turnResources = [];
         messages.push({ id: 'history-' + index, role: 'user', text, complete: true });
         activity = {
           id: 'history-activity-' + index, role: 'activity', status: 'running',
@@ -403,10 +416,15 @@
           resources: Array.isArray(receipt.resources) ? receipt.resources : [],
           endedAt: rowAt,
         });
+        addTurnResources([toolStep.resource].concat(toolStep.resources || []));
         if (activity) upsertActivityStep(activity, toolStep);
       });
       if (text && row.role !== 'user') {
-        messages.push({ id: 'history-' + index, role: row.role || 'assistant', text, complete: true, errorCode: row.error_code || '' });
+        messages.push({
+          id: 'history-' + index, role: row.role || 'assistant', text, complete: true,
+          errorCode: row.error_code || '',
+          resources: row.role === 'assistant' ? turnResources.slice(0, 24) : [],
+        });
         if (row.role === 'assistant' && activity && !parts.some(p => p && p.type === 'tool_call')) {
           closeHistoryActivity(rowAt);
         }
@@ -593,9 +611,24 @@
       </details>`;
     }
     const cls = row.role === 'user' ? 'user' : 'assistant';
+    const preferredArtifacts = [
+      'result_tables.json', 'figure_gallery.json', 'manuscript_scaffold.pdf',
+      'manuscript_draft.json', 'agent_plan.json', 'literature_evidence.json',
+      'evidence_ledger.json', 'quality_gate.json',
+    ];
+    const messageResources = (Array.isArray(row.resources) ? row.resources : [])
+      .filter(resource => resourceKey(resource))
+      .filter((resource, index, rows) => rows.findIndex(item => resourceKey(item) === resourceKey(resource)) === index)
+      .sort((left, right) => {
+        const leftRank = preferredArtifacts.indexOf(String(left.artifact || ''));
+        const rightRank = preferredArtifacts.indexOf(String(right.artifact || ''));
+        return (leftRank < 0 ? preferredArtifacts.length : leftRank) - (rightRank < 0 ? preferredArtifacts.length : rightRank);
+      })
+      .slice(0, 8);
     return `<article class="gpi-message ${cls}">
       <div class="gpi-message-body">
         ${row.text ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(row.text) : esc(row.text)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`}
+        ${messageResources.length ? `<div class="gpi-message-resources" aria-label="${tr('Referenced run artifacts', '本轮引用的运行产物')}"><span>${tr('Open evidence and artifacts', '打开证据和产物')}</span><div class="gpi-resource-list">${messageResources.map(resource => resourceButton(resource)).join('')}</div></div>` : ''}
       </div>
     </article>`;
   }
@@ -643,6 +676,26 @@
       note: tr('This authorizes one provider planning run. Execution must pause again for your plan approval.', '这会授权一次模型规划；真正执行前必须再次停下等待你的计划批准。'),
       approve: tr('Generate Agent plan', '生成 Agent 计划'),
     };
+    if (code === 'plan_configuration_superseded' || code === 'plan_review_not_resumable') return {
+      code, grants: ['provider_run'],
+      message: tr(
+        'I confirm that the old plan must not be reused. Start a fresh Research Agent planning run from the current study configuration, and pause again for my review before analysis.',
+        '我确认旧计划不能复用。请按当前研究配置启动一次全新的 Research Agent 规划，并在分析前再次停下让我审核。',
+      ),
+      title: tr('The study changed. Generate a fresh analysis plan?', '研究配置已更新，是否重新生成分析计划？'),
+      note: tr('The old run stays as history. The new run receives a new id and current configuration digest.', '旧 run 仅保留为历史；新 run 使用新的标识和当前配置摘要。'),
+      approve: tr('Generate fresh plan', '重新生成计划'),
+    };
+    if (code === 'failed_pipeline_requires_fresh_plan') return {
+      code, grants: ['provider_run'],
+      message: tr(
+        'Keep the failed run as history. Start a fresh Research Agent planning run from the current study configuration, and pause for my review before analysis.',
+        '保留上次失败运行为历史。请按当前研究配置启动一次新的 Research Agent 规划，并在分析前停下让我审核。',
+      ),
+      title: tr('The previous analysis failed closed. Generate a fresh plan?', '上次分析未通过验证，是否重新生成干净计划？'),
+      note: tr('The previous evidence remains immutable. The new run receives a new id and must pass plan review again.', '旧证据保持不变；新 run 使用新的标识，并且仍须经过计划人工审核。'),
+      approve: tr('Generate fresh plan', '重新生成计划'),
+    };
     if (code === 'operator_plan_approval_required') return {
       code, grants: ['provider_run'],
       message: tr('I approve the current evidence-bound plan. Continue the analysis.', '我批准当前证据绑定的计划，请继续分析。'),
@@ -652,6 +705,24 @@
       reviewResources: [
         { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'agent_plan.json', label: tr('Open analysis plan', '打开分析计划'), media_type: 'application/json' },
         { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'literature_evidence.json', label: tr('Open literature bindings', '打开文献绑定'), media_type: 'application/json' },
+      ],
+    };
+    if (code === 'plan_scientific_changes_required') return {
+      code, grants: ['provider_run'], nonApprovable: true,
+      message: tr(
+        'The current plan is scientifically non-approvable. Keep it as evidence, apply the review findings in a new study version, and generate a fresh plan before analysis.',
+        '当前计划未达到科学可批准标准。请保留本次审阅证据，在新的研究版本中处理这些问题，再重新生成计划。',
+      ),
+      title: tr('Scientific plan review requires changes', '科学计划审阅要求修改'),
+      note: tr(
+        'The score and findings are deterministic and digest-bound. They cannot be waived by approving this pause; changes that alter the estimand or study authority still need your explicit confirmation.',
+        '评分与问题清单均已确定性计算并绑定摘要，不能通过“批准本次暂停”来绕过；涉及估计目标或研究权威的修改仍需你明确确认。',
+      ),
+      approve: tr('Review required changes', '查看并处理问题'),
+      reviewResources: [
+        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'scientific_plan_review.json', label: tr('Open scientific review', '打开科学审阅'), media_type: 'application/json' },
+        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'agent_plan.json', label: tr('Open proposed plan', '打开候选计划'), media_type: 'application/json' },
+        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'literature_evidence.json', label: tr('Open literature evidence', '打开文献证据'), media_type: 'application/json' },
       ],
     };
     return null;
@@ -664,12 +735,33 @@
       .filter(resource => resource.run_id)
       .map(resource => resourceButton(resource, resource.label))
       .join('');
+    const review = state.workflow && state.workflow.plan_review_summary;
+    const scorecard = confirmation.code === 'plan_scientific_changes_required'
+      && review && review.dimension_scores && typeof review.dimension_scores === 'object'
+      ? `<div class="gpi-confirmation-scorecard"><strong>${esc(tr(`Scientific review ${review.score || 0}/100`, `科学审阅 ${review.score || 0}/100`))}</strong><span>${Object.entries(review.dimension_scores).map(([key, value]) => `${esc(key)} ${esc(value)}`).join(' · ')}</span></div>`
+      : '';
+    const authorizationQuestions = confirmation.code === 'plan_scientific_changes_required'
+      && review && Array.isArray(review.authorization_questions)
+      ? review.authorization_questions.slice(0, 4).map(item => `<li>${esc(item.question || item.code || '')}</li>`).join('')
+      : '';
+    const remediationLanes = confirmation.code === 'plan_scientific_changes_required'
+      && review && review.remediation_buckets && typeof review.remediation_buckets === 'object'
+      ? [
+          ['agent_plan_revision', tr('Agent can repair in a fresh plan', 'Agent 可在全新计划中自动修复')],
+          ['study_authority_change', tr('Needs your scientific decision', '需要你的科学设定决定')],
+          ['external_evidence', tr('Needs more external evidence', '需要继续补充外部证据')],
+          ['independent_review', tr('Needs independent novelty review', '需要独立创新性审阅')],
+        ].map(([key, label]) => {
+          const codes = Array.isArray(review.remediation_buckets[key]) ? review.remediation_buckets[key] : [];
+          return codes.length ? `<li><strong>${esc(label)}</strong><span>${esc(codes.join(' · '))}</span></li>` : '';
+        }).filter(Boolean).join('')
+      : '';
     return `<section class="gpi-confirmation" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
       <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-      <div><strong>${esc(confirmation.title)}</strong><small>${esc(confirmation.note)}</small>${reviewResources ? `<div class="gpi-confirmation-resources">${reviewResources}</div>` : ''}</div>
+      <div><strong>${esc(confirmation.title)}</strong><small>${esc(confirmation.note)}</small>${scorecard}${remediationLanes ? `<ul class="gpi-confirmation-questions">${remediationLanes}</ul>` : ''}${authorizationQuestions ? `<ul class="gpi-confirmation-questions">${authorizationQuestions}</ul>` : ''}${reviewResources ? `<div class="gpi-confirmation-resources">${reviewResources}</div>` : ''}</div>
       <div class="gpi-confirmation-actions">
-        <button class="btn sm" type="button" data-gpi-confirm-edit>${tr('Request changes', '提出修改')}</button>
-        <button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.approve)}</button>
+        <button class="btn sm" type="button" data-gpi-confirm-edit>${confirmation.code === 'plan_scientific_changes_required' ? tr('Answer next scientific question', '回答下一个科学问题') : tr('Request changes', '提出修改')}</button>
+        ${confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.approve)}</button>`}
       </div>
     </section>`;
   }
@@ -708,7 +800,7 @@
             <button class="btn sm gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 14)} ${tr('Full demo', '完整演示')}</button>
             <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
             <button class="gpi-link" type="button" data-gpi-new>${tr('New', '新会话')}</button>
-            <button class="gpi-link" type="button" data-gpi-legacy>${tr('Study setup', '研究配置')}</button>
+            <button class="gpi-link" type="button" data-gpi-study-setup>${tr('Study setup', '研究配置')}</button>
           </div>
         </header>
         ${workflowHtml()}
@@ -768,11 +860,21 @@
   function syncProjectWorkflowAside() {
     const demo = state.demoMode && window.EU_GUIDED_PI_DEMO;
     const workflow = demo && typeof demo.workflow === 'function' ? demo.workflow() : state.workflow;
-    if (state.shell !== 'pi' || (!state.demoMode && !projectId()) || !workflow) return;
+    if (state.shell !== 'pi' || (!state.demoMode && !projectId())) return;
     const aside = document.getElementById('gdStudyAside');
     const body = document.getElementById('gdAsideBody');
     const head = aside && aside.querySelector('.gd-aside-head');
     if (!aside || !body || !head) return;
+    if (!workflow) {
+      const receipt = state.project && state.project.binding_receipt;
+      const revision = receipt && Number.isInteger(receipt.study_context_revision)
+        ? ` · r${receipt.study_context_revision}` : '';
+      head.innerHTML = `<div class="eyebrow">${tr('One EasyICU workflow', '统一 EasyICU 科研流程')}</div><div class="at">${tr('Project authority', '项目权威状态')}</div><div class="asub">${tr('Loading the bound StudyContext workflow.', '正在读取已绑定的 StudyContext 流程。')}</div>`;
+      body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-loading role="status" aria-live="polite">
+        <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Bound project', '已绑定项目')}</div><strong>${esc((state.project && state.project.title) || projectId())}${esc(revision)}</strong><div class="gd-pipeline-value">${tr('Loading authoritative configuration…', '正在读取权威配置…')}</div></div></div>
+      </div>`;
+      return;
+    }
     const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
     const names = {
       question: tr('Scientific question', '科学问题'), idea: tr('Idea mining', '想法发掘'),
@@ -788,11 +890,18 @@
       study_setup_complete: tr('Required study setup is complete', '必需研究配置已完成'),
       active_export_ready: tr('A matching EasyICU export is ready', '同一项目的 EasyICU 数据包已就绪'),
       plan_ready: tr('Ready to create the analysis plan', '可以生成分析计划'),
+      agent_plan_ready: tr('The digest-bound analysis plan is ready', '摘要绑定分析计划已就绪'),
       operator_plan_approval_required: tr('Review and approve the digest-bound plan before analysis', '请在分析前审核并批准摘要绑定的计划'),
+      plan_scientific_changes_required: tr('The scientific plan review requires a new study/plan version before analysis', '科学计划审阅要求先形成新的研究/计划版本，当前不能继续分析'),
+      plan_configuration_superseded: tr('The study configuration changed; the old plan is superseded and cannot be approved', '研究配置已变化；旧计划已失效，不能再批准'),
+      plan_review_not_resumable: tr('The old plan no longer has a live resume authority and must be regenerated', '旧计划的可恢复执行权限已失效，必须重新生成'),
       operator_plan_approved: tr('Digest-bound plan approved by the user', '摘要绑定计划已由用户批准'),
       analysis_ready: tr('Ready for analysis after plan approval', '计划确认后可以执行分析'),
       validated_analysis_required: tr('Validated analysis is required first', '需要先完成并验证分析'),
       validated_analysis_complete: tr('Analysis, validation, and numeric checks are complete', '分析、验证与数值核验已完成'),
+      validated_analysis_ready: tr('Analysis, validation, and numeric checks are complete', '分析、验证与数值核验已完成'),
+      evidence_bound_interpretation_ready: tr('Review the evidence-bound result interpretation', '请审阅证据约束的结果解读'),
+      manuscript_draft_ready_for_review: tr('Review the evidence-bound manuscript draft', '请审阅证据绑定的稿件草稿'),
       interpretation_complete: tr('Evidence-bounded interpretation is complete', '证据约束的结果解读已完成'),
       human_review_required: tr('Draft is locked pending clinical and methods review', '初稿已锁定，等待临床与方法学审阅'),
       source_population_scope_open: tr('Prepared data are traceable, but source-population scope is open', '准备数据可追踪，但来源人群范围未闭合'),
@@ -845,9 +954,10 @@
     try {
       const payload = await api().loadPiCopilotStatus();
       state.runtime = payload && payload.runtime;
-      if (runtimeReady() && projectId()) {
+      if (projectId()) {
         await prepareProject();
-      } else if (!runtimeReady()) {
+      }
+      if (!runtimeReady()) {
         state.showSetup = true;
       }
     } catch (error) {
@@ -882,7 +992,10 @@
         return;
       }
       state.showSetup = false;
-      if (projectId()) await createSession();
+      if (projectId()) {
+        await prepareProject();
+        await createSession();
+      }
     } catch (error) {
       state.availableModels = Array.isArray(error && error.details && error.details.available_models)
         ? error.details.available_models.map(String) : [];
@@ -933,10 +1046,23 @@
   function assistantRow() {
     let row = state.messages[state.messages.length - 1];
     if (!row || row.role !== 'assistant' || row.complete) {
-      row = { id: 'live-' + Date.now(), role: 'assistant', text: '', complete: false };
+      row = {
+        id: 'live-' + Date.now(), role: 'assistant', text: '', complete: false,
+        resources: state.currentTurnResources.slice(0, 24),
+      };
       state.messages.push(row);
     }
     return row;
+  }
+  function addAssistantResources(resources) {
+    const existing = state.currentTurnResources;
+    (Array.isArray(resources) ? resources : []).forEach(resource => {
+      const key = resourceKey(resource);
+      if (key && !existing.some(item => resourceKey(item) === key)) existing.push(resource);
+    });
+    state.currentTurnResources = existing.slice(0, 24);
+    const row = state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
+    if (row) row.resources = state.currentTurnResources.slice();
   }
   function completeLatestAssistant(stopReason) {
     const row = state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
@@ -976,6 +1102,7 @@
     const at = timeMs(event.at);
     const activity = ensureActivity(event.at);
     if (event.type === 'run_start') {
+      state.currentTurnResources = [];
       upsertActivityStep(activity, { id: 'agent', kind: 'agent', status: 'complete', at });
     } else if (event.type === 'turn_start') {
       upsertActivityStep(activity, { id: 'turn-' + event.turn_index, kind: 'turn', turn: Number(event.turn_index || 0), status: 'running', at });
@@ -1013,7 +1140,8 @@
         resource: event.resource || null,
         resources: Array.isArray(event.resources) ? event.resources : [],
       });
-      if (['study_context_updated', 'easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted'].includes(String(event.code || ''))) {
+      addAssistantResources([event.resource].concat(Array.isArray(event.resources) ? event.resources : []));
+      if (event.host_rebind_after_turn === true || ['study_context_updated', 'easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted'].includes(String(event.code || ''))) {
         state.pendingAuthorityRebind = true;
       }
       if (/^(easyicu_(research_workflow_projected|idea_|active_export_reused|extraction_|run_|full_run_|result_|manuscript_))/.test(String(event.code || ''))) {
@@ -1062,7 +1190,7 @@
     const label = code === 'easyicu_extraction_submitted'
       ? tr('EasyICU data extraction submitted', 'EasyICU 数据提取任务已提交')
       : code === 'easyicu_full_run_submitted'
-        ? tr('EasyICU full research analysis submitted', 'EasyICU 完整科研分析已提交')
+        ? tr('Research Agent planning submitted', 'Research Agent 规划任务已提交')
         : tr('EasyICU preflight submitted', 'EasyICU 预检任务已提交');
     upsertActivityStep(activity, {
       id: 'pipeline-submitted', kind: 'pipeline', step: 'submitted', label,
@@ -1170,20 +1298,20 @@
         at: Date.now(), code: [count, reason].filter(Boolean).join(' · '), owner: String(job.kind || 'EasyICU'),
       });
     });
-    const settled = ['succeeded', 'failed', 'cancelled'].includes(String(job.status || ''));
+    const settled = ['done', 'failed', 'cancelled'].includes(String(job.status || ''));
     if (settled) {
       completeRunningPipelineSteps(activity);
       upsertActivityStep(activity, {
         id: 'projected-terminal', kind: 'pipeline', step: 'terminal',
-        label: job.status === 'succeeded'
+        label: job.status === 'done'
           ? tr('EasyICU research task completed', 'EasyICU 科研任务已完成')
           : job.status === 'cancelled'
             ? tr('EasyICU research task cancelled', 'EasyICU 科研任务已取消')
             : tr('EasyICU research task failed', 'EasyICU 科研任务失败'),
-        status: job.status === 'succeeded' ? 'complete' : 'error', at: Date.now(),
+        status: job.status === 'done' ? 'complete' : 'error', at: Date.now(),
         code: String(job.error_code || job.status || ''), owner: String(job.kind || 'EasyICU'),
       });
-      activity.status = job.status === 'succeeded' ? 'complete' : (job.status === 'cancelled' ? 'cancelled' : 'error');
+      activity.status = job.status === 'done' ? 'complete' : (job.status === 'cancelled' ? 'cancelled' : 'error');
       activity.endedAt = Date.now();
     }
   }
@@ -1211,7 +1339,7 @@
 
   async function loadWorkflow() {
     const expectedProjectId = projectId();
-    if (!runtimeReady() || !expectedProjectId || !api().loadPiCopilotProjectWorkflow) return;
+    if (!expectedProjectId || !api().loadPiCopilotProjectWorkflow) return;
     try {
       const payload = await api().loadPiCopilotProjectWorkflow(expectedProjectId);
       if (expectedProjectId !== projectId()) return;
@@ -1225,17 +1353,22 @@
 
   async function prepareProject() {
     const expectedProjectId = projectId();
-    if (!runtimeReady() || !expectedProjectId) return;
+    if (!expectedProjectId) return;
+    const bindingReceipt = state.project && state.project.binding_receipt;
     try {
       const initialized = await api().initializePiCopilotProject({
         project_id: expectedProjectId,
         title: (state.project && state.project.title) || expectedProjectId,
         confirm_initialization: false,
+        binding_receipt: state.project.binding_receipt || undefined,
       });
       if (expectedProjectId !== projectId()) return;
       state.projectInitialization = initialized || { status: 'ready' };
+      if (bindingReceipt && initialized && initialized.binding_receipt) {
+        state.project = { ...state.project, binding_receipt: null };
+      }
       await loadWorkflow();
-      await loadProjectSessions();
+      if (runtimeReady()) await loadProjectSessions();
     } catch (error) {
       if (expectedProjectId !== projectId()) return;
       if (error && error.code === 'pi_project_initialization_required') {
@@ -1253,9 +1386,15 @@
 
   function bindProject(project) {
     const next = project && String(project.id || '').trim()
-      ? { id: String(project.id).trim(), title: String(project.title || project.id).trim() }
+      ? {
+          id: String(project.id).trim(),
+          title: String(project.title || project.id).trim(),
+          binding_receipt: project.binding_receipt || null,
+        }
       : null;
-    if (projectId() === String((next && next.id) || '')) return;
+    const sameProject = projectId() === String((next && next.id) || '');
+    const currentReceipt = state.project && state.project.binding_receipt;
+    if (sameProject && JSON.stringify(currentReceipt || null) === JSON.stringify((next && next.binding_receipt) || null)) return;
     closeSource();
     closeChildSource();
     state.demoMode = false;
@@ -1274,8 +1413,15 @@
       window.EU_GUIDED_PI_PREVIEW.clearProject();
     }
     render();
-    if (next && runtimeReady()) {
-      prepareProject().catch(error => { state.error = errorText(error); render(); });
+    if (next) {
+      // Project selection happens after the initial Pi status request in the
+      // common path. prepareProject() updates the authoritative workflow and
+      // saved-session lists asynchronously, so render again when it settles;
+      // otherwise the legacy 0/8 aside and empty-session panel remain visible
+      // even though the server returned the bound StudyContext revision.
+      prepareProject()
+        .then(() => { if (projectId() === next.id) render(); })
+        .catch(error => { if (projectId() === next.id) { state.error = errorText(error); render(); } });
     }
   }
 
@@ -1316,6 +1462,7 @@
     if (!text) return;
     const grants = Array.isArray(grantsOverride) ? grantsOverride : turnGrants();
     const submittedAt = Date.now();
+    state.currentTurnResources = [];
     state.messages.push({ id: 'user-' + submittedAt, role: 'user', text, complete: true });
     const activity = ensureActivity(new Date(submittedAt).toISOString());
     upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: submittedAt });
@@ -1342,12 +1489,47 @@
     await sendText(confirmation.message, confirmation.grants);
   }
   function editWorkflow() {
-    state.draft = tr('Please change the current workflow before continuing: ', '继续前请修改当前流程：');
+    const workflow = state.workflow || {};
+    const review = workflow.plan_review_summary || {};
+    const questions = Array.isArray(review.authorization_questions)
+      ? review.authorization_questions.filter(item => item && (item.question || item.code))
+      : [];
+    const nextQuestion = questions.length ? String(questions[0].question || questions[0].code) : '';
+    state.draft = nextQuestion || tr(
+      'Please ask me the next unresolved scientific decision and save my answer in the typed study configuration.',
+      '请一次只问我一个尚未解决的科学设定问题，并把我的回答保存到结构化研究配置。',
+    );
     render();
     requestAnimationFrame(() => {
       const input = state.host && state.host.querySelector('[data-gpi-input]');
       if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
     });
+  }
+  function studySetupReviewPrompt(workflow) {
+    const receipt = workflow && workflow.study_setup_receipt;
+    const missing = workflow && workflow.missing_setup_fields;
+    const missingText = Array.isArray(missing) && missing.length
+      ? missing.join(', ')
+      : 'none';
+    const receiptText = JSON.stringify(receipt || {
+      study_context_id: '',
+      revision: 0,
+      configured_fields: [],
+      configuration: {},
+    });
+    return tr(
+      `Review this existing project's study configuration in this conversation. Treat the following path-free Study Setup Receipt as the authoritative starting state: ${receiptText}. Preserve study_context_id and revision; do not create a new project or reset configured fields. Current missing fields: ${missingText}. Summarize the configured values first, then ask which field I want to edit.`,
+      `请在当前对话中审阅这个已有项目的研究配置。以下不含本地路径的 Study Setup Receipt 是权威起始状态：${receiptText}。保留 study_context_id 和 revision；不要新建项目，也不要重置已配置字段。当前缺失字段：${missingText}。请先概括已有配置，再询问我要修改哪个字段。`,
+    );
+  }
+  async function openStudySetupInConversation() {
+    if (!state.session || state.busy || sessionIsStale()) return;
+    setShell('pi');
+    state.showSetup = false;
+    state.error = '';
+    await loadWorkflow();
+    const prompt = studySetupReviewPrompt(state.workflow);
+    await sendText(prompt, ['configure']);
   }
   async function stopMessage() {
     if (!state.session || !state.busy) return;
@@ -1393,6 +1575,9 @@
             relevance: resource.dataset.gpiResourceRelevance,
             doi: resource.dataset.gpiResourceDoi,
             pmid: resource.dataset.gpiResourcePmid,
+            study_context_id: resource.dataset.gpiResourceStudy,
+            study_revision: resource.dataset.gpiResourceRevision,
+            review_sha256: resource.dataset.gpiResourceDigest,
           }, projectId());
         }
         return;
@@ -1406,6 +1591,7 @@
       if (event.target.closest('[data-gpi-retry]')) { loadStatus(); return; }
       if (event.target.closest('[data-gpi-setup]')) { state.showSetup = true; setShell('pi'); return; }
       if (event.target.closest('[data-gpi-open]')) { setShell('pi'); return; }
+      if (event.target.closest('[data-gpi-study-setup]')) { openStudySetupInConversation(); return; }
       if (event.target.closest('[data-gpi-legacy]')) { setShell('legacy'); return; }
       if (event.target.closest('[data-gpi-create]')) { createSession(); return; }
       if (event.target.closest('[data-gpi-confirm-action]')) { confirmWorkflowAction(); return; }

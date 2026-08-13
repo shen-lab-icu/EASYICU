@@ -170,6 +170,7 @@
           <div style="font-weight:600;font-size:12.75px;">${title}</div>
           <div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${meta}</div>
         </div>
+        <button class="btn sm" type="button" data-crossdb-cancel>${text('Cancel', '取消')}</button>
       </div>
       <div class="indet mt-12"></div>
       <div class="panel-sub mt-8">${text('EasyICU is reading bounded summaries from the selected exports. Raw ICU folders are not scanned.', 'EasyICU 正在读取所选导出的有界摘要；不会扫描原始 ICU 文件夹。')}</div>

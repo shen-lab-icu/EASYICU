@@ -266,9 +266,6 @@
   function loadCohortReviewSummary(body) {
     return postJSON('/api/cohort-review/summary', body || {});
   }
-  function loadCrossdbReviewSummary(body) {
-    return postJSON('/api/crossdb-review/summary', body || {});
-  }
   function loadCrossdbRawDistribution(body) {
     return postJSON('/api/crossdb-review/raw-distribution', body || {});
   }
@@ -278,11 +275,11 @@
   function startCrossdbRawDistributionJob(body) {
     return postJSON('/api/jobs/crossdb-raw-distribution', body || {});
   }
+  function startCrossdbReviewSummaryJob(body) {
+    return postJSON('/api/jobs/crossdb-summary', body || {});
+  }
   function loadCrossdbDemoDistribution(body) {
     return postJSON('/api/crossdb-review/demo-distribution', body || {});
-  }
-  function loadCrossdbSummary(paths) {
-    return postJSON('/api/workspaces/crossdb-summary', { paths: paths || [] });
   }
   function loadAgentProviderStatus(provider) {
     const q = provider ? '?provider=' + encodeURIComponent(provider) : '';
@@ -447,6 +444,18 @@
       + '/artifacts/' + encodeURIComponent(artifact)
     );
   }
+  function loadPiCopilotDataPackageReview(projectId, studyRevision, reviewSha256) {
+    return getJSON(
+      '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/data-package-review?study_revision=' + encodeURIComponent(studyRevision)
+      + '&review_sha256=' + encodeURIComponent(reviewSha256)
+    );
+  }
+  function piCopilotResearchDocumentUrl(projectId, runId, documentName) {
+    return '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/runs/' + encodeURIComponent(runId)
+      + '/documents/' + encodeURIComponent(documentName);
+  }
   function createPageGuideSession(body) {
     return postJSON('/api/page-guide/sessions', body || {});
   }
@@ -563,12 +572,11 @@
   window.EU_API.loadPatientReviewTablePreview = loadPatientReviewTablePreview;
   window.EU_API.loadPatientReviewFeature = loadPatientReviewFeature;
   window.EU_API.loadCohortReviewSummary = loadCohortReviewSummary;
-  window.EU_API.loadCrossdbReviewSummary = loadCrossdbReviewSummary;
   window.EU_API.loadCrossdbRawDistribution = loadCrossdbRawDistribution;
   window.EU_API.scanCrossdbRawRoot = scanCrossdbRawRoot;
   window.EU_API.startCrossdbRawDistributionJob = startCrossdbRawDistributionJob;
+  window.EU_API.startCrossdbReviewSummaryJob = startCrossdbReviewSummaryJob;
   window.EU_API.loadCrossdbDemoDistribution = loadCrossdbDemoDistribution;
-  window.EU_API.loadCrossdbSummary = loadCrossdbSummary;
   window.EU_API.loadAgentProviderStatus = loadAgentProviderStatus;
   window.EU_API.saveAgentProviderConfig = saveAgentProviderConfig;
   window.EU_API.startAgentRun = startAgentRun;
@@ -618,6 +626,8 @@
   window.EU_API.loadPiCopilotWorkspaceFile = loadPiCopilotWorkspaceFile;
   window.EU_API.piCopilotWorkspacePreviewUrl = piCopilotWorkspacePreviewUrl;
   window.EU_API.loadPiCopilotResearchArtifact = loadPiCopilotResearchArtifact;
+  window.EU_API.loadPiCopilotDataPackageReview = loadPiCopilotDataPackageReview;
+  window.EU_API.piCopilotResearchDocumentUrl = piCopilotResearchDocumentUrl;
   window.EU_API.createPageGuideSession = createPageGuideSession;
   window.EU_API.sendPageGuideMessage = sendPageGuideMessage;
   window.EU_API.runPageGuideAction = runPageGuideAction;

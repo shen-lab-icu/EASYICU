@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import secrets
@@ -11,6 +12,10 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from easyicu.research_agent.planning.sensitivity_authority import (
+    normalize_prespecified_sensitivities,
+)
 
 _CONFIG_PATH = Path.home() / ".easyicu" / "webserver_study_contexts.json"
 _LOCK = threading.RLock()
@@ -49,11 +54,18 @@ _CONTEXT_FIELDS = {
     "question",
     "purpose",
     "data_source",
+    "crossdb_selection",
     "cohort",
     "modules",
     "outcome",
     "primary_exposure",
     "covariates",
+    "covariate_selection",
+    "covariate_rationales",
+    "covariate_temporal_roles",
+    "execution_concepts",
+    "analysis_design",
+    "sensitivity_specs",
     "time_window",
     "comparator",
     "export_format",
@@ -63,6 +75,7 @@ _CONTEXT_FIELDS = {
     "active_job_id",
     "confirmations",
     "idea_handoff",
+    "literature_authority",
 }
 _TEXT_LIMITS = {
     "title": 160,
@@ -139,6 +152,23 @@ _TIME_WINDOW_SCHEMA = {
     "preset": "text",
     "label": "text",
 }
+_EXECUTION_CONCEPT_FIELDS = frozenset(
+    {"outcome", "primary_exposure", "covariates"}
+)
+_ANALYSIS_DESIGN_FIELDS = frozenset(
+    {"analysis_unit", "variance_estimator", "cluster_unit"}
+)
+_COVARIATE_SELECTIONS = frozenset({"planner_selectable", "exact"})
+_COVARIATE_TEMPORAL_ROLES = frozenset(
+    {"baseline_static", "at_or_before_time_zero"}
+)
+_ANALYSIS_UNITS = frozenset(
+    {"row", "icu_stay", "hospital_admission", "patient", "site"}
+)
+_VARIANCE_ESTIMATORS = frozenset(
+    {"model_based", "heteroskedasticity_robust", "cluster_robust"}
+)
+_CLUSTER_UNITS = frozenset({"hospital_admission", "patient", "site", "custom"})
 _IDEA_HANDOFF_SCHEMA = {
     "schema_version": "text",
     "run_id": "text",
@@ -154,6 +184,42 @@ _IDEA_HANDOFF_SCHEMA = {
     "prior_art_result_count": "number",
     "prior_art_searched_at": "text",
 }
+_LITERATURE_AUTHORITY_SCHEMA = {
+    "schema_version": "text",
+    "receipt_id": "text",
+    "receipt_sha256": "text",
+    "status": "text",
+    "result_count": "number",
+    "searched_at": "text",
+    "study_configuration_sha256": "text",
+}
+_LITERATURE_SCOPE_FIELDS = (
+    "question",
+    "purpose",
+    "data_source",
+    "crossdb_selection",
+    "cohort",
+    "modules",
+    "outcome",
+    "primary_exposure",
+    "covariates",
+    "covariate_selection",
+    "covariate_rationales",
+    "covariate_temporal_roles",
+    "execution_concepts",
+    "analysis_design",
+    "sensitivity_specs",
+    "time_window",
+    "comparator",
+    "export_format",
+    "analysis_goal",
+    "confirmations",
+    "idea_handoff",
+)
+_SCIENTIFIC_CONFIGURATION_FIELDS = (
+    *_LITERATURE_SCOPE_FIELDS,
+    "literature_authority",
+)
 
 
 class StudyContextError(ValueError):
@@ -382,6 +448,128 @@ def _data_source(value: Any) -> Optional[Dict[str, str]]:
     return source if any(source.values()) else None
 
 
+def _crossdb_selection(value: Any) -> Dict[str, Any]:
+    if value in (None, {}):
+        return {}
+    if not isinstance(value, dict):
+        raise StudyContextError(
+            {"error": "invalid_study_context_field", "field": "crossdb_selection"}
+        )
+    allowed = {"schema_version", "source_count", "sources", "selection_digest"}
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise StudyContextError(
+            {
+                "error": "unknown_study_context_fields",
+                "field": "crossdb_selection",
+                "fields": unknown,
+            }
+        )
+    schema_version = _text(
+        value.get("schema_version"),
+        field="crossdb_selection.schema_version",
+        max_length=40,
+    )
+    if schema_version != "crossdb-selection-v1":
+        raise StudyContextError(
+            {
+                "error": "crossdb_selection_schema_unsupported",
+                "field": "crossdb_selection.schema_version",
+            }
+        )
+    source_count = value.get("source_count")
+    if (
+        isinstance(source_count, bool)
+        or not isinstance(source_count, int)
+        or source_count < 2
+        or source_count > _MAX_COLLECTION_ITEMS
+    ):
+        raise StudyContextError(
+            {
+                "error": "invalid_study_context_field",
+                "field": "crossdb_selection.source_count",
+            }
+        )
+    raw_sources = value.get("sources")
+    if not isinstance(raw_sources, list) or len(raw_sources) != source_count:
+        raise StudyContextError(
+            {
+                "error": "crossdb_selection_source_count_mismatch",
+                "field": "crossdb_selection.sources",
+            }
+        )
+    sources: List[Dict[str, str]] = []
+    for index, raw_source in enumerate(raw_sources):
+        field = f"crossdb_selection.sources[{index}]"
+        if not isinstance(raw_source, dict):
+            raise StudyContextError(
+                {"error": "invalid_study_context_field", "field": field}
+            )
+        source_unknown = sorted(
+            set(raw_source) - {"source_id", "label", "database", "path_hash"}
+        )
+        if source_unknown:
+            raise StudyContextError(
+                {
+                    "error": "unknown_study_context_fields",
+                    "field": field,
+                    "fields": source_unknown,
+                }
+            )
+        path_hash = _text(
+            raw_source.get("path_hash"), field=f"{field}.path_hash", max_length=64
+        ).lower()
+        if not re.fullmatch(r"[0-9a-f]{12,64}", path_hash):
+            raise StudyContextError(
+                {
+                    "error": "invalid_study_context_identifier",
+                    "field": f"{field}.path_hash",
+                }
+            )
+        sources.append(
+            {
+                "source_id": _identifier(
+                    raw_source.get("source_id"), field=f"{field}.source_id"
+                ),
+                "label": _text(
+                    raw_source.get("label"), field=f"{field}.label", max_length=160
+                ),
+                "database": _text(
+                    raw_source.get("database"),
+                    field=f"{field}.database",
+                    max_length=64,
+                ),
+                "path_hash": path_hash,
+            }
+        )
+    selection_digest = _text(
+        value.get("selection_digest"),
+        field="crossdb_selection.selection_digest",
+        max_length=64,
+    ).lower()
+    expected_digest = hashlib.sha256(
+        json.dumps(
+            sources,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if selection_digest != expected_digest:
+        raise StudyContextError(
+            {
+                "error": "crossdb_selection_digest_mismatch",
+                "field": "crossdb_selection.selection_digest",
+            }
+        )
+    return {
+        "schema_version": schema_version,
+        "source_count": source_count,
+        "sources": sources,
+        "selection_digest": selection_digest,
+    }
+
+
 def _modules(value: Any) -> List[str]:
     return _text_list(value, field="modules", max_length=80)
 
@@ -531,6 +719,234 @@ def _confirmations(value: Any) -> Dict[str, bool]:
     return result
 
 
+def normalize_covariate_rationales(value: Any) -> Dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > _MAX_COLLECTION_ITEMS:
+        raise StudyContextError(
+            {
+                "error": "invalid_study_context_field_type",
+                "field": "covariate_rationales",
+                "expected": "object[string]",
+            }
+        )
+    result: Dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        key = _identifier(raw_key, field="covariate_rationales.key")
+        text = _text(
+            raw_value,
+            field=f"covariate_rationales.{key}",
+            max_length=_MAX_NESTED_TEXT,
+        )
+        if len(text) < 8:
+            raise StudyContextError(
+                {
+                    "error": "study_covariate_rationale_too_short",
+                    "field": f"covariate_rationales.{key}",
+                    "min_length": 8,
+                }
+            )
+        result[key] = text
+    return result
+
+
+def normalize_covariate_temporal_roles(value: Any) -> Dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > _MAX_COLLECTION_ITEMS:
+        raise StudyContextError(
+            {
+                "error": "invalid_study_context_field_type",
+                "field": "covariate_temporal_roles",
+                "expected": "object[string]",
+            }
+        )
+    result: Dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        key = _identifier(raw_key, field="covariate_temporal_roles.key")
+        role = _identifier(
+            raw_value,
+            field=f"covariate_temporal_roles.{key}",
+        )
+        if role not in _COVARIATE_TEMPORAL_ROLES:
+            raise StudyContextError(
+                {
+                    "error": "study_covariate_temporal_role_invalid",
+                    "field": f"covariate_temporal_roles.{key}",
+                    "allowed": sorted(_COVARIATE_TEMPORAL_ROLES),
+                }
+            )
+        result[key] = role
+    return result
+
+
+def normalize_execution_concepts(value: Any) -> Dict[str, Any]:
+    """Normalize exact source-concept identifiers separately from UI labels."""
+
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise StudyContextError(
+            {
+                "error": "invalid_study_context_field_type",
+                "field": "execution_concepts",
+                "expected": "object",
+            }
+        )
+    unknown = sorted(set(value) - _EXECUTION_CONCEPT_FIELDS)
+    if unknown:
+        raise StudyContextError(
+            {
+                "error": "unknown_study_context_fields",
+                "field": "execution_concepts",
+                "fields": unknown,
+            }
+        )
+    result: Dict[str, Any] = {}
+    for field in ("outcome", "primary_exposure"):
+        raw = value.get(field)
+        if raw not in (None, ""):
+            result[field] = _identifier(
+                raw,
+                field=f"execution_concepts.{field}",
+            )
+    if "covariates" in value:
+        raw_covariates = value.get("covariates")
+        if not isinstance(raw_covariates, list) or len(raw_covariates) > _MAX_COLLECTION_ITEMS:
+            raise StudyContextError(
+                {
+                    "error": "invalid_study_context_field",
+                    "field": "execution_concepts.covariates",
+                    "max_items": _MAX_COLLECTION_ITEMS,
+                }
+            )
+        covariates: List[str] = []
+        for raw in raw_covariates:
+            concept_id = _identifier(
+                raw,
+                field="execution_concepts.covariates",
+            )
+            if concept_id not in covariates:
+                covariates.append(concept_id)
+        result["covariates"] = covariates
+    return result
+
+
+def normalize_analysis_design(value: Any) -> Dict[str, str]:
+    """Normalize user-approved sampling and variance commitments.
+
+    StudyContext owns this scientific intent.  A data-source adapter may later
+    bind ``cluster_unit`` to a private physical coordinate, but neither the
+    browser nor Pi is allowed to guess that coordinate from prose.
+    """
+
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise StudyContextError(
+            {
+                "error": "invalid_study_context_field_type",
+                "field": "analysis_design",
+                "expected": "object",
+            }
+        )
+    unknown = sorted(set(value) - _ANALYSIS_DESIGN_FIELDS)
+    if unknown:
+        raise StudyContextError(
+            {
+                "error": "unknown_study_context_fields",
+                "field": "analysis_design",
+                "fields": unknown,
+            }
+        )
+    if not value:
+        return {}
+    missing = sorted(
+        field
+        for field in ("analysis_unit", "variance_estimator")
+        if not value.get(field)
+    )
+    if missing:
+        raise StudyContextError(
+            {
+                "error": "study_analysis_design_fields_required",
+                "field": "analysis_design",
+                "fields": missing,
+            }
+        )
+    analysis_unit = _identifier(
+        value.get("analysis_unit"), field="analysis_design.analysis_unit"
+    )
+    variance_estimator = _identifier(
+        value.get("variance_estimator"),
+        field="analysis_design.variance_estimator",
+    )
+    if analysis_unit not in _ANALYSIS_UNITS:
+        raise StudyContextError(
+            {
+                "error": "study_analysis_unit_unsupported",
+                "field": "analysis_design.analysis_unit",
+                "allowed": sorted(_ANALYSIS_UNITS),
+            }
+        )
+    if variance_estimator not in _VARIANCE_ESTIMATORS:
+        raise StudyContextError(
+            {
+                "error": "study_variance_estimator_unsupported",
+                "field": "analysis_design.variance_estimator",
+                "allowed": sorted(_VARIANCE_ESTIMATORS),
+            }
+        )
+    cluster_unit = ""
+    if value.get("cluster_unit") not in (None, ""):
+        cluster_unit = _identifier(
+            value.get("cluster_unit"), field="analysis_design.cluster_unit"
+        )
+        if cluster_unit not in _CLUSTER_UNITS:
+            raise StudyContextError(
+                {
+                    "error": "study_cluster_unit_unsupported",
+                    "field": "analysis_design.cluster_unit",
+                    "allowed": sorted(_CLUSTER_UNITS),
+                }
+            )
+    if variance_estimator == "cluster_robust" and not cluster_unit:
+        raise StudyContextError(
+            {
+                "error": "study_cluster_unit_required",
+                "field": "analysis_design.cluster_unit",
+            }
+        )
+    if variance_estimator != "cluster_robust" and cluster_unit:
+        raise StudyContextError(
+            {
+                "error": "study_cluster_unit_not_applicable",
+                "field": "analysis_design.cluster_unit",
+            }
+        )
+    return {
+        "analysis_unit": analysis_unit,
+        "variance_estimator": variance_estimator,
+        **({"cluster_unit": cluster_unit} if cluster_unit else {}),
+    }
+
+
+def normalize_sensitivity_specs(value: Any) -> List[Dict[str, Any]]:
+    """Normalize typed user-reviewed sensitivities at the StudyContext owner."""
+
+    try:
+        specs = normalize_prespecified_sensitivities(value)
+    except (TypeError, ValueError) as exc:
+        raise StudyContextError(
+            {
+                "error": "study_sensitivity_specs_invalid",
+                "field": "sensitivity_specs",
+                "reason": str(exc)[:_MAX_NESTED_TEXT],
+            }
+        ) from exc
+    return [spec.model_dump(mode="json") for spec in specs]
+
+
 def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
     return {
         "id": context_id,
@@ -539,11 +955,18 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "question": "",
         "purpose": "",
         "data_source": None,
+        "crossdb_selection": {},
         "cohort": {},
         "modules": [],
         "outcome": "",
         "primary_exposure": "",
         "covariates": [],
+        "covariate_selection": "planner_selectable",
+        "covariate_rationales": {},
+        "covariate_temporal_roles": {},
+        "execution_concepts": {},
+        "analysis_design": {},
+        "sensitivity_specs": [],
         "time_window": {},
         "comparator": "",
         "export_format": "",
@@ -553,12 +976,17 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "active_job_id": None,
         "confirmations": {},
         "idea_handoff": {},
+        "literature_authority": {},
         "created_at": timestamp,
         "updated_at": timestamp,
     }
 
 
-def _sanitize_patch(raw: Any) -> Dict[str, Any]:
+def _sanitize_patch(
+    raw: Any,
+    *,
+    allow_literature_authority: bool = False,
+) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise StudyContextError({"error": "study_context_body_required"})
     _enforce_context_budget(raw)
@@ -577,11 +1005,50 @@ def _sanitize_patch(raw: Any) -> Dict[str, Any]:
             patch[field] = _text(raw.get(field), field=field, max_length=max_length)
     if "data_source" in raw:
         patch["data_source"] = _data_source(raw.get("data_source"))
+    if "crossdb_selection" in raw:
+        patch["crossdb_selection"] = _crossdb_selection(
+            raw.get("crossdb_selection")
+        )
     if "modules" in raw:
         patch["modules"] = _modules(raw.get("modules"))
     if "covariates" in raw:
         patch["covariates"] = _text_list(
             raw.get("covariates"), field="covariates", max_length=160
+        )
+    if "covariate_selection" in raw:
+        selection = _identifier(
+            raw.get("covariate_selection"),
+            field="covariate_selection",
+            default="planner_selectable",
+        )
+        if selection not in _COVARIATE_SELECTIONS:
+            raise StudyContextError(
+                {
+                    "error": "study_covariate_selection_invalid",
+                    "field": "covariate_selection",
+                    "allowed": sorted(_COVARIATE_SELECTIONS),
+                }
+            )
+        patch["covariate_selection"] = selection
+    if "covariate_rationales" in raw:
+        patch["covariate_rationales"] = normalize_covariate_rationales(
+            raw.get("covariate_rationales")
+        )
+    if "covariate_temporal_roles" in raw:
+        patch["covariate_temporal_roles"] = normalize_covariate_temporal_roles(
+            raw.get("covariate_temporal_roles")
+        )
+    if "execution_concepts" in raw:
+        patch["execution_concepts"] = normalize_execution_concepts(
+            raw.get("execution_concepts")
+        )
+    if "analysis_design" in raw:
+        patch["analysis_design"] = normalize_analysis_design(
+            raw.get("analysis_design")
+        )
+    if "sensitivity_specs" in raw:
+        patch["sensitivity_specs"] = normalize_sensitivity_specs(
+            raw.get("sensitivity_specs")
         )
     if "cohort" in raw:
         patch["cohort"] = _cohort(raw.get("cohort"))
@@ -628,6 +1095,39 @@ def _sanitize_patch(raw: Any) -> Dict[str, Any]:
                 }
             )
         patch["idea_handoff"] = handoff
+    if "literature_authority" in raw:
+        if not allow_literature_authority:
+            raise StudyContextError(
+                {
+                    "error": "study_literature_authority_server_owned",
+                    "field": "literature_authority",
+                }
+            )
+        authority = _schema_object(
+            raw.get("literature_authority"),
+            field="literature_authority",
+            schema=_LITERATURE_AUTHORITY_SCHEMA,
+        )
+        for field in ("receipt_sha256", "study_configuration_sha256"):
+            digest = str(authority.get(field) or "")
+            if digest and not re.fullmatch(r"[a-f0-9]{64}", digest):
+                raise StudyContextError(
+                    {
+                        "error": "invalid_literature_authority_digest",
+                        "field": f"literature_authority.{field}",
+                    }
+                )
+        count = authority.get("result_count")
+        if count is not None and (
+            isinstance(count, bool) or not isinstance(count, int) or count < 0
+        ):
+            raise StudyContextError(
+                {
+                    "error": "invalid_literature_authority_count",
+                    "field": "literature_authority.result_count",
+                }
+            )
+        patch["literature_authority"] = authority
     for field, default in (("current_stage", "plan"), ("last_route", "entry")):
         if field in raw:
             patch[field] = _identifier(raw.get(field), field=field, default=default)
@@ -648,7 +1148,8 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
         _enforce_context_budget(row)
         _reject_row_level_metadata(row)
         patch = _sanitize_patch(
-            {field: row[field] for field in _CONTEXT_FIELDS if field in row}
+            {field: row[field] for field in _CONTEXT_FIELDS if field in row},
+            allow_literature_authority=True,
         )
         context_id = patch.pop("id")
         created_at = (
@@ -666,6 +1167,124 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
         contexts.append(context)
     return contexts
+
+
+def _validate_covariate_decision_contract(context: Dict[str, Any]) -> None:
+    roster = set(context.get("covariates") or [])
+    rationale_keys = set((context.get("covariate_rationales") or {}).keys())
+    temporal_keys = set((context.get("covariate_temporal_roles") or {}).keys())
+    unbound = sorted((rationale_keys | temporal_keys) - roster)
+    if unbound:
+        raise StudyContextError(
+            {
+                "error": "study_covariate_decision_roster_mismatch",
+                "field": "covariate_rationales",
+                "unbound": unbound,
+            }
+        )
+    if context.get("covariate_selection") != "exact" and (
+        rationale_keys or temporal_keys
+    ):
+        raise StudyContextError(
+            {
+                "error": "study_covariate_decision_requires_exact_roster",
+                "field": "covariate_selection",
+            }
+        )
+
+
+def analysis_dependence_finding(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return one owner-issued conflict between cohort and inference authority.
+
+    A stay-level model may treat rows as independent only when the configured
+    cohort removes repeat ICU stays. If repeat stays are explicitly retained,
+    ordinary model-based and heteroskedasticity-robust variance do not close
+    within-patient dependence; the only currently expressible closure is a
+    patient-clustered estimator. This function chooses no design. It prevents
+    prose or an executor limitation from weakening a user-owned commitment.
+    """
+
+    raw_design = context.get("analysis_design")
+    design = raw_design if isinstance(raw_design, dict) else {}
+    raw_cohort = context.get("cohort")
+    cohort = raw_cohort if isinstance(raw_cohort, dict) else {}
+    if (
+        not design
+        or design.get("analysis_unit") != "icu_stay"
+        or cohort.get("exclude_readmissions") is not False
+    ):
+        return None
+    if (
+        design.get("variance_estimator") == "cluster_robust"
+        and design.get("cluster_unit") == "patient"
+    ):
+        return None
+    return {
+        "error": "study_repeated_stay_dependence_unaddressed",
+        "field": "analysis_design",
+        "analysis_unit": "icu_stay",
+        "exclude_readmissions": False,
+        "required_design": {
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "patient",
+        },
+        "alternative": (
+            "set cohort.exclude_readmissions=true in a new "
+            "user-authorized revision"
+        ),
+    }
+
+
+def materialization_window_finding(
+    context: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Return a conflict between Web wording and the executable outer window.
+
+    ``time_window`` is the physical feature-materialization window.  The
+    current cohort materializer interprets its numeric offsets from ICU
+    admission.  A phenotype's clinical time zero (for example an event onset)
+    comes from the concept owner, while a whole-stay outcome keeps its own
+    outcome semantics.  Treating either of those as this physical anchor would
+    silently execute different science from the conversation.
+
+    Missing fields are allowed while a conversation is incomplete.  This
+    finding covers only an explicit, unsupported commitment so legacy partial
+    contexts remain readable and the workflow can ask for the missing slot.
+    """
+
+    raw_window = context.get("time_window")
+    window = raw_window if isinstance(raw_window, dict) else {}
+    raw_anchor = str(window.get("anchor") or "").strip()
+    if not raw_anchor:
+        return None
+    normalized = re.sub(
+        r"\s+",
+        " ",
+        raw_anchor.lower().replace("-", " ").replace("_", " "),
+    ).strip()
+    if normalized in {"icu admission", "admission"}:
+        return None
+    return {
+        "error": "study_materialization_window_anchor_unsupported",
+        "field": "time_window.anchor",
+        "configured_anchor": raw_anchor,
+        "supported_anchor": "icu_admission",
+        "window_role": "outer_observation_window",
+        "clinical_definition_anchor_owner": "concept_clinical_contract",
+        "outcome_horizon_owner": "execution_concepts.outcome",
+    }
+
+
+def _validate_analysis_dependence_contract(context: Dict[str, Any]) -> None:
+    finding = analysis_dependence_finding(context)
+    if finding is not None:
+        raise StudyContextError(finding)
+
+
+def _validate_materialization_window_contract(context: Dict[str, Any]) -> None:
+    finding = materialization_window_finding(context)
+    if finding is not None:
+        raise StudyContextError(finding)
 
 
 def list_contexts() -> Dict[str, Any]:
@@ -710,8 +1329,12 @@ def upsert_context(
     expected_revision: Optional[int] = None,
     require_revision: bool = False,
     lifecycle_write: bool = True,
+    _server_literature_authority_write: bool = False,
 ) -> Dict[str, Any]:
-    patch = _sanitize_patch(raw_context)
+    patch = _sanitize_patch(
+        raw_context,
+        allow_literature_authority=_server_literature_authority_write,
+    )
     if expected_revision is not None and (
         isinstance(expected_revision, bool)
         or not isinstance(expected_revision, int)
@@ -775,8 +1398,21 @@ def upsert_context(
             if current is not None
             else _default_context(context_id, timestamp)
         )
+        if current is not None and "literature_authority" not in patch:
+            current_scope = literature_search_scope_sha256(current)
+            proposed_scope = literature_search_scope_sha256({**current, **patch})
+            if proposed_scope != current_scope:
+                # A Web search receipt is authority only for the exact
+                # question/source/cohort/design it was issued against.  Clear
+                # it in the same atomic write as any scientific configuration
+                # change so a later Plan can never inherit stale prior art.
+                patch["literature_authority"] = {}
         if patch or current is None:
             context.update(patch)
+            _validate_covariate_decision_contract(context)
+            _validate_analysis_dependence_contract(context)
+            if "time_window" in patch:
+                _validate_materialization_window_contract(context)
             context["revision"] = current_revision + 1
             context["updated_at"] = timestamp
         contexts = [row for row in contexts if row.get("id") != context_id]
@@ -802,6 +1438,32 @@ def upsert_context(
             }
         )
         return context
+
+
+def bind_literature_authority(
+    context_id: str,
+    authority: Dict[str, Any],
+    *,
+    expected_revision: int,
+) -> Dict[str, Any]:
+    """Attach one server-issued literature receipt with revision CAS.
+
+    Browser and model callers cannot populate this field through the generic
+    metadata route.  The literature-authority owner creates the binding; this
+    StudyContext owner alone commits it to the scientific configuration.
+    """
+
+    return upsert_context(
+        {
+            "id": _identifier(context_id, field="id"),
+            "literature_authority": authority,
+        },
+        active=True,
+        expected_revision=expected_revision,
+        require_revision=True,
+        lifecycle_write=False,
+        _server_literature_authority_write=True,
+    )
 
 
 def handoff_context(
@@ -956,9 +1618,18 @@ def build_agent_context_binding(
                 "title",
                 "purpose",
                 "data_source",
+                "crossdb_selection",
                 "cohort",
                 "modules",
                 "outcome",
+                "primary_exposure",
+                "covariates",
+                "covariate_selection",
+                "covariate_rationales",
+                "covariate_temporal_roles",
+                "execution_concepts",
+                "analysis_design",
+                "sensitivity_specs",
                 "time_window",
                 "comparator",
                 "export_format",
@@ -968,13 +1639,61 @@ def build_agent_context_binding(
                 "active_job_id",
                 "confirmations",
                 "idea_handoff",
+                "literature_authority",
             )
         },
     }
 
 
+def _scientific_fields_sha256(
+    context: Dict[str, Any],
+    *,
+    fields: tuple[str, ...],
+) -> str:
+    sanitized = _sanitize_patch(
+        {key: context.get(key) for key in fields},
+        allow_literature_authority=True,
+    )
+    encoded = json.dumps(
+        sanitized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def literature_search_scope_sha256(context: Dict[str, Any]) -> str:
+    """Digest the exact scientific scope a Web literature receipt governs.
+
+    The receipt binding itself is intentionally excluded.  Including it would
+    make the digest recursive and would prevent a stable comparison before and
+    after the server attaches that receipt to the StudyContext.
+    """
+
+    return _scientific_fields_sha256(context, fields=_LITERATURE_SCOPE_FIELDS)
+
+
+def scientific_configuration_sha256(context: Dict[str, Any]) -> str:
+    """Digest only fields that can change a Research Agent scientific run.
+
+    Lifecycle coordinates such as stage, route, revision, and active job are
+    intentionally excluded.  A plan can therefore survive host bookkeeping,
+    but not a changed question, source, cohort, analysis design, or evidence
+    authority.
+    """
+
+    return _scientific_fields_sha256(
+        context,
+        fields=_SCIENTIFIC_CONFIGURATION_FIELDS,
+    )
+
+
 __all__ = [
     "StudyContextError",
+    "analysis_dependence_finding",
+    "materialization_window_finding",
+    "bind_literature_authority",
     "build_agent_context_binding",
     "clear_active_job_if",
     "get_active_context",
@@ -982,5 +1701,10 @@ __all__ = [
     "handoff_context",
     "list_contexts",
     "normalize_path",
+    "normalize_analysis_design",
+    "normalize_sensitivity_specs",
+    "normalize_execution_concepts",
+    "literature_search_scope_sha256",
+    "scientific_configuration_sha256",
     "upsert_context",
 ]

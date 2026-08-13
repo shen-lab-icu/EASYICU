@@ -8,9 +8,13 @@ owners' receipts.
 
 from __future__ import annotations
 
-from typing import Any, List, Literal, Mapping, Optional
+import hashlib
+
+from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from easyicu.webserver import study_contexts as study_context_owner
 
 WorkflowStatus = Literal[
     "blocked",
@@ -41,6 +45,20 @@ class ResearchWorkflowStage(BaseModel):
     reason_code: str
 
 
+class StudySetupReceipt(BaseModel):
+    """Path-free identity and configuration receipt for Copilot review."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.pi-study-setup-receipt/1"] = (
+        "easyicu.pi-study-setup-receipt/1"
+    )
+    study_context_id: str
+    revision: int = Field(ge=0)
+    configured_fields: List[str] = Field(default_factory=list, max_length=24)
+    configuration: Mapping[str, Any]
+
+
 class ResearchWorkflowSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -57,6 +75,8 @@ class ResearchWorkflowSnapshot(BaseModel):
     pi_role: Literal["conversation_and_orchestration"] = (
         "conversation_and_orchestration"
     )
+    study_setup_receipt: StudySetupReceipt
+    plan_review_summary: Optional[Mapping[str, Any]] = None
 
 
 def _has_mapping(value: Any) -> bool:
@@ -99,6 +119,22 @@ def registered_export_matches_study(
 def _setup_missing(
     study: Mapping[str, Any], *, active_export_present: bool
 ) -> List[str]:
+    raw_execution = study.get("execution_concepts")
+    execution = raw_execution if isinstance(raw_execution, Mapping) else {}
+    raw_window = study.get("time_window")
+    time_window = raw_window if isinstance(raw_window, Mapping) else {}
+    human_outcome = bool(str(study.get("outcome") or "").strip())
+    human_exposure = bool(str(study.get("primary_exposure") or "").strip())
+    executable_exposure = bool(
+        str(execution.get("primary_exposure") or "").strip()
+    )
+    executable_outcome = bool(str(execution.get("outcome") or "").strip())
+    analysis_design_present = _has_mapping(study.get("analysis_design"))
+    dependence_finding = study_context_owner.analysis_dependence_finding(dict(study))
+    window_finding = study_context_owner.materialization_window_finding(dict(study))
+    window_hours = time_window.get("hours")
+    if window_hours is None:
+        window_hours = time_window.get("observation_hours")
     missing: List[str] = []
     checks = (
         ("question", bool(str(study.get("question") or "").strip())),
@@ -108,8 +144,41 @@ def _setup_missing(
         ),
         ("cohort", _has_mapping(study.get("cohort"))),
         ("modules", bool(study.get("modules"))),
-        ("outcome", bool(str(study.get("outcome") or "").strip())),
-        ("time_window", _has_mapping(study.get("time_window"))),
+        ("outcome", human_outcome),
+        *(
+            (("execution_concepts.outcome", executable_outcome),)
+            if human_outcome
+            else ()
+        ),
+        *(
+            (
+                ("execution_concepts.primary_exposure", executable_exposure),
+                ("analysis_design", analysis_design_present),
+                *(
+                    (("analysis_design.dependence", False),)
+                    if analysis_design_present and dependence_finding is not None
+                    else ()
+                ),
+            )
+            if human_exposure or executable_exposure
+            else ()
+        ),
+        *(
+            (("time_window", False),)
+            if not time_window
+            else (
+                ("time_window.hours", window_hours is not None),
+                (
+                    "time_window.anchor",
+                    bool(str(time_window.get("anchor") or "").strip()),
+                ),
+                *(
+                    (("time_window.anchor_supported", False),)
+                    if window_finding is not None
+                    else ()
+                ),
+            )
+        ),
         (
             "export_format",
             bool(str(study.get("export_format") or "").strip()),
@@ -125,12 +194,108 @@ def _setup_missing(
     return missing
 
 
+def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
+    """Project only bounded setup fields; never return a local filesystem path."""
+
+    raw_source = study.get("data_source")
+    source = raw_source if isinstance(raw_source, Mapping) else {}
+    source_path = str(source.get("path") or "").strip()
+    safe_source: Dict[str, Any] = {
+        key: str(source.get(key) or "").strip()
+        for key in ("label", "database")
+        if str(source.get(key) or "").strip()
+    }
+    if source_path:
+        safe_source["path_hash"] = hashlib.sha256(
+            source_path.encode("utf-8")
+        ).hexdigest()[:16]
+
+    raw_crossdb = study.get("crossdb_selection")
+    crossdb = dict(raw_crossdb) if isinstance(raw_crossdb, Mapping) else {}
+    raw_cohort = study.get("cohort")
+    cohort = dict(raw_cohort) if isinstance(raw_cohort, Mapping) else {}
+    raw_window = study.get("time_window")
+    time_window = dict(raw_window) if isinstance(raw_window, Mapping) else {}
+    raw_execution = study.get("execution_concepts")
+    execution_concepts = (
+        dict(raw_execution) if isinstance(raw_execution, Mapping) else {}
+    )
+    raw_analysis_design = study.get("analysis_design")
+    analysis_design = (
+        dict(raw_analysis_design)
+        if isinstance(raw_analysis_design, Mapping)
+        else {}
+    )
+    raw_rationales = study.get("covariate_rationales")
+    covariate_rationales = (
+        dict(raw_rationales) if isinstance(raw_rationales, Mapping) else {}
+    )
+    raw_temporal_roles = study.get("covariate_temporal_roles")
+    covariate_temporal_roles = (
+        dict(raw_temporal_roles)
+        if isinstance(raw_temporal_roles, Mapping)
+        else {}
+    )
+    raw_confirmations = study.get("confirmations")
+    confirmations = (
+        dict(raw_confirmations)
+        if isinstance(raw_confirmations, Mapping)
+        else {}
+    )
+    configuration: Dict[str, Any] = {
+        "question": str(study.get("question") or "").strip(),
+        "purpose": str(study.get("purpose") or "").strip(),
+        "data_source": safe_source,
+        "crossdb_selection": crossdb,
+        "cohort": cohort,
+        "modules": [
+            str(value)
+            for value in (study.get("modules") or [])
+            if str(value).strip()
+        ],
+        "outcome": str(study.get("outcome") or "").strip(),
+        "primary_exposure": str(study.get("primary_exposure") or "").strip(),
+        "covariates": [
+            str(value)
+            for value in (study.get("covariates") or [])
+            if str(value).strip()
+        ],
+        "covariate_selection": str(
+            study.get("covariate_selection") or "planner_selectable"
+        ).strip(),
+        "covariate_rationales": covariate_rationales,
+        "covariate_temporal_roles": covariate_temporal_roles,
+        "execution_concepts": execution_concepts,
+        "analysis_design": analysis_design,
+        "sensitivity_specs": [
+            dict(value)
+            for value in (study.get("sensitivity_specs") or [])
+            if isinstance(value, Mapping)
+        ],
+        "time_window": time_window,
+        "comparator": str(study.get("comparator") or "").strip(),
+        "export_format": str(study.get("export_format") or "").strip(),
+        "analysis_goal": str(study.get("analysis_goal") or "").strip(),
+        "confirmations": confirmations,
+    }
+    configured_fields = [
+        key for key, value in configuration.items() if bool(value)
+    ]
+    return StudySetupReceipt(
+        study_context_id=str(study.get("id") or ""),
+        revision=int(study.get("revision") or 0),
+        configured_fields=configured_fields,
+        configuration=configuration,
+    )
+
+
 def build_research_workflow_snapshot(
     *,
     study: Optional[Mapping[str, Any]],
     active_export_present: bool,
     active_job: Optional[Mapping[str, Any]],
     latest_run: Optional[Mapping[str, Any]],
+    plan_review_authority: Optional[Mapping[str, Any]] = None,
 ) -> ResearchWorkflowSnapshot:
     """Compile owner receipts into one deterministic Copilot workflow state."""
 
@@ -195,10 +360,142 @@ def build_research_workflow_snapshot(
         for item in (run_row.get("pending_review_reason_codes") or [])
         if str(item).strip()
     }
-    plan_review_pending = bool(
+    plan_review_codes = {
+        "operator_plan_approval_required",
+        "plan_scientific_changes_required",
+    }
+    active_plan_review_codes = sorted(
+        pending_review_reason_codes & plan_review_codes
+    )
+    plan_review_declared = bool(
         has_plan
         and str(run_row.get("run_status") or "") == "human_review_pending"
-        and "operator_plan_approval_required" in pending_review_reason_codes
+        and active_plan_review_codes
+    )
+    review_authority = (
+        plan_review_authority
+        if isinstance(plan_review_authority, Mapping)
+        else {}
+    )
+    raw_scientific_review = review_authority.get("scientific_plan_review")
+    raw_scientific_review = (
+        raw_scientific_review
+        if isinstance(raw_scientific_review, Mapping)
+        else {}
+    )
+    dimension_scores = raw_scientific_review.get("dimension_scores")
+    dimension_scores = (
+        dimension_scores if isinstance(dimension_scores, Mapping) else {}
+    )
+    review_findings = raw_scientific_review.get("findings")
+    review_findings = review_findings if isinstance(review_findings, list) else []
+    raw_facts = raw_scientific_review.get("facts")
+    raw_facts = raw_facts if isinstance(raw_facts, Mapping) else {}
+    raw_remediation_buckets = raw_facts.get("remediation_buckets")
+    raw_remediation_buckets = (
+        raw_remediation_buckets
+        if isinstance(raw_remediation_buckets, Mapping)
+        else {}
+    )
+    plan_review_summary = (
+        {
+            "status": str(raw_scientific_review.get("status") or "")[:40],
+            "score": raw_scientific_review.get("score"),
+            "top_journal_candidate": bool(
+                raw_scientific_review.get("top_journal_candidate")
+            ),
+            "review_scope": str(
+                raw_scientific_review.get("review_scope") or "pre_execution_plan"
+            )[:80],
+            "rendered_outputs_assessed": bool(
+                raw_scientific_review.get("rendered_outputs_assessed")
+            ),
+            "dimension_scores": {
+                str(key)[:80]: int(value)
+                for key, value in list(dimension_scores.items())[:12]
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            },
+            "finding_codes": [
+                str(item.get("code") or "")[:120]
+                for item in review_findings[:40]
+                if isinstance(item, Mapping) and str(item.get("code") or "").strip()
+            ],
+            "authorization_questions": [
+                {
+                    "code": str(item.get("code") or "")[:120],
+                    "question": str(item.get("authorization_question") or "")[:1_200],
+                }
+                for item in review_findings[:40]
+                if isinstance(item, Mapping)
+                and bool(item.get("requires_user_authorization"))
+                and str(item.get("authorization_question") or "").strip()
+            ],
+            "remediation_buckets": {
+                route: [
+                    str(code)[:120]
+                    for code in (
+                        raw_remediation_buckets.get(route)
+                        if isinstance(raw_remediation_buckets.get(route), list)
+                        else []
+                    )[:40]
+                    if str(code).strip()
+                ]
+                for route in (
+                    "agent_plan_revision",
+                    "study_authority_change",
+                    "external_evidence",
+                    "independent_review",
+                )
+            },
+        }
+        if raw_scientific_review
+        else None
+    )
+    current_scientific_digest = (
+        study_context_owner.scientific_configuration_sha256(study_row)
+    )
+    planned_scientific_digest = str(
+        review_authority.get("scientific_configuration_sha256")
+        or run_row.get("scientific_configuration_sha256")
+        or ""
+    ).strip()
+    review_authority_available = bool(
+        review_authority
+        and str(review_authority.get("run_id") or "").strip()
+        == str(run_row.get("run_id") or "").strip()
+        and bool(review_authority.get("resumable_here"))
+    )
+    plan_configuration_matches = bool(
+        len(planned_scientific_digest) == 64
+        and planned_scientific_digest == current_scientific_digest
+    )
+    plan_review_pending = bool(
+        plan_review_declared
+        and review_authority_available
+        and plan_configuration_matches
+    )
+    live_plan_reason = (
+        "plan_scientific_changes_required"
+        if "plan_scientific_changes_required" in active_plan_review_codes
+        else "operator_plan_approval_required"
+    )
+    plan_review_reason_code = (
+        live_plan_reason
+        if plan_review_pending
+        else "plan_configuration_superseded"
+        if plan_review_declared
+        and planned_scientific_digest
+        and not plan_configuration_matches
+        else "plan_review_not_resumable"
+        if plan_review_declared
+        else ""
+    )
+    # A live, digest-matching review is an approval gate. A stale or
+    # non-resumable plan remains historical evidence, but the next governed
+    # action is a fresh planning run rather than approval or in-place editing.
+    plan_attention_required = bool(plan_review_pending)
+    plan_regeneration_required = bool(
+        plan_review_declared and not plan_review_pending and not analysis_running
     )
     analysis_complete = bool(
         full_run
@@ -211,6 +508,24 @@ def build_research_workflow_snapshot(
     )
     pipeline_attempt_blocked = bool(
         full_run and pipeline_run and pipeline_receipt and run_blocked
+    )
+    # A terminal fail-closed run is historical evidence, not a completed
+    # analysis stage.  The ordinary Copilot journey must return to a fresh Plan
+    # confirmation instead of advancing to interpretation (where the user can
+    # only be told that the old run failed).  The failed run stays immutable;
+    # a newly authorized provider turn receives a new run id and Plan review.
+    failed_pipeline_regeneration_required = bool(
+        pipeline_attempt_blocked
+        and not analysis_running
+        and not plan_review_declared
+    )
+    plan_regeneration_required = bool(
+        plan_regeneration_required or failed_pipeline_regeneration_required
+    )
+    plan_regeneration_reason_code = (
+        "failed_pipeline_requires_fresh_plan"
+        if failed_pipeline_regeneration_required
+        else plan_review_reason_code
     )
     legacy_full_scaffold = bool(full_run and not pipeline_run and has_plan)
 
@@ -286,11 +601,13 @@ def build_research_workflow_snapshot(
                 "blocked"
                 if idea_blocks_execution
                 else "review_required"
-                if plan_review_pending
-                else "complete"
-                if has_plan
+                if plan_attention_required
                 else "running"
                 if analysis_running
+                else "ready"
+                if plan_regeneration_required
+                else "complete"
+                if has_plan
                 else "ready"
                 if active_export_present and setup_ready
                 else "blocked"
@@ -299,12 +616,14 @@ def build_research_workflow_snapshot(
             reason_code=(
                 "idea_feasibility_refresh_required"
                 if idea_blocks_execution
-                else "operator_plan_approval_required"
-                if plan_review_pending
-                else "agent_plan_ready"
-                if has_plan
+                else plan_review_reason_code
+                if plan_attention_required
                 else "analysis_running"
                 if analysis_running
+                else plan_regeneration_reason_code
+                if plan_regeneration_required
+                else "agent_plan_ready"
+                if has_plan
                 else "provider_plan_ready"
                 if preflight_complete
                 else "plan_ready"
@@ -319,13 +638,13 @@ def build_research_workflow_snapshot(
                 "blocked"
                 if idea_blocks_execution
                 else "blocked"
-                if plan_review_pending
+                if plan_attention_required or plan_regeneration_required
+                else "running"
+                if analysis_running
                 else "complete"
                 if analysis_complete and not run_blocked
                 else "review_required"
                 if pipeline_attempt_blocked
-                else "running"
-                if analysis_running
                 else "ready"
                 if active_export_present and setup_ready
                 else "blocked"
@@ -334,16 +653,20 @@ def build_research_workflow_snapshot(
             reason_code=(
                 "idea_feasibility_refresh_required"
                 if idea_blocks_execution
-                else "operator_plan_approval_required"
-                if plan_review_pending
+                else (
+                    plan_review_reason_code
+                    if plan_attention_required
+                    else plan_regeneration_reason_code
+                )
+                if plan_attention_required or plan_regeneration_required
+                else "analysis_running"
+                if analysis_running
                 else "validated_analysis_ready"
                 if analysis_complete and not run_blocked
                 else "analysis_gate_blocked"
                 if pipeline_attempt_blocked
                 else "research_pipeline_required"
                 if legacy_full_scaffold
-                else "analysis_running"
-                if analysis_running
                 else "analysis_ready"
                 if active_export_present and setup_ready
                 else "active_export_or_setup_required"
@@ -376,23 +699,23 @@ def build_research_workflow_snapshot(
     ]
 
     required = [row for row in stages if row.id != "idea"]
-    completed = sum(
-        1 for row in required if row.status in {"complete", "review_required"}
-    )
-    if plan_review_pending:
-        completed -= 1
+    # ``review_required`` is an outstanding human action, never a completed
+    # stage.  Counting it as done made analysis-only runs appear as 7/7 even
+    # though their interpretation and manuscript were still awaiting review.
+    completed = sum(1 for row in required if row.status == "complete")
+    if plan_attention_required or plan_regeneration_required:
         next_stage = next(row for row in required if row.id == "plan")
     else:
         next_stage = next(
             (
                 row
                 for row in required
-                if row.status not in {"complete", "review_required"}
+                if row.status != "complete"
             ),
             stages[-1],
         )
     next_action = next_stage.reason_code
-    if all(row.status in {"complete", "review_required"} for row in required):
+    if all(row.status == "complete" for row in required):
         next_action = "human_review_and_reporting"
     return ResearchWorkflowSnapshot(
         current_stage=next_stage.id,
@@ -400,12 +723,15 @@ def build_research_workflow_snapshot(
         missing_setup_fields=missing,
         stages=stages,
         completed_required_stages=completed,
+        study_setup_receipt=_safe_study_setup_receipt(study_row),
+        plan_review_summary=plan_review_summary,
     )
 
 
 __all__ = [
     "ResearchWorkflowSnapshot",
     "ResearchWorkflowStage",
+    "StudySetupReceipt",
     "WorkflowStatus",
     "active_export_matches_study",
     "registered_export_matches_study",

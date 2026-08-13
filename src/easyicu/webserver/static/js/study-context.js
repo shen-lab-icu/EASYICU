@@ -11,8 +11,10 @@
   const DIRTY_STORAGE_KEY = 'easyicu.studyContext.dirty.v1';
   const EVENT_NAME = 'easyicu:study-context';
   const PERSISTED_FIELDS = [
-    'id', 'title', 'question', 'purpose', 'data_source', 'cohort', 'modules',
-    'outcome', 'primary_exposure', 'covariates', 'time_window', 'comparator',
+    'id', 'title', 'question', 'purpose', 'data_source', 'crossdb_selection', 'cohort', 'modules',
+    'outcome', 'primary_exposure', 'covariates', 'covariate_selection',
+    'covariate_rationales', 'covariate_temporal_roles', 'execution_concepts',
+    'analysis_design', 'sensitivity_specs', 'time_window', 'comparator',
     'export_format', 'analysis_goal', 'current_stage', 'last_route',
     'active_job_id', 'confirmations', 'idea_handoff',
   ];
@@ -51,6 +53,12 @@
   };
   const TIME_WINDOW_SCHEMA = {
     hours: 'number', observation_hours: 'number', anchor: 'text', preset: 'text', label: 'text',
+  };
+  const EXECUTION_CONCEPTS_SCHEMA = {
+    outcome: 'text', primary_exposure: 'text', covariates: 'text_list',
+  };
+  const ANALYSIS_DESIGN_SCHEMA = {
+    analysis_unit: 'text', variance_estimator: 'text', cluster_unit: 'text',
   };
   const IDEA_HANDOFF_SCHEMA = {
     schema_version: 'text', run_id: 'text', idea_id: 'text',
@@ -157,6 +165,29 @@
     return result;
   }
 
+  function cleanSensitivitySpecs(value) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 16).map(candidate => {
+      const raw = cleanObject(candidate);
+      const row = {
+        spec_id: metadataText(raw.spec_id, 80),
+        axis: metadataText(raw.axis, 40),
+        strategy: metadataText(raw.strategy, 80),
+        execution_variables: Array.from(new Set(cleanList(raw.execution_variables)
+          .slice(0, 16)
+          .filter(item => typeof item === 'string')
+          .map(item => metadataText(item, 80))
+          .filter(Boolean))),
+        require_alive_at_landmark: raw.require_alive_at_landmark === true,
+        exclude_negative_event_times: raw.exclude_negative_event_times === true,
+      };
+      if (typeof raw.landmark_hours === 'number' && Number.isFinite(raw.landmark_hours)) {
+        row.landmark_hours = raw.landmark_hours;
+      }
+      return row;
+    }).filter(row => row.spec_id && row.axis && row.strategy);
+  }
+
   function cleanDataSource(value) {
     const source = cleanObject(value);
     const clean = {
@@ -165,6 +196,31 @@
       database: metadataText(source.database, 64),
     };
     return clean.path || clean.label || clean.database ? clean : null;
+  }
+
+  function cleanCrossdbSelection(value) {
+    const raw = cleanObject(value);
+    if (!Object.keys(raw).length) return {};
+    const sources = cleanList(raw.sources).slice(0, 64).map(source => {
+      const row = cleanObject(source);
+      return {
+        source_id: metadataText(row.source_id, 80),
+        label: metadataText(row.label, 160),
+        database: metadataText(row.database, 64),
+        path_hash: metadataText(row.path_hash, 64).toLowerCase(),
+      };
+    }).filter(source => source.source_id && /^[0-9a-f]{12,64}$/.test(source.path_hash));
+    const sourceCount = Number(raw.source_count);
+    const digest = metadataText(raw.selection_digest, 64).toLowerCase();
+    if (raw.schema_version !== 'crossdb-selection-v1'
+        || !Number.isInteger(sourceCount) || sourceCount < 2
+        || sourceCount !== sources.length || !/^[0-9a-f]{64}$/.test(digest)) return {};
+    return {
+      schema_version: 'crossdb-selection-v1',
+      source_count: sourceCount,
+      sources,
+      selection_digest: digest,
+    };
   }
 
   function normalize(value) {
@@ -179,11 +235,18 @@
       question,
       purpose: metadataText(raw.purpose, 800),
       data_source: cleanDataSource(raw.data_source),
+      crossdb_selection: cleanCrossdbSelection(raw.crossdb_selection),
       cohort: cleanSchemaObject(raw.cohort, COHORT_SCHEMA),
       modules: Array.from(new Set(cleanList(raw.modules).slice(0, 64).filter(item => typeof item === 'string').map(item => metadataText(item, 80)).filter(Boolean))),
       outcome: metadataText(raw.outcome, 500),
       primary_exposure: metadataText(raw.primary_exposure, 160),
       covariates: Array.from(new Set(cleanList(raw.covariates).slice(0, 64).filter(item => typeof item === 'string').map(item => metadataText(item, 160)).filter(Boolean))),
+      covariate_selection: ['planner_selectable', 'exact'].includes(text(raw.covariate_selection)) ? text(raw.covariate_selection) : 'planner_selectable',
+      covariate_rationales: Object.fromEntries(Object.entries(cleanObject(raw.covariate_rationales)).slice(0, 64).filter(([key, value]) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(key) && typeof value === 'string').map(([key, value]) => [key, metadataText(value, 500)]).filter(([, value]) => value)),
+      covariate_temporal_roles: Object.fromEntries(Object.entries(cleanObject(raw.covariate_temporal_roles)).slice(0, 64).filter(([key, value]) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(key) && ['baseline_static', 'at_or_before_time_zero'].includes(value))),
+      execution_concepts: cleanSchemaObject(raw.execution_concepts, EXECUTION_CONCEPTS_SCHEMA),
+      analysis_design: cleanSchemaObject(raw.analysis_design, ANALYSIS_DESIGN_SCHEMA),
+      sensitivity_specs: cleanSensitivitySpecs(raw.sensitivity_specs),
       time_window: cleanSchemaObject(raw.time_window, TIME_WINDOW_SCHEMA),
       comparator: metadataText(raw.comparator, 500),
       export_format: metadataText(raw.export_format, 40),
@@ -536,9 +599,20 @@
       }
       const response = activeResult.status === 'fulfilled' ? activeResult.value : null;
       const listResponse = listResult.status === 'fulfilled' ? (listResult.value || {}) : {};
-      (Array.isArray(listResponse.contexts) ? listResponse.contexts : []).forEach(context => {
+      const serverContexts = Array.isArray(listResponse.contexts) ? listResponse.contexts : [];
+      const serverIds = new Set(serverContexts.map(context => text(context && context.id)).filter(Boolean));
+      // The server owns product-list membership.  Remove clean cached rows
+      // that are no longer returned (for example internal evaluation records),
+      // while preserving unsynced local edits and the currently active record.
+      contexts = contexts.filter(context =>
+        serverIds.has(context.id)
+        || isDirty(context.id)
+        || (activeContext && activeContext.id === context.id),
+      );
+      serverContexts.forEach(context => {
         if (!isDirty(context && context.id)) rememberContext(context);
       });
+      writeContextList();
       if (activeContext && isDirty(activeContext.id)) rememberContext(activeContext);
       const serverContext = responseContext(response)
         || contexts.find(row => row.id === listResponse.active_id)

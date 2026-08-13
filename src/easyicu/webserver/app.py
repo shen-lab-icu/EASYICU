@@ -119,8 +119,32 @@ async def local_clients_only(request: Request, call_next):
 
 
 @app.middleware("http")
-async def no_store_native_ui_assets(request: Request, call_next):
+async def native_ui_security_headers(request: Request, call_next):
     response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=()",
+    )
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "; ".join(
+            (
+                "default-src 'self'",
+                "base-uri 'none'",
+                "object-src 'none'",
+                "frame-ancestors 'self'",
+                "form-action 'self'",
+                "script-src 'self'",
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data: blob:",
+                "font-src 'self'",
+                "connect-src 'self'",
+                "frame-src 'self' blob:",
+            )
+        ),
+    )
     path = request.url.path
     if path in {"/", "/index.html"} or path.startswith(("/js/", "/css/")):
         response.headers["Cache-Control"] = "no-store"

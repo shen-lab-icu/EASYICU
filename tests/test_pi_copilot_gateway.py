@@ -505,6 +505,16 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
             ]
           }} }} }},
       }});
+      const dataPackageReview = normalizePiEvent({{
+        type: 'tool_execution_end', toolCallId: 'call-data-package',
+        toolName: 'easyicu_inspect_data_package', result: {{ details: {{
+          status: 'ok', code: 'easyicu_data_package_review_ready',
+          summary: 'Data package ready', owner: 'easyicu.data_package_review',
+          details: {{ resource: {{ kind: 'data_package_review',
+            study_context_id: 'study_review', study_revision: 7,
+            review_sha256: '{'d' * 64}', label: 'Data package review',
+            media_type: 'application/json', source_path: 'must-not-leak' }} }}
+        }} }} }});
       const submittedRun = normalizePiEvent({{
         type: 'tool_execution_end', toolCallId: 'call-6', toolName: 'easyicu_run',
         result: {{ details: {{ status: 'ok', code: 'easyicu_full_run_submitted',
@@ -535,7 +545,7 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         role: 'assistant', content: [], stopReason: 'error',
         errorMessage: 'pi_shell_token_budget_exhausted: bounded session budget reached'
       }});
-      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts, submittedRun, unsafeJob, providerErrorEvent, providerErrorTranscript, shellBudgetEvent, shellBudgetTranscript }}));
+      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts, dataPackageReview, submittedRun, unsafeJob, providerErrorEvent, providerErrorTranscript, shellBudgetEvent, shellBudgetTranscript }}));
     """
     completed = subprocess.run(
         [node, "--input-type=module", "--eval", script],
@@ -579,6 +589,14 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         "label": "Table 1",
         "media_type": "application/json",
     }]
+    assert payload["dataPackageReview"]["resource"] == {
+        "kind": "data_package_review",
+        "study_context_id": "study_review",
+        "study_revision": 7,
+        "review_sha256": "d" * 64,
+        "label": "Data package review",
+        "media_type": "application/json",
+    }
     assert payload["submittedRun"]["job_id"] == "6a2bf5684685"
     assert "job_id" not in payload["unsafeJob"]
     assert payload["providerErrorEvent"]["error_code"] == "pi_model_provider_unavailable"
@@ -602,7 +620,8 @@ def test_sidecar_projects_only_verified_literature_click_targets() -> None:
         type: 'tool_execution_end', toolCallId: 'lit-1',
         toolName: 'easyicu_search_literature', result: {{ details: {{
           status: 'ok', code: 'easyicu_literature_search_completed',
-          summary: 'Search complete', owner: 'easyicu.ideas', details: {{ resources: [
+          summary: 'Search complete', owner: 'easyicu.ideas', details: {{
+            host_rebind_after_turn: true, resources: [
             {{ kind: 'literature_source', title: 'Source-backed article',
                url: 'https://pubmed.ncbi.nlm.nih.gov/12345/', pmid: '12345',
                venue: 'Critical Care', year: '2025' }},
@@ -632,9 +651,10 @@ def test_sidecar_projects_only_verified_literature_click_targets() -> None:
             "doi": "",
             "pmid": "12345",
             "media_type": "text/html",
-            "authority_class": "literature_metadata",
+            "authority_class": "literature_retrieval_candidate",
         }
     ]
+    assert payload["host_rebind_after_turn"] is True
 
 
 def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> None:
@@ -643,8 +663,18 @@ def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> 
     assert "then call easyicu_run" in entrypoint
     assert "Use easyicu_inspect_run only when the user asks for status" in entrypoint
     assert "A persisted run_id is historical evidence, not proof of an active job" in entrypoint
+    assert "run_id_status=pending_pipeline_start" in entrypoint
+    assert "save that commitment in typed analysis_design" in entrypoint
     assert "Never call easyicu_resume without an approved/rejected decision" in entrypoint
     assert "an explicit user rerun request must call easyicu_run" in entrypoint
+    assert "Treat every scientific question as one ordinary research project" in entrypoint
+    assert "Evaluation orchestration and scoring stay outside the Copilot product surface" in entrypoint
+    assert "When the workflow reports failed_pipeline_requires_fresh_plan" in entrypoint
+    assert "treat the terminal failed run as immutable history" in entrypoint
+    assert "covariate_rationales" in entrypoint
+    assert "covariate_temporal_roles" in entrypoint
+    assert "save each explicit decision in typed sensitivity_specs" in entrypoint
+    assert "sensitivity_spec" in entrypoint
 
 
 def test_research_system_prompt_requires_tool_first_idea_mining() -> None:
@@ -667,6 +697,14 @@ def test_system_prompt_keeps_copilot_replies_concise_while_preserving_blockers()
     assert "Match the user's language and brevity" in entrypoint
     assert "use at most two short sentences around tool calls" in entrypoint
     assert "ask one direct question and stop" in entrypoint
+    assert "independently answerable scientific decision" in entrypoint
+    assert "Do not bundle cohort, estimand, timing, adjustment" in entrypoint
+    assert "do not recommend model-based or heteroskedasticity-robust variance" in entrypoint
+    assert "instead of steering the user toward the only executable" in entrypoint
+    assert "Typed time-window rule" in entrypoint
+    assert "It is not a phenotype's clinical definition anchor" in entrypoint
+    assert "never save suspected-infection onset as its physical anchor" in entrypoint
+    assert "never send a questionnaire or numbered list of confirmations" in entrypoint
     assert "Never hide a blocker or weaken its exact stable code" in entrypoint
 
 
@@ -713,15 +751,55 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
     finally:
         gateway.close()
 
+    # A normal new conversation is durable before its first prompt. This keeps
+    # ordinary Web sessions recoverable across a host restart without any
+    # benchmark- or feature-specific session type.
+    session_file = Path(state["session_file"])
+    assert session_file.is_file()
+    reopened_gateway = PiGatewayClient(
+        app_dir=APP_DIR,
+        session_dir=tmp_path / "sessions",
+        cwd=REPO_ROOT,
+        environ={
+            "PATH": str(Path(shutil.which("node") or "").parent),
+            "EASYICU_PI_API_KEY": "test-only-placeholder",
+            "EASYICU_PI_PROVIDER": "easyicu-local",
+            "EASYICU_PI_BASE_URL": "http://127.0.0.1:8317/v1",
+            "EASYICU_PI_MODEL": "gpt5.6 luna",
+            "EASYICU_PI_API": "openai-completions",
+        },
+    )
+    try:
+        reopened_state = reopened_gateway.request(
+            "session.create",
+            {
+                "session_id": "pi-smoke",
+                "session_file": str(session_file),
+                "thinking_level": "off",
+                "agent_mode": "research",
+            },
+            timeout=30,
+        )
+    finally:
+        reopened_gateway.close()
+
     assert runtime["provider"] == "easyicu-local"
     assert runtime["model"] == "gpt5.6 luna"
     assert runtime["built_in_tools_enabled"] == []
     assert state["enabled_tools"] == runtime["custom_tools"]
-    assert len(state["enabled_tools"]) == 25
+    assert len(state["enabled_tools"]) == 30
+    assert {
+        "easyicu_list_extensions",
+        "easyicu_load_skill",
+        "easyicu_call_mcp_tool",
+    }.issubset(state["enabled_tools"])
     assert {"read", "write", "edit", "bash"}.isdisjoint(state["enabled_tools"])
     assert workspace_state["agent_mode"] == "workspace"
     assert workspace_state["enabled_tools"] == runtime["custom_tools_by_mode"]["workspace"]
-    assert len(workspace_state["enabled_tools"]) == 32
+    assert len(workspace_state["enabled_tools"]) == 36
     assert {"read", "write", "edit", "bash"}.isdisjoint(
         workspace_state["enabled_tools"]
     )
+    assert reopened_state["session_file"] == str(session_file)
+    assert reopened_state["agent_mode"] == "research"
+    assert reopened_state["enabled_tools"] == state["enabled_tools"]

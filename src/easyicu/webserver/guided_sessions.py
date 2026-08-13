@@ -1390,18 +1390,63 @@ def _normalise_draft(
 
 
 def list_guided_drafts(limit: int = 20) -> Dict[str, Any]:
+    # Import the project/run owners lazily so the metadata registry stays
+    # dependency-neutral during module initialization.  These public contracts
+    # expose only project identifiers, lifecycle state, and aggregate run
+    # receipts; no patient rows or arbitrary paths are projected to the rail.
+    from easyicu.webserver import agent_runs, study_contexts
+    from easyicu.webserver.pi_copilot.project_authority import ProjectAuthorityStore
+
     raw = _read_raw()
     rows = raw.get("drafts") if isinstance(raw.get("drafts"), list) else []
-    drafts = [row for row in rows if isinstance(row, dict) and row.get("id")]
-    drafts.sort(
+    drafts = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("id")
+        and row.get("surface_visibility", "product") == "product"
+    ]
+    # Old project folders can carry the default ``demo`` flag even after the
+    # project is bound to a real registered export through StudyContext.  The
+    # rail is a projection, so derive its data-mode label from the current
+    # project setup instead of repeating stale creation-time metadata.  No
+    # patient rows or host paths are returned.
+    projected_drafts: List[Dict[str, Any]] = []
+    authority = ProjectAuthorityStore()
+    for row in drafts:
+        projected = dict(row)
+        setup = read_project_study_setup(str(row.get("id") or ""))
+        if setup is not None and setup.data_source:
+            projected["data_mode"] = "real"
+        study_id = authority.resolve(str(row.get("id") or ""))
+        study = study_contexts.get_context(study_id) if study_id else None
+        history = agent_runs.list_run_history(study_id=study_id, limit=1) if study_id else {}
+        runs = [item for item in (history.get("runs") or []) if isinstance(item, dict)]
+        latest_run = runs[0] if runs else None
+        if latest_run:
+            projected["workflow_status"] = (
+                "plan_review"
+                if (
+                    latest_run.get("pending_review_reason_codes")
+                    or str(latest_run.get("run_status") or "")
+                    in {"waiting_for_review", "pending_review"}
+                )
+                else "analysis_review"
+            )
+        elif study and study.get("active_job_id"):
+            projected["workflow_status"] = "analysis_running"
+        elif study and study.get("data_source"):
+            projected["workflow_status"] = "configured"
+        projected_drafts.append(projected)
+    projected_drafts.sort(
         key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
         reverse=True,
     )
     cap = max(1, min(int(limit or 20), 100))
     return {
         "ok": True,
-        "drafts": drafts[:cap],
-        "count": len(drafts),
+        "drafts": projected_drafts[:cap],
+        "count": len(projected_drafts),
         "config_path": str(_CONFIG_PATH),
         "storage": "metadata_only",
     }

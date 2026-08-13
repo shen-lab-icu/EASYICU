@@ -1,4 +1,4 @@
-/* Cross-DB raw job progress + cooperative-cancel presentation owner. */
+/* Cross-DB job progress + cooperative-cancel presentation owner. */
 (function () {
   'use strict';
 
@@ -9,6 +9,7 @@
     cancelRequested: false,
     cancelSent: false,
     starting: false,
+    jobKind: '',
     databaseOrder: [],
     databaseStates: Object.create(null),
   };
@@ -20,6 +21,7 @@
     state.cancelRequested = false;
     state.cancelSent = false;
     state.starting = false;
+    state.jobKind = '';
     state.databaseOrder = [];
     state.databaseStates = Object.create(null);
   }
@@ -50,6 +52,7 @@
 
   function applyProgress(event) {
     if (!event || typeof event !== 'object' || state.cancelRequested) return false;
+    if (event.job_kind) state.jobKind = String(event.job_kind);
     rememberDatabases(event);
     state.progress = { ...event };
     const database = String(event.database || '').trim();
@@ -84,6 +87,7 @@
   function resume(jobId, event, history) {
     state.jobId = String(jobId || '');
     state.starting = false;
+    if (event && event.job_kind) state.jobKind = String(event.job_kind);
     if (Array.isArray(history) && history.length) {
       state.cancelRequested = false;
       state.cancelSent = false;
@@ -171,6 +175,7 @@
     const icon = opts.icon || (() => '');
     const errorMessage = String(opts.errorMessage || '').trim();
     const p = state.progress || {};
+    const registeredSummary = state.jobKind === 'crossdb-summary';
     const completedChunks = Number(p.completed_chunks || 0);
     const totalChunks = Number(p.total_chunks || 0);
     const completedDatabases = Number(p.current || 0);
@@ -189,7 +194,9 @@
       ? t('Cancellation requested. EasyICU will stop after the current bounded read returns.', '已请求取消。当前有界读取返回后，EasyICU 将立即停止。')
       : currentDatabase
         ? `${currentDatabase}${chunkTotal ? ` · ${t('chunk', '分块')} ${chunkCurrent || 1}/${chunkTotal}` : ''}`
-        : progressMessage(p.message || t('Starting local raw Cross-DB density job…', '正在启动本地原始跨库密度任务…'));
+        : progressMessage(p.message || (registeredSummary
+          ? t('Starting registered-export Cross-DB summary job…', '正在启动注册导出的跨库摘要任务…')
+          : t('Starting local raw Cross-DB density job…', '正在启动本地原始跨库密度任务…')));
     const rows = snapshot().databases;
     const rowHtml = rows.length ? `<ol class="crossdb-progress-databases" aria-label="${esc(t('Database progress', '数据库进度'))}" aria-live="off">
       ${rows.map(row => {
@@ -207,7 +214,9 @@
       <div class="load-strip">
         <span class="spin accent" aria-hidden="true"></span>
         <div class="grow">
-          <div class="crossdb-progress-title">${esc(t('Loading real feature densities from local databases…', '正在从本地数据库加载真实特征密度…'))}</div>
+          <div class="crossdb-progress-title">${esc(registeredSummary
+            ? t('Loading aggregate summaries from registered exports…', '正在加载已注册导出的聚合摘要…')
+            : t('Loading real feature densities from local databases…', '正在从本地数据库加载真实特征密度…'))}</div>
           <div class="crossdb-progress-meta mono">${esc(t('local-only · nothing uploaded', '仅本机 · 不上传任何内容'))}${p.phase ? ` · ${esc(statusLabel(p.phase))}` : ''}${sampleText}</div>
         </div>
         ${databaseTotal ? `<span class="crossdb-progress-count mono">${completedDatabases}/${databaseTotal}</span>` : ''}

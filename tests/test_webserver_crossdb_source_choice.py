@@ -32,7 +32,7 @@ def test_crossdb_source_choice_owner_is_explicitly_wired() -> None:
     setup = _read("js/screens-viz-crossdb-setup.js")
     owner = _read("js/screens-viz-crossdb-source.js")
 
-    owner_src = "js/screens-viz-crossdb-source.js?v=20260728-clarity2"
+    owner_src = "js/screens-viz-crossdb-source.js?v=20260812-crossdb-jobs"
     assert owner_src in index
     assert index.index("js/screens-viz.js?") < index.index(owner_src)
     assert index.index(owner_src) < index.index("js/screens-viz-study-context.js?")
@@ -97,7 +97,12 @@ def test_registered_export_host_bypasses_raw_root_scan() -> None:
     assert "rawRoot" not in host
 
     assert "const registeredPathOverride" in viz
-    assert "window.EU_API.loadCrossdbReviewSummary({ paths: paths })" in viz
+    assert "window.EU_API.startCrossdbReviewSummaryJob" in viz
+    assert "deadline_seconds: 120" in viz
+    registered_branch = viz.split("if (!requestedRawRoot && paths.length >= 2", 1)[1].split(
+        "if (!requestedRawRoot && registeredPathOverride)", 1
+    )[0]
+    assert "loadCrossdbReviewSummary" not in registered_branch
     assert "runRaw: loadRealCrossdb" in viz
     assert "config.runRaw(ok =>" in setup
     assert "{ operationId, rawRoot: rootValue, setup: runSnapshot }" in setup

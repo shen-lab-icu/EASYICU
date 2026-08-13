@@ -96,7 +96,7 @@ assert.doesNotMatch(readyHtml, /data-crossdb-run-registered aria-disabled="true"
 const loadingHtml = owner.renderLoading();
 assert.match(loadingHtml, /data-crossdb-registered-loading/);
 assert.match(loadingHtml, /2 local exports · aggregate-only/);
-assert.doesNotMatch(loadingHtml, /data-crossdb-cancel/);
+assert.match(loadingHtml, /data-crossdb-cancel/);
 const demoHtml = owner.renderDemo({
   sourceModeHtml: '<div data-test-source-mode>source mode</div>',
   syntheticHtml: '<div data-test-synthetic>synthetic fallback</div>',

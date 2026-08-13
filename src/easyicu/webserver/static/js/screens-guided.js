@@ -5074,6 +5074,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedInitialRender = initializeGuidedState();
       return `
       <div class="gd-shell">
+        <h1 class="shell-sr-only" tabindex="-1">${t('Guided Copilot', '研究引导')}</h1>
         <div class="gd-top">
           <button class="gd-home-link" type="button" data-open="entry" aria-label="${t('Back to EasyICU home', '返回 EasyICU 首页')}" title="${t('Back to EasyICU home', '返回 EasyICU 首页')}">
             <span class="brand-mark">${icon('spark', 16)}</span>
@@ -5127,6 +5128,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     afterRender(root) {
       const initialRender = guidedInitialRender;
       guidedInitialRender = false;
+      const guidedBinding = window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.takeGuidedHandoff
+        ? window.EU_AGENT_STUDY_CONTEXT.takeGuidedHandoff()
+        : null;
+      if (guidedBinding) {
+        selectedGuidedDraft = {
+          id: guidedBinding.project_id,
+          title: guidedBinding.project_title,
+          binding_receipt: guidedBinding.binding_receipt || null,
+          study_context_id: guidedBinding.binding_receipt && guidedBinding.binding_receipt.study_context_id,
+          study_context_revision: guidedBinding.binding_receipt && guidedBinding.binding_receipt.study_context_revision,
+        };
+      }
       renderGuidedFolderControls();
       renderGuidedFolderDialog();
       renderAside();
@@ -5138,10 +5151,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.mount) {
         window.EU_GUIDED_PI.mount(root.querySelector('#gdPiShell'));
         if (selectedGuidedDraft && window.EU_GUIDED_PI.bindProject) {
+          const bindingReceipt = selectedGuidedDraft.binding_receipt || null;
           window.EU_GUIDED_PI.bindProject({
             id: selectedGuidedDraft.id,
             title: selectedGuidedDraft.title || selectedGuidedDraft.id,
+            binding_receipt: bindingReceipt,
           });
+          if (bindingReceipt) delete selectedGuidedDraft.binding_receipt;
         }
       }
       // The global topbar Demo/Real toggle is the source of truth on entry:

@@ -1,4 +1,4 @@
-/* Executable lifecycle contract for Cross-DB raw-distribution reconnects. */
+/* Executable lifecycle contract for Cross-DB registered/raw job reconnects. */
 'use strict';
 
 function missingJobError() {
@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(process.argv[2], 'utf8');
-const KEY = 'easyicu_crossdb_raw_job_v1';
+const KEY = 'easyicu_crossdb_job_v2';
 const META = {
   job_id: 'job_cross_01',
   kind: 'crossdb-raw-distribution',
@@ -23,6 +23,13 @@ const META = {
   source_identity: 'eicu,miiv',
   sample_mode: 'standard',
   feature_scope: 'all_catalog',
+};
+const SUMMARY_META = {
+  job_id: 'job_summary_01',
+  kind: 'crossdb-summary',
+  source_identity: 'src_111111111111,src_222222222222',
+  selection_digest: 'a'.repeat(64),
+  deadline_at: 2000000000,
 };
 
 function storageWith(initial) {
@@ -40,7 +47,7 @@ function harness(options) {
   const calls = [];
   const timers = [];
   let timerId = 0;
-  const state = { root: opts.currentRoot || '', identity: '' };
+  const state = { root: opts.currentRoot || '', identity: '', digest: '' };
   const localStorage = storageWith(opts.stored);
   class FakeEventSource {
     static instances = [];
@@ -54,15 +61,25 @@ function harness(options) {
     fail() { this.onerror(); }
   }
   const host = {
-    canRestore() { return opts.canRestore !== false; },
+    canRestore(meta) {
+      return opts.canRestore !== false
+        && (!opts.expectedKind || (meta && meta.kind) === opts.expectedKind);
+    },
     acceptResume(meta) {
       calls.push(['accept', meta.job_id]);
-      if (state.root && state.root !== meta.raw_root) return false;
-      state.root = meta.raw_root;
+      if (meta.kind === 'crossdb-raw-distribution') {
+        if (state.root && state.root !== meta.raw_root) return false;
+        state.root = meta.raw_root;
+      }
       state.identity = meta.source_identity;
+      state.digest = meta.selection_digest || '';
       return true;
     },
-    matchesSource(meta) { return state.root === meta.raw_root && state.identity === meta.source_identity; },
+    matchesSource(meta) {
+      return state.identity === meta.source_identity
+        && (meta.kind !== 'crossdb-raw-distribution' || state.root === meta.raw_root)
+        && (meta.kind !== 'crossdb-summary' || state.digest === meta.selection_digest);
+    },
     onProbe(meta) { calls.push(['probe', meta.job_id]); },
     onRunning(meta, progress) { calls.push(['running', meta.job_id, progress && progress.phase]); },
     onProgress(meta, progress) { calls.push(['progress', meta.job_id, progress.current]); },
@@ -279,6 +296,40 @@ function harness(options) {
   scopeChanged.context.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged(META.raw_root, META.source_identity, META.sample_mode, 'curated_core');
   assert.equal(scopeChanged.localStorage.getItem(KEY), null, 'changing feature scope must not resume a differently scoped job');
 
+  const summaryRunning = harness({
+    stored: JSON.stringify(SUMMARY_META),
+    expectedKind: 'crossdb-summary',
+    snapshot: {
+      id: SUMMARY_META.job_id,
+      kind: SUMMARY_META.kind,
+      status: 'running',
+      events: [{ type: 'progress', phase: 'summarizing', current: 1, total: 2 }],
+    },
+  });
+  assert.equal(await summaryRunning.context.EU_CROSSDB_JOB_CONTINUITY.restoreIfNeeded(), true);
+  assert.equal(summaryRunning.EventSource.instances[0].url, '/api/jobs/job_summary_01/events');
+  assert.deepEqual(summaryRunning.calls.slice(0, 3), [
+    ['accept', SUMMARY_META.job_id],
+    ['probe', SUMMARY_META.job_id],
+    ['running', SUMMARY_META.job_id, 'summarizing'],
+  ]);
+
+  const summaryStarted = harness({ snapshot: null });
+  assert.equal(summaryStarted.context.EU_CROSSDB_JOB_CONTINUITY.start(SUMMARY_META, { phase: 'queued' }), true);
+  assert.deepEqual(Object.keys(JSON.parse(summaryStarted.localStorage.getItem(KEY))).sort(), [
+    'deadline_at', 'job_id', 'kind', 'selection_digest', 'source_identity',
+  ]);
+  summaryStarted.context.EU_CROSSDB_JOB_CONTINUITY.onSelectionChanged(
+    SUMMARY_META.source_identity,
+    SUMMARY_META.selection_digest,
+  );
+  assert.notEqual(summaryStarted.localStorage.getItem(KEY), null);
+  summaryStarted.context.EU_CROSSDB_JOB_CONTINUITY.onSelectionChanged(
+    'src_333333333333,src_444444444444',
+    SUMMARY_META.selection_digest,
+  );
+  assert.equal(summaryStarted.localStorage.getItem(KEY), null, 'changing registered source selection must forget the old job');
+
   process.stdout.write(JSON.stringify({
     restored: true,
     terminal_statuses: 3,
@@ -291,6 +342,8 @@ function harness(options) {
     feature_scope_guard: true,
     same_job_stale_stream: true,
     terminal_pointer_cleared: true,
+    registered_summary_restore: true,
+    registered_selection_guard: true,
   }));
 })().catch(error => {
   console.error(error);

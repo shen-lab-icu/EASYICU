@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import stat
 import time
 from pathlib import Path
@@ -85,6 +86,42 @@ def test_study_context_api_persists_lists_and_handoffs_metadata(tmp_path: Path) 
             "outcome": "hospital mortality",
             "primary_exposure": "sofa2_score",
             "covariates": ["age", "sex", "age"],
+            "covariate_selection": "exact",
+            "covariate_rationales": {
+                "age": "Age is a prespecified baseline demographic confounder.",
+                "sex": "Sex is a prespecified baseline demographic confounder.",
+            },
+            "covariate_temporal_roles": {
+                "age": "baseline_static",
+                "sex": "baseline_static",
+            },
+            "execution_concepts": {
+                "outcome": "death",
+                "primary_exposure": "sofa2_score",
+                "covariates": ["age", "sex", "age"],
+            },
+            "analysis_design": {
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "hospital_admission",
+            },
+            "sensitivity_specs": [
+                {
+                    "spec_id": "first_24h_landmark",
+                    "axis": "timing",
+                    "strategy": "landmark",
+                    "execution_variables": ["death_time"],
+                    "landmark_hours": 24,
+                    "require_alive_at_landmark": True,
+                    "exclude_negative_event_times": True,
+                },
+                {
+                    "spec_id": "non_readmission_only",
+                    "axis": "repeated_stays",
+                    "strategy": "non_readmission_restriction",
+                    "execution_variables": ["icu_readmission"],
+                },
+            ],
             "time_window": {"hours": 24, "anchor": "icu_admission"},
             "comparator": "lower admission severity",
             "export_format": "parquet",
@@ -112,6 +149,27 @@ def test_study_context_api_persists_lists_and_handoffs_metadata(tmp_path: Path) 
     assert context["revision"] == 1
     assert context["primary_exposure"] == "sofa2_score"
     assert context["covariates"] == ["age", "sex"]
+    assert context["covariate_selection"] == "exact"
+    assert context["covariate_rationales"]["age"].startswith("Age is")
+    assert context["covariate_temporal_roles"] == {
+        "age": "baseline_static",
+        "sex": "baseline_static",
+    }
+    assert context["execution_concepts"] == {
+        "outcome": "death",
+        "primary_exposure": "sofa2_score",
+        "covariates": ["age", "sex"],
+    }
+    assert context["analysis_design"] == {
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "hospital_admission",
+    }
+    assert [row["spec_id"] for row in context["sensitivity_specs"]] == [
+        "first_24h_landmark",
+        "non_readmission_only",
+    ]
+    assert context["sensitivity_specs"][0]["require_alive_at_landmark"] is True
     assert context["idea_handoff"]["idea_id"] == "idea-sepsis"
     assert context["idea_handoff"]["go_no_go"] == "recommend"
 
@@ -143,6 +201,418 @@ def test_study_context_api_persists_lists_and_handoffs_metadata(tmp_path: Path) 
     assert stored["active_id"] == "study_sepsis"
     assert stored["contexts"][0]["last_route"] == "cohort"
     assert not context_store._CONFIG_PATH.with_suffix(".json.tmp").exists()
+
+
+def test_study_context_requires_explicit_authority_for_an_exact_adjustment_set() -> None:
+    client = TestClient(app)
+    created = client.post(
+        "/api/study-contexts",
+        json={
+            "id": "study_exact_adjustment",
+            "question": "Is severity associated with mortality?",
+            "covariates": ["age", "sex"],
+            "covariate_selection": "exact",
+            "covariate_rationales": {
+                "age": "Age is a prespecified baseline demographic confounder.",
+                "sex": "Sex is a prespecified baseline demographic confounder.",
+            },
+            "covariate_temporal_roles": {
+                "age": "baseline_static",
+                "sex": "baseline_static",
+            },
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["context"]["covariate_selection"] == "exact"
+    assert created.json()["context"]["covariate_temporal_roles"]["age"] == "baseline_static"
+
+
+def test_study_context_rejects_invalid_covariate_temporal_role() -> None:
+    client = TestClient(app)
+
+    rejected = client.post(
+        "/api/study-contexts",
+        json={
+            "id": "study_bad_covariate_timing",
+            "covariates": ["lactate"],
+            "covariate_selection": "exact",
+            "covariate_temporal_roles": {"lactate": "first_value_after_admission"},
+        },
+    )
+
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"]["error"] == "study_covariate_temporal_role_invalid"
+
+    rejected = client.post(
+        "/api/study-contexts",
+        json={
+            "id": "study_exact_adjustment",
+            "covariate_selection": "suggested",
+            "expected_revision": 1,
+        },
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"] == {
+        "error": "study_covariate_selection_invalid",
+        "field": "covariate_selection",
+        "allowed": ["exact", "planner_selectable"],
+    }
+
+
+def test_product_context_list_hides_development_evaluation_but_exact_get_keeps_it() -> None:
+    client = TestClient(app)
+    product = client.post(
+        "/api/study-contexts",
+        json={"id": "study_product", "question": "A normal research question"},
+    )
+    assert product.status_code == 200
+    internal = client.post(
+        "/api/study-contexts",
+        json={
+            "id": "study_internal",
+            "question": "An external evaluation question",
+            "confirmations": {
+                "development_only": True,
+                "internal_evaluation": True,
+            },
+        },
+    )
+    assert internal.status_code == 200
+
+    listed = client.get("/api/study-contexts")
+    exact = client.get("/api/study-contexts/study_internal")
+
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()["contexts"]] == ["study_product"]
+    assert exact.status_code == 200
+    assert exact.json()["context"]["id"] == "study_internal"
+    assert {row["id"] for row in context_store.list_contexts()["contexts"]} == {
+        "study_product",
+        "study_internal",
+    }
+
+
+def test_study_context_rejects_prose_execution_concepts() -> None:
+    response = TestClient(app).post(
+        "/api/study-contexts",
+        json={
+            "id": "study_execution_concept_contract",
+            "question": "Is an exposure associated with mortality?",
+            "outcome": "In-hospital mortality",
+            "execution_concepts": {
+                "outcome": "In-hospital mortality from the outcome module",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "error": "invalid_study_context_identifier",
+        "field": "execution_concepts.outcome",
+        "max_length": 80,
+    }
+
+
+@pytest.mark.parametrize(
+    ("analysis_design", "error"),
+    [
+        (
+            {
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "cluster_robust",
+            },
+            "study_cluster_unit_required",
+        ),
+        (
+            {
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "model_based",
+                "cluster_unit": "hospital_admission",
+            },
+            "study_cluster_unit_not_applicable",
+        ),
+    ],
+)
+def test_study_context_analysis_design_relations_fail_closed(
+    analysis_design: dict[str, str], error: str
+) -> None:
+    response = TestClient(app).post(
+        "/api/study-contexts",
+        json={
+            "id": "study_analysis_design_contract",
+            "question": "Is an exposure associated with mortality?",
+            "analysis_design": analysis_design,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == error
+
+
+def test_study_context_rejects_independent_variance_when_repeat_stays_retained() -> None:
+    response = TestClient(app).post(
+        "/api/study-contexts",
+        json={
+            "id": "study_repeat_stay_dependence",
+            "question": "Is an exposure associated with mortality?",
+            "cohort": {
+                "label": "All adult ICU stays",
+                "exclude_readmissions": False,
+            },
+            "analysis_design": {
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "model_based",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == (
+        "study_repeated_stay_dependence_unaddressed"
+    )
+    assert response.json()["detail"]["required_design"] == {
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "patient",
+    }
+
+
+@pytest.mark.parametrize(
+    ("cohort", "analysis_design"),
+    [
+        (
+            {"label": "First eligible ICU stay", "exclude_readmissions": True},
+            {"analysis_unit": "icu_stay", "variance_estimator": "model_based"},
+        ),
+        (
+            {"label": "All adult ICU stays", "exclude_readmissions": False},
+            {
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
+            },
+        ),
+    ],
+)
+def test_study_context_accepts_explicit_repeat_stay_dependence_closure(
+    cohort: dict[str, object], analysis_design: dict[str, str]
+) -> None:
+    response = TestClient(app).post(
+        "/api/study-contexts",
+        json={
+            "id": "study_repeat_stay_closed",
+            "question": "Is an exposure associated with mortality?",
+            "cohort": cohort,
+            "analysis_design": analysis_design,
+        },
+    )
+
+    assert response.status_code == 200
+
+
+def test_study_context_rejects_clinical_event_as_physical_window_anchor() -> None:
+    response = TestClient(app).post(
+        "/api/study-contexts",
+        json={
+            "id": "study_temporal_roles",
+            "question": "Is an event-defined phenotype associated with mortality?",
+            "time_window": {
+                "hours": 24,
+                "anchor": "suspected infection onset",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "error": "study_materialization_window_anchor_unsupported",
+        "field": "time_window.anchor",
+        "configured_anchor": "suspected infection onset",
+        "supported_anchor": "icu_admission",
+        "window_role": "outer_observation_window",
+        "clinical_definition_anchor_owner": "concept_clinical_contract",
+        "outcome_horizon_owner": "execution_concepts.outcome",
+    }
+
+
+def test_study_context_rejects_invalid_sensitivity_authority() -> None:
+    response = TestClient(app).post(
+        "/api/study-contexts",
+        json={
+            "id": "study_sensitivity_contract",
+            "question": "Is an exposure associated with mortality?",
+            "sensitivity_specs": [
+                {
+                    "spec_id": "invalid_landmark",
+                    "axis": "timing",
+                    "strategy": "landmark",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "study_sensitivity_specs_invalid"
+
+
+def test_scientific_configuration_digest_ignores_lifecycle_only_changes() -> None:
+    base = {
+        "question": "Is an exposure associated with mortality?",
+        "data_source": {"path": "/typed/export", "database": "miiv"},
+        "cohort": {"label": "adult ICU stays"},
+        "modules": ["demographics", "outcome"],
+        "outcome": "In-hospital mortality",
+        "execution_concepts": {"outcome": "death"},
+        "analysis_design": {
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "model_based",
+        },
+        "current_stage": "plan",
+        "last_route": "guided",
+        "active_job_id": None,
+        "revision": 3,
+    }
+    lifecycle_changed = {
+        **base,
+        "current_stage": "review",
+        "last_route": "agent",
+        "active_job_id": "job-local",
+        "revision": 8,
+    }
+    scientific_changed = {
+        **base,
+        "analysis_design": {
+            "analysis_unit": "patient",
+            "variance_estimator": "model_based",
+        },
+    }
+    sensitivity_changed = {
+        **base,
+        "sensitivity_specs": [
+            {
+                "spec_id": "complete_case",
+                "axis": "missing_data",
+                "strategy": "complete_case",
+                "execution_variables": ["age"],
+            }
+        ],
+    }
+
+    assert context_store.scientific_configuration_sha256(base) == (
+        context_store.scientific_configuration_sha256(lifecycle_changed)
+    )
+    assert context_store.scientific_configuration_sha256(base) != (
+        context_store.scientific_configuration_sha256(scientific_changed)
+    )
+    assert context_store.scientific_configuration_sha256(base) != (
+        context_store.scientific_configuration_sha256(sensitivity_changed)
+    )
+
+
+def test_literature_scope_digest_excludes_receipt_but_not_scientific_changes() -> None:
+    base = {
+        "question": "Is Sepsis-3 associated with mortality?",
+        "execution_concepts": {
+            "primary_exposure": "sep3_sofa1",
+            "outcome": "death",
+            "covariates": [],
+        },
+        "literature_authority": {},
+    }
+    bound = {
+        **base,
+        "literature_authority": {
+            "schema_version": "easyicu.web-literature-authority/2",
+            "receipt_id": "lit_" + "a" * 24,
+            "receipt_sha256": "b" * 64,
+            "status": "searched",
+            "result_count": 3,
+            "searched_at": "2026-08-12T12:00:00+00:00",
+            "study_configuration_sha256": "c" * 64,
+        },
+    }
+
+    assert context_store.literature_search_scope_sha256(base) == (
+        context_store.literature_search_scope_sha256(bound)
+    )
+    assert context_store.scientific_configuration_sha256(base) != (
+        context_store.scientific_configuration_sha256(bound)
+    )
+    assert context_store.literature_search_scope_sha256(base) != (
+        context_store.literature_search_scope_sha256(
+            {**base, "question": "Is lactate associated with mortality?"}
+        )
+    )
+
+
+def test_scientific_change_atomically_clears_server_owned_literature_receipt() -> None:
+    created = context_store.upsert_context(
+        {
+            "id": "study_literature_scope",
+            "question": "Is Sepsis-3 associated with mortality?",
+            "execution_concepts": {
+                "primary_exposure": "sep3_sofa1",
+                "outcome": "death",
+                "covariates": [],
+            },
+        }
+    )
+    binding = {
+        "schema_version": "easyicu.web-literature-authority/2",
+        "receipt_id": "lit_" + "a" * 24,
+        "receipt_sha256": "b" * 64,
+        "status": "searched",
+        "result_count": 1,
+        "searched_at": "2026-08-12T12:00:00+00:00",
+        "study_configuration_sha256": context_store.literature_search_scope_sha256(
+            created
+        ),
+    }
+    bound = context_store.bind_literature_authority(
+        created["id"],
+        binding,
+        expected_revision=created["revision"],
+    )
+    lifecycle = context_store.handoff_context(
+        created["id"],
+        current_stage="review",
+        expected_revision=bound["revision"],
+    )
+    changed = context_store.upsert_context(
+        {
+            "id": created["id"],
+            "question": "Is lactate associated with mortality?",
+        },
+        expected_revision=lifecycle["revision"],
+        require_revision=True,
+        lifecycle_write=False,
+    )
+
+    assert lifecycle["literature_authority"] == binding
+    assert changed["literature_authority"] == {}
+
+
+def test_public_study_context_api_cannot_forge_literature_authority() -> None:
+    response = TestClient(app).post(
+        "/api/study-contexts",
+        json={
+            "id": "study_forged_literature",
+            "question": "A scientific question",
+            "literature_authority": {
+                "schema_version": "easyicu.web-literature-authority/2",
+                "receipt_id": "lit_" + "a" * 24,
+                "receipt_sha256": "b" * 64,
+                "status": "searched",
+                "result_count": 1,
+                "searched_at": "2026-08-12T12:00:00+00:00",
+                "study_configuration_sha256": "c" * 64,
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == (
+        "study_literature_authority_server_owned"
+    )
 
 
 def test_patient_review_scope_metadata_survives_backend_normalization() -> None:
@@ -474,6 +944,59 @@ def test_agent_run_rejects_study_context_source_mismatch(tmp_path: Path) -> None
     assert detail["study_context_id"] == "study_mismatch"
     assert detail["expected_path"] == str(other_export.resolve())
     assert detail["active_path"] == str(active_export.resolve())
+
+
+def test_study_context_persists_verified_crossdb_selection_receipt() -> None:
+    client = TestClient(app)
+    sources = [
+        {
+            "source_id": "src_miiv",
+            "label": "Primary MIIV",
+            "database": "miiv",
+            "path_hash": "a" * 12,
+        },
+        {
+            "source_id": "src_eicu",
+            "label": "Comparator eICU",
+            "database": "eicu",
+            "path_hash": "b" * 12,
+        },
+    ]
+    digest = hashlib.sha256(
+        json.dumps(sources, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    receipt = {
+        "schema_version": "crossdb-selection-v1",
+        "source_count": 2,
+        "sources": sources,
+        "selection_digest": digest,
+    }
+
+    created = client.post(
+        "/api/study-contexts",
+        json={
+            "id": "study_crossdb_receipt",
+            "question": "Compare portability across selected exports.",
+            "crossdb_selection": receipt,
+            "cohort": {"review": "crossdb", "source_count": 2},
+            "confirmations": {"crossdb_plan_only": True},
+        },
+    )
+
+    assert created.status_code == 200
+    assert created.json()["context"]["crossdb_selection"] == receipt
+
+    tampered = dict(receipt)
+    tampered["selection_digest"] = "0" * 64
+    rejected = client.post(
+        "/api/study-contexts",
+        json={
+            "id": "study_crossdb_tampered",
+            "crossdb_selection": tampered,
+        },
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"]["error"] == "crossdb_selection_digest_mismatch"
 
 
 def test_agent_run_blocks_crossdb_plan_until_aggregate_is_bound(

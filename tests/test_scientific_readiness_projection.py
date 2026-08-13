@@ -186,3 +186,74 @@ def test_scientific_readiness_artifact_is_public_but_bounded() -> None:
     public = agent_runs._public_review_payloads({"scientific_readiness.json": payload})
     assert public == {"scientific_readiness.json": payload}
     assert "scientific_readiness.json" in agent_runs._RUN_ARTIFACT_NAMES
+
+
+def test_maturity_authorization_request_is_projected_without_auto_upgrade(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "scientific_maturity_audit.json",
+        {
+            "status": "major_revision",
+            "score": 72,
+            "dimension_scores": {"statistical_design": 65},
+            "findings": [
+                {
+                    "code": "UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE",
+                    "severity": "major",
+                    "dimension": "statistical_design",
+                    "message": "The exact user-authorized analysis is unadjusted.",
+                    "evidence_refs": ["manifest.json.current_plan_authority"],
+                    "remediation": "Ask before creating a new adjusted study version.",
+                    "requires_user_authorization": True,
+                    "authorization_question": "Keep descriptive, or authorize a new adjusted version?",
+                }
+            ],
+        },
+    )
+    projection = build_scientific_readiness_projection(
+        run_id="run-auth",
+        run_dir=tmp_path,
+        axes={
+            "analysis_validated": True,
+            "manuscript_ready": True,
+            "publication_ready": False,
+            "paper_authorized": False,
+            "display_suite_complete": True,
+        },
+        literature_evidence={
+            "status": "searched",
+            "citation_count": 1,
+            "mapping_status": "complete",
+            "scientific_mapping_status": "complete",
+            "search": {
+                "search_conducted": True,
+                "sources_returning": ["pubmed"],
+            },
+        },
+        study={
+            "idea_handoff": {
+                "status": "accepted",
+                "canonical_handoff_sha256": "b" * 64,
+                "prior_art_sha256": "c" * 64,
+                "prior_art_status": "complete",
+                "prior_art_result_count": 1,
+                "prior_art_searched_at": "2026-08-12T00:00:00+00:00",
+            }
+        },
+    )
+
+    finding = next(
+        row
+        for row in projection.findings
+        if row.code == "UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE"
+    )
+    assert projection.status == "analysis_only"
+    assert projection.claim_ceiling == "analysis_only"
+    assert finding.requires_user_authorization is True
+    assert projection.facts["analysis"]["user_authorization_requests"] == [
+        {
+            "code": "UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE",
+            "question": "Keep descriptive, or authorize a new adjusted version?",
+        }
+    ]
