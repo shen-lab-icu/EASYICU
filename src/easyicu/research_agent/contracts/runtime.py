@@ -22,7 +22,7 @@ from ..authority.scientific_claims import ScientificClaim
 from ..robustness.panel import RobustnessPanel, RobustnessPanelRow, RobustnessSpec
 from ..schema import EvidenceRecord as EvidenceArtifact
 from ..schema import ValidationFinding
-from .execution_result import RunResult
+from .execution_result import RunnerFailureCode, RunResult
 
 DerivedClaim = NumericClaim
 
@@ -95,6 +95,7 @@ __all__ = [
     "ScientificClaim",
     "DerivedClaim",
     "RunResult",
+    "RunnerFailureCode",
     "TimeWindow",
     "ConceptPredicate",
     "CohortDefinition",

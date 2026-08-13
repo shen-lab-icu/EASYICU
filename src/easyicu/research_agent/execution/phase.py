@@ -4407,6 +4407,9 @@ def run_execute_phase(
         candidate_contract_findings = replan_candidate_contract_findings(
             plan=revised,
             context=context,
+            owner_declaration_findings=owner_declaration_plan_findings(
+                plan=revised
+            ),
         )
         active_candidate_findings, candidate_contract_errors = (
             partition_replan_candidate_findings(
@@ -10296,6 +10299,7 @@ def run_execute_phase(
                 deterministic_executor_used=bool(
                     worker_progress.deterministic_standard_executor_used
                 ),
+                runner_failure_code=run_result.runner_failure_code,
             )
             if runtime_failure is not None:
                 step_record.update(runtime_failure.step_updates)

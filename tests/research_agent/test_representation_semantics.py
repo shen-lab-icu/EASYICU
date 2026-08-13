@@ -53,6 +53,16 @@ def test_first_time_companion_is_time_not_ordinal_score() -> None:
     assert compiled.ordinal_levels is None
     assert compiled.allowed_aggregations == [AggregationRule.NONE]
     assert all("0–4 ordinal" not in item for item in compiled.clinical_caveats)
+    assert any(
+        "first non-null observation" in item
+        and "not a certified clinical onset or treatment initiation" in item
+        for item in compiled.clinical_caveats
+    )
+    assert any(
+        "does not prove that the event or treatment was absent"
+        in item
+        for item in compiled.clinical_caveats
+    )
 
 
 def test_mean_of_ordinal_source_is_explicit_derived_continuous_summary() -> None:

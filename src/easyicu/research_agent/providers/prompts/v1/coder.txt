@@ -829,16 +829,20 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   and missingness before modelling. If treatment timing is unavailable,
   describe the analysis as an observed association or selection
   diagnostic only, never as a treatment effect.
-- Exposure/event TIMING is available in the wide cohort: alongside the
-  magnitude summaries (`<c>_max/_min/_mean/_first/_n/_measured`), a
-  time-series concept also carries `<c>_first_time` and `<c>_last_time`
-  — the `charttime` in hours from ICU admission of the FIRST and LAST
-  recorded value. `<c>_first_time` is the initiation/onset time (e.g.
-  `norepi_rate_first_time` is the vasopressor start hour), so
-  early-vs-delayed or time-to-event exposures CAN be constructed when
-  these columns are present. Check for them before concluding that
-  row-level timing is unavailable; a NaN means the concept was never
-  recorded for that stay (no onset), not that timing is unknown.
+- Exposure/event TIMING is available in the wide cohort: alongside the magnitude summaries
+  (`<c>_max/_min/_mean/_first/_n/_measured`), a time-series concept may
+  carry `<c>_first_time` and `<c>_last_time`: the `charttime` in hours from
+  ICU admission of the first non-null observation inside the materialization
+  window and the last such observation. `<c>_first_time` is not a certified
+  initiation/onset time. An explicit zero or event-negative state is still a
+  valid first observation, and NaN only means no non-null observation was
+  recorded inside that window; it does not prove that the event or treatment
+  never occurred. Use these columns to describe observation coverage. For a
+  clinical onset, treatment initiation, incident exposure, or eligibility
+  time-zero, use an owner-authorized event time or derive the qualifying
+  positive transition from the bound long trajectory. If neither authority is
+  available, block the timing-dependent design rather than substituting the
+  wide first-observation coordinate.
 - Outcome TIMING: an outcome may carry `<outcome>_time` alongside the
   binary `<outcome>` — the event time in hours from ICU admission (e.g.
   `death_time` is time-of-death; NaN when the event never occurred).
@@ -847,23 +851,19 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   early-vs-delayed treatment comparison need not be blocked solely for
   lack of outcome timing. Still block if the exposure time-zero or
   eligibility onset themselves remain uncertified.
-- An event time recorded BEFORE time-zero (e.g. an `<outcome>_time` or
-  `<c>_first_time` < 0 relative to ICU admission, or before the chosen
-  landmark) is a pre-baseline event, not a missing or invalid one. Handle
-  it the standard survival way — exclude those stays from the at-risk /
-  landmark cohort and record the count — rather than failing an
-  outcome-timing certification over them. Report how many were excluded.
-- A required eligibility / onset "time-zero" can often be CONSTRUCTED from
-  the timing columns rather than read from a single pre-built status
-  field. If no certified onset field exists, try to assemble one by
-  combining the available onset timestamps (a state's `_first_time` with
-  the first qualifying physiology/treatment `_first_time`), then state and
-  justify the definition and its coverage. Only block if the components
-  needed for a defensible onset are themselves absent — not merely because
-  a ready-made certified field is missing. (Non-binding example, adapt to
-  the question: an onset could combine an infection-suspicion `_first_time`
-  with the first qualifying hypotension/lactate/vasopressor `_first_time`;
-  the specific rule is the study's to define, not a fixed default.)
+- A certified event time recorded BEFORE time-zero (for example an
+  `<outcome>_time` relative to ICU admission, or before the chosen landmark)
+  is a pre-baseline event, not a missing or invalid one. Handle it the standard
+  survival way — exclude those stays from the at-risk / landmark cohort and
+  record the count — rather than failing timing certification over them.
+  A wide `<c>_first_time < 0` is only a pre-baseline observation and must not
+  be called a pre-baseline event without typed event/transition authority.
+- A required eligibility/onset time-zero can be constructed from the bound
+  long trajectory when the required component concepts and a defensible,
+  positive state-transition rule are available. State and justify that rule
+  and its coverage. Do not combine wide `_first_time` observation coordinates
+  and label the result onset. If the required transition inputs or authority
+  are absent, block the timing-dependent design.
 - If a missingness or component-completeness QC check finds that interpretation is
   unsafe, write the QC artefacts and stop cleanly with null primary
   estimates. Do not repair by silently changing the clinical estimand

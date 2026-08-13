@@ -15,6 +15,10 @@ different, and both stop the step without spending an LLM code-repair attempt:
   executor (which carries its own, much larger bounded timeout) or an
   explicitly raised ``timeout_seconds`` — both operator decisions, not
   something a rewritten script can reach on its own.
+* An unavailable isolation backend — generated Python never started, so asking
+  the Coder to rewrite it cannot affect the host/Docker/sandbox boundary.  This
+  is an operator environment failure and must remain distinct from a code
+  defect.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from enum import Enum
 from typing import Any, Mapping
 
 from ..contracts.runtime import ValidationFinding
+from ..contracts.execution_result import RunnerFailureCode
 
 
 class RuntimeFailureClass(str, Enum):
@@ -31,6 +36,7 @@ class RuntimeFailureClass(str, Enum):
 
     PLAN_DATA_CONTRACT = "plan_data_contract"
     EXECUTION_TIMEOUT = "execution_timeout"
+    ISOLATION_BACKEND_UNAVAILABLE = "isolation_backend_unavailable"
     DETERMINISTIC_MODEL_NOT_ESTIMABLE = "deterministic_model_not_estimable"
 
 
@@ -49,7 +55,6 @@ _NOT_ESTIMABLE_SIGNATURES = (
     "could not be fitted as declared",
 )
 
-
 @dataclass(frozen=True)
 class RuntimeFailureDecision:
     """Terminal fail-closed payload consumed by execute-phase bookkeeping."""
@@ -67,6 +72,7 @@ def classify_runtime_failure(
     returncode: int,
     timeout_seconds: float | None = None,
     deterministic_executor_used: bool = False,
+    runner_failure_code: RunnerFailureCode | str | None = None,
 ) -> RuntimeFailureDecision | None:
     """Return a fail-closed class without exposing diagnostic literals.
 
@@ -114,6 +120,38 @@ def classify_runtime_failure(
             progress_message=(
                 f"Execution timed out for {step_id}; Coder repair was not "
                 "authorized."
+            ),
+        )
+    if runner_failure_code == RunnerFailureCode.ISOLATION_BACKEND_UNAVAILABLE:
+        failure_class = RuntimeFailureClass.ISOLATION_BACKEND_UNAVAILABLE
+        return RuntimeFailureDecision(
+            finding=ValidationFinding(
+                validator="runtime_isolation_backend_unavailable",
+                severity="error",
+                message=(
+                    "The generated script was not launched because no approved "
+                    "execution-isolation backend was available. The step failed "
+                    "closed without requesting Coder repair: changing analysis "
+                    "code cannot start Docker or make the host sandbox accept "
+                    "the configured interpreter. Restore an approved runner "
+                    "backend, then retry the run."
+                ),
+                detail={
+                    "step_id": step_id,
+                    "failure_class": failure_class.value,
+                    "returncode": returncode,
+                },
+            ),
+            step_updates={
+                "status": "execution_environment_failed",
+                "diagnostic_only": True,
+                "runtime_failure_class": failure_class.value,
+                "runtime_repair_route": "fail_closed",
+                "llm_repair_used": False,
+            },
+            progress_message=(
+                f"Execution isolation was unavailable for {step_id}; Coder "
+                "repair was not authorized."
             ),
         )
     if (

@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
+
+
+class RunnerFailureCode(str, Enum):
+    """Host-issued runner diagnostics that generated code cannot mint."""
+
+    ISOLATION_BACKEND_UNAVAILABLE = "isolation_backend_unavailable"
 
 
 @dataclass
@@ -29,6 +36,10 @@ class RunResult:
     # False means callers must not scan or hash anything under ``out_dir``.
     outputs_safe_to_collect: bool = True
     runner_log_path: Optional[Path] = None
+    # This control-plane value is assigned by the runner from a trusted backend
+    # probe.  stdout/stderr/run.log are child-influenced diagnostic surfaces and
+    # must never be used as substitutes for it.
+    runner_failure_code: Optional[RunnerFailureCode] = None
 
     @property
     def succeeded(self) -> bool:
@@ -37,4 +48,4 @@ class RunResult:
         )
 
 
-__all__ = ["RunResult"]
+__all__ = ["RunnerFailureCode", "RunResult"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -535,7 +536,7 @@ def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
     assert payload["outside_value"] is None
 
 
-def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
+def test_code_runner_default_does_not_retry_unavailable_sandbox_on_host(
     ra, tmp_path: Path, monkeypatch, unauthorized_host_fallback
 ):
     import easyicu.research_agent.execution.runner as runner_mod
@@ -546,7 +547,11 @@ def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
 
     def _fake_run(cmd, **kwargs):
         calls.append(list(cmd))
-        return SimpleNamespace(stdout="", stderr="", returncode=-6)
+        return SimpleNamespace(
+            stdout="",
+            stderr="sandbox-exec: sandbox_apply: Operation not permitted",
+            returncode=71,
+        )
 
     runner = ra.CodeRunner(workdir=tmp_path / "run", cohort_parquet=cohort_path)
     monkeypatch.setattr(
@@ -565,11 +570,15 @@ def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
 
     result = runner.run(step_id="sandbox_abort", code="print('must not retry')\n")
 
-    assert result.returncode == -6
-    assert len(calls) == 1
+    assert result.returncode == 71
+    assert len(calls) == 2
+    assert calls[0][0] == calls[1][0] == "sandbox-exec"
+    assert "-c" in calls[1]
     assert result.effective_isolation == "macos_sandbox_exec"
     assert result.isolation_degraded is False
     assert "fail-closed policy" in result.stderr
+    assert result.runner_failure_code is not None
+    assert result.runner_failure_code.value == "isolation_backend_unavailable"
 
 
 def test_code_runner_default_blocks_direct_host_execution(
@@ -917,14 +926,207 @@ def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
     )
 
     assert result.succeeded
-    assert len(calls) == 2
-    assert calls[0][0] == "unshare"
-    assert _is_python_executable(calls[1][0])
+    assert len(calls) == 3
+    assert calls[0][0] == calls[1][0] == "unshare"
+    assert "-c" in calls[1]
+    assert _is_python_executable(calls[2][0])
     assert any(p.name == "ok.txt" for p in result.artefacts)
-    assert "retrying without Linux network namespace isolation" in result.stderr
+    assert "unshare network isolation unavailable" in result.stderr
     assert result.isolation_degraded is True
     assert result.effective_isolation == "host_subprocess"
     assert "unshare" in (result.isolation_degradation_reason or "")
+
+
+@pytest.mark.parametrize(
+    ("diagnostic", "allow_unsafe_host_fallback"),
+    [
+        (
+            "Traceback (most recent call last):\n"
+            "  File 'script.py', line 1, in <module>\n"
+            "NameError: name 'model_frame' is not defined",
+            False,
+        ),
+        (
+            "Traceback (most recent call last):\n"
+            "  File 'script.py', line 1, in <module>\n"
+            "OSError: [Errno 9] Bad file descriptor",
+            True,
+        ),
+    ],
+)
+def test_sandboxed_child_code_error_remains_coder_repairable(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+    unauthorized_host_fallback,
+    diagnostic: str,
+    allow_unsafe_host_fallback: bool,
+):
+    """A working sandbox must not relabel the child's traceback as host failure."""
+
+    import easyicu.research_agent.execution.runner as runner_mod
+    from easyicu.research_agent.execution.failure_classification import (
+        classify_runtime_failure,
+    )
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        allow_unsafe_host_fallback=allow_unsafe_host_fallback,
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "build_command",
+        lambda *, script_path: [
+            "sandbox-exec",
+            "-p",
+            "(deny network*)",
+            "python",
+            str(script_path),
+        ],
+    )
+    monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return SimpleNamespace(stdout="", stderr=diagnostic, returncode=1)
+
+    monkeypatch.setattr(
+        runner_mod, "_run_capturing_with_descendant_reaping", _fake_run
+    )
+
+    result = runner.run(step_id="child_name_error", code="print(model_frame)\n")
+    run_log = result.runner_log_path.read_text(encoding="utf-8")
+
+    assert len(calls) == 1
+    assert "[CodeRunner] isolation backend failed" not in result.stderr
+    assert diagnostic.splitlines()[-1] in result.stderr
+    assert (
+        classify_runtime_failure(
+            run_log=run_log,
+            timed_out=result.timed_out,
+            step_id=result.step_id,
+            returncode=result.returncode,
+            runner_failure_code=result.runner_failure_code,
+        )
+        is None
+    )
+
+
+def test_child_diagnostic_cannot_authorize_unsafe_host_fallback(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """A host-owned probe, not generated stderr, decides sandbox fallback."""
+
+    import easyicu.research_agent.execution.runner as runner_mod
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
+    )
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, *, cwd, env, timeout):
+        calls.append(list(cmd))
+        if "-c" in cmd:
+            return SimpleNamespace(
+                stdout="easyicu-isolation-probe-ok\n", stderr="", returncode=0
+            )
+        return SimpleNamespace(
+            stdout="",
+            stderr="OMP: Error #179: Function Can't open SHM2 failed:",
+            returncode=1,
+        )
+
+    monkeypatch.setattr(
+        runner,
+        "build_command",
+        lambda *, script_path: [
+            "sandbox-exec",
+            "-p",
+            "(deny network*)",
+            "python",
+            str(script_path),
+        ],
+    )
+    monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        runner_mod, "_run_capturing_with_descendant_reaping", _fake_run
+    )
+
+    result = runner.run(step_id="child_spoof", code="raise RuntimeError('boom')\n")
+
+    assert len(calls) == 2
+    assert calls[0][0] == calls[1][0] == "sandbox-exec"
+    assert result.returncode == 1
+    assert result.isolation_degraded is False
+    assert result.runner_failure_code is None
+
+
+def test_child_diagnostic_plus_probe_timeout_keeps_original_repair_route(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+):
+    import easyicu.research_agent.execution.runner as runner_mod
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
+    )
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, *, cwd, env, timeout):
+        calls.append(list(cmd))
+        if "-c" in cmd:
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        return SimpleNamespace(
+            stdout="",
+            stderr="OMP: Error #179: Function Can't open SHM2 failed:",
+            returncode=1,
+        )
+
+    monkeypatch.setattr(
+        runner,
+        "build_command",
+        lambda *, script_path: [
+            "sandbox-exec",
+            "-p",
+            "(deny network*)",
+            "python",
+            str(script_path),
+        ],
+    )
+    monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        runner_mod, "_run_capturing_with_descendant_reaping", _fake_run
+    )
+
+    result = runner.run(step_id="probe_timeout", code="raise RuntimeError('boom')\n")
+
+    assert len(calls) == 2
+    assert result.returncode == 1
+    assert result.timed_out is False
+    assert result.isolation_degraded is False
+    assert result.runner_failure_code is None
+    assert "original child failure retained" in result.stderr
 
 
 def test_runner_forces_single_thread_env_for_sandboxed_numeric_stacks(
@@ -1010,11 +1212,12 @@ def test_runner_retries_without_macos_sandbox_when_openmp_shm_is_blocked(
     result = runner.run(step_id="macos_omp_fallback", code="print('ok')\n")
 
     assert result.succeeded
-    assert len(calls) == 2
-    assert calls[0][0] == "sandbox-exec"
-    assert _is_python_executable(calls[1][0])
+    assert len(calls) == 3
+    assert calls[0][0] == calls[1][0] == "sandbox-exec"
+    assert "-c" in calls[1]
+    assert _is_python_executable(calls[2][0])
     assert any(p.name == "ok.txt" for p in result.artefacts)
-    assert "retrying without sandbox-exec" in result.stderr
+    assert "blocked numeric runtime shared memory" in result.stderr
     assert result.isolation_degraded is True
     assert result.effective_isolation == "host_subprocess"
     assert "shared memory" in (result.isolation_degradation_reason or "")
@@ -1069,9 +1272,10 @@ def test_runner_retries_without_macos_sandbox_when_profile_apply_is_denied(
     result = runner.run(step_id="macos_sandbox_apply_fallback", code="print('ok')\n")
 
     assert result.succeeded
-    assert len(calls) == 2
-    assert calls[0][0] == "sandbox-exec"
-    assert _is_python_executable(calls[1][0])
+    assert len(calls) == 3
+    assert calls[0][0] == calls[1][0] == "sandbox-exec"
+    assert "-c" in calls[1]
+    assert _is_python_executable(calls[2][0])
     assert captured_env["MPLCONFIGDIR"].endswith(".matplotlib")
     assert any(p.name == "ok.txt" for p in result.artefacts)
     assert "could not apply its profile" in result.stderr
@@ -1130,8 +1334,10 @@ def test_runner_retries_without_macos_sandbox_when_target_exec_is_denied(
     result = runner.run(step_id="macos_execvp_fallback", code="print('ok')\n")
 
     assert result.succeeded
-    assert len(calls) == 2
-    assert calls[0][0] == "sandbox-exec"
+    assert len(calls) == 3
+    assert calls[0][0] == calls[1][0] == "sandbox-exec"
+    assert "-c" in calls[1]
+    assert _is_python_executable(calls[2][0])
     assert result.isolation_degraded is True
     assert result.effective_isolation == "host_subprocess"
     assert "could not apply its profile" in result.stderr
@@ -1187,9 +1393,10 @@ def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(
     result = runner.run(step_id="macos_stdio_fallback", code="print('ok')\n")
 
     assert result.succeeded
-    assert len(calls) == 2
-    assert calls[0][0] == "sandbox-exec"
-    assert _is_python_executable(calls[1][0])
+    assert len(calls) == 3
+    assert calls[0][0] == calls[1][0] == "sandbox-exec"
+    assert "-c" in calls[1]
+    assert _is_python_executable(calls[2][0])
     assert any(p.name == "ok.txt" for p in result.artefacts)
     assert "prevented Python stdio initialisation" in result.stderr
     assert result.isolation_degraded is True
