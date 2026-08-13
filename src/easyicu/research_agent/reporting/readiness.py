@@ -65,6 +65,7 @@ from ..authority.step_recovery import StepRecoverySignature
 from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
+from ..gates.visual import _is_cosmetic_visual_finding
 from ..planning.capability_registry import (
     assess_scientific_capability,
     get_capability_by_id,
@@ -637,41 +638,19 @@ _PUBLICATION_FIGURE_VISUAL_ERROR_VALIDATORS = {
     "visual_qa",
     "vlm_visual_qa",
 }
-_COSMETIC_VISUAL_REASON = "svg_text_overlap_spacing"
-_LEGACY_COSMETIC_VISUAL_MESSAGE = re.compile(
-    r"^svg figure '[^']+' has overlapping text elements; "
-    r"multi-panel labels, annotations or axis text need more spacing\.?$",
-    re.IGNORECASE,
-)
-_HARD_VISUAL_MESSAGE = re.compile(
-    r"\b(?:blank|clip(?:ped|ping)?|crop(?:ped|ping)?|missing|absent|"
-    r"unreadable|overflow|truncat(?:ed|ion)|numeric|mismatch|disagree)\b",
-    re.IGNORECASE,
-)
-
-
-def _is_cosmetic_visual_error(finding: ValidationFinding) -> bool:
-    """A deterministic SVG text-overlap spacing warning is cosmetic, not a
-    manuscript blocker.
-
-    Mirrors ``execution.phase._is_cosmetic_visual_finding`` at the readiness
-    layer: the step-level demotion runs during execution, but this exact finding
-    is re-generated when the FINAL manuscript SVG is audited, after that pass, so
-    it leaks into ``analysis_errors`` / the figure-bundle gate and blocks a run
-    whose analysis and evidence are sound. A minor
-    multi-panel label/annotation overlap is demoted; genuine visual_qa errors
-    (blank/absent figure, wrong content) still block because they do not carry
-    the deterministic "overlapping text elements … spacing" signature.
-    """
-    if finding.severity != "error" or finding.validator != "visual_qa":
-        return False
-    message = str(finding.message or "").strip()
-    if _HARD_VISUAL_MESSAGE.search(message):
-        return False
-    detail = finding.detail if isinstance(finding.detail, Mapping) else {}
-    if str(detail.get("reason") or "").strip() == _COSMETIC_VISUAL_REASON:
-        return True
-    return _LEGACY_COSMETIC_VISUAL_MESSAGE.fullmatch(message) is not None
+# The cosmetic-demotion predicate is a scientific gate rule with exactly one
+# owner: ``gates.visual``.  Readiness needs it because the same finding is
+# re-generated when the FINAL manuscript SVG is audited -- after the step-level
+# demotion has already run -- so without it a run whose analysis and evidence
+# are sound is blocked by a multi-panel label overlap.
+#
+# It used to be re-implemented here, together with byte-identical copies of the
+# reason literal and both regexes.  Two owners for one gate is how the rule
+# drifts, and the copy's docstring already pointed at ``execution.phase``, a
+# location the predicate left in 60284da.  Import the owner instead; the
+# historical private name is kept because ``reporting.write_phase`` and the
+# governance tests bind to it.
+_is_cosmetic_visual_error = _is_cosmetic_visual_finding
 
 
 def _publication_figure_bundle_ready(
