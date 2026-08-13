@@ -228,6 +228,12 @@ def test_planner_receives_exact_preplan_literature_authority() -> None:
     assert "method_decision_cards" in prompt
     assert "What must this study report for a reader to appraise it?" in prompt
     assert "Allowed literature_citation_keys for this run are exactly" in prompt
+    assert "Method-source bindings may use ONLY the design elements" in prompt
+    assert '"record_2015": ["reporting"]' in prompt
+    assert (
+        '"strobe_2007": ["dependence", "estimand", "outcome", "reporting"]'
+        in prompt
+    )
     assert len(llm.calls) == 2
 
 
