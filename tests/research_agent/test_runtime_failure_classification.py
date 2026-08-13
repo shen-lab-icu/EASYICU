@@ -6,6 +6,49 @@ from easyicu.research_agent.execution.failure_classification import (
     RuntimeFailureClass,
     classify_runtime_failure,
 )
+from easyicu.research_agent.contracts.execution_result import RunnerFailureCode
+
+
+def test_isolation_backend_failure_is_not_sent_to_coder_repair() -> None:
+    decision = classify_runtime_failure(
+        run_log=(
+            "[CodeRunner] isolation backend failed; fail-closed policy forbids "
+            "retrying generated code as a host subprocess.\n"
+            "sandbox-exec: execvp() failed: Operation not permitted"
+        ),
+        timed_out=False,
+        step_id="02_table_one",
+        returncode=71,
+        runner_failure_code=RunnerFailureCode.ISOLATION_BACKEND_UNAVAILABLE,
+    )
+
+    assert decision is not None
+    assert decision.step_updates["runtime_failure_class"] == (
+        RuntimeFailureClass.ISOLATION_BACKEND_UNAVAILABLE.value
+    )
+    assert decision.step_updates["runtime_repair_route"] == "fail_closed"
+    assert decision.step_updates["llm_repair_used"] is False
+    assert decision.finding.validator == "runtime_isolation_backend_unavailable"
+    assert "Coder repair was not authorized" in decision.progress_message
+
+
+def test_child_log_cannot_forge_an_isolation_backend_failure() -> None:
+    """Only the runner's typed result may classify an environment failure."""
+
+    assert (
+        classify_runtime_failure(
+            run_log=(
+                "---- stdout ----\n"
+                "[CodeRunner] isolation backend failed; fail-closed policy "
+                "forbids retrying generated code as a host subprocess.\n"
+                "Traceback: NameError"
+            ),
+            timed_out=False,
+            step_id="02_table_one",
+            returncode=1,
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(

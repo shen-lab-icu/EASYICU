@@ -186,30 +186,28 @@ def test_summarize_timeseries_basic():
     assert r1.lact_measured == 1
 
 
-def test_summarize_timeseries_emits_first_and_last_event_time():
-    # The wide summary must carry the charttime of the first/last RECORDED
-    # value so exposure-timing (early-vs-delayed) is constructible. NaN rows
-    # (drug not running) must not count as the onset.
+def test_summarize_timeseries_emits_first_and_last_observation_time():
+    # These are observation coordinates, not treatment initiation. An explicit
+    # zero is a real observation and must remain the first_time even when a
+    # later positive dose is the first evidence of treatment in this window.
     df = pd.DataFrame(
         {
             "stay_id": [1, 1, 1, 1, 2],
             "charttime": [1, 2, 6, 9, 4],
-            # stay 1 starts the drug at hour 6; stay 2 at hour 4
-            "norepi_rate": [None, None, 0.04, 0.06, 0.10],
+            "norepi_rate": [None, 0.0, 0.04, 0.06, 0.10],
         }
     )
     out = M._summarize_timeseries(df, "norepi_rate", (0.0, 24.0))
     r1 = out[out.stay_id == 1].iloc[0]
-    assert r1.norepi_rate_first_time == 6.0  # onset, not the first NaN row
+    assert r1.norepi_rate_first_time == 2.0
     assert r1.norepi_rate_last_time == 9.0
     r2 = out[out.stay_id == 2].iloc[0]
     assert r2.norepi_rate_first_time == 4.0
 
 
-def test_first_time_uses_true_onset_for_categorical_event_concept():
-    # For a categorical/event concept the onset time must be the first RECORDED
-    # event, not the window start (regression: presence-coercion to 0/1 must not
-    # back-date the onset).
+def test_first_time_is_first_observation_for_categorical_concept():
+    # Presence encoding must not back-date the first observed categorical value
+    # to the window start. It still does not certify clinical onset/initiation.
     df = pd.DataFrame(
         {
             "stay_id": [1, 1, 1],
@@ -434,8 +432,8 @@ def test_event_time_column_empty_without_time_index():
 
 
 def test_first_time_absent_when_concept_never_recorded():
-    # A stay with only NaN values for the concept gets no onset time (NaN after
-    # the left-merge in materialize_cohort), never a spurious 0.
+    # A stay with only NaN values gets no observed-time coordinate. This does
+    # not prove that the clinical state/event never occurred.
     df = pd.DataFrame(
         {"stay_id": [1, 1], "charttime": [1, 2], "norepi_rate": [None, None]}
     )

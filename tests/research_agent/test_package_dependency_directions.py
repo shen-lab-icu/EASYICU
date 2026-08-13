@@ -166,6 +166,20 @@ def test_read_only_gates_do_not_import_action_layers() -> None:
     )
 
 
+def test_planning_does_not_import_agent_or_action_layers() -> None:
+    """Planning contracts must be reusable without loading their adapters."""
+
+    edges = _package_edges()
+    planning_targets = edges.get("planning", set())
+    forbidden = sorted(
+        planning_targets & {"agents", "execution", "orchestration", "pipeline"}
+    )
+    assert forbidden == [], (
+        "planning/ must own dependency-neutral contracts instead of importing "
+        f"agent adapters or action layers; violations: {forbidden}"
+    )
+
+
 def test_methods_package_stays_a_leaf() -> None:
     edges = _package_edges()
     method_targets = edges.get("methods", set())

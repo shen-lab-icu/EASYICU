@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Sequence
+
 from ..contracts.declared_product import primary_analysis_cohort_plan_findings
 from ..contracts.runtime import ValidationFinding
 from ..plan_utils import endpoint_contract_findings, _typed_plan_dag_findings
@@ -13,14 +15,20 @@ def replan_candidate_contract_findings(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    owner_declaration_findings: Sequence[ValidationFinding] = (),
 ) -> list[ValidationFinding]:
-    """Return execution-blocking graph defects in one proposed revision."""
+    """Return execution-blocking graph defects in one proposed revision.
+
+    Execution-owned selector diagnostics arrive as immutable findings instead
+    of making the planning package import the execution implementation.
+    """
 
     return [
         *endpoint_contract_findings(plan, context=context, severity="error"),
         *_typed_plan_dag_findings(plan),
         *primary_analysis_cohort_plan_findings(plan=plan),
         *trajectory_plan_dag_findings(plan=plan, context=context),
+        *owner_declaration_findings,
     ]
 
 

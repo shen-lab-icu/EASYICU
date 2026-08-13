@@ -20,11 +20,11 @@ For every time-series concept it emits a wide per-stay summary
 (``<c>_max/_min/_mean/_first/_n/_measured``) over a window, matching the
 data-quality-gate input contract (see ``docs/qc_eligibility_gate_design_v1``),
 plus timing columns ``<c>_first_time/_last_time`` carrying the ``charttime``
-(hours from ICU admission) of the first/last recorded value. The timing
-columns are what make exposure-timing questions answerable — e.g. the first
-``charttime`` where ``norepi_rate`` is recorded is the vasopressor initiation
-time, so "early vs delayed" exposure groups can be constructed from the wide
-cohort without re-reading the raw event stream.
+(hours from ICU admission) of the first/last non-null observation inside the
+materialisation window. These are observation-coverage coordinates, not
+certified clinical onset, treatment initiation, resolution, or cessation
+times. Timing-dependent definitions must use an owner-authorized event time or
+derive a qualifying transition from the bound long trajectory.
 Each outcome is emitted as a whole-stay binary ``<outcome>`` and, when its
 source carries a timestamp, an event time ``<outcome>_time`` (e.g.
 ``death_time`` = time-of-death in hours from ICU admission, NaN when the event
@@ -568,20 +568,18 @@ def _resolve_source(
 def _timing_columns(w: pd.DataFrame, concept: str) -> pd.DataFrame:
     """Per-stay ``<c>_first_time`` / ``<c>_last_time`` for one concept.
 
-    The time index (``charttime``, hours from ICU admission) of the FIRST and
-    LAST *recorded* (non-null) value of ``concept`` inside the window. Computed
-    on the raw column **before** any presence-coercion, so a categorical event's
-    ``_first_time`` is its true onset, not the window start.
+    The time index (``charttime``, hours from ICU admission) of the first and
+    last *recorded* (non-null) value of ``concept`` inside the window. Computed
+    on the raw column before any presence coercion, an explicit zero or
+    event-negative state is still an observation and may therefore be
+    ``_first_time``.
 
-    This is what makes timing-dependent questions answerable: e.g. the first
-    ``charttime`` where ``norepi_rate`` is recorded IS the vasopressor
-    initiation time, so "early vs delayed" exposure can be constructed. Without
-    it the wide summary only exposes magnitude (``_max/_min/_mean/_first``) and
-    an agent wrongly concludes no row-level timing exists and BLOCKs the study.
-
-    A stay with no recorded value is absent here -> the column is NaN after the
-    left-merge, which honestly reads as "never measured / event never occurred",
-    i.e. no onset time.
+    These columns describe observation coverage only. They do not certify a
+    clinical onset or treatment initiation; those require an owner-authorized
+    event time or a qualifying state transition in the bound long trajectory.
+    A stay with no recorded value is absent here and becomes NaN after the left
+    merge. That means no qualifying observation was recorded inside the window,
+    not that the event or treatment never occurred.
     """
     if TIME_COL not in w.columns:
         return pd.DataFrame(columns=[ID_COL])
@@ -710,9 +708,9 @@ def _summarize_timeseries_with_representation(
     w = _window(df, window[0], window[1])
     if w.empty or concept not in w.columns:
         return pd.DataFrame(columns=[ID_COL]), False
-    # Timing (onset/last-record time) is taken from the RAW non-null values
-    # before the presence-coercion below, so a categorical event keeps its true
-    # onset charttime rather than the window start.
+    # Observation bounds are taken from RAW non-null values before the
+    # presence-coercion below. They deliberately do not claim clinical onset,
+    # initiation, resolution, or cessation.
     timing = _timing_columns(w, concept)
     # The wide summary emits numeric _max/_min/_mean. A concept stored as object
     # (e.g. a ventilation status or a vasopressor drug name) cannot be reduced

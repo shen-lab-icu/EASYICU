@@ -57,7 +57,7 @@ from ..contracts.method_packages import (
     FINGERPRINT_ONLY_DISTRIBUTIONS,
     OPTIONAL_BASELINE_PACKAGES,
 )
-from ..contracts.runtime import RunResult
+from ..contracts.runtime import RunnerFailureCode, RunResult
 from ..orchestration.profiles import is_paper_facing_profile
 from .method_capabilities import set_runtime_capability_snapshot_provider
 
@@ -669,6 +669,115 @@ def macos_sandbox_permission_denied(stderr: object) -> bool:
     )
 
 
+def _linux_unshare_startup_failed(stderr: object) -> bool:
+    detail = _as_text(stderr).lower()
+    return "unshare:" in detail and "unshare failed" in detail
+
+
+def _macos_python_stdio_startup_failed(stderr: object) -> bool:
+    detail = _as_text(stderr).lower()
+    return (
+        "init_sys_streams" in detail
+        or "can't initialize sys standard streams" in detail
+    )
+
+
+def _macos_numeric_runtime_blocked(stderr: object) -> bool:
+    detail = _as_text(stderr).lower()
+    return "omp: error #179" in detail and "shm" in detail
+
+
+def _suspected_isolation_failure_kind(
+    *, command: Sequence[str], stderr: object, returncode: int
+) -> Optional[str]:
+    """Name a child-observed backend symptom that requires trusted probing.
+
+    The generated script's stderr is only a trigger to run the probe. It is
+    never sufficient to authorize host fallback or a terminal environment
+    classification because generated code can print every diagnostic below.
+    """
+
+    if returncode == 0 or not command:
+        return None
+    backend = Path(command[0]).name
+    if backend == "unshare" and _linux_unshare_startup_failed(stderr):
+        return "linux_unshare"
+    if backend != "sandbox-exec":
+        return None
+    if macos_sandbox_permission_denied(stderr):
+        return "macos_permission"
+    if _macos_python_stdio_startup_failed(stderr):
+        return "macos_stdio"
+    if _macos_numeric_runtime_blocked(stderr):
+        return "macos_numeric"
+    if returncode < 0 and not _as_text(stderr).strip():
+        return "macos_signal"
+    return None
+
+
+def _trusted_isolation_probe_command(
+    command: Sequence[str], *, failure_kind: str
+) -> List[str]:
+    """Replace the generated script with fixed host-owned probe code."""
+
+    if len(command) < 2:
+        return []
+    probe_code = (
+        "import numpy as _np; "
+        "_np.dot(_np.array([1.0]), _np.array([1.0])); "
+        "print('easyicu-isolation-probe-ok')"
+        if failure_kind == "macos_numeric"
+        else "print('easyicu-isolation-probe-ok')"
+    )
+    # CodeRunner commands always end in ``python analysis.py``. Retain the
+    # exact wrapper/profile argv and replace only its interpreter payload.
+    return [*command[:-1], "-I", "-c", probe_code]
+
+
+def _trusted_probe_confirms_isolation_failure(
+    *, failure_kind: str, stderr: object, returncode: int
+) -> bool:
+    if returncode == 0:
+        return False
+    if failure_kind == "linux_unshare":
+        return _linux_unshare_startup_failed(stderr)
+    if failure_kind == "macos_permission":
+        return macos_sandbox_permission_denied(stderr)
+    if failure_kind == "macos_stdio":
+        return _macos_python_stdio_startup_failed(stderr)
+    if failure_kind == "macos_numeric":
+        return _macos_numeric_runtime_blocked(stderr)
+    if failure_kind == "macos_signal":
+        return returncode < 0 and not _as_text(stderr).strip()
+    return False
+
+
+def _host_fallback_reason(failure_kind: str) -> tuple[str, str]:
+    messages = {
+        "linux_unshare": (
+            "unshare network isolation unavailable",
+            "unshare network namespace isolation failed",
+        ),
+        "macos_permission": (
+            "macOS sandbox-exec could not apply its profile inside the current outer sandbox",
+            "macOS sandbox-exec profile application was denied by the outer sandbox",
+        ),
+        "macos_stdio": (
+            "macOS sandbox-exec prevented Python stdio initialisation",
+            "macOS sandbox-exec blocked Python stdio initialisation",
+        ),
+        "macos_numeric": (
+            "macOS sandbox-exec blocked numeric runtime shared memory",
+            "macOS sandbox-exec blocked numeric runtime shared memory",
+        ),
+        "macos_signal": (
+            "macOS sandbox-exec terminated the Python runtime without diagnostics",
+            "macOS sandbox-exec terminated the Python runtime",
+        ),
+    }
+    return messages[failure_kind]
+
+
 class CodeRunner:
     """Run agent-generated Python in a fresh per-step directory."""
 
@@ -1094,6 +1203,7 @@ class CodeRunner:
         requested_isolation = self._isolation_backend_for_cmd(original_cmd)
         isolation_degraded = False
         isolation_degradation_reason: Optional[str] = None
+        runner_failure_code: Optional[RunnerFailureCode] = None
         unsafe_direct_backends = {
             "host_subprocess",
             "linux_unshare_network_namespace",
@@ -1152,6 +1262,7 @@ class CodeRunner:
                 isolation_degraded=False,
                 isolation_degradation_reason=None,
                 runner_log_path=log_path,
+                runner_failure_code=RunnerFailureCode.ISOLATION_BACKEND_UNAVAILABLE,
             )
         if requested_isolation == "host_subprocess":
             isolation_degraded = True
@@ -1179,185 +1290,87 @@ class CodeRunner:
                 timeout=self.timeout_seconds,
             )
             stdout, stderr, returncode = proc.stdout, proc.stderr, proc.returncode
-            if (
-                returncode != 0
-                and self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name == "unshare"
-                and sys.platform.startswith("linux")
-                and "unshare failed" in stderr.lower()
-            ):
-                retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(
-                    self.timeout_seconds - (time.monotonic() - started), 1.0
+            failure_kind = _suspected_isolation_failure_kind(
+                command=original_cmd,
+                stderr=stderr,
+                returncode=returncode,
+            )
+            if failure_kind is not None:
+                probe_cmd = _trusted_isolation_probe_command(
+                    original_cmd,
+                    failure_kind=failure_kind,
                 )
-                retry_proc = _run_capturing_with_descendant_reaping(
-                    retry_cmd,
-                    cwd=str(step_dir),
-                    env=env,
-                    timeout=retry_timeout,
+                probe_timeout = max(
+                    min(self.timeout_seconds - (time.monotonic() - started), 10.0),
+                    1.0,
                 )
-                stdout = retry_proc.stdout
-                stderr = (
-                    "[CodeRunner] unshare network isolation unavailable; "
-                    "retrying without Linux network namespace isolation.\n"
-                    f"[CodeRunner] original stderr:\n{stderr}\n"
-                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
+                probe_proc = None
+                probe_error: Optional[str] = None
+                try:
+                    probe_proc = _run_capturing_with_descendant_reaping(
+                        probe_cmd,
+                        cwd=str(step_dir),
+                        env=env,
+                        timeout=probe_timeout,
+                    )
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    # A child-controlled diagnostic may request this probe, so
+                    # probe infrastructure failure cannot replace the child's
+                    # original result or buy a different repair route.
+                    probe_error = type(exc).__name__
+                confirmed = bool(
+                    probe_proc is not None
+                    and _trusted_probe_confirms_isolation_failure(
+                        failure_kind=failure_kind,
+                        stderr=probe_proc.stderr,
+                        returncode=probe_proc.returncode,
+                    )
                 )
-                returncode = retry_proc.returncode
-                cmd = retry_cmd
-                isolation_degraded = True
-                isolation_degradation_reason = "unshare network namespace isolation failed; retried as a host subprocess."
-            if (
-                returncode != 0
-                and self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name == "sandbox-exec"
-                and sys.platform == "darwin"
-                and macos_sandbox_permission_denied(stderr)
-            ):
-                retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(
-                    self.timeout_seconds - (time.monotonic() - started), 1.0
-                )
-                retry_proc = _run_capturing_with_descendant_reaping(
-                    retry_cmd,
-                    cwd=str(step_dir),
-                    env=env,
-                    timeout=retry_timeout,
-                )
-                stdout = retry_proc.stdout
-                stderr = (
-                    "[CodeRunner] macOS sandbox-exec could not apply its profile "
-                    "inside the current outer sandbox; retrying without sandbox-exec "
-                    "while keeping generated code under captured provenance.\n"
-                    f"[CodeRunner] original stderr:\n{stderr}\n"
-                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
-                )
-                returncode = retry_proc.returncode
-                cmd = retry_cmd
-                isolation_degraded = True
-                isolation_degradation_reason = (
-                    "macOS sandbox-exec profile application was denied by the "
-                    "outer sandbox; retried as a host subprocess."
-                )
-            if (
-                returncode != 0
-                and self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name == "sandbox-exec"
-                and sys.platform == "darwin"
-                and (
-                    "init_sys_streams" in stderr.lower()
-                    or "can't initialize sys standard streams" in stderr.lower()
-                    or "bad file descriptor" in stderr.lower()
-                )
-            ):
-                retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(
-                    self.timeout_seconds - (time.monotonic() - started), 1.0
-                )
-                retry_proc = _run_capturing_with_descendant_reaping(
-                    retry_cmd,
-                    cwd=str(step_dir),
-                    env=env,
-                    timeout=retry_timeout,
-                )
-                stdout = retry_proc.stdout
-                stderr = (
-                    "[CodeRunner] macOS sandbox-exec prevented Python stdio initialisation; "
-                    "retrying without sandbox-exec while keeping generated code under "
-                    "captured provenance.\n"
-                    f"[CodeRunner] original stderr:\n{stderr}\n"
-                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
-                )
-                returncode = retry_proc.returncode
-                cmd = retry_cmd
-                isolation_degraded = True
-                isolation_degradation_reason = (
-                    "macOS sandbox-exec blocked Python stdio initialisation; "
-                    "retried as a host subprocess."
-                )
-            if (
-                returncode != 0
-                and self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name == "sandbox-exec"
-                and sys.platform == "darwin"
-                and "omp: error #179" in stderr.lower()
-                and "shm" in stderr.lower()
-            ):
-                retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(
-                    self.timeout_seconds - (time.monotonic() - started), 1.0
-                )
-                retry_proc = _run_capturing_with_descendant_reaping(
-                    retry_cmd,
-                    cwd=str(step_dir),
-                    env=env,
-                    timeout=retry_timeout,
-                )
-                stdout = retry_proc.stdout
-                stderr = (
-                    "[CodeRunner] macOS sandbox-exec blocked numeric runtime shared memory; "
-                    "retrying without sandbox-exec while keeping network-free generated code "
-                    "under captured provenance.\n"
-                    f"[CodeRunner] original stderr:\n{stderr}\n"
-                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
-                )
-                returncode = retry_proc.returncode
-                cmd = retry_cmd
-                isolation_degraded = True
-                isolation_degradation_reason = (
-                    "macOS sandbox-exec blocked numeric runtime shared memory; "
-                    "retried as a host subprocess."
-                )
-            if (
-                returncode < 0
-                and self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name == "sandbox-exec"
-                and sys.platform == "darwin"
-                and not stderr.strip()
-            ):
-                retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(
-                    self.timeout_seconds - (time.monotonic() - started), 1.0
-                )
-                retry_proc = _run_capturing_with_descendant_reaping(
-                    retry_cmd,
-                    cwd=str(step_dir),
-                    env=env,
-                    timeout=retry_timeout,
-                )
-                stdout = retry_proc.stdout
-                stderr = (
-                    "[CodeRunner] macOS sandbox-exec terminated the Python "
-                    "runtime without diagnostics; retrying with the scrubbed "
-                    "environment but without filesystem isolation.\n"
-                    f"[CodeRunner] sandbox returncode: {returncode}\n"
-                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
-                )
-                returncode = retry_proc.returncode
-                cmd = retry_cmd
-                isolation_degraded = True
-                isolation_degradation_reason = (
-                    "macOS sandbox-exec terminated the Python runtime; retried "
-                    "as a host subprocess with a scrubbed environment."
-                )
-            if (
-                returncode != 0
-                and not self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name in {"sandbox-exec", "unshare"}
-            ):
-                stderr = (
-                    "[CodeRunner] isolation backend failed; fail-closed policy "
-                    "forbids retrying generated code as a host subprocess. "
-                    "Set allow_unsafe_host_fallback=True (development only) to "
-                    "opt in to degraded execution.\n"
-                    f"{stderr}"
-                )
+                if confirmed and self.allow_unsafe_host_fallback:
+                    assert probe_proc is not None
+                    retry_cmd = [self.python_executable, str(script_path)]
+                    retry_timeout = max(
+                        self.timeout_seconds - (time.monotonic() - started), 1.0
+                    )
+                    retry_proc = _run_capturing_with_descendant_reaping(
+                        retry_cmd,
+                        cwd=str(step_dir),
+                        env=env,
+                        timeout=retry_timeout,
+                    )
+                    headline, reason = _host_fallback_reason(failure_kind)
+                    stdout = retry_proc.stdout
+                    stderr = (
+                        f"[CodeRunner] {headline}; retrying without the failed "
+                        "isolation backend under explicit development-only "
+                        "fallback.\n"
+                        f"[CodeRunner] host probe stderr:\n{probe_proc.stderr}\n"
+                        f"[CodeRunner] original stderr:\n{stderr}\n"
+                        f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
+                    )
+                    returncode = retry_proc.returncode
+                    cmd = retry_cmd
+                    isolation_degraded = True
+                    isolation_degradation_reason = (
+                        f"{reason}; retried as a host subprocess."
+                    )
+                elif confirmed:
+                    assert probe_proc is not None
+                    runner_failure_code = (
+                        RunnerFailureCode.ISOLATION_BACKEND_UNAVAILABLE
+                    )
+                    stderr = (
+                        "[CodeRunner] isolation backend failed; fail-closed policy "
+                        "forbids retrying generated code as a host subprocess. "
+                        "A fixed host-owned probe reproduced the startup failure.\n"
+                        f"[CodeRunner] host probe stderr:\n{probe_proc.stderr}\n"
+                        f"[CodeRunner] original stderr:\n{stderr}"
+                    )
+                elif probe_error:
+                    stderr = (
+                        f"{stderr}\n[CodeRunner] trusted isolation probe did not "
+                        f"complete ({probe_error}); original child failure retained."
+                    )
             duration = time.monotonic() - started
         except subprocess.TimeoutExpired as exc:
             # exc.stdout/stderr may be bytes even under text mode — decode before
@@ -1419,6 +1432,7 @@ class CodeRunner:
             isolation_degraded=isolation_degraded,
             isolation_degradation_reason=isolation_degradation_reason,
             runner_log_path=log_path,
+            runner_failure_code=runner_failure_code,
         )
 
 

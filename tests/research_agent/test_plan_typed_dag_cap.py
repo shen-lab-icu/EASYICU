@@ -10,6 +10,9 @@ from easyicu.research_agent.plan_utils import (
 from easyicu.research_agent.pipeline import (
     _defer_typed_plan_dag_findings_until_probe,
 )
+from easyicu.research_agent.execution.owner_declaration import (
+    owner_declaration_plan_findings,
+)
 from easyicu.research_agent.planning.replan_gate import (
     partition_replan_candidate_findings,
     replan_candidate_contract_findings,
@@ -18,6 +21,7 @@ from easyicu.research_agent.planning.replan_gate import (
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
+    ArtifactConsumptionContract,
     CohortDescriptor,
     ConceptDescriptor,
     ResearchContext,
@@ -163,6 +167,54 @@ def test_replan_candidate_contract_rejects_ambiguous_producer():
     assert any(
         finding.severity == "error"
         and (finding.detail or {}).get("reason") == "typed_input_producer_ambiguous"
+        for finding in findings
+    )
+
+
+def test_replan_candidate_rejects_distribution_figure_single_row_drift() -> None:
+    input_key = "table:exposure_outcome_distribution"
+    plan = AnalysisPlan(
+        research_question="Describe an exposure and outcome.",
+        steps=[
+            _step("01_distribution", outputs=[input_key]),
+            AnalysisStep(
+                step_id="02_figure",
+                intent="Render the exposure prevalence and outcome risk.",
+                planned_analysis_role="auxiliary",
+                method="visualization",
+                inputs=[input_key],
+                expected_outputs=["figure:absolute_risk"],
+                input_consumption_contracts=[
+                    ArtifactConsumptionContract(
+                        input_key=input_key,
+                        mode="single_row",
+                    )
+                ],
+            ),
+        ],
+        revision=2,
+    )
+
+    owner_findings = owner_declaration_plan_findings(plan=plan)
+    findings = replan_candidate_contract_findings(
+        plan=plan,
+        context=ResearchContext(
+            research_question=plan.research_question,
+            cohort=CohortDescriptor(
+                cohort_name="cohort",
+                database="synthetic",
+                n_patients=10,
+                n_stays=10,
+            ),
+            variables=[],
+        ),
+        owner_declaration_findings=owner_findings,
+    )
+
+    assert any(
+        finding.validator == "plan_owner_declaration"
+        and (finding.detail or {}).get("analysis_kind")
+        == "exposure_outcome_distribution_figure"
         for finding in findings
     )
 
