@@ -45,6 +45,11 @@ from ...contracts.association_execution import (
     association_estimator_kind,
     association_execution_verdict,
 )
+from ...contracts.dependence import (
+    PatientGroupResolutionError,
+    PlannedDependenceRequirement,
+    resolve_patient_groups,
+)
 from ...contracts.host_scaffold import HostScaffoldedScript
 from ...contracts.model_terms import (
     ModelTermSpec,
@@ -131,6 +136,8 @@ ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS = (
     "n",
     "n_events",
     "standard_error",
+    "variance_estimator",
+    "cluster_count",
     "notes",
     # --- the contrast this row reports -------------------------------------
     # A binary or continuous exposure has one contrast and one row, so these
@@ -328,6 +335,7 @@ def adjusted_association_executor_scaffold(
             "method_family": {requirement.method_family!r},
             "model_terms": {serialise_model_terms(requirement.model_terms or ())!r},
             "primary_contrast_level": {requirement.primary_contrast_level!r},
+            "dependence": {requirement.dependence.model_dump(mode="json") if requirement.dependence is not None else None!r},
         }}
 
         frame, cohort_path = load_step_cohort_frame(
@@ -535,6 +543,43 @@ def _contrast_rows(
     return rows
 
 
+def _cluster_groups(
+    *,
+    frame: Any,
+    dependence: PlannedDependenceRequirement | None,
+) -> tuple[Any, str]:
+    """Return runtime groups from the exact plan declaration.
+
+    The derivation is intentionally closed.  In particular, the executor does
+    not search for id-like columns or parse a naming convention that the plan
+    did not carry.  Malformed composite identities fail before any model output
+    is written.
+    """
+
+    if dependence is None:
+        return None, "model_based"
+    source = dependence.group_source
+    if source not in frame.columns:
+        raise AdjustedAssociationError(
+            f"declared cluster group source {source!r} is absent from the bound cohort"
+        )
+    series = frame[source]
+    if bool(series.isna().any()):
+        raise AdjustedAssociationError(
+            f"declared cluster group source {source!r} contains missing values"
+        )
+    try:
+        resolved = resolve_patient_groups(
+            series.astype("object").tolist(),
+            requirement=dependence,
+        )
+    except PatientGroupResolutionError as exc:
+        raise AdjustedAssociationError(str(exc)) from exc
+    groups = series.astype("object").copy()
+    groups.iloc[:] = list(resolved.groups)
+    return groups, dependence.variance_estimator
+
+
 def run_adjusted_association_from_env(
     *,
     requirement_id: str,
@@ -547,6 +592,7 @@ def run_adjusted_association_from_env(
     analysis_role: str,
     method_family: str,
     primary_contrast_level: Optional[str] = None,
+    dependence: PlannedDependenceRequirement | Dict[str, Any] | None = None,
     typed_cohort_input: Optional[str] = None,
     frame: Any = None,
     cohort_path: Any = None,
@@ -584,6 +630,18 @@ def run_adjusted_association_from_env(
             f"declared estimator {canonical_method!r} does not exactly dispatch "
             f"to runtime kind {estimator_kind!r}"
         )
+    try:
+        parsed_dependence = (
+            dependence
+            if isinstance(dependence, PlannedDependenceRequirement)
+            else PlannedDependenceRequirement.model_validate(dependence)
+            if dependence is not None
+            else None
+        )
+    except ValueError as exc:
+        raise AdjustedAssociationError(
+            "declared dependence contract is invalid: " + str(exc)
+        ) from exc
     parsed_terms = [
         item if isinstance(item, ModelTermSpec) else ModelTermSpec.model_validate(item)
         for item in model_terms
@@ -600,6 +658,8 @@ def run_adjusted_association_from_env(
         ) from exc
     adjustment = [item.name for item in adjustment_terms]
     needed = [outcome, *[item.name for item in parsed_terms]]
+    if parsed_dependence is not None:
+        needed.append(parsed_dependence.group_source)
     missing = [column for column in needed if column not in frame.columns]
     if missing:
         raise AdjustedAssociationError(
@@ -607,7 +667,11 @@ def run_adjusted_association_from_env(
             + ", ".join(sorted(missing))
         )
 
-    model_frame = frame[needed]
+    model_frame = frame[list(dict.fromkeys(needed))]
+    cluster_groups, variance_estimator = _cluster_groups(
+        frame=model_frame,
+        dependence=parsed_dependence,
+    )
     try:
         compiled = compile_model_terms(
             model_frame,
@@ -643,6 +707,8 @@ def run_adjusted_association_from_env(
         kind=estimator_kind,
         term=focal_term,
         source_by_design_column=compiled.source_by_design_column,
+        variance_estimator=variance_estimator,
+        cluster_groups=cluster_groups,
     )
     estimate = _finite(result.point_estimate)
     ci_low = _finite(result.ci_low)
@@ -684,6 +750,8 @@ def run_adjusted_association_from_env(
         "analysis_set": analysis_set,
         "n": int(result.n),
         "n_events": n_events,
+        "variance_estimator": result.variance_estimator,
+        "cluster_count": result.cluster_count,
         "notes": result.notes or "",
     }
     if contrasts is None:
@@ -801,6 +869,12 @@ def run_adjusted_association_from_env(
         "fit_method": _FIT_METHODS[estimator_kind],
         "model_terms": serialise_model_terms(parsed_terms),
         "design_columns": list(compiled.design.columns),
+        "dependence": (
+            parsed_dependence.model_dump(mode="json")
+            if parsed_dependence is not None
+            else None
+        ),
+        "cluster_count": result.cluster_count,
     }
 
     summary: Dict[str, Any] = {
@@ -815,6 +889,8 @@ def run_adjusted_association_from_env(
         "design_columns": list(compiled.design.columns),
         "estimator_kind": estimator_kind,
         "analysis_set": analysis_set,
+        "variance_estimator": result.variance_estimator,
+        "cluster_count": result.cluster_count,
         "typed_cohort_input": typed_cohort_input,
         "source_cohort": Path(cohort_path).name if cohort_path is not None else None,
         "n_total": int(result.n),

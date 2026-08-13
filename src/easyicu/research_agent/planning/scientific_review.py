@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..canonical_json import canonical_sha256
 from ..concept_availability import normalize_database_name
+from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..literature import LiteratureBundle
 from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
@@ -29,6 +30,10 @@ from ..research_context.temporal_semantics import (
 )
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from .figure_strategy import ArticleFigureStrategy, figure_step_covers_role
+from .dependence_authority import (
+    context_patient_group_authority,
+    dependence_matches_context,
+)
 from .method_literature import method_binding_support
 from .novelty_contract import NOVELTY_REVIEW_DIMENSIONS
 from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
@@ -174,29 +179,7 @@ def repeat_units_possible(context: ResearchContext) -> bool:
 
 
 def patient_identity_available(context: ResearchContext) -> bool:
-    provenance = context.cohort.provenance or {}
-    replacement = provenance.get("replacement_row_identity")
-    if isinstance(replacement, Mapping):
-        derivation = replacement.get("patient_group_derivation")
-        output_column = str(replacement.get("output_identity_column") or "")
-        if (
-            output_column in context.cohort.id_columns
-            and isinstance(derivation, Mapping)
-            and derivation.get("algorithm") == "prefix_before_:s"
-            and derivation.get("delimiter") == ":s"
-            and isinstance(replacement.get("mapping_file_sha256"), str)
-            and len(str(replacement.get("mapping_file_sha256"))) == 64
-        ):
-            return True
-    values = [
-        *context.cohort.id_columns,
-        *[str(value) for value in provenance.get("patient_id_columns") or ()],
-    ]
-    return any(
-        token in str(value).strip().casefold()
-        for value in values
-        for token in ("subject_id", "patient_id", "person_id", "uniquepid")
-    )
+    return context_patient_group_authority(context) is not None
 
 
 _EXECUTABLE_TEMPORAL_METHODS = frozenset(
@@ -215,6 +198,16 @@ _EXECUTABLE_DEPENDENCE_METHODS = frozenset(
         "one_stay_per_patient_association",
         "first_stay_association",
     }
+)
+_DESCRIPTIVE_ONLY_STEP_SHAPES = frozenset(
+    {
+        ("descriptive_distribution", ("table:distribution_prevalence",)),
+        ("descriptive_distribution_summary", ("table:distribution_prevalence",)),
+        ("descriptive", ("table:exposure_outcome_distribution",)),
+    }
+)
+_POST_BASELINE_OPPORTUNITY_LIMITATION = (
+    "post_baseline_exposure_opportunity_unresolved"
 )
 
 
@@ -238,14 +231,82 @@ def executable_scientific_step(step: AnalysisStep) -> bool:
     )
 
 
-def timing_design_closed(plan: Optional[AnalysisPlan]) -> bool:
-    """True only for an executable temporal estimator, never protocol prose."""
+def descriptive_only_step(step: AnalysisStep) -> bool:
+    """Whether one step has a closed, typed descriptive claim ceiling.
 
-    return any(
-        executable_scientific_step(step)
-        and _method_head(step) in _EXECUTABLE_TEMPORAL_METHODS
-        for step in scientific_steps(plan)
+    Exact method/product pairs are used because arbitrary table names or prose
+    such as "descriptive association" cannot prove that a model/effect estimate
+    is absent.  Any model/capability declaration wins over the ceiling and
+    keeps the plan on the inferential path.
+    """
+
+    contract = step.descriptive_claim
+    declared_columns = [
+        str(value).strip()
+        for value in step.inputs
+        if str(value).strip() and ":" not in str(value).strip()
+    ]
+    shape = (_method_head(step), tuple(step.expected_outputs))
+    closed_shape = bool(
+        shape in _DESCRIPTIVE_ONLY_STEP_SHAPES
+        and (
+            step.exposure_outcome_distribution_spec is not None
+            if shape == ("descriptive", ("table:exposure_outcome_distribution",))
+            else len(declared_columns) == 2 and len(set(declared_columns)) == 2
+        )
     )
+    return bool(
+        contract is not None
+        and contract.claim_ceiling == "descriptive_only"
+        and _POST_BASELINE_OPPORTUNITY_LIMITATION
+        in contract.unresolved_limitations
+        and closed_shape
+        and not step.model_requirements
+        and step.family_primary_result_requirement is None
+        and step.scientific_capability is None
+        and sole_typed_cohort_input(step) not in {None, ""}
+    )
+
+
+def _step_requires_temporal_inference(step: AnalysisStep) -> bool:
+    if descriptive_only_step(step):
+        return False
+    if (
+        step.exposure_outcome_distribution_spec is not None
+        or step.model_requirements
+        or step.family_primary_result_requirement is not None
+        or step.scientific_capability is not None
+    ):
+        return True
+    return _method_head(step) in (
+        _EXECUTABLE_TEMPORAL_METHODS | _EXECUTABLE_DEPENDENCE_METHODS
+    )
+
+
+def timing_design_closed(plan: Optional[AnalysisPlan]) -> bool:
+    """Require every applicable estimator to close its own temporal design."""
+
+    applicable = [
+        step
+        for step in scientific_steps(plan)
+        if executable_scientific_step(step) and _step_requires_temporal_inference(step)
+    ]
+    return bool(applicable) and all(
+        _method_head(step) in _EXECUTABLE_TEMPORAL_METHODS for step in applicable
+    )
+
+
+def temporal_inference_required(plan: Optional[AnalysisPlan]) -> bool:
+    """Whether an exact executable step estimates exposure inference.
+
+    Table 1, missingness and other supporting scientific tables can be marked
+    secondary without becoming exposure estimators.  Treating every
+    primary/secondary/sensitivity table as inference made a purely descriptive
+    plan fail merely because it also reported its denominator.  This predicate
+    therefore follows typed estimator ownership, not role labels or prose.
+    """
+
+    return any(_step_requires_temporal_inference(step) for step in scientific_steps(plan))
 
 
 def _sensitivity_specs(context: ResearchContext) -> tuple[Any, ...]:
@@ -264,12 +325,49 @@ def _sensitivity_specs(context: ResearchContext) -> tuple[Any, ...]:
 def repeated_unit_design_closed(
     context: ResearchContext, plan: Optional[AnalysisPlan]
 ) -> bool:
+    applicable = False
     for step in scientific_steps(plan):
         if not executable_scientific_step(step):
             continue
         method = _method_head(step)
-        if patient_identity_available(context) and method in _EXECUTABLE_DEPENDENCE_METHODS:
-            return True
+        model_requirements = tuple(step.model_requirements)
+        distribution = step.exposure_outcome_distribution_spec
+        if not (
+            model_requirements
+            or distribution is not None
+            or method in _EXECUTABLE_DEPENDENCE_METHODS
+            or method == "non_readmission_restriction"
+        ):
+            continue
+        applicable = True
+        has_patient_authority = patient_identity_available(context)
+        if model_requirements and not (
+            has_patient_authority
+            and all(
+                dependence_matches_context(
+                    context=context,
+                    dependence=requirement.dependence,
+                )
+                for requirement in model_requirements
+            )
+        ):
+            return False
+        if distribution is not None and not (
+            has_patient_authority
+            and dependence_matches_context(
+                context=context,
+                dependence=distribution.dependence,
+            )
+        ):
+            return False
+        # A mixed product step must close every covariance consumer above;
+        # neither its model nor its marginal distribution may borrow the
+        # other's authority. Once both present contracts are closed, the step
+        # is complete regardless of the human-readable method label.
+        if model_requirements or distribution is not None:
+            continue
+        if has_patient_authority and method in _EXECUTABLE_DEPENDENCE_METHODS:
+            continue
         if method == "non_readmission_restriction" and any(
             variable == "icu_readmission"
             for spec in _sensitivity_specs(context)
@@ -278,8 +376,9 @@ def repeated_unit_design_closed(
             and spec.strategy == "non_readmission_restriction"
             for variable in spec.execution_variables
         ):
-            return True
-    return False
+            continue
+        return False
+    return applicable
 
 
 def required_method_layers_for_plan(
@@ -489,31 +588,16 @@ def _literature_design_bindings(
 
 
 def _requested_sensitivity_axes(context: ResearchContext) -> set[str]:
-    preferences = context.user_preferences
-    if hasattr(preferences, "model_dump"):
-        preferences = preferences.model_dump(mode="json")
-    preferences = preferences if isinstance(preferences, Mapping) else {}
-    text = " ".join(
-        str(preferences.get(key) or "")
-        for key in (
-            "timing_and_design",
-            "subgroup_sensitivity",
-            "must_have_outputs",
-            "data_constraints",
-            "extra_notes",
-        )
-    ).casefold()
-    axes: set[str] = {
-        "readmission" if spec.axis == "repeated_stays" else spec.axis
-        for spec in _sensitivity_specs(context)
-    }
-    if any(token in text for token in ("timing", "time window", "landmark", "时序", "时间窗")):
-        axes.add("timing")
-    if any(token in text for token in ("readmission", "re-admission", "first stay", "再入院", "重复住院")):
-        axes.add("readmission")
-    if any(token in text for token in ("missing", "complete case", "缺失")):
-        axes.add("missing")
-    return axes
+    def review_axis(axis: str) -> str:
+        return {
+            "repeated_stays": "readmission",
+            "missing_data": "missing",
+        }.get(axis, axis)
+
+    # Only the typed StudyContext roster can create a required sensitivity.
+    # Free text remains useful planning context but cannot survive negation,
+    # so token scans here produced obligations users had explicitly declined.
+    return {review_axis(spec.axis) for spec in _sensitivity_specs(context)}
 
 
 def _sensitivity_facts(
@@ -1185,7 +1269,8 @@ def build_plan_scientific_review(
                 ),
             )
         )
-    if post_baseline and not timing_design_closed(plan):
+    needs_temporal_inference = temporal_inference_required(plan)
+    if post_baseline and needs_temporal_inference and not timing_design_closed(plan):
         findings.append(
             PlanScientificFinding(
                 code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
@@ -1452,6 +1537,12 @@ def build_plan_scientific_review(
             "repeat_units_possible": repeats,
             "patient_identity_available": patient_identity,
             "timing_design_executable": timing_design_closed(plan),
+            "temporal_inference_required": needs_temporal_inference,
+            "descriptive_only_step_ids": [
+                step.step_id
+                for step in scientific_steps(plan)
+                if descriptive_only_step(step)
+            ],
             "repeated_unit_design_executable": repeated_unit_design_closed(context, plan),
             "primary_covariates": list(covariates),
             "covariate_selection": covariate_selection,

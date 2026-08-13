@@ -37,6 +37,9 @@ from easyicu.research_agent.execution.runners.adjusted_association_executor impo
 from easyicu.research_agent.execution.runners.selection import (  # noqa: E402
     select_standard_executor,
 )
+from easyicu.research_agent.audits.validators import (  # noqa: E402
+    PrimaryModelContractValidator,
+)
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep  # noqa: E402
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
@@ -265,6 +268,72 @@ def test_the_declared_model_is_fitted_and_the_row_matches_the_reader(tmp_path) -
         "table:adjusted_association_estimates": "adjusted_association_estimates.csv"
     }
     assert summary["primary_or"] == pytest.approx(row["estimate"])
+
+
+def test_cluster_robust_dependence_is_executed_and_receipted(tmp_path) -> None:
+    frame = _cohort()
+    frame["patient_stay_id"] = [
+        f"patient-{index // 2}:s{index}" for index in range(len(frame))
+    ]
+    dependence = {
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "patient",
+        "group_source": "patient_stay_id",
+        "group_derivation": "prefix_before_delimiter",
+        "delimiter": ":s",
+    }
+
+    summary = _run(tmp_path, frame=frame, dependence=dependence)
+    table = pd.read_csv(tmp_path / "adjusted_association_estimates.csv")
+    contract = summary["model_contracts"][0]
+
+    assert summary["variance_estimator"] == "cluster_robust"
+    assert summary["cluster_count"] == len(frame) // 2
+    assert contract["dependence"]["variance_estimator"] == "cluster_robust"
+    assert contract["cluster_count"] == len(frame) // 2
+    assert table.loc[0, "variance_estimator"] == "cluster_robust"
+    assert table.loc[0, "cluster_count"] == len(frame) // 2
+
+    step_payload = json.loads(_step().model_dump_json())
+    step_payload["model_requirements"][0]["dependence"] = dependence
+    step = AnalysisStep.model_validate(step_payload)
+    issues, _ = PrimaryModelContractValidator._planned_model_requirement_issues(
+        step=step,
+        contracts=[contract],
+    )
+    assert issues == []
+
+    mismatched = dict(contract)
+    mismatched["dependence"] = None
+    issues, _ = PrimaryModelContractValidator._planned_model_requirement_issues(
+        step=step,
+        contracts=[mismatched],
+    )
+    assert any(
+        item.get("issue") == "model_requirement_field_mismatch"
+        and "dependence" in item.get("mismatches", {})
+        for item in issues
+    )
+
+
+def test_cluster_group_derivation_fails_closed_on_malformed_identity(tmp_path) -> None:
+    frame = _cohort()
+    frame["patient_stay_id"] = [f"stay-{index}" for index in range(len(frame))]
+
+    with pytest.raises(AdjustedAssociationError, match="cluster group"):
+        _run(
+            tmp_path,
+            frame=frame,
+            dependence={
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
+                "group_source": "patient_stay_id",
+                "group_derivation": "prefix_before_delimiter",
+                "delimiter": ":s",
+            },
+        )
+
+    assert not (tmp_path / "adjusted_association_estimates.csv").exists()
 
 
 def test_the_reported_effect_is_the_exposure_not_a_covariate(tmp_path) -> None:

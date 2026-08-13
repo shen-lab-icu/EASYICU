@@ -50,6 +50,7 @@ from ..contracts.fraction_scale import (
     normalize_metric_key,
 )
 from ..contracts.model_tokens import canonical_association_method
+from ..contracts.model_contract_match import reported_model_requirement_fields
 from ..replication.metrics import compare_metric_values
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..schema import (
@@ -4133,15 +4134,7 @@ class PrimaryModelContractValidator:
                 continue
 
             contract = matched[0]
-            reported = {
-                "outcome": contract.get("outcome"),
-                "outcome_type": contract.get("outcome_type"),
-                "method_family": contract.get("method_family")
-                or contract.get("model_family"),
-                "exposure_source": contract.get("exposure_source"),
-                "analysis_role": contract.get("analysis_role"),
-                "analysis_set": contract.get("analysis_set"),
-            }
+            reported = reported_model_requirement_fields(contract)
             mismatches: Dict[str, Dict[str, Any]] = {}
             for field in (
                 "outcome",
@@ -4166,6 +4159,12 @@ class PrimaryModelContractValidator:
                 mismatches["exposure_source"] = {
                     "expected": requirement["exposure_source"],
                     "reported": reported["exposure_source"],
+                }
+            field = "dependence"
+            if requirement.get(field) != reported.get(field):
+                mismatches[field] = {
+                    "expected": requirement.get(field),
+                    "reported": reported.get(field),
                 }
             if mismatches:
                 issues.append(

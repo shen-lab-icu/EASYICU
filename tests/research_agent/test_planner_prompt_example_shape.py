@@ -182,7 +182,12 @@ def test_the_example_spec_validates_on_its_own() -> None:
     spec = _distribution_example_step()["exposure_outcome_distribution_spec"]
 
     assert isinstance(spec, dict)
-    ExposureOutcomeDistributionSpec.model_validate(spec)
+    parsed = ExposureOutcomeDistributionSpec.model_validate(spec)
+    assert parsed.risk_difference_contrast is not None
+    assert parsed.risk_difference_contrast.reference_exposure_level == 0
+    assert parsed.risk_difference_contrast.comparison_exposure_level == 1
+    # The Planner chooses contrast direction but never fabricates host grouping.
+    assert parsed.dependence is None
 
 
 def test_the_closed_robustness_axis_vocabulary_is_published_to_the_planner() -> None:

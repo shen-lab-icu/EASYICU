@@ -46,6 +46,79 @@ def _store_with_association_claim(ra, tmp_path: Path):
     return store
 
 
+def _descriptive_distribution_summary() -> dict:
+    ceiling = "descriptive_unadjusted_not_causal"
+
+    def absolute_risk(
+        level_index: int,
+        level: int,
+        events: int,
+        estimate: float,
+        low: float,
+        high: float,
+    ) -> dict:
+        return {
+            "level_index": level_index,
+            "level": level,
+            "events": events,
+            "denominator": 100,
+            "estimate_pct": estimate,
+            "standard_error_pct": 2.0,
+            "ci_low_pct": low,
+            "ci_high_pct": high,
+            "confidence_level": 0.95,
+            "interval_method": "patient_cluster_robust_wald",
+            "covariance": "cluster_robust",
+            "cluster_count": 80,
+        }
+
+    return {
+        "interpretation_class": "exposure_outcome_distribution",
+        "interpretation_ceiling": ceiling,
+        "analysis_role": "primary",
+        "analysis_set": "bound_typed_cohort",
+        "cohort_n": 200,
+        "exposure": "early_lactate_elevation",
+        "outcome": "hospital_mortality",
+        "descriptive_estimates": {
+            "schema_version": "easyicu.exposure_outcome_descriptive_estimates/1",
+            "analysis_role": "primary",
+            "analysis_set": "bound_typed_cohort",
+            "interpretation_ceiling": ceiling,
+            "dependence": {
+                "schema_version": "easyicu.planned_dependence/1",
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
+                "group_source": "patient_stay_id",
+                "group_derivation": "prefix_before_delimiter",
+                "delimiter": ":s",
+            },
+            "exposure_prevalence": [],
+            "outcome_absolute_risks": [
+                absolute_risk(0, 0, 10, 10.0, 6.080072, 13.919928),
+                absolute_risk(1, 1, 30, 30.0, 26.080072, 33.919928),
+            ],
+            "risk_difference": {
+                "reference_level_index": 0,
+                "reference_level": 0,
+                "comparison_level_index": 1,
+                "comparison_level": 1,
+                "direction": "comparison_minus_reference",
+                "n": 200,
+                "estimate_pct": 20.0,
+                "standard_error_pct": 5.0,
+                "ci_low_pct": 10.20018,
+                "ci_high_pct": 29.79982,
+                "confidence_level": 0.95,
+                "interval_method": "linear_probability_wald",
+                "covariance": "cluster_robust",
+                "cluster_count": 80,
+                "interpretation_ceiling": ceiling,
+            },
+        },
+    }
+
+
 def test_qualitative_result_cannot_launder_support_through_an_evidence_id(
     ra, tmp_path: Path
 ) -> None:
@@ -302,3 +375,128 @@ def test_host_derives_association_direction_from_interval_against_null(
     )
 
     assert [claim.direction for claim in claims] == [expected_direction]
+
+
+def test_host_derives_only_descriptive_absolute_risks_and_risk_difference() -> None:
+    from easyicu.research_agent.authority.scientific_claims import (
+        bind_scientific_claim_drafts,
+        derive_scientific_claim_drafts,
+    )
+
+    drafts = derive_scientific_claim_drafts(_descriptive_distribution_summary())
+
+    assert [claim.claim_type for claim in drafts] == [
+        "descriptive_absolute_risk",
+        "descriptive_absolute_risk",
+        "descriptive_risk_difference",
+    ]
+    assert [claim.claim_id for claim in drafts] == [
+        "observed_absolute_risk_level_0",
+        "observed_absolute_risk_level_1",
+        "prespecified_unadjusted_risk_difference",
+    ]
+    claims = bind_scientific_claim_drafts(
+        [draft.model_dump(mode="json") for draft in drafts],
+        step_id="02_describe",
+        evidence_id="02_summary",
+    )
+    rendered = " ".join(
+        claim.render_text()
+        for claim in claims
+    ).lower()
+    assert "observed absolute risk was 10 percent" in rendered
+    assert (
+        "risk difference (comparison minus reference) was 20 percentage points"
+        in rendered
+    )
+    assert "descriptive, unadjusted, noncausal" in rendered
+    assert all(word not in rendered for word in ("associated", "independent", "caused"))
+
+
+def test_descriptive_claim_compiler_fails_closed_on_ceiling_or_level_drift() -> None:
+    from easyicu.research_agent.authority.scientific_claims import (
+        derive_scientific_claim_drafts,
+    )
+
+    wrong_ceiling = _descriptive_distribution_summary()
+    wrong_ceiling["interpretation_ceiling"] = "association"
+    with pytest.raises(ValueError, match="exact descriptive interpretation ceiling"):
+        derive_scientific_claim_drafts(wrong_ceiling)
+
+    wrong_level = _descriptive_distribution_summary()
+    wrong_level["descriptive_estimates"]["risk_difference"][
+        "comparison_level"
+    ] = "1"
+    with pytest.raises(ValueError, match="typed level values drifted"):
+        derive_scientific_claim_drafts(wrong_level)
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"estimate_pct": 12.0, "ci_low_pct": 2.0, "ci_high_pct": 22.0}, "comparison minus reference"),
+        ({"n": 199}, "two absolute-risk denominators"),
+        ({"cluster_count": 79}, "covariance authority"),
+        ({"ci_high_pct": 35.0}, "confidence interval arithmetic"),
+    ],
+)
+def test_descriptive_claim_compiler_rederives_the_risk_difference(
+    updates: dict, message: str
+) -> None:
+    from easyicu.research_agent.authority.scientific_claims import (
+        derive_scientific_claim_drafts,
+    )
+
+    summary = _descriptive_distribution_summary()
+    summary["descriptive_estimates"]["risk_difference"].update(updates)
+
+    with pytest.raises(ValueError, match=message):
+        derive_scientific_claim_drafts(summary)
+
+
+def test_descriptive_claim_names_the_exposure_observed_analysis_set() -> None:
+    from easyicu.research_agent.authority.scientific_claims import (
+        derive_scientific_claim_drafts,
+    )
+
+    summary = _descriptive_distribution_summary()
+    analysis_set = "exposure_observed_rows_within_bound_typed_cohort"
+    summary["analysis_set"] = analysis_set
+    summary["descriptive_estimates"]["analysis_set"] = analysis_set
+
+    drafts = derive_scientific_claim_drafts(summary)
+
+    assert {draft.population for draft in drafts} == {
+        "rows with observed exposure in the bound typed cohort"
+    }
+
+
+def test_descriptive_claims_are_digest_bound_and_writer_selectable(
+    ra, tmp_path: Path
+) -> None:
+    summary = _descriptive_distribution_summary()
+    store = ra.EvidenceStore(root=tmp_path, enforcement_mode="strict")
+    source = tmp_path / "descriptive_step_summary.json"
+    source.write_text(json.dumps(summary), encoding="utf-8")
+    record = store.register_file(
+        kind="statistic",
+        description="Typed descriptive summary",
+        source_path=source,
+        evidence_id="02_descriptive_summary",
+        produced_by_step="02_describe",
+        generation_mode="deterministic_standard",
+    )
+
+    store.register_step_summary_numerics(
+        step_id="02_describe",
+        evidence_id=record.evidence_id,
+        summary=summary,
+    )
+    claims = store.scientific_claims()
+    assert claims[-1].claim_ref == (
+        "02_describe.prespecified_unadjusted_risk_difference"
+    )
+    manuscript = store.bind_manuscript(claims[-1].placeholder)
+    assert "prespecified unadjusted risk difference" in manuscript
+    assert "descriptive, unadjusted, noncausal" in manuscript
+    assert "02_descriptive_summary" in manuscript
