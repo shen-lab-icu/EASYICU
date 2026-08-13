@@ -69,11 +69,6 @@ from ..agents.core import (
     StatisticalAnalysisAgent,
     VisualizationAgent,
 )
-from ..reporting.article_contract import (
-    article_contract_audit_payload,
-    summarize_article_contract_coverage,
-    validate_run_against_article_contract,
-)
 from ..audits.validators import (
     ClinicalConstraintValidator,
     ConceptUsageAuditor,
@@ -99,6 +94,7 @@ from ..repairs.source import (
 from ..repairs.semantic_boundary import SemanticRepairRecorder
 from ..repairs.attempt_record import record_deterministic_runner_repair_attempt
 from .code_hygiene import reorder_forward_references
+from .article_audit import RunArticleAuditResult, collect_run_article_audits
 from ..repairs.coordination import (
     RepairAuthorityBinding,
     StepRepairBudget,
@@ -351,10 +347,6 @@ from ..planning.cohort_contract import (
     cohort_definition_has_explicit_selection,
     cohort_definition_sha,
 )
-from ..planning.figure_strategy import (
-    validate_run_against_article_figure_strategy,
-)
-from ..planning.study_design import study_design_family_for_analysis_type
 from ..planning.method_vocabulary import (
     MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
 )
@@ -522,6 +514,41 @@ from ..viability import (
 from ..gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 logger = logging.getLogger(__name__)
+
+
+def _persist_run_article_audit_result(
+    *,
+    result: RunArticleAuditResult,
+    evidence_store: Any,
+    flush_partial_manifest: Callable[[Dict[str, Any]], None],
+) -> Tuple[ValidationFinding, ...]:
+    """Apply one read-only audit result through execute-phase host services."""
+
+    try:
+        artifact = result.artifact
+        if artifact is not None and evidence_store.get(artifact.evidence_id) is None:
+            evidence_store.register_file(
+                kind=artifact.kind,
+                description=artifact.description,
+                source_path=artifact.source_path,
+                evidence_id=artifact.evidence_id,
+                producer=artifact.producer,
+                generation_mode=artifact.generation_mode,
+            )
+        if result.manifest_items:
+            flush_partial_manifest(dict(result.manifest_items))
+    except Exception as exc:
+        return (
+            ValidationFinding(
+                validator="article_analysis_contract",
+                severity="warning",
+                message=(
+                    "Run-level article analysis contract audit failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            ),
+        )
+    return ()
 
 
 def _repair_prompt_binding_sha256(
@@ -12436,89 +12463,21 @@ def run_execute_phase(
         )
         findings += demoted_final_findings
 
-    try:
-        article_contract_status = summarize_article_contract_coverage(
-            context=context,
-            plan=plan,
-            evidence_records=evidence.records(),
-            per_step_records=per_step_records,
-            run_dir=run_dir,
+    article_audit_result = collect_run_article_audits(
+        context=context,
+        plan=plan,
+        evidence_records=evidence.records(),
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+    )
+    findings.extend(article_audit_result.findings)
+    findings.extend(
+        _persist_run_article_audit_result(
+            result=article_audit_result,
+            evidence_store=evidence,
+            flush_partial_manifest=_flush_partial_manifest,
         )
-        article_contract_path = run_dir / "article_contract_audit.json"
-        article_contract_path.write_text(
-            json.dumps(
-                article_contract_audit_payload(article_contract_status),
-                indent=2,
-                ensure_ascii=False,
-                default=str,
-            ),
-            encoding="utf-8",
-        )
-        if evidence.get("article_contract_audit") is None:
-            evidence.register_file(
-                kind="log",
-                description=(
-                    "Run-level article analysis contract audit: compares "
-                    "registered artifacts against required article display roles."
-                ),
-                source_path=article_contract_path,
-                evidence_id="article_contract_audit",
-                producer="article_contract",
-                generation_mode="system",
-            )
-        findings.extend(
-            validate_run_against_article_contract(
-                context=context,
-                plan=plan,
-                evidence_records=evidence.records(),
-                per_step_records=per_step_records,
-                run_dir=run_dir,
-            )
-        )
-        _flush_partial_manifest(
-            {"article_contract_audit": str(article_contract_path.relative_to(run_dir))}
-        )
-    except Exception as exc:
-        findings.append(
-            ValidationFinding(
-                validator="article_analysis_contract",
-                severity="warning",
-                message=(
-                    "Run-level article analysis contract audit failed: "
-                    f"{type(exc).__name__}: {exc}"
-                ),
-            )
-        )
-
-    # Figure-strategy coverage already gates publication readiness, but until
-    # this call the shortfall existed only inside that projection: a run whose
-    # figures missed a required article role produced no finding a reviewer
-    # could read. The family is resolved from the final plan so this finding
-    # cannot disagree with the gate it reports on.
-    try:
-        findings.extend(
-            validate_run_against_article_figure_strategy(
-                context=context,
-                run_dir=run_dir,
-                per_step_records=per_step_records,
-                analysis_family=(
-                    study_design_family_for_analysis_type(plan.analysis_type)
-                    if plan is not None and plan.analysis_type is not None
-                    else None
-                ),
-            )
-        )
-    except Exception as exc:
-        findings.append(
-            ValidationFinding(
-                validator="article_figure_strategy",
-                severity="warning",
-                message=(
-                    "Run-level article figure strategy audit failed: "
-                    f"{type(exc).__name__}: {exc}"
-                ),
-            )
-        )
+    )
 
     plan_result.plan = plan
     plan_result.plan_path = plan_path
