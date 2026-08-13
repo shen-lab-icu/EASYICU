@@ -438,3 +438,26 @@ def test_runner_repair_strips_fake_easyicu_import():
     ), repaired
     assert "restricted_cubic_spline" in repaired  # stub keeps the name defined
     assert "NotImplementedError" in repaired
+
+
+def test_runner_repair_stops_when_reported_easyicu_module_exists(monkeypatch):
+    """An import-loader failure is not authority to rewrite an existing module."""
+
+    from easyicu.research_agent.repairs import runner_dispatch, source
+
+    monkeypatch.setattr(
+        runner_dispatch, "host_module_is_available", lambda _name: True
+    )
+    result = source._deterministic_runner_repair_candidate(
+        code=(
+            "from easyicu.research_agent.schema import AnalysisStep\n"
+            "print(os.environ)\n"
+        ),
+        run_log=(
+            "ModuleNotFoundError: No module named "
+            "'easyicu.research_agent.schema'\n"
+            "NameError: name 'os' is not defined\n"
+        ),
+    )
+
+    assert result is None

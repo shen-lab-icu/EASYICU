@@ -1577,12 +1577,23 @@ def test_locked_sensitivity_contract_is_wired_into_both_contract_passes() -> Non
 
 
 def test_later_repairs_receive_prior_concept_findings_as_regression_constraints():
+    from easyicu.research_agent.execution.concept_repair import (
+        run_concept_repair_loop,
+    )
     from easyicu.research_agent.execution.phase import run_execute_phase
 
-    source = inspect.getsource(run_execute_phase)
-    assert "def _monotonic_concept_constraint_ticket" in source
-    assert source.count("*_monotonic_concept_constraint_ticket()") >= 4
-    assert "HOST-OWNED REPAIR AUTHORITY" not in source
+    phase_source = inspect.getsource(run_execute_phase)
+    concept_repair_source = inspect.getsource(run_concept_repair_loop)
+    assert "def _monotonic_concept_constraint_ticket" in phase_source
+    assert "monotonic_constraint_ticket=(_monotonic_concept_constraint_ticket)" in (
+        phase_source
+    )
+    direct_tickets = phase_source.count("*_monotonic_concept_constraint_ticket()")
+    delegated_tickets = concept_repair_source.count(
+        "*services.monotonic_constraint_ticket()"
+    )
+    assert direct_tickets + delegated_tickets >= 4
+    assert "HOST-OWNED REPAIR AUTHORITY" not in phase_source
 
 
 def test_untrusted_runtime_diagnostics_can_authorize_syntactic_repairs_only():
