@@ -1,0 +1,115 @@
+from easyicu.research_agent.literature import (
+    CitationRecord,
+    LiteratureBundle,
+    LiteratureScreeningDecision,
+)
+from easyicu.research_agent.reporting.manuscript_literature import (
+    audit_manuscript_literature,
+    render_writer_literature_digest,
+)
+
+
+def _bundle() -> LiteratureBundle:
+    return LiteratureBundle(
+        research_question="Question",
+        citations=[
+            CitationRecord(
+                key="paper_2024",
+                title="A relevant ICU cohort",
+                year="2024",
+                relevance="Source excerpt: Direct comparator.",
+            ),
+            CitationRecord(
+                key="strobe_2007",
+                title="The STROBE statement",
+                year="2007",
+                relevance="Methodology: observational reporting.",
+            ),
+        ],
+        screening_decisions=[
+            LiteratureScreeningDecision(
+                citation_key="paper_2024",
+                source="pubmed",
+                disposition="include",
+                evidence_role="direct_comparator",
+                rationale="Exact P/E/O screen passed.",
+                population_match=True,
+                exposure_match=True,
+                outcome_match=True,
+                design_excerpt_available=True,
+            )
+        ],
+    )
+
+
+def test_writer_digest_exposes_exact_key_and_relevance() -> None:
+    digest = render_writer_literature_digest(_bundle())
+    assert "[@paper_2024]" in digest
+    assert "A relevant ICU cohort" in digest
+    assert "Direct comparator" in digest
+    assert "direct_comparator" in digest
+    assert "method:" in digest
+
+
+def test_manuscript_literature_audit_rejects_aggregate_only_or_unknown() -> None:
+    aggregate_only = audit_manuscript_literature(
+        "Search flow {evidence:literature_prisma}.", _bundle()
+    )
+    assert aggregate_only.status == "blocked"
+    assert not aggregate_only.exact_citations_present
+
+    unknown = audit_manuscript_literature("Prior work [@invented].", _bundle())
+    assert unknown.status == "blocked"
+    assert unknown.unknown_keys == ["invented"]
+
+
+def test_manuscript_literature_audit_accepts_bound_exact_key() -> None:
+    manuscript = """## Introduction
+Prior work defines the comparator [@paper_2024].
+
+## Methods
+### Statistical analysis
+The observational reporting route followed STROBE [@strobe_2007].
+
+## Discussion
+The result is compared with the retained ICU study [@paper_2024].
+"""
+    audit = audit_manuscript_literature(manuscript, _bundle())
+    assert audit.status == "pass"
+    assert audit.cited_keys == ["paper_2024", "strobe_2007"]
+    assert audit.section_cited_keys["methods"] == ["strobe_2007"]
+
+
+def test_manuscript_literature_audit_rejects_one_token_citation_theatre() -> None:
+    manuscript = """## Introduction
+Prior work [@paper_2024].
+
+## Methods
+No literature citation here.
+
+## Discussion
+No direct comparator citation here.
+"""
+    audit = audit_manuscript_literature(manuscript, _bundle())
+
+    assert audit.status == "blocked"
+    assert audit.missing_required_citation_sections == ["methods", "discussion"]
+    assert audit.direct_comparator_sections_missing == ["discussion"]
+    assert audit.methods_method_source_missing is True
+
+
+def test_methods_cannot_use_a_comparator_as_method_authority() -> None:
+    manuscript = """## Introduction
+Prior work [@paper_2024].
+
+## Methods
+The method followed the comparator [@paper_2024].
+
+## Discussion
+Comparison with prior work [@paper_2024].
+"""
+    audit = audit_manuscript_literature(manuscript, _bundle())
+
+    assert audit.status == "blocked"
+    assert audit.missing_required_citation_sections == []
+    assert audit.methods_method_source_missing is True

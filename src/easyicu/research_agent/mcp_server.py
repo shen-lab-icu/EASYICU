@@ -15,6 +15,9 @@ This module exposes EasyICU research-agent tools at two granularities:
   ``audit_cohort`` / ``run_validator`` — atomic ICU extraction, concept and validator
   surfaces for external coding agents that do not want the whole
   end-to-end manuscript pipeline.
+* ``research_agent.list_export_concepts`` /
+  ``assess_export_coverage`` — path-free, read-only projections over an
+  EasyICU prepared export before a cohort is materialized.
 * ``research_agent.cross_database_concept_availability`` — standardized
   extraction support matrix across EasyICU's public ICU database layer.
 * ``research_agent.bind_evidence`` — register an external artefact in the
@@ -43,6 +46,12 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 from .concept_availability import (
     concept_database_availability_from_load_record,
     cross_database_concept_availability,
+)
+from .acquisition.mcp_projection import (
+    MAX_MCP_COVERAGE_CONCEPTS,
+    MAX_MCP_EXPORT_CONCEPTS,
+    project_export_concepts,
+    project_export_coverage,
 )
 from .research_context.builder import build_research_context
 from .research_context.outbound import (
@@ -583,6 +592,39 @@ def _tool_describe_concept(args: Dict[str, Any]) -> Dict[str, Any]:
         "concept": projected[0] if projected else {"name": variable.name},
         "projection": _projection_note(),
     }
+
+
+def _export_dir_from_args(args: Dict[str, Any]) -> Path:
+    export_dir = args.get("export_dir")
+    if export_dir is None:
+        raise ValueError("export_dir is required")
+    return resolve_within_roots(export_dir, field="export_dir")
+
+
+def _tool_list_export_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
+    export_dir = _export_dir_from_args(args)
+    raw_modules = args.get("modules") or []
+    if not isinstance(raw_modules, list):
+        raise ValueError("modules must be an array of module names")
+    return project_export_concepts(
+        export_dir=export_dir,
+        source_ref=_path_digest(export_dir),
+        query=str(args.get("query") or ""),
+        modules=[str(value) for value in raw_modules],
+        limit=args.get("limit", 200),
+    )
+
+
+def _tool_assess_export_coverage(args: Dict[str, Any]) -> Dict[str, Any]:
+    export_dir = _export_dir_from_args(args)
+    raw_concepts = args.get("concepts")
+    if not isinstance(raw_concepts, list):
+        raise ValueError("concepts must be an array of concept ids")
+    return project_export_coverage(
+        export_dir=export_dir,
+        source_ref=_path_digest(export_dir),
+        concepts=[str(value) for value in raw_concepts],
+    )
 
 
 def _tool_audit_cohort(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1182,6 +1224,8 @@ TOOLS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
     "research_agent.build_context": _tool_build_context,
     "research_agent.list_concepts": _tool_list_concepts,
     "research_agent.describe_concept": _tool_describe_concept,
+    "research_agent.list_export_concepts": _tool_list_export_concepts,
+    "research_agent.assess_export_coverage": _tool_assess_export_coverage,
     "research_agent.audit_cohort": _tool_audit_cohort,
     "research_agent.run_validator": _tool_run_validator,
     "research_agent.load_concepts": _tool_load_concepts,
@@ -1297,6 +1341,56 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "cohort_name": {"type": "string"},
                 "database": {"type": "string"},
                 "target_outcome": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "research_agent.list_export_concepts",
+        "description": (
+            "List standardized concepts physically present in a prepared "
+            "EasyICU export. Returns a path-free metadata projection and no "
+            "patient rows."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["export_dir"],
+            "additionalProperties": False,
+            "properties": {
+                "export_dir": {"type": "string", "minLength": 1},
+                "query": {"type": "string"},
+                "modules": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "maxItems": 40,
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_MCP_EXPORT_CONCEPTS,
+                    "default": 200,
+                },
+            },
+        },
+    },
+    {
+        "name": "research_agent.assess_export_coverage",
+        "description": (
+            "Check whether an explicit concept set is physically available "
+            "in a prepared EasyICU export. Returns owner-computed resolution "
+            "and re-extraction advice without patient rows or host paths."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["export_dir", "concepts"],
+            "additionalProperties": False,
+            "properties": {
+                "export_dir": {"type": "string", "minLength": 1},
+                "concepts": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1,
+                    "maxItems": MAX_MCP_COVERAGE_CONCEPTS,
+                },
             },
         },
     },
@@ -1527,6 +1621,8 @@ TOOL_SCOPES: Dict[str, str] = {
     "research_agent.build_context": SCOPE_METADATA,
     "research_agent.list_concepts": SCOPE_METADATA,
     "research_agent.describe_concept": SCOPE_METADATA,
+    "research_agent.list_export_concepts": SCOPE_METADATA,
+    "research_agent.assess_export_coverage": SCOPE_METADATA,
     "research_agent.audit_cohort": SCOPE_METADATA,
     "research_agent.run_validator": SCOPE_METADATA,
     "research_agent.load_concepts": SCOPE_METADATA,

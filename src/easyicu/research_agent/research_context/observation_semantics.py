@@ -146,18 +146,39 @@ def _conditional_event_time_updates(
 ) -> dict[str, ConceptDescriptor]:
     updates: dict[str, ConceptDescriptor] = {}
     for descriptor in descriptors.values():
+        # Native typed materialization publishes this transform explicitly.
+        # Legacy export materialization predates the column sidecar but uses the
+        # same closed ``<event>`` + ``<event>_time`` representation.  Accept the
+        # legacy shape only after the status column is mechanically verified as
+        # complete binary data and the source-status reconciler accepts every
+        # row; a suffix alone never grants event semantics.
+        legacy_event_base = (
+            descriptor.name.removesuffix("_time")
+            if descriptor.name.endswith("_time")
+            else ""
+        )
+        typed_event_time = (
+            descriptor.unit_normalization == "first_truthy_event_time"
+            and bool(descriptor.source_concept)
+        )
+        legacy_event_time = bool(
+            legacy_event_base and legacy_event_base in descriptors
+        )
         if (
             descriptor.name not in frame.columns
-            or descriptor.unit_normalization != "first_truthy_event_time"
-            or not descriptor.source_concept
+            or not (typed_event_time or legacy_event_time)
         ):
             continue
+        source_concept = str(descriptor.source_concept or legacy_event_base)
         candidates = [
             candidate
             for candidate in descriptors.values()
             if candidate.name != descriptor.name
             and candidate.name in frame.columns
-            and candidate.source_concept == descriptor.source_concept
+            and (
+                candidate.source_concept == source_concept
+                or candidate.name == legacy_event_base
+            )
             and isinstance(candidate.observed_domain, dict)
             and candidate.observed_domain.get("is_binary") is True
             and candidate.missingness is not None
@@ -165,7 +186,7 @@ def _conditional_event_time_updates(
         ]
         candidates.sort(
             key=lambda candidate: (
-                candidate.name != descriptor.source_concept,
+                candidate.name != source_concept,
                 candidate.name,
             )
         )

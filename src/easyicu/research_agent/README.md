@@ -462,6 +462,15 @@ python -m easyicu.research_agent.mcp_server --transport stdio
 ```python
 from easyicu.research_agent import mcp_dispatch
 mcp_dispatch("research_agent.list_skills")
+mcp_dispatch("research_agent.list_export_concepts", {
+    "export_dir": "prepared_easyicu_export",
+    "modules": ["labs", "outcome"],
+    "query": "lact",
+})
+mcp_dispatch("research_agent.assess_export_coverage", {
+    "export_dir": "prepared_easyicu_export",
+    "concepts": ["lact", "death"],
+})
 mcp_dispatch("research_agent.list_concepts", {"cohort_path": "cohort.parquet"})
 mcp_dispatch("research_agent.audit_cohort", {"cohort_path": "cohort.parquet"})
 mcp_dispatch("research_agent.run", {
@@ -475,10 +484,14 @@ mcp_dispatch("research_agent.run", {
 The server delegates protocol negotiation, JSON-RPC validation and stdio
 framing to the official MCP Python SDK. In addition to the end-to-end
 `research_agent.run`, it exposes atomic tools for external agents:
-`build_context`, `list_concepts`, `describe_concept`, `load_concepts`,
-`audit_cohort`, `run_validator`, `cross_database_concept_availability`,
-and `bind_evidence`. These are standardized extraction and evidence
-tools, not raw SQL tools: external agents can call EasyICU's existing
+`list_export_concepts`, `assess_export_coverage`, `build_context`,
+`list_concepts`, `describe_concept`, `load_concepts`, `audit_cohort`,
+`run_validator`, `cross_database_concept_availability`, and
+`bind_evidence`. The two export tools are the read-only bridge to the
+pre-materialization data foundation: they reuse the owner catalog and
+coverage rules, require only the `metadata` scope, and return no host path,
+patient row, or raw SQL. The remaining tools are standardized extraction and
+evidence tools, not raw SQL tools: external agents can call EasyICU's existing
 `load_concepts` API for any supported concept set (vitals, labs,
 therapies, outcomes, scores, sepsis definitions, SOFA/SOFA-2 components,
 etc.), check cross-database derivability before extraction, and register
@@ -497,6 +510,12 @@ The endpoint is `/mcp`. Non-loopback binding requires an independent MCP
 bearer token; patient-row disclosure additionally requires the separate
 `EASYICU_MCP_PATIENT_DATA_TOKEN` credential and the
 `read_patient_data` scope.
+
+Every `export_dir`, `cohort_path`, `data_path`, `workdir`, and output path is
+confined to `EASYICU_MCP_ALLOWED_ROOTS` (the server working directory when the
+variable is absent). Keep prepared exports inside an explicitly configured
+read root; do not grant a database volume or home directory more broadly than
+the MCP client needs.
 
 `--tool-timeout-seconds` is an optional request-wait ceiling, not a hard
 process kill: a synchronous tool that already started remains inside the

@@ -295,6 +295,7 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
                     "inputs": ["exposure_max", "death"],
                     "expected_outputs": ["table:adjusted_association_estimates"],
                     "method": "adjusted_association_models",
+                    "sensitivity_spec_ids": ["timing_landmark_24h"],
                     "model_requirements": [
                         {
                             "requirement_id": "primary",
@@ -331,6 +332,9 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
 
     assert len(projected.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT
     assert payload["steps"][0]["inputs"] == ["exposure_max", "death"]
+    assert payload["steps"][0]["sensitivity_spec_ids"] == [
+        "timing_landmark_24h"
+    ]
     assert payload["steps"][0]["model_requirements"][0]["outcome"] == "death"
     assert payload["robustness_specs"][0]["spec_id"] == "complete_case"
     assert payload["evalue_conversion_spec"]["baseline_population"] == "unexposed"

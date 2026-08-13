@@ -926,6 +926,36 @@ def test_locked_measurement_data_quality_terminates_before_code_repair():
     assert "coder.repair" not in terminal_route
 
 
+def test_host_standard_renderer_does_not_require_legacy_repair_receipt():
+    """Code sealing and registry repair receipts are separate contracts.
+
+    A selected deterministic figure executor has no repair id by design.  It
+    still gets the no-rewrite code-digest policy, while its parents are bound
+    by the ordinary resolved-input receipts.  Requiring the legacy receipt in
+    that state made every such renderer fail after successfully drawing.
+    """
+
+    from easyicu.research_agent.execution import phase as pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    receipt_guard = source.index("legacy_sealed_renderer_receipt = bool(")
+    parent_check = source.index(
+        "if legacy_sealed_renderer_receipt:", receipt_guard
+    )
+    identity_check = source.index(
+        "if legacy_sealed_renderer_receipt and (", parent_check
+    )
+    contract_repair_gate = source.index(
+        "if sealed_renderer_authorized_code_sha256 is not None:", identity_check
+    )
+
+    guarded = source[receipt_guard:contract_repair_gate]
+    assert "sealed_renderer_state.repair_id is not None" in guarded
+    assert "read_digest_bound_artifact_snapshot(" in guarded
+    assert "sealed_renderer_implementation_sha256" in guarded
+    assert parent_check < identity_check < contract_repair_gate
+
+
 def test_locked_measurement_preflight_runs_before_every_coder_repair():
     from easyicu.research_agent.execution import phase as pipeline_execute
 

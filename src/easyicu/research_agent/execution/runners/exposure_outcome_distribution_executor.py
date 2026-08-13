@@ -32,9 +32,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...authority.declared_levels import execution_distribution_spec
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep, ExposureOutcomeDistributionSpec, _typed_level_key
+from .plausibility_receipt import host_plausibility_receipt_injected
 from .typed_input_binding import (
     load_typed_cohort,
     run_dir_from_env,
@@ -86,6 +88,8 @@ EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS = (
     "n_rows",
     "exposure_denominator",
     "exposure_pct",
+    "exposure_ci_low_pct",
+    "exposure_ci_high_pct",
     "outcome_observed_n",
     "outcome_missing_n",
     "outcome_events",
@@ -245,8 +249,18 @@ def exposure_outcome_distribution_declaration_verdict(
     )
 
 
-def exposure_outcome_distribution_executor_code(step: AnalysisStep) -> str:
-    """Return the small sandbox entrypoint for the exact declared design."""
+def exposure_outcome_distribution_executor_code(
+    step: AnalysisStep,
+    *,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
+) -> str:
+    """Return the sandbox entrypoint for the exact declared design.
+
+    A flag-only plausibility obligation is mechanical host policy, not a
+    reason to hand this otherwise closed product to the stochastic Coder.  The
+    host-owned receipt is therefore appended to this owner's exact adapter and
+    covered by the same code digest as the distribution product itself.
+    """
 
     if not exposure_outcome_distribution_executor_owns_step(step):
         raise ValueError(
@@ -258,7 +272,9 @@ def exposure_outcome_distribution_executor_code(step: AnalysisStep) -> str:
     # rescued only by a replan that guessed ``[0, 1]``.
     spec = execution_distribution_spec(step)
     assert spec is not None  # narrowed by owns_step
-    return textwrap.dedent(
+    if plausibility_scope is not None:
+        plausibility_scope.require_step(step.step_id)
+    code = textwrap.dedent(
         f"""
         from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
             run_exposure_outcome_distribution_from_env,
@@ -279,6 +295,11 @@ def exposure_outcome_distribution_executor_code(step: AnalysisStep) -> str:
         )
         """
     ).strip()
+    return host_plausibility_receipt_injected(
+        code,
+        scope=plausibility_scope,
+        already_satisfied=False,
+    )
 
 
 def _finite(value: Any) -> Optional[float]:
@@ -571,6 +592,11 @@ def _distribution_rows(
     for level in spec.exposure_levels:
         mask = exposure_masks[_typed_level_key(level)]
         n_rows = int(mask.sum())
+        exposure_low, exposure_high = wilson_interval(
+            n_rows,
+            exposure_denominator,
+            confidence_level=spec.confidence_level,
+        )
         observed_n = int((mask & observed_outcome).sum())
         missing_n = n_rows - observed_n
         events = int((mask & event).sum())
@@ -587,6 +613,8 @@ def _distribution_rows(
                 "n_rows": n_rows,
                 "exposure_denominator": exposure_denominator,
                 "exposure_pct": percentage(n_rows, exposure_denominator),
+                "exposure_ci_low_pct": exposure_low,
+                "exposure_ci_high_pct": exposure_high,
                 "outcome_observed_n": observed_n,
                 "outcome_missing_n": missing_n,
                 "outcome_events": events,
@@ -608,6 +636,11 @@ def _distribution_rows(
     low, high = wilson_interval(
         overall_events, overall_denominator, confidence_level=spec.confidence_level
     )
+    exposure_low, exposure_high = wilson_interval(
+        total_rows,
+        exposure_denominator,
+        confidence_level=spec.confidence_level,
+    )
     rows.append(
         {
             "row_role": _OVERALL_ROLE,
@@ -615,6 +648,8 @@ def _distribution_rows(
             "n_rows": total_rows,
             "exposure_denominator": exposure_denominator,
             "exposure_pct": percentage(total_rows, exposure_denominator),
+            "exposure_ci_low_pct": exposure_low,
+            "exposure_ci_high_pct": exposure_high,
             "outcome_observed_n": overall_observed,
             "outcome_missing_n": total_rows - overall_observed,
             "outcome_events": overall_events,
@@ -680,6 +715,18 @@ def _verify_product(
             row["n_rows"], row["exposure_denominator"]
         ):
             raise RuntimeError("an exposure percentage is not its own counts")
+        if (
+            row["exposure_ci_low_pct"],
+            row["exposure_ci_high_pct"],
+        ) != wilson_interval(
+            row["n_rows"],
+            row["exposure_denominator"],
+            confidence_level=spec.confidence_level,
+        ):
+            raise RuntimeError(
+                "an exposure prevalence interval is not the declared method "
+                "at that level"
+            )
         if row["outcome_rate_pct"] != percentage(
             row["outcome_events"], row["outcome_denominator"]
         ):

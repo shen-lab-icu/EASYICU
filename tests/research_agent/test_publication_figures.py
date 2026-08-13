@@ -1071,6 +1071,118 @@ def test_publication_figure_skill_uses_auxiliary_outcome_incidence_for_main_figu
     assert descriptive["evidence_ids"] == ["outcome_incidence"]
 
 
+def test_publication_figure_skill_uses_distribution_and_labels_unadjusted_model(
+    ra,
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    primary_table = tmp_path / "adjusted_association_estimates.csv"
+    primary_table.write_text(
+        "exposure,estimate,ci_low,ci_high,effect_scale\n"
+        "exposure,1.70,1.50,1.92,odds_ratio\n",
+        encoding="utf-8",
+    )
+    distribution = tmp_path / "exposure_outcome_distribution.csv"
+    distribution.write_text(
+        "row_role,exposure_level,n_rows,outcome_rate_pct\n"
+        "exposure_level,0,700,8.0\n"
+        "exposure_level,1,300,14.0\n"
+        "overall,,1000,9.8\n",
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Primary unadjusted association table.",
+        source_path=primary_table,
+        evidence_id="adjusted_association_estimates",
+        produced_by_step="primary",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Observed outcome distribution by exposure.",
+        source_path=distribution,
+        evidence_id="exposure_outcome_distribution",
+        produced_by_step="distribution",
+    )
+    context = ra.ResearchContext(
+        research_question="Estimate an unadjusted association.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=1000,
+            n_stays=1000,
+        ),
+        variables=[],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="distribution",
+                intent="Report absolute outcome risk by exposure.",
+                expected_outputs=["table:exposure_outcome_distribution"],
+                planned_analysis_role="auxiliary",
+            ),
+            ra.AnalysisStep(
+                step_id="primary",
+                intent="Estimate the primary unadjusted association.",
+                expected_outputs=["table:adjusted_association_estimates"],
+                planned_analysis_role="primary",
+            ),
+            ra.AnalysisStep(
+                step_id="figure",
+                intent="Render the primary figure.",
+                inputs=["table:adjusted_association_estimates"],
+                expected_outputs=["figure:publication_figure"],
+                planned_analysis_role="auxiliary",
+            ),
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    contract = json.loads(
+        (
+            run_dir
+            / "publication_figures"
+            / "easyicu_publication_figure.figure_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert contract["panels"][0]["title"] == "Unadjusted association"
+    assert contract["panels"][1]["role"] == "descriptive_result"
+    assert contract["panels"][1]["evidence_ids"] == [
+        "exposure_outcome_distribution"
+    ]
+
+
+def test_distribution_overall_audit_row_is_not_drawn_as_a_third_exposure_group():
+    from easyicu.research_agent.figures.skill import _normalise_strata_frame
+
+    frame = pd.DataFrame(
+        {
+            "row_role": ["exposure_level", "exposure_level", "overall"],
+            "exposure_level": [0, 1, None],
+            "n_rows": [700, 300, 1000],
+            "outcome_rate_pct": [8.0, 14.0, 9.8],
+        }
+    )
+
+    normalized = _normalise_strata_frame(frame)
+
+    assert normalized["score"].tolist() == ["Unexposed", "Exposed"]
+    assert normalized["n"].tolist() == [700, 300]
+
+
 def test_figure_contract_enforces_unique_panel_ids():
     with pytest.raises(ValueError):
         make_figure_contract(

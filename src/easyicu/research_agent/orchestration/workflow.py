@@ -241,6 +241,7 @@ PipelineRunOutcome = Union[PipelineResult, HumanReviewPending]
 HUMAN_REVIEW_FINDING_REASONS: Mapping[str, str] = {
     "capability_review_required": "capability_request",
     "raw_ehr_provenance_unavailable": "protocol_claim",
+    "plan_scientific_changes_required": "scientific_stop",
     "scientific_stop": "scientific_stop",
 }
 
@@ -372,6 +373,15 @@ def human_review_requests_for_plan(
     if not reviewable and not require_plan_review:
         return ()
 
+    # Some pauses are requests to *change the study*, not requests whose
+    # current plan may be approved.  Offering the generic approval request
+    # alongside such a stop implies that clicking Approve can waive a
+    # deterministic scientific blocker.  It cannot.
+    approval_allowed = not any(
+        detail.get("approval_allowed") is False
+        for _finding, _reason, _kind, detail in reviewable
+    )
+
     requests: list[HumanReviewRequest] = []
     seen: set[str] = set()
     plan_authority = _plan_authority_payload(
@@ -379,7 +389,7 @@ def human_review_requests_for_plan(
         evidence,
         execution_authority,
     )
-    if require_plan_review:
+    if require_plan_review and approval_allowed:
         payload = {
             "validator": "operator_plan_review_policy",
             "severity": "error",
@@ -409,6 +419,15 @@ def human_review_requests_for_plan(
             # ``capability_request`` case, so its own digest is part of what
             # the signature covers.
             "capability_request_sha256": detail.get("capability_request_sha256"),
+            "approval_allowed": detail.get("approval_allowed", True),
+            "review_status": detail.get("review_status"),
+            "review_score": detail.get("review_score"),
+            "top_journal_candidate": detail.get("top_journal_candidate"),
+            "finding_codes": list(detail.get("finding_codes") or ()),
+            "review_evidence_id": detail.get("review_evidence_id"),
+            "user_authorization_requests": list(
+                detail.get("user_authorization_requests") or ()
+            ),
             **plan_authority,
         }
         request = HumanReviewRequest.create(
@@ -675,6 +694,16 @@ class PipelineWorkflow:
         for request, decision in zip(self._requests, ordered):
             if decision.authority_sha256 != request.authority_sha256:
                 raise ValueError("human review decision authority digest mismatch")
+            if (
+                decision.decision == "approved"
+                and request.payload.get("approval_allowed") is False
+            ):
+                raise ValueError(
+                    "this scientific-stop request cannot be approved; create "
+                    "a new study/plan version that resolves or explicitly "
+                    "re-authorizes the listed scientific findings, or reject "
+                    "the current plan"
+                )
 
         # A matching digest proves the decision answers the request that was
         # made. It says nothing about whether the run still holds the plan that

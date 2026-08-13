@@ -374,6 +374,72 @@ def test_pubmed_protocol_search_attaches_bounded_source_backed_design_excerpt(ra
     ]
 
 
+def test_pubmed_protocol_search_retains_source_publication_types(ra):
+    xml = b"""<PubmedArticleSet><PubmedArticle><MedlineCitation>
+      <PMID>8844239</PMID><Article><Abstract>
+      <AbstractText>We included adult ICU patients and assessed mortality.</AbstractText>
+      </Abstract><PublicationTypeList>
+      <PublicationType>Systematic Review</PublicationType>
+      <PublicationType>Review</PublicationType>
+      </PublicationTypeList></Article></MedlineCitation></PubmedArticle></PubmedArticleSet>"""
+    stub = _StubClient(
+        ra,
+        esearch_ids=["8844239"],
+        esummary_payload=_fixture_payload(),
+        efetch_xml=xml,
+    )
+
+    records = stub.client.search("critical care", retmax=5)
+
+    matched = next(record for record in records if record.pmid == "8844239")
+    assert matched.publication_types == ["Systematic Review", "Review"]
+
+
+def test_context_search_keeps_exposure_and_outcome_sentences_in_excerpt(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="lactate_max",
+                description="lactate",
+                role="lab",
+                dtype="float64",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                description="hospital mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="lactate_max",
+        target_outcome="death",
+    )
+    xml = b"""<PubmedArticleSet><PubmedArticle><MedlineCitation>
+      <PMID>8844239</PMID><Article><Abstract>
+      <AbstractText>We included adult ICU patients.</AbstractText>
+      <AbstractText>Peak lactate was the primary exposure.</AbstractText>
+      <AbstractText>The primary endpoint was hospital mortality.</AbstractText>
+      </Abstract></Article></MedlineCitation></PubmedArticle></PubmedArticleSet>"""
+    stub = _StubClient(
+        ra,
+        esearch_ids=["8844239"],
+        esummary_payload=_fixture_payload(),
+        efetch_xml=xml,
+    )
+
+    records = stub.client.search_for_context(context, retmax=5)
+
+    excerpt = next(record.relevance for record in records if record.pmid == "8844239")
+    assert excerpt is not None
+    assert "Peak lactate" in excerpt
+    assert "hospital mortality" in excerpt
+
+
 def test_client_search_returns_empty_on_no_hits(ra):
     stub = _StubClient(ra, esearch_ids=[], esummary_payload={})
     out = stub.client.search("query", retmax=5)
@@ -524,6 +590,7 @@ def test_blueprint_prompt_exposes_related_design_without_authorizing_copy(ra):
     from easyicu.research_agent.literature import (
         CitationRecord,
         LiteratureBundle,
+        LiteratureScreeningDecision,
         render_hypothesis_blueprint_for_prompt,
     )
 
@@ -544,6 +611,19 @@ def test_blueprint_prompt_exposes_related_design_without_authorizing_copy(ra):
                     "Study-design excerpt: Adults were included and chronic "
                     "dialysis was excluded."
                 ),
+            )
+        ],
+        screening_decisions=[
+            LiteratureScreeningDecision(
+                citation_key="paper_1",
+                source="pubmed",
+                disposition="include",
+                evidence_role="direct_comparator",
+                rationale="Exact-context direct-comparator screen passed.",
+                population_match=True,
+                exposure_match=True,
+                outcome_match=True,
+                design_excerpt_available=True,
             )
         ],
     )
@@ -768,7 +848,7 @@ def test_tavily_client_posts_required_search_knobs(ra):
     assert payload["search_depth"] == "basic"
 
 
-def test_literature_agent_merges_tavily_with_curated(ra):
+def test_literature_agent_does_not_promote_generic_tavily_hit(ra):
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="Is admission SOFA-2 associated with ICU mortality?",
@@ -808,4 +888,298 @@ def test_literature_agent_merges_tavily_with_curated(ra):
     ).run(ctx)
     keys = {c.key for c in bundle.citations}
     assert "vincent_sofa_1996" in keys
+    # A failed direct-comparator screen removes scientific comparator
+    # authority, not the source record itself.  The record remains inspectable
+    # as related context in the Web literature library.
     assert "tavily_guideline_2021_deadbeef" in keys
+    decision = next(
+        row
+        for row in bundle.screening_decisions
+        if row.citation_key == "tavily_guideline_2021_deadbeef"
+    )
+    assert decision.disposition == "exclude"
+    assert decision.evidence_role == "related_context"
+
+
+def test_focused_pubmed_return_does_not_auto_pass_direct_comparator_screen(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="lact_max",
+                description="lactate",
+                source_concept="lact",
+                role="lab",
+                dtype="float64",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                description="hospital mortality",
+                source_concept="hospital_mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="lact_max",
+        target_outcome="death",
+    )
+
+    class _PubMed:
+        def search_for_context(self, context, *, retmax=5):
+            from easyicu.research_agent.literature import CitationRecord
+
+            return [
+                CitationRecord(
+                    key="irrelevant_return",
+                    title="Nutrition in postoperative wards",
+                    year="2024",
+                    relevance="Study-design excerpt: Adults were enrolled after surgery.",
+                    pmid="1",
+                )
+            ]
+
+    from easyicu.research_agent.literature import LiteratureAgent
+
+    bundle = LiteratureAgent(
+        enable_pubmed=True,
+        pubmed_client=_PubMed(),
+    ).run(ctx)
+
+    assert "irrelevant_return" in {row.key for row in bundle.citations}
+    decision = next(
+        row for row in bundle.screening_decisions if row.citation_key == "irrelevant_return"
+    )
+    assert decision.disposition == "exclude"
+    assert not decision.population_match
+    assert not decision.exposure_match
+    assert not decision.outcome_match
+
+
+def test_review_or_trial_cannot_become_direct_comparator_even_when_peo_matches(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="lact_max",
+                description="lactate",
+                source_concept="lact",
+                role="lab",
+                dtype="float64",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                description="hospital mortality",
+                source_concept="hospital_mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="lact_max",
+        target_outcome="death",
+    )
+
+    class _PubMed:
+        def search_for_context(self, context, *, retmax=5):
+            from easyicu.research_agent.literature import CitationRecord
+
+            excerpt = (
+                "Study-design excerpt: Adult ICU patients with lactate "
+                "measurement were evaluated for hospital mortality."
+            )
+            return [
+                CitationRecord(
+                    key="review_return",
+                    title="Systematic review of lactate and hospital mortality in ICU",
+                    year="2025",
+                    relevance=excerpt,
+                    publication_types=["Systematic Review", "Review"],
+                    pmid="11",
+                ),
+                CitationRecord(
+                    key="trial_return",
+                    title="Randomized trial of lactate-guided ICU care and mortality",
+                    year="2025",
+                    relevance=excerpt,
+                    publication_types=["Randomized Controlled Trial"],
+                    pmid="12",
+                ),
+            ]
+
+    from easyicu.research_agent.literature import LiteratureAgent
+
+    bundle = LiteratureAgent(
+        enable_pubmed=True,
+        pubmed_client=_PubMed(),
+    ).run(ctx)
+    decisions = {
+        row.citation_key: row
+        for row in bundle.screening_decisions
+        if row.citation_key in {"review_return", "trial_return"}
+    }
+
+    assert set(decisions) == {"review_return", "trial_return"}
+    assert all(row.disposition == "exclude" for row in decisions.values())
+    assert all(not row.publication_type_eligible for row in decisions.values())
+    assert all(row.population_match for row in decisions.values())
+    assert all(row.exposure_match for row in decisions.values())
+    assert all(row.outcome_match for row in decisions.values())
+
+
+def test_population_keyword_does_not_turn_treatment_study_into_direct_comparator(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question=(
+            "What is the prevalence of Sepsis-3 and its association with "
+            "in-hospital mortality?"
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU stays",
+            database="miiv",
+            n_patients=None,
+            n_stays=100,
+            inclusion_criteria=["age >=18 years"],
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="sep3",
+                description="canonical Sepsis-3 criterion",
+                role="other",
+                dtype="int64",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                description="in-hospital mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="sep3",
+        target_outcome="death",
+    )
+
+    class _PubMed:
+        def search_for_context(self, context, *, retmax=5):
+            from easyicu.research_agent.literature import CitationRecord
+
+            return [
+                CitationRecord(
+                    key="vasopressin_timing",
+                    title=(
+                        "Vasopressin initiation timing and in-hospital mortality "
+                        "in septic shock"
+                    ),
+                    year="2025",
+                    relevance=(
+                        "Study-design excerpt: Adult ICU patients with septic "
+                        "shock based on modified Sepsis-3 criteria received "
+                        "catecholamines. Vasopressin timing was associated with "
+                        "in-hospital mortality."
+                    ),
+                    publication_types=["Observational Study"],
+                    pmid="40844800",
+                ),
+                CitationRecord(
+                    key="exact_sepsis3_comparator",
+                    title=(
+                        "Sepsis-3 prevalence and in-hospital mortality among "
+                        "adult ICU stays"
+                    ),
+                    year="2025",
+                    relevance=(
+                        "Study-design excerpt: In adult ICU stays, Sepsis-3 "
+                        "prevalence and its association with in-hospital "
+                        "mortality were estimated."
+                    ),
+                    publication_types=["Observational Study"],
+                    pmid="12345678",
+                ),
+            ]
+
+    from easyicu.research_agent.literature import LiteratureAgent
+
+    bundle = LiteratureAgent(
+        enable_pubmed=True,
+        pubmed_client=_PubMed(),
+    ).run(ctx)
+    decisions = {row.citation_key: row for row in bundle.screening_decisions}
+
+    treatment = decisions["vasopressin_timing"]
+    assert treatment.population_match is True
+    assert treatment.outcome_match is True
+    assert treatment.exposure_match is False
+    assert treatment.disposition == "exclude"
+    exact = decisions["exact_sepsis3_comparator"]
+    assert exact.population_match is True
+    assert exact.exposure_match is True
+    assert exact.outcome_match is True
+    assert exact.disposition == "include"
+    assert exact.evidence_role == "direct_comparator"
+
+
+def test_adult_protocol_excludes_pediatric_direct_comparator(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU",
+            database="miiv",
+            n_patients=10,
+            n_stays=10,
+            inclusion_criteria=["age >=18 years"],
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="lactate",
+                description="lactate",
+                role="lab",
+                dtype="float64",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                description="hospital mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="lactate",
+        target_outcome="death",
+    )
+
+    class _PubMed:
+        def search_for_context(self, context, *, retmax=5):
+            from easyicu.research_agent.literature import CitationRecord
+
+            return [
+                CitationRecord(
+                    key="pediatric_lactate",
+                    title="Lactate and hospital mortality in pediatric ICU sepsis",
+                    year="2025",
+                    relevance=(
+                        "Study-design excerpt: Children in pediatric ICU were "
+                        "evaluated for the association between lactate and "
+                        "hospital mortality."
+                    ),
+                    publication_types=["Observational Study"],
+                    pmid="87654321",
+                )
+            ]
+
+    from easyicu.research_agent.literature import LiteratureAgent
+
+    decision = LiteratureAgent(
+        enable_pubmed=True,
+        pubmed_client=_PubMed(),
+    ).run(ctx).screening_decisions[-1]
+
+    assert decision.population_match is False
+    assert decision.exposure_match is True
+    assert decision.outcome_match is True
+    assert decision.disposition == "exclude"

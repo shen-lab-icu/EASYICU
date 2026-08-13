@@ -59,6 +59,10 @@ from .icu_rules import (
 )
 from .planning.cohort_contract import cohort_definition_has_explicit_selection
 from .planning.endpoint_contract import endpoint_contract_findings as endpoint_contract_findings
+from .planning.figure_strategy import (
+    DATA_QUALITY_FIGURE_PRODUCT,
+    DATA_QUALITY_FIGURE_REQUIRED_INPUTS,
+)
 from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_structure_findings,
@@ -84,6 +88,61 @@ from .trajectory.contract import (
     trajectory_phenotyping_contract_applies,
 )
 from .trajectory.plan_contract import trajectory_plan_contract_applies
+
+
+class PlanShapeValidationError(ValueError):
+    """A host-shaped plan is structurally unsafe to review or execute."""
+
+    def __init__(self, *, reason: str, step_ids: Sequence[str]) -> None:
+        self.reason = str(reason)
+        self.step_ids = tuple(str(step_id) for step_id in step_ids)
+        super().__init__(
+            f"{self.reason}: " + ", ".join(self.step_ids)
+        )
+
+
+def validate_final_plan_shape(plan: AnalysisPlan) -> None:
+    """Fail closed when host plan shaping leaves an empty renderer.
+
+    Planner JSON is checked before it reaches this module, but the host then
+    performs dependency closure, mixed-output splitting, and step capping. A
+    bug in any of those transforms must not create a plan that can still be
+    shown for human approval. Rendering steps therefore have one final,
+    case-neutral invariant: they own at least one exact typed figure product.
+    """
+
+    invalid_step_ids = [
+        str(step.step_id)
+        for step in plan.steps or []
+        if _normalised_method_head(str(step.method or "")) == "visualization"
+        and not any(
+            (product := typed_product(output)) is not None
+            and product[0] == "figure"
+            for output in step.expected_outputs or []
+        )
+    ]
+    if invalid_step_ids:
+        raise PlanShapeValidationError(
+            reason="visualization_without_typed_figure_output",
+            step_ids=invalid_step_ids,
+        )
+    figure_owners: Dict[Tuple[str, str], List[str]] = {}
+    for step in plan.steps or []:
+        for output in step.expected_outputs or []:
+            product = typed_product(output)
+            if product is not None and product[0] == "figure":
+                figure_owners.setdefault(product, []).append(str(step.step_id))
+    duplicate_owner_ids = [
+        step_id
+        for owners in figure_owners.values()
+        if len(owners) > 1
+        for step_id in owners
+    ]
+    if duplicate_owner_ids:
+        raise PlanShapeValidationError(
+            reason="duplicate_typed_figure_output",
+            step_ids=duplicate_owner_ids,
+        )
 
 
 def _migrate_render_step_contract(
@@ -485,6 +544,43 @@ def _article_display_roles(steps: Sequence[AnalysisStep]) -> set[str]:
         ):
             roles.add("robustness")
     return roles
+
+
+def _dedicated_renderer_consumes_typed_source(
+    steps: Sequence[AnalysisStep],
+    *,
+    source: str,
+) -> bool:
+    """Return whether one explicit renderer already owns a typed source.
+
+    Article-contract augmentation may add a conventional figure product to a
+    scientific owner.  If the Planner already supplied a rendering-only step
+    for the same typed result table, adding that conventional alias creates a
+    second renderer after mixed-output splitting.  The exact typed source --
+    not a step id, figure name, or free-text intent -- is the stable ownership
+    boundary.
+    """
+
+    source_product = typed_product(source)
+    if source_product is None:
+        return False
+    for step in steps or []:
+        if _normalised_method_head(str(step.method or "")) != "visualization":
+            continue
+        input_products = {
+            product
+            for raw_input in step.inputs or []
+            if (product := typed_product(raw_input)) is not None
+        }
+        figure_products = [
+            product
+            for output in step.expected_outputs or []
+            if (product := typed_product(output)) is not None
+            and product[0] == "figure"
+        ]
+        if source_product in input_products and len(figure_products) == 1:
+            return True
+    return False
 
 
 def _best_contract_step_for_outputs(steps: Sequence[AnalysisStep]) -> AnalysisStep:
@@ -1166,6 +1262,18 @@ def _enforce_advanced_plan_contract(
             "log:missingness_strategy_notes",
         ]
 
+    if family == "robustness" and _dedicated_renderer_consumes_typed_source(
+        plan.steps,
+        source="table:robustness_matrix",
+    ):
+        # A Planner-owned renderer already presents the deterministic replay
+        # result.  Do not add a differently named conventional figure to the
+        # scientific producer: the subsequent mixed-output split would create
+        # two visual owners for the same verified matrix.
+        required_outputs = [
+            output for output in required_outputs if output != "figure:robustness_plot"
+        ]
+
     def _is_relevant(step: AnalysisStep) -> bool:
         return _plan_step_owns_contract_family(family, step)
 
@@ -1814,6 +1922,35 @@ def _split_table_and_figure_outputs_in_plan(
         str(step.step_id): list(step.expected_outputs or []) for step in plan.steps
     }
     rehomed_figure_dependencies: Dict[str, Dict[str, str]] = {}
+    dedicated_dedup_records: List[Tuple[str, str, str]] = []
+
+    # Prefer an explicit rendering-only owner when a Planner also attached the
+    # exact same figure to a mixed scientific step. Keeping both would create
+    # two evidence owners; splitting the mixed step would make that duplication
+    # even less visible. The exact product identity makes this a structural
+    # de-duplication only: no chart, source table, or scientific role is chosen
+    # by the host.
+    dedicated_figure_owners: Dict[Tuple[str, str], List[str]] = {}
+    for candidate in plan.steps:
+        if not _step_is_figure_only(candidate):
+            continue
+        for output in candidate.expected_outputs or []:
+            product = typed_product(output)
+            if product is not None and product[0] == "figure":
+                dedicated_figure_owners.setdefault(product, []).append(
+                    str(candidate.step_id)
+                )
+    for step in plan.steps:
+        if _step_is_figure_only(step):
+            continue
+        step_id = str(step.step_id)
+        for output in list(outputs_by_step[step_id]):
+            product = typed_product(output)
+            owners = dedicated_figure_owners.get(product or ("", ""), [])
+            if product is None or product[0] != "figure" or len(owners) != 1:
+                continue
+            outputs_by_step[step_id].remove(output)
+            dedicated_dedup_records.append((step_id, str(output), owners[0]))
 
     # A planner may attach a figure to the wrong mixed-output step even though
     # another step declares the figure's exact typed table/statistic product.
@@ -1833,6 +1970,18 @@ def _split_table_and_figure_outputs_in_plan(
 
     for step in plan.steps:
         step_id = str(step.step_id)
+        step_outputs = outputs_by_step[step_id]
+        # A dedicated rendering step already owns the figure and its typed
+        # dependency. Rehoming applies only when a Planner mixed a figure into
+        # a scientific/result step. Moving the sole output out of an explicit
+        # renderer would erase that step's contract and leave an empty action
+        # in the plan presented for human approval.
+        step_has_non_figure_output = any(
+            not _output_declares_figure(candidate)
+            for candidate in step_outputs
+        )
+        if not step_has_non_figure_output:
+            continue
         for output in list(outputs_by_step[step_id]):
             parsed = typed_product(output)
             if parsed is None or parsed[0] != "figure":
@@ -1881,6 +2030,25 @@ def _split_table_and_figure_outputs_in_plan(
                     },
                 )
             )
+
+    for source_step_id, figure_output, dedicated_owner_id in dedicated_dedup_records:
+        findings.append(
+            ValidationFinding(
+                validator="plan_contract",
+                severity="warning",
+                message=(
+                    f"Removed duplicate '{figure_output}' from mixed step "
+                    f"'{source_step_id}'; dedicated rendering step "
+                    f"'{dedicated_owner_id}' remains its sole owner."
+                ),
+                detail={
+                    "reason": "figure_duplicate_owned_by_dedicated_renderer",
+                    "figure_output": figure_output,
+                    "mixed_step_id": source_step_id,
+                    "dedicated_renderer_step_id": dedicated_owner_id,
+                },
+            )
+        )
 
     typed_product_producers: Dict[Tuple[str, str], Set[str]] = {}
     for candidate in plan.steps:
@@ -2210,54 +2378,95 @@ def _ensure_audit_panel_step_in_plan(
     plan: AnalysisPlan,
     context: ResearchContext,
 ) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
-    """Append an audit-panel step when the plan declares none.
+    """Bind the article data-quality figure to exact typed audit tables.
 
-    The framework already produces audit/robustness evidence (the locked
-    robustness specs, the missingness/data-quality summaries, the causal-audit
-    report), but the plan that the replanner grows often never *declares* an
-    audit display item, so the manuscript ships without a panel tying those
-    checks together. This appends a step that renders one from the existing
-    step_summary.json files — no new analysis, just a display of what was
-    already computed. Skipped when an audit/sensitivity display is already
-    declared.
+    A robustness plot is not a data-quality plot, and a renderer with no typed
+    inputs is not evidence. The host may add the conventional figure role only
+    when the Planner declared one unique producer for both tables read by the
+    deterministic renderer. Otherwise the plan remains unchanged and the
+    scientific-review owner keeps the missing role visible.
+
+    The historical function name remains as a compatibility surface for the
+    pipeline; its contract is deliberately narrower than the old "any audit"
+    heuristic.
     """
-    if any(_step_declares_audit_panel(step) for step in plan.steps or []):
-        return plan, []
 
-    next_index = len(plan.steps or []) + 1
+    steps = list(plan.steps or [])
+    required_inputs = tuple(DATA_QUALITY_FIGURE_REQUIRED_INPUTS)
+    for step in steps:
+        outputs = {str(value) for value in step.expected_outputs or []}
+        inputs = {str(value) for value in step.inputs or []}
+        if any(value.startswith("figure:") for value in outputs) and (
+            DATA_QUALITY_FIGURE_PRODUCT in outputs
+            or bool(inputs.intersection(required_inputs))
+        ):
+            return plan, []
+
+    producers = {
+        input_key: [
+            str(step.step_id)
+            for step in steps
+            if input_key in {str(value) for value in step.expected_outputs or []}
+        ]
+        for input_key in required_inputs
+    }
+    missing = [key for key, owners in producers.items() if not owners]
+    ambiguous = {
+        key: owners for key, owners in producers.items() if len(owners) > 1
+    }
+    if missing or ambiguous:
+        return plan, [
+            ValidationFinding(
+                validator="data_quality_figure_contract",
+                severity="warning",
+                message=(
+                    "A source-bound data-quality figure was not appended because "
+                    "its audit-table ownership is incomplete or ambiguous."
+                ),
+                detail={
+                    "reason_code": "data_quality_figure_source_not_closed",
+                    "required_inputs": list(required_inputs),
+                    "missing_inputs": missing,
+                    "ambiguous_inputs": ambiguous,
+                },
+            )
+        ]
+
+    next_index = len(steps) + 1
     audit_step = AnalysisStep(
-        step_id=f"{next_index:02d}_audit_panel",
+        step_id=f"{next_index:02d}_data_quality_figure",
         planned_analysis_role="auxiliary",
         intent=(
-            "Render an audit panel that summarises the analysis's robustness: "
-            "data completeness / missingness, the pre-specified sensitivity / "
-            "robustness specifications, and any leakage or calibration checks. "
-            "Read the prior step_summary.json files under the run directory, do "
-            "not re-run the primary analysis, and save the panel as both PNG and "
-            "SVG with the same stem into ``os.environ['STEP_OUT_DIR']`` (set by "
-            "the runner). Record every produced path in step_summary.json under "
-            "``figure_files``."
+            "Render the exact missingness and measurement-process audit tables "
+            "as a source-data-bound data-quality figure. Do not scan run files, "
+            "redefine denominators, impute values, or re-run an analysis."
         ),
         method="visualization",
-        inputs=[],
-        expected_outputs=["figure:audit_panel"],
-        icu_rule_refs=["visualization_rule"],
+        inputs=list(required_inputs),
+        expected_outputs=[DATA_QUALITY_FIGURE_PRODUCT],
+        icu_rule_refs=["visualization_rule", "missingness_rule"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
+            for input_key in required_inputs
+        ],
     )
-    new_steps = list(plan.steps or []) + [audit_step]
-    preserved = plan.model_copy(update={"steps": new_steps})
-    findings = [
+    preserved = plan.model_copy(update={"steps": [*steps, audit_step]})
+    return preserved, [
         ValidationFinding(
-            validator="plan_contract",
+            validator="data_quality_figure_contract",
             severity="warning",
             message=(
-                "Plan declared no audit / sensitivity display item; appended a "
-                f"fallback audit-panel step '{audit_step.step_id}' so the produced "
-                "robustness and data-quality evidence is presented."
+                "Plan declared both typed audit sources but no data-quality "
+                f"renderer; appended '{audit_step.step_id}' with exact inputs."
             ),
-            detail={"appended_step_id": audit_step.step_id},
+            detail={
+                "reason_code": "data_quality_figure_bound_to_typed_sources",
+                "appended_step_id": audit_step.step_id,
+                "inputs": list(required_inputs),
+                "producer_step_ids": producers,
+            },
         )
     ]
-    return preserved, findings
 
 
 def _step_produces_figure(step: AnalysisStep) -> bool:

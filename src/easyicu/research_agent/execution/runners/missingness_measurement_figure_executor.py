@@ -35,6 +35,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
+from ...planning.figure_strategy import DATA_QUALITY_FIGURE_REQUIRED_INPUTS
 from ...schema import AnalysisStep
 from .deterministic_missingness import measurement_audit_product_filename
 from .figure_input_capability import TypedInputCapability
@@ -55,16 +56,14 @@ __all__ = [
 ]
 
 
-MISSINGNESS_MEASUREMENT_AUDIT_INPUT = "table:missingness_measurement_audit"
-MEASUREMENT_PROCESS_AUDIT_INPUT = "table:measurement_process_audit"
+MISSINGNESS_MEASUREMENT_AUDIT_INPUT, MEASUREMENT_PROCESS_AUDIT_INPUT = (
+    DATA_QUALITY_FIGURE_REQUIRED_INPUTS
+)
 # The one-panel renderer consumes the same typed audit product as panel A of
 # the two-panel renderer.  Keep a role-specific alias for call-site clarity,
 # but never invent a second Planner input key for the same product.
 MEASUREMENT_MISSINGNESS_FIGURE_INPUT = MISSINGNESS_MEASUREMENT_AUDIT_INPUT
-MISSINGNESS_MEASUREMENT_FIGURE_INPUTS = (
-    MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
-    MEASUREMENT_PROCESS_AUDIT_INPUT,
-)
+MISSINGNESS_MEASUREMENT_FIGURE_INPUTS = DATA_QUALITY_FIGURE_REQUIRED_INPUTS
 #: One stable name for this owner across the claim, the decline and the trace.
 MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND = "missingness_measurement_figure"
 #: A figure product id is a Planner-owned *label*, not a capability claim.  What
@@ -144,6 +143,37 @@ _COLUMNS_BY_INPUT = {
 }
 
 
+def _measurement_missingness_input(step: AnalysisStep) -> str | None:
+    """Return the sole typed product backed by the measurement audit owner."""
+
+    if len(step.inputs or ()) != 1:
+        return None
+    input_key = str(step.inputs[0] or "").strip()
+    kind, separator, product = input_key.partition(":")
+    if (
+        kind != "table"
+        or not separator
+        or measurement_audit_product_filename(product)
+        != "missingness_measurement_audit.csv"
+    ):
+        return None
+    return input_key
+
+
+def _columns_read(input_key: str) -> tuple[str, ...]:
+    if input_key == MEASUREMENT_PROCESS_AUDIT_INPUT:
+        return _PROCESS_COLUMNS
+    kind, separator, product = str(input_key or "").partition(":")
+    if (
+        kind == "table"
+        and separator
+        and measurement_audit_product_filename(product)
+        == "missingness_measurement_audit.csv"
+    ):
+        return _AUDIT_COLUMNS
+    raise ValueError(f"{input_key} is not a supported measurement-audit product")
+
+
 def _method_head(value: Any) -> str:
     return str(value or "").strip().lower().split(" with ", 1)[0]
 
@@ -192,7 +222,7 @@ def _binding_carries_the_columns_read(binding: Any, input_key: str) -> bool:
         isinstance(value, str) for value in columns
     ):
         return False
-    return set(_COLUMNS_BY_INPUT[input_key]).issubset(set(columns))
+    return set(_columns_read(input_key)).issubset(set(columns))
 
 
 def missingness_measurement_figure_executor_owns_step(
@@ -233,10 +263,15 @@ def measurement_missingness_figure_executor_owns_step(
     """Own a one-panel figure whose only authority is one full audit table."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
+    input_key = _measurement_missingness_input(step)
+    contracts = list(step.input_consumption_contracts or ())
     if not (
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
-        and tuple(step.inputs) == (MEASUREMENT_MISSINGNESS_FIGURE_INPUT,)
+        and input_key is not None
+        and len(contracts) == 1
+        and contracts[0].input_key == input_key
+        and contracts[0].mode == "all_rows"
         and len(products) == 1
         and products[0] is not None
         and step.trajectory_stability_spec is None
@@ -245,8 +280,8 @@ def measurement_missingness_figure_executor_owns_step(
     if not isinstance(resolved_bindings, Mapping):
         return False
     return _binding_carries_the_columns_read(
-        resolved_bindings.get(MEASUREMENT_MISSINGNESS_FIGURE_INPUT),
-        MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
+        resolved_bindings.get(input_key),
+        input_key,
     )
 
 
@@ -403,6 +438,9 @@ def measurement_missingness_figure_executor_code(step: AnalysisStep) -> str:
     )
     if product is None:
         raise ValueError("The step is not owned by the measurement-missingness renderer")
+    input_key = _measurement_missingness_input(step)
+    if input_key is None:
+        raise ValueError("The step has no supported measurement-audit input")
     return textwrap.dedent(
         f"""
         import os
@@ -418,6 +456,7 @@ def measurement_missingness_figure_executor_code(step: AnalysisStep) -> str:
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
             figure_product={product!r},
+            input_key={input_key!r},
         )
         """
     ).strip()
@@ -440,8 +479,8 @@ def _load_one_binding(
     binding = inputs.get(input_key)
     if not isinstance(binding, dict):
         raise ValueError(f"{input_key} binding is absent")
-    product = _PRODUCT_BY_INPUT[input_key]
-    expected_columns = list(_COLUMNS_BY_INPUT[input_key])
+    _kind, _separator, product = input_key.partition(":")
+    expected_columns = list(_columns_read(input_key))
     expected_sha256 = str(binding.get("sha256") or "")
     relative_path = binding.get("relative_path")
     product_contract = binding.get("product_contract")
@@ -535,6 +574,7 @@ def _load_single_measurement_binding(
     run_dir: Path,
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
+    input_key: str,
 ) -> tuple[pd.DataFrame, Mapping[str, Any], str]:
     if isinstance(resolved_inputs, Mapping):
         payload = dict(resolved_inputs)
@@ -543,14 +583,12 @@ def _load_single_measurement_binding(
     if not isinstance(payload, dict) or payload.get("step_id") != step_id:
         raise ValueError("resolved-input manifest does not belong to this step")
     inputs = payload.get("inputs")
-    if not isinstance(inputs, dict) or set(inputs) != {
-        MEASUREMENT_MISSINGNESS_FIGURE_INPUT
-    }:
+    if not isinstance(inputs, dict) or set(inputs) != {input_key}:
         raise ValueError("exact measurement-missingness binding is absent or widened")
     return _load_one_binding(
         run_dir=run_dir,
         inputs=inputs,
-        input_key=MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
+        input_key=input_key,
     )
 
 
@@ -752,6 +790,7 @@ def run_measurement_missingness_figure(
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
     figure_product: str,
+    input_key: str = MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
 ) -> Mapping[str, Any]:
     """Render one complete typed missingness audit without model-authored lineage."""
 
@@ -763,6 +802,7 @@ def run_measurement_missingness_figure(
         run_dir=Path(run_dir),
         resolved_inputs=resolved_inputs,
         step_id=step_id,
+        input_key=input_key,
     )
     per_variable = _validate_audit_rows(audit_frame)
 
@@ -885,15 +925,15 @@ def run_measurement_missingness_figure(
         "analysis_family": "data_quality",
         "deterministic_standard_analysis": "measurement_missingness_figure",
         "rendering_only": True,
-        "source_inputs": [MEASUREMENT_MISSINGNESS_FIGURE_INPUT],
+        "source_inputs": [input_key],
         "source_evidence_ids": {
-            MEASUREMENT_MISSINGNESS_FIGURE_INPUT: audit_binding.get("evidence_id")
+            input_key: audit_binding.get("evidence_id")
         },
         "source_sha256": {
-            MEASUREMENT_MISSINGNESS_FIGURE_INPUT: audit_binding.get("sha256")
+            input_key: audit_binding.get("sha256")
         },
         "source_rows_consumed": {
-            MEASUREMENT_MISSINGNESS_FIGURE_INPUT: int(len(audit_frame))
+            input_key: int(len(audit_frame))
         },
         "audited_variable_count": int(len(per_variable)),
         "source_data_files": [source_path.name],
@@ -904,7 +944,7 @@ def run_measurement_missingness_figure(
         "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
         "input_bindings": [
             {
-                "input_key": MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
+                "input_key": input_key,
                 "evidence_id": audit_binding.get("evidence_id"),
                 "sha256": audit_binding.get("sha256"),
                 "loaded": True,

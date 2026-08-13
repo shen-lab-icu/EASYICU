@@ -40,10 +40,27 @@ _REAL_STEP_OUTPUTS = [
 ]
 
 
+class _ReplaySpec:
+    def __init__(self, mapping: dict[str, str]) -> None:
+        self.mapping = mapping
+
+    def output_for(self, product_id: str) -> str | None:
+        return self.mapping.get(product_id)
+
+
 class _Step:
-    def __init__(self, step_id: str, outputs: List[str]) -> None:
+    def __init__(
+        self,
+        step_id: str,
+        outputs: List[str],
+        *,
+        replay_outputs: dict[str, str] | None = None,
+    ) -> None:
         self.step_id = step_id
         self.expected_outputs = outputs
+        self.robustness_replay_spec = (
+            _ReplaySpec(replay_outputs) if replay_outputs is not None else None
+        )
 
 
 class _Plan:
@@ -68,6 +85,54 @@ def test_the_real_recorded_step_is_flagged_with_its_product_and_kinds() -> None:
     assert details[0]["step_id"] == "07_missingness_robustness_replay"
     assert details[0]["product"] == "robustness_summary"
     assert sorted(details[0]["kinds"]) == ["statistic", "table"]
+
+
+def test_replay_owner_tells_the_planner_exactly_which_kind_to_keep() -> None:
+    """The failed Web E1 replan guessed statistic; the owner writes a table."""
+
+    findings = product_promise_plan_findings(
+        plan=_Plan(
+            _Step(
+                "06_robustness_replay",
+                ["table:robustness_summary", "statistic:robustness_summary"],
+                replay_outputs={"robustness_summary": "robustness_summary"},
+            )
+        )
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["required_kind"] == "table"
+    assert findings[0].detail["required_promise"] == "table:robustness_summary"
+    assert "Keep exactly 'table:robustness_summary'" in findings[0].message
+
+
+def test_wrong_single_kind_is_repaired_even_after_collision_was_removed() -> None:
+    """A replan that removes the correct kind must not reach execution."""
+
+    wrong = product_promise_plan_findings(
+        plan=_Plan(
+            _Step(
+                "06_robustness_replay",
+                ["statistic:robustness_summary"],
+                replay_outputs={"robustness_summary": "robustness_summary"},
+            )
+        )
+    )
+    correct = product_promise_plan_findings(
+        plan=_Plan(
+            _Step(
+                "06_robustness_replay",
+                ["table:robustness_summary"],
+                replay_outputs={"robustness_summary": "robustness_summary"},
+            )
+        )
+    )
+
+    assert [finding.detail["reason"] for finding in wrong] == [
+        "product_kind_conflicts_with_owner"
+    ]
+    assert wrong[0].detail["required_promise"] == "table:robustness_summary"
+    assert correct == []
 
 
 def test_an_artifact_and_table_pair_is_deliberately_left_alone() -> None:
@@ -248,7 +313,9 @@ def test_the_gate_runs_in_the_plan_time_preflight() -> None:
     source = _PHASE.read_text(encoding="utf-8")
     called = _called_names(source)
 
-    assert called.count("product_promise_plan_findings") == 1
+    # Once to generate the bounded replan directive, then again to verify the
+    # model-authored revision before any executor is selected.
+    assert called.count("product_promise_plan_findings") == 2
     assert called.count("product_promise_replan_directive") == 1
 
 

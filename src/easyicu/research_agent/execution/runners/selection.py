@@ -24,6 +24,7 @@ from .adjusted_association_executor import (
 )
 from .exposure_outcome_distribution_render import (
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT,
+    exposure_outcome_distribution_figure_declaration_verdict,
     exposure_outcome_distribution_figure_code,
     exposure_outcome_distribution_figure_owns_step,
 )
@@ -46,7 +47,6 @@ from .deterministic_missingness import (
     source_availability_audit_executor_owns_step,
 )
 from .missingness_measurement_figure_executor import (
-    MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
     missingness_measurement_figure_declaration_verdict,
     MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
     measurement_missingness_figure_executor_code,
@@ -128,6 +128,12 @@ from .source_feasibility_executor import (
     source_feasibility_executor_code,
     source_feasibility_executor_owns_step,
 )
+from .feasibility_protocol_executor import (
+    FEASIBILITY_PROTOCOL_ANALYSIS_KIND,
+    feasibility_protocol_consumed_input_keys,
+    feasibility_protocol_executor_code,
+    feasibility_protocol_executor_owns_step,
+)
 
 
 def _consumed_typed_cohort_inputs(step: AnalysisStep) -> tuple[str, ...]:
@@ -174,6 +180,13 @@ class StandardExecutorSelection:
     progress_message: str
     code: str
     consumed_input_keys: tuple[str, ...]
+    # Rendering-only host adapters already embody the reviewed scientific
+    # result and figure contract.  Visual QA may reject their output, but must
+    # never hand their source to a model for an unauthorised rewrite.  This
+    # grants the host-code digest/no-rewrite policy only; repair-registry
+    # renderers separately carry the legacy repair-id, parent-snapshot and
+    # product-slot receipt bundle.
+    host_sealed_renderer: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,6 +349,23 @@ def select_standard_executor(
                 )
             _missed(SOURCE_FEASIBILITY_ANALYSIS_KIND)
 
+    if feasibility_protocol_executor_owns_step(step):
+        if receipt_required:
+            _receipt_declined(FEASIBILITY_PROTOCOL_ANALYSIS_KIND)
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=FEASIBILITY_PROTOCOL_ANALYSIS_KIND,
+                selection_reason="planner_declared_feasibility_protocol",
+                progress_message=(
+                    "Recording the Planner-declared non-executable protocol"
+                ),
+                code=feasibility_protocol_executor_code(step),
+                consumed_input_keys=feasibility_protocol_consumed_input_keys(step),
+            )
+        )
+    _missed(FEASIBILITY_PROTOCOL_ANALYSIS_KIND)
+
     if cohort_summary_executor_owns_step(step):
         # This executor emits the flag-only receipt itself, so a receipt
         # obligation no longer sends a step the host can compute exactly to
@@ -355,11 +385,6 @@ def select_standard_executor(
         )
     _missed("descriptive_cohort_summary")
     if exposure_outcome_distribution_executor_owns_step(step):
-        if receipt_required:
-            # This owner emits no flag-only receipt, so it declines rather than
-            # claiming a step whose obligation it cannot discharge.
-            _receipt_declined("exposure_outcome_distribution")
-            return None
         typed_cohort_inputs = _consumed_typed_cohort_inputs(step)
         return _selected(
             StandardExecutorSelection(
@@ -368,7 +393,10 @@ def select_standard_executor(
                 progress_message=(
                     "Using planner-declared exposure/outcome distribution executor"
                 ),
-                code=exposure_outcome_distribution_executor_code(step),
+                code=exposure_outcome_distribution_executor_code(
+                    step,
+                    plausibility_scope=plausibility_scope,
+                ),
                 consumed_input_keys=typed_cohort_inputs,
             )
         )
@@ -405,9 +433,16 @@ def select_standard_executor(
                     display_labels=plan.display_labels,
                 ),
                 consumed_input_keys=(EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT,),
+                host_sealed_renderer=True,
             )
         )
-    _missed("exposure_outcome_distribution_figure")
+    distribution_figure_verdict = (
+        exposure_outcome_distribution_figure_declaration_verdict(step)
+    )
+    if distribution_figure_verdict.missing_declarations:
+        _declined(distribution_figure_verdict)
+    else:
+        _missed("exposure_outcome_distribution_figure")
     if prevalence_outcome_figure_executor_owns_step(step):
         if receipt_required:
             _receipt_declined("prevalence_outcome_figure")
@@ -421,6 +456,7 @@ def select_standard_executor(
                 ),
                 code=prevalence_outcome_figure_executor_code(step),
                 consumed_input_keys=(PREVALENCE_OUTCOME_FIGURE_INPUT,),
+                host_sealed_renderer=True,
             )
         )
     _missed("prevalence_outcome_figure")
@@ -443,6 +479,7 @@ def select_standard_executor(
                 consumed_input_keys=robustness_figure_consumed_input_keys(
                     resolved_bindings
                 ),
+                host_sealed_renderer=True,
             )
         )
     _missed("robustness_figure")
@@ -461,6 +498,7 @@ def select_standard_executor(
                 ),
                 code=adjusted_association_figure_executor_code(step),
                 consumed_input_keys=(ADJUSTED_ASSOCIATION_FIGURE_INPUT,),
+                host_sealed_renderer=True,
             )
         )
     _missed("adjusted_association_figure")
@@ -477,6 +515,7 @@ def select_standard_executor(
                 progress_message="Using digest-bound cohort-flow renderer",
                 code=cohort_flow_figure_executor_code(step),
                 consumed_input_keys=(COHORT_FLOW_INPUT,),
+                host_sealed_renderer=True,
             )
         )
     _missed("cohort_flow_figure")
@@ -495,6 +534,7 @@ def select_standard_executor(
                 ),
                 code=descriptive_result_figure_executor_code(step),
                 consumed_input_keys=(step.inputs[0],),
+                host_sealed_renderer=True,
             )
         )
     _missed("descriptive_result_figure")
@@ -514,6 +554,7 @@ def select_standard_executor(
                     display_labels=plan.display_labels,
                 ),
                 consumed_input_keys=PREVALENCE_MORTALITY_FIGURE_INPUTS,
+                host_sealed_renderer=True,
             )
         )
     _missed("prevalence_mortality_figure")
@@ -531,7 +572,8 @@ def select_standard_executor(
                     "Using digest-bound measurement-missingness figure renderer"
                 ),
                 code=measurement_missingness_figure_executor_code(step),
-                consumed_input_keys=(MEASUREMENT_MISSINGNESS_FIGURE_INPUT,),
+                consumed_input_keys=(str(step.inputs[0]),),
+                host_sealed_renderer=True,
             )
         )
     _missed("measurement_missingness_figure")
@@ -550,6 +592,7 @@ def select_standard_executor(
                 ),
                 code=missingness_measurement_figure_executor_code(step),
                 consumed_input_keys=MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
+                host_sealed_renderer=True,
             )
         )
     # Not a bare miss when one string is the only thing between the plan and a
@@ -578,6 +621,7 @@ def select_standard_executor(
                 progress_message="Using deterministic audit-panel renderer",
                 code=audit_panel_executor_code(step),
                 consumed_input_keys=(),
+                host_sealed_renderer=True,
             )
         )
     _missed("audit_panel")

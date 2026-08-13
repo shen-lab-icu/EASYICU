@@ -75,6 +75,7 @@ from .result_integrity import (
     primary_result_plausibility_errors,
     primary_survival_estimate_integrity_errors,
 )
+from .scientific_maturity import build_scientific_maturity_audit
 from .step_summaries import (
     authoritative_step_summaries as _authoritative_step_summaries,
     step_authority_records as _step_authority_records,
@@ -1941,24 +1942,36 @@ def _compute_readiness_gates(
             else None
         ),
     )
+    scientific_maturity = build_scientific_maturity_audit(
+        context=context,
+        plan=plan,
+        run_dir=run_dir,
+        display_suite=display_suite,
+        publication_bundle=publication,
+    )
     # Read the FULL findings list, not `active_findings`: supersession retires a
     # finding when its step later succeeds, and a dropped step never ran, so no
     # later success can speak for it. What *can* speak for it is a later plan
     # revision that declares the product again — which is why the final plan is
     # passed in rather than the question being answered from findings alone.
     plan_truncation = _plan_truncation_status(findings, plan=plan)
-    publication_ready = publication_authorized(
-        manuscript_ready=manuscript_ready,
-        publication_figure_bundle_ready=publication["publication_figure_bundle_ready"],
-        publication_provenance_ready=publication_provenance[
-            "publication_provenance_ready"
-        ],
-        display_suite_complete=display_suite["display_suite_complete"],
-        article_contract_complete=article_contract["article_contract_complete"],
-        article_figure_strategy_complete=figure_strategy[
-            "article_figure_strategy_complete"
-        ],
-        plan_not_truncated=not plan_truncation["plan_truncated"],
+    publication_ready = (
+        publication_authorized(
+            manuscript_ready=manuscript_ready,
+            publication_figure_bundle_ready=publication[
+                "publication_figure_bundle_ready"
+            ],
+            publication_provenance_ready=publication_provenance[
+                "publication_provenance_ready"
+            ],
+            display_suite_complete=display_suite["display_suite_complete"],
+            article_contract_complete=article_contract["article_contract_complete"],
+            article_figure_strategy_complete=figure_strategy[
+                "article_figure_strategy_complete"
+            ],
+            plan_not_truncated=not plan_truncation["plan_truncated"],
+        )
+        and scientific_maturity.article_grade
     )
     return {
         **execution,
@@ -1981,6 +1994,14 @@ def _compute_readiness_gates(
         "replan_budget_hit": replan_budget_hit,
         "replan_budget_advisory": replan_budget_hit and not replan_budget_exhausted,
         "publication_ready": publication_ready,
+        "scientific_maturity_article_grade": scientific_maturity.article_grade,
+        "scientific_maturity_status": scientific_maturity.status,
+        "scientific_maturity_score": scientific_maturity.score,
+        "scientific_maturity_dimension_scores": scientific_maturity.dimension_scores,
+        "scientific_maturity_findings": [
+            finding.model_dump(mode="json") for finding in scientific_maturity.findings
+        ],
+        "scientific_maturity_facts": scientific_maturity.facts,
         "manuscript_generated": manuscript_generated,
         **manuscript_text_gate,
         "writer_probe_mode": bool(writer_probe_mode),
@@ -2063,7 +2084,14 @@ def write_readiness_artifacts(
     )
     gates["publication_artifacts_ready"] = publication_artifacts_ready
     gates["execution_paper_eligible"] = bool(execution_paper_eligible)
-    gates.update(paper_authority_gates(publication_artifacts_ready, execution_paper_eligible, plan_authority_verified, plan_authority_sha256))
+    gates.update(
+        paper_authority_gates(
+            publication_artifacts_ready,
+            execution_paper_eligible,
+            plan_authority_verified,
+            plan_authority_sha256,
+        )
+    )
 
     artifact_paths: Dict[str, str] = {}
 
@@ -2184,6 +2212,29 @@ def write_readiness_artifacts(
         encoding="utf-8",
     )
     artifact_paths["display_suite_audit"] = str(display_suite_path.relative_to(run_dir))
+
+    scientific_maturity_path = run_dir / "scientific_maturity_audit.json"
+    scientific_maturity_payload = {
+        "schema_version": "easyicu.scientific_maturity/1",
+        "status": gates["scientific_maturity_status"],
+        "article_grade": gates["scientific_maturity_article_grade"],
+        "score": gates["scientific_maturity_score"],
+        "dimension_scores": gates["scientific_maturity_dimension_scores"],
+        "findings": gates["scientific_maturity_findings"],
+        "facts": gates["scientific_maturity_facts"],
+    }
+    scientific_maturity_path.write_text(
+        json.dumps(
+            scientific_maturity_payload,
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    artifact_paths["scientific_maturity_audit"] = str(
+        scientific_maturity_path.relative_to(run_dir)
+    )
 
     article_contract_path = run_dir / "article_contract_audit.json"
     article_contract_payload = article_contract_audit_payload(gates)
@@ -2346,6 +2397,12 @@ def write_readiness_artifacts(
             "statistic",
             "Article display-suite coverage audit for publication gating.",
             display_suite_path,
+        ),
+        (
+            "scientific_maturity_audit",
+            "statistic",
+            "Typed literature, ICU-design, robustness, figure, and review maturity audit.",
+            scientific_maturity_path,
         ),
         (
             "claim_ledger",

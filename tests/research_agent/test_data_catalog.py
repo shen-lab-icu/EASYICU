@@ -121,6 +121,33 @@ def test_build_available_catalog_from_export_dir(tmp_path):
     assert "stay_id" not in ids and "charttime" not in ids
 
 
+def test_legacy_catalog_marks_sofa2_sepsis_as_explicit_only(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "easyicu.research_agent.acquisition.catalog.index_export_package",
+        lambda _path: {
+            "sep3_sofa1": {
+                "file_name": "sepsis3_sofa1.parquet",
+                "rows": 20,
+            },
+            "sep3_sofa2": {
+                "file_name": "sepsis3_sofa2.parquet",
+                "rows": 21,
+            },
+        },
+    )
+
+    catalog = build_available_catalog("unused")
+    by_id = {concept.concept_id: concept for concept in catalog.concepts}
+
+    assert by_id["sep3_sofa1"].selection_mode == "ordinary"
+    assert by_id["sep3_sofa2"].selection_mode == "explicit_only"
+    assert by_id["sep3_sofa2"].canonical_alternative == "sep3_sofa1"
+    assert "not canonical Sepsis-3" in by_id["sep3_sofa2"].description
+    assert "explicit-only" in catalog.render_for_prompt()
+
+
 def test_legacy_catalog_reuses_owner_event_semantics(tmp_path):
     pd.DataFrame(
         {

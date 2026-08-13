@@ -68,18 +68,61 @@ def test_figure_guard_needs_force_when_question_is_silent():
     assert findings and findings[0].validator == "plan_contract"
 
 
-def test_audit_panel_guard_appends_then_idempotent():
+def _plan_with_typed_data_quality_sources() -> AnalysisPlan:
     plan = _table_only_plan()
+    return plan.model_copy(
+        update={
+            "steps": [
+                *plan.steps,
+                AnalysisStep(
+                    step_id="03_missingness_measurement_audit",
+                    intent="Audit missingness with owner denominators.",
+                    method="measurement_audit",
+                    expected_outputs=["table:missingness_measurement_audit"],
+                ),
+                AnalysisStep(
+                    step_id="04_measurement_process_audit",
+                    intent="Audit measurement opportunity and repeats.",
+                    method="measurement_audit",
+                    expected_outputs=["table:measurement_process_audit"],
+                ),
+            ]
+        }
+    )
+
+
+def test_data_quality_figure_guard_binds_typed_sources_then_is_idempotent():
+    plan = _plan_with_typed_data_quality_sources()
     ctx = _Ctx(plan.research_question)
 
     with_audit, findings = _ensure_audit_panel_step_in_plan(plan=plan, context=ctx)
     assert any(_step_declares_audit_panel(s) for s in with_audit.steps)
-    assert findings and findings[0].validator == "plan_contract"
+    figure = with_audit.steps[-1]
+    assert figure.expected_outputs == ["figure:data_quality"]
+    assert figure.inputs == [
+        "table:missingness_measurement_audit",
+        "table:measurement_process_audit",
+    ]
+    assert findings and findings[0].validator == "data_quality_figure_contract"
 
     # Idempotent: a plan that already declares an audit panel is left alone.
     again, findings2 = _ensure_audit_panel_step_in_plan(plan=with_audit, context=ctx)
     assert len(again.steps) == len(with_audit.steps)
     assert findings2 == []
+
+
+def test_data_quality_figure_guard_never_invents_an_unbound_renderer():
+    plan = _table_only_plan()
+    shaped, findings = _ensure_audit_panel_step_in_plan(
+        plan=plan,
+        context=_Ctx(plan.research_question),
+    )
+
+    assert shaped == plan
+    assert findings[0].detail["reason_code"] == (
+        "data_quality_figure_source_not_closed"
+    )
+    assert not any(_step_declares_audit_panel(step) for step in shaped.steps)
 
 
 def test_plan_dimension_lifts_after_both_guards():
@@ -100,7 +143,7 @@ def test_plan_dimension_lifts_after_both_guards():
     assert before.signals["result_figure_count"] == 0
     assert before.signals["has_audit_panel"] is False
 
-    plan = _table_only_plan()
+    plan = _plan_with_typed_data_quality_sources()
     ctx = _Ctx(plan.research_question)
     plan, _ = _ensure_publication_figure_step_in_plan(plan=plan, context=ctx, force=True)
     plan, _ = _ensure_audit_panel_step_in_plan(plan=plan, context=ctx)

@@ -622,6 +622,52 @@ def test_correctable_resume_error_keeps_the_pipeline_pause(tmp_path):
     assert agent._pending_human_review is pending_state
 
 
+def test_resume_rebinds_progress_to_the_current_transport_job(tmp_path):
+    """Post-review execution events belong to the resume job, not the old one."""
+
+    from easyicu.research_agent.pipeline import ResearchAgentPipeline
+
+    old_events: list[dict] = []
+    current_events: list[dict] = []
+    progress_sink = {"callback": old_events.append}
+
+    class _ResumingWorkflow:
+        state = "paused"
+
+        def resume(self, *_args, **_kwargs):
+            progress_sink["callback"](
+                {"stage": "coder", "message": "Generating analysis code."}
+            )
+            self.state = "completed"
+            return "done"
+
+    class _Pending:
+        run_id = "20260812T100000_progress"
+        run_dir = str(tmp_path / "run")
+        resumable_here = True
+
+    Path(_Pending.run_dir).mkdir(parents=True)
+    agent = ResearchAgentPipeline(workdir=tmp_path / "wd")
+    agent._pending_human_review = {
+        "workflow": _ResumingWorkflow(),
+        "pending": _Pending(),
+        "runtime_capabilities": (),
+        "runtime_bundle": None,
+        "progress_sink": progress_sink,
+    }
+    agent._pipeline_result_or_pending = lambda outcome, **_kwargs: outcome
+
+    result = agent.resume_human_review(
+        [], progress_callback=current_events.append
+    )
+
+    assert result == "done"
+    assert old_events == []
+    assert current_events == [
+        {"stage": "coder", "message": "Generating analysis code."}
+    ]
+
+
 def test_p0_full_pause_and_resume_through_the_real_workflow(tmp_path):
     """plan → pause → resume → real record → recorder → evidence.
 

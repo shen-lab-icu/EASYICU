@@ -209,6 +209,10 @@ class PipelineConfig:
     # run, so CI / final submission cannot ship a silently repaired manuscript.
     evidence_enforcement_mode: str = "soft"
     latex_venue_template: str = "article"
+    # Interactive previews are deliberately marked as drafts. CLI and formal
+    # benchmark callers keep the historical unmarked scaffold unless their
+    # host opts in explicitly.
+    latex_draft_watermark: bool = False
     manuscript_language: str = "en"
 
     # --- context / ablation knobs ---------------------------------------
@@ -277,6 +281,12 @@ class PipelineConfig:
     # payload is frozen and hashed into run authority; the pipeline validates
     # it as a LiteratureBundle before exposing any citation key to Planner.
     bound_preplan_literature: Optional[Dict[str, Any]] = None
+    # Optional host-compiled instructions from an exact prior scientific plan
+    # review. This is an immutable string rather than a mutable old plan: the
+    # new run remains fresh, the value is hashed into run configuration, and
+    # the host must prove the StudyContext digest has not changed before
+    # supplying it. Only plan-owned findings may appear here.
+    bound_plan_revision_contract: Optional[str] = None
     enable_tavily: bool = False
     tavily_api_key: Optional[str] = None
     tavily_retmax: int = 5
