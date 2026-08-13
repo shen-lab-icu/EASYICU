@@ -60,7 +60,14 @@ def _numeric_mapping_loop(
     return matches[0] if len(matches) == 1 else None
 
 
-def _mapping_literal_key(node: ast.AST, *, mapping_name: str) -> str | None:
+def mapping_literal_key(node: ast.AST, *, mapping_name: str) -> str | None:
+    """Return the string key a chained ``mapping[key]...`` expression reads.
+
+    Single owner: the repair that rewrites these reads must recognise exactly
+    the same expression shapes as the gate that rejects them, or it will
+    rewrite code the gate still refuses and miss code the gate blocks.
+    """
+
     while True:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             node = node.func.value
@@ -94,8 +101,8 @@ def _explicit_numeric_aliases(
             and len(node.args) >= 2
         ):
             continue
-        left = _mapping_literal_key(node.args[0], mapping_name=mapping_name)
-        right = _mapping_literal_key(node.args[1], mapping_name=mapping_name)
+        left = mapping_literal_key(node.args[0], mapping_name=mapping_name)
+        right = mapping_literal_key(node.args[1], mapping_name=mapping_name)
         if left is not None and right is not None and left != right:
             aliases.add(frozenset((left, right)))
     return aliases
