@@ -162,6 +162,10 @@ pilot_runs/
 !docs/analysis_method_suite.md
 !docs/deprecation_policy.md
 !docs/pi_copilot_integration_architecture.md
+!docs/repository_layout.md
+!docs/research_agent_capability_inventory.md
+!docs/qa/
+!docs/qa/*.md
 !src/easyicu/webserver/pi_copilot/node_app/README.md
 !src/easyicu/webserver/pi_copilot/node_app/THIRD_PARTY_NOTICES.md
 !benchmarks/meta_generalization/README.md

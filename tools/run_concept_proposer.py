@@ -39,7 +39,9 @@ from easyicu.research_agent.discovery.idea_mining_feasibility_tier import (  # n
 from easyicu.research_agent.providers.protocol import LLMMessage  # noqa: E402
 
 DEFAULT_DB = Path("/Volumes/外置硬盘/databases/mimiciv")
-DEFAULT_CATALOG = REPO_ROOT / "benchmark" / "source_item_catalog_miiv.json"
+DEFAULT_CATALOG = (
+    REPO_ROOT / "benchmarks" / "catalogs" / "source_item_catalog_miiv.json"
+)
 
 # table -> (shard glob, linking-id column, denominator table glob)
 _TABLE_SOURCES = {

@@ -366,7 +366,8 @@ class ExtendedFeasibilityIndex:
         if icd_catalog_path is None:
             icd_catalog_path = (
                 Path(easyicu.__file__).resolve().parent.parent.parent
-                / "benchmark"
+                / "benchmarks"
+                / "catalogs"
                 / "icd_cohort_catalog_miiv.json"
             )
         if Path(icd_catalog_path).exists():

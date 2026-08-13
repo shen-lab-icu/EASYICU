@@ -262,7 +262,7 @@ def _register_case_patterns(case_name: Optional[str]) -> Optional[Dict[str, Any]
     _bootstrap_imports()
     from easyicu.research_agent.cohort.schema import default_pattern_registry
 
-    module_name = f"benchmark.cases.{case_name}.register_patterns"
+    module_name = f"benchmarks.cases.{case_name}.register_patterns"
     try:
         module = importlib.import_module(module_name)
     except ModuleNotFoundError as exc:
@@ -3816,7 +3816,7 @@ def main() -> int:
         "--case",
         default=None,
         help=(
-            "Optional case protocol directory name under benchmark/cases. "
+            "Optional case protocol directory name under benchmarks/cases. "
             "When set, case-owned cohort patterns are registered before "
             "planning. Example: case_b_sofa2_sepsis."
         ),

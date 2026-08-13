@@ -65,7 +65,9 @@ from easyicu.research_agent.discovery.idea_mining_feasibility_tier import (  # n
 )
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole  # noqa: E402
 
-DEFAULT_SOURCE_CATALOG = REPO_ROOT / "benchmark" / "source_item_catalog_miiv.json"
+DEFAULT_SOURCE_CATALOG = (
+    REPO_ROOT / "benchmarks" / "catalogs" / "source_item_catalog_miiv.json"
+)
 
 DEFAULT_FULL_EXPORT = Path("/Volumes/外置硬盘/easyicu_fullexport_miiv_20260610")
 

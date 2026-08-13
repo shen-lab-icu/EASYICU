@@ -47,7 +47,9 @@ from easyicu.research_agent.schema import ConceptDescriptor, VariableRole  # noq
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "z-ai/glm-4.5-air:free"
-DEFAULT_SEEDS = REPO_ROOT / "benchmark" / "idea_mining_s6_screen_seed_controls.json"
+DEFAULT_SEEDS = (
+    REPO_ROOT / "benchmarks" / "idea_mining" / "s6_screen_seed_controls.json"
+)
 DEFAULT_OUT = REPO_ROOT / ".tmp" / "idea_mining_s6_validation"
 DEFAULT_MIIV = REPO_ROOT.parent / "其他文件" / "miiv_20260420"
 
