@@ -67,9 +67,51 @@ def descriptor_path_is_compatible(*, kind: str, path: str) -> bool:
     return kind in physical_kinds
 
 
+def contained_regular_output_file(out_dir: Path, value: object) -> Path:
+    """Return one link-free regular file lexically contained in ``out_dir``.
+
+    This helper runs inside the macOS execution sandbox.  Calling
+    :meth:`Path.resolve` there asks the kernel to inspect ancestors such as
+    ``/private`` that are intentionally outside the sandbox allowlist.  The
+    host already supplies the output root, so containment is enforced without
+    ancestor traversal. Output-local absolute aliases are first reduced
+    lexically to a relative path; outside paths and parent components remain
+    invalid. Every output-local component is then checked for symlinks, and
+    hard-linked files are rejected.
+    """
+
+    root = Path(out_dir)
+    raw = str(value or "").strip()
+    supplied = Path(raw)
+    if supplied.is_absolute():
+        try:
+            relative = supplied.relative_to(root.absolute())
+        except ValueError as exc:
+            raise ValueError("output path must be contained") from exc
+    else:
+        relative = supplied
+    if not raw or ".." in relative.parts:
+        raise ValueError("output path must be contained")
+    try:
+        if root.is_symlink() or not root.is_dir():
+            raise ValueError("output root is not a regular directory")
+        candidate = root
+        for part in relative.parts:
+            candidate = candidate / part
+            if candidate.is_symlink():
+                raise ValueError("output path traverses a symlink")
+        stat_result = candidate.stat()
+    except OSError as exc:
+        raise ValueError("output file is unavailable") from exc
+    if not candidate.is_file() or stat_result.st_nlink != 1:
+        raise ValueError("output path is not a single-link regular file")
+    return candidate
+
+
 __all__ = [
     "FIGURE_SUFFIXES",
     "KNOWN_FILE_SUFFIXES",
+    "contained_regular_output_file",
     "descriptor_path_is_compatible",
     "file_kinds",
 ]
