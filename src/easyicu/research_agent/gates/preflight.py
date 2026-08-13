@@ -1147,15 +1147,10 @@ def _provenance_signal_source(value: ast.AST) -> Optional[tuple[str, str]]:
     return None
 
 
-def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding]:
-    """Require a terminating guard for an implemented provenance failure audit."""
-
-    parents = {
-        child: parent
-        for parent in ast.walk(tree)
-        for child in ast.iter_child_nodes(parent)
-    }
-    id_parents, statement_positions = _ast_parent_and_statement_positions(tree)
+def _build_provenance_scope_helpers(
+    *, tree: ast.Module, parents: dict[ast.AST, ast.AST]
+) -> tuple[Callable[..., object], ...]:
+    """Build scope-local provenance AST readers around one immutable tree."""
 
     def _nearest_function(node: ast.AST) -> Optional[ast.AST]:
         current = parents.get(node)
@@ -1164,7 +1159,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         ):
             current = parents.get(current)
         return current
-
     def _contains_literal_audit_row(scope: ast.AST) -> bool:
         return contains_literal_provenance_audit_row(
             scope,
@@ -1172,7 +1166,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             parents=parents,
             failure_keys=_PROVENANCE_FAILURE_KEYS,
         )
-
     def _uses_host_provenance_receipt(scope: ast.AST) -> bool:
         """Leave fail-closed semantics of the host receipt to its own gate."""
 
@@ -1183,76 +1176,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             and _nearest_function(node) is scope
             for node in ast.walk(scope)
         )
-
-    marker_nodes = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and _contains_literal_audit_row(node)
-        and not _uses_host_provenance_receipt(node)
-    ]
-    module_is_marker = _contains_literal_audit_row(tree)
-    if not marker_nodes and not module_is_marker:
-        return []
-    marker_names = {node.name for node in marker_nodes}
-    all_functions = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    ]
-    ambiguous_names = {
-        name
-        for name in marker_names
-        if sum(node.name == name for node in all_functions) != 1
-    }
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Name)
-            and node.id in marker_names
-            and isinstance(node.ctx, (ast.Store, ast.Del))
-        ):
-            ambiguous_names.add(node.id)
-        if isinstance(node, ast.ClassDef) and node.name in marker_names:
-            ambiguous_names.add(node.name)
-        if isinstance(node, ast.ExceptHandler) and node.name in marker_names:
-            ambiguous_names.add(str(node.name))
-        if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name in marker_names:
-            ambiguous_names.add(str(node.name))
-        if isinstance(node, ast.MatchMapping) and node.rest in marker_names:
-            ambiguous_names.add(str(node.rest))
-        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (node.name in marker_names):
-            ambiguous_names.add(node.name)
-        targets: list[ast.AST] = []
-        if isinstance(node, ast.Assign):
-            targets = list(node.targets)
-        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
-            targets = [node.target]
-        bound_names = {name for target in targets for name in _target_names(target)}
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            bound_names.update(
-                argument.arg
-                for argument in [
-                    *node.args.posonlyargs,
-                    *node.args.args,
-                    *node.args.kwonlyargs,
-                ]
-            )
-            if node.args.vararg is not None:
-                bound_names.add(node.args.vararg.arg)
-            if node.args.kwarg is not None:
-                bound_names.add(node.args.kwarg.arg)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            bound_names.update(
-                alias.asname or alias.name.split(".")[0] for alias in node.names
-            )
-        ambiguous_names.update(marker_names & bound_names)
-    marker_functions = {
-        node.name: node for node in marker_nodes if node.name not in ambiguous_names
-    }
-    module_scope_key = "<easyicu-module-provenance-scope>"
-    if module_is_marker:
-        marker_functions[module_scope_key] = tree
-
     def _scope(node: ast.AST) -> ast.AST:
         current: Optional[ast.AST] = node
         while current is not None and not isinstance(
@@ -1260,12 +1183,10 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         ):
             current = parents.get(current)
         return current or tree
-
     def _local_nodes(scope: ast.AST) -> list[ast.AST]:
         return [
             node for node in ast.walk(scope) if node is scope or _scope(node) is scope
         ]
-
     def _environment(
         scope: ast.AST,
     ) -> tuple[
@@ -1315,7 +1236,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                     for name in _target_names(target):
                         assignments.setdefault(name, node.value)
         return expression_roles, signal_meanings, assignments, audit_containers
-
     def _next_statement(statement: ast.stmt) -> Optional[ast.stmt]:
         parent = parents.get(statement)
         if parent is None:
@@ -1327,7 +1247,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             if index + 1 < len(value) and isinstance(value[index + 1], ast.stmt):
                 return value[index + 1]
         return None
-
     def _preceding_direct_assignments(statement: ast.stmt) -> dict[str, ast.AST]:
         """Return straight-line bindings in the exact suite before a guard."""
 
@@ -1360,7 +1279,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 if isinstance(target, ast.Name):
                     assignments[target.id] = value
         return assignments
-
     def _direct_audit_row(
         statement: ast.stmt,
     ) -> Optional[tuple[dict[str, ast.AST], set[str]]]:
@@ -1436,7 +1354,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         ):
             return None
         return fields, containers
-
     def _immediate_returned_audit_row(
         guard: ast.If,
     ) -> Optional[dict[str, ast.AST]]:
@@ -1482,7 +1399,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         ):
             return None
         return fields
-
     def _post_audit_alias_path_is_pure(
         statements: list[ast.stmt],
         *,
@@ -1520,6 +1436,29 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 return False
             trusted.add(statement.targets[0].id)
         return True
+
+    return (
+        _nearest_function, _contains_literal_audit_row,
+        _uses_host_provenance_receipt, _scope, _local_nodes, _environment,
+        _next_statement, _preceding_direct_assignments, _direct_audit_row,
+        _immediate_returned_audit_row, _post_audit_alias_path_is_pure,
+    )
+
+
+def _build_provenance_execution_helpers(
+    *,
+    tree: ast.Module,
+    parents: dict[ast.AST, ast.AST],
+    all_functions: list[ast.FunctionDef | ast.AsyncFunctionDef],
+    marker_names: set[str],
+    _nearest_function: Callable[[ast.AST], Optional[ast.AST]],
+    _scope: Callable[[ast.AST], ast.AST],
+    _local_nodes: Callable[[ast.AST], list[ast.AST]],
+    _next_statement: Callable[[ast.stmt], Optional[ast.stmt]],
+    _direct_audit_row: Callable[..., object],
+    _post_audit_alias_path_is_pure: Callable[..., bool],
+) -> tuple[Callable[..., object], ...]:
+    """Build runtime-binding proofs for provenance audit helpers."""
 
     def _module_pre_guard_has_indirect_effects(
         statements: list[ast.stmt],
@@ -1653,7 +1592,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 ):
                     return True
         return False
-
     def _module_direct_guard_is_bound(guard: ast.If) -> bool:
         """Prove a module guard is bound to one exact, immutable audit row."""
 
@@ -1726,7 +1664,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             count_names=bound_names,
             audit_containers=audit_containers,
         )
-
     def _canonical_entrypoint_guard(node: ast.AST) -> bool:
         if not (
             isinstance(node, ast.If)
@@ -1748,7 +1685,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             and right.value == "__main__"
             for left, right in (operands, operands[::-1])
         )
-
     def _direct_function_runtime_binding(function: ast.AST) -> bool:
         if not (
             isinstance(function, ast.FunctionDef)
@@ -1836,7 +1772,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             ):
                 return False
         return True
-
     def _dynamic_namespace_execution_present() -> bool:
         if _has_dynamic_namespace_indirection(tree):
             return True
@@ -1854,7 +1789,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             if call_name in _DYNAMIC_NAMESPACE_MUTATORS:
                 return True
         return False
-
     def _terminal_entry_function(function: ast.AST) -> bool:
         if not _direct_function_runtime_binding(function):
             return False
@@ -1880,7 +1814,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             ):
                 return False
         return True
-
     def _direct_execution_statement(statement: ast.stmt) -> bool:
         current: ast.AST = statement
         while True:
@@ -1897,7 +1830,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 current = owner
                 continue
             return False
-
     def _result_sink_precedes_call(call: ast.Call) -> bool:
         call_scope = _scope(call)
         call_line = int(getattr(call, "lineno", 0) or 0)
@@ -1907,7 +1839,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             and _is_provenance_result_sink_call(candidate)
             for candidate in _local_nodes(call_scope)
         )
-
     def _eager_outer_call_statement(call: ast.Call) -> ast.stmt | None:
         """Return the statement for a nested, eagerly evaluated call argument.
 
@@ -1938,6 +1869,34 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 current = owner
                 continue
             return None
+
+    return (
+        _module_pre_guard_has_indirect_effects, _module_direct_guard_is_bound,
+        _canonical_entrypoint_guard, _direct_function_runtime_binding,
+        _dynamic_namespace_execution_present, _terminal_entry_function,
+        _direct_execution_statement, _result_sink_precedes_call,
+        _eager_outer_call_statement,
+    )
+
+
+def _build_provenance_guard_helpers(
+    *,
+    tree: ast.Module,
+    parents: dict[ast.AST, ast.AST],
+    id_parents: dict[int, ast.AST],
+    statement_positions: dict[int, object],
+    swallowed_exit_issues: dict[tuple[int, int, int], dict[str, object]],
+    environments: dict[ast.AST, object],
+    _scope: Callable[[ast.AST], ast.AST],
+    _local_nodes: Callable[[ast.AST], list[ast.AST]],
+    _environment: Callable[..., object],
+    _next_statement: Callable[[ast.stmt], Optional[ast.stmt]],
+    _preceding_direct_assignments: Callable[[ast.stmt], dict[str, ast.AST]],
+    _direct_audit_row: Callable[..., object],
+    _immediate_returned_audit_row: Callable[..., object],
+    _post_audit_alias_path_is_pure: Callable[..., bool],
+) -> tuple[Callable[..., object], ...]:
+    """Build terminating-guard proofs and attributable diagnostics."""
 
     def _loop_eager_argument_is_fail_closed(
         call: ast.Call, statement: ast.stmt
@@ -2069,7 +2028,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 continue
             return False
         return True
-
     def _exact_collection_test(node: ast.AST, name: str) -> bool:
         if isinstance(node, ast.Name):
             return node.id == name
@@ -2088,7 +2046,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         ):
             return False
         return isinstance(node.ops[0], (ast.Gt, ast.NotEq))
-
     def _branch_all_paths_raise(statements: list[ast.stmt]) -> bool:
         direct_raise = _branch_all_paths_exit(statements) and not any(
             isinstance(node, ast.Return)
@@ -2116,9 +2073,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 positions=statement_positions,
             )
         )
-
-    swallowed_exit_issues: dict[tuple[int, int, int], dict[str, object]] = {}
-
     def _failure_exit_may_be_swallowed(node: ast.AST) -> bool:
         """Reject a raise site whose caller-side ``try`` can consume failure."""
 
@@ -2173,11 +2127,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 return True
             current = parent
         return False
-
-    environments = {
-        scope: _environment(scope) for scope in [tree, *marker_functions.values()]
-    }
-
     def _direct_scope_statement(statement: ast.stmt, scope: ast.AST) -> bool:
         """Prove a statement lies on a direct, failure-propagating suite path."""
 
@@ -2192,7 +2141,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 current = owner
                 continue
             return False
-
     def _stable_local_failure_signals(guard: ast.If, scope: ast.AST) -> bool:
         """Bind both audit counts to immutable built-in ``int`` values."""
 
@@ -2317,7 +2265,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                     ):
                         return False
         return True
-
     def _full_failure_test(
         node: ast.AST,
         scope: ast.AST,
@@ -2347,7 +2294,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         return not require_stable_signals or (
             isinstance(guard, ast.If) and _stable_local_failure_signals(guard, scope)
         )
-
     def _separate_direct_failure_guards(
         scope: ast.AST,
     ) -> set[ast.If]:
@@ -2494,6 +2440,164 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             if len(guards) >= 2 and coverage == set(_PROVENANCE_FAILURE_KEYS)
             else set()
         )
+
+    return (
+        _loop_eager_argument_is_fail_closed, _exact_collection_test,
+        _branch_all_paths_raise, _failure_exit_may_be_swallowed,
+        _direct_scope_statement, _stable_local_failure_signals,
+        _full_failure_test, _separate_direct_failure_guards,
+    )
+
+
+def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Require a terminating guard for an implemented provenance failure audit."""
+
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    id_parents, statement_positions = _ast_parent_and_statement_positions(tree)
+    (
+        _nearest_function, _contains_literal_audit_row,
+        _uses_host_provenance_receipt, _scope, _local_nodes, _environment,
+        _next_statement, _preceding_direct_assignments, _direct_audit_row,
+        _immediate_returned_audit_row, _post_audit_alias_path_is_pure,
+    ) = _build_provenance_scope_helpers(tree=tree, parents=parents)
+
+
+
+
+    marker_nodes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and _contains_literal_audit_row(node)
+        and not _uses_host_provenance_receipt(node)
+    ]
+    module_is_marker = _contains_literal_audit_row(tree)
+    if not marker_nodes and not module_is_marker:
+        return []
+    marker_names = {node.name for node in marker_nodes}
+    all_functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    ambiguous_names = {
+        name
+        for name in marker_names
+        if sum(node.name == name for node in all_functions) != 1
+    }
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Name)
+            and node.id in marker_names
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
+            ambiguous_names.add(node.id)
+        if isinstance(node, ast.ClassDef) and node.name in marker_names:
+            ambiguous_names.add(node.name)
+        if isinstance(node, ast.ExceptHandler) and node.name in marker_names:
+            ambiguous_names.add(str(node.name))
+        if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name in marker_names:
+            ambiguous_names.add(str(node.name))
+        if isinstance(node, ast.MatchMapping) and node.rest in marker_names:
+            ambiguous_names.add(str(node.rest))
+        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (node.name in marker_names):
+            ambiguous_names.add(node.name)
+        targets: list[ast.AST] = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+            targets = [node.target]
+        bound_names = {name for target in targets for name in _target_names(target)}
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            bound_names.update(
+                argument.arg
+                for argument in [
+                    *node.args.posonlyargs,
+                    *node.args.args,
+                    *node.args.kwonlyargs,
+                ]
+            )
+            if node.args.vararg is not None:
+                bound_names.add(node.args.vararg.arg)
+            if node.args.kwarg is not None:
+                bound_names.add(node.args.kwarg.arg)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound_names.update(
+                alias.asname or alias.name.split(".")[0] for alias in node.names
+            )
+        ambiguous_names.update(marker_names & bound_names)
+    marker_functions = {
+        node.name: node for node in marker_nodes if node.name not in ambiguous_names
+    }
+    module_scope_key = "<easyicu-module-provenance-scope>"
+    if module_is_marker:
+        marker_functions[module_scope_key] = tree
+
+    (
+        _module_pre_guard_has_indirect_effects, _module_direct_guard_is_bound,
+        _canonical_entrypoint_guard, _direct_function_runtime_binding,
+        _dynamic_namespace_execution_present, _terminal_entry_function,
+        _direct_execution_statement, _result_sink_precedes_call,
+        _eager_outer_call_statement,
+    ) = _build_provenance_execution_helpers(
+        tree=tree, parents=parents, all_functions=all_functions,
+        marker_names=marker_names, _nearest_function=_nearest_function,
+        _scope=_scope, _local_nodes=_local_nodes, _next_statement=_next_statement,
+        _direct_audit_row=_direct_audit_row,
+        _post_audit_alias_path_is_pure=_post_audit_alias_path_is_pure,
+    )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    swallowed_exit_issues: dict[tuple[int, int, int], dict[str, object]] = {}
+
+
+    environments = {
+        scope: _environment(scope) for scope in [tree, *marker_functions.values()]
+    }
+
+    (
+        _loop_eager_argument_is_fail_closed, _exact_collection_test,
+        _branch_all_paths_raise, _failure_exit_may_be_swallowed,
+        _direct_scope_statement, _stable_local_failure_signals,
+        _full_failure_test, _separate_direct_failure_guards,
+    ) = _build_provenance_guard_helpers(
+        tree=tree, parents=parents, id_parents=id_parents,
+        statement_positions=statement_positions,
+        swallowed_exit_issues=swallowed_exit_issues, environments=environments,
+        _scope=_scope, _local_nodes=_local_nodes, _environment=_environment,
+        _next_statement=_next_statement,
+        _preceding_direct_assignments=_preceding_direct_assignments,
+        _direct_audit_row=_direct_audit_row,
+        _immediate_returned_audit_row=_immediate_returned_audit_row,
+        _post_audit_alias_path_is_pure=_post_audit_alias_path_is_pure,
+    )
+
+
+
+
 
     returned_slots: dict[str, Optional[int]] = {}
     self_guarded: set[str] = set()
