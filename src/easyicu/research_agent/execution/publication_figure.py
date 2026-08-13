@@ -28,10 +28,11 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
 
 from ..contracts.declared_product import (
     authorize_declared_figure_product_slots,
+    read_digest_bound_artifact_snapshot,
     typed_product as _canonical_typed_product,
 )
 from ..authority.parent_artifact import _resolve_upstream_manifest_step
@@ -40,7 +41,7 @@ from ..authority.evidence_store import sha256_of_bytes, sha256_of_file
 from .figure_preparation import _step_has_figure_only_output_contract
 from .host_services import ExecutePhaseHost, PublicationFigureAuthorityServices
 from ..repair_registry import is_sealed_renderer_repair, repair_metadata_for
-from ..schema import AnalysisStep, ResearchContext
+from ..schema import AnalysisStep, ResearchContext, ValidationFinding
 from .step_worker_state import StepWorkerProgress
 
 
@@ -68,6 +69,109 @@ class SealedRendererState:
         self.implementation_sha256: Optional[str] = None
         self.parent_digests: Dict[str, str] = {}
         self.authorized_product_slots: Dict[str, str] = {}
+
+
+def sealed_renderer_code_seal_required(
+    *,
+    state: SealedRendererState,
+    host_sealed_renderer: bool,
+) -> bool:
+    """Return whether generated code is immutable after concept approval."""
+
+    return state.repair_id is not None or host_sealed_renderer
+
+
+def validate_and_record_sealed_renderer_receipt(
+    *,
+    state: SealedRendererState,
+    authorized_code_sha256: Optional[str],
+    visual_step_summary: Mapping[str, Any],
+    run_dir: Path,
+    step_id: str,
+    step_record: MutableMapping[str, Any],
+) -> tuple[ValidationFinding, ...]:
+    """Validate the legacy receipt bundle only for registry-backed renderers.
+
+    Ordinary deterministic host renderers are code-sealed too, but their
+    lineage is governed by resolved-input and host input-binding receipts.
+    Only a registry-backed repair carries the additional repair-id,
+    parent-snapshot, implementation, and product-slot receipt bundle.
+    """
+
+    if authorized_code_sha256 is None or state.repair_id is None:
+        return ()
+
+    findings: list[ValidationFinding] = []
+    parent_step_id = str(step_id or "").removesuffix("_figure")
+    parent_out = run_dir / "steps" / parent_step_id / "outputs"
+    try:
+        read_digest_bound_artifact_snapshot(
+            parent_out=parent_out,
+            artifact_digests=state.parent_digests,
+        )
+        step_record["sealed_renderer_parent_receipt_verified"] = True
+    except ValueError:
+        step_record["sealed_renderer_parent_receipt_verified"] = False
+        findings.append(
+            ValidationFinding(
+                validator="sealed_renderer_authority",
+                severity="error",
+                message=(
+                    "The sealed renderer's direct-parent inputs changed before "
+                    "host receipt."
+                ),
+                detail={"step_id": step_id, "repair_id": state.repair_id},
+            )
+        )
+
+    reported_slot_bindings = visual_step_summary.get(
+        "planner_product_slot_bindings"
+    )
+    reported_product_slots = (
+        {
+            str(product): str(binding.get("slot") or "")
+            for product, binding in reported_slot_bindings.items()
+            if isinstance(binding, Mapping)
+        }
+        if isinstance(reported_slot_bindings, Mapping)
+        else {}
+    )
+    if (
+        visual_step_summary.get("sealed_renderer_repair") != state.repair_id
+        or visual_step_summary.get("sealed_renderer_implementation_sha256")
+        != state.implementation_sha256
+        or visual_step_summary.get("sealed_renderer_parent_digests")
+        != state.parent_digests
+        or reported_product_slots != state.authorized_product_slots
+    ):
+        findings.append(
+            ValidationFinding(
+                validator="sealed_renderer_authority",
+                severity="error",
+                message=(
+                    "The rendered summary did not preserve the exact sealed "
+                    "renderer identity and implementation digest."
+                ),
+                detail={
+                    "step_id": step_id,
+                    "expected_repair_id": state.repair_id,
+                    "reported_repair_id": visual_step_summary.get(
+                        "sealed_renderer_repair"
+                    ),
+                    "expected_implementation_sha256": state.implementation_sha256,
+                    "reported_implementation_sha256": visual_step_summary.get(
+                        "sealed_renderer_implementation_sha256"
+                    ),
+                    "expected_parent_digests": state.parent_digests,
+                    "reported_parent_digests": visual_step_summary.get(
+                        "sealed_renderer_parent_digests"
+                    ),
+                    "expected_product_slots": state.authorized_product_slots,
+                    "reported_product_slots": reported_product_slots,
+                },
+            )
+        )
+    return tuple(findings)
 
 
 def _sealed_renderer_source_digests(repair_id: str) -> Dict[str, str]:
@@ -414,4 +518,6 @@ __all__ = [
     "_sealed_renderer_implementation_digest",
     "_sealed_parent_planner_anchors",
     "_sealed_typed_figure_products",
+    "sealed_renderer_code_seal_required",
+    "validate_and_record_sealed_renderer_receipt",
 ]

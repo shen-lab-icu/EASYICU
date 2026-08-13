@@ -935,25 +935,24 @@ def test_host_standard_renderer_does_not_require_legacy_repair_receipt():
     that state made every such renderer fail after successfully drawing.
     """
 
-    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution.publication_figure import (
+        validate_and_record_sealed_renderer_receipt,
+    )
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
-    receipt_guard = source.index("legacy_sealed_renderer_receipt = bool(")
+    source = inspect.getsource(validate_and_record_sealed_renderer_receipt)
+    receipt_guard = source.index(
+        "if authorized_code_sha256 is None or state.repair_id is None:"
+    )
     parent_check = source.index(
-        "if legacy_sealed_renderer_receipt:", receipt_guard
+        "read_digest_bound_artifact_snapshot(", receipt_guard
     )
     identity_check = source.index(
-        "if legacy_sealed_renderer_receipt and (", parent_check
-    )
-    contract_repair_gate = source.index(
-        "if sealed_renderer_authorized_code_sha256 is not None:", identity_check
+        'visual_step_summary.get("sealed_renderer_repair")', parent_check
     )
 
-    guarded = source[receipt_guard:contract_repair_gate]
-    assert "sealed_renderer_state.repair_id is not None" in guarded
-    assert "read_digest_bound_artifact_snapshot(" in guarded
-    assert "sealed_renderer_implementation_sha256" in guarded
-    assert parent_check < identity_check < contract_repair_gate
+    assert "return ()" in source[receipt_guard:parent_check]
+    assert "sealed_renderer_implementation_sha256" in source[identity_check:]
+    assert receipt_guard < parent_check < identity_check
 
 
 def test_locked_measurement_preflight_runs_before_every_coder_repair():

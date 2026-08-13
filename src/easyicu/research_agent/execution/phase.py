@@ -208,7 +208,6 @@ from ..contracts.declared_product import (
     authorize_declared_figure_product_slots,
     primary_analysis_cohort_plan_findings,
     primary_analysis_cohort_producer_uses_universe,
-    read_digest_bound_artifact_snapshot,
     typed_product_binding_contract,
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
@@ -314,6 +313,8 @@ from .publication_figure import (
     _sealed_renderer_implementation_digest,
     _sealed_renderer_source_digests,
     _sealed_typed_figure_products,
+    sealed_renderer_code_seal_required,
+    validate_and_record_sealed_renderer_receipt,
 )
 from .host_services import ExecutePhaseHost
 from .output_files import (
@@ -549,6 +550,31 @@ def _persist_run_article_audit_result(
             ),
         )
     return ()
+
+
+def _collect_and_persist_run_article_audits(
+    *,
+    context: ResearchContext,
+    plan: Optional[AnalysisPlan],
+    evidence_store: Any,
+    per_step_records: Sequence[Mapping[str, Any]],
+    run_dir: Path,
+    flush_partial_manifest: Callable[[Dict[str, Any]], None],
+) -> Tuple[ValidationFinding, ...]:
+    """Join the read-only article owner to execute-phase persistence."""
+
+    result = collect_run_article_audits(
+        context=context,
+        plan=plan,
+        evidence_records=evidence_store.records(),
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+    )
+    return result.findings + _persist_run_article_audit_result(
+        result=result,
+        evidence_store=evidence_store,
+        flush_partial_manifest=flush_partial_manifest,
+    )
 
 
 def _repair_prompt_binding_sha256(
@@ -7507,12 +7533,12 @@ def run_execute_phase(
                 step_record["concept_approved_code_sha256"] = (
                     concept_approved_code_digest
                 )
-                if (
-                    sealed_renderer_state.repair_id is not None
-                    or (
+                if sealed_renderer_code_seal_required(
+                    state=sealed_renderer_state,
+                    host_sealed_renderer=bool(
                         standard_executor is not None
                         and standard_executor.host_sealed_renderer
-                    )
+                    ),
                 ):
                     sealed_renderer_authorized_code_sha256 = (
                         concept_approved_code_digest
@@ -9789,99 +9815,18 @@ def run_execute_phase(
                             },
                         )
                     )
-                reported_slot_bindings = visual_step_summary.get(
-                    "planner_product_slot_bindings"
-                )
-                reported_product_slots = (
-                    {
-                        str(product): str(binding.get("slot") or "")
-                        for product, binding in reported_slot_bindings.items()
-                        if isinstance(binding, Mapping)
-                    }
-                    if isinstance(reported_slot_bindings, Mapping)
-                    else {}
-                )
-                # A registry-backed sealed renderer carries an additional
-                # repair-id/parent-snapshot/product-slot receipt bundle.  A
-                # normal deterministic host renderer is also code-sealed so a
-                # model cannot rewrite it, but its lineage is governed by the
-                # resolved-input and host input-binding receipts written above.
-                # Do not demand the legacy repair receipt from that second
-                # class: its SealedRendererState is intentionally empty.
-                legacy_sealed_renderer_receipt = bool(
-                    sealed_renderer_authorized_code_sha256 is not None
-                    and sealed_renderer_state.repair_id is not None
-                )
-                if legacy_sealed_renderer_receipt:
-                    parent_step_id = str(step.step_id or "").removesuffix("_figure")
-                    parent_out = run_dir / "steps" / parent_step_id / "outputs"
-                    try:
-                        read_digest_bound_artifact_snapshot(
-                            parent_out=parent_out,
-                            artifact_digests=sealed_renderer_state.parent_digests,
-                        )
-                        step_record["sealed_renderer_parent_receipt_verified"] = True
-                    except ValueError:
-                        step_record["sealed_renderer_parent_receipt_verified"] = False
-                        early_contract_findings.append(
-                            ValidationFinding(
-                                validator="sealed_renderer_authority",
-                                severity="error",
-                                message=(
-                                    "The sealed renderer's direct-parent inputs "
-                                    "changed before host receipt."
-                                ),
-                                detail={
-                                    "step_id": step.step_id,
-                                    "repair_id": sealed_renderer_state.repair_id,
-                                },
-                            )
-                        )
-                if legacy_sealed_renderer_receipt and (
-                    visual_step_summary.get("sealed_renderer_repair")
-                    != sealed_renderer_state.repair_id
-                    or visual_step_summary.get("sealed_renderer_implementation_sha256")
-                    != sealed_renderer_state.implementation_sha256
-                    or visual_step_summary.get("sealed_renderer_parent_digests")
-                    != sealed_renderer_state.parent_digests
-                    or reported_product_slots
-                    != sealed_renderer_state.authorized_product_slots
-                ):
-                    early_contract_findings.append(
-                        ValidationFinding(
-                            validator="sealed_renderer_authority",
-                            severity="error",
-                            message=(
-                                "The rendered summary did not preserve the exact "
-                                "sealed renderer identity and implementation digest."
-                            ),
-                            detail={
-                                "step_id": step.step_id,
-                                "expected_repair_id": sealed_renderer_state.repair_id,
-                                "reported_repair_id": visual_step_summary.get(
-                                    "sealed_renderer_repair"
-                                ),
-                                "expected_implementation_sha256": (
-                                    sealed_renderer_state.implementation_sha256
-                                ),
-                                "reported_implementation_sha256": (
-                                    visual_step_summary.get(
-                                        "sealed_renderer_implementation_sha256"
-                                    )
-                                ),
-                                "expected_parent_digests": (
-                                    sealed_renderer_state.parent_digests
-                                ),
-                                "reported_parent_digests": visual_step_summary.get(
-                                    "sealed_renderer_parent_digests"
-                                ),
-                                "expected_product_slots": (
-                                    sealed_renderer_state.authorized_product_slots
-                                ),
-                                "reported_product_slots": reported_product_slots,
-                            },
-                        )
+                early_contract_findings.extend(
+                    validate_and_record_sealed_renderer_receipt(
+                        state=sealed_renderer_state,
+                        authorized_code_sha256=(
+                            sealed_renderer_authorized_code_sha256
+                        ),
+                        visual_step_summary=visual_step_summary,
+                        run_dir=run_dir,
+                        step_id=step.step_id,
+                        step_record=step_record,
                     )
+                )
                 # PRIMARY runners keep their trustworthy core estimate.
                 early_contract_findings = _demote_step_contract_for_primary_runner(
                     step_record, visual_step_summary, early_contract_findings
@@ -12463,18 +12408,13 @@ def run_execute_phase(
         )
         findings += demoted_final_findings
 
-    article_audit_result = collect_run_article_audits(
-        context=context,
-        plan=plan,
-        evidence_records=evidence.records(),
-        per_step_records=per_step_records,
-        run_dir=run_dir,
-    )
-    findings.extend(article_audit_result.findings)
     findings.extend(
-        _persist_run_article_audit_result(
-            result=article_audit_result,
+        _collect_and_persist_run_article_audits(
+            context=context,
+            plan=plan,
             evidence_store=evidence,
+            per_step_records=per_step_records,
+            run_dir=run_dir,
             flush_partial_manifest=_flush_partial_manifest,
         )
     )
