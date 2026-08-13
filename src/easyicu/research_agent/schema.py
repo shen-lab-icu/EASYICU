@@ -60,6 +60,10 @@ from .planning.cohort_contract import (
     CohortSchemaError,
     coerce_cohort_definition,
 )
+from .planning.literature_contract import (
+    LiteratureDesignBinding,
+    LiteratureDesignElement,
+)
 from .planning.robustness_contract import (
     ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS,
     RobustnessPlanError,
@@ -1974,49 +1978,6 @@ class RobustnessReplaySpec(BaseModel):
             if item.product_id == wanted:
                 return item.output
         return None
-
-
-LiteratureDesignElement = Literal[
-    "population",
-    "time_zero",
-    "exposure",
-    "outcome",
-    "estimand",
-    "adjustment",
-    "dependence",
-    "missing_data",
-    "robustness",
-    "reporting",
-]
-
-
-class LiteratureDesignBinding(BaseModel):
-    """Planner-owned explanation of how one source governs one plan step.
-
-    A citation key alone proves only that an article was named.  This contract
-    records the exact design decisions the Planner adopted from it, plus any
-    deliberate divergence.  Source excerpts remain owned by the sealed
-    LiteratureBundle and are joined by the host during scientific review.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    citation_key: str = Field(
-        ...,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$",
-    )
-    design_elements: List[LiteratureDesignElement] = Field(min_length=1)
-    application: str = Field(min_length=8, max_length=1200)
-    divergence: Optional[str] = Field(default=None, max_length=1200)
-
-    @field_validator("design_elements")
-    @classmethod
-    def _unique_design_elements(
-        cls, values: List[LiteratureDesignElement]
-    ) -> List[LiteratureDesignElement]:
-        if len(values) != len(set(values)):
-            raise ValueError("literature design_elements must be unique")
-        return values
 
 
 class AnalysisStep(BaseModel):
