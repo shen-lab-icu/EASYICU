@@ -1237,15 +1237,28 @@ def postprocess_paper_replication(
 def canonical_outcome_name(raw: Optional[str]) -> Optional[str]:
     """Map a free-text outcome label to a canonical EasyICU outcome key.
 
-    ``death`` covers ICU/hospital/28-day mortality labels; ``los_icu``
-    covers length-of-stay variants. Anything that doesn't match a
-    known canonical bucket is returned unchanged so the caller can
-    still observe what the paper meant.
+    Explicit fixed-horizon mortality labels keep their distinct endpoint;
+    only mortality without a stated supported horizon maps to ``death``.
+    ``los_icu`` covers length-of-stay variants. Anything that does not match a
+    known canonical bucket is returned unchanged so the caller can still
+    observe what the paper meant.
     """
     text = (raw or "").lower()
     if not text:
         return None
     if "mortality" in text or "death" in text:
+        horizon_patterns = {
+            "mort_28d": (r"\b28\s*[- ]?(?:day|days|d)\b", r"\bday\s*[- ]?28\b"),
+            "mort_90d": (r"\b90\s*[- ]?(?:day|days|d)\b", r"\bday\s*[- ]?90\b"),
+            "mort_365d": (
+                r"\b365\s*[- ]?(?:day|days|d)\b",
+                r"\bday\s*[- ]?365\b",
+                r"\b(?:1|one)\s*[- ]?year\b",
+            ),
+        }
+        for concept_id, patterns in horizon_patterns.items():
+            if any(re.search(pattern, text) for pattern in patterns):
+                return concept_id
         return "death"
     if "length of stay" in text or "los" in text:
         return "los_icu"

@@ -2981,7 +2981,9 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     assert "Math.log10(n)" in viz_js
     assert "p = ${esc(pValueLabel)}" in viz_js
     assert "cohortSurvivalWindowNote" in viz_js
-    assert "derived from hospital death + LOS" in viz_js
+    assert "dedicated flag + follow-up" in viz_js
+    assert "derived from hospital death + LOS" not in viz_js
+    assert "hospital_mortality_time_window" not in viz_js
     assert ".surv-outcome-card" in cohort_css
     assert (
         "ICU mortality is unavailable because this export does not include ICU-specific event and time columns."

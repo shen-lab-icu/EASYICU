@@ -2670,7 +2670,7 @@
       '28-day mortality': '28 天死亡',
       '30-day display window': '30 天显示窗口',
       '28-day window': '28 天窗口',
-      'derived from hospital death + LOS': '由院内死亡 + 住院时长派生',
+      'dedicated flag + follow-up': '专用事件标志 + 随访时间',
       'Hospital LOS / follow-up days': '住院时长 / 随访天数',
       'Outcome': '结局',
       'Outcome overview': '结局概览',
@@ -3126,13 +3126,11 @@
     } else if (summary.status === 'available') {
       parts.push(cohortText('Event rate summary'));
     }
-    if (summary.basis === 'derived_time_window') {
-      parts.push(cohortText(summary.time_window_label || row.window_label || 'time window'));
-    } else if (row.window_label && row.id === 'mort_28d') {
-      parts.push(cohortText(row.window_label));
+    if (summary.basis === 'fixed_horizon_event_and_followup') {
+      parts.push(cohortText('dedicated flag + follow-up'));
     }
-    if (summary.basis === 'derived_time_window' || row.derived_from === 'hospital_mortality_time_window') {
-      parts.push(cohortText('derived from hospital death + LOS'));
+    if (row.window_label && row.id === 'mort_28d') {
+      parts.push(cohortText(row.window_label));
     }
     return parts.join(' · ');
   }
@@ -3152,9 +3150,6 @@
       `Displayed on a ${days}-day window; later observations are censored at the window boundary.`,
       `默认显示 ${days} 天窗口；窗口之后的观测在边界处按删失处理。`
     );
-    if (curve.derived_from === 'hospital_mortality_time_window') {
-      return `${base} ${t('This 28-day endpoint is derived from hospital death plus hospital LOS because dedicated 28-day columns were not present.', '这个 28 天结局由院内死亡 + 住院时长派生，因为导出中没有单独的 28 天结局列。')}`;
-    }
     return base;
   }
 

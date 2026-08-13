@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import threading
 import time
 import zipfile
@@ -185,7 +186,7 @@ def _write_csv_export(root: Path, database: str = "miiv") -> Path:
         "outcome": pd.DataFrame(
             {
                 "stay_id": [1, 2, 3],
-                "death": ["", "1", "0"],
+                "death": ["0", "1", "0"],
                 "los_icu": [2.0, 5.0, 1.0],
                 "los_hosp": [4.0, 3.0, 6.0],
             }
@@ -2158,6 +2159,45 @@ def test_data_scan_auto_classifies_supported_folder_layouts(tmp_path: Path) -> N
     assert unknown_result["privacy"]["raw_rows_read"] is False
 
 
+def test_data_scan_fails_closed_for_ambiguous_or_unidentified_prepared_data(
+    tmp_path: Path,
+) -> None:
+    ambiguous = tmp_path / "ambiguous"
+    ambiguous.mkdir()
+    (ambiguous / "numericitems").mkdir()
+    pd.DataFrame({"CaseID": [1]}).to_parquet(
+        ambiguous / "cases.parquet", index=False
+    )
+
+    ambiguous_result = dataio.scan_path(str(ambiguous))
+
+    assert ambiguous_result == {
+        "ok": False,
+        "error": "database_detection_ambiguous",
+        "path": str(ambiguous.resolve()),
+        "candidates": ["aumc", "sic"],
+        "ready": False,
+        "privacy": {
+            "raw_rows_read": False,
+            "patient_identifiers_returned": False,
+        },
+    }
+
+    unidentified = tmp_path / "prepared"
+    unidentified.mkdir()
+    pd.DataFrame({"value": [1]}).to_parquet(
+        unidentified / "measurements.parquet", index=False
+    )
+
+    unidentified_result = dataio.scan_path(str(unidentified))
+
+    assert unidentified_result["ok"] is False
+    assert unidentified_result["error"] == "database_detection_unavailable"
+    assert unidentified_result["source"] == "prepared"
+    assert unidentified_result["tables"] == 1
+    assert unidentified_result["ready"] is False
+
+
 def test_workspace_summary_endpoint_returns_snapshot_and_rejects_bad_paths(
     tmp_path: Path,
 ) -> None:
@@ -2874,7 +2914,7 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     assert survival_analysis["mode"] == "kaplan_meier_aggregate"
     assert survival_analysis["scope"] == "exploratory_unadjusted"
     assert survival_analysis["reportable"] is False
-    assert survival_analysis["default_outcome"] == "mort_28d"
+    assert survival_analysis["default_outcome"] == "hospital_death"
     hospital = next(
         row for row in survival_analysis["outcomes"] if row["id"] == "hospital_death"
     )
@@ -2902,14 +2942,10 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
         == "blocked"
     )
     mort_28d = next(row for row in survival_analysis["outcomes"] if row["id"] == "mort_28d")
-    assert mort_28d["status"] == "ready"
-    assert mort_28d["derived_from"] == "hospital_mortality_time_window"
-    assert mort_28d["display_horizon_days"] == 28.0
-    assert mort_28d["event_column"] == "death"
-    assert mort_28d["time_column"] == "los_hosp"
-    assert mort_28d["event_summary"]["basis"] == "derived_time_window"
-    assert mort_28d["event_summary"]["event_count"] == 1
-    assert mort_28d["event_summary"]["event_rate_pct"] == 33.3
+    assert mort_28d["status"] == "blocked"
+    assert mort_28d["event_column"] is None
+    assert mort_28d["time_column"] is None
+    assert mort_28d["reason"] == "No event column found for 28-day mortality."
     assert (
         next(row for row in survival_analysis["outcomes"] if row["id"] == "icu_death")[
             "reason"
@@ -3013,6 +3049,89 @@ def test_cohort_review_icu_death_event_rate_does_not_require_km_time(
     serialized = json.dumps(survival)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
+
+
+def test_cohort_review_28d_requires_dedicated_followup_and_preserves_unknowns() -> None:
+    outcome = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "mort_28d": pd.Series([True, pd.NA, False], dtype="boolean"),
+            "followup_days_28d": [5.0, 28.0, 40.0],
+        }
+    )
+
+    payload = cohort_review._survival_analysis_payload(
+        outcome=outcome,
+        entity_ids=["1", "2", "3"],
+        age_by_entity={"1": 40.0, "2": 50.0, "3": 60.0},
+        sex_by_entity={"1": "F", "2": "M", "3": "F"},
+        sofa_by_entity={"1": 8.0, "2": 4.0, "3": 2.0},
+        sepsis_by_entity={"1": True, "2": False, "3": False},
+    )
+
+    mort_28d = next(row for row in payload["outcomes"] if row["id"] == "mort_28d")
+    assert mort_28d["status"] == "ready"
+    assert mort_28d["event_column"] == "mort_28d"
+    assert mort_28d["time_column"] == "followup_days_28d"
+    assert mort_28d["usable_entities"] == 2
+    assert mort_28d["event_count"] == 1
+    assert mort_28d["event_summary"]["denominator"] == 2
+    assert mort_28d["event_summary"]["event_rate_pct"] == 50.0
+
+
+def test_cohort_review_28d_excludes_flag_time_contradictions_consistently() -> None:
+    outcome = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "mort_28d": pd.Series([True, False, True, False], dtype="boolean"),
+            # Rows 1 and 2 contradict a fixed 28-day endpoint: a day-40 death
+            # cannot be mort_28d=True, and censoring at day 10 cannot establish
+            # mort_28d=False. Rows 3 and 4 are the valid event/non-event pair.
+            "followup_days_28d": [40.0, 10.0, 5.0, 28.0],
+        }
+    )
+
+    payload = cohort_review._survival_analysis_payload(
+        outcome=outcome,
+        entity_ids=["1", "2", "3", "4"],
+        age_by_entity={"1": 40.0, "2": 70.0, "3": 50.0, "4": 80.0},
+        sex_by_entity={"1": "F", "2": "M", "3": "F", "4": "M"},
+        sofa_by_entity={"1": 8.0, "2": 2.0, "3": 7.0, "4": 3.0},
+        sepsis_by_entity={"1": True, "2": False, "3": True, "4": False},
+    )
+
+    mort_28d = next(row for row in payload["outcomes"] if row["id"] == "mort_28d")
+    curves = [row for row in payload["curves"] if row["outcome_id"] == "mort_28d"]
+
+    assert mort_28d["status"] == "ready"
+    assert mort_28d["usable_entities"] == 2
+    assert mort_28d["event_count"] == 1
+    assert mort_28d["event_summary"]["denominator"] == 2
+    assert mort_28d["event_summary"]["event_count"] == 1
+    assert mort_28d["event_summary"]["event_rate_pct"] == 50.0
+    assert mort_28d["event_summary"]["excluded_inconsistent_entities"] == 2
+    assert curves
+    assert all(sum(group["events"] for group in curve["groups"]) == 1 for curve in curves)
+
+
+def test_cohort_summary_cache_identity_changes_after_same_size_restored_mtime(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "outcome.csv"
+    source.write_bytes(b"stay_id,death\n1,0\n")
+    original = source.stat()
+    description = {
+        "generated": "fixture",
+        "summary": {"stays": 1, "modules": 1, "file_count": 1, "total_rows": 1},
+        "files": [{"file": source.name, "module": "outcome"}],
+    }
+    before = cohort_review._summary_cache_key(tmp_path, description, None)
+
+    source.write_bytes(b"stay_id,death\n1,1\n")
+    os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+    after = cohort_review._summary_cache_key(tmp_path, description, None)
+
+    assert after != before
 
 
 def test_cohort_review_presence_rate_modules_are_not_low_coverage(
@@ -3385,7 +3504,7 @@ def test_cohort_review_large_parquet_export_reuses_active_source_for_km_and_cove
     assert modules["outcome"]["coverage_pct"] == 100.0
     survival = payload["survival_analysis"]
     assert survival["status"] == "ready"
-    assert survival["default_outcome"] == "mort_28d"
+    assert survival["default_outcome"] == "hospital_death"
     assert survival["curves"]
     sepsis_curve = next(
         row
