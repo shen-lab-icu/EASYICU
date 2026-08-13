@@ -1531,6 +1531,8 @@ def test_pi_replay_survives_service_restart_and_archives_only_safe_child_job(
         "run",
     ]
     assert public["archived_child_jobs"][0]["job_id"] == child.id
+    assert public["archived_child_jobs"][0]["created_at_epoch"] == child.created
+    assert public["archived_child_jobs"][0]["finished_at_epoch"] == child.finished
     assert len(public["conversation_replay"]["replay_sha256"]) == 64
 
 

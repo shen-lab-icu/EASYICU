@@ -32,7 +32,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-demo.js?v=20260811-science-readiness1" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1" in index
     assert "js/screens-guided-pi-preview.js?v=20260812-data-package1" in index
-    assert "js/screens-guided-pi.js?v=20260812-natural-chat-artifacts1" in index
+    assert "js/screens-guided-pi-replay.js?v=20260813-review-replay2" in index
+    assert "js/screens-guided-pi.js?v=20260813-review-replay2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
@@ -428,6 +429,10 @@ def test_pi_project_reopens_latest_session_and_replays_safe_lifecycle() -> None:
     assert "saved-activity-" in owner
     assert "state.session.archived_child_jobs" in owner
     assert "archiveChildJob(jobId)" in owner
+    assert "childJobPresentation" in replay
+    assert "Analysis plan ready for review" in replay
+    assert "activity.displayTitle" in owner
+    assert "row.durationKnown === false" in owner
     assert "data-gpi-presentation-pin" in owner
     assert "pinPiCopilotPresentation" in owner
     assert "private chain-of-thought" in owner
