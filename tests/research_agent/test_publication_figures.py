@@ -1183,6 +1183,199 @@ def test_distribution_overall_audit_row_is_not_drawn_as_a_third_exposure_group()
     assert normalized["n"].tolist() == [700, 300]
 
 
+def _e1_typed_distribution_frame(*, include_risk_difference: bool) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        {
+            "row_role": ["exposure_level", "exposure_level", "overall"],
+            "exposure_level_index": [0, 1, None],
+            "exposure_level": [0, 1, None],
+            "n_rows": [62_900, 31_600, 94_500],
+            # Deliberately differ from n_rows: Panel B must use the analysed
+            # outcome denominator, not whichever structural count comes first.
+            "outcome_denominator": [62_862, 31_596, 94_458],
+            "outcome_rate_pct": [8.210047, 13.625142, 10.021385],
+            "ci_low_pct": [7.995860, 13.245177, 9.830581],
+            "ci_high_pct": [8.424235, 14.005108, 10.212189],
+            "exposure_column": ["sep3_sofa1_max"] * 3,
+        }
+    )
+    if include_risk_difference:
+        frame = frame.assign(
+            risk_difference_pct=5.415095,
+            risk_difference_ci_low_pct=4.977273,
+            risk_difference_ci_high_pct=5.852917,
+            risk_difference_reference_index=0,
+            risk_difference_comparison_index=1,
+            risk_difference_effect_measure="risk_difference",
+        )
+    return frame
+
+
+def test_e1_typed_distribution_uses_authorized_risk_difference_not_level_codes(ra):
+    from easyicu.research_agent.figures.skill import (
+        _association_axis_metadata,
+        _normalise_association_frame,
+    )
+
+    normalized = _normalise_association_frame(
+        _e1_typed_distribution_frame(include_risk_difference=True),
+        primary_exposure="sep3_sofa1_max",
+        display_labels={"sep3_sofa1_max": "Sepsis-3"},
+    )
+
+    assert normalized["estimate"].tolist() == pytest.approx([5.415095])
+    assert normalized["lower"].tolist() == pytest.approx([4.977273])
+    assert normalized["upper"].tolist() == pytest.approx([5.852917])
+    assert normalized["label"].tolist() == ["Sepsis-3: Exposed vs Unexposed"]
+    assert not set(normalized["estimate"]) & {0.0, 1.0}
+    axis = _association_axis_metadata(normalized)
+    assert axis["null_value"] == 0.0
+    assert axis["ratio_scale"] is False
+    assert axis["xlabel"] == "Risk difference (percentage points)"
+
+
+def test_e1_typed_distribution_without_authorized_contrast_fails_closed(ra):
+    from easyicu.research_agent.figures.skill import _normalise_association_frame
+
+    incomplete_typed = _normalise_association_frame(
+        _e1_typed_distribution_frame(include_risk_difference=False),
+        primary_exposure="sep3_sofa1_max",
+    )
+    arbitrary_numeric = _normalise_association_frame(
+        pd.DataFrame(
+            {
+                "exposure_level": [0, 1],
+                "n_rows": [700, 300],
+                "outcome_rate_pct": [8.0, 14.0],
+            }
+        )
+    )
+
+    assert incomplete_typed.empty
+    assert arbitrary_numeric.empty
+
+
+def test_e1_typed_distribution_panel_b_uses_rate_ci_and_outcome_denominator(ra):
+    from easyicu.research_agent.figures.skill import _draw_strata_panel
+    from easyicu.research_agent.figures.strata import normalise_strata_frame
+
+    normalized = normalise_strata_frame(
+        _e1_typed_distribution_frame(include_risk_difference=True)
+    )
+
+    assert normalized["score"].tolist() == ["Unexposed", "Exposed"]
+    assert normalized["rate"].tolist() == pytest.approx([0.08210047, 0.13625142])
+    assert normalized["lower"].tolist() == pytest.approx([0.07995860, 0.13245177])
+    assert normalized["upper"].tolist() == pytest.approx([0.08424235, 0.14005108])
+    assert normalized["n"].tolist() == [62_862, 31_596]
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    _draw_strata_panel(
+        ax,
+        normalized,
+        palette={"blue": "#0F4D92", "neutral_light": "#D8D8D8"},
+        outcome_label="In-hospital mortality",
+    )
+    labels = [label.get_text() for label in ax.get_yticklabels()]
+    assert labels == ["Unexposed (n=62,862)", "Exposed (n=31,596)"]
+    # One collection comes from the lollipop stems and another from the
+    # horizontal confidence intervals.  A point-only panel has only the former.
+    assert len(ax.collections) >= 2
+    plt.close(fig)
+
+
+def test_publication_figure_skill_e1_typed_distribution_projects_both_panels(
+    ra,
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    distribution = tmp_path / "exposure_outcome_distribution.csv"
+    _e1_typed_distribution_frame(include_risk_difference=True).to_csv(
+        distribution,
+        index=False,
+    )
+    evidence.register_file(
+        kind="table",
+        description="E1 typed exposure/outcome distribution.",
+        source_path=distribution,
+        evidence_id="exposure_outcome_distribution",
+        produced_by_step="03_distribution",
+    )
+    context = ra.ResearchContext(
+        research_question="Describe Sepsis-3 and in-hospital mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="MIMIC-IV ICU stays",
+            database="mimiciv",
+            n_patients=65_366,
+            n_stays=94_458,
+        ),
+        variables=[],
+        primary_exposure="sep3_sofa1_max",
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        display_labels={"sep3_sofa1_max": "Sepsis-3"},
+        steps=[
+            ra.AnalysisStep(
+                step_id="03_distribution",
+                intent="Estimate the prespecified descriptive contrast.",
+                expected_outputs=["table:exposure_outcome_distribution"],
+                planned_analysis_role="primary",
+            ),
+            ra.AnalysisStep(
+                step_id="04_figure",
+                intent="Render the publication figure.",
+                inputs=["table:exposure_outcome_distribution"],
+                expected_outputs=["figure:publication_figure"],
+                planned_analysis_role="auxiliary",
+            ),
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    assert result.findings == []
+    primary_source = pd.read_csv(
+        run_dir
+        / "publication_figures"
+        / "publication_figure_source_primary_association.csv"
+    )
+    strata_source = pd.read_csv(
+        run_dir
+        / "publication_figures"
+        / "publication_figure_source_stratified_outcome.csv"
+    )
+    assert primary_source["estimate"].tolist() == pytest.approx([5.415095])
+    assert not set(primary_source["estimate"]) & {0.0, 1.0}
+    assert strata_source["rate"].tolist() == pytest.approx([0.08210047, 0.13625142])
+    assert strata_source["n"].tolist() == [62_862, 31_596]
+    contract = json.loads(
+        (
+            run_dir
+            / "publication_figures"
+            / "easyicu_publication_figure.figure_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert contract["panels"][0]["title"] == "Unadjusted risk difference"
+    assert "percentage points" in contract["panels"][0]["claim"]
+    assert "analysed denominators" in contract["panels"][1]["claim"]
+    assert "relative estimate" not in json.dumps(contract)
+
+
 def test_figure_contract_enforces_unique_panel_ids():
     with pytest.raises(ValueError):
         make_figure_contract(

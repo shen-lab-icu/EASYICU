@@ -8,6 +8,7 @@ import pandas as pd
 
 from .base import first_exact_column
 from .display_labels import display_label, label_lookup
+from .exposure_outcome_distribution import normalise_distribution_outcome_rates
 
 _GROUP_SUFFIXES = (
     "_group",
@@ -34,6 +35,12 @@ def normalise_strata_frame(
 
     if frame.empty:
         return pd.DataFrame(columns=["score", "rate"])
+    typed_distribution = normalise_distribution_outcome_rates(
+        frame,
+        display_labels=display_labels,
+    )
+    if typed_distribution is not None:
+        return typed_distribution
     columns = {str(column).lower(): column for column in frame.columns}
     score_column = first_exact_column(
         columns,
