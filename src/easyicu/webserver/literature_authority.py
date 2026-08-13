@@ -22,7 +22,13 @@ from typing import Any, Mapping, Optional
 
 from easyicu.webserver import study_contexts
 
-LITERATURE_AUTHORITY_SCHEMA_VERSION = "easyicu.web-literature-authority/2"
+LITERATURE_AUTHORITY_SCHEMA_VERSION = "easyicu.web-literature-authority/3"
+_SUPPORTED_SCHEMA_VERSIONS = frozenset(
+    {
+        "easyicu.web-literature-authority/2",
+        LITERATURE_AUTHORITY_SCHEMA_VERSION,
+    }
+)
 _AUTHORITY_ROOT = Path.home() / ".easyicu" / "literature_authorities"
 _MAX_RECEIPT_BYTES = 512_000
 _MAX_CITATIONS = 20
@@ -47,6 +53,18 @@ def persist_literature_authority(
 ) -> dict[str, Any]:
     """Persist one completed Web search and return its compact binding."""
 
+    study_context_id = _text(study.get("id"), 160)
+    study_context_revision = study.get("revision")
+    if (
+        not study_context_id
+        or isinstance(study_context_revision, bool)
+        or not isinstance(study_context_revision, int)
+        or study_context_revision < 0
+    ):
+        raise LiteratureAuthorityError(
+            "literature_authority_study_coordinate_required",
+            "A literature receipt requires the exact source StudyContext id and revision.",
+        )
     status = _text(discovered.get("status"), 80)
     if not bool(discovered.get("search_performed")) or status not in {
         "searched",
@@ -91,9 +109,16 @@ def persist_literature_authority(
             "A no-hits receipt cannot contain PubMed records.",
         )
 
-    scope_sha256 = study_contexts.literature_search_scope_sha256(dict(study))
+    scope_sha256 = study_contexts.literature_search_scope_sha256(
+        dict(study),
+        schema_version=LITERATURE_AUTHORITY_SCHEMA_VERSION,
+    )
     payload = {
         "schema_version": LITERATURE_AUTHORITY_SCHEMA_VERSION,
+        "study_context": {
+            "id": study_context_id,
+            "revision": study_context_revision,
+        },
         "searched_at": searched_at,
         "status": status,
         "study_configuration_sha256": scope_sha256,
@@ -130,6 +155,8 @@ def persist_literature_authority(
         "schema_version": LITERATURE_AUTHORITY_SCHEMA_VERSION,
         "receipt_id": receipt_id,
         "receipt_sha256": hashlib.sha256(raw).hexdigest(),
+        "study_context_id": payload["study_context"]["id"],
+        "study_context_revision": payload["study_context"]["revision"],
         "status": status,
         "result_count": len(citations),
         "searched_at": searched_at,
@@ -148,7 +175,8 @@ def load_bound_literature(
     binding = binding if isinstance(binding, Mapping) else {}
     if not binding:
         return None
-    if binding.get("schema_version") != LITERATURE_AUTHORITY_SCHEMA_VERSION:
+    binding_schema = _text(binding.get("schema_version"), 120)
+    if binding_schema not in _SUPPORTED_SCHEMA_VERSIONS:
         raise LiteratureAuthorityError(
             "literature_authority_schema_invalid",
             "The StudyContext literature binding has an unsupported schema.",
@@ -171,7 +199,7 @@ def load_bound_literature(
             "literature_authority_digest_mismatch",
             "The Web literature receipt changed after it was bound to the study.",
         )
-    if payload.get("schema_version") != LITERATURE_AUTHORITY_SCHEMA_VERSION:
+    if payload.get("schema_version") != binding_schema:
         raise LiteratureAuthorityError(
             "literature_authority_receipt_schema_invalid",
             "The bound Web literature receipt has an unsupported schema.",
@@ -181,8 +209,31 @@ def load_bound_literature(
             "literature_authority_receipt_id_mismatch",
             "The Web literature receipt identity no longer matches its binding.",
         )
+    source_context = payload.get("study_context")
+    source_context = source_context if isinstance(source_context, Mapping) else {}
+    source_context_id = _text(source_context.get("id"), 160)
+    source_context_revision = source_context.get("revision")
+    if binding_schema == LITERATURE_AUTHORITY_SCHEMA_VERSION:
+        binding_context_id = _text(binding.get("study_context_id"), 160)
+        binding_context_revision = binding.get("study_context_revision")
+        if (
+            not source_context_id
+            or source_context_id != binding_context_id
+            or source_context_id != _text(study.get("id"), 160)
+            or isinstance(source_context_revision, bool)
+            or not isinstance(source_context_revision, int)
+            or source_context_revision < 0
+            or source_context_revision != binding_context_revision
+        ):
+            raise LiteratureAuthorityError(
+                "literature_authority_study_coordinate_mismatch",
+                "The bound Web literature receipt lost its source StudyContext coordinate.",
+            )
 
-    current_scope = study_contexts.literature_search_scope_sha256(dict(study))
+    current_scope = study_contexts.literature_search_scope_sha256(
+        dict(study),
+        schema_version=binding_schema,
+    )
     expected_scope = _text(binding.get("study_configuration_sha256"), 80).lower()
     receipt_scope = _text(payload.get("study_configuration_sha256"), 80).lower()
     if not _DIGEST.fullmatch(expected_scope) or not _DIGEST.fullmatch(receipt_scope):
@@ -270,7 +321,7 @@ def load_bound_literature(
         if matched:
             record_queries[citation["key"]] = matched
     count = len(citations)
-    return {
+    bundle = {
         "research_question": _text(research_question, 2_000),
         "citations": citations,
         "prisma": {
@@ -297,6 +348,19 @@ def load_bound_literature(
         },
         "screening_decisions": [],
     }
+    if binding_schema == LITERATURE_AUTHORITY_SCHEMA_VERSION:
+        bundle["authority_trace"] = {
+            "schema_version": binding_schema,
+            "receipt_id": receipt_id,
+            "receipt_sha256": expected_digest,
+            "study_context_id": _text(
+                source_context_id,
+                160,
+            ),
+            "study_context_revision": _nonnegative_int(source_context_revision),
+            "retrieval_scope_sha256": expected_scope,
+        }
+    return bundle
 
 
 def _citation(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:

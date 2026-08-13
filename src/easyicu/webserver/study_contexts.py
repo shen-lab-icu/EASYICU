@@ -188,12 +188,16 @@ _LITERATURE_AUTHORITY_SCHEMA = {
     "schema_version": "text",
     "receipt_id": "text",
     "receipt_sha256": "text",
+    "study_context_id": "text",
+    "study_context_revision": "number",
     "status": "text",
     "result_count": "number",
     "searched_at": "text",
     "study_configuration_sha256": "text",
 }
-_LITERATURE_SCOPE_FIELDS = (
+_LITERATURE_AUTHORITY_V2 = "easyicu.web-literature-authority/2"
+_LITERATURE_AUTHORITY_V3 = "easyicu.web-literature-authority/3"
+_LITERATURE_SCOPE_FIELDS_V2 = (
     "question",
     "purpose",
     "data_source",
@@ -217,7 +221,7 @@ _LITERATURE_SCOPE_FIELDS = (
     "idea_handoff",
 )
 _SCIENTIFIC_CONFIGURATION_FIELDS = (
-    *_LITERATURE_SCOPE_FIELDS,
+    *_LITERATURE_SCOPE_FIELDS_V2,
     "literature_authority",
 )
 
@@ -1155,16 +1159,21 @@ def _sanitize_patch(
                         "field": f"literature_authority.{field}",
                     }
                 )
-        count = authority.get("result_count")
-        if count is not None and (
-            isinstance(count, bool) or not isinstance(count, int) or count < 0
-        ):
-            raise StudyContextError(
-                {
-                    "error": "invalid_literature_authority_count",
-                    "field": "literature_authority.result_count",
-                }
-            )
+        for field in ("result_count", "study_context_revision"):
+            number = authority.get(field)
+            if number is not None and (
+                isinstance(number, bool) or not isinstance(number, int) or number < 0
+            ):
+                raise StudyContextError(
+                    {
+                        "error": (
+                            "invalid_literature_authority_count"
+                            if field == "result_count"
+                            else "invalid_literature_authority_revision"
+                        ),
+                        "field": f"literature_authority.{field}",
+                    }
+                )
         patch["literature_authority"] = authority
     for field, default in (("current_stage", "plan"), ("last_route", "entry")):
         if field in raw:
@@ -1437,13 +1446,24 @@ def upsert_context(
             else _default_context(context_id, timestamp)
         )
         if current is not None and "literature_authority" not in patch:
-            current_scope = literature_search_scope_sha256(current)
-            proposed_scope = literature_search_scope_sha256({**current, **patch})
+            binding = current.get("literature_authority")
+            binding = binding if isinstance(binding, dict) else {}
+            authority_schema = str(
+                binding.get("schema_version") or _LITERATURE_AUTHORITY_V3
+            )
+            current_scope = literature_search_scope_sha256(
+                current,
+                schema_version=authority_schema,
+            )
+            proposed_scope = literature_search_scope_sha256(
+                {**current, **patch},
+                schema_version=authority_schema,
+            )
             if proposed_scope != current_scope:
-                # A Web search receipt is authority only for the exact
-                # question/source/cohort/design it was issued against.  Clear
-                # it in the same atomic write as any scientific configuration
-                # change so a later Plan can never inherit stale prior art.
+                # A Web search receipt is authority only for the exact typed
+                # retrieval scope that produced its queries. Clear it in the
+                # same atomic write when that scope changes so a later Plan
+                # can never inherit candidates retrieved for another topic.
                 patch["literature_authority"] = {}
         if patch or current is None:
             context.update(patch)
@@ -1701,15 +1721,59 @@ def _scientific_fields_sha256(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def literature_search_scope_sha256(context: Dict[str, Any]) -> str:
-    """Digest the exact scientific scope a Web literature receipt governs.
+def literature_search_scope_sha256(
+    context: Dict[str, Any],
+    *,
+    schema_version: str = _LITERATURE_AUTHORITY_V3,
+) -> str:
+    """Digest the typed scope that generated one Web literature search.
 
-    The receipt binding itself is intentionally excluded.  Including it would
-    make the digest recursive and would prevent a stable comparison before and
-    after the server attaches that receipt to the StudyContext.
+    Version 2 bound retrieval to the entire scientific configuration.  That
+    made the normal conversation order unusable: a user could search the
+    exposure/outcome literature, then confirm a covariance estimator or time
+    window, and that unrelated planning choice erased the search receipt.
+
+    Version 3 binds exactly the fields used to compile the PubMed query:
+    question, display exposure/outcome, and their execution concepts.  The
+    Research Agent still re-screens every returned record against its sealed
+    full ResearchContext; this narrower digest preserves *retrieval* evidence,
+    not a prior comparator, novelty, eligibility, or method decision.
+
+    ``schema_version`` remains explicit so already-issued v2 receipts can be
+    verified with their historical scope contract.
     """
 
-    return _scientific_fields_sha256(context, fields=_LITERATURE_SCOPE_FIELDS)
+    if schema_version == _LITERATURE_AUTHORITY_V2:
+        return _scientific_fields_sha256(
+            context,
+            fields=_LITERATURE_SCOPE_FIELDS_V2,
+        )
+    if schema_version != _LITERATURE_AUTHORITY_V3:
+        raise StudyContextError(
+            {
+                "error": "literature_authority_schema_invalid",
+                "schema_version": schema_version,
+            }
+        )
+    execution = context.get("execution_concepts")
+    execution = execution if isinstance(execution, dict) else {}
+    scope = {
+        "question": context.get("question"),
+        "primary_exposure": context.get("primary_exposure"),
+        "outcome": context.get("outcome"),
+        "execution_concepts": {
+            "primary_exposure": execution.get("primary_exposure"),
+            "outcome": execution.get("outcome"),
+        },
+    }
+    sanitized = _sanitize_patch(scope, allow_literature_authority=True)
+    encoded = json.dumps(
+        sanitized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def scientific_configuration_sha256(context: Dict[str, Any]) -> str:
