@@ -959,6 +959,87 @@ def test_focused_pubmed_return_does_not_auto_pass_direct_comparator_screen(ra):
     assert not decision.outcome_match
 
 
+def test_composite_sepsis_sofa2_identity_requires_both_terms_for_comparator(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question=(
+            "What is the prevalence of an experimental Sepsis-3 phenotype "
+            "using SOFA-2 and its association with in-hospital mortality?"
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU stays",
+            database="miiv",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="sep3_sofa2_max",
+                description="experimental Sepsis-3 phenotype using SOFA-2",
+                source_concept="sep3_sofa2",
+                role="composite_score",
+                dtype="int64",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                description="in-hospital mortality",
+                source_concept="hospital_mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="sep3_sofa2_max",
+        target_outcome="death",
+    )
+
+    class _PubMed:
+        def search_for_context(self, context, *, retmax=5):
+            from easyicu.research_agent.literature import CitationRecord
+
+            return [
+                CitationRecord(
+                    key="direct_sofa2_sepsis",
+                    title=(
+                        "SOFA-2 for Sepsis-3 identification and hospital mortality "
+                        "in adult ICU stays"
+                    ),
+                    year="2026",
+                    relevance=(
+                        "Study-design excerpt: A retrospective adult ICU cohort "
+                        "evaluated SOFA-2 for Sepsis-3 identification. Hospital "
+                        "mortality was the prespecified outcome."
+                    ),
+                    publication_types=["Observational Study"],
+                    pmid="101",
+                ),
+                CitationRecord(
+                    key="score_only",
+                    title="SOFA-2 performance for mortality in adult ICU stays",
+                    year="2026",
+                    relevance=(
+                        "Study-design excerpt: An adult ICU cohort evaluated SOFA-2 "
+                        "for hospital mortality."
+                    ),
+                    publication_types=["Observational Study"],
+                    pmid="102",
+                ),
+            ]
+
+    from easyicu.research_agent.literature import LiteratureAgent
+
+    bundle = LiteratureAgent(enable_pubmed=True, pubmed_client=_PubMed()).run(ctx)
+    decisions = {
+        row.citation_key: row
+        for row in bundle.screening_decisions
+        if row.citation_key in {"direct_sofa2_sepsis", "score_only"}
+    }
+
+    assert decisions["direct_sofa2_sepsis"].disposition == "include"
+    assert decisions["direct_sofa2_sepsis"].evidence_role == "direct_comparator"
+    assert decisions["score_only"].disposition == "exclude"
+    assert not decisions["score_only"].exposure_match
+
+
 def test_review_or_trial_cannot_become_direct_comparator_even_when_peo_matches(ra):
     schema = ra.schema
     ctx = schema.ResearchContext(
