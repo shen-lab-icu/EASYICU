@@ -17,7 +17,8 @@
       "figures/absolute_risk.py": 1,
       "figures/continuous_measurement_audit.py": 1,
       "gates/family_primary_result.py": 1,
-      "intake/materialized_trajectory.py": 1
+      "intake/materialized_trajectory.py": 1,
+      "pipeline.py": 1
     }
   }
 }

@@ -550,14 +550,26 @@ def compare_snapshots(
     """Return fail-closed architecture regressions relative to ``baseline``."""
 
     errors: List[str] = []
-    current_metrics = current.get("metrics", {})
-    baseline_metrics = baseline.get("metrics", {})
+    current_metrics = current.get("metrics")
+    baseline_metrics = baseline.get("metrics")
+    if not isinstance(current_metrics, Mapping):
+        return ["current snapshot lacks a valid metrics object"]
+    if not isinstance(baseline_metrics, Mapping):
+        return ["baseline snapshot lacks a valid metrics object"]
     # Splitting one giant SCC into several smaller SCCs increases the component
     # count while reducing the actual cyclic burden.  Gate the number of modules
     # participating in cycles and the largest component; report SCC count only.
-    for metric in ("cyclic_module_count", "largest_scc_size"):
-        before = int(baseline_metrics.get(metric, 0))
-        after = int(current_metrics.get(metric, 0))
+    for metric in (
+        "module_count",
+        "top_level_module_count",
+        "cyclic_module_count",
+        "largest_scc_size",
+    ):
+        if metric not in current_metrics or metric not in baseline_metrics:
+            errors.append(f"required metric missing: {metric}")
+            continue
+        before = int(baseline_metrics[metric])
+        after = int(current_metrics[metric])
         if after > before:
             errors.append(f"{metric} increased: {before} -> {after}")
 

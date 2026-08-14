@@ -590,6 +590,98 @@
       "warning": 11
     },
     "count": 15,
+    "identities": [
+      {
+        "reason": "Using the deterministic calculator for the complete Planner-owned standard-executor specification in step 03_stability.",
+        "severity": "info",
+        "step_id": "03_stability",
+        "validator": "coder"
+      },
+      {
+        "reason": "Analysis plan does not cover all article-level roles in the phenotyping blueprint.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "analysis_blueprint"
+      },
+      {
+        "reason": "Analysis plan does not cover all required visual roles in the phenotyping blueprint.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "analysis_blueprint"
+      },
+      {
+        "reason": "Run artifacts do not yet satisfy the article-level analysis contract for phenotyping studies.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "article_analysis_contract"
+      },
+      {
+        "reason": "Run figures do not yet satisfy the article-level figure strategy for phenotyping studies.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "article_figure_strategy"
+      },
+      {
+        "reason": "Cohort is keyed at the ICU-stay level with no patient identifier; within-patient non-independence and first-stay selection cannot be assessed from this export. Re-extract with a patient identifier (e.g. subject_id) if repeat ICU stays could affect the outcome model.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "cohort_auditor"
+      },
+      {
+        "reason": "A source-bound data-quality figure was not appended because its audit-table ownership is incomplete or ambiguous.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "data_quality_figure_contract"
+      },
+      {
+        "reason": "Manuscript generation skipped after a planned analysis pause before the execution gate completed.",
+        "severity": "info",
+        "step_id": null,
+        "validator": "manuscript_gate"
+      },
+      {
+        "reason": "Multiple-testing audit completed, but no raw p-values with a defensible declared or source-local hypothesis family were found; no adjustment was computed.",
+        "severity": "info",
+        "step_id": null,
+        "validator": "multiple_testing"
+      },
+      {
+        "reason": "Plan did not declare a figure step even though the research question asked for a publication-ready figure; appended a fallback figure step '06_publication_figure_fallback' to preserve the task contract.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "plan_contract"
+      },
+      {
+        "reason": "generic deterministic robustness refitting is disabled; only a validated step-owned primary estimate is retained, and variants require exact registered primary-script replay",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "robustness_estimator"
+      },
+      {
+        "reason": "The run locked robustness specifications that no step estimated, so the panel carries them as blank rows: complete_case_trajectory_inputs. A step re-estimating the locked grid must declare robustness_replay_spec to reach the deterministic replay owner; generic refitting stays disabled here because it would choose an exposure, outcome or method on the plan's behalf.",
+        "severity": "error",
+        "step_id": null,
+        "validator": "robustness_panel"
+      },
+      {
+        "reason": "Analysis plan does not declare all main-text displays expected for phenotyping studies.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "study_design_brief"
+      },
+      {
+        "reason": "Analysis plan may be missing expected method components for phenotyping studies.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "study_design_brief"
+      },
+      {
+        "reason": "Analysis plan may be missing expected sensitivity requirements for phenotyping studies.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "study_design_brief"
+      }
+    ],
     "set_sha256": "39b76f4f5736468df2bad010faa6cd1416b43f0208a8eb33cf6355be69e2de49"
   },
   "volatile_field_allowlist": [
