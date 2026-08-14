@@ -30,6 +30,7 @@ from xml.etree import ElementTree as ET
 
 from easyicu.concept import catalog as concept_catalog
 from easyicu.research_agent.discovery.discovery_handoff import DiscoveryHandoffPacket
+from easyicu.research_agent.literature_excerpt import select_source_backed_excerpt
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.ideas import direct_evidence_search
@@ -122,9 +123,10 @@ _MATERIALIZED_CONCEPT_SUFFIXES = (
     "_min",
     "_n",
 )
-_MAX_DISCOVERY_QUERIES = 5
+_MAX_DISCOVERY_QUERIES = 6
 _DISCOVERY_QUERY_STRATA = (
     "broad_icu",
+    "concept_definition_or_validation",
     "direct_observational_comparator_all_years",
     "direct_observational_comparator_recent",
     "review_or_guideline",
@@ -586,20 +588,28 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
             direct_evidence_search.screen_article(article, typed_search_scope)
             for article in fallback_articles
         ]
-        ranked_fallback = [
+        included_fallback = [
             article
             for article, decision in zip(fallback_articles, fallback_decisions)
             if decision.get("disposition") == "include"
-        ] + [
+        ]
+        related_fallback = [
             article
             for article, decision in zip(fallback_articles, fallback_decisions)
             if decision.get("disposition") != "include"
         ]
         # Keep the public ``limit`` contract while giving a valid exact
-        # comparator priority over unrelated broad-query returns.
-        articles = [*ranked_fallback, *articles][:limit]
+        # comparator priority over broad-query returns.  An excluded fallback
+        # is only related context and must not erase the prespecified stratum
+        # sample (definition, recent, review and database evidence) merely
+        # because it came from the last query.
+        articles = _dedupe_articles(
+            [*included_fallback, *articles, *related_fallback]
+        )[:limit]
         fallback_retained = {
-            str(row.get("pmid") or "") for row in ranked_fallback[:limit]
+            str(row.get("pmid") or "")
+            for row in articles
+            if str(row.get("pmid") or "") in set(fallback_ids)
         }
         for pmid in fallback_ids:
             receipt = retrieval_by_pmid.setdefault(
@@ -3201,6 +3211,17 @@ def _discovery_queries(topic: str, journal: str, body: Dict[str, Any]) -> List[s
         )
     journal_filter = f' AND "{journal}"[Journal]' if journal else ""
     scope = _discovery_topic_clause(topic, body)
+    concept_anchor = direct_evidence_search.build_concept_anchor_query(
+        {**body, "topic": topic}
+    )
+    if not concept_anchor:
+        concept_anchor = (
+            f"({scope}) AND (definition[Title/Abstract] OR "
+            "criteria[Title/Abstract] OR development[Title/Abstract] OR "
+            "validation[Title/Abstract] OR consensus[Title/Abstract]) AND "
+            '(ICU[Title/Abstract] OR "critical care"[Title/Abstract] OR '
+            '"intensive care"[Title/Abstract])'
+        )
     population_filter = _discovery_population_filter(topic, body)
     observational_filter = (
         " NOT (Review[Publication Type] OR Meta-Analysis[Publication Type] OR "
@@ -3249,11 +3270,27 @@ def _discovery_queries(topic: str, journal: str, body: Dict[str, Any]) -> List[s
     )
     return [
         base + journal_filter + year_filter,
+        concept_anchor + journal_filter + year_filter,
         direct + year_filter,
         direct + direct_year_filter,
         review + journal_filter + year_filter,
         db + year_filter,
     ]
+
+
+def _dedupe_articles(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Preserve retrieval order while deduplicating exact PubMed identities."""
+
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        pmid = str(row.get("pmid") or "").strip()
+        key = f"pmid:{pmid}" if pmid else "title:" + _clean(row.get("title"), 260)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
 
 
 def _discovery_population_filter(topic: str, body: Dict[str, Any]) -> str:
@@ -3335,6 +3372,23 @@ def _stratified_pubmed_ids(
 
 def _discovery_topic_clause(topic: str, body: Dict[str, Any]) -> str:
     """Compile conversational study text into a bounded PubMed topic clause."""
+
+    # Exact execution concepts and display slots are authoritative when they
+    # exist.  Let the literature-query owner project their conventional PubMed
+    # names; do not quote an internal materialized column name as though it were
+    # a phrase authors are expected to use.
+    if any(
+        _clean(body.get(key), 180)
+        for key in (
+            "exposure_concept",
+            "outcome_concept",
+            "exposure",
+            "outcome",
+        )
+    ):
+        typed_clause = direct_evidence_search.build_scope_clause(body)
+        if typed_clause:
+            return typed_clause
 
     # A study slot has both a user-facing clinical label and, once configured,
     # an owner-validated execution concept.  Prefer the latter for search
@@ -3596,24 +3650,13 @@ def _study_design_excerpt(
     and never summarizes or invents study details.
     """
 
-    sentences = re.split(r"(?<=[.!?])\s+", _clean(text, 4_000))
-    normalized_focus = [
-        " ".join(re.sub(r"[^a-z0-9]+", " ", str(term).casefold()).split())
-        for term in focus_terms
-        if str(term or "").strip()
-    ]
-    focus_selected: List[str] = []
-    design_selected: List[str] = []
-    for sentence in sentences:
-        folded = sentence.casefold()
-        normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", folded).split())
-        if any(term and term in normalized for term in normalized_focus):
-            focus_selected.append(sentence)
-        elif any(term in folded for term in _STUDY_DESIGN_TERMS):
-            design_selected.append(sentence)
-    selected = list(dict.fromkeys([*focus_selected, *design_selected]))
-    excerpt = " ".join(selected[:5]) or " ".join(sentences[:2])
-    return _clean(excerpt, _MAX_DESIGN_EXCERPT)
+    return select_source_backed_excerpt(
+        _clean(text, 4_000),
+        focus_terms=focus_terms,
+        design_terms=_STUDY_DESIGN_TERMS,
+        max_sentences=5,
+        max_chars=_MAX_DESIGN_EXCERPT,
+    )
 
 
 @dataclass(frozen=True)

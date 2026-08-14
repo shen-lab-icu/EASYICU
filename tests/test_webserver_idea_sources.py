@@ -19,6 +19,7 @@ from easyicu.webserver.ideas.handoff import (
     build_web_handoff_packet,
     map_web_ledger_row,
 )
+from easyicu.webserver.ideas import direct_evidence_search
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.app import app
 
@@ -710,11 +711,16 @@ def test_conversational_sepsis_scope_compiles_to_bounded_pubmed_queries() -> Non
         {"exposure": "sep3_sofa1_max", "outcome": "death"},
     )
 
-    assert len(queries) == 5
+    assert len(queries) == 6
     assert all('"Sepsis-3"[Title/Abstract]' in query for query in queries)
-    assert all('"mortality"[Title/Abstract]' in query for query in queries)
+    assert all(
+        '"mortality"[Title/Abstract]' in query
+        for index, query in enumerate(queries)
+        if index != 1
+    )
+    assert "definition[Title/Abstract]" in queries[1]
     assert any("observational[Title/Abstract]" in query for query in queries)
-    all_years, recent = queries[1:3]
+    all_years, recent = queries[2:4]
     assert "adult[Title/Abstract]" in all_years
     assert "pediatric[Title/Abstract]" in all_years
     assert "NOT (Review[Publication Type]" in all_years
@@ -723,6 +729,59 @@ def test_conversational_sepsis_scope_compiles_to_bounded_pubmed_queries() -> Non
     assert "Date - Publication" not in all_years
     assert "2021/01/01" in recent
     assert all("请帮我" not in query for query in queries)
+
+
+def test_sofa2_execution_concept_uses_retrieval_aliases_without_granting_evidence() -> (
+    None
+):
+    scope = {
+        "topic": "adult ICU experimental SOFA-2 Sepsis-3 phenotype and mortality",
+        "exposure": "experimental Sepsis-3 phenotype using SOFA-2",
+        "outcome": "in-hospital mortality",
+        "exposure_concept": "sep3_sofa2",
+        "outcome_concept": "death",
+        "population": "adult ICU stays",
+        "database": "miiv",
+        "analysis_family": "association_study",
+    }
+
+    queries = idea_mining._discovery_queries(scope["topic"], "", scope)
+    fallback = direct_evidence_search.build_query(scope)
+
+    assert len(queries) == 6
+    assert all('"SOFA-2"[Title/Abstract]' in query for query in queries)
+    assert all(
+        '"Sepsis-3"[Title/Abstract]' in query
+        for index, query in enumerate(queries)
+        if index != 1
+    )
+    assert all(
+        '"SOFA"[Title/Abstract]' in query
+        for index, query in enumerate(queries)
+        if index != 1
+    )
+    assert '"SOFA-2"[Title/Abstract]' in queries[1]
+    assert '"Sepsis-3"[Title/Abstract]' not in queries[1]
+    assert all('"SOFA-2 sepsis"[Title/Abstract]' not in query for query in queries)
+    assert '"hospital mortality"[Title/Abstract]' in fallback
+    assert '"MIMIC-IV"[Title/Abstract]' in fallback
+
+    # Retrieval aliases increase recall only.  A Sepsis-3/SOFA paper that does
+    # not study the exact SOFA-2 exposure remains related context at this stage.
+    decision = direct_evidence_search.screen_article(
+        {
+            "pmid": "123",
+            "title": "Sepsis-3 prevalence and hospital mortality in adult ICU stays",
+            "design_excerpt": (
+                "An observational adult ICU cohort assessed Sepsis-3 prevalence "
+                "and hospital mortality using SOFA."
+            ),
+            "publication_types": ["Observational Study"],
+        },
+        scope,
+    )
+    assert decision["disposition"] == "exclude"
+    assert decision["evidence_role"] == "related_context"
 
 
 def test_inferred_concept_search_uses_literature_identity_not_display_label() -> None:
@@ -978,6 +1037,7 @@ def test_literature_discovery_round_robins_prespecified_query_strata(
             ["175", "176"],
             ["200", "201"],
             ["300", "301"],
+            ["350", "351"],
         ]
     )
     fetched: list[str] = []
@@ -1019,6 +1079,7 @@ def test_literature_discovery_round_robins_prespecified_query_strata(
     assert fetched == ["100", "150", "175"]
     assert [row["id"] for row in payload["query_strata"]] == [
         "broad_icu",
+        "concept_definition_or_validation",
         "direct_observational_comparator_all_years",
         "direct_observational_comparator_recent",
         "review_or_guideline",
@@ -1030,13 +1091,14 @@ def test_literature_discovery_round_robins_prespecified_query_strata(
         1,
         0,
         0,
+        0,
     ]
     assert [
         row["matched_query_strata"] for row in payload["source_candidates"]
     ] == [
         ["broad_icu"],
+        ["concept_definition_or_validation"],
         ["direct_observational_comparator_all_years"],
-        ["direct_observational_comparator_recent"],
     ]
 
 
@@ -1047,7 +1109,7 @@ def test_literature_discovery_runs_typed_direct_fallback_after_source_screen(
 
     def search(query: str, limit: int = 5) -> list[str]:
         calls.append(query)
-        if len(calls) <= 5:
+        if len(calls) <= 6:
             return [f"10{len(calls)}"]
         return ["900", "901"]
 
@@ -1112,7 +1174,7 @@ def test_literature_discovery_runs_typed_direct_fallback_after_source_screen(
         }
     )
 
-    assert len(calls) == 6
+    assert len(calls) == 7
     assert '"Sepsis-3"[Title/Abstract]' in calls[-1]
     assert '"hospital mortality"[Title/Abstract]' in calls[-1]
     assert '"MIMIC-IV"[Title/Abstract]' in calls[-1]
@@ -1130,6 +1192,61 @@ def test_literature_discovery_runs_typed_direct_fallback_after_source_screen(
     assert unrelated["direct_comparator_screen"]["disposition"] == "exclude"
 
 
+def test_excluded_direct_fallback_does_not_erase_prespecified_strata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def search(query: str, limit: int = 5) -> list[str]:
+        calls.append(query)
+        return [f"10{len(calls)}"] if len(calls) <= 6 else ["900", "901"]
+
+    def article_records(
+        ids: list[str], *, focus_terms=()
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "pmid": pmid,
+                "title": "Vasopressin timing and mortality in septic shock",
+                "year": 2025,
+                "design_excerpt": (
+                    "Adult ICU patients meeting Sepsis-3 criteria received "
+                    "vasopressin; timing was associated with mortality."
+                ),
+                "publication_types": ["Observational Study"],
+            }
+            for pmid in ids
+        ]
+
+    monkeypatch.setattr(idea_mining, "_pubmed_esearch", search)
+    monkeypatch.setattr(idea_mining, "_pubmed_article_records", article_records)
+
+    payload = idea_mining.discover_literature(
+        {
+            "topic": "adult ICU Sepsis-3 hospital mortality",
+            "exposure_concept": "sep3_sofa1",
+            "outcome_concept": "death",
+            "outcome": "in-hospital mortality",
+            "population": "adult ICU stays",
+            "database": "miiv",
+            "analysis_family": "descriptive_epidemiology",
+            "allow_network": True,
+            "limit": 3,
+        }
+    )
+
+    assert len(calls) == 7
+    assert [row["pmid"] for row in payload["source_candidates"]] == [
+        "101",
+        "102",
+        "103",
+    ]
+    assert payload["query_strata"][-1]["id"] == (
+        "typed_direct_observational_comparator"
+    )
+    assert payload["query_strata"][-1]["retained_count"] == 0
+
+
 def test_literature_discovery_keeps_foundational_and_recent_comparator_strata() -> None:
     queries = idea_mining._discovery_queries(
         "Sepsis-3 mortality",
@@ -1141,9 +1258,9 @@ def test_literature_discovery_keeps_foundational_and_recent_comparator_strata() 
         },
     )
 
-    assert len(queries) == 5
-    all_years = queries[1]
-    recent = queries[2]
+    assert len(queries) == 6
+    all_years = queries[2]
+    recent = queries[3]
     assert "cohort[Title/Abstract]" in all_years
     assert "Date - Publication" not in all_years
     assert "cohort[Title/Abstract]" in recent
@@ -1184,6 +1301,30 @@ def test_pubmed_metadata_retains_publication_type_and_design_excerpt(
     assert row["publication_types"] == ["Observational Study"]
     assert "retrospective cohort" in row["design_excerpt"]
     assert "hospital mortality" in row["design_excerpt"]
+
+
+def test_design_excerpt_preserves_late_outcome_axis_after_exposure_synonyms() -> None:
+    excerpt = idea_mining._study_design_excerpt(
+        (
+            "SOFA-2 updates the Sequential Organ Failure Assessment score. "
+            "Sepsis-3 criteria can use SOFA-2 for organ dysfunction. "
+            "We conducted a retrospective multicenter ICU cohort. "
+            "Adults with suspected infection were included. "
+            "The primary outcome was ICU mortality; hospital mortality was a "
+            "prespecified secondary outcome."
+        ),
+        focus_terms=(
+            "SOFA-2",
+            "Sepsis-3",
+            "SOFA",
+            "Sequential Organ Failure Assessment",
+            "hospital mortality",
+        ),
+    )
+
+    assert "SOFA-2" in excerpt
+    assert "Sepsis-3" in excerpt
+    assert "hospital mortality" in excerpt
 
 
 def test_idea_mining_maps_ards_peep_pdf_excerpt_to_respiratory_concepts(

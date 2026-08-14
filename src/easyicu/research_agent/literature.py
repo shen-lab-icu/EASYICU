@@ -39,6 +39,8 @@ from .concept_availability import (
     normalize_concept_name,
 )
 from .gates.data_answerability import analysis_answerability_findings
+from .literature_concepts import literature_concept_identity
+from .literature_excerpt import select_source_backed_excerpt
 from .planning.method_literature import method_literature_citations
 from .providers.mocks import MockLLMClient
 from .providers.factory import authorized_complete
@@ -844,13 +846,30 @@ def _screening_decision_for_record(
 
     exposure = _protocol_search_term(context, context.primary_exposure)
     outcome = _protocol_search_term(context, context.target_outcome)
+    exposure_variable = context.variable(context.primary_exposure)
+    exposure_identity = literature_concept_identity(
+        (
+            exposure_variable.source_concept or exposure_variable.name
+            if exposure_variable is not None
+            else context.primary_exposure
+        )
+    )
     return screen_source_backed_direct_comparator(
-        exposure=exposure,
+        exposure=(
+            exposure_identity.screening_role_term
+            if exposure_identity is not None
+            else exposure
+        ),
         outcome=outcome,
         adult_required=_adult_population_required(context),
         record=record,
         source=source,
         query=query,
+        exposure_required_terms=(
+            exposure_identity.screening_required_terms
+            if exposure_identity is not None
+            else ()
+        ),
     )
 
 
@@ -862,6 +881,7 @@ def screen_source_backed_direct_comparator(
     record: CitationRecord,
     source: str,
     query: Optional[str],
+    exposure_required_terms: Sequence[str] = (),
 ) -> LiteratureScreeningDecision:
     """Screen one retrieved paper against an exact typed P/E/O scope.
 
@@ -879,6 +899,7 @@ def screen_source_backed_direct_comparator(
         outcome=outcome,
         title=record.title,
         source_excerpt=source_excerpt,
+        required_terms=exposure_required_terms,
     )
     outcome_match = _clinical_axis_matches(outcome, blob, axis="outcome")
     padded_blob = f" {blob} "
@@ -1044,6 +1065,7 @@ def _clinical_exposure_role_matches(
     outcome: str,
     title: str,
     source_excerpt: str,
+    required_terms: Sequence[str] = (),
 ) -> bool:
     """Require the declared exposure to act as a studied variable.
 
@@ -1058,6 +1080,13 @@ def _clinical_exposure_role_matches(
     if not normalized_exposure:
         return False
     normalized_title = _normalise_clinical_text(title)
+    normalized_blob = _normalise_clinical_text(" ".join((title, source_excerpt)))
+    if not all(
+        _clinical_axis_matches(term, normalized_blob, axis="exposure")
+        for term in required_terms
+        if _normalise_clinical_text(term)
+    ):
+        return False
     if _text_assigns_studied_exposure(normalized_exposure, normalized_title):
         return True
 
@@ -1291,27 +1320,13 @@ def _study_design_excerpt(
     terms; this remains extractive and never asks a model to summarize a paper.
     """
 
-    normalized = " ".join(str(abstract or "").split())
-    if not normalized:
-        return ""
-    sentences = re.split(r"(?<=[.!?])\s+", normalized)
-    normalized_focus = [
-        _normalise_clinical_text(term)
-        for term in focus_terms
-        if _normalise_clinical_text(term)
-    ]
-    focus_selected: List[str] = []
-    design_selected: List[str] = []
-    for sentence in sentences:
-        sentence_folded = sentence.casefold()
-        sentence_normalized = _normalise_clinical_text(sentence)
-        if any(focus in sentence_normalized for focus in normalized_focus):
-            focus_selected.append(sentence)
-        elif any(term in sentence_folded for term in _PROTOCOL_SENTENCE_TERMS):
-            design_selected.append(sentence)
-    selected = list(dict.fromkeys([*focus_selected, *design_selected]))
-    text = " ".join(selected[:5]) or " ".join(sentences[:2])
-    return text[:max_chars].rstrip()
+    return select_source_backed_excerpt(
+        abstract,
+        focus_terms=focus_terms,
+        design_terms=_PROTOCOL_SENTENCE_TERMS,
+        max_sentences=5,
+        max_chars=max_chars,
+    )
 
 
 def parse_pubmed_esummary(payload: Dict[str, Any]) -> List[CitationRecord]:
