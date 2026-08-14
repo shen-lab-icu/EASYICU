@@ -93,6 +93,18 @@ TARGET_FILES: List[Path] = [
     # active refactor batch, so one lane cannot baseline another lane's dirty
     # working-tree bytes.
     RA / "audits" / "validators.py",
+    # 2026-08-14 audits/validators.py decomposition batch: concept-audit owner
+    # stays in validators.py (the authorized_complete module seam tests patch
+    # lives there); every other validator moved to sibling owner modules and
+    # inherits the ratchet from day one. figures.py holds the mutually
+    # referencing figure validators that cannot split without a cycle.
+    RA / "audits" / "cohort.py",
+    RA / "audits" / "cross_step.py",
+    RA / "audits" / "statistical.py",
+    RA / "audits" / "figures.py",
+    RA / "audits" / "clinical.py",
+    RA / "audits" / "publication.py",
+    RA / "audits" / "_v_support.py",
     RA / "plan_utils.py",
     RA / "agents" / "core.py",
     # 2026-08-14 agents/core.py decomposition batch: the monolith was split
