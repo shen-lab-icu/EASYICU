@@ -11,6 +11,8 @@ an exposure, outcome, cohort, estimator, or analysis method.
 
 from __future__ import annotations
 
+from ..canonical_json import sha256_file as _sha256_file
+
 import json
 import hashlib
 import math
@@ -294,14 +296,6 @@ def _assignment_artifact_frame(
     if suffix in {".parquet", ".pq"}:
         return pd.read_parquet(path, columns=list(columns))
     return None
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def typed_product_binding_contract(

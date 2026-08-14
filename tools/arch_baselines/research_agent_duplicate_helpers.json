@@ -1,0 +1,23 @@
+{
+  "schema_version": "easyicu.research_agent_duplicate_helper_baseline/1",
+  "helpers": {
+    "_sha256_file": {},
+    "_finite": {
+      "execution/runners/adjusted_association_executor.py": 1,
+      "execution/runners/adjusted_association_figure_executor.py": 1,
+      "execution/runners/descriptive_distribution_executor.py": 1,
+      "execution/runners/descriptive_result_figure_executor.py": 1,
+      "execution/runners/deterministic_robustness.py": 1,
+      "execution/runners/exposure_outcome_distribution_executor.py": 1,
+      "execution/runners/exposure_outcome_distribution_render.py": 1,
+      "execution/runners/landmark_spline_executor.py": 1,
+      "execution/runners/missingness_measurement_figure_executor.py": 1,
+      "execution/runners/prevalence_outcome_figure_executor.py": 1,
+      "execution/runners/robustness_figure_executor.py": 1,
+      "figures/absolute_risk.py": 1,
+      "figures/continuous_measurement_audit.py": 1,
+      "gates/family_primary_result.py": 1,
+      "intake/materialized_trajectory.py": 1
+    }
+  }
+}

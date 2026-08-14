@@ -8,7 +8,8 @@ run manifest or locked submission profile.
 
 from __future__ import annotations
 
-import hashlib
+from .canonical_json import sha256_file as _sha256_file
+
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -39,10 +40,6 @@ class ConceptDictFingerprint:
 
 def _package_root() -> Path:
     return Path(__file__).resolve().parents[1]
-
-
-def _sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _dict_path(package_relative_path: str) -> Path:
