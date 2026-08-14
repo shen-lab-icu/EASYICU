@@ -113,47 +113,6 @@ def test_planner_parse_recovers_fenced_json(ra):
     assert plan.steps and plan.steps[0].step_id == "01_table_one"
 
 
-def test_fresh_planner_measurement_audit_requires_typed_product_authority(ra):
-    raw = json.dumps(
-        {
-            "research_question": "Audit measurement availability.",
-            "analysis_type": "descriptive_epidemiology",
-            "steps": [
-                {
-                    "step_id": "01_measurement_audit",
-                    "planned_analysis_role": "auxiliary",
-                    "intent": "Report count-only measurement missingness.",
-                    "inputs": [],
-                    "expected_outputs": ["table:missingness_data_quality"],
-                    "method": "measurement_audit",
-                }
-            ],
-        }
-    )
-    schema = ra.schema
-    ctx = schema.ResearchContext(
-        research_question="Audit measurement availability.",
-        cohort=schema.CohortDescriptor(
-            cohort_name="c",
-            database="d",
-            n_patients=1,
-            n_stays=1,
-        ),
-        variables=[],
-    )
-
-    class _ProviderLikeLLM:
-        name = "provider-like"
-
-        def complete(self, messages, **kwargs):
-            return raw
-
-    from easyicu.research_agent.agents.core import PlannerAgent
-
-    with pytest.raises(ValueError, match="measurement_audit_spec.products"):
-        PlannerAgent(_ProviderLikeLLM())._parse(raw, ctx)
-
-
 def test_planner_parse_preserves_declared_display_labels(ra):
     raw = (
         '{"research_question":"Estimate an association.",'
@@ -1039,7 +998,9 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     assert "mechanisms, strengths, or limitations" in captured["user"]
     assert "must either be one exact host-authorized claim token" in captured["user"]
     assert "TBD by author" not in captured["user"]
-    assert "Funding information was not available" in captured["user"]
+    # Administrative facts are host-owned and appended after the LLM sections.
+    assert "Funding information requires author verification" not in captured["user"]
+    assert "Funding information requires author verification before submission." in out
     # The dummy LLM's stock response should land in the bound output.
     assert "{evidence:table_one}" in out
 

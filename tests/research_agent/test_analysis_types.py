@@ -670,8 +670,12 @@ def test_planner_prompt_suggests_inferred_family(ra):
             if "INFERRED ANALYSIS FAMILY SUGGESTION" in line
         )
         assert expected_family in suggested_line, (question, suggested_line)
-        # The full catalog still follows as reference.
-        assert "ANALYSIS-TYPE CATALOG" in prompt
+        # `2ef77e7` replaced the flat ANALYSIS-TYPE CATALOG with two targeted
+        # blocks: the inferred family's exact scientific actions, plus a switch
+        # menu keeping every other family selectable. Pin both so the Planner
+        # can never be left with a suggestion and no menu behind it.
+        assert "SCIENTIFIC ACTIONS (inferred family; exact ids):" in prompt
+        assert "ANALYSIS-TYPE SWITCH MENU (all families remain selectable):" in prompt
 
 
 def test_parse_fills_inferred_analysis_type_only_when_agent_omits_it(ra):
