@@ -16,12 +16,7 @@ import {
 import { Type } from "typebox";
 
 import { normalizePiEvent, projectTranscriptMessage } from "./event-projection.mjs";
-import {
-  providerCallReceipt,
-  restoredProviderCallCount,
-  SHELL_BUDGET_RECEIPT,
-  ShellBudgetGuard,
-} from "./shell-budget.mjs";
+import { ShellBudgetGuard } from "./shell-budget.mjs";
 
 const PROTOCOL_VERSION = "easyicu.pi-copilot/1";
 const MAX_LINE_BYTES = 1024 * 1024;
@@ -209,6 +204,49 @@ function integerEnv(name, fallback, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, parsed));
 }
 
+function optionalDecimalEnv(name, minimum, maximum) {
+  const raw = String(process.env[name] || "").trim();
+  if (!raw) return null;
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(raw)) {
+    throw Object.assign(new Error(`invalid decimal setting: ${name}`), {
+      code: "pi_shell_pricing_invalid",
+    });
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
+    throw Object.assign(new Error(`out-of-range decimal setting: ${name}`), {
+      code: "pi_shell_pricing_invalid",
+    });
+  }
+  return parsed;
+}
+
+function shellPricingConfig() {
+  const values = {
+    inputPriceUsdPerMillionTokens: optionalDecimalEnv(
+      "EASYICU_PI_INPUT_PRICE_USD_PER_1M_TOKENS", 0, 1000,
+    ),
+    outputPriceUsdPerMillionTokens: optionalDecimalEnv(
+      "EASYICU_PI_OUTPUT_PRICE_USD_PER_1M_TOKENS", 0, 1000,
+    ),
+    maxCostUsdPerMessage: optionalDecimalEnv(
+      "EASYICU_PI_MAX_COST_USD_PER_MESSAGE", 0.000001, 10000,
+    ),
+    maxCostUsdPerSession: optionalDecimalEnv(
+      "EASYICU_PI_MAX_COST_USD_PER_SESSION", 0.000001, 100000,
+    ),
+  };
+  const configured = Object.values(values).filter((value) => value !== null).length;
+  if (configured === 0) return null;
+  if (configured !== Object.keys(values).length) {
+    throw Object.assign(
+      new Error("Pi shell pricing requires both token prices and both cost ceilings."),
+      { code: "pi_shell_pricing_incomplete" },
+    );
+  }
+  return values;
+}
+
 function modelConfig() {
   const apiKey = String(process.env.EASYICU_PI_API_KEY || "").trim();
   const baseUrl = String(process.env.EASYICU_PI_BASE_URL || "http://127.0.0.1:8317/v1").trim();
@@ -246,6 +284,7 @@ function modelConfig() {
     maxProviderCallsPerSession: integerEnv(
       "EASYICU_PI_MAX_PROVIDER_CALLS_PER_SESSION", 128, 1, 10000,
     ),
+    pricing: shellPricingConfig(),
   };
 }
 
@@ -679,18 +718,18 @@ async function createSession(params) {
     maxProviderCallsPerMessage: config.maxProviderCallsPerMessage,
     maxProviderCallsPerSession: config.maxProviderCallsPerSession,
     consumedTokens: () => session.getSessionStats().tokens.total,
-    initialProviderCalls: restoredProviderCallCount(
-      typeof manager?.getEntries === "function" ? manager.getEntries() : [],
-      session.getSessionStats().assistantMessages,
-    ),
+    initialProviderCalls: session.getSessionStats().assistantMessages,
+    persistedEntries: typeof manager?.getEntries === "function" ? manager.getEntries() : [],
+    pricing: config.pricing,
   });
   session.agent.streamFunction = (model, context, options = {}) => lazyStream(
     model,
     async () => {
-      const authorization = record.budgetGuard.authorize(context, options);
+      record.budgetGuard.authorize(context, options);
+      const budgetReceipt = record.budgetGuard.receipt();
       manager.appendCustomEntry(
-        SHELL_BUDGET_RECEIPT,
-        providerCallReceipt(authorization.session_provider_call),
+        budgetReceipt.schema_version,
+        budgetReceipt,
       );
       return await originalStreamFunction(model, context, {
         ...options,
