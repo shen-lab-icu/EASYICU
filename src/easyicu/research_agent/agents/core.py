@@ -1927,7 +1927,7 @@ class PlannerAgent:
                 )
         _validate_table_one_observed_levels(plan, context)
         if not llm_is_mockish(getattr(self, "llm", None)):
-            validate_fresh_planner_typed_product_specs(plan)
+            validate_fresh_planner_typed_product_specs(plan, context=context)
         # Family inference is a planner hint, not execution authority. Preserve
         # a valid agent-selected family (and its rationale); only fill the field
         # when the agent omitted it. A non-empty declaration is nevertheless a

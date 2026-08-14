@@ -8,11 +8,74 @@ resulting immutable contracts.
 
 from __future__ import annotations
 
-from ..schema import AnalysisPlan
+from ..schema import AnalysisPlan, ResearchContext
 from .planner_measurement_audit import validate_planner_measurement_audit_specs
+from .scientific_review import post_baseline_exposure
 
 
-def validate_fresh_planner_typed_product_specs(plan: AnalysisPlan) -> None:
+class PlannerOutputContractError(ValueError):
+    """A fresh Planner response omitted required typed scientific authority."""
+
+
+def _method_head(value: object) -> str:
+    return str(value or "").strip().casefold().split("(", 1)[0].strip()
+
+
+def missing_post_baseline_descriptive_claims(
+    *,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+) -> tuple[str, ...]:
+    """Return primary descriptive estimators missing their typed claim ceiling.
+
+    The ceiling is required only when the sealed exposure window extends after
+    the clinical anchor.  It is deliberately limited to the exact deterministic
+    descriptive product shapes accepted by scientific review; association,
+    temporal-model, and auxiliary distribution steps are not relabelled.
+    """
+
+    if not post_baseline_exposure(context)[0]:
+        return ()
+    missing: list[str] = []
+    for step in plan.steps:
+        if step.planned_analysis_role != "primary":
+            continue
+        shape = (_method_head(step.method), tuple(step.expected_outputs))
+        is_descriptive_product = bool(
+            shape
+            in {
+                (
+                    "descriptive",
+                    ("table:exposure_outcome_distribution",),
+                ),
+                (
+                    "descriptive_distribution",
+                    ("table:distribution_prevalence",),
+                ),
+                (
+                    "descriptive_distribution_summary",
+                    ("table:distribution_prevalence",),
+                ),
+            }
+        )
+        if not is_descriptive_product:
+            continue
+        if (
+            step.model_requirements
+            or step.family_primary_result_requirement is not None
+            or step.scientific_capability is not None
+        ):
+            continue
+        if step.descriptive_claim is None:
+            missing.append(step.step_id)
+    return tuple(missing)
+
+
+def validate_fresh_planner_typed_product_specs(
+    plan: AnalysisPlan,
+    *,
+    context: ResearchContext,
+) -> None:
     """Reject ambiguous typed products in a newly generated Planner response."""
 
     validate_planner_measurement_audit_specs(plan)
@@ -41,6 +104,23 @@ def validate_fresh_planner_typed_product_specs(plan: AnalysisPlan) -> None:
             f"{missing_table_one_specs!r}. Use table:cohort_summary for an "
             "ungrouped descriptive table."
         )
+    missing_claims = missing_post_baseline_descriptive_claims(
+        plan=plan,
+        context=context,
+    )
+    if missing_claims:
+        raise PlannerOutputContractError(
+            "Planner primary descriptive steps for a post-baseline exposure "
+            "must declare descriptive_claim with claim_ceiling="
+            "'descriptive_only' and unresolved_limitations="
+            "['post_baseline_exposure_opportunity_unresolved']; missing for "
+            f"{list(missing_claims)!r}. Descriptive prose does not create this "
+            "machine-verifiable claim ceiling."
+        )
 
 
-__all__ = ["validate_fresh_planner_typed_product_specs"]
+__all__ = [
+    "PlannerOutputContractError",
+    "missing_post_baseline_descriptive_claims",
+    "validate_fresh_planner_typed_product_specs",
+]
