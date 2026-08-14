@@ -185,8 +185,41 @@ def _safe_run_id(value: Any) -> str:
     return run_id
 
 
+_RUN_TOOL_ARGUMENTS = frozenset(
+    {
+        "question",
+        "cohort_path",
+        "workdir",
+        "provider",
+        "model",
+        "base_url",
+        "request_timeout",
+        "cohort_name",
+        "database",
+        "target_outcome",
+        "cross_database_validation",
+        "inclusion_criteria",
+        "exclusion_criteria",
+    }
+)
+_RUN_PIPELINE_ARGUMENTS = _RUN_TOOL_ARGUMENTS - {
+    "cohort_path",
+    "workdir",
+    "provider",
+    "model",
+    "base_url",
+    "request_timeout",
+}
+
+
 def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
     require_scope(SCOPE_RUN_PIPELINE, tool="research_agent.run")
+    unknown = sorted(set(args) - _RUN_TOOL_ARGUMENTS)
+    if unknown:
+        raise ValueError(
+            "research_agent.run does not accept additional properties: "
+            + ", ".join(unknown)
+        )
     workdir = resolve_within_roots(
         args.pop("workdir", None) or "./research_output", field="workdir"
     )
@@ -206,6 +239,7 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
         }
     if config_error is not None:
         return config_error
+    run_args = {key: args[key] for key in _RUN_PIPELINE_ARGUMENTS if key in args}
     try:
         pipeline = ResearchAgentPipeline(workdir=workdir, llm=llm)
     except Exception as exc:
@@ -216,7 +250,7 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
             ),
             "error_code": "llm_configuration_invalid",
         }
-    result = pipeline.run(cohort=cohort, **args)
+    result = pipeline.run(cohort=cohort, **run_args)
     from .orchestration.workflow import HumanReviewPending
 
     if isinstance(result, HumanReviewPending):
@@ -694,6 +728,18 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(concepts, list) or not concepts:
         return {"error": "concepts must be a non-empty string or string array"}
 
+    should_write = bool(args.get("output_path") or args.get("register_evidence"))
+    if should_write:
+        require_scope(SCOPE_WRITE_ARTIFACTS, tool="research_agent.load_concepts")
+    if args.get("register_evidence"):
+        require_scope(SCOPE_BIND_EVIDENCE, tool="research_agent.load_concepts")
+    if args.get("output_path"):
+        resolve_within_roots(args["output_path"], field="output_path")
+    if args.get("register_evidence"):
+        resolve_within_roots(
+            args.get("workdir") or "./research_output", field="workdir"
+        )
+
     import easyicu as easyicu_pkg
 
     easyicu_load_concepts = getattr(easyicu_pkg, "load_concepts", None)
@@ -734,6 +780,19 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
         kwargs["data_path"] = str(
             resolve_within_roots(kwargs["data_path"], field="data_path")
         )
+    if "dict_path" in kwargs:
+        raw_dict_paths = kwargs["dict_path"]
+        if isinstance(raw_dict_paths, str):
+            kwargs["dict_path"] = str(
+                resolve_within_roots(raw_dict_paths, field="dict_path")
+            )
+        elif isinstance(raw_dict_paths, list):
+            kwargs["dict_path"] = [
+                str(resolve_within_roots(path, field="dict_path"))
+                for path in raw_dict_paths
+            ]
+        else:
+            raise ValueError("dict_path must be a path or an array of paths")
 
     # Patient rows are opt-in twice: the server must grant the scope and the
     # caller must request a positive preview. Merely holding the scope must not
@@ -1245,6 +1304,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "required": ["question", "cohort_path", "model"],
+            "additionalProperties": False,
             "properties": {
                 "question": {"type": "string"},
                 "cohort_path": {"type": "string"},
@@ -1254,6 +1314,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                     "enum": ["openai", "openrouter"],
                 },
                 "model": {"type": "string"},
+                "base_url": {"type": "string"},
                 "request_timeout": {"type": "number", "minimum": 1},
                 "cohort_name": {"type": "string"},
                 "database": {"type": "string"},

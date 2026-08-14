@@ -214,6 +214,21 @@ def test_constructor_honours_environment_image(
     assert runner.image == "company/easyicu-ra:1.4"
 
 
+def test_paper_facing_profile_rejects_network_other_than_none(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+
+    with pytest.raises(ValueError, match="requires Docker network='none'"):
+        ra.DockerRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort,
+            network="bridge",
+            submission_profile_name="npj_dm/20260611",
+        )
+
+
 def test_runner_authority_changes_when_same_tag_resolves_to_new_image(
     ra,
     tmp_path: Path,

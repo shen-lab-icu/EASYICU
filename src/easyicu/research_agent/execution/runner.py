@@ -1,13 +1,13 @@
 """Run agent-generated Python code in a constrained subprocess.
 
 The runner is the line between LLM output and real numbers. It must
-be deterministic, isolated, and fully captured.
+be deterministic, isolated, and safely captured.
 
 What it gives you:
 
 * a fresh working directory per step (``STEP_OUT_DIR``);
 * the cohort path injected as ``COHORT_PARQUET``;
-* stdout, stderr and exit-code captured into a run log;
+* bounded stdout/stderr tails and the exit code captured into a run log;
 * a hard wall-clock timeout (default 5 min) so a runaway script
   never blocks the whole pipeline;
 * a curated PYTHONPATH so the script picks up the EasyICU
@@ -60,6 +60,12 @@ from ..contracts.method_packages import (
     OPTIONAL_BASELINE_PACKAGES,
 )
 from ..contracts.runtime import RunnerFailureCode, RunResult
+from ..authority.secret_redaction import (
+    REDACTED,
+    is_sensitive_key,
+    redact_text_secrets,
+    string_contains_secret,
+)
 from ..orchestration.profiles import is_paper_facing_profile
 from .method_capabilities import set_runtime_capability_snapshot_provider
 
@@ -86,6 +92,12 @@ _ROBUSTNESS_AUTHORITY_ENTRYPOINT = "_run_robustness_preflight_from_env"
 #: patience, not permission: collection still requires proof of absence.
 _TEARDOWN_ABSENCE_BUDGET_SECONDS = 60.0
 _TEARDOWN_ABSENCE_POLL_SECONDS = 2.0
+
+# Generated code can write forever even when its computation is otherwise
+# bounded. Stream captures to anonymous files and retain only this tail in host
+# memory, RunResult, and evidence logs.
+MAX_RUNNER_CAPTURE_BYTES = 1024 * 1024
+_CAPTURE_TRUNCATED_MARKER = b"[... earlier runner output truncated ...]\n"
 
 
 def _python_source_tree_sha256(root: Path) -> str:
@@ -385,7 +397,9 @@ def _replace_regular_file_atomically(destination: Path, payload: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _terminate_process_group(proc: "subprocess.Popen") -> None:
+def _terminate_process_group(
+    proc: "subprocess.Popen", *, process_group_id: Optional[int] = None
+) -> None:
     """Best-effort SIGKILL of the child's whole process group (POSIX only).
 
     ``start_new_session=True`` makes the child a session/group leader, so its
@@ -394,20 +408,61 @@ def _terminate_process_group(proc: "subprocess.Popen") -> None:
     escape -- an inherent limit of group signalling, not specific to this code.
     """
 
-    try:
-        pgid = os.getpgid(proc.pid)
-    except (ProcessLookupError, OSError):
-        pgid = None
-    if pgid is not None:
+    pgid = process_group_id
+    if pgid is not None and pgid > 1 and pgid != os.getpgrp():
         try:
             os.killpg(pgid, signal.SIGKILL)
             return
         except (ProcessLookupError, OSError):
             pass
+    poll = getattr(proc, "poll", None)
+    if callable(poll) and poll() is not None:
+        return
     try:
         proc.kill()
     except (ProcessLookupError, OSError):
         pass
+
+
+def _bounded_capture_text(stream: object, fallback: object = None) -> str:
+    """Read at most the configured tail of one streamed binary capture."""
+
+    payload = b""
+    try:
+        stream.flush()  # type: ignore[attr-defined]
+        stream.seek(0, os.SEEK_END)  # type: ignore[attr-defined]
+        size = int(stream.tell())  # type: ignore[attr-defined]
+        truncated = size > MAX_RUNNER_CAPTURE_BYTES
+        stream.seek(  # type: ignore[attr-defined]
+            max(0, size - MAX_RUNNER_CAPTURE_BYTES), os.SEEK_SET
+        )
+        payload = stream.read(MAX_RUNNER_CAPTURE_BYTES)  # type: ignore[attr-defined]
+        if truncated:
+            payload = _CAPTURE_TRUNCATED_MARKER + payload
+    except (AttributeError, OSError, TypeError, ValueError):
+        payload = b""
+    if payload:
+        return payload.decode("utf-8", errors="replace")
+    text = _as_text(fallback)
+    encoded = text.encode("utf-8")
+    if len(encoded) <= MAX_RUNNER_CAPTURE_BYTES:
+        return text
+    return (_CAPTURE_TRUNCATED_MARKER + encoded[-MAX_RUNNER_CAPTURE_BYTES:]).decode(
+        "utf-8", errors="replace"
+    )
+
+
+def _redact_runner_text(value: object, extra_env: Mapping[str, str]) -> str:
+    """Redact recognized and explicitly supplied credentials from diagnostics."""
+
+    text = _as_text(value)
+    for key, raw_secret in sorted(
+        extra_env.items(), key=lambda item: len(str(item[1])), reverse=True
+    ):
+        secret = str(raw_secret)
+        if secret and (is_sensitive_key(key) or string_contains_secret(secret)):
+            text = text.replace(secret, REDACTED)
+    return redact_text_secrets(text)
 
 
 def _run_capturing_with_descendant_reaping(
@@ -417,7 +472,7 @@ def _run_capturing_with_descendant_reaping(
     env: Mapping[str, str],
     timeout: float,
 ) -> subprocess.CompletedProcess:
-    """Run ``cmd`` capturing text output; on timeout kill the whole group.
+    """Run ``cmd`` with bounded streamed output and always kill descendants.
 
     ``subprocess.run(timeout=...)`` sends the timeout kill only to the direct
     child, so a background process spawned by generated code survives and can
@@ -428,30 +483,73 @@ def _run_capturing_with_descendant_reaping(
     Non-POSIX platforms keep the plain ``subprocess.run`` behaviour.
     """
 
-    capture = dict(
-        cwd=cwd,
-        env=dict(env),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    capture = dict(cwd=cwd, env=dict(env))
     if os.name != "posix":
-        return subprocess.run(  # noqa: S603 - configured argv, no shell
-            cmd, timeout=timeout, **capture
-        )
+        with (
+            tempfile.TemporaryFile() as stdout_file,
+            tempfile.TemporaryFile() as stderr_file,
+        ):
+            try:
+                proc = subprocess.run(  # noqa: S603 - configured argv, no shell
+                    cmd,
+                    timeout=timeout,
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    **capture,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise subprocess.TimeoutExpired(
+                    cmd,
+                    timeout,
+                    output=_bounded_capture_text(stdout_file, exc.stdout),
+                    stderr=_bounded_capture_text(stderr_file, exc.stderr),
+                ) from None
+            return subprocess.CompletedProcess(
+                cmd,
+                proc.returncode,
+                _bounded_capture_text(stdout_file),
+                _bounded_capture_text(stderr_file),
+            )
 
-    with subprocess.Popen(  # noqa: S603 - configured argv, no shell
-        cmd, start_new_session=True, **capture
-    ) as proc:
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _terminate_process_group(proc)
-            stdout, stderr = proc.communicate()
-            raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
-        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    with (
+        tempfile.TemporaryFile() as stdout_file,
+        tempfile.TemporaryFile() as stderr_file,
+    ):
+        with subprocess.Popen(  # noqa: S603 - configured argv, no shell
+            cmd,
+            start_new_session=True,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            **capture,
+        ) as proc:
+            process_group_id = proc.pid
+            try:
+                fallback_stdout, fallback_stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+                _terminate_process_group(proc, process_group_id=process_group_id)
+                fallback_stdout, fallback_stderr = proc.communicate()
+                raise subprocess.TimeoutExpired(
+                    cmd,
+                    timeout,
+                    output=_bounded_capture_text(
+                        stdout_file,
+                        fallback_stdout if fallback_stdout is not None else exc.stdout,
+                    ),
+                    stderr=_bounded_capture_text(
+                        stderr_file,
+                        fallback_stderr if fallback_stderr is not None else exc.stderr,
+                    ),
+                ) from None
+            # PID 1 may exit while descendants continue with inherited output
+            # descriptors. The dedicated session guarantees this group is not
+            # the host's process group; terminate it before evidence collection.
+            _terminate_process_group(proc, process_group_id=process_group_id)
+            return subprocess.CompletedProcess(
+                cmd,
+                proc.returncode,
+                _bounded_capture_text(stdout_file, fallback_stdout),
+                _bounded_capture_text(stderr_file, fallback_stderr),
+            )
 
 
 def _remove_authority_snapshot(path: Path) -> None:
@@ -903,7 +1001,9 @@ class CodeRunner:
         if proc.returncode != 0:
             raise RuntimeError(
                 "Python execution-runtime capability probe failed before planning: "
-                + (proc.stderr.strip() or f"returncode={proc.returncode}")
+                + redact_text_secrets(
+                    proc.stderr.strip() or f"returncode={proc.returncode}"
+                )
             )
         try:
             snapshot = tuple(str(name) for name in json.loads(proc.stdout))
@@ -973,7 +1073,7 @@ class CodeRunner:
             if result.returncode != 0:
                 raise RuntimeError(
                     "CodeRunner interpreter authority probe failed: "
-                    f"{result.stderr.strip() or self.python_executable}"
+                    f"{redact_text_secrets(result.stderr.strip() or self.python_executable)}"
                 )
             try:
                 interpreter = json.loads(result.stdout)
@@ -1469,6 +1569,13 @@ class CodeRunner:
             duration = time.monotonic() - started
             timed_out = True
 
+        stdout = _redact_runner_text(stdout, self.extra_env)
+        stderr = _redact_runner_text(stderr, self.extra_env)
+        rendered_cmd = _redact_runner_text(" ".join(cmd), self.extra_env)
+        rendered_original_cmd = _redact_runner_text(
+            " ".join(original_cmd), self.extra_env
+        )
+
         # Symlink-safe: sandboxed code may have replaced ``run.log`` with a
         # symlink during execution; the atomic writer overwrites the link with a
         # fresh regular file rather than writing through it to a host victim.
@@ -1477,8 +1584,8 @@ class CodeRunner:
             textwrap.dedent(
                 f"""
                 === step {step_id} ===
-                cmd: {' '.join(cmd)}
-                original_cmd: {' '.join(original_cmd)}
+                cmd: {rendered_cmd}
+                original_cmd: {rendered_original_cmd}
                 cwd: {step_dir}
                 cohort: {self.cohort_parquet}
                 network_policy: {self.network_policy}
@@ -1625,7 +1732,7 @@ class DockerRunner:
         # module. The defaults are the module constants.
         self.teardown_absence_budget_seconds = _TEARDOWN_ABSENCE_BUDGET_SECONDS
         self.teardown_absence_poll_seconds = _TEARDOWN_ABSENCE_POLL_SECONDS
-        self.network = network
+        self.network = str(network or "none").strip().lower()
         self.extra_mounts = self._validated_extra_mounts(extra_mounts or ())
         self.extra_env = dict(extra_env or {})
         reject_reserved_runner_env(self.extra_env, owner="DockerRunner")
@@ -1653,6 +1760,11 @@ class DockerRunner:
         # same profile would then have run under different, unrecorded
         # ceilings. Development profiles keep the opt-out.
         if is_paper_facing_profile(submission_profile_name):
+            if self.network != "none":
+                raise ValueError(
+                    "submission profile "
+                    f"{submission_profile_name!r} requires Docker network='none'"
+                )
             disabled = [
                 name
                 for name, value in (
@@ -2892,6 +3004,10 @@ class DockerRunner:
                 monitor_thread.join(timeout=1.0)
         duration = time.monotonic() - started
 
+        stdout = _redact_runner_text(stdout, self.extra_env)
+        stderr = _redact_runner_text(stderr, self.extra_env)
+        rendered_cmd = _redact_runner_text(" ".join(cmd), self.extra_env)
+
         log_content = textwrap.dedent(
             f"""
                 === step {step_id} (DockerRunner) ===
@@ -2900,7 +3016,7 @@ class DockerRunner:
                 repo_digests: {runtime_provenance.get("repo_digests")}
                 network: {self.network}
                 cohort: {self.cohort_parquet}
-                cmd: {' '.join(cmd)}
+                cmd: {rendered_cmd}
                 returncode: {returncode}
                 timed_out: {timed_out}
                 duration_seconds: {duration:.3f}
