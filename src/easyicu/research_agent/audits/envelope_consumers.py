@@ -8,6 +8,7 @@ retain a decision only when both views agree exactly.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
 from easyicu.research_agent.authority.result_envelope_sidecar import (
@@ -18,6 +19,9 @@ from easyicu.research_agent.authority.result_envelope_sidecar import (
     StepResultEnvelopeSidecarUnavailable,
     load_current_step_result_envelope_sidecar,
     step_record_declares_sidecar,
+)
+from easyicu.research_agent.authority.runtime_artifacts import (
+    verified_run_evidence_path,
 )
 from easyicu.research_agent.contracts.result_envelope import (
     StepResultEnvelope,
@@ -119,6 +123,82 @@ class RegisteredOutputEnvelopeConsumer(CrossStepRegisteredOutputValidator):
     """
 
     name = CrossStepRegisteredOutputValidator.name
+
+    @staticmethod
+    def _evidence_source_name(record: Any) -> str:
+        name = Path(str(record.relative_path)).name
+        prefix = f"{record.evidence_id}__"
+        return name[len(prefix) :] if name.startswith(prefix) else name
+
+    @classmethod
+    def _writer_artifact_bindings(
+        cls,
+        *,
+        record: Mapping[str, Any],
+        envelope: StepResultEnvelope,
+        evidence_store: Any,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Bind every sealed product to its immutable EvidenceStore copy."""
+
+        step_id = envelope.step_id
+        script_evidence_id = str(record.get("script_evidence_id") or "").strip()
+        active_ids = {
+            str(evidence_id)
+            for evidence_id in (record.get("evidence_ids") or [])
+            if str(evidence_id).strip()
+        }
+        evidence_records = list(evidence_store.records())
+        bindings: Dict[str, Dict[str, Any]] = {}
+        for artifact in envelope.artifacts:
+            expected_kind = (
+                artifact.kind
+                if artifact.kind in {"table", "statistic", "figure"}
+                else "log"
+            )
+            matches = [
+                candidate
+                for candidate in evidence_records
+                if candidate.evidence_id in active_ids
+                and candidate.produced_by_step == step_id
+                and candidate.script_evidence_id == script_evidence_id
+                and candidate.kind == expected_kind
+                and candidate.sha256 == artifact.sha256
+                and cls._evidence_source_name(candidate) == artifact.relative_path
+            ]
+            if len(matches) != 1:
+                raise RegisteredOutputAuthorityError(
+                    "sealed writer artifact could not be bound uniquely to immutable "
+                    f"evidence for {step_id}/{artifact.product_id}"
+                )
+            matched = matches[0]
+            verified_path = verified_run_evidence_path(evidence_store.root, matched)
+            if verified_path is None:
+                raise RegisteredOutputAuthorityError(
+                    "sealed writer artifact failed immutable evidence verification for "
+                    f"{step_id}/{artifact.product_id}"
+                )
+            try:
+                byte_size = verified_path.stat().st_size
+            except OSError as exc:
+                raise RegisteredOutputAuthorityError(
+                    "sealed writer artifact became unreadable for "
+                    f"{step_id}/{artifact.product_id}"
+                ) from exc
+            if byte_size != artifact.byte_size:
+                raise RegisteredOutputAuthorityError(
+                    "sealed writer artifact size disagrees with its envelope for "
+                    f"{step_id}/{artifact.product_id}"
+                )
+            bindings[artifact.product_id] = {
+                "product_id": artifact.product_id,
+                "kind": artifact.kind,
+                "envelope_relative_path": artifact.relative_path,
+                "sha256": artifact.sha256,
+                "byte_size": artifact.byte_size,
+                "evidence_id": matched.evidence_id,
+                "evidence_relative_path": matched.relative_path,
+            }
+        return bindings
 
     @classmethod
     def _successful_upstream_record(
@@ -346,6 +426,11 @@ class RegisteredOutputEnvelopeConsumer(CrossStepRegisteredOutputValidator):
                 )
             record["step_summary"] = canonical_summary
             record["writer_result_envelope_evidence_id"] = loaded.evidence_id
+            record["writer_artifact_bindings"] = self._writer_artifact_bindings(
+                record=record,
+                envelope=loaded.envelope,
+                evidence_store=evidence_store,
+            )
             authoritative.append(record)
         return authoritative
 

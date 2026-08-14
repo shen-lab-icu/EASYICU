@@ -843,6 +843,7 @@ def _draft_manuscript(
                 context=context,
                 run_dir=run_dir,
                 per_step_records=writer_authority_records,
+                evidence=evidence,
             )
         writer_digest_path = run_dir / "writer_evidence_digest.md"
         writer_digest_path.write_text(writer_evidence_digest, encoding="utf-8")

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 
 def _write_panel(ra, tmp_path: Path, rows):
     from easyicu.research_agent.robustness.panel import (
@@ -60,11 +62,15 @@ def _write_panel(ra, tmp_path: Path, rows):
             if row.spec_id == "primary"
             else {"robustness_rows": [row.to_dict()]}
         )
-        evidence.register_json(
+        source = tmp_path / f"raw_{row.evidence_id}.json"
+        source.write_text(
+            json.dumps({"effect_scale": "odds_ratio", **payload}),
+            encoding="utf-8",
+        )
+        evidence.register_file(
             kind="statistic",
             description="Digest fixture row authority.",
-            payload=payload,
-            filename=f"{row.evidence_id}.json",
+            source_path=source,
             evidence_id=row.evidence_id,
         )
     panel = RobustnessPanel.from_rows(
@@ -319,3 +325,70 @@ def test_digest_panel_block_lists_worst_per_axis(ra, tmp_path: Path) -> None:
     assert "worst on cohort axis: spec_id=cohort_worst, point=0.9" in digest
     assert "worst on missing axis: spec_id=missing_worst, point=1" in digest
     assert "worst on outcome axis: spec_id=outcome_worst, point=1.1" in digest
+
+
+def test_digest_reads_immutable_panel_and_source_summary_after_raw_mutation(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.reporting.writer_evidence import (
+        _render_writer_evidence_digest,
+    )
+    from easyicu.research_agent.robustness.panel import RobustnessPanelRow
+
+    evidence = _write_panel(
+        ra,
+        tmp_path,
+        [
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.25, 1.1, 1.42, 0.08, "e1", True
+            )
+        ],
+    )
+    raw_panel = tmp_path / "robustness_panel.json"
+    panel_payload = json.loads(raw_panel.read_text(encoding="utf-8"))
+    panel_payload["rows"][0]["spec_id"] = "tampered_label"
+    panel_payload["rows"][0]["point_estimate"] = 999
+    raw_panel.write_text(json.dumps(panel_payload), encoding="utf-8")
+    raw_source = tmp_path / "raw_e1.json"
+    raw_source.write_text(
+        json.dumps({"effect_scale": "tampered_scale", "primary_or": 999}),
+        encoding="utf-8",
+    )
+
+    digest = _render_writer_evidence_digest(
+        [], run_dir=tmp_path, evidence=evidence
+    )
+
+    assert "primary: spec_id=primary, point=1.25" in digest
+    assert "tampered_label" not in digest
+    assert "tampered_scale" not in digest
+    assert "999" not in digest
+
+
+@pytest.mark.parametrize("tamper", ["replace", "remove"])
+def test_digest_fails_closed_when_immutable_panel_is_lost(
+    ra,
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    from easyicu.research_agent.reporting.writer_evidence import (
+        _render_writer_evidence_digest,
+    )
+    from easyicu.research_agent.robustness.panel import RobustnessPanelRow
+
+    evidence = _write_panel(
+        ra,
+        tmp_path,
+        [RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True)],
+    )
+    record = evidence.get("robustness_panel")
+    assert record is not None
+    target = evidence.root / record.relative_path
+    if tamper == "replace":
+        target.write_text('{"rows": []}', encoding="utf-8")
+    else:
+        target.unlink()
+
+    with pytest.raises(RuntimeError, match="robustness_panel"):
+        _render_writer_evidence_digest([], run_dir=tmp_path, evidence=evidence)

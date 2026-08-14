@@ -55,6 +55,7 @@ def infer_numeric_claim_identity(
     source = str(source_field or "").strip().lower()
     normalized = re.sub(r"[^a-z0-9]+", "_", source).strip("_")
     tokens = set(normalized.split("_"))
+    declared_scale = coerce_numeric_effect_scale(declared_effect_scale)
 
     scale: Optional[NumericEffectScale] = None
     if "odds_ratio" in normalized or "or" in tokens:
@@ -68,6 +69,17 @@ def infer_numeric_claim_identity(
 
     excluded_tokens = {"se", "stderr", "std", "error", "variance", "p", "value"}
     if tokens & excluded_tokens and not ({"ci", "interval"} & tokens):
+        return None, None
+    if scale is not None and declared_scale is not None and scale is not declared_scale:
+        raise ValueError(
+            "declared effect scale conflicts with source-field identity: "
+            f"{declared_scale.value!r} != {scale.value!r} for {source_field!r}"
+        )
+    # Regression coefficients and explicitly logged ratios are on a transformed
+    # coordinate. They must be exponentiated by an owning producer before they
+    # can be published as OR/HR/RR claims.
+    transformed_tokens = {"log", "ln", "logit", "coefficient", "coef", "beta"}
+    if scale is not None and tokens & transformed_tokens:
         return None, None
 
     lower = bool(
@@ -100,7 +112,7 @@ def infer_numeric_claim_identity(
         )
 
     if estimand is not None and scale is None:
-        scale = coerce_numeric_effect_scale(declared_effect_scale)
+        scale = declared_scale
     return scale, estimand
 
 
@@ -133,8 +145,25 @@ class NumericClaim:
             if self.estimand
             else inferred_estimand
         )
-        self.effect_scale = inferred_scale or (
-            declared_scale if self.estimand is not None else None
+        normalized_source = re.sub(
+            r"[^a-z0-9]+", "_", str(self.source_field or "").strip().lower()
+        ).strip("_")
+        transformed_ratio = bool(
+            {"log", "ln", "logit", "coefficient", "coef", "beta"}
+            & set(normalized_source.split("_"))
+            and (
+                "odds_ratio" in normalized_source
+                or "hazard_ratio" in normalized_source
+                or "risk_ratio" in normalized_source
+                or "relative_risk" in normalized_source
+                or {"or", "hr", "rr"} & set(normalized_source.split("_"))
+            )
+        )
+        self.effect_scale = (
+            None
+            if transformed_ratio
+            else inferred_scale
+            or (declared_scale if self.estimand is not None else None)
         )
 
     @property

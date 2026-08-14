@@ -14,9 +14,11 @@ from easyicu.research_agent.schema import (
     RobustnessReplaySpec,
 )
 from easyicu.research_agent.execution.cohort_routing import (
+    PreselectionUniverseOwnerCapability,
     StepExecutionCohortRoutingError,
     bind_step_execution_cohort,
     bound_step_execution_cohort_path,
+    preselection_universe_capability,
     step_may_access_preselection_universe,
 )
 from easyicu.research_agent.execution.envelope_sealing import (
@@ -272,7 +274,12 @@ def test_execute_phase_routes_runner_and_gates_to_the_bound_step_cohort() -> Non
 
 
 def _run_universe_environment_probe(
-    *, ra, tmp_path: Path, step: AnalysisStep, plan: AnalysisPlan
+    *,
+    ra,
+    tmp_path: Path,
+    step: AnalysisStep,
+    plan: AnalysisPlan,
+    owner_capability: PreselectionUniverseOwnerCapability | None = None,
 ) -> tuple[object, str]:
     cohort_path = tmp_path / f"{step.step_id}_cohort.parquet"
     universe_path = tmp_path / f"{step.step_id}_universe.parquet"
@@ -288,9 +295,10 @@ def _run_universe_environment_probe(
         run_dir=tmp_path / f"run_{step.step_id}",
         cohort_path=cohort_path,
         universe_path=universe_path,
-        preselection_universe_authorized=step_may_access_preselection_universe(
+        preselection_universe_capability=preselection_universe_capability(
             step=step,
             plan=plan,
+            owner_capability=owner_capability,
         ),
     )
     result = runner.run(
@@ -332,11 +340,11 @@ def test_ordinary_primary_script_cannot_access_preselection_universe(
     assert observed == "<absent>"
 
 
-def test_typed_robustness_script_receives_digest_bound_preselection_universe(
+def test_declared_robustness_step_without_owner_capability_cannot_access_universe(
     ra, tmp_path: Path
 ) -> None:
     step = AnalysisStep(
-        step_id="02_robustness",
+        step_id="02_generated_robustness",
         intent="Replay the locked robustness grid.",
         method="arbitrary_label_does_not_grant_authority",
         expected_outputs=["table:robustness_summary"],
@@ -357,6 +365,32 @@ def test_typed_robustness_script_receives_digest_bound_preselection_universe(
         step=step,
         plan=plan,
     )
+
+    assert step_may_access_preselection_universe(step=step, plan=plan) is False
+    assert "EASYICU_UNIVERSE_PARQUET" not in runner.extra_env
+    assert observed == "<absent>"
+
+
+def test_legacy_deterministic_robustness_owner_receives_preselection_universe(
+    ra, tmp_path: Path
+) -> None:
+    step = AnalysisStep(
+        step_id="02_robustness",
+        intent="Replay the locked robustness grid.",
+        method="robustness_sensitivity",
+        expected_outputs=["table:robustness_summary"],
+    )
+    plan = AnalysisPlan(research_question="Q", steps=[step])
+
+    runner, observed = _run_universe_environment_probe(
+        ra=ra,
+        tmp_path=tmp_path,
+        step=step,
+        plan=plan,
+        owner_capability=(
+            PreselectionUniverseOwnerCapability.DETERMINISTIC_ROBUSTNESS_REPLAY
+        ),
+    )
     without_universe = runner.__class__(
         workdir=tmp_path / "run_without_universe",
         cohort_parquet=runner.cohort_parquet,
@@ -364,6 +398,15 @@ def test_typed_robustness_script_receives_digest_bound_preselection_universe(
         allow_unsafe_host_fallback=True,
     )
 
-    assert step_may_access_preselection_universe(step=step, plan=plan) is True
+    assert (
+        step_may_access_preselection_universe(
+            step=step,
+            plan=plan,
+            owner_capability=(
+                PreselectionUniverseOwnerCapability.DETERMINISTIC_ROBUSTNESS_REPLAY
+            ),
+        )
+        is True
+    )
     assert observed == runner.extra_env["EASYICU_UNIVERSE_PARQUET"]
     assert runner.authority_identity_sha256 != without_universe.authority_identity_sha256

@@ -221,6 +221,7 @@ from .execution.host_services import (
     ExecutePhaseServices,
     PublicationFigureAuthorityServices,
 )
+from .execution.cohort_routing import PreselectionUniverseOwnerCapability
 from .execution.output_files import _clear_output_dir, _has_figure_exports
 from .concept_dict_audit import (
     assert_dict_matches as assert_concept_dict_matches,
@@ -2010,7 +2011,9 @@ class ResearchAgentPipeline:
         cohort_path: Path,
         target_outcome: Optional[str] = None,
         universe_path: Optional[Path] = None,
-        preselection_universe_authorized: bool = False,
+        preselection_universe_capability: Optional[
+            PreselectionUniverseOwnerCapability
+        ] = None,
         universe_is_typed: bool = False,
         universe_authority_ref: Optional[MaterializedCohortAuthorityRef] = None,
         trajectory_path: Optional[Path] = None,
@@ -2029,7 +2032,7 @@ class ResearchAgentPipeline:
         ``cohort_path`` is the canonical analysis cohort the steps read as
         ``COHORT_PARQUET``. ``universe_path`` remains host authority metadata;
         it is exposed as ``EASYICU_UNIVERSE_PARQUET`` only when the caller has
-        authorized this exact typed robustness/cohort-construction step.
+        supplied this exact typed robustness/cohort-construction capability.
         """
         # Runner capability discovery is scoped to the backend selected for
         # this build.  Clear a Docker snapshot left in the current ContextVar
@@ -2056,13 +2059,19 @@ class ResearchAgentPipeline:
         )
         if target_outcome:
             extra_env["OUTCOME_COL"] = target_outcome
-        if not isinstance(preselection_universe_authorized, bool):
-            raise TypeError("preselection_universe_authorized must be a bool")
-        if preselection_universe_authorized and universe_path is None:
+        if preselection_universe_capability is not None and not isinstance(
+            preselection_universe_capability,
+            PreselectionUniverseOwnerCapability,
+        ):
+            raise TypeError(
+                "preselection_universe_capability must be a "
+                "PreselectionUniverseOwnerCapability"
+            )
+        if preselection_universe_capability is not None and universe_path is None:
             raise ValueError(
                 "pre-selection universe authorization requires universe_path"
             )
-        if preselection_universe_authorized:
+        if preselection_universe_capability is not None:
             extra_env["EASYICU_UNIVERSE_PARQUET"] = str(universe_path)
         if trajectory_path is not None:
             candidate = Path(trajectory_path).expanduser()
