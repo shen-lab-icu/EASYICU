@@ -4484,6 +4484,7 @@ class ResearchAgentPipeline:
             run_id=run_id,
             progress_callback=progress_callback,
             plan_result_factory=_PlanPhaseResult,
+            load_resume_state=_load_resume_state,
         )
     def _record_human_review_records(
         self,
@@ -5418,9 +5419,12 @@ class ResearchAgentPipeline:
         checkpoint_commit: Dict[str, Any] = {
             "path": None,
             "decision_sha256": None,
+            "decision_payloads": None,
         }
 
-        def _commit_human_review_execution() -> None:
+        def _commit_human_review_execution(
+            decision_records: Sequence[Mapping[str, Any]],
+        ) -> None:
             path = checkpoint_commit.get("path")
             if path is None:
                 return
@@ -5431,24 +5435,63 @@ class ResearchAgentPipeline:
                 raise HumanReviewCheckpointError(
                     "durable review decision set is not digest bound"
                 )
-            checkpoint = load_human_review_checkpoint(Path(path))
+            decision_payloads = checkpoint_commit.get("decision_payloads")
+            if not isinstance(decision_payloads, list) or not decision_payloads:
+                raise HumanReviewCheckpointError(
+                    "durable review decision payloads are unavailable"
+                )
+            checkpoint = load_human_review_checkpoint(
+                Path(path), require_pending=False
+            )
             if not reviewed_plan:
                 raise HumanReviewCheckpointError(
                     "approved execution has no restored typed plan handoff"
                 )
             plan_result = reviewed_plan[-1]
-            _plan_lifecycle.approve_normalized_plan_for_execution(
-                run_dir=run_dir,
-                evidence=plan_result.evidence,
-                revision=plan_result.plan.revision,
-                review_requests=checkpoint.requests,
-                decision_set_sha256=decision_sha256,
+            if checkpoint.state == "pending":
+                _plan_lifecycle.approve_normalized_plan_for_execution(
+                    run_dir=run_dir,
+                    evidence=plan_result.evidence,
+                    revision=plan_result.plan.revision,
+                    review_requests=checkpoint.requests,
+                    decision_set_sha256=decision_sha256,
+                )
+            if checkpoint.state == "pending":
+                write_human_review_checkpoint(
+                    Path(path),
+                    checkpoint.approved(
+                        decisions=decision_payloads,
+                        decision_records=decision_records,
+                        decision_sha256=decision_sha256,
+                    ),
+                )
+            elif checkpoint.state in {
+                "approved_pending_execution",
+                "executing",
+            }:
+                if (
+                    checkpoint.consumed_decision_sha256 != decision_sha256
+                    or list(checkpoint.approved_decisions) != decision_payloads
+                    or list(checkpoint.approved_decision_records)
+                    != [dict(item) for item in decision_records]
+                ):
+                    raise HumanReviewCheckpointError(
+                        "restored approval does not match the durable decision set"
+                    )
+            else:
+                raise HumanReviewCheckpointError(
+                    f"checkpoint state {checkpoint.state!r} is not resumable"
+                )
+
+        def _commit_human_review_execution_start() -> None:
+            path = checkpoint_commit.get("path")
+            if path is None:
+                return
+            checkpoint = load_human_review_checkpoint(
+                Path(path), require_pending=False
             )
             write_human_review_checkpoint(
-                Path(path),
-                checkpoint.transitioned(
-                    "consumed", decision_sha256=decision_sha256
-                ),
+                Path(path), checkpoint.execution_started()
             )
 
         workflow = build_pipeline_workflow(
@@ -5460,6 +5503,7 @@ class ResearchAgentPipeline:
             human_review_invoker=_human_review_invoker,
             human_review_recorder=_human_review_recorder,
             human_review_execution_commit=_commit_human_review_execution,
+            human_review_execution_start=_commit_human_review_execution_start,
             reviewer_identity_resolver=(
                 getattr(gate, "reviewer_identity_resolver", None)
                 if gate is not None
@@ -5541,7 +5585,7 @@ class ResearchAgentPipeline:
                 checkpoint = load_human_review_checkpoint(
                     path, require_pending=False
                 )
-                if checkpoint.state == "consumed":
+                if checkpoint.state in {"executing", "consumed"}:
                     write_human_review_checkpoint(
                         path, checkpoint.transitioned("completed")
                     )
@@ -5674,12 +5718,15 @@ class ResearchAgentPipeline:
         ]
         checkpoint_commit = pending_state.get("checkpoint_commit")
         if isinstance(checkpoint_commit, dict) and checkpoint_commit.get("path"):
-            checkpoint_commit["decision_sha256"] = canonical_sha256(
-                sorted(
-                    (dict(item) for item in payload),
-                    key=lambda item: str(item.get("review_id") or ""),
-                )
-            )
+            by_review_id = {
+                str(item.get("review_id") or ""): dict(item) for item in payload
+            }
+            ordered_payload = [
+                by_review_id.get(request.review_id, {})
+                for request in pending.requests
+            ]
+            checkpoint_commit["decision_payloads"] = ordered_payload
+            checkpoint_commit["decision_sha256"] = canonical_sha256(ordered_payload)
         # Same writer lease ``run`` holds, bound to the paused run's own id
         # rather than a fresh one: resuming writes into that run's directory
         # and evidence store, so it must not proceed while another call is
@@ -5757,7 +5804,12 @@ class ResearchAgentPipeline:
                     selected = load_human_review_checkpoint(
                         path, require_pending=False
                     )
-                    if selected.state in {"pending", "consumed"}:
+                    if selected.state in {
+                        "pending",
+                        "approved_pending_execution",
+                        "executing",
+                        "consumed",
+                    }:
                         write_human_review_checkpoint(
                             path,
                             selected.transitioned(
