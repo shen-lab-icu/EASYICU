@@ -20,8 +20,9 @@ Why this design:
   already been called inside ``_run_plan_phase`` in that branch.
 
 This deliberately chooses an explicit state machine over a half-adopted graph
-framework. Human-review pauses remain honestly ``same_process`` until phase
-handoffs have a complete artifact-rehydration contract.
+framework. A pause is cross-process only when the pipeline has written and
+verified the complete typed phase handoff; legacy/test pauses remain honestly
+``same_process``.
 """
 
 from __future__ import annotations
@@ -55,6 +56,7 @@ from ..schema import PipelineResult
 __all__ = [
     "HUMAN_REVIEW_FINDING_REASONS",
     "HUMAN_REVIEW_RESUME_SCOPE",
+    "DURABLE_HUMAN_REVIEW_RESUME_SCOPE",
     "HumanReviewAuthorityError",
     "HumanReviewDecision",
     "HumanReviewPending",
@@ -84,6 +86,7 @@ __all__ = [
 #: operator UI can read it and decline to present the run as durably
 #: resumable. Making it durable requires reconstructible phase handoffs.
 HUMAN_REVIEW_RESUME_SCOPE = "same_process"
+DURABLE_HUMAN_REVIEW_RESUME_SCOPE = "durable_checkpoint"
 
 
 class HumanReviewAuthorityError(RuntimeError):
@@ -197,8 +200,8 @@ class HumanReviewPending(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.human_review_pending/2"] = (
-        "easyicu.human_review_pending/2"
+    schema_version: Literal["easyicu.human_review_pending/3"] = (
+        "easyicu.human_review_pending/3"
     )
     run_id: str
     thread_id: str
@@ -206,10 +209,12 @@ class HumanReviewPending(BaseModel):
     requests: tuple[HumanReviewRequest, ...]
     #: Literal, not a free string: widening it is a deliberate edit here, not
     #: something a caller can assert by passing a different value.
-    resume_scope: Literal["same_process"] = HUMAN_REVIEW_RESUME_SCOPE
+    resume_scope: Literal["same_process", "durable_checkpoint"] = (
+        HUMAN_REVIEW_RESUME_SCOPE
+    )
     #: The process that can answer this pause. A caller comparing it to its own
     #: pid knows before prompting a human whether the answer can be delivered.
-    resume_pid: int = Field(default_factory=os.getpid)
+    resume_pid: Optional[int] = Field(default_factory=os.getpid)
 
     @property
     def review_ids(self) -> tuple[str, ...]:
@@ -219,7 +224,9 @@ class HumanReviewPending(BaseModel):
     def resumable_here(self) -> bool:
         """True when this process is the one that can accept the decisions."""
 
-        return self.resume_pid == os.getpid()
+        return self.resume_scope == DURABLE_HUMAN_REVIEW_RESUME_SCOPE or (
+            self.resume_pid == os.getpid()
+        )
 
 
 #: What :meth:`ResearchAgentPipeline.run` and its wrappers actually return.
@@ -580,6 +587,7 @@ class PipelineWorkflow:
         human_review_recorder: Optional[
             Callable[[Sequence[Mapping[str, Any]]], None]
         ] = None,
+        human_review_execution_commit: Optional[Callable[[], None]] = None,
         reviewer_identity_resolver: Optional[Callable[[], str]] = None,
     ) -> None:
         self._plan_invoker = plan_invoker
@@ -589,6 +597,7 @@ class PipelineWorkflow:
         self._provenance_hook = provenance_hook
         self._human_review_invoker = human_review_invoker
         self._human_review_recorder = human_review_recorder
+        self._human_review_execution_commit = human_review_execution_commit
         self._reviewer_identity_resolver = reviewer_identity_resolver
         self._state = "created"
         self._plan_result: Optional[_PlanPhaseResult] = None
@@ -609,6 +618,48 @@ class PipelineWorkflow:
         #: produced them. See :meth:`_decision_records_for` for why a resubmitted
         #: decision must not be re-stamped.
         self._decision_record_cache: dict[str, tuple[dict[str, Any], ...]] = {}
+
+    def restore_paused(
+        self,
+        *,
+        plan_result: _PlanPhaseResult,
+        requests: Sequence[HumanReviewRequest | Mapping[str, Any]],
+    ) -> None:
+        """Restore one already-verified typed pause without re-running Plan.
+
+        The caller owns artifact/digest verification.  This method deliberately
+        accepts the same real ``_PlanPhaseResult`` used by ``start`` rather than
+        a shadow workflow schema, then re-derives the review authority before
+        making the pause answerable.  A mismatched checkpoint therefore fails
+        before any decision can be recorded or any analysis can execute.
+        """
+
+        if self._state != "created":
+            raise RuntimeError(
+                f"workflow restore requires state 'created', found {self._state!r}"
+            )
+        parsed = tuple(HumanReviewRequest.model_validate(item) for item in requests)
+        if not parsed:
+            raise HumanReviewAuthorityError(
+                "a durable human-review checkpoint contains no review requests"
+            )
+        request_ids = [item.review_id for item in parsed]
+        if len(request_ids) != len(set(request_ids)):
+            raise HumanReviewAuthorityError(
+                "durable human-review requests must have unique review ids"
+            )
+        self._plan_result = plan_result
+        self._requests = parsed
+        self._pause_snapshot = tuple(
+            item.model_dump(mode="json") for item in parsed
+        )
+        self._pause_digest = canonical_sha256(list(self._pause_snapshot))
+        self._state = "paused"
+        try:
+            self._verify_pause_still_binds_live_state()
+        except Exception:
+            self._discard_live_pause(state="failed")
+            raise
 
     @property
     def state(self) -> str:
@@ -740,6 +791,12 @@ class PipelineWorkflow:
             raise HumanReviewRejected(rejected_ids)
 
         self._record_human_review(records)
+        if self._human_review_execution_commit is not None:
+            # The checkpoint owner atomically consumes the pause here: after
+            # the human decision is durably recorded but before the first
+            # analysis side effect. A duplicate resume can therefore neither
+            # execute twice nor lose a correctable decision-validation retry.
+            self._human_review_execution_commit()
         try:
             return self._finish(tuple(records))
         except Exception:
@@ -961,6 +1018,7 @@ def build_pipeline_workflow(
     human_review_recorder: Optional[
         Callable[[Sequence[Mapping[str, Any]]], None]
     ] = None,
+    human_review_execution_commit: Optional[Callable[[], None]] = None,
     reviewer_identity_resolver: Optional[Callable[[], str]] = None,
 ) -> WorkflowEngine:
     """Build the explicit phase dispatcher for one pipeline run."""
@@ -973,5 +1031,6 @@ def build_pipeline_workflow(
         provenance_hook=provenance_hook,
         human_review_invoker=human_review_invoker,
         human_review_recorder=human_review_recorder,
+        human_review_execution_commit=human_review_execution_commit,
         reviewer_identity_resolver=reviewer_identity_resolver,
     )

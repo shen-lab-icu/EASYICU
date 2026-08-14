@@ -146,6 +146,23 @@ class PiToolResult(BaseModel):
     authority: Dict[str, Any] = Field(default_factory=dict)
 
 
+class WorkspaceMutationReceipt(BaseModel):
+    """Host-issued shared write/edit quota receipt for one model turn."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.workspace-mutation-receipt/1"] = (
+        "easyicu.workspace-mutation-receipt/1"
+    )
+    tool: Literal["write", "edit"]
+    ordinal: int = Field(ge=1)
+    limit: int = Field(ge=1)
+
+
+class WorkspaceMutationLimitError(RuntimeError):
+    pass
+
+
 class HostTurnGrant:
     """Host-held one-use actions and explicitly reusable turn capabilities."""
 
@@ -161,6 +178,8 @@ class HostTurnGrant:
             if action not in self._capabilities
         }
         self._provided = frozenset(requested)
+        self._workspace_mutations = 0
+        self._workspace_mutation_limit = 8
         self._lock = threading.Lock()
 
     @classmethod
@@ -186,6 +205,23 @@ class HostTurnGrant:
 
         with self._lock:
             return str(action) in self._capabilities
+
+    def reserve_workspace_mutation(
+        self, tool: Literal["write", "edit"]
+    ) -> WorkspaceMutationReceipt:
+        """Reserve from one shared write/edit ceiling before filesystem access."""
+
+        with self._lock:
+            if "workspace_write" not in self._capabilities:
+                raise WorkspaceMutationLimitError("workspace_write_not_granted")
+            if self._workspace_mutations >= self._workspace_mutation_limit:
+                raise WorkspaceMutationLimitError("workspace_mutation_limit_reached")
+            self._workspace_mutations += 1
+            return WorkspaceMutationReceipt(
+                tool=tool,
+                ordinal=self._workspace_mutations,
+                limit=self._workspace_mutation_limit,
+            )
 
     def was_provided(self, action: str) -> bool:
         """Return whether the user supplied this action for the turn.

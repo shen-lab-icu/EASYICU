@@ -502,6 +502,10 @@ class ProviderHardStopLedger:
                     )
                 return TaskProviderHardStop(self, normalized)
             status = str(task.get("status") or "")
+            if status == "paused":
+                # A restarted host may attach to a human-review pause without
+                # restarting its active clock or resetting any cumulative use.
+                return TaskProviderHardStop(self, normalized)
             if status == "completed" and not reopen_terminal:
                 return TaskProviderHardStop(self, normalized)
             if reopen_terminal and status in {"completed", "failed"}:

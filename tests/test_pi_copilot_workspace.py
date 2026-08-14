@@ -43,18 +43,43 @@ def test_project_workspace_writes_reads_edits_checks_and_previews(tmp_path: Path
         expected_sha256=written["sha256"],
     )
     assert edited["replacements"] == 1
-    assert workspace.check_file("project-a", "demo/index.html") == {
+    checked = workspace.check_file("project-a", "demo/index.html")
+    assert checked == {
         "file": "demo/index.html",
         "media_type": "text/html",
         "checker": "html.parser",
         "valid": True,
+        "checked_sha256": edited["sha256"],
         "check_scope": "bounded_static_syntax",
         **dict(WORKSPACE_ARTIFACT_AUTHORITY),
     }
     assert "<h1>Ready</h1>" in workspace.preview_file(
-        "project-a", "demo/index.html"
+        "project-a",
+        "demo/index.html",
+        checked_sha256=checked["checked_sha256"],
     )["text"]
     assert workspace.list_files("project-a")[0]["file"] == "demo/index.html"
+
+
+def test_preview_refuses_bytes_changed_after_static_check(tmp_path: Path) -> None:
+    workspace = ProjectWorkspace(tmp_path / "workspace")
+    written = workspace.write_file("project-a", "index.html", "<h1>A</h1>")
+    checked = workspace.check_file("project-a", "index.html")
+    workspace.edit_file(
+        "project-a",
+        "index.html",
+        old_text="<h1>A</h1>",
+        new_text="<h1>B</h1>",
+        expected_sha256=written["sha256"],
+    )
+
+    with pytest.raises(PiCopilotError) as raised:
+        workspace.preview_file(
+            "project-a",
+            "index.html",
+            checked_sha256=checked["checked_sha256"],
+        )
+    assert raised.value.code == "pi_workspace_preview_check_stale"
 
 
 @pytest.mark.parametrize(

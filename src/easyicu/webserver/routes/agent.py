@@ -381,6 +381,14 @@ def jobs_agent_run_review(body: Dict[str, Any]) -> dict:
             status_code=409,
             detail={"error": "research_pipeline_review_not_resumable_here"},
         )
+    provider_environment = _provider_environment_for_agent_run(
+        credential_source=str(
+            pending.get("credential_source") or "scientific_provider"
+        ),
+        engine="research_agent_pipeline",
+        run_type="full",
+        external_llm_opt_in=True,
+    )
     try:
         study_context = context_store.get_context(study_context_id)
     except context_store.StudyContextError as exc:
@@ -422,6 +430,7 @@ def jobs_agent_run_review(body: Dict[str, Any]) -> dict:
                 note=str(body.get("note") or ""),
                 job=job,
                 current_study_context=study_context,
+                provider_environment=provider_environment,
             )
             terminal_stage = (
                 "review_blocked"

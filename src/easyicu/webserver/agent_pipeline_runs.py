@@ -19,6 +19,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping, Optional
 
 from easyicu.extensions import (
@@ -57,6 +58,13 @@ from easyicu.webserver.literature_projection import (
 )
 from easyicu.webserver.scientific_readiness_projection import (
     build_scientific_readiness_projection,
+)
+from easyicu.webserver.agent_review_recovery import (
+    WebReviewRecoveryError,
+    WebReviewRecoveryRecord,
+    get_record as get_review_recovery_record,
+    put_record as put_review_recovery_record,
+    remove_record as remove_review_recovery_record,
 )
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
@@ -144,10 +152,63 @@ class _PendingRun:
     provider: Dict[str, Any]
     acquisition: Any
     created_at: float
+    credential_source: str = "scientific_provider"
     provider_hard_stop: Optional[Any] = None
 
 
 _PENDING: Dict[str, _PendingRun] = {}
+
+
+def _acquisition_recovery_projection(acquisition: Any) -> Dict[str, Any]:
+    selection = getattr(acquisition, "selection", None)
+    coverage = getattr(acquisition, "coverage", None)
+    return {
+        "selected_concepts": list(
+            getattr(selection, "selected_concepts", ()) or ()
+        )[:64],
+        "materialized_concepts": list(
+            getattr(acquisition, "materialized_concepts", ()) or ()
+        )[:128],
+        "coverage_sufficient": bool(getattr(coverage, "sufficient", False)),
+    }
+
+
+def _rehydrate_acquisition_projection(payload: Mapping[str, Any]) -> Any:
+    return SimpleNamespace(
+        selection=SimpleNamespace(
+            selected_concepts=list(payload.get("selected_concepts") or ())
+        ),
+        materialized_concepts=list(payload.get("materialized_concepts") or ()),
+        coverage=SimpleNamespace(
+            sufficient=bool(payload.get("coverage_sufficient"))
+        ),
+    )
+
+
+def _checkpoint_pending_from_record(record: WebReviewRecoveryRecord) -> Any:
+    from easyicu.research_agent.orchestration.human_review_checkpoint import (
+        checkpoint_path,
+        load_checkpoint,
+    )
+    from easyicu.research_agent.orchestration.workflow import HumanReviewPending
+
+    wrapper_dir = Path(record.wrapper_dir).resolve()
+    run_dir = (wrapper_dir / "pipeline" / record.run_id).resolve()
+    try:
+        run_dir.relative_to((wrapper_dir / "pipeline").resolve())
+    except ValueError as exc:
+        raise WebReviewRecoveryError("Web review run path escaped its wrapper") from exc
+    checkpoint = load_checkpoint(checkpoint_path(run_dir))
+    if checkpoint.run_id != record.run_id:
+        raise WebReviewRecoveryError("Web review checkpoint belongs to another run")
+    return HumanReviewPending(
+        run_id=record.run_id,
+        thread_id=record.run_id,
+        run_dir=str(run_dir),
+        requests=checkpoint.requests,
+        resume_scope="durable_checkpoint",
+        resume_pid=None,
+    )
 
 
 def _slug(value: Any) -> str:
@@ -1878,12 +1939,9 @@ def _register_pending(entry: _PendingRun) -> None:
         _PENDING[str(entry.pending.run_id)] = entry
         while len(_PENDING) > _MAX_PENDING:
             oldest = min(_PENDING.items(), key=lambda item: item[1].created_at)[0]
-            evicted = _PENDING.pop(oldest, None)
-            if evicted is not None and evicted.provider_hard_stop is not None:
-                _finish_web_provider_hard_stop(
-                    evicted.provider_hard_stop,
-                    error="pending_review_evicted",
-                )
+            # Only evict the live object. Its signed recovery record and paused
+            # cumulative Provider ledger remain available after restart/pressure.
+            _PENDING.pop(oldest, None)
 
 
 def _start_web_provider_hard_stop(
@@ -1962,16 +2020,28 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     key = _clean_text(run_id, 160)
     with _PENDING_LOCK:
         entry = _PENDING.get(key)
-        if entry is None:
+    if entry is None:
+        try:
+            record = get_review_recovery_record(key)
+            if record is None:
+                return None
+            pending = _checkpoint_pending_from_record(record)
+            study = record.study
+            credential_source = record.credential_source
+        except WebReviewRecoveryError:
             return None
+    else:
         pending = entry.pending
-        return {
+        study = entry.study
+        credential_source = entry.credential_source
+    return {
             "run_id": pending.run_id,
-            "study_id": _clean_text(entry.study.get("id"), 160),
+            "study_id": _clean_text(study.get("id"), 160),
             "scientific_configuration_sha256": (
-                study_context_owner.scientific_configuration_sha256(entry.study)
+                study_context_owner.scientific_configuration_sha256(study)
             ),
             "resume_scope": pending.resume_scope,
+            "credential_source": credential_source,
             "resumable_here": bool(pending.resumable_here),
             "requests": [
                 {
@@ -2015,6 +2085,73 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
                 Path(pending.run_dir), pending
             ),
         }
+
+
+def _recover_pending_run(
+    run_id: str,
+    *,
+    provider_environment: Optional[Mapping[str, str]],
+) -> Optional[_PendingRun]:
+    """Reconstruct one paused Web run from private, digest-bound coordinates."""
+
+    record = get_review_recovery_record(run_id)
+    if record is None:
+        return None
+    from easyicu.research_agent import ResearchAgentPipeline
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLedger,
+    )
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+    from easyicu.research_agent.orchestration.services import PipelineServices
+
+    pending = _checkpoint_pending_from_record(record)
+    wrapper_dir = Path(record.wrapper_dir).resolve()
+    config = PipelineConfig(**record.pipeline_config)
+    if config.canonical_digest() != record.pipeline_config.get(
+        "pipeline_config_sha256", config.canonical_digest()
+    ):
+        # The Pipeline's own checkpoint performs the authoritative config
+        # digest comparison. This branch only rejects an impossible embedded
+        # self-coordinate if a future schema adds one.
+        raise WebReviewRecoveryError("Web review pipeline config is inconsistent")
+    if Path(config.workdir).resolve() != (wrapper_dir / "pipeline").resolve():
+        raise WebReviewRecoveryError("Web review pipeline workdir drifted")
+    client, provider_public = provider_adapter.build_research_agent_provider_client(
+        dict(record.provider_meta),
+        environ=provider_environment,
+    )
+    for key in ("provider", "model", "credential_fingerprint"):
+        if provider_public.get(key) != record.provider_public.get(key):
+            raise WebReviewRecoveryError(
+                "Web review provider identity changed after the pause"
+            )
+    task_id = record.hard_stop_task_id
+    ledger = ProviderHardStopLedger(
+        path=Path(record.hard_stop_ledger_path).resolve(),
+        task_ids=(task_id,),
+        limits=provider_adapter.web_research_agent_hard_stop_limits(),
+        batch_id=task_id,
+        declaration_sha256=record.hard_stop_declaration_sha256,
+        resume_existing=True,
+    )
+    task = ledger.start_task(task_id)
+    pipeline = ResearchAgentPipeline.from_config(
+        config,
+        services=PipelineServices(llm=client, provider_hard_stop=task),
+    )
+    return _PendingRun(
+        pipeline=pipeline,
+        pending=pending,
+        wrapper_dir=wrapper_dir,
+        study=dict(record.study),
+        provider=dict(provider_public),
+        acquisition=_rehydrate_acquisition_projection(
+            record.acquisition_projection
+        ),
+        created_at=record.created_at,
+        credential_source=record.credential_source,
+        provider_hard_stop=task,
+    )
 
 
 def _compile_plan_revision_contract(
@@ -2410,6 +2547,43 @@ def make_research_pipeline_run_runner(
             if isinstance(outcome, HumanReviewPending):
                 run_dir = Path(outcome.run_dir)
                 _pause_web_provider_hard_stop(provider_hard_stop)
+                config_payload = config.canonical_payload()
+                if PipelineConfig(**config_payload).canonical_digest() != (
+                    config.canonical_digest()
+                ):
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_review_config_not_recoverable",
+                        "The paused run configuration cannot be reconstructed safely.",
+                    )
+                put_review_recovery_record(
+                    WebReviewRecoveryRecord.create(
+                        run_id=str(outcome.run_id),
+                        wrapper_dir=str(wrapper_dir.resolve()),
+                        study=study,
+                        scientific_configuration_sha256=(
+                            study_context_owner.scientific_configuration_sha256(study)
+                        ),
+                        provider_meta=dict(provider),
+                        provider_public=dict(provider_public),
+                        credential_source=(
+                            "pi_verified"
+                            if research_provider_environment is not None
+                            else "scientific_provider"
+                        ),
+                        pipeline_config=config_payload,
+                        acquisition_projection=_acquisition_recovery_projection(
+                            acquisition
+                        ),
+                        hard_stop_ledger_path=str(
+                            provider_hard_stop.ledger.path.resolve()
+                        ),
+                        hard_stop_task_id=str(provider_hard_stop.task_id),
+                        hard_stop_declaration_sha256=(
+                            study_context_owner.scientific_configuration_sha256(study)
+                        ),
+                        created_at=time.time(),
+                    )
+                )
                 entry = _PendingRun(
                     pipeline=pipeline,
                     pending=outcome,
@@ -2418,6 +2592,11 @@ def make_research_pipeline_run_runner(
                     provider=provider_public,
                     acquisition=acquisition,
                     created_at=time.time(),
+                    credential_source=(
+                        "pi_verified"
+                        if research_provider_environment is not None
+                        else "scientific_provider"
+                    ),
                     provider_hard_stop=provider_hard_stop,
                 )
                 _register_pending(entry)
@@ -2499,17 +2678,33 @@ def resume_research_pipeline(
     note: str,
     job: Any,
     current_study_context: Optional[Mapping[str, Any]] = None,
+    provider_environment: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Resume one same-process plan review with digest-bound decisions."""
+    """Resume one digest-bound plan review, including after host restart."""
 
     key = _clean_text(run_id, 160)
     with _PENDING_LOCK:
         entry = _PENDING.get(key)
     if entry is None:
-        raise ResearchPipelineRunError(
-            "research_pipeline_review_not_resumable",
-            "This plan review is not available in the current server process.",
-        )
+        try:
+            entry = _recover_pending_run(
+                key,
+                provider_environment=provider_environment,
+            )
+        except Exception as exc:
+            raise ResearchPipelineRunError(
+                "research_pipeline_review_recovery_failed",
+                "The saved plan review could not be restored safely.",
+                details={"failure_type": _pipeline_failure_category(exc)},
+            ) from exc
+        if entry is None:
+            raise ResearchPipelineRunError(
+                "research_pipeline_review_not_resumable",
+                "No saved plan review exists for this run.",
+            )
+        with _PENDING_LOCK:
+            incumbent = _PENDING.setdefault(key, entry)
+            entry = incumbent
     if _clean_text(entry.study.get("id"), 160) != _clean_text(study_context_id, 160):
         raise ResearchPipelineRunError(
             "research_pipeline_review_study_mismatch",
@@ -2525,6 +2720,7 @@ def resume_research_pipeline(
         if current_digest != planned_digest:
             with _PENDING_LOCK:
                 _PENDING.pop(key, None)
+            remove_review_recovery_record(key)
             _finish_web_provider_hard_stop(
                 entry.provider_hard_stop,
                 error="configuration_superseded",
@@ -2584,6 +2780,7 @@ def resume_research_pipeline(
             progress_callback=lambda event: _pipeline_progress(job, event),
         )
     except HumanReviewRejected:
+        remove_review_recovery_record(key)
         _finish_web_provider_hard_stop(
             entry.provider_hard_stop,
             error="human_review_rejected",
@@ -2611,6 +2808,7 @@ def resume_research_pipeline(
                 entry.provider_hard_stop,
                 error=_pipeline_failure_category(exc),
             )
+            remove_review_recovery_record(key)
         raise ResearchPipelineRunError(
             "research_pipeline_review_resume_failed",
             "The governed Research Agent run could not resume after plan review.",
@@ -2632,6 +2830,7 @@ def resume_research_pipeline(
             pending=outcome,
         )
     _finish_web_provider_hard_stop(entry.provider_hard_stop)
+    remove_review_recovery_record(key)
     return _write_projection(
         wrapper_dir=entry.wrapper_dir,
         study=entry.study,
