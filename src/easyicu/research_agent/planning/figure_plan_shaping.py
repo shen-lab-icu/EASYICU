@@ -18,6 +18,10 @@ from ..contracts.figure_plan import (
     DATA_QUALITY_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,
+    GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS,
+    GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT,
+    MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+    measurement_availability_figure_panels,
 )
 from ..schema import (
     AnalysisPlan,
@@ -201,6 +205,14 @@ def bind_deterministic_figure_panels(
         frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_INPUT}): (
             EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS
         ),
+        frozenset({GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT}): (
+            GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS
+        ),
+        frozenset({MISSINGNESS_MEASUREMENT_AUDIT_INPUT}): (
+            measurement_availability_figure_panels(
+                MISSINGNESS_MEASUREMENT_AUDIT_INPUT
+            )
+        ),
         frozenset(DATA_QUALITY_FIGURE_REQUIRED_INPUTS): DATA_QUALITY_FIGURE_PANELS,
     }
     changed = False
@@ -212,9 +224,22 @@ def bind_deterministic_figure_panels(
             for output in step.expected_outputs
             if str(output).startswith("figure:")
         ]
-        templates = templates_by_inputs.get(
-            frozenset(str(value) for value in step.inputs)
-        )
+        input_set = frozenset(str(value) for value in step.inputs)
+        templates = templates_by_inputs.get(input_set)
+        if templates is None and len(input_set) == 1:
+            input_key = next(iter(input_set))
+            kind, separator, product = input_key.partition(":")
+            if kind == "table" and separator:
+                producers = [
+                    candidate
+                    for candidate in plan.steps
+                    if input_key in {str(value) for value in candidate.expected_outputs}
+                    and candidate.measurement_audit_spec is not None
+                    and candidate.measurement_audit_spec.audit_for(product)
+                    == "measurement_missingness"
+                ]
+                if len(producers) == 1:
+                    templates = measurement_availability_figure_panels(input_key)
         if (
             _method_head(str(step.method or "")) != "visualization"
             or step.planned_analysis_role != "auxiliary"

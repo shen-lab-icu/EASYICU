@@ -38,6 +38,7 @@ from ...contracts.figure_plan import (
     DATA_QUALITY_FIGURE_PANELS,
     MEASUREMENT_PROCESS_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+    measurement_availability_figure_panels,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep
@@ -148,19 +149,33 @@ _COLUMNS_BY_INPUT = {
 }
 
 
-def _measurement_missingness_input(step: AnalysisStep) -> str | None:
+def _measurement_missingness_input(
+    step: AnalysisStep,
+    *,
+    plan: Any | None = None,
+) -> str | None:
     """Return the sole typed product backed by the measurement audit owner."""
 
     if len(step.inputs or ()) != 1:
         return None
     input_key = str(step.inputs[0] or "").strip()
     kind, separator, product = input_key.partition(":")
+    if kind != "table" or not separator:
+        return None
     if (
-        kind != "table"
-        or not separator
-        or measurement_audit_product_filename(product)
-        != "missingness_measurement_audit.csv"
+        measurement_audit_product_filename(product)
+        == "missingness_measurement_audit.csv"
     ):
+        return input_key
+    producers = [
+        candidate
+        for candidate in getattr(plan, "steps", ()) or ()
+        if input_key in {str(value) for value in candidate.expected_outputs}
+        and candidate.measurement_audit_spec is not None
+        and candidate.measurement_audit_spec.audit_for(product)
+        == "measurement_missingness"
+    ]
+    if len(producers) != 1:
         return None
     return input_key
 
@@ -168,13 +183,8 @@ def _measurement_missingness_input(step: AnalysisStep) -> str | None:
 def _columns_read(input_key: str) -> tuple[str, ...]:
     if input_key == MEASUREMENT_PROCESS_AUDIT_INPUT:
         return _PROCESS_COLUMNS
-    kind, separator, product = str(input_key or "").partition(":")
-    if (
-        kind == "table"
-        and separator
-        and measurement_audit_product_filename(product)
-        == "missingness_measurement_audit.csv"
-    ):
+    kind, separator, _product = str(input_key or "").partition(":")
+    if kind == "table" and separator:
         return _AUDIT_COLUMNS
     raise ValueError(f"{input_key} is not a supported measurement-audit product")
 
@@ -263,12 +273,13 @@ def missingness_measurement_figure_executor_owns_step(
 def measurement_missingness_figure_executor_owns_step(
     step: AnalysisStep,
     *,
+    plan: Any | None = None,
     resolved_bindings: Mapping[str, Any] | None = None,
 ) -> bool:
     """Own a one-panel figure whose only authority is one full audit table."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
-    input_key = _measurement_missingness_input(step)
+    input_key = _measurement_missingness_input(step, plan=plan)
     contracts = list(step.input_consumption_contracts or ())
     if not (
         step.planned_analysis_role == "auxiliary"
@@ -435,7 +446,11 @@ def missingness_measurement_figure_executor_code(step: AnalysisStep) -> str:
     ).strip()
 
 
-def measurement_missingness_figure_executor_code(step: AnalysisStep) -> str:
+def measurement_missingness_figure_executor_code(
+    step: AnalysisStep,
+    *,
+    plan: Any | None = None,
+) -> str:
     """Return the sandbox entrypoint for one digest-bound audit figure."""
 
     product = (
@@ -443,7 +458,7 @@ def measurement_missingness_figure_executor_code(step: AnalysisStep) -> str:
     )
     if product is None:
         raise ValueError("The step is not owned by the measurement-missingness renderer")
-    input_key = _measurement_missingness_input(step)
+    input_key = _measurement_missingness_input(step, plan=plan)
     if input_key is None:
         raise ValueError("The step has no supported measurement-audit input")
     return textwrap.dedent(
@@ -541,9 +556,11 @@ def _load_one_binding(
         raise ValueError(f"{input_key} bytes disagree with its product contract")
     if _canonical_sha256(path) != expected_sha256:
         raise ValueError(f"{input_key} changed while it was being read")
-    source_filename = measurement_audit_product_filename(product)
-    if not source_filename:
-        raise ValueError(f"{input_key} has no deterministic producer filename")
+    # The digest-verified EvidenceStore copy preserves the producer basename as
+    # ``<evidence_id>__<basename>``.  Use that bound basename rather than a
+    # second alias table: typed MeasurementAuditSpec may authorize a valid
+    # product id the legacy filename shim has never seen.
+    source_filename = path.name.split("__", 1)[1] if "__" in path.name else path.name
     return frame, binding, source_filename
 
 
@@ -838,6 +855,7 @@ def run_measurement_missingness_figure(
     missing_pct = [per_variable[name]["missing_pct"] for name in variables]
     available_pct = [per_variable[name]["available_pct"] for name in variables]
     height_mm = max(82.0, 31.0 + 7.0 * len(variables))
+    panel_template = measurement_availability_figure_panels(input_key)[0]
     fig, ax = plt.subplots(figsize=(183 / 25.4, height_mm / 25.4))
     positions = list(range(len(variables)))
     ax.barh(
@@ -891,7 +909,7 @@ def run_measurement_missingness_figure(
         height_mm=height_mm,
         panels=[
             {
-                "panel_id": DATA_QUALITY_FIGURE_PANELS[0].panel_id,
+                "panel_id": panel_template.panel_id,
                 "title": "Measurement availability",
                 "role": "data_quality",
                 "claim": (
@@ -900,8 +918,8 @@ def run_measurement_missingness_figure(
                 ),
                 "evidence_ids": [source_path.name],
                 "metadata": {
-                    "article_role": DATA_QUALITY_FIGURE_PANELS[0].article_role,
-                    "chart_type": DATA_QUALITY_FIGURE_PANELS[0].chart_type,
+                    "article_role": panel_template.article_role,
+                    "chart_type": panel_template.chart_type,
                     "source_products": [input_key],
                     "source_data": [source_path.name],
                 },
