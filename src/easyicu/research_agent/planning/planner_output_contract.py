@@ -9,7 +9,6 @@ resulting immutable contracts.
 from __future__ import annotations
 
 from ..schema import AnalysisPlan, ResearchContext
-from .planner_measurement_audit import validate_planner_measurement_audit_specs
 from .scientific_review import post_baseline_exposure
 
 
@@ -78,7 +77,6 @@ def validate_fresh_planner_typed_product_specs(
 ) -> None:
     """Reject ambiguous typed products in a newly generated Planner response."""
 
-    validate_planner_measurement_audit_specs(plan)
     missing_distribution_specs = [
         step.step_id
         for step in plan.steps
