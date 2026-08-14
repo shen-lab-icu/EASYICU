@@ -95,6 +95,16 @@ TARGET_FILES: List[Path] = [
     RA / "audits" / "validators.py",
     RA / "plan_utils.py",
     RA / "agents" / "core.py",
+    # 2026-08-14 agents/core.py decomposition batch: the monolith was split
+    # into owner modules behind the core.py facade. The facade itself stays
+    # measured (it must remain a thin re-export), and the new owners inherit
+    # the same lower-is-better ratchet from day one.
+    RA / "agents" / "_support.py",
+    RA / "agents" / "planner.py",
+    RA / "agents" / "replanner.py",
+    RA / "agents" / "roles.py",
+    RA / "agents" / "coder.py",
+    RA / "agents" / "reporting.py",
     # Scientific contract consolidation now makes the compatibility schema an
     # active owner boundary; keep its future growth on the same ratchet.
     RA / "schema.py",
