@@ -19,6 +19,9 @@ from typing import Any, Mapping
 
 import pandas as pd
 
+from ...contracts.figure_plan import (
+    GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS,
+)
 from ...figures.publication import (
     PALETTE_CLINICAL,
     apply_publication_style,
@@ -62,6 +65,51 @@ _DESCRIPTIVE_DISTRIBUTION_REQUIRED_COLUMNS = tuple(
 # accepting any other count spelling would make the renderer guess.
 DESCRIPTIVE_DISTRIBUTION_COUNT_COLUMNS = frozenset({"group_n", "n_total"})
 
+_WIDE_DISTRIBUTION_SUFFIXES = (
+    "n_nonmissing",
+    "missing_n",
+    "missing_pct",
+    "median",
+    "q25",
+    "q75",
+    "mean",
+    "sd",
+)
+
+
+def _wide_distribution_shape(columns: list[str]) -> tuple[str, str] | None:
+    """Resolve one strict ``group + metric-prefixed summaries`` table.
+
+    This is the shape emitted by older generated grouped summaries.  It is not
+    inferred from values: every summary suffix must identify the same one
+    metric stem, and exactly one remaining column must identify the groups.
+    Ambiguous or widened tables remain outside this deterministic owner.
+    """
+
+    column_set = set(columns)
+    stems: set[str] = set()
+    summary_columns: set[str] = set()
+    for column in columns:
+        for suffix in _WIDE_DISTRIBUTION_SUFFIXES:
+            marker = f"_{suffix}"
+            if column.endswith(marker) and len(column) > len(marker):
+                stems.add(column[: -len(marker)])
+                summary_columns.add(column)
+                break
+    if len(stems) != 1:
+        return None
+    stem = next(iter(stems))
+    required_summaries = {f"{stem}_{suffix}" for suffix in _WIDE_DISTRIBUTION_SUFFIXES}
+    if summary_columns != required_summaries:
+        return None
+    fixed = {"n", "percentage", "denominator"}
+    group_columns = column_set - required_summaries - fixed
+    if not fixed.issubset(column_set) or len(group_columns) != 1:
+        return None
+    if column_set != required_summaries | fixed | group_columns:
+        return None
+    return next(iter(group_columns)), stem
+
 
 def _method_head(value: Any) -> str:
     return str(value or "").strip().lower().split(" with ", 1)[0]
@@ -99,6 +147,14 @@ def _binding_mode(binding: Any) -> str | None:
             and consumption.get("mode") == "all_rows"
         ):
             return "distribution_table"
+        if (
+            isinstance(columns, list)
+            and all(isinstance(column, str) for column in columns)
+            and _wide_distribution_shape(columns) is not None
+            and isinstance(consumption, Mapping)
+            and consumption.get("mode") == "all_rows"
+        ):
+            return "distribution_table_wide"
     if declared_kind == evidence_kind == "statistic":
         structure = contract.get("json_structure")
         paths = structure.get("paths") if isinstance(structure, Mapping) else None
@@ -138,7 +194,7 @@ def descriptive_result_figure_executor_owns_step(
         return False
     input_key = step.inputs[0]
     mode = _binding_mode(resolved_bindings.get(input_key))
-    if mode == "distribution_table":
+    if mode in {"distribution_table", "distribution_table_wide"}:
         contracts = list(step.input_consumption_contracts or [])
         return bool(
             _typed_product(input_key, "table")
@@ -230,7 +286,7 @@ def _load_binding(
         path.relative_to(base)
     except ValueError as exc:
         raise ValueError("descriptive figure input escapes the run directory") from exc
-    expected_suffix = ".csv" if mode == "distribution_table" else ".json"
+    expected_suffix = ".csv" if mode.startswith("distribution_table") else ".json"
     if path.is_symlink() or not path.is_file() or path.suffix.lower() != expected_suffix:
         raise ValueError("descriptive figure input is not a safe regular file")
     if _sha256(path) != expected_sha:
@@ -256,7 +312,9 @@ def _write_contract_and_summary(
     source_path: Path,
     core_claim: str,
     panel_title: str,
+    panel_id: str,
     panel_role: str,
+    chart_type: str,
     statistics_note: str,
     source_rows: int,
 ) -> dict[str, Any]:
@@ -268,13 +326,15 @@ def _write_contract_and_summary(
         height_mm=92.0,
         panels=[
             {
-                "panel_id": "A",
+                "panel_id": panel_id,
                 "title": panel_title,
                 "role": panel_role,
                 "claim": core_claim,
                 "evidence_ids": [str(binding.get("evidence_id") or "")],
                 "metadata": {
-                    "chart_type": "deterministic_descriptive_result",
+                    "article_role": panel_role,
+                    "chart_type": chart_type,
+                    "source_products": [input_key],
                     "source_data": [source_path.name],
                 },
             }
@@ -346,18 +406,58 @@ def run_descriptive_result_figure(
     apply_publication_style()
     fig, ax = plt.subplots(figsize=(7.2, 3.6))
 
-    if mode == "distribution_table":
-        frame = pd.read_csv(path)
+    if mode.startswith("distribution_table"):
+        raw_frame = pd.read_csv(path)
         contract = binding["product_contract"]
         expected_rows = contract.get("row_count")
         if (
-            list(frame.columns) != list(contract.get("columns") or [])
+            list(raw_frame.columns) != list(contract.get("columns") or [])
             or isinstance(expected_rows, bool)
             or not isinstance(expected_rows, int)
             or expected_rows < 1
-            or len(frame) != expected_rows
+            or len(raw_frame) != expected_rows
         ):
             raise ValueError("distribution table bytes disagree with their contract")
+        if mode == "distribution_table_wide":
+            shape = _wide_distribution_shape(list(raw_frame.columns))
+            if shape is None:  # pragma: no cover - ownership and binding guard it
+                raise ValueError("wide distribution contract is ambiguous")
+            group_column, stem = shape
+            group_n = pd.to_numeric(raw_frame["n"], errors="coerce")
+            denominator = pd.to_numeric(raw_frame["denominator"], errors="coerce")
+            percentage = pd.to_numeric(raw_frame["percentage"], errors="coerce")
+            if (
+                group_n.isna().any()
+                or denominator.isna().any()
+                or percentage.isna().any()
+                or (group_n <= 0).any()
+                or (denominator <= 0).any()
+                or denominator.nunique() != 1
+                or int(group_n.sum()) != int(denominator.iloc[0])
+                or not (
+                    percentage - 100.0 * group_n / denominator
+                ).abs().le(1e-6).all()
+            ):
+                raise ValueError("wide distribution group denominator invariants failed")
+            frame = pd.DataFrame(
+                {
+                    "variable": stem,
+                    "group": raw_frame[group_column],
+                    "row_role": "exposure_level",
+                    "group_n": group_n,
+                    "n_nonmissing": raw_frame[f"{stem}_n_nonmissing"],
+                    "missing_n": raw_frame[f"{stem}_missing_n"],
+                    "missing_pct": raw_frame[f"{stem}_missing_pct"],
+                    "median": raw_frame[f"{stem}_median"],
+                    "q25": raw_frame[f"{stem}_q25"],
+                    "q75": raw_frame[f"{stem}_q75"],
+                    "mean": raw_frame[f"{stem}_mean"],
+                    "sd": raw_frame[f"{stem}_sd"],
+                    "unit": "",
+                }
+            )
+        else:
+            frame = raw_frame
         variables = frame["variable"].dropna().astype(str).str.strip().unique()
         groups = frame["group"].dropna().astype(str).str.strip()
         if len(variables) != 1 or groups.eq("").any() or groups.duplicated().any():
@@ -394,7 +494,7 @@ def run_descriptive_result_figure(
             or not ((q25 <= median) & (median <= q75)).all()
         ):
             raise ValueError("distribution table count or quantile invariants failed")
-        source = frame.copy()
+        source = raw_frame.copy()
         source_name = path.name.split("__", 1)[1] if "__" in path.name else path.name
         source.insert(0, "source_step_id", binding.get("produced_by_step"))
         source.insert(0, "source_table", source_name)
@@ -449,7 +549,13 @@ def run_descriptive_result_figure(
                 "every group in one digest-verified descriptive table."
             ),
             panel_title="Descriptive distribution",
+            panel_id=(
+                GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS[0].panel_id
+            ),
             panel_role="distribution",
+            chart_type=(
+                GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS[0].chart_type
+            ),
             statistics_note=(
                 "All parent rows are preserved in source data. The renderer "
                 "introduces no grouping, filtering, imputation, or estimator choice."
@@ -507,7 +613,9 @@ def run_descriptive_result_figure(
                 "digest-verified statistic artifact."
             ),
             panel_title="Descriptive statistic",
+            panel_id="descriptive_statistic",
             panel_role="descriptive_result",
+            chart_type="scalar_display",
             statistics_note=(
                 "Only the bound statistic value is plotted. Additional numeric "
                 "payload fields are not promoted into unverified figure results."

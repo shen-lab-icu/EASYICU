@@ -92,6 +92,29 @@ def _canonical_grouped_distribution_frame() -> pd.DataFrame:
     )
 
 
+def _wide_grouped_distribution_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            [0, 60, 60.0, 100, 60, 0, 0.0, 63.0, 51.0, 74.0, 62.5, 15.0],
+            [1, 40, 40.0, 100, 40, 0, 0.0, 67.0, 56.0, 77.0, 66.8, 14.0],
+        ],
+        columns=[
+            "sepsis3_status",
+            "n",
+            "percentage",
+            "denominator",
+            "age_n_nonmissing",
+            "age_missing_n",
+            "age_missing_pct",
+            "age_median",
+            "age_q25",
+            "age_q75",
+            "age_mean",
+            "age_sd",
+        ],
+    )
+
+
 def _binding(
     tmp_path: Path,
     *,
@@ -307,6 +330,116 @@ def test_canonical_group_n_distribution_contract_is_rendered_without_llm(
         summary=summary,
         binding=binding,
     )
+
+
+def test_e1_wide_grouped_summary_is_rendered_by_the_same_owner(
+    tmp_path: Path,
+) -> None:
+    step = _distribution_step(
+        inputs=["table:distribution_prevalence"],
+        expected_outputs=["figure:age_distribution"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(
+                input_key="table:distribution_prevalence", mode="all_rows"
+            )
+        ],
+        figure_panels=[
+            {
+                "panel_id": "grouped_distribution",
+                "figure_output": "figure:age_distribution",
+                "article_role": "distribution",
+                "chart_type": "point_range",
+                "source_products": ["table:distribution_prevalence"],
+            }
+        ],
+    )
+    run_dir, manifest, binding = _binding(tmp_path, step=step, kind="table")
+    source_path = run_dir / str(binding["relative_path"])
+    frame = _wide_grouped_distribution_frame()
+    frame.to_csv(source_path, index=False)
+    frame.to_csv(
+        run_dir / "steps" / "05_parent" / "outputs" / "typed_distribution.csv",
+        index=False,
+    )
+    digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    binding["sha256"] = digest
+    binding["identity_row"]["sha256"] = digest
+    binding["product_contract"] = {
+        "schema_version": "easyicu.host_typed_product.v4",
+        "tabular_format": "csv",
+        "columns": list(frame.columns),
+        "row_count": len(frame),
+    }
+    binding["consumption_contract"]["artifact_sha256"] = digest
+    binding["consumption_contract"]["verified_row_count"] = len(frame)
+
+    assert descriptive_result_figure_executor_owns_step(
+        step, resolved_bindings={step.inputs[0]: binding}
+    )
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Test", steps=[step]),
+        resolved_bindings={step.inputs[0]: binding},
+    )
+    assert selection is not None
+    assert selection.analysis_kind == "descriptive_result_figure"
+
+    out_dir = run_dir / "steps" / step.step_id / "outputs"
+    summary = run_descriptive_result_figure(
+        out_dir=out_dir,
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=step.step_id,
+        input_key=step.inputs[0],
+        figure_product="age_distribution",
+    )
+    source = pd.read_csv(out_dir / "age_distribution_source_data.csv")
+    assert source["source_row_index"].tolist() == [0, 1]
+    assert source["age_median"].tolist() == [63.0, 67.0]
+    contract = json.loads(
+        (out_dir / "age_distribution.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert contract["panels"][0]["metadata"] == {
+        "article_role": "distribution",
+        "chart_type": "point_range",
+        "source_data": ["age_distribution_source_data.csv"],
+        "source_products": ["table:distribution_prevalence"],
+    }
+    _assert_valid_bundle(
+        step=step,
+        run_dir=run_dir,
+        out_dir=out_dir,
+        summary=summary,
+        binding=binding,
+    )
+
+
+def test_wide_grouped_summary_requires_one_complete_metric_stem() -> None:
+    step = _distribution_step(
+        inputs=["table:distribution_prevalence"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(
+                input_key="table:distribution_prevalence", mode="all_rows"
+            )
+        ],
+    )
+    columns = list(_wide_grouped_distribution_frame().columns)
+
+    for invalid_columns in (
+        [column for column in columns if column != "age_sd"],
+        [*columns, "lactate_median"],
+    ):
+        binding = {
+            "declared_kind": "table",
+            "evidence_kind": "table",
+            "product_contract": {"columns": invalid_columns},
+            "consumption_contract": {"mode": "all_rows"},
+        }
+        assert not descriptive_result_figure_executor_owns_step(
+            step, resolved_bindings={step.inputs[0]: binding}
+        )
 
 
 def test_scalar_contract_excludes_unbound_numeric_siblings(tmp_path: Path) -> None:

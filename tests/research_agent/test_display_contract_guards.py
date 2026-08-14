@@ -214,6 +214,147 @@ def test_deterministic_renderer_is_not_bound_without_all_rows_authority() -> Non
     assert findings == []
 
 
+def test_grouped_distribution_draft_is_normalized_to_point_range() -> None:
+    step = AnalysisStep(
+        step_id="08_age_distribution_figure",
+        planned_analysis_role="auxiliary",
+        intent="Plot the prespecified grouped age summary.",
+        method="visualization",
+        inputs=["table:distribution_prevalence"],
+        expected_outputs=["figure:age_distribution"],
+        input_consumption_contracts=[
+            {"input_key": "table:distribution_prevalence", "mode": "all_rows"}
+        ],
+        figure_panels=[
+            {
+                "panel_id": "draft_distribution",
+                "figure_output": "figure:age_distribution",
+                "article_role": "distribution",
+                "chart_type": "distribution_plot",
+                "source_products": ["table:distribution_prevalence"],
+            }
+        ],
+    )
+    plan = AnalysisPlan(research_question="Describe age by group.", steps=[step])
+
+    shaped, findings = bind_deterministic_figure_panels(plan=plan)
+
+    assert [panel.model_dump() for panel in shaped.steps[0].figure_panels] == [
+        {
+            "schema_version": "easyicu.planned_figure_panel/1",
+            "panel_id": "grouped_distribution",
+            "figure_output": "figure:age_distribution",
+            "article_role": "distribution",
+            "chart_type": "point_range",
+            "source_products": ["table:distribution_prevalence"],
+        }
+    ]
+    assert findings[0].detail["reason"] == (
+        "deterministic_figure_panels_normalized"
+    )
+
+
+def test_typed_measurement_alias_is_normalized_to_availability_panel() -> None:
+    producer = AnalysisStep(
+        step_id="05_measurement_missingness_audit",
+        planned_analysis_role="auxiliary",
+        intent="Audit source availability.",
+        method="measurement_audit",
+        expected_outputs=["table:missingness_data_quality"],
+        measurement_audit_spec={
+            "products": [
+                {
+                    "product_id": "missingness_data_quality",
+                    "audit": "measurement_missingness",
+                }
+            ]
+        },
+    )
+    figure = AnalysisStep(
+        step_id="09_missingness_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render the audited source availability.",
+        method="visualization",
+        inputs=["table:missingness_data_quality"],
+        expected_outputs=["figure:missingness_data_quality"],
+        input_consumption_contracts=[
+            {"input_key": "table:missingness_data_quality", "mode": "all_rows"}
+        ],
+        figure_panels=[
+            {
+                "panel_id": "draft_heatmap",
+                "figure_output": "figure:missingness_data_quality",
+                "article_role": "data_quality",
+                "chart_type": "coverage_heatmap",
+                "source_products": ["table:missingness_data_quality"],
+            }
+        ],
+    )
+    plan = AnalysisPlan(
+        research_question="Audit measurement availability.",
+        steps=[producer, figure],
+    )
+
+    shaped, findings = bind_deterministic_figure_panels(plan=plan)
+
+    assert [panel.model_dump() for panel in shaped.steps[1].figure_panels] == [
+        {
+            "schema_version": "easyicu.planned_figure_panel/1",
+            "panel_id": "source_availability",
+            "figure_output": "figure:missingness_data_quality",
+            "article_role": "data_quality",
+            "chart_type": "availability_panel",
+            "source_products": ["table:missingness_data_quality"],
+        }
+    ]
+    assert findings[0].detail["reason"] == (
+        "deterministic_figure_panels_normalized"
+    )
+
+
+def test_untyped_or_wrong_measurement_alias_is_never_normalized() -> None:
+    figure = AnalysisStep(
+        step_id="09_missingness_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render a table whose audit meaning is not closed.",
+        method="visualization",
+        inputs=["table:missingness_data_quality"],
+        expected_outputs=["figure:missingness_data_quality"],
+        input_consumption_contracts=[
+            {"input_key": "table:missingness_data_quality", "mode": "all_rows"}
+        ],
+    )
+    no_owner = AnalysisPlan(
+        research_question="Audit measurement availability.", steps=[figure]
+    )
+    wrong_owner = AnalysisPlan(
+        research_question="Audit measurement availability.",
+        steps=[
+            AnalysisStep(
+                step_id="05_event_timing_audit",
+                planned_analysis_role="auxiliary",
+                intent="Audit event timing.",
+                method="measurement_audit",
+                expected_outputs=["table:missingness_data_quality"],
+                measurement_audit_spec={
+                    "products": [
+                        {
+                            "product_id": "missingness_data_quality",
+                            "audit": "event_timing",
+                        }
+                    ]
+                },
+            ),
+            figure,
+        ],
+    )
+
+    for plan in (no_owner, wrong_owner):
+        shaped, findings = bind_deterministic_figure_panels(plan=plan)
+        assert shaped == plan
+        assert findings == []
+
+
 def test_plan_dimension_lifts_after_both_guards():
     task = ICUAgentBenchTask(
         task_id="t1",

@@ -95,6 +95,11 @@ def _identity_transforms(monkeypatch: pytest.MonkeyPatch) -> None:
         "close_measurement_companion_inputs",
         lambda *, plan, context, **_kwargs: (plan, []),
     )
+    monkeypatch.setattr(
+        plan_authority,
+        "bind_deterministic_figure_panels",
+        lambda *, plan: (plan, []),
+    )
 
 
 def test_pipeline_execute_reexports_plan_authority_objects_with_identity() -> None:
@@ -153,6 +158,7 @@ def test_candidate_transform_order_keeps_second_snapshot_restore() -> None:
             "_project_locked_robustness_specs_after_replan",
             "augment_trajectory_plan_products",
             "close_measurement_companion_inputs",
+            "bind_deterministic_figure_panels",
         }
     ]
     assert relevant == [
@@ -163,6 +169,7 @@ def test_candidate_transform_order_keeps_second_snapshot_restore() -> None:
         "_project_locked_robustness_specs_after_replan",
         "augment_trajectory_plan_products",
         "close_measurement_companion_inputs",
+        "bind_deterministic_figure_panels",
         "_preserve_completed_step_snapshots_after_replan",
     ]
 
@@ -196,6 +203,58 @@ def test_second_snapshot_restore_repairs_intermediate_transform(
     assert result.plan.steps[0] == current.steps[0]
     assert any(
         finding.detail.get("reason") == "completed_step_snapshot_immutable"
+        for finding in result.findings
+    )
+
+
+def test_replan_normalizer_rebinds_deterministic_panels_before_authority() -> None:
+    producer = AnalysisStep(
+        step_id="01_distribution",
+        planned_analysis_role="secondary",
+        intent="Summarise age by group.",
+        method="descriptive_distribution",
+        expected_outputs=["table:distribution_prevalence"],
+    )
+    figure = AnalysisStep(
+        step_id="02_distribution_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render the grouped summary.",
+        method="visualization",
+        inputs=["table:distribution_prevalence"],
+        expected_outputs=["figure:age_distribution"],
+        input_consumption_contracts=[
+            {"input_key": "table:distribution_prevalence", "mode": "all_rows"}
+        ],
+        figure_panels=[
+            {
+                "panel_id": "draft_distribution",
+                "figure_output": "figure:age_distribution",
+                "article_role": "distribution",
+                "chart_type": "distribution_plot",
+                "source_products": ["table:distribution_prevalence"],
+            }
+        ],
+    )
+    current = AnalysisPlan(
+        research_question="Test candidate plan authority.",
+        steps=[producer, figure],
+    )
+
+    result = plan_authority.normalize_replan_candidate(
+        current_plan=current,
+        candidate_plan=current.model_copy(update={"revision": current.revision + 1}),
+        completed_records=[],
+        context=_context(),
+        max_total_steps=0,
+        locked_robustness_specs=[],
+    )
+
+    panel = result.plan.steps[1].figure_panels[0]
+    assert panel.panel_id == "grouped_distribution"
+    assert panel.chart_type == "point_range"
+    assert any(
+        finding.detail.get("reason")
+        == "deterministic_figure_panels_normalized"
         for finding in result.findings
     )
 

@@ -559,7 +559,7 @@ def select_standard_executor(
         )
     _missed("prevalence_mortality_figure")
     if measurement_missingness_figure_executor_owns_step(
-        step, resolved_bindings=resolved_bindings
+        step, plan=plan, resolved_bindings=resolved_bindings
     ):
         if receipt_required:
             _receipt_declined("measurement_missingness_figure")
@@ -571,7 +571,7 @@ def select_standard_executor(
                 progress_message=(
                     "Using digest-bound measurement-missingness figure renderer"
                 ),
-                code=measurement_missingness_figure_executor_code(step),
+                code=measurement_missingness_figure_executor_code(step, plan=plan),
                 consumed_input_keys=(str(step.inputs[0]),),
                 host_sealed_renderer=True,
             )
