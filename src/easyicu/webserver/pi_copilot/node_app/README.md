@@ -48,12 +48,23 @@ Optional variables:
 - `EASYICU_PI_API` (`openai-completions` or `openai-responses`)
 - `EASYICU_PI_CONTEXT_WINDOW` (default `200000`)
 - `EASYICU_PI_MAX_TOKENS` (default `16384`)
-- `EASYICU_PI_SESSION_TOKEN_BUDGET` (default `1000000`; hard session stop)
+- `EASYICU_PI_SESSION_TOKEN_BUDGET` (default `1000000`; provider-call checked cumulative ceiling)
 - `EASYICU_PI_CWD` (normally a private empty workspace supplied by the host)
-- `EASYICU_PI_SESSION_TOKEN_BUDGET` (provider-call checked cumulative ceiling)
 - `EASYICU_PI_MAX_PROVIDER_CALLS_PER_MESSAGE` (default `8`)
 - `EASYICU_PI_MAX_PROVIDER_CALLS_PER_SESSION` (default `128`)
+- `EASYICU_PI_INPUT_PRICE_USD_PER_1M_TOKENS`
+- `EASYICU_PI_OUTPUT_PRICE_USD_PER_1M_TOKENS`
+- `EASYICU_PI_MAX_COST_USD_PER_MESSAGE`
+- `EASYICU_PI_MAX_COST_USD_PER_SESSION`
 - `EASYICU_PI_SESSION_DIR` (normally supplied by the Python host)
+
+The four pricing/cost variables are an all-or-none contract. When a provider
+publishes reliable prices, the shell conservatively reserves the maximum input
+and output cost before every call, persists the cumulative reservation, and
+fails closed at either cost ceiling. Existing sessions cannot silently adopt a
+new or changed pricing contract. Local proxies that do not publish trustworthy
+pricing leave all four unset; the token and call ceilings remain the hard-stop
+fallback and the UI reports that dollar pricing is unavailable.
 
 The shell provider is independent of any provider selected for an EasyICU
 scientific run. The child receives only a strict runtime/`EASYICU_PI_*`

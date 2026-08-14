@@ -597,6 +597,10 @@ def test_reconfigure_preserves_independent_shell_budget_settings(
             "PATH": "/usr/bin:/bin",
             "EASYICU_PI_SESSION_TOKEN_BUDGET": "42000",
             "EASYICU_PI_MAX_TOKENS": "2048",
+            "EASYICU_PI_INPUT_PRICE_USD_PER_1M_TOKENS": "1.25",
+            "EASYICU_PI_OUTPUT_PRICE_USD_PER_1M_TOKENS": "5",
+            "EASYICU_PI_MAX_COST_USD_PER_MESSAGE": "0.5",
+            "EASYICU_PI_MAX_COST_USD_PER_SESSION": "5",
         },
     )
 
@@ -612,6 +616,8 @@ def test_reconfigure_preserves_independent_shell_budget_settings(
 
     assert gateway.environ["EASYICU_PI_SESSION_TOKEN_BUDGET"] == "42000"
     assert gateway.environ["EASYICU_PI_MAX_TOKENS"] == "2048"
+    assert gateway.environ["EASYICU_PI_INPUT_PRICE_USD_PER_1M_TOKENS"] == "1.25"
+    assert gateway.environ["EASYICU_PI_MAX_COST_USD_PER_SESSION"] == "5"
     assert gateway.environ["EASYICU_PI_API_KEY"] == "new-private-key"
 
 
@@ -651,6 +657,8 @@ def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
 
     assert "EASYICU_PI_SESSION_TOKEN_BUDGET" in source
     assert "pi_shell_token_budget_exhausted" in budget
+    assert "EASYICU_PI_MAX_COST_USD_PER_MESSAGE" in source
+    assert "pi_shell_session_cost_budget_exhausted" in budget
     assert "record.budgetGuard.authorize(context, options)" in source
     assert "maxRetries: 0" in source
     assert 'update.type === "thinking_delta"' not in source + projection
@@ -695,6 +703,71 @@ def test_shell_budget_guard_blocks_each_provider_boundary() -> None:
         {{ type: 'compaction', usage: {{ totalTokens: 200 }} }},
       ];
       console.log(restoredProviderCallCount(entries, 1));
+
+      const priced = new ShellBudgetGuard({{
+        tokenBudget: 50000,
+        maxOutputTokens: 1000,
+        maxProviderCallsPerMessage: 2,
+        maxProviderCallsPerSession: 4,
+        consumedTokens: () => 0,
+        pricing: {{
+          inputPriceUsdPerMillionTokens: 10,
+          outputPriceUsdPerMillionTokens: 30,
+          maxCostUsdPerMessage: 0.08,
+          maxCostUsdPerSession: 0.12,
+        }},
+      }});
+      priced.beginMessage();
+      priced.authorize({{messages: []}}, {{maxTokens: 1000}});
+      const receipt = priced.receipt();
+      console.log(receipt.schema_version, receipt.reserved_cost_micro_usd, priced.state().pricing_available);
+      priced.endMessage();
+
+      const restored = new ShellBudgetGuard({{
+        tokenBudget: 50000,
+        maxOutputTokens: 1000,
+        maxProviderCallsPerMessage: 2,
+        maxProviderCallsPerSession: 4,
+        consumedTokens: () => 0,
+        persistedEntries: [{{ type: 'custom', customType: receipt.schema_version, data: receipt }}],
+        pricing: {{
+          inputPriceUsdPerMillionTokens: 10,
+          outputPriceUsdPerMillionTokens: 30,
+          maxCostUsdPerMessage: 0.08,
+          maxCostUsdPerSession: 0.12,
+        }},
+      }});
+      restored.beginMessage();
+      try {{ restored.authorize({{messages: []}}, {{maxTokens: 1000}}); }}
+      catch (error) {{ console.log(error.code); }}
+
+      try {{
+        new ShellBudgetGuard({{
+          tokenBudget: 50000,
+          maxOutputTokens: 1000,
+          maxProviderCallsPerMessage: 2,
+          maxProviderCallsPerSession: 4,
+          consumedTokens: () => 0,
+          persistedEntries: entries,
+          pricing: {{
+            inputPriceUsdPerMillionTokens: 10,
+            outputPriceUsdPerMillionTokens: 30,
+            maxCostUsdPerMessage: 0.08,
+            maxCostUsdPerSession: 0.12,
+          }},
+        }});
+      }} catch (error) {{ console.log(error.code); }}
+
+      try {{
+        new ShellBudgetGuard({{
+          tokenBudget: 50000,
+          maxOutputTokens: 1000,
+          maxProviderCallsPerMessage: 2,
+          maxProviderCallsPerSession: 4,
+          consumedTokens: () => 0,
+          persistedEntries: [{{ type: 'custom', customType: receipt.schema_version, data: receipt }}],
+        }});
+      }} catch (error) {{ console.log(error.code); }}
     """
     completed = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -706,6 +779,10 @@ def test_shell_budget_guard_blocks_each_provider_boundary() -> None:
         "pi_shell_token_budget_exhausted",
         "pi_shell_message_provider_call_budget_exhausted",
         "9",
+        "easyicu.shell-budget/2 71110 true",
+        "pi_shell_session_cost_budget_exhausted",
+        "pi_shell_cost_history_unavailable",
+        "pi_shell_pricing_binding_mismatch",
     ]
 
 
