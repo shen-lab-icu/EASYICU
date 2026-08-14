@@ -448,6 +448,17 @@ def _declared_primary_lineage_step_ids(plan: AnalysisPlan) -> Set[str]:
     return allowed
 
 
+def declared_primary_lineage_step_ids(plan: AnalysisPlan) -> frozenset[str]:
+    """Expose the typed pre-execution primary lineage to adjacent owners.
+
+    Figure planning and article-content planning must use the same lineage
+    definition.  Returning an immutable projection keeps callers from
+    modifying the reporting owner's internal working set.
+    """
+
+    return frozenset(_declared_primary_lineage_step_ids(plan))
+
+
 #: Roles for which the SCHEMA, not this contract, fixes the product name.
 #:
 #: ``AnalysisStep`` refuses a step carrying a ``table_one_spec`` unless its
@@ -1209,6 +1220,7 @@ __all__ = [
     "ArticleDisplayRequirement",
     "augment_plan_for_article_contract",
     "build_article_analysis_contract",
+    "declared_primary_lineage_step_ids",
     "empty_primary_lineage_reason",
     "render_article_analysis_contract_for_prompt",
     "roles_covered_by_artifacts",

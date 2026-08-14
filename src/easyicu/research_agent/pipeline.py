@@ -368,6 +368,7 @@ from .plan_utils import (
 from .planning.figure_plan_shaping import (
     bind_deterministic_figure_panels,
     ensure_data_quality_figure_step as _ensure_audit_panel_step_in_plan,
+    ensure_primary_result_figure_step,
 )
 from .planning.final_plan_shape import validate_final_plan_shape
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
@@ -2650,6 +2651,10 @@ class ResearchAgentPipeline:
             # ensure a declared audit/robustness panel, since that evidence is
             # produced (locked robustness specs, data-quality summaries) but the
             # plan often never presents it.
+            plan, primary_figure_findings = ensure_primary_result_figure_step(
+                plan=plan,
+            )
+            findings.extend(primary_figure_findings)
             plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
                 plan=plan,
                 context=context,

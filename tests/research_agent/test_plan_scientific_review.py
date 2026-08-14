@@ -1139,6 +1139,15 @@ def test_planner_parse_binds_cluster_authority_into_the_plan_digest() -> None:
     for step in payload["steps"]:
         step["literature_citation_keys"] = []
         step["literature_design_bindings"] = []
+        if step["step_id"] == "missingness":
+            step["measurement_audit_spec"] = {
+                "products": [
+                    {
+                        "product_id": "missingness_audit",
+                        "audit": "missingness_profile",
+                    }
+                ]
+            }
     payload["steps"][0]["model_requirements"][0]["method_family"] = (
         "statsmodels_logit_mle"
     )
@@ -1386,9 +1395,7 @@ def test_explicit_distribution_figure_covers_descriptive_role_without_prose() ->
                             figure_output="figure:exposure_outcome_panel",
                             article_role="descriptive_result",
                             chart_type="prevalence_panel",
-                            source_products=[
-                                "table:exposure_outcome_distribution"
-                            ],
+                            source_products=["table:exposure_outcome_distribution"],
                         )
                     ],
                 ),
@@ -1404,6 +1411,86 @@ def test_explicit_distribution_figure_covers_descriptive_role_without_prose() ->
 
     assert "descriptive_result" in review.facts["figure_roles"]["covered_roles"]
     assert "descriptive_result" not in review.facts["figure_roles"]["missing_roles"]
+
+
+def test_descriptive_hero_figure_must_descend_from_primary_result() -> None:
+    context = _context()
+    primary = AnalysisStep(
+        step_id="primary_distribution",
+        planned_analysis_role="primary",
+        intent="Estimate the primary descriptive result.",
+        method="descriptive",
+        expected_outputs=["table:exposure_outcome_distribution"],
+    )
+    secondary = AnalysisStep(
+        step_id="age_distribution",
+        planned_analysis_role="secondary",
+        intent="Describe age by group.",
+        method="descriptive_distribution",
+        expected_outputs=["table:distribution_prevalence"],
+    )
+    off_lineage_figure = AnalysisStep(
+        step_id="age_distribution_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render age by group.",
+        method="visualization",
+        inputs=["table:distribution_prevalence"],
+        expected_outputs=["figure:age_distribution"],
+        figure_panels=[
+            PlannedFigurePanelSpec(
+                panel_id="grouped_distribution",
+                figure_output="figure:age_distribution",
+                article_role="distribution",
+                chart_type="point_range",
+                source_products=["table:distribution_prevalence"],
+            )
+        ],
+    )
+    plan = AnalysisPlan(
+        research_question="Describe the primary exposure and outcome.",
+        analysis_type="descriptive_epidemiology",
+        steps=[primary, secondary, off_lineage_figure],
+    )
+    strategy = build_article_figure_strategy(
+        context,
+        analysis_family="descriptive",
+    )
+
+    missing = build_plan_scientific_review(
+        context=context,
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=strategy,
+    )
+    assert "distribution" in missing.facts["figure_roles"]["missing_roles"]
+
+    on_lineage_figure = off_lineage_figure.model_copy(
+        update={
+            "step_id": "primary_distribution_figure",
+            "inputs": ["table:exposure_outcome_distribution"],
+            "expected_outputs": ["figure:primary_distribution"],
+            "figure_panels": [
+                PlannedFigurePanelSpec(
+                    panel_id="primary_distribution",
+                    figure_output="figure:primary_distribution",
+                    article_role="distribution",
+                    chart_type="prevalence_panel",
+                    source_products=["table:exposure_outcome_distribution"],
+                )
+            ],
+        }
+    )
+    closed_plan = plan.model_copy(
+        update={"steps": [primary, secondary, off_lineage_figure, on_lineage_figure]}
+    )
+    closed = build_plan_scientific_review(
+        context=context,
+        plan=closed_plan,
+        literature=_literature(),
+        figure_strategy=strategy,
+    )
+    assert "distribution" in closed.facts["figure_roles"]["covered_roles"]
+    assert "distribution" not in closed.facts["figure_roles"]["missing_roles"]
 
 
 def test_generic_overview_inputs_do_not_infer_figure_roles_or_chart_breadth() -> None:

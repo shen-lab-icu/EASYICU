@@ -22,6 +22,7 @@ from easyicu.research_agent.planning.figure_plan_shaping import (
     bind_deterministic_figure_panels,
     dedicated_renderer_consumes_typed_source,
     ensure_data_quality_figure_step,
+    ensure_primary_result_figure_step,
     step_declares_audit_panel,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -162,7 +163,9 @@ def test_deterministic_cohort_renderer_gets_digest_bound_panel_contract() -> Non
     assert findings[0].detail["reason"] == "deterministic_figure_panels_bound"
 
 
-def test_deterministic_renderer_normalizes_draft_visual_semantics_before_review() -> None:
+def test_deterministic_renderer_normalizes_draft_visual_semantics_before_review() -> (
+    None
+):
     step = AnalysisStep(
         step_id="06_cohort_figure",
         planned_analysis_role="auxiliary",
@@ -192,9 +195,7 @@ def test_deterministic_renderer_normalizes_draft_visual_semantics_before_review(
     assert shaped.steps[0].figure_panels[0].article_role == "cohort_accounting"
     assert shaped.steps[0].figure_panels[0].chart_type == "cohort_flow"
     assert findings[0].severity == "warning"
-    assert findings[0].detail["reason"] == (
-        "deterministic_figure_panels_normalized"
-    )
+    assert findings[0].detail["reason"] == ("deterministic_figure_panels_normalized")
 
 
 def test_deterministic_renderer_is_not_bound_without_all_rows_authority() -> None:
@@ -249,9 +250,53 @@ def test_grouped_distribution_draft_is_normalized_to_point_range() -> None:
             "source_products": ["table:distribution_prevalence"],
         }
     ]
-    assert findings[0].detail["reason"] == (
-        "deterministic_figure_panels_normalized"
+    assert findings[0].detail["reason"] == ("deterministic_figure_panels_normalized")
+
+
+def test_primary_result_figure_is_added_even_when_secondary_figure_exists() -> None:
+    primary = AnalysisStep(
+        step_id="03_primary_distribution",
+        planned_analysis_role="primary",
+        intent="Estimate the prespecified primary descriptive result.",
+        method="descriptive",
+        expected_outputs=["table:exposure_outcome_distribution"],
     )
+    secondary = AnalysisStep(
+        step_id="04_secondary_distribution",
+        planned_analysis_role="secondary",
+        intent="Describe a secondary continuous variable.",
+        method="descriptive_distribution",
+        expected_outputs=["table:distribution_prevalence"],
+    )
+    secondary_figure = AnalysisStep(
+        step_id="05_secondary_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render the secondary distribution.",
+        method="visualization",
+        inputs=["table:distribution_prevalence"],
+        expected_outputs=["figure:secondary_distribution"],
+        input_consumption_contracts=[
+            {"input_key": "table:distribution_prevalence", "mode": "all_rows"}
+        ],
+    )
+    plan = AnalysisPlan(
+        research_question="Describe the primary exposure and outcome.",
+        steps=[primary, secondary, secondary_figure],
+    )
+
+    shaped, findings = ensure_primary_result_figure_step(plan=plan)
+    shaped, panel_findings = bind_deterministic_figure_panels(plan=shaped)
+
+    assert len(shaped.steps) == 4
+    hero = shaped.steps[-1]
+    assert hero.inputs == ["table:exposure_outcome_distribution"]
+    assert hero.figure_panels[0].article_role == "distribution"
+    assert hero.figure_panels[0].chart_type == "prevalence_panel"
+    assert hero.figure_panels[1].chart_type == "dot_interval_absolute_risk"
+    assert findings[0].detail["reason"] == (
+        "primary_result_figure_bound_to_typed_primary_source"
+    )
+    assert panel_findings[0].detail["reason"] == ("deterministic_figure_panels_bound")
 
 
 def test_typed_measurement_alias_is_normalized_to_availability_panel() -> None:
@@ -307,9 +352,7 @@ def test_typed_measurement_alias_is_normalized_to_availability_panel() -> None:
             "source_products": ["table:missingness_data_quality"],
         }
     ]
-    assert findings[0].detail["reason"] == (
-        "deterministic_figure_panels_normalized"
-    )
+    assert findings[0].detail["reason"] == ("deterministic_figure_panels_normalized")
 
 
 def test_untyped_or_wrong_measurement_alias_is_never_normalized() -> None:
@@ -375,7 +418,9 @@ def test_plan_dimension_lifts_after_both_guards():
 
     plan = _plan_with_typed_data_quality_sources()
     ctx = _Ctx(plan.research_question)
-    plan, _ = _ensure_publication_figure_step_in_plan(plan=plan, context=ctx, force=True)
+    plan, _ = _ensure_publication_figure_step_in_plan(
+        plan=plan, context=ctx, force=True
+    )
     plan, _ = ensure_data_quality_figure_step(plan=plan, context=ctx)
 
     after = score_plan(
@@ -400,9 +445,7 @@ def test_typed_source_detects_one_explicit_renderer_only():
     assert dedicated_renderer_consumes_typed_source([renderer], source=source)
 
     ambiguous_renderer = renderer.model_copy(
-        update={
-            "expected_outputs": ["figure:robustness", "figure:second_view"]
-        }
+        update={"expected_outputs": ["figure:robustness", "figure:second_view"]}
     )
     assert not dedicated_renderer_consumes_typed_source(
         [ambiguous_renderer], source=source
