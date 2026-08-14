@@ -1,6 +1,6 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "27dc177745bec86c066f24c1b72501bd1bc84348739c02bffc249d0bbe4e9eab",
+  "tool_sha256": "140b6d79df9ddade2c301e79e6ac507d6a46e5fd3b04362813ee6804ba3840bc",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
@@ -64,9 +64,21 @@
       "shim_bypass_violations": []
     },
     "gates/preflight.py": {
-      "loc": 6982,
-      "sha256": "52a357919c6835268929c641ca1a2c00ba89f674a4d687cc74270bf629c2ba4f",
-      "intra_package_import_edges": 12,
+      "loc": 6268,
+      "sha256": "32a03d4c3653377014330016b63a3b979ee9fa60ad109363b17f2be3a22cb6a1",
+      "intra_package_import_edges": 14,
+      "shim_bypass_violations": []
+    },
+    "gates/preflight_statics.py": {
+      "loc": 478,
+      "sha256": "9ec1cd0816154f47ff114fd7ab6d4ab2bce9952e2722d18172b83083a0184b36",
+      "intra_package_import_edges": 3,
+      "shim_bypass_violations": []
+    },
+    "gates/preflight_provenance.py": {
+      "loc": 357,
+      "sha256": "e205b48fedcb3bf3c36229d0086f1b4f807608860f9757d8bd2f086ff8932ba5",
+      "intra_package_import_edges": 2,
       "shim_bypass_violations": []
     },
     "gates/typed_input.py": {
@@ -232,7 +244,7 @@
       "callable_closure_captured_names": 79
     }
   },
-  "baseline_reason": "phase.py decomposition batch: 72 self-contained pre-loop helpers moved byte-preserved to execution/phase_support.py behind a facade import; fixpoint ejection kept run_execute_phase's seam-adjacent helpers (revalidation, materialized-cohort receipts, publication-figure staging, detached-figure binding) in phase.py so monkeypatch seams and source-inspection tests keep binding to phase. 7,514 -> 5,944 loc, no growth. Two suite failures are pre-existing (path-scoped stash controls).",
+  "baseline_reason": "preflight.py decomposition batch: name-resolution statics (preflight_statics.py) and provenance/exposure-authority statics (preflight_provenance.py) moved byte-preserved behind the preflight facade; fixpoint ejection kept every seam-entangled checker (branch-local unbound, provenance fail-closed, typed-dataframe erasure, reconciliation swallowing) in preflight.py. 6,982 -> 6,268 loc, no growth; new owners ratcheted from day one.",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -380,6 +392,9 @@
     },
     {
       "reason": "phase.py decomposition batch: 72 self-contained pre-loop helpers moved byte-preserved to execution/phase_support.py behind a facade import; fixpoint ejection kept run_execute_phase's seam-adjacent helpers (revalidation, materialized-cohort receipts, publication-figure staging, detached-figure binding) in phase.py so monkeypatch seams and source-inspection tests keep binding to phase. 7,514 -> 5,944 loc, no growth. Two suite failures are pre-existing (path-scoped stash controls)."
+    },
+    {
+      "reason": "preflight.py decomposition batch: name-resolution statics (preflight_statics.py) and provenance/exposure-authority statics (preflight_provenance.py) moved byte-preserved behind the preflight facade; fixpoint ejection kept every seam-entangled checker (branch-local unbound, provenance fail-closed, typed-dataframe erasure, reconciliation swallowing) in preflight.py. 6,982 -> 6,268 loc, no growth; new owners ratcheted from day one."
     }
   ]
 }
