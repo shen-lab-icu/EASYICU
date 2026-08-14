@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.research_agent.orchestration.progress import (
+    NonFatalProgressCallbackError,
+    ProgressControlSignal,
     ResumableProgressChannel,
     planner_retry_progress_callback,
 )
@@ -56,6 +58,37 @@ def test_resumable_progress_channel_projects_heartbeat_audit_and_ui(
     assert audits[0]["detail"] == {"run_id": "run-safe"}
     assert events[0]["status"] == "complete"
     assert events[0]["timestamp"]
+
+
+def test_progress_callback_control_signal_propagates() -> None:
+    class HostCancellation(ProgressControlSignal):
+        pass
+
+    def cancel(_event: dict[str, object]) -> None:
+        raise HostCancellation("host requested cancellation")
+
+    channel = ResumableProgressChannel(cancel)
+
+    with pytest.raises(HostCancellation, match="host requested cancellation"):
+        channel.emit("analysis", "Running the exact approved step.")
+
+
+def test_generic_progress_callback_failure_is_ignored() -> None:
+    def broken_observer(_event: dict[str, object]) -> None:
+        raise RuntimeError("optional observer disconnected")
+
+    channel = ResumableProgressChannel(broken_observer)
+
+    channel.emit("analysis", "Running without the optional observer.")
+
+
+def test_typed_nonfatal_progress_callback_failure_is_ignored() -> None:
+    def unavailable_ui(_event: dict[str, object]) -> None:
+        raise NonFatalProgressCallbackError("UI transport disconnected")
+
+    channel = ResumableProgressChannel(unavailable_ui)
+
+    channel.emit("analysis", "Running without the optional UI projection.")
 
 
 def test_planner_retry_projection_exposes_only_bounded_progress() -> None:

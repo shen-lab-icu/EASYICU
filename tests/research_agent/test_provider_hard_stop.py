@@ -68,6 +68,46 @@ def _pipeline_limit_options(limits):
     }
 
 
+def _reserve_from_independent_process(
+    path,
+    limits,
+    task_id,
+    barrier,
+    results,
+):
+    from pathlib import Path
+
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopExceeded,
+        ProviderHardStopLedger,
+    )
+
+    try:
+        ledger = ProviderHardStopLedger(
+            path=Path(path),
+            task_ids=("E1", "E2"),
+            limits=limits,
+            batch_id="test-batch",
+            resume_existing=True,
+        )
+        barrier.wait(timeout=10)
+        ledger.start_task(task_id)
+        barrier.wait(timeout=10)
+        attempt_id = ledger.reserve_transport_attempt(
+            task_id=task_id,
+            role="planner",
+            model="test-model",
+            messages=[SimpleNamespace(content=task_id)],
+            max_tokens=8,
+            prior_attempt_id=None,
+        )
+        results.put((task_id, "authorized", attempt_id))
+    except ProviderHardStopExceeded as exc:
+        results.put((task_id, "blocked", exc.code))
+    except BaseException as exc:  # pragma: no cover - reported to the parent
+        results.put((task_id, "error", f"{type(exc).__name__}: {exc}"))
+
+
 def test_pipeline_requires_matching_declarative_limits_and_live_service(
     tmp_path, ra
 ):
@@ -330,6 +370,136 @@ def test_batch_attempt_limit_blocks_next_task_before_client_call(tmp_path):
         second.complete(_message(), max_tokens=8)
 
     assert second_inner.calls == []
+
+
+def test_one_attempt_batch_serializes_independently_loaded_processes(tmp_path):
+    import multiprocessing
+
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        load_provider_hard_stop_ledger,
+    )
+
+    limits = _limits(
+        max_provider_attempts_per_run=1,
+        max_provider_attempts_per_batch=1,
+    )
+    ledger = _ledger(tmp_path, task_ids=("E1", "E2"), limits=limits)
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_reserve_from_independent_process,
+            args=(str(ledger.path), limits, task_id, barrier, results),
+        )
+        for task_id in ("E1", "E2")
+    ]
+
+    for process in processes:
+        process.start()
+    outcomes = [results.get(timeout=20) for _ in processes]
+    for process in processes:
+        process.join(timeout=20)
+        assert process.exitcode == 0
+    results.close()
+    results.join_thread()
+
+    assert sorted(outcome[1] for outcome in outcomes) == ["authorized", "blocked"]
+    assert [outcome[2] for outcome in outcomes if outcome[1] == "blocked"] == [
+        "BATCH_PROVIDER_ATTEMPT_LIMIT"
+    ]
+    payload = load_provider_hard_stop_ledger(ledger.path)
+    tasks = {task["task_id"]: task for task in payload["tasks"]}
+    assert {task_id: task["status"] for task_id, task in tasks.items()} == {
+        "E1": "running",
+        "E2": "running",
+    }
+    assert all(task["started_at"] is not None for task in tasks.values())
+    assert sum(len(task["calls"]) for task in tasks.values()) == 1
+    assert payload["totals"]["provider_attempts"] == 1
+
+
+def test_windows_sidecar_locks_before_initializing_first_byte(
+    tmp_path, monkeypatch
+) -> None:
+    from easyicu.research_agent.authority import provider_hard_stop as owner
+
+    events: list[str] = []
+
+    class _Msvcrt:
+        LK_LOCK = 1
+        LK_UNLCK = 2
+
+        @staticmethod
+        def locking(descriptor, operation, _length):
+            if operation == _Msvcrt.LK_LOCK:
+                assert owner.os.fstat(descriptor).st_size == 0
+                events.append("lock")
+            else:
+                events.append("unlock")
+
+    monkeypatch.setattr(owner, "fcntl", None)
+    monkeypatch.setattr(owner, "msvcrt", _Msvcrt)
+    ledger_path = (tmp_path / "windows-first-create.json").resolve()
+
+    with owner._exclusive_ledger_file_lock(ledger_path):
+        lock_path = ledger_path.parent / f".{ledger_path.name}.lock"
+        assert lock_path.read_bytes() == b"\0"
+        assert events == ["lock"]
+
+    assert events == ["lock", "unlock"]
+
+
+def test_pending_review_reconciles_a_post_resume_crash_to_the_original_pause(
+    tmp_path, monkeypatch
+):
+    from easyicu.research_agent.authority import provider_hard_stop as owner
+
+    wall = [datetime(2026, 8, 14, tzinfo=timezone.utc)]
+    monotonic = [100.0]
+
+    class _ClockDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = wall[0]
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(owner, "datetime", _ClockDateTime)
+    monkeypatch.setattr(owner.time, "monotonic", lambda: monotonic[0])
+    ledger = _ledger(tmp_path)
+    task = ledger.start_task("E1")
+    wall[0] += timedelta(seconds=5)
+    monotonic[0] += 5.0
+    checkpoint_at = wall[0].isoformat()
+    wall[0] += timedelta(seconds=2)
+    monotonic[0] += 2.0
+    task.pause()
+
+    assert ledger.snapshot()["tasks"][0]["elapsed_seconds"] == pytest.approx(7.0)
+
+    task.reconcile_review_pause(paused_at=checkpoint_at)
+    reconciled_pause = ledger.snapshot()["tasks"][0]
+    paused_elapsed = reconciled_pause["elapsed_seconds"]
+    assert paused_elapsed == pytest.approx(5.0)
+    assert reconciled_pause["paused_at"] == checkpoint_at
+    assert reconciled_pause["review_checkpoint_at"] == checkpoint_at
+    task.resume()
+    assert ledger.snapshot()["tasks"][0]["status"] == "running"
+
+    wrong_checkpoint = (wall[0] + timedelta(seconds=1)).isoformat()
+    with pytest.raises(
+        owner.ProviderHardStopLedgerError,
+        match="review checkpoint changed",
+    ):
+        task.reconcile_review_pause(paused_at=wrong_checkpoint)
+    assert ledger.snapshot()["tasks"][0]["status"] == "running"
+
+    task.reconcile_review_pause(paused_at=checkpoint_at)
+
+    recovered = ledger.snapshot()["tasks"][0]
+    assert recovered["status"] == "paused"
+    assert recovered["review_checkpoint_at"] == checkpoint_at
+    assert recovered["elapsed_seconds"] == paused_elapsed
 
 
 @pytest.mark.parametrize(

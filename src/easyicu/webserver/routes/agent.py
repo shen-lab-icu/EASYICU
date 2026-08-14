@@ -23,11 +23,18 @@ from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.ideas.mining import EXECUTION_GATE_BLOCKERS
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
+from easyicu.webserver.pi_copilot.workspace import ProjectWorkspace
 from easyicu.webserver.routes.jobs import submit_job
 from easyicu.webserver.routes.request_parsing import body_bool
 
 control_router = APIRouter()
 artifact_router = APIRouter()
+
+
+def _research_pipeline_workspace() -> ProjectWorkspace:
+    """Return the server-owned Pi workspace used for scientific run artifacts."""
+
+    return ProjectWorkspace(Path.home() / ".easyicu" / "pi-agent" / "workspace")
 
 
 def _provider_environment_for_agent_run(
@@ -40,6 +47,11 @@ def _provider_environment_for_agent_run(
     """Resolve one credential authority without returning secret values."""
 
     source = str(credential_source or "scientific_provider").strip().lower()
+    if engine == "research_agent_pipeline" and source != "pi_verified":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "research_pipeline_pi_verified_credentials_required"},
+        )
     if source == "scientific_provider":
         return None
     if source != "pi_verified":
@@ -121,6 +133,19 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
             status_code=400,
             detail={"error": "research_pipeline_study_context_required"},
         )
+    budget_mode = "planner_canary"
+    if engine == "research_agent_pipeline":
+        if "budget_mode" in body:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "research_pipeline_budget_mode_server_owned"},
+            )
+        source = (study_context or {}).get("data_source")
+        database = source.get("database") if isinstance(source, Mapping) else None
+        try:
+            dataio.validate_research_pipeline_source(path, database=database)
+        except dataio.ExportCohortError as exc:
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
     llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
     external_llm_opt_in = body_bool(body, "external_llm_opt_in")
     literature_search_authorized = body_bool(
@@ -170,16 +195,18 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
                 export_path=path,
                 request_question=body.get("question"),
             )
-        project_root = body.get("project_root") or _agent_seed_run_root(
-            project_seed_dir
-        )
         if engine == "research_agent_pipeline":
+            workspace = _research_pipeline_workspace()
+            project_root = str(
+                workspace.project_root(str((study_context or {}).get("id") or ""))
+            )
             runner_kwargs: Dict[str, Any] = {
                 "export_path": path,
                 "study_context": study_context or {},
                 "project_root": project_root,
                 "provider": provider_meta,
                 "provider_environment": provider_environment,
+                "budget_mode": budget_mode,
             }
             if literature_search_authorized:
                 runner_kwargs["literature_search_authorized"] = True
@@ -194,6 +221,9 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
                 **runner_kwargs,
             )
         else:
+            project_root = body.get("project_root") or _agent_seed_run_root(
+                project_seed_dir
+            )
             base_runner = agent_runs.make_agent_run_runner(
                 export_path=path,
                 study_id=str(
@@ -209,6 +239,8 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
                 study_context=study_context,
             )
     except context_store.StudyContextError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+    except PiCopilotError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
     except agent_pipeline_runs.ResearchPipelineRunError as exc:
         raise HTTPException(
@@ -381,6 +413,11 @@ def jobs_agent_run_review(body: Dict[str, Any]) -> dict:
             status_code=409,
             detail={"error": "research_pipeline_review_not_resumable_here"},
         )
+    if decision == "approved" and pending.get("budget_mode") == "planner_canary":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "research_pipeline_planner_canary_execution_blocked"},
+        )
     provider_environment = _provider_environment_for_agent_run(
         credential_source=str(
             pending.get("credential_source") or "scientific_provider"
@@ -426,7 +463,7 @@ def jobs_agent_run_review(body: Dict[str, Any]) -> dict:
                 run_id=run_id,
                 study_context_id=study_context_id,
                 decision=decision,
-                reviewer=str(body.get("reviewer") or "local_web_reviewer"),
+                reviewer=agent_pipeline_runs.server_reviewer_identity(),
                 note=str(body.get("note") or ""),
                 job=job,
                 current_study_context=study_context,
@@ -688,7 +725,7 @@ def post_agent_run_signoff(body: Dict[str, Any]) -> dict:
     """Write a local human signoff artifact without unlocking the draft."""
     result = agent_runs.create_human_signoff(
         str(body.get("project_dir") or ""),
-        reviewer=body.get("reviewer"),
+        reviewer=agent_pipeline_runs.server_reviewer_identity(),
         confirmations=(
             body.get("confirmations")
             if isinstance(body.get("confirmations"), list)

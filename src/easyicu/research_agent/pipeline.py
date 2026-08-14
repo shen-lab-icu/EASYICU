@@ -5520,6 +5520,20 @@ class ResearchAgentPipeline:
         )
         from .authority.provider_hard_stop import ProviderHardStopExceeded
 
+        planner_only_rejection = bool(decisions) and all(
+            str(
+                item.get("decision")
+                if isinstance(item, Mapping)
+                else getattr(item, "decision", "")
+            )
+            == "rejected"
+            for item in decisions
+        )
+        if self._config.planner_only and not planner_only_rejection:
+            raise RuntimeError(
+                "this pipeline authority is planner-only and cannot resume into Execute"
+            )
+
         pending_state = self._pending_human_review
         if not pending_state and run_id is not None:
             pending_state = self._restore_durable_human_review_pause(
@@ -5578,34 +5592,55 @@ class ResearchAgentPipeline:
                 # Same-process pauses created before a hot reload retain the
                 # historical mutable callback sink.
                 progress_channel["callback"] = progress_callback
+        provider_resumed = False
+        review_checkpoint_at: Optional[str] = None
         try:
-            if self._provider_hard_stop is not None:
-                self._provider_hard_stop.resume()
-            with run_heartbeat_scope(run_id=pending.run_id):
-                bind_active_run_heartbeat(
-                    Path(pending.run_dir),
-                    task_timeout_seconds=self._heartbeat_wall_clock_remaining(),
-                )
-                with acquire_run_execution_lock(
-                    workdir=Path(self.workdir), run_id=pending.run_id
-                ):
+            with acquire_run_execution_lock(
+                workdir=Path(self.workdir), run_id=pending.run_id
+            ):
+                if self._provider_hard_stop is not None:
+                    # A process may die after reopening the Provider clock but
+                    # before the decision commit changes a still-pending review
+                    # checkpoint. Converge that exact window back to the durable
+                    # pause before reopening it; paused tasks make this a no-op.
+                    if isinstance(checkpoint_commit, dict):
+                        checkpoint_path = checkpoint_commit.get("path")
+                        reconcile_pause = getattr(
+                            self._provider_hard_stop,
+                            "reconcile_review_pause",
+                            None,
+                        )
+                        if checkpoint_path and callable(reconcile_pause):
+                            checkpoint = load_human_review_checkpoint(
+                                Path(str(checkpoint_path)), require_pending=False
+                            )
+                            if checkpoint.state == "pending":
+                                review_checkpoint_at = checkpoint.created_at
+                                reconcile_pause(paused_at=review_checkpoint_at)
+                    self._provider_hard_stop.resume()
+                    provider_resumed = True
+                with run_heartbeat_scope(run_id=pending.run_id):
+                    bind_active_run_heartbeat(
+                        Path(pending.run_dir),
+                        task_timeout_seconds=self._heartbeat_wall_clock_remaining(),
+                    )
                     outcome = workflow.resume(payload)
-            return self._pipeline_result_or_pending(
-                outcome,
-                workflow=workflow,
-                run_id=pending.run_id,
-                run_dir=Path(pending.run_dir),
-                progress_channel=(
-                    progress_channel
-                    if isinstance(progress_channel, ResumableProgressChannel)
-                    else None
-                ),
-                checkpoint_commit=(
-                    checkpoint_commit
-                    if isinstance(checkpoint_commit, dict)
-                    else None
-                ),
-            )
+                return self._pipeline_result_or_pending(
+                    outcome,
+                    workflow=workflow,
+                    run_id=pending.run_id,
+                    run_dir=Path(pending.run_dir),
+                    progress_channel=(
+                        progress_channel
+                        if isinstance(progress_channel, ResumableProgressChannel)
+                        else None
+                    ),
+                    checkpoint_commit=(
+                        checkpoint_commit
+                        if isinstance(checkpoint_commit, dict)
+                        else None
+                    ),
+                )
         except HumanReviewRejected:
             # The workflow has recorded the rejection and discarded its live
             # handoff. Do not keep presenting the public pipeline pause as
@@ -5625,8 +5660,16 @@ class ResearchAgentPipeline:
                 if isinstance(checkpoint_commit, dict):
                     fail_human_review_checkpoint(checkpoint_commit)
                 self._pending_human_review = None
-            elif self._provider_hard_stop is not None:
-                self._provider_hard_stop.pause()
+            elif provider_resumed and self._provider_hard_stop is not None:
+                reconcile_pause = getattr(
+                    self._provider_hard_stop,
+                    "reconcile_review_pause",
+                    None,
+                )
+                if review_checkpoint_at and callable(reconcile_pause):
+                    reconcile_pause(paused_at=review_checkpoint_at)
+                else:
+                    self._provider_hard_stop.pause()
             raise
 
     def run_from_spec(

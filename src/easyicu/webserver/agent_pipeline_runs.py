@@ -13,6 +13,7 @@ import base64
 import csv
 import hashlib
 import json
+import math
 import re
 import stat
 import threading
@@ -27,8 +28,10 @@ from easyicu.extensions import (
     ExtensionRegistry,
     ExtensionRegistryError,
 )
+from easyicu.databases import normalize_database_key
 
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+from easyicu.research_agent.orchestration.progress import ProgressControlSignal
 from easyicu.research_agent.providers.structured_retry import (
     safe_provider_error_category,
     safe_structured_attempt_metadata,
@@ -46,6 +49,7 @@ from easyicu.research_agent.publication_skills import (
 from easyicu.webserver import (
     agent_runs,
     capabilities as capability_policy,
+    dataio,
     literature_authority,
     provider_adapter,
     source_identity_authority,
@@ -133,7 +137,7 @@ _UNSAFE_PROJECTION_PATTERNS = (
 )
 
 
-class ResearchPipelineRunError(RuntimeError):
+class ResearchPipelineRunError(ProgressControlSignal):
     """Stable Web-facing failure from the true Research Agent bridge."""
 
     def __init__(
@@ -148,6 +152,20 @@ class ResearchPipelineRunError(RuntimeError):
         self.details = dict(details or {})
 
 
+@dataclass(frozen=True)
+class _WebHumanReviewGate:
+    """Server-owned reviewer identity for the local durable review route."""
+
+    def reviewer_identity_resolver(self) -> str:
+        return server_reviewer_identity()
+
+
+def server_reviewer_identity() -> str:
+    """Return the host-authenticated identity used by the local Web service."""
+
+    return "easyicu_local_web_operator"
+
+
 @dataclass
 class _PendingRun:
     pipeline: Any
@@ -158,6 +176,8 @@ class _PendingRun:
     acquisition: Any
     created_at: float
     credential_source: str = "scientific_provider"
+    budget_mode: str = "full_reviewed"
+    prepared_package_binding: Optional[Dict[str, Any]] = None
     provider_hard_stop: Optional[Any] = None
 
 
@@ -775,11 +795,19 @@ def _cohort_window(study: Mapping[str, Any]) -> tuple[float, float]:
                 if key != "error"
             },
         )
+    if isinstance(value, bool):
+        raise ResearchPipelineRunError(
+            "research_pipeline_time_window_invalid",
+            "The configured study time window must be a finite number of hours.",
+        )
     try:
         hours = float(value)
-    except (TypeError, ValueError):
-        hours = 24.0
-    if not 0 < hours <= 24 * 365:
+    except (TypeError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_time_window_invalid",
+            "The configured study time window must be a finite number of hours.",
+        ) from exc
+    if not math.isfinite(hours) or not 0 < hours <= 24 * 365:
         raise ResearchPipelineRunError(
             "research_pipeline_time_window_invalid",
             "The configured study time window is outside the supported range.",
@@ -1982,6 +2010,7 @@ def _start_web_provider_hard_stop(
     wrapper_dir: Path,
     job_id: str,
     declaration_sha256: str,
+    budget_mode: str = "full_reviewed",
 ) -> Any:
     """Start the one durable Provider task shared by acquisition and Pipeline."""
 
@@ -1999,7 +2028,7 @@ def _start_web_provider_hard_stop(
     ledger = ProviderHardStopLedger(
         path=(runtime_dir / "provider_hard_stop_ledger.json").resolve(),
         task_ids=(task_id,),
-        limits=provider_adapter.web_research_agent_hard_stop_limits(),
+        limits=provider_adapter.web_research_agent_hard_stop_limits(budget_mode),
         batch_id=task_id,
         declaration_sha256=declaration_sha256,
     )
@@ -2035,20 +2064,6 @@ def _finish_web_provider_hard_stop(
     task.finish(error=error)
 
 
-def _pause_web_provider_hard_stop(task: Optional[Any]) -> None:
-    """Pause active Provider time while the Web run awaits human review."""
-
-    if task is not None:
-        task.pause()
-
-
-def _resume_web_provider_hard_stop(task: Optional[Any]) -> None:
-    """Resume active Provider time immediately before pipeline execution."""
-
-    if task is not None:
-        task.resume()
-
-
 def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     key = _clean_text(run_id, 160)
     with _PENDING_LOCK:
@@ -2061,12 +2076,14 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             pending = _checkpoint_pending_from_record(record)
             study = record.study
             credential_source = record.credential_source
+            budget_mode = record.budget_mode
         except WebReviewRecoveryError:
             return None
     else:
         pending = entry.pending
         study = entry.study
         credential_source = entry.credential_source
+        budget_mode = entry.budget_mode
     return {
             "run_id": pending.run_id,
             "study_id": _clean_text(study.get("id"), 160),
@@ -2075,6 +2092,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             ),
             "resume_scope": pending.resume_scope,
             "credential_source": credential_source,
+            "budget_mode": budget_mode,
             "resumable_here": bool(pending.resumable_here),
             "requests": [
                 {
@@ -2160,11 +2178,32 @@ def _recover_pending_run(
         ) from exc
     if Path(config.workdir).resolve() != (wrapper_dir / "pipeline").resolve():
         raise WebReviewRecoveryError("Web review pipeline workdir drifted")
+    source = record.study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    if not record.prepared_package_binding:
+        raise WebReviewRecoveryError("Web review recovery lacks a package binding")
+    try:
+        dataio.validate_research_pipeline_source(
+            str(source.get("path") or ""),
+            database=source.get("database"),
+            expected_binding=record.prepared_package_binding,
+        )
+    except dataio.ExportCohortError as exc:
+        raise WebReviewRecoveryError(
+            "Web review prepared package changed after the pause"
+        ) from exc
     client, provider_public = provider_adapter.build_research_agent_provider_client(
         dict(record.provider_meta),
         environ=provider_environment,
     )
-    for key in ("provider", "model", "credential_fingerprint"):
+    for key in (
+        "provider",
+        "model",
+        "credential_fingerprint",
+        "endpoint_fingerprint",
+        "credential_header",
+        "base_url_endpoint",
+    ):
         if provider_public.get(key) != record.provider_public.get(key):
             raise WebReviewRecoveryError(
                 "Web review provider identity changed after the pause"
@@ -2173,29 +2212,23 @@ def _recover_pending_run(
     ledger = ProviderHardStopLedger(
         path=Path(record.hard_stop_ledger_path).resolve(),
         task_ids=(task_id,),
-        limits=provider_adapter.web_research_agent_hard_stop_limits(),
+        limits=provider_adapter.web_research_agent_hard_stop_limits(
+            record.budget_mode
+        ),
         batch_id=task_id,
         declaration_sha256=record.hard_stop_declaration_sha256,
         resume_existing=True,
     )
-    from easyicu.research_agent.orchestration.human_review_checkpoint import (
-        checkpoint_path,
-        load_checkpoint,
-    )
-
-    checkpoint = load_checkpoint(
-        checkpoint_path(Path(pending.run_dir)),
-        require_pending=False,
-    )
-    if checkpoint.state == "pending":
-        ledger.reconcile_review_pause(
-            task_id,
-            paused_at=checkpoint.created_at,
-        )
+    # Provider pause/reconcile state belongs to Pipeline.resume_human_review,
+    # which performs it while holding the cross-process run execution lock.
     task = ledger.start_task(task_id)
     pipeline = ResearchAgentPipeline.from_config(
         config,
-        services=PipelineServices(llm=client, provider_hard_stop=task),
+        services=PipelineServices(
+            llm=client,
+            human_review_gate=_WebHumanReviewGate(),
+            provider_hard_stop=task,
+        ),
     )
     return _PendingRun(
         pipeline=pipeline,
@@ -2208,6 +2241,8 @@ def _recover_pending_run(
         ),
         created_at=record.created_at,
         credential_source=record.credential_source,
+        budget_mode=record.budget_mode,
+        prepared_package_binding=dict(record.prepared_package_binding),
         provider_hard_stop=task,
     )
 
@@ -2285,6 +2320,7 @@ def make_research_pipeline_run_runner(
     provider_environment: Optional[Mapping[str, str]] = None,
     literature_search_authorized: bool = False,
     plan_revision_source_run_id: str = "",
+    budget_mode: str = "planner_canary",
 ) -> Any:
     """Build the JobManager runner for a real, evidence-bound pipeline run."""
 
@@ -2296,10 +2332,25 @@ def make_research_pipeline_run_runner(
             "A scientific question is required before starting the pipeline.",
         )
     source = study.get("data_source")
-    database = (
-        _clean_text(source.get("database") if isinstance(source, Mapping) else "", 64)
-        or "miiv"
-    )
+    if not isinstance(source, Mapping):
+        raise ResearchPipelineRunError(
+            "research_pipeline_database_required",
+            "A typed ICU database is required before pipeline launch.",
+        )
+    database_raw = _clean_text(source.get("database"), 64)
+    if not database_raw:
+        raise ResearchPipelineRunError(
+            "research_pipeline_database_required",
+            "A typed ICU database is required before pipeline launch.",
+        )
+    try:
+        database = normalize_database_key(database_raw)
+    except KeyError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_database_unknown",
+            "The configured ICU database is not supported.",
+            details={"database": database_raw},
+        ) from exc
     target = _target_outcome(study)
     primary_exposure = _primary_exposure(study)
     covariates = _configured_covariates(study)
@@ -2323,6 +2374,38 @@ def make_research_pipeline_run_runner(
         covariates=covariates,
         sensitivity_specs=sensitivity_specs,
     )
+    try:
+        package_receipt = dataio.validate_research_pipeline_source(
+            export_path,
+            database=database,
+        )
+    except dataio.ExportCohortError as exc:
+        raise ResearchPipelineRunError(
+            str(exc.detail.get("error") or "research_pipeline_source_invalid"),
+            "The Research Agent requires a manifest-backed prepared data package.",
+            details={
+                key: value for key, value in exc.detail.items() if key != "error"
+            },
+        ) from exc
+    prepared_package_binding = dict(package_receipt["binding"])
+    selected_budget_mode = str(budget_mode or "").strip().lower()
+    try:
+        provider_adapter.web_research_agent_hard_stop_limits(selected_budget_mode)
+    except ValueError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_budget_mode_invalid",
+            "Choose an explicit reviewed Research Agent budget mode.",
+        ) from exc
+    if provider_environment is None:
+        raise ResearchPipelineRunError(
+            "research_pipeline_pi_verified_credentials_required",
+            "A verified Pi provider credential is required for this pipeline.",
+        )
+    if not project_root:
+        raise ResearchPipelineRunError(
+            "research_pipeline_project_workspace_required",
+            "A server-owned Pi project workspace is required for this pipeline.",
+        )
     capability_settings = capability_policy.capability_settings()
     publication_skill_flags = publication_skill_flags_from_settings(
         capability_settings
@@ -2341,17 +2424,22 @@ def make_research_pipeline_run_runner(
         )
     except ExtensionRegistryError as exc:
         raise ResearchPipelineRunError(exc.code, exc.message, details=exc.details) from exc
-    research_provider_environment = (
-        dict(provider_environment) if provider_environment is not None else None
-    )
+    research_provider_environment = dict(provider_environment)
     source_run_id = _clean_text(plan_revision_source_run_id, 160)
 
     def runner(job: Any) -> Dict[str, Any]:
-        root = (
-            Path(project_root).expanduser()
-            if project_root
-            else Path.home() / "easyicu" / "projects"
-        )
+        try:
+            dataio.validate_research_pipeline_source(
+                export_path,
+                database=database,
+                expected_binding=prepared_package_binding,
+            )
+        except dataio.ExportCohortError as exc:
+            raise ResearchPipelineRunError(
+                str(exc.detail.get("error") or "research_pipeline_source_invalid"),
+                "The prepared data package changed after launch validation.",
+            ) from exc
+        root = Path(project_root).expanduser().resolve()
         wrapper_dir = root / _slug(study.get("id")) / f"run_{job.id}"
         wrapper_dir.mkdir(parents=True, exist_ok=True)
         bound_plan_revision_contract = ""
@@ -2372,7 +2460,11 @@ def make_research_pipeline_run_runner(
             from easyicu.research_agent.acquisition.foundation import (
                 acquire_universe_for_question,
             )
+            from easyicu.research_agent.execution.runner import DockerRunner
             from easyicu.research_agent.orchestration.config import PipelineConfig
+            from easyicu.research_agent.orchestration.profiles import (
+                get_submission_profile,
+            )
             from easyicu.research_agent.orchestration.services import PipelineServices
             from easyicu.research_agent.orchestration.workflow import HumanReviewPending
             from easyicu.research_agent.providers.hard_stop import HardStopClient
@@ -2383,6 +2475,7 @@ def make_research_pipeline_run_runner(
                 declaration_sha256=(
                     study_context_owner.scientific_configuration_sha256(study)
                 ),
+                budget_mode=selected_budget_mode,
             )
             provider_public["provider_hard_stop"] = {
                 "schema_version": "easyicu.web-provider-hard-stop-policy/1",
@@ -2482,6 +2575,18 @@ def make_research_pipeline_run_runner(
                     )
                 except literature_authority.LiteratureAuthorityError as exc:
                     raise ResearchPipelineRunError(exc.code, exc.message) from exc
+            submission_profile = get_submission_profile(
+                "npj_dm_e1_canary_dev/20260814"
+            )
+            profile_options = submission_profile.pipeline_options()
+            profile_options.update(
+                {
+                    "enable_memory": False,
+                    "enable_experience_bank": False,
+                    "enable_reviewed_memory": False,
+                    "reviewed_memory_namespaces": (),
+                }
+            )
             config = PipelineConfig(
                 workdir=wrapper_dir / "pipeline",
                 enable_publication_figure_skill=publication_skill_flags[
@@ -2491,14 +2596,11 @@ def make_research_pipeline_run_runner(
                     "nature_writing_enabled"
                 ],
                 extension_activation=user_extension_activation,
-                enable_reproducibility_envelope=True,
-                evidence_enforcement_mode="strict",
                 # Strict manuscript enforcement can only bind the host's
                 # typed ScientificClaim placeholders when the writer receives
                 # the claim-aware v2 evidence digest.  The primary-only v1
                 # digest omits that authority and would make an otherwise
                 # valid Web analysis fail at the writing boundary.
-                writer_digest_widened=True,
                 require_human_plan_review=True,
                 require_reportable_scientific_capability=True,
                 required_primary_cohort_selection_mode=(
@@ -2519,6 +2621,9 @@ def make_research_pipeline_run_runner(
                     bool(literature_search_authorized)
                     and bound_preplan_literature is None
                 ),
+                runner_kind=submission_profile.requires_runner,
+                runner_image=DockerRunner.DEFAULT_IMAGE,
+                runner_network="none",
                 max_provider_attempts_per_run=(
                     hard_stop_limits.max_provider_attempts_per_run
                 ),
@@ -2541,11 +2646,13 @@ def make_research_pipeline_run_runner(
                 provider_output_cost_usd_per_million_tokens=(
                     hard_stop_limits.output_cost_usd_per_million_tokens
                 ),
+                **profile_options,
             )
             pipeline = ResearchAgentPipeline.from_config(
                 config,
                 services=PipelineServices(
                     llm=client,
+                    human_review_gate=_WebHumanReviewGate(),
                     provider_hard_stop=provider_hard_stop,
                 ),
             )
@@ -2568,11 +2675,9 @@ def make_research_pipeline_run_runner(
                 ),
                 provider_meta=dict(provider),
                 provider_public=dict(provider_public),
-                credential_source=(
-                    "pi_verified"
-                    if research_provider_environment is not None
-                    else "scientific_provider"
-                ),
+                credential_source="pi_verified",
+                budget_mode=selected_budget_mode,
+                prepared_package_binding=prepared_package_binding,
                 pipeline_config=config_payload,
                 pipeline_config_sha256=config.canonical_digest(),
                 acquisition_projection=_acquisition_recovery_projection(acquisition),
@@ -2644,7 +2749,6 @@ def make_research_pipeline_run_runner(
             )
             if isinstance(outcome, HumanReviewPending):
                 run_dir = Path(outcome.run_dir)
-                _pause_web_provider_hard_stop(provider_hard_stop)
                 put_review_recovery_record(
                     recovery_seed.record(str(outcome.run_id))
                 )
@@ -2656,11 +2760,9 @@ def make_research_pipeline_run_runner(
                     provider=provider_public,
                     acquisition=acquisition,
                     created_at=time.time(),
-                    credential_source=(
-                        "pi_verified"
-                        if research_provider_environment is not None
-                        else "scientific_provider"
-                    ),
+                    credential_source="pi_verified",
+                    budget_mode=selected_budget_mode,
+                    prepared_package_binding=prepared_package_binding,
                     provider_hard_stop=provider_hard_stop,
                 )
                 _register_pending(entry)
@@ -2805,6 +2907,33 @@ def resume_research_pipeline(
             "research_pipeline_review_decision_invalid",
             "Choose approved or rejected for the pending plan review.",
         )
+    if resolved == "approved" and entry.budget_mode == "planner_canary":
+        raise ResearchPipelineRunError(
+            "research_pipeline_planner_canary_execution_blocked",
+            "A Planner-only canary cannot approve or execute its proposed plan.",
+        )
+    if resolved == "approved":
+        source = entry.study.get("data_source")
+        source = source if isinstance(source, Mapping) else {}
+        if not entry.prepared_package_binding:
+            raise ResearchPipelineRunError(
+                "research_pipeline_package_binding_missing",
+                "The paused run has no exact prepared-package authority.",
+            )
+        try:
+            dataio.validate_research_pipeline_source(
+                str(source.get("path") or ""),
+                database=source.get("database"),
+                expected_binding=entry.prepared_package_binding,
+            )
+        except dataio.ExportCohortError as exc:
+            raise ResearchPipelineRunError(
+                str(
+                    exc.detail.get("error")
+                    or "research_pipeline_package_binding_changed"
+                ),
+                "The prepared package changed after planning and cannot be approved.",
+            ) from exc
     stored_decisions: List[Dict[str, Any]] = []
     checkpoint_file = Path(entry.pending.run_dir) / "human_review_checkpoint.json"
     if checkpoint_file.is_file():
@@ -2867,7 +2996,6 @@ def resume_research_pipeline(
         _PENDING.pop(key, None)
 
     try:
-        _resume_web_provider_hard_stop(entry.provider_hard_stop)
         outcome = entry.pipeline.resume_human_review(
             decisions,
             run_id=key,
@@ -2893,11 +3021,7 @@ def resume_research_pipeline(
             getattr(entry.pipeline, "has_resumable_human_review", False)
         )
         if remains_resumable:
-            try:
-                _pause_web_provider_hard_stop(entry.provider_hard_stop)
-                _register_pending(entry)
-            except Exception:
-                remains_resumable = False
+            _register_pending(entry)
         if not remains_resumable:
             _finish_web_provider_hard_stop(
                 entry.provider_hard_stop,
@@ -2914,7 +3038,6 @@ def resume_research_pipeline(
             },
         ) from exc
     if isinstance(outcome, HumanReviewPending):
-        _pause_web_provider_hard_stop(entry.provider_hard_stop)
         entry.pending = outcome
         _register_pending(entry)
         return _write_projection(

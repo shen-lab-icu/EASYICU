@@ -45,7 +45,7 @@ def test_strict_mode_raises_on_unsupported_result_sentence(ra, tmp_path: Path):
     ]
 
 
-def test_strict_mode_accepts_evidence_bound_scaffold(ra, tmp_path: Path):
+def test_strict_mode_rejects_result_with_arbitrary_evidence_token(ra, tmp_path: Path):
     store = ra.EvidenceStore(
         root=tmp_path, enforcement_mode=ra.EvidenceEnforcementMode.STRICT
     )
@@ -53,9 +53,11 @@ def test_strict_mode_accepts_evidence_bound_scaffold(ra, tmp_path: Path):
         "# Results\n\n"
         "Median age was 65 years {evidence:table_one}.\n"
     )
-    filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
-    assert removed == []
-    assert "{evidence:table_one}" in filtered
+    with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
+        store.enforce_evidence_bound_scaffold(scaffold)
+    assert exc_info.value.detail["removed_sentences"] == [
+        "Median age was 65 years {evidence:table_one}."
+    ]
 
 
 def test_strict_mode_allows_nonanalytic_keywords_metadata(ra, tmp_path: Path):
@@ -80,6 +82,30 @@ def test_strict_mode_allows_data_availability_boilerplate(ra, tmp_path: Path):
     filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
     assert removed == []
     assert "SHA-256 evidence store" in filtered
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    [
+        "{Evidence:table_one}",
+        "{evidence:table_one",
+        "{evidence:table_one}}",
+        "{Claim:step.claim}",
+        "{claim:step.claim",
+        "{{claim:step.claim}}",
+    ],
+)
+def test_strict_bind_rejects_malformed_authority_placeholders(
+    ra, tmp_path: Path, placeholder: str
+):
+    store = ra.EvidenceStore(root=tmp_path, enforcement_mode="strict")
+
+    with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
+        store.bind_manuscript(f"See {placeholder}.")
+
+    assert exc_info.value.detail["malformed_authority_placeholder_sentences"] == [
+        f"See {placeholder}."
+    ]
 
 
 def test_strict_mode_raises_on_bold_section_result_sentence(ra, tmp_path: Path):

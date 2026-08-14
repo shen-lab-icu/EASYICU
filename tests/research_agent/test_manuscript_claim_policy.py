@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import pytest
+
+from easyicu.research_agent.authority.evidence_store import (
+    EvidenceEnforcementError,
+    EvidenceEnforcementMode,
+    EvidenceStore,
+)
 from easyicu.research_agent.authority.manuscript_claim_policy import (
     expand_scientific_claim_tokens,
     filter_evidence_bound_scaffold,
@@ -53,6 +60,137 @@ def test_policy_preserves_metadata_but_filters_uncited_numeric_result() -> None:
     assert "Data availability" in result.scaffold
     assert "Mortality was 20%" not in result.scaffold
     assert result.removed_result_sentences == ("Mortality was 20%.",)
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Patients experienced excess mortality {evidence:unrelated_log}.",
+        "Patients had higher mortality {evidence:unrelated_log}.",
+    ],
+)
+def test_strict_policy_rejects_assertions_with_arbitrary_evidence_tokens(
+    tmp_path, sentence
+) -> None:
+    store = EvidenceStore(tmp_path, enforcement_mode=EvidenceEnforcementMode.STRICT)
+
+    with pytest.raises(EvidenceEnforcementError) as blocked:
+        store.enforce_evidence_bound_scaffold(sentence)
+
+    detail = blocked.value.detail
+    assert sentence in (
+        detail["removed_sentences"]
+        + detail["unsupported_scientific_claim_sentences"]
+    )
+
+
+def test_policy_preserves_provenance_metadata_with_evidence_token() -> None:
+    sentence = (
+        "Data availability: The reproducibility envelope and SHA-256 digest are "
+        "available {evidence:run_manifest}."
+    )
+
+    result = filter_evidence_bound_scaffold(sentence, resolve_claim=_resolver)
+
+    assert result.scaffold == sentence + "\n"
+    assert result.filtered_sentences == ()
+
+
+def test_policy_preserves_scientific_noun_phrases_in_keyword_metadata() -> None:
+    sentence = "Keywords: survival benefit, protective factors, ICU mortality"
+
+    result = filter_evidence_bound_scaffold(sentence, resolve_claim=_resolver)
+
+    assert result.scaffold == sentence + "\n"
+    assert result.filtered_sentences == ()
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Treatment conferred a survival benefit.",
+        "The exposure was protective against mortality.",
+        "The intervention was harmful.",
+        "Treated patients fared better.",
+        "The exposure adversely affected outcomes.",
+        "Treatment conferred benefit.",
+        "The exposure was linked to harm.",
+        "The findings suggested a benefit.",
+    ],
+)
+def test_policy_rejects_common_qualitative_scientific_assertions(sentence) -> None:
+    result = filter_evidence_bound_scaffold(sentence, resolve_claim=_resolver)
+
+    assert sentence not in result.scaffold
+    assert result.unsupported_scientific_claim_sentences == (sentence,)
+
+
+def test_policy_applies_qualitative_claim_gate_to_markdown_headings() -> None:
+    result = filter_evidence_bound_scaffold(
+        "## Treatment conferred a survival benefit",
+        resolve_claim=_resolver,
+    )
+
+    assert "Treatment conferred" not in result.scaffold
+    assert result.unsupported_scientific_claim_sentences == (
+        "Treatment conferred a survival benefit",
+    )
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "## Treatment yielded better outcomes",
+        "## The intervention was beneficial",
+    ],
+)
+def test_policy_rejects_equivalent_unsupported_result_headings(heading) -> None:
+    result = filter_evidence_bound_scaffold(heading, resolve_claim=_resolver)
+
+    assert result.scaffold == "\n"
+    assert result.filtered_sentences
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Data availability: Scripts are available, and treatment conferred a survival benefit.",
+        "Data availability: Patients experienced excess mortality.",
+        "Generated scripts are available while exposed patients fared worse.",
+        "Funding: The exposure was harmful to patients.",
+    ],
+)
+def test_metadata_forms_cannot_hide_scientific_clauses(tmp_path, sentence) -> None:
+    store = EvidenceStore(tmp_path, enforcement_mode=EvidenceEnforcementMode.STRICT)
+
+    with pytest.raises(EvidenceEnforcementError):
+        store.enforce_evidence_bound_scaffold(sentence)
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "See {Claim:04_association.adjusted_association}.",
+        "See {claim:04_association.adjusted_association.",
+        "See {claim:adjusted_association}.",
+        "See {{claim:04_association.adjusted_association}}.",
+        "See {Evidence:run_manifest}.",
+        "See {evidence:run_manifest.",
+        "See {evidence:run_manifest}}.",
+        "See {evidence:}.",
+    ],
+)
+def test_strict_policy_rejects_malformed_authority_placeholders(
+    tmp_path, sentence
+) -> None:
+    store = EvidenceStore(tmp_path, enforcement_mode=EvidenceEnforcementMode.STRICT)
+
+    with pytest.raises(EvidenceEnforcementError) as blocked:
+        store.enforce_evidence_bound_scaffold(sentence)
+
+    assert blocked.value.detail["unsupported_scientific_claim_sentences"] == [
+        sentence
+    ]
 
 
 def test_claim_expansion_preserves_markdown_prefix_and_binds_evidence() -> None:

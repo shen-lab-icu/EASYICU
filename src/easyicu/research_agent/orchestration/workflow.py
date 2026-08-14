@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable, Mapping, Sequence
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import (
@@ -43,6 +44,7 @@ from typing import (
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..authority.plan_lifecycle import load_approved_executable_plan
 from ..authority.plan_review import PlanReviewAuthority, ReviewExecutionAuthority
 from ..canonical_json import canonical_sha256
 from ..contracts.runtime import (
@@ -50,7 +52,7 @@ from ..contracts.runtime import (
     _PlanPhaseResult,
     _WritePhaseResult,
 )
-from ..schema import PipelineResult
+from ..schema import AnalysisPlan, PipelineResult
 
 
 __all__ = [
@@ -633,6 +635,7 @@ class PipelineWorkflow:
         #: are what resume compares against.
         self._pause_snapshot: tuple[dict[str, Any], ...] = ()
         self._pause_digest: str = ""
+        self._approved_plan_sha256: str = ""
         #: Built decision records, keyed by the digest of the decision set that
         #: produced them. See :meth:`_decision_records_for` for why a resubmitted
         #: decision must not be re-stamped.
@@ -806,6 +809,18 @@ class PipelineWorkflow:
             for decision in ordered
             if decision.decision == "rejected"
         ]
+        approved_authority = _shared_plan_authority_payload(self._pause_snapshot)
+        approval_source = None
+        approved_handoff = None
+        if (
+            not rejected_ids
+            and approved_authority is not None
+            and self._human_review_execution_commit is not None
+        ):
+            approved_handoff = self._snapshot_plan_handoff()
+            approval_source = self._approved_plan_source(
+                approved_authority, approved_handoff
+            )
 
         # Recording the decision and acting on it are separate acts, and only
         # the second one is irreversible. The recorder writes two files and
@@ -828,11 +843,99 @@ class PipelineWorkflow:
         if rejected_ids:
             self._discard_live_pause(state="rejected")
             raise HumanReviewRejected(rejected_ids)
+        if approval_source is not None:
+            run_dir, evidence, revision, plan_sha256 = approval_source
+            self._verify_review_bound_evidence(approved_authority, evidence)
+            approved = load_approved_executable_plan(
+                run_dir=run_dir,
+                evidence=evidence,
+                revision=revision,
+                expected_plan_sha256=plan_sha256,
+                expected_decision_set_sha256=canonical_sha256(
+                    [item.model_dump(mode="json") for item in ordered]
+                ),
+            )
+            assert approved_handoff is not None
+            approved_handoff.plan = AnalysisPlan.model_validate(approved.plan_payload)
+            self._plan_result = approved_handoff
+            self._approved_plan_sha256 = approved.plan_sha256
         try:
             return self._finish(tuple(records))
         except Exception:
             self._discard_live_pause(state="failed")
             raise
+
+    def _approved_plan_source(
+        self,
+        authority: Mapping[str, Any],
+        handoff: Any,
+    ) -> tuple[Any, Any, int, str]:
+        """Capture immutable lookup coordinates before an approval callback runs."""
+
+        if handoff is None:
+            raise HumanReviewAuthorityError(
+                "approved execution has no typed plan handoff to reconstruct"
+            )
+        plan_payload = authority.get("plan_payload")
+        if not isinstance(plan_payload, Mapping):
+            raise HumanReviewAuthorityError(
+                "approved review authority has no complete plan payload"
+            )
+        try:
+            run_dir = handoff.plan_path.parent
+            evidence = handoff.evidence
+            revision = int(plan_payload["revision"])
+            plan_sha256 = str(authority["plan_sha256"])
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise HumanReviewAuthorityError(
+                "approved execution cannot locate its persisted plan authority"
+            ) from exc
+        return run_dir, evidence, revision, plan_sha256
+
+    def _snapshot_plan_handoff(self) -> Any:
+        """Copy every plan-phase field that callbacks must not rewrite."""
+
+        if self._plan_result is None:
+            raise HumanReviewAuthorityError(
+                "approved execution has no typed plan handoff to snapshot"
+            )
+        snapshot = copy(self._plan_result)
+        for name in (
+            "context",
+            "agent_context",
+            "plan",
+            "preplan_literature",
+            "aborted_result",
+        ):
+            value = getattr(self._plan_result, name, None)
+            if value is not None:
+                setattr(
+                    snapshot,
+                    name,
+                    value.model_copy(deep=True)
+                    if isinstance(value, BaseModel)
+                    else deepcopy(value),
+                )
+        for name in ("findings", "prompt_files", "resume_state"):
+            if hasattr(self._plan_result, name):
+                setattr(snapshot, name, deepcopy(getattr(self._plan_result, name)))
+        for name in (
+            "context_path",
+            "evidence",
+            "plan_path",
+            "llm_signature",
+            "used_mock_llm",
+            "prompt_version",
+            "role_resolver",
+            "cost_meter",
+            "repro_envelope",
+            "started_at",
+            "allowed_literature_citation_keys",
+            "direct_comparator_literature_keys",
+        ):
+            if hasattr(self._plan_result, name):
+                setattr(snapshot, name, getattr(self._plan_result, name))
+        return snapshot
 
     def _verify_requests_match_the_pause_offered(self) -> None:
         """Refuse when the paused requests are not the ones that were offered.
@@ -893,7 +996,7 @@ class PipelineWorkflow:
           as tampering would deadlock the retry this engine promises.
         """
 
-        if self._human_review_invoker is None or self._plan_result is None:
+        if self._plan_result is None:
             return
         # Read the approved side from the private snapshot, never from the live
         # request: the request's payload is mutable in place, so deriving both
@@ -902,6 +1005,27 @@ class PipelineWorkflow:
         # rewritten request; this keeps the comparison correct on its own.
         approved = _shared_plan_authority_payload(self._pause_snapshot)
         if approved is None:
+            return
+        approved_plan = str(approved.get("plan_sha256") or "")
+        try:
+            current_plan = canonical_sha256(
+                AnalysisPlan.model_validate(self._plan_result.plan).model_dump(mode="json")
+            )
+        except Exception as exc:
+            raise HumanReviewStateDrift(
+                "the restored analysis plan is no longer a complete typed plan"
+            ) from exc
+        if current_plan != approved_plan:
+            raise HumanReviewStateDrift(
+                "the analysis plan changed after it was sent for review "
+                f"(approved plan_sha256={approved_plan[:8]}, live "
+                f"plan_sha256={current_plan[:8]}). The decision on record "
+                "approves the earlier plan, so the current one must not execute under it."
+            )
+        current_evidence = self._verify_review_bound_evidence(
+            approved, self._plan_result.evidence
+        )
+        if self._human_review_invoker is None:
             return
         try:
             current_requests = tuple(self._human_review_invoker(self._plan_result))
@@ -921,16 +1045,8 @@ class PipelineWorkflow:
                 "derives from its own plan state, so the decision on record "
                 "approves a run state that no longer exists."
             )
-        approved_plan = str(approved.get("plan_sha256") or "")
-        current_plan = str(current.get("plan_sha256") or "")
-        if current_plan != approved_plan:
-            raise HumanReviewStateDrift(
-                "the analysis plan changed after it was sent for review "
-                f"(approved plan_sha256={approved_plan[:8]}, live "
-                f"plan_sha256={current_plan[:8]}). The decision on record "
-                "approves the earlier plan, so the current one must not "
-                "execute under it."
-            )
+        if str(current.get("plan_sha256") or "") != approved_plan:
+            raise HumanReviewStateDrift("the re-derived review authority changed plans")
         if current.get("execution") != approved.get("execution"):
             raise HumanReviewStateDrift(
                 "the execution identity changed after the plan was sent for "
@@ -938,8 +1054,33 @@ class PipelineWorkflow:
                 "profile or run input capsule). The approval covers the "
                 "identity the reviewer saw, not this one."
             )
+        rederived_evidence = dict(current.get("evidence_sha256") or {})
+        if rederived_evidence != current_evidence:
+            raise HumanReviewStateDrift(
+                "the re-derived review authority does not match physically verified evidence"
+            )
+
+    def _verify_review_bound_evidence(
+        self,
+        approved: Mapping[str, Any],
+        evidence: Any,
+    ) -> dict[str, str]:
+        """Verify physical bytes for every evidence digest bound into review."""
+
+        try:
+            verified_records = getattr(evidence, "verified_records", None)
+            records = (
+                verified_records() if callable(verified_records) else evidence.records()
+            )
+        except Exception as exc:
+            raise HumanReviewAuthorityError(
+                "cannot re-derive review authority because the physical bytes of "
+                "every review-bound evidence record cannot be verified"
+            ) from exc
+        current_evidence = {
+            str(record.evidence_id): str(record.sha256) for record in records
+        }
         approved_evidence = dict(approved.get("evidence_sha256") or {})
-        current_evidence = dict(current.get("evidence_sha256") or {})
         for evidence_id, digest in sorted(approved_evidence.items()):
             live = current_evidence.get(evidence_id)
             if live is None:
@@ -953,6 +1094,7 @@ class PipelineWorkflow:
                     f"evidence {evidence_id!r} changed after review (approved "
                     f"sha256={str(digest)[:8]}, live sha256={str(live)[:8]})."
                 )
+        return current_evidence
 
     def _decision_records_for(
         self,
@@ -1007,6 +1149,7 @@ class PipelineWorkflow:
         self._requests = ()
         self._pause_snapshot = ()
         self._pause_digest = ""
+        self._approved_plan_sha256 = ""
         self._plan_result = None
         # The run is over; nothing can be resubmitted, so the retry cache has
         # no remaining purpose and should not outlive the decisions it holds.
@@ -1021,6 +1164,21 @@ class PipelineWorkflow:
         if self._human_review_execution_start is not None:
             self._human_review_execution_start()
         execute_result = self._execute_invoker(self._plan_result)
+        if self._approved_plan_sha256:
+            plans = [self._plan_result.plan]
+            executed_plan = getattr(execute_result, "plan", None)
+            if executed_plan is not None:
+                plans.append(executed_plan)
+            if any(
+                canonical_sha256(
+                    AnalysisPlan.model_validate(plan).model_dump(mode="json")
+                )
+                != self._approved_plan_sha256
+                for plan in plans
+            ):
+                raise HumanReviewStateDrift(
+                    "the approved plan payload changed during Execute; Write was not started"
+                )
         if self._human_review_write_start is not None:
             self._human_review_write_start()
         write_result = self._write_invoker(self._plan_result, execute_result)

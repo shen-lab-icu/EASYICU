@@ -10,6 +10,14 @@ from ..authority.runtime_artifacts import AuditLogger
 from ..providers.structured_retry import StructuredRetryProgress
 
 
+class NonFatalProgressCallbackError(RuntimeError):
+    """Mark a UI projection failure as safe to ignore by orchestration."""
+
+
+class ProgressControlSignal(RuntimeError):
+    """Base for typed host cancellation or orchestration control signals."""
+
+
 class ResumableProgressChannel:
     """Per-run progress transport that can be rebound after a review pause.
 
@@ -72,6 +80,8 @@ class ResumableProgressChannel:
         }
         try:
             self._callback(payload)
+        except ProgressControlSignal:
+            raise
         except Exception:
             pass
 
@@ -112,4 +122,9 @@ def planner_retry_progress_callback(
     return callback
 
 
-__all__ = ["ResumableProgressChannel", "planner_retry_progress_callback"]
+__all__ = [
+    "NonFatalProgressCallbackError",
+    "ProgressControlSignal",
+    "ResumableProgressChannel",
+    "planner_retry_progress_callback",
+]

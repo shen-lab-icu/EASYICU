@@ -456,6 +456,44 @@ def persist_approved_executable_plan(
     return path
 
 
+def load_approved_executable_plan(
+    *,
+    run_dir: Path,
+    evidence: EvidenceStore,
+    revision: int,
+    expected_plan_sha256: str,
+    expected_decision_set_sha256: str,
+) -> ApprovedExecutablePlan:
+    """Load the registered approval and revalidate its exact execution binding."""
+
+    evidence_id = f"approved_executable_plan_revision_{int(revision)}"
+    record = evidence.get(evidence_id)
+    if record is None:
+        raise PlanLifecycleAuthorityError(
+            f"approved executable plan authority {evidence_id!r} is absent"
+        )
+    verified = verified_run_evidence_path(Path(run_dir), record)
+    if verified is None:
+        raise PlanLifecycleAuthorityError(
+            f"approved executable plan authority {evidence_id!r} is unavailable"
+        )
+    try:
+        approved = ApprovedExecutablePlan.model_validate_json(verified.read_bytes())
+    except Exception as exc:
+        raise PlanLifecycleAuthorityError(
+            f"approved executable plan authority {evidence_id!r} is invalid"
+        ) from exc
+    if approved.plan_sha256 != str(expected_plan_sha256):
+        raise PlanLifecycleAuthorityError(
+            "approved executable plan does not match the reviewed plan digest"
+        )
+    if approved.decision_set_sha256 != str(expected_decision_set_sha256):
+        raise PlanLifecycleAuthorityError(
+            "approved executable plan does not match the exact decision-set digest"
+        )
+    return approved
+
+
 def approve_normalized_plan_for_execution(
     *,
     run_dir: Path,
@@ -520,6 +558,7 @@ __all__ = [
     "ProposedPlan",
     "approve_normalized_plan_for_execution",
     "build_normalized_plan_lineage",
+    "load_approved_executable_plan",
     "load_normalized_plan",
     "persist_approved_executable_plan",
     "persist_normalized_plan",

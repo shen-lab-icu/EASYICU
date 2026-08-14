@@ -168,6 +168,40 @@ def test_review_authority_rejects_registered_evidence_byte_drift(tmp_path) -> No
         )
 
 
+def test_restored_pause_verifies_review_bound_evidence_without_an_invoker(
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+
+    evidence = EvidenceStore(tmp_path)
+    record = evidence.register_text(
+        kind="log",
+        description="Review-bound evidence.",
+        text="reviewed bytes",
+        filename="review_bound.txt",
+        evidence_id="review_bound",
+    )
+    plan = _plan()
+    requests = human_review_requests_for_plan(
+        findings=[_stop_finding()],
+        plan=plan,
+        evidence=evidence,
+    )
+    (tmp_path / record.relative_path).write_text("tampered bytes", encoding="utf-8")
+    handoff = SimpleNamespace(aborted_result=None, plan=plan, evidence=evidence)
+    workflow = build_pipeline_workflow(
+        plan_invoker=lambda: handoff,
+        execute_invoker=lambda _plan: "executed",
+        write_invoker=lambda _plan, _execute: "written",
+        finalise_invoker=lambda _plan, _execute, _write: "final",
+    )
+
+    with pytest.raises(HumanReviewAuthorityError, match="physical bytes"):
+        workflow.restore_paused(plan_result=handoff, requests=requests)
+
+    assert workflow.state == "failed"
+
+
 def test_a_rewritten_request_payload_is_refused() -> None:
     """`frozen=True` freezes the attributes; the payload dict stays mutable.
 

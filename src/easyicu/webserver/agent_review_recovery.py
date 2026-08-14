@@ -102,9 +102,12 @@ class WebReviewRecoveryRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[
-        "easyicu.web-review-recovery/1", "easyicu.web-review-recovery/2"
+        "easyicu.web-review-recovery/1",
+        "easyicu.web-review-recovery/2",
+        "easyicu.web-review-recovery/3",
+        "easyicu.web-review-recovery/4",
     ] = (
-        "easyicu.web-review-recovery/2"
+        "easyicu.web-review-recovery/4"
     )
     run_id: str
     wrapper_dir: str
@@ -113,6 +116,8 @@ class WebReviewRecoveryRecord(BaseModel):
     provider_meta: Dict[str, Any]
     provider_public: Dict[str, Any]
     credential_source: Literal["pi_verified", "scientific_provider"]
+    budget_mode: Literal["planner_canary", "full_reviewed"] = "full_reviewed"
+    prepared_package_binding: Optional[Dict[str, Any]] = None
     pipeline_config: Dict[str, Any]
     pipeline_config_sha256: Optional[str] = Field(
         default=None, pattern=r"^[0-9a-f]{64}$"
@@ -127,11 +132,30 @@ class WebReviewRecoveryRecord(BaseModel):
     @model_validator(mode="after")
     def _verify_digest(self) -> "WebReviewRecoveryRecord":
         if (
-            self.schema_version == "easyicu.web-review-recovery/2"
+            self.schema_version
+            in {
+                "easyicu.web-review-recovery/2",
+                "easyicu.web-review-recovery/3",
+                "easyicu.web-review-recovery/4",
+            }
             and self.pipeline_config_sha256 is None
         ):
-            raise ValueError("Web review recovery v2 requires a pipeline digest")
+            raise ValueError("Web review recovery requires a pipeline digest")
+        if (
+            self.schema_version == "easyicu.web-review-recovery/4"
+            and not self.prepared_package_binding
+        ):
+            raise ValueError("Web review recovery v4 requires a package binding")
         payload = self.model_dump(mode="json", exclude={"record_sha256"})
+        if self.schema_version == "easyicu.web-review-recovery/1":
+            payload.pop("pipeline_config_sha256", None)
+        if self.schema_version in {
+            "easyicu.web-review-recovery/1",
+            "easyicu.web-review-recovery/2",
+        }:
+            payload.pop("budget_mode", None)
+        if self.schema_version != "easyicu.web-review-recovery/4":
+            payload.pop("prepared_package_binding", None)
         if canonical_sha256(payload) != self.record_sha256:
             raise ValueError("Web review recovery digest mismatch")
         return self
@@ -140,8 +164,9 @@ class WebReviewRecoveryRecord(BaseModel):
     def create(cls, **values: Any) -> "WebReviewRecoveryRecord":
         values = dict(values)
         values.pop("schema_version", None)
+        values.setdefault("budget_mode", "full_reviewed")
         payload = {
-            "schema_version": "easyicu.web-review-recovery/2",
+            "schema_version": "easyicu.web-review-recovery/4",
             **values,
         }
         payload["record_sha256"] = canonical_sha256(payload)
@@ -153,8 +178,12 @@ class WebReviewRecoverySeed(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.web-review-recovery-seed/1"] = (
-        "easyicu.web-review-recovery-seed/1"
+    schema_version: Literal[
+        "easyicu.web-review-recovery-seed/1",
+        "easyicu.web-review-recovery-seed/2",
+        "easyicu.web-review-recovery-seed/3",
+    ] = (
+        "easyicu.web-review-recovery-seed/3"
     )
     wrapper_dir: str
     study: Dict[str, Any]
@@ -162,6 +191,8 @@ class WebReviewRecoverySeed(BaseModel):
     provider_meta: Dict[str, Any]
     provider_public: Dict[str, Any]
     credential_source: Literal["pi_verified", "scientific_provider"]
+    budget_mode: Literal["planner_canary", "full_reviewed"] = "full_reviewed"
+    prepared_package_binding: Optional[Dict[str, Any]] = None
     pipeline_config: Dict[str, Any]
     pipeline_config_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     acquisition_projection: Dict[str, Any]
@@ -174,6 +205,15 @@ class WebReviewRecoverySeed(BaseModel):
     @model_validator(mode="after")
     def _verify_digest(self) -> "WebReviewRecoverySeed":
         payload = self.model_dump(mode="json", exclude={"seed_sha256"})
+        if (
+            self.schema_version == "easyicu.web-review-recovery-seed/3"
+            and not self.prepared_package_binding
+        ):
+            raise ValueError("Web review recovery seed v3 requires a package binding")
+        if self.schema_version == "easyicu.web-review-recovery-seed/1":
+            payload.pop("budget_mode", None)
+        if self.schema_version != "easyicu.web-review-recovery-seed/3":
+            payload.pop("prepared_package_binding", None)
         if canonical_sha256(payload) != self.seed_sha256:
             raise ValueError("Web review recovery seed digest mismatch")
         return self
@@ -182,8 +222,9 @@ class WebReviewRecoverySeed(BaseModel):
     def create(cls, **values: Any) -> "WebReviewRecoverySeed":
         values = dict(values)
         values.pop("schema_version", None)
+        values.setdefault("budget_mode", "full_reviewed")
         payload = {
-            "schema_version": "easyicu.web-review-recovery-seed/1",
+            "schema_version": "easyicu.web-review-recovery-seed/3",
             **values,
         }
         payload["seed_sha256"] = canonical_sha256(payload)
