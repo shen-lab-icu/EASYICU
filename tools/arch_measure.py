@@ -91,6 +91,11 @@ TARGET_FILES: List[Path] = [
     RA / "authority" / "typed_input_sdk.py",
     RA / "authority" / "development_projection.py",
     RA / "gates" / "preflight.py",
+    # 2026-08-14 preflight.py decomposition batch: name-resolution statics and
+    # provenance/exposure authority statics moved to sibling owner modules
+    # behind the preflight facade; the patched seam and audit entry stay.
+    RA / "gates" / "preflight_statics.py",
+    RA / "gates" / "preflight_provenance.py",
     RA / "gates" / "typed_input.py",
     RA / "repairs" / "source.py",
     RA / "repairs" / "typed_input.py",

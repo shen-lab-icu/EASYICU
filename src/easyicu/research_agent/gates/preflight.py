@@ -516,6 +516,51 @@ def _subscript_key(node: ast.AST) -> Optional[str]:
     return None
 
 
+from .preflight_provenance import (  # noqa: F401 — owner module
+    _FLOW_FALLTHROUGH,
+    _FLOW_FUNCTION_EXIT,
+    _FLOW_LOOP_ESCAPE,
+    _PROVENANCE_FAILURE,
+    _PROVENANCE_FAILURE_DECISION_KEYS,
+    _PROVENANCE_FAILURE_KEYS,
+    _PROVENANCE_FULL_COVERAGE,
+    _PROVENANCE_LOOP_SENTINEL,
+    _PROVENANCE_RESULT_SINK_METHODS,
+    _PROVENANCE_SUCCESS,
+    _PROVENANCE_SUCCESS_DECISION_KEYS,
+    _REFLECTION_MODULE_ROOTS,
+    _expression_identity,
+    _finally_exception_suppressor,
+    _handler_immediately_reraises,
+    _has_unrelated_control_ancestor,
+    _is_provenance_result_sink_call,
+    _literal_bool,
+    _literal_string_tokens,
+    _literal_zero,
+    _mapping_root_name,
+    _provenance_branch_contains_result_sink,
+    _provenance_pair_scan_findings,
+    _provenance_signal_source,
+    _referenced_names,
+    _result_sink_precedes_guard,
+    _statements_call_reconciliation,
+    _swap_provenance_meaning,
+)
+
+from .preflight_statics import (  # noqa: F401 — owner module
+    _EXPOSURE_RESULT_CALLS,
+    _MODULE_DUNDERS,
+    _assignment_target_names,
+    _authoritative_exposure_binding_findings,
+    _authoritative_exposure_fallback_findings,
+    _contains_bound_exposure_selection,
+    _finalized_exposure_reconciliation_findings,
+    _names_bound_in_scope,
+    _scope_nodes,
+    unresolvable_names,
+)
+
+
 def _binding_metadata_findings(tree: ast.Module) -> list[ValidationFinding]:
     required_keys: set[str] = set()
     literal_keys: set[str] = set()
@@ -553,32 +598,10 @@ def _binding_metadata_findings(tree: ast.Module) -> list[ValidationFinding]:
     ]
 
 
-_PROVENANCE_FAILURE_KEYS = frozenset({"invalid_pair_n", "discordant_n"})
-_PROVENANCE_FAILURE_DECISION_KEYS = frozenset({"fail_closed"})
-_PROVENANCE_SUCCESS_DECISION_KEYS = frozenset(
-    {"completed_step_allowed", "provenance_valid"}
-)
-_PROVENANCE_FULL_COVERAGE = frozenset(_PROVENANCE_FAILURE_KEYS)
-_PROVENANCE_FAILURE = "failure"
-_PROVENANCE_SUCCESS = "success"
-_PROVENANCE_LOOP_SENTINEL = "_easyicu_provenance_loop_observed"
-_FLOW_FALLTHROUGH = "fallthrough"
-_FLOW_FUNCTION_EXIT = "function_exit"
-_FLOW_LOOP_ESCAPE = "loop_escape"
 
 
-def _literal_string_tokens(node: ast.AST) -> set[str]:
-    return {
-        str(candidate.value).strip().lower()
-        for candidate in ast.walk(node)
-        if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str)
-    }
 
 
-def _referenced_names(node: ast.AST) -> set[str]:
-    return {
-        candidate.id for candidate in ast.walk(node) if isinstance(candidate, ast.Name)
-    }
 
 
 def _target_names(node: ast.AST) -> set[str]:
@@ -589,9 +612,6 @@ def _target_names(node: ast.AST) -> set[str]:
     return set()
 
 
-_REFLECTION_MODULE_ROOTS = frozenset(
-    {"__main__", "gc", "importlib", "inspect", "pkgutil", "pydoc", "unittest"}
-)
 
 
 def _has_dynamic_namespace_indirection(tree: ast.Module) -> bool:
@@ -738,8 +758,6 @@ def _has_dynamic_namespace_indirection(tree: ast.Module) -> bool:
     return False
 
 
-def _expression_identity(node: ast.AST) -> str:
-    return ast.dump(node, annotate_fields=True, include_attributes=False)
 
 
 def _mapping_access_key(node: ast.AST) -> Optional[str]:
@@ -755,39 +773,12 @@ def _mapping_access_key(node: ast.AST) -> Optional[str]:
     return None
 
 
-def _mapping_root_name(node: ast.AST) -> Optional[str]:
-    current = node
-    if isinstance(current, ast.Call) and isinstance(current.func, ast.Attribute):
-        current = current.func.value
-    while isinstance(current, (ast.Subscript, ast.Attribute)):
-        current = current.value
-    return current.id if isinstance(current, ast.Name) else None
 
 
-def _literal_zero(node: ast.AST) -> bool:
-    return (
-        isinstance(node, ast.Constant)
-        and not isinstance(node.value, bool)
-        and node.value == 0
-    )
 
 
-def _literal_bool(node: ast.AST) -> Optional[bool]:
-    if isinstance(node, ast.Constant) and isinstance(node.value, bool):
-        return node.value
-    return None
 
 
-def _swap_provenance_meaning(
-    meaning: Optional[tuple[str, frozenset[str]]],
-) -> Optional[tuple[str, frozenset[str]]]:
-    if meaning is None:
-        return None
-    kind, coverage = meaning
-    inverse = (
-        _PROVENANCE_SUCCESS if kind == _PROVENANCE_FAILURE else _PROVENANCE_FAILURE
-    )
-    return inverse, coverage
 
 
 def _provenance_predicate_meaning(
@@ -1019,136 +1010,16 @@ def _branch_never_falls_through(statements: list[ast.stmt]) -> bool:
     return _FLOW_FALLTHROUGH not in _block_flow_outcomes(statements)
 
 
-def _has_unrelated_control_ancestor(
-    node: ast.AST, parents: dict[ast.AST, ast.AST]
-) -> bool:
-    current = parents.get(node)
-    while current is not None and not isinstance(
-        current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)
-    ):
-        if isinstance(current, (ast.If, ast.For, ast.AsyncFor, ast.While)):
-            return True
-        current = parents.get(current)
-    return False
 
 
-_PROVENANCE_RESULT_SINK_METHODS = frozenset(
-    {
-        "fit",
-        "fit_regularized",
-        "predict",
-        "dump",
-        "save",
-        "savefig",
-        "savetxt",
-        "to_csv",
-        "to_excel",
-        "to_feather",
-        "to_json",
-        "to_parquet",
-        "to_pickle",
-        "write_bytes",
-        "write_text",
-    }
-)
 
 
-def _is_provenance_result_sink_call(candidate: ast.Call) -> bool:
-    call_name = _call_name(candidate.func).lower()
-    method = call_name.rsplit(".", 1)[-1]
-    return (
-        method in _PROVENANCE_RESULT_SINK_METHODS
-        or "write_success" in method
-        or (method.startswith("write_") and not method.startswith("write_failed"))
-        or method.startswith("publish")
-    )
 
 
-def _provenance_branch_contains_result_sink(statements: list[ast.stmt]) -> bool:
-    """Return whether an executed guard branch can publish scientific output."""
-
-    found = False
-
-    class _SinkVisitor(ast.NodeVisitor):
-        def visit_Call(self, node: ast.Call) -> None:
-            nonlocal found
-            if _is_provenance_result_sink_call(node):
-                found = True
-                return
-            self.generic_visit(node)
-
-        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-            return None
-
-        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-            return None
-
-        def visit_Lambda(self, node: ast.Lambda) -> None:
-            return None
-
-        def visit_ClassDef(self, node: ast.ClassDef) -> None:
-            return None
-
-    visitor = _SinkVisitor()
-    for statement in statements:
-        visitor.visit(statement)
-        if found:
-            return True
-    return False
 
 
-def _result_sink_precedes_guard(guard: ast.If, parents: dict[ast.AST, ast.AST]) -> bool:
-    scope: ast.AST = guard
-    while scope in parents and not isinstance(
-        scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)
-    ):
-        scope = parents[scope]
-    guard_line = int(getattr(guard, "lineno", 0) or 0)
-    for candidate in ast.walk(scope):
-        if not isinstance(candidate, ast.Call):
-            continue
-        current: Optional[ast.AST] = candidate
-        while current in parents and not isinstance(
-            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)
-        ):
-            current = parents[current]
-        if current is not scope:
-            continue
-        line = int(getattr(candidate, "lineno", 0) or 0)
-        if not line or line >= guard_line:
-            continue
-        if _is_provenance_result_sink_call(candidate):
-            return True
-    return False
 
 
-def _provenance_signal_source(value: ast.AST) -> Optional[tuple[str, str]]:
-    current = value
-    if (
-        isinstance(current, ast.Call)
-        and isinstance(current.func, ast.Name)
-        and current.func.id in {"bool", "float", "int"}
-        and len(current.args) == 1
-    ):
-        current = current.args[0]
-    if isinstance(current, ast.Name):
-        return current.id, _PROVENANCE_FAILURE
-    if not (
-        isinstance(current, ast.Call)
-        and isinstance(current.func, ast.Attribute)
-        and current.func.attr in {"any", "sum"}
-    ):
-        return None
-    base = current.func.value
-    if isinstance(base, ast.Name):
-        return base.id, _PROVENANCE_FAILURE
-    if (
-        isinstance(base, ast.UnaryOp)
-        and isinstance(base.op, (ast.Not, ast.Invert))
-        and isinstance(base.operand, ast.Name)
-    ):
-        return base.operand.id, _PROVENANCE_SUCCESS
-    return None
 
 
 
@@ -1192,40 +1063,6 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
     )
 
 
-def _provenance_pair_scan_findings(tree: ast.Module) -> list[ValidationFinding]:
-    """Reject an explicit measured-only scan that cannot see count-only concepts."""
-
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        tokens = _literal_string_tokens(node)
-        if not (_PROVENANCE_FAILURE_KEYS <= tokens and "audit_only" in tokens):
-            continue
-        scanned_suffixes: set[str] = set()
-        for candidate in ast.walk(node):
-            if not isinstance(candidate, ast.Call):
-                continue
-            if _call_name(candidate.func).split(".")[-1] != "endswith":
-                continue
-            scanned_suffixes.update(
-                token
-                for token in _literal_string_tokens(candidate)
-                if token in {"_measured", "_n"}
-            )
-        if "_measured" not in scanned_suffixes or "_n" in scanned_suffixes:
-            continue
-        return [
-            ValidationFinding(
-                validator="mechanical_code_preflight",
-                severity="error",
-                message=(
-                    "The measurement-provenance audit scans measured columns only "
-                    "and cannot fail closed for count-only concepts."
-                ),
-                detail={"reason": "provenance_pair_scan_not_bidirectional"},
-            )
-        ]
-    return []
 
 
 def _resolved_context_payload_findings(tree: ast.Module) -> list[ValidationFinding]:
@@ -1590,14 +1427,6 @@ def _handler_catches_reconciliation_failure(handler: ast.ExceptHandler) -> bool:
     )
 
 
-def _handler_immediately_reraises(handler: ast.ExceptHandler) -> bool:
-    """Prove that a handler immediately propagates the caught exception."""
-
-    return (
-        bool(handler.body)
-        and isinstance(handler.body[0], ast.Raise)
-        and handler.body[0].exc is None
-    )
 
 
 def _reconciliation_helper_call_names(
@@ -1679,112 +1508,8 @@ def _reconciliation_helper_call_names(
     return names
 
 
-def _statements_call_reconciliation(
-    statements: list[ast.stmt],
-    *,
-    helper_call_names: set[str],
-) -> bool:
-    """Detect helper calls executed in one lexical scope.
-
-    Function and lambda bodies are deferred code, so merely defining one inside
-    a ``try`` must not make that ``try`` look as though it called the helper.
-    Simple aliases assigned inside the inspected statements are followed in
-    source order as well as by the visible-scope fixed-point alias scan above.
-    """
-
-    aliases = set(helper_call_names)
-    called = False
-
-    class _CallVisitor(ast.NodeVisitor):
-        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-            return
-
-        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-            return
-
-        def visit_Lambda(self, node: ast.Lambda) -> None:
-            return
-
-        def visit_Assign(self, node: ast.Assign) -> None:
-            source_name = _call_name(node.value).split(".")[-1]
-            if source_name in aliases:
-                aliases.update(
-                    target.id for target in node.targets if isinstance(target, ast.Name)
-                )
-            self.visit(node.value)
-
-        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-            if node.value is None:
-                return
-            source_name = _call_name(node.value).split(".")[-1]
-            if source_name in aliases and isinstance(node.target, ast.Name):
-                aliases.add(node.target.id)
-            self.visit(node.value)
-
-        def visit_Call(self, node: ast.Call) -> None:
-            nonlocal called
-            if _call_name(node.func).split(".")[-1] in aliases:
-                called = True
-            self.generic_visit(node)
-
-    visitor = _CallVisitor()
-    for statement in statements:
-        visitor.visit(statement)
-    return called
 
 
-def _finally_exception_suppressor(finalbody: list[ast.stmt]) -> ast.AST | None:
-    """Return control flow that can suppress an active ``try`` exception.
-
-    A ``return`` anywhere in the current lexical scope suppresses an exception
-    raised by the corresponding ``try``.  A ``break`` or ``continue`` does the
-    same only when it targets a loop outside that ``try``; control transfers
-    inside a loop created by the ``finally`` suite do not escape the suite and
-    therefore do not suppress the exception.
-    """
-
-    suppressor: ast.AST | None = None
-
-    class _FinallyVisitor(ast.NodeVisitor):
-        def __init__(self) -> None:
-            self.loop_depth = 0
-
-        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-            return
-
-        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-            return
-
-        def visit_Lambda(self, node: ast.Lambda) -> None:
-            return
-
-        def visit_Return(self, node: ast.Return) -> None:
-            nonlocal suppressor
-            suppressor = suppressor or node
-
-        def visit_Break(self, node: ast.Break) -> None:
-            nonlocal suppressor
-            if self.loop_depth == 0:
-                suppressor = suppressor or node
-
-        def visit_Continue(self, node: ast.Continue) -> None:
-            nonlocal suppressor
-            if self.loop_depth == 0:
-                suppressor = suppressor or node
-
-        def _visit_loop(self, node: ast.AST) -> None:
-            self.loop_depth += 1
-            self.generic_visit(node)
-            self.loop_depth -= 1
-
-        visit_For = _visit_loop
-        visit_AsyncFor = _visit_loop
-        visit_While = _visit_loop
-
-    visitor = _FinallyVisitor()
-    for statement in finalbody:
-        visitor.visit(statement)
-    return suppressor
 
 
 def _swallowed_reconciliation_error_findings(
@@ -1959,313 +1684,18 @@ def _swallowed_reconciliation_error_findings(
     return findings
 
 
-def _scope_nodes(statements: list[ast.stmt]) -> list[ast.AST]:
-    """Walk one lexical scope without borrowing uses from nested functions."""
-
-    collected: list[ast.AST] = []
-
-    class _ScopeVisitor(ast.NodeVisitor):
-        def generic_visit(self, node: ast.AST) -> None:
-            collected.append(node)
-            super().generic_visit(node)
-
-        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-            collected.append(node)
-
-        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-            collected.append(node)
-
-        def visit_Lambda(self, node: ast.Lambda) -> None:
-            collected.append(node)
-
-    visitor = _ScopeVisitor()
-    for statement in statements:
-        visitor.visit(statement)
-    return collected
 
 
-_EXPOSURE_RESULT_CALLS = frozenset(
-    {
-        "agg",
-        "aggregate",
-        "average",
-        "bar",
-        "boxplot",
-        "count",
-        "describe",
-        "dump",
-        "fit",
-        "fit_predict",
-        "fit_regularized",
-        "groupby",
-        "hist",
-        "kdeplot",
-        "lineplot",
-        "mean",
-        "median",
-        "plot",
-        "predict",
-        "quantile",
-        "save",
-        "savefig",
-        "scatter",
-        "sum",
-        "to_csv",
-        "to_json",
-        "to_parquet",
-        "value_counts",
-        "violinplot",
-        "write",
-        "write_bytes",
-        "write_text",
-    }
-)
 
 
-def _assignment_target_names(node: ast.Assign | ast.AnnAssign) -> set[str]:
-    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-    names: set[str] = set()
-    pending = list(targets)
-    while pending:
-        target = pending.pop()
-        if isinstance(target, ast.Name):
-            names.add(target.id)
-        elif isinstance(target, (ast.List, ast.Tuple)):
-            pending.extend(target.elts)
-    return names
 
 
-def _contains_bound_exposure_selection(
-    node: ast.AST,
-    *,
-    definition_names: set[str],
-    column_binding_names: set[str],
-) -> bool:
-    for candidate in ast.walk(node):
-        if not isinstance(candidate, ast.Subscript):
-            continue
-        if _referenced_names(candidate.value) & (
-            definition_names | column_binding_names
-        ):
-            return True
-        if _referenced_names(candidate.slice) & column_binding_names:
-            return True
-    return False
 
 
-def _authoritative_exposure_binding_findings(
-    tree: ast.Module, step: AnalysisStep
-) -> list[ValidationFinding]:
-    authoritative_product = "artifact:primary_exposure_definition"
-    if authoritative_product not in {
-        str(value or "").strip().lower() for value in step.inputs or []
-    }:
-        return []
-
-    scopes = [tree.body]
-    scopes.extend(
-        node.body
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    )
-    for statements in scopes:
-        nodes = _scope_nodes(statements)
-        definition_names: set[str] = set()
-        for node in nodes:
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
-                continue
-            if authoritative_product not in _literal_string_tokens(node.value):
-                continue
-            is_binding_lookup = (
-                isinstance(node.value, ast.Subscript)
-                or isinstance(node.value, ast.Call)
-                and _call_name(node.value.func).split(".")[-1] in {"get", "pop"}
-            )
-            if not is_binding_lookup:
-                continue
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            definition_names.update(
-                target.id for target in targets if isinstance(target, ast.Name)
-            )
-        if not definition_names:
-            continue
-
-        assignments = [
-            node
-            for node in nodes
-            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
-        ]
-        column_binding_names: set[str] = set()
-        for assignment in assignments:
-            if not isinstance(assignment.value, ast.Call):
-                continue
-            call_inputs = [
-                *assignment.value.args,
-                *[keyword.value for keyword in assignment.value.keywords],
-            ]
-            if any(
-                _referenced_names(value) & definition_names for value in call_inputs
-            ):
-                column_binding_names.update(_assignment_target_names(assignment))
-
-        selected_value_names: set[str] = set()
-        changed = True
-        while changed:
-            changed = False
-            for assignment in assignments:
-                target_names = _assignment_target_names(assignment)
-                if not target_names or target_names & definition_names:
-                    continue
-                value = assignment.value
-                if not (
-                    _contains_bound_exposure_selection(
-                        value,
-                        definition_names=definition_names,
-                        column_binding_names=column_binding_names,
-                    )
-                    or _referenced_names(value) & selected_value_names
-                ):
-                    continue
-                new_names = target_names - selected_value_names
-                if new_names:
-                    selected_value_names.update(new_names)
-                    changed = True
-
-        for node in nodes:
-            if isinstance(node, ast.Return) and node.value is not None:
-                if (
-                    _contains_bound_exposure_selection(
-                        node.value,
-                        definition_names=definition_names,
-                        column_binding_names=column_binding_names,
-                    )
-                    or _referenced_names(node.value) & selected_value_names
-                ):
-                    return []
-            if not isinstance(node, ast.Call):
-                continue
-            call_name = _call_name(node.func).split(".")[-1].lower()
-            if call_name not in _EXPOSURE_RESULT_CALLS:
-                continue
-            if (
-                _contains_bound_exposure_selection(
-                    node,
-                    definition_names=definition_names,
-                    column_binding_names=column_binding_names,
-                )
-                or _referenced_names(node) & selected_value_names
-            ):
-                return []
-
-        return [
-            ValidationFinding(
-                validator="mechanical_code_preflight",
-                severity="error",
-                message=(
-                    "The authoritative primary-exposure definition is loaded but "
-                    "never consumed to bind the executable exposure column."
-                ),
-                detail={"reason": "authoritative_primary_exposure_unused"},
-            )
-        ]
-    return []
 
 
-def _authoritative_exposure_fallback_findings(
-    tree: ast.Module, step: AnalysisStep
-) -> list[ValidationFinding]:
-    authoritative_product = "artifact:primary_exposure_definition"
-    if authoritative_product not in {
-        str(value or "").strip().lower() for value in step.inputs or []
-    }:
-        return []
-
-    binding_keys = {"exposure_column", "source_concept", "role"}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Try):
-            continue
-        body_text = "\n".join(ast.unparse(statement) for statement in node.body)
-        if "exposure_definition" not in body_text:
-            continue
-        for handler in node.handlers:
-            if binding_keys <= _literal_string_tokens(handler):
-                return [
-                    ValidationFinding(
-                        validator="mechanical_code_preflight",
-                        severity="error",
-                        message=(
-                            "A failed authoritative exposure binding is replaced "
-                            "with constructed fallback metadata instead of failing "
-                            "closed."
-                        ),
-                        detail={"reason": "authoritative_primary_exposure_fallback"},
-                    )
-                ]
-    return []
 
 
-def _finalized_exposure_reconciliation_findings(
-    tree: ast.Module, step: AnalysisStep
-) -> list[ValidationFinding]:
-    """Reject re-derivation of a row-aligned finalized exposure table.
-
-    A tabular ``primary_exposure_definition`` can be the producer-finalized,
-    row-aligned exposure itself.  Once a DataFrame branch reads values directly
-    from that typed artifact, raw-event reconciliation must not replace or
-    reinterpret those values.  This is an implementation boundary only; the
-    check does not choose the exposure or its scientific semantics.
-    """
-
-    authoritative_product = "artifact:primary_exposure_definition"
-    if authoritative_product not in {
-        str(value or "").strip().lower() for value in step.inputs or []
-    }:
-        return []
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        dataframe_names: set[str] = set()
-        for call in ast.walk(node.test):
-            if not isinstance(call, ast.Call) or _call_name(call.func) != "isinstance":
-                continue
-            if len(call.args) < 2 or not _call_name(call.args[1]).endswith("DataFrame"):
-                continue
-            dataframe_names.update(_referenced_names(call.args[0]))
-        if not dataframe_names:
-            continue
-
-        body_nodes = [
-            candidate for statement in node.body for candidate in ast.walk(statement)
-        ]
-        reads_finalized_values = any(
-            isinstance(candidate, ast.Subscript)
-            and _referenced_names(candidate.value) & dataframe_names
-            for candidate in body_nodes
-        )
-        repeats_raw_event_reconciliation = any(
-            isinstance(candidate, ast.Call)
-            and _call_name(candidate.func).split(".")[-1]
-            == "reconcile_binary_event_presence"
-            for candidate in body_nodes
-        )
-        if reads_finalized_values and repeats_raw_event_reconciliation:
-            return [
-                ValidationFinding(
-                    validator="mechanical_code_preflight",
-                    severity="error",
-                    message=(
-                        "A row-aligned finalized primary-exposure table is read "
-                        "directly and then reinterpreted through raw binary-event "
-                        "reconciliation."
-                    ),
-                    detail={
-                        "reason": "finalized_exposure_reconciliation_fallback",
-                        "line": int(node.lineno),
-                    },
-                )
-            ]
-    return []
 
 
 def _typed_dataframe_erasure_findings(
@@ -2395,154 +1825,10 @@ def _undefined_direct_call_findings(tree: ast.Module) -> list[ValidationFinding]
     ]
 
 
-_MODULE_DUNDERS = frozenset(
-    {
-        "__name__",
-        "__file__",
-        "__doc__",
-        "__package__",
-        "__spec__",
-        "__loader__",
-        "__builtins__",
-    }
-)
 
 
-def _names_bound_in_scope(scope: ast.AST) -> set[str]:
-    """Every name this one scope binds, not descending into nested definitions."""
-
-    bound: set[str] = set()
-    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-        arguments = scope.args
-        for group in (
-            arguments.posonlyargs,
-            arguments.args,
-            arguments.kwonlyargs,
-        ):
-            bound.update(argument.arg for argument in group)
-        for solo in (arguments.vararg, arguments.kwarg):
-            if solo is not None:
-                bound.add(solo.arg)
-
-    def _walk(node: ast.AST) -> None:
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                bound.add(child.name)
-                continue
-            if isinstance(child, ast.Lambda):
-                continue
-            if isinstance(child, ast.Import):
-                for alias in child.names:
-                    bound.add(alias.asname or alias.name.split(".", 1)[0])
-            elif isinstance(child, ast.ImportFrom):
-                for alias in child.names:
-                    bound.add(alias.asname or alias.name)
-            elif isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
-                bound.add(child.id)
-            elif isinstance(child, ast.ExceptHandler) and child.name:
-                bound.add(child.name)
-            elif isinstance(child, (ast.Global, ast.Nonlocal)):
-                bound.update(child.names)
-            _walk(child)
-
-    _walk(scope)
-    return bound
 
 
-def unresolvable_names(tree: ast.Module) -> list[tuple[str, int]]:
-    """Names read where Python's scope rules cannot resolve them.
-
-    ``compile()`` accepts every one of these -- a ``NameError`` is a runtime
-    event -- so the syntax check is happy and the container is not.  A name is
-    reported with the first line that reads it.
-
-    A read resolves if the name is bound in its own scope, in an enclosing
-    function scope, at module level, or is a builtin.  Nothing else counts, and
-    that is the whole point: an earlier version of this check collected
-    bindings from the *whole program*, so a name that was only ever a local of
-    some other function looked bound.  canary4 died on exactly that --
-    ``predicate_flow`` is a local of ``validate_receipt`` and ``main`` reads it
-    as a global at line 133.  Both the module-only and whole-tree versions
-    returned nothing for that script.
-
-    Measured over the 409 recorded generated scripts: 4 flagged (1.0%), and
-    every one is a real defect --
-
-    * ``predicate_flow``  -- canary4, the death above
-    * ``cohort_df``       -- an earlier run, same shape, also fatal
-    * ``provenance_audit``-- unverifiable, that container never started
-    * ``source_index``    -- a typo for ``source_row_index`` inside a ``raise``
-      branch.  It has never executed, so no run has died of it; if the branch
-      ever fires it replaces a written diagnostic with a ``NameError``, exactly
-      when something has already gone wrong.
-
-    A ``match`` statement binds names that are not ``Name`` stores, so a module
-    containing one is abstained on rather than guessed at.  There is not one in
-    the corpus, and a wrong flag costs a healthy step a repair -- the expensive
-    direction to be wrong in.
-    """
-
-    if any(isinstance(node, ast.Match) for node in ast.walk(tree)):
-        return []
-
-    parents = {
-        id(child): parent
-        for parent in ast.walk(tree)
-        for child in ast.iter_child_nodes(parent)
-    }
-    scopes: list[ast.AST] = [tree]
-    scopes.extend(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
-    )
-    bound_by_scope = {id(scope): _names_bound_in_scope(scope) for scope in scopes}
-    # ``global x`` inside a function binds x at MODULE level, not in the
-    # function that declares it -- so a sibling reading x afterwards is legal
-    # Python.  Attributing it to the declaring scope reported that sibling,
-    # which is the false positive this check must not produce.
-    declared_global: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Global):
-            declared_global.update(node.names)
-    module_names = (
-        bound_by_scope[id(tree)]
-        | declared_global
-        | set(dir(builtins))
-        | set(_MODULE_DUNDERS)
-    )
-
-    loaded: dict[str, int] = {}
-    for scope in scopes:
-        visible = set(module_names) | bound_by_scope[id(scope)]
-        enclosing = parents.get(id(scope))
-        while enclosing is not None:
-            if isinstance(
-                enclosing, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
-            ):
-                visible |= bound_by_scope[id(enclosing)]
-            enclosing = parents.get(id(enclosing))
-
-        def _reads(node: ast.AST) -> None:
-            for child in ast.iter_child_nodes(node):
-                if isinstance(
-                    child,
-                    (
-                        ast.FunctionDef,
-                        ast.AsyncFunctionDef,
-                        ast.ClassDef,
-                        ast.Lambda,
-                    ),
-                ):
-                    continue
-                if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
-                    if child.id not in visible:
-                        loaded.setdefault(child.id, int(child.lineno))
-                _reads(child)
-
-        _reads(scope)
-
-    return sorted(loaded.items())
 
 
 def module_level_unbound_names(tree: ast.Module) -> list[tuple[str, int]]:
