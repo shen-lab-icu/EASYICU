@@ -145,6 +145,108 @@ def persist_human_review_records(
     )
 
 
+def bind_checkpoint_decision_payloads(
+    checkpoint_commit: Dict[str, Any],
+    *,
+    requests: Sequence[Any],
+    payload: Sequence[Mapping[str, Any]],
+) -> None:
+    """Order decision payloads by the signed request set and bind their digest."""
+
+    by_review_id = {
+        str(item.get("review_id") or ""): dict(item) for item in payload
+    }
+    ordered = [by_review_id.get(str(request.review_id), {}) for request in requests]
+    checkpoint_commit["decision_payloads"] = ordered
+    checkpoint_commit["decision_sha256"] = canonical_sha256(ordered)
+
+
+def commit_human_review_execution_approval(
+    *,
+    checkpoint_file: Path,
+    run_dir: Path,
+    evidence: EvidenceStore,
+    plan_revision: int,
+    decision_payloads: Sequence[Mapping[str, Any]],
+    decision_records: Sequence[Mapping[str, Any]],
+    decision_sha256: str,
+) -> None:
+    """Durably bind approval before any reviewed Execute side effect."""
+
+    payloads = [dict(item) for item in decision_payloads]
+    records = [dict(item) for item in decision_records]
+    if not re.fullmatch(r"[0-9a-f]{64}", str(decision_sha256)):
+        raise HumanReviewCheckpointError(
+            "durable review decision set is not digest bound"
+        )
+    if not payloads:
+        raise HumanReviewCheckpointError(
+            "durable review decision payloads are unavailable"
+        )
+    selected = load_checkpoint(checkpoint_file, require_pending=False)
+    if selected.state == "pending":
+        approve_normalized_plan_for_execution(
+            run_dir=run_dir,
+            evidence=evidence,
+            revision=int(plan_revision),
+            review_requests=selected.requests,
+            decision_set_sha256=str(decision_sha256),
+        )
+        write_checkpoint(
+            checkpoint_file,
+            selected.approved(
+                decisions=payloads,
+                decision_records=records,
+                decision_sha256=str(decision_sha256),
+            ),
+        )
+        return
+    if selected.state in {"approved_pending_execution", "executing"}:
+        if (
+            selected.consumed_decision_sha256 != str(decision_sha256)
+            or list(selected.approved_decisions) != payloads
+            or list(selected.approved_decision_records) != records
+        ):
+            raise HumanReviewCheckpointError(
+                "restored approval does not match the durable decision set"
+            )
+        return
+    raise HumanReviewCheckpointError(
+        f"checkpoint state {selected.state!r} is not resumable"
+    )
+
+
+def mark_human_review_execution_started(checkpoint_file: Path) -> None:
+    """Durably bind the Execute start before the first analysis side effect."""
+
+    selected = load_checkpoint(checkpoint_file, require_pending=False)
+    write_checkpoint(checkpoint_file, selected.execution_started())
+
+
+def fail_human_review_checkpoint(checkpoint_commit: Mapping[str, Any]) -> None:
+    """Terminalise a resumable durable handoff without hiding its last state."""
+
+    path = checkpoint_commit.get("path")
+    if not path:
+        return
+    selected = load_checkpoint(Path(str(path)), require_pending=False)
+    if selected.state not in {
+        "pending",
+        "approved_pending_execution",
+        "executing",
+        "consumed",
+    }:
+        return
+    write_checkpoint(
+        Path(str(path)),
+        selected.transitioned(
+            "failed",
+            decision_sha256=str(checkpoint_commit.get("decision_sha256") or "")
+            or None,
+        ),
+    )
+
+
 def restore_durable_human_review_pause(
     pipeline: Any,
     *,
@@ -451,51 +553,18 @@ def restore_durable_human_review_pause(
     def commit_human_review_execution(
         decision_records: Sequence[Mapping[str, Any]],
     ) -> None:
-        decision_sha256 = str(checkpoint_commit.get("decision_sha256") or "")
-        if not re.fullmatch(r"[0-9a-f]{64}", decision_sha256):
-            raise HumanReviewCheckpointError(
-                "durable review decision set is not digest bound"
-            )
-        decision_payloads = checkpoint_commit.get("decision_payloads")
-        if not isinstance(decision_payloads, list) or not decision_payloads:
-            raise HumanReviewCheckpointError(
-                "durable review decision payloads are unavailable"
-            )
-        selected = load_checkpoint(checkpoint_file, require_pending=False)
-        if selected.state == "pending":
-            approve_normalized_plan_for_execution(
-                run_dir=run_dir,
-                evidence=evidence,
-                revision=plan_result.plan.revision,
-                review_requests=selected.requests,
-                decision_set_sha256=decision_sha256,
-            )
-            write_checkpoint(
-                checkpoint_file,
-                selected.approved(
-                    decisions=decision_payloads,
-                    decision_records=decision_records,
-                    decision_sha256=decision_sha256,
-                ),
-            )
-        elif selected.state in {"approved_pending_execution", "executing"}:
-            if (
-                selected.consumed_decision_sha256 != decision_sha256
-                or list(selected.approved_decisions) != decision_payloads
-                or list(selected.approved_decision_records)
-                != [dict(item) for item in decision_records]
-            ):
-                raise HumanReviewCheckpointError(
-                    "restored approval does not match the durable decision set"
-                )
-        else:
-            raise HumanReviewCheckpointError(
-                f"checkpoint state {selected.state!r} is not resumable"
-            )
+        commit_human_review_execution_approval(
+            checkpoint_file=checkpoint_file,
+            run_dir=run_dir,
+            evidence=evidence,
+            plan_revision=plan_result.plan.revision,
+            decision_payloads=checkpoint_commit.get("decision_payloads") or (),
+            decision_records=decision_records,
+            decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
+        )
 
     def commit_human_review_execution_start() -> None:
-        selected = load_checkpoint(checkpoint_file, require_pending=False)
-        write_checkpoint(checkpoint_file, selected.execution_started())
+        mark_human_review_execution_started(checkpoint_file)
 
     workflow = build_pipeline_workflow(
         plan_invoker=lambda: (_ for _ in ()).throw(
