@@ -6424,6 +6424,88 @@ def test_apply_writer_evidence_repair_decisions_cites_or_drops_without_rewriting
     assert [item["action"] for item in applied] == ["cite", "drop"]
 
 
+def test_apply_writer_evidence_repair_replaces_prose_with_exact_host_claim(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    sentence = "The exposed group had higher observed mortality."
+    claim_ref = "03_primary.observed_risk_difference"
+    scaffold = f"## Results\n\n{sentence}\n"
+
+    repaired, applied = _apply_writer_evidence_repair_decisions(
+        scaffold,
+        missing_sentences=[sentence],
+        decisions=[
+            {
+                "index": 0,
+                "action": "claim",
+                "evidence_ids": [],
+                "claim_ref": claim_ref,
+            }
+        ],
+        allowed_claim_refs=[claim_ref],
+    )
+
+    assert sentence not in repaired
+    assert f"{{claim:{claim_ref}}}" in repaired
+    assert applied[0]["claim_ref"] == claim_ref
+
+
+def test_apply_writer_evidence_repair_never_puts_claim_in_title(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    title = "Higher mortality in the exposed group"
+    claim_ref = "03_primary.observed_risk_difference"
+    repaired, applied = _apply_writer_evidence_repair_decisions(
+        f"# {title}\n",
+        missing_sentences=[title],
+        decisions=[
+            {
+                "index": 0,
+                "action": "claim",
+                "evidence_ids": [],
+                "claim_ref": claim_ref,
+            }
+        ],
+        allowed_claim_refs=[claim_ref],
+    )
+
+    assert f"{{claim:{claim_ref}}}" not in repaired
+    assert applied[0]["action"] == "drop"
+
+
+def test_apply_writer_evidence_repair_handles_each_repeated_occurrence(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    sentence = "The exposed group had higher observed mortality."
+    claim_ref = "03_primary.observed_risk_difference"
+    scaffold = f"## Abstract\n\n{sentence}\n\n## Results\n\n{sentence}\n"
+
+    repaired, applied = _apply_writer_evidence_repair_decisions(
+        scaffold,
+        missing_sentences=[sentence, sentence],
+        decisions=[
+            {
+                "index": index,
+                "action": "claim",
+                "evidence_ids": [],
+                "claim_ref": claim_ref,
+            }
+            for index in range(2)
+        ],
+        allowed_claim_refs=[claim_ref],
+    )
+
+    assert sentence not in repaired
+    assert repaired.count(f"{{claim:{claim_ref}}}") == 2
+    assert [item["index"] for item in applied] == [0, 1]
+
+
 def test_execution_gate_and_parent_figure_dependency_helpers(ra):
     from easyicu.research_agent.pipeline import (
         _execution_gate_status,

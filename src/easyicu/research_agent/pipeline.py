@@ -181,6 +181,7 @@ from .orchestration.config import (
     PipelineConfig,
     assert_step_provider_budget_funds_its_repairs,
 )
+from .orchestration.instance_lifecycle import PipelineInstanceLifecycleLease
 from .orchestration.services import PipelineServices
 from .orchestration.progress import (
     ResumableProgressChannel,
@@ -523,6 +524,64 @@ def _one_capability_job(method: Callable[..., Any]) -> Callable[..., Any]:
             return method(self, *args, **kwargs)
 
     return wrapper
+
+
+def _pending_review_run_id(pipeline: Any) -> Optional[str]:
+    """Project the live pause coordinate without exposing its mutable handoff."""
+
+    state = getattr(pipeline, "_pending_human_review", None)
+    if not isinstance(state, Mapping):
+        return None
+    pending = state.get("pending")
+    run_id = getattr(pending, "run_id", None)
+    return str(run_id) if run_id else None
+
+
+def _pipeline_instance_lifecycle(
+    operation: str,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Bind one public call to the pipeline object's fail-fast lifecycle.
+
+    Owner: ``orchestration.instance_lifecycle``.  This adapter only projects
+    the pipeline's live human-review coordinate into that dependency-neutral
+    state machine.  The run-id file lock remains the cross-process writer
+    owner; this lease protects instance fields shared by different run ids.
+    """
+
+    if operation not in {"run", "resume"}:  # pragma: no cover - module invariant
+        raise ValueError(f"unsupported pipeline lifecycle operation: {operation!r}")
+
+    def decorate(method: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(method)
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            # ``setdefault`` keeps legacy ``__new__``-constructed test doubles
+            # and same-process hot-reload objects compatible without creating
+            # two owners when concurrent callers arrive together.
+            lease = self.__dict__.setdefault(
+                "_instance_lifecycle_lease", PipelineInstanceLifecycleLease()
+            )
+            pending_run_id = _pending_review_run_id(self)
+            token = (
+                lease.begin_run(pending_review_run_id=pending_run_id)
+                if operation == "run"
+                else lease.begin_resume(pending_review_run_id=pending_run_id)
+            )
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                # A pause is a reserved lifecycle, not a completed call.  The
+                # live handoff is deliberately retained across the human wait;
+                # only a completed/rejected/terminal resume clears it.
+                pending_run_id = _pending_review_run_id(self)
+                if pending_run_id:
+                    lease.hold_for_review(token, run_id=pending_run_id)
+                else:
+                    lease.release(token)
+
+        setattr(wrapper, "__easyicu_instance_lifecycle__", operation)
+        return wrapper
+
+    return decorate
 
 
 def _defer_typed_plan_dag_findings_until_probe(
@@ -1880,6 +1939,10 @@ class ResearchAgentPipeline:
         # ``resume_human_review()``. Holds the state machine because its phase
         # invokers close over this run's evidence store and services.
         self._pending_human_review: Optional[Dict[str, Any]] = None
+        # Instance-local owner for mutable run/runtime/review state.  Unlike
+        # the run-id file lock, this lease spans a human-review pause and sees
+        # fresh run ids, so one object cannot be driven by two calls at once.
+        self._instance_lifecycle_lease = PipelineInstanceLifecycleLease()
         self._know_how_paths = tuple(Path(path) for path in config.know_how_paths)
         self._know_how_top_k = int(config.know_how_top_k)
         self._know_how_min_score = float(config.know_how_min_score)
@@ -4043,6 +4106,7 @@ class ResearchAgentPipeline:
     # Public API
     # ------------------------------------------------------------------
 
+    @_pipeline_instance_lifecycle("run")
     @exclusive_run_execution
     @_one_capability_job
     def run(
@@ -5056,6 +5120,7 @@ class ResearchAgentPipeline:
             and getattr(pending, "resumable_here", False)
         )
 
+    @_pipeline_instance_lifecycle("resume")
     @_one_capability_job
     def resume_human_review(
         self,
