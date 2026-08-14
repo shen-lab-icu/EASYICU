@@ -1033,8 +1033,11 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     # assert on the alias token rather than a specific sentence.
     assert "`model_performance`" in captured["system"]
     assert "Use exactly single braces" in captured["user"]
+    assert "SCIENTIFIC CLAIM RULE" in captured["user"]
+    assert "complete standalone sentence" in captured["user"]
+    assert "Run-bound typed methodology applications" in captured["user"]
     assert "mechanisms, strengths, or limitations" in captured["user"]
-    assert "Each conclusion sentence must cite" in captured["user"]
+    assert "must either be one exact host-authorized claim token" in captured["user"]
     assert "TBD by author" not in captured["user"]
     assert "Funding information was not available" in captured["user"]
     # The dummy LLM's stock response should land in the bound output.
@@ -1104,6 +1107,79 @@ def test_writer_evidence_repair_rejects_unregistered_evidence_id():
             evidence_ids=["literature_prisma"],
             evidence_digest="literature_prisma: background evidence",
             missing_sentences=["Sepsis is clinically important."],
+        )
+
+
+def test_writer_evidence_repair_can_select_only_an_exact_host_claim():
+    from easyicu.research_agent.reporting.writer_evidence_repair import (
+        decide_writer_evidence_repairs,
+    )
+
+    sentence = "The exposed group had higher observed mortality."
+    claim_ref = "03_primary.observed_risk_difference"
+    raw = json.dumps(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "claim",
+                    "evidence_ids": [],
+                    "claim_ref": claim_ref,
+                }
+            ]
+        }
+    )
+
+    decisions = decide_writer_evidence_repairs(
+        ScriptedMockLLMClient([raw], repeat_last=True),
+        evidence_ids=["primary_summary"],
+        evidence_digest="primary summary",
+        missing_sentences=[sentence],
+        scientific_claims={claim_ref: "Host-rendered descriptive claim."},
+        claim_required_sentences=[sentence],
+    )
+
+    assert decisions == [
+        {
+            "index": 0,
+            "action": "claim",
+            "evidence_ids": [],
+            "claim_ref": claim_ref,
+        }
+    ]
+
+
+def test_writer_evidence_repair_cannot_cite_around_claim_authority():
+    from easyicu.research_agent.providers.structured_retry import (
+        StructuredResponseFailure,
+    )
+    from easyicu.research_agent.reporting.writer_evidence_repair import (
+        decide_writer_evidence_repairs,
+    )
+
+    sentence = "The exposed group had higher observed mortality."
+    raw = json.dumps(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "cite",
+                    "evidence_ids": ["primary_summary"],
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(StructuredResponseFailure):
+        decide_writer_evidence_repairs(
+            ScriptedMockLLMClient([raw], repeat_last=True),
+            evidence_ids=["primary_summary"],
+            evidence_digest="primary summary",
+            missing_sentences=[sentence],
+            scientific_claims={
+                "03_primary.observed_risk_difference": "Host claim."
+            },
+            claim_required_sentences=[sentence],
         )
 
 

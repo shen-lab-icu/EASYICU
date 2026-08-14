@@ -4462,6 +4462,17 @@ class WriterAgent:
                     "interest are manuscript metadata and do not need evidence citations.\n"
                     "- NEVER use a placeholder as a noun. If a number is unavailable, omit the sentence.\n"
                     f"- Only use ids from this list: {evidence_list}\n\n"
+                    "SCIENTIFIC CLAIM RULE:\n"
+                    "- The machine digest may contain a `host-authorized scientific "
+                    "claims` block. For any current-study direction, comparison, or "
+                    "qualitative interpretation covered by that block, output the exact "
+                    "`{claim:<step>.<claim>}` token as the complete standalone sentence.\n"
+                    "- Do not paraphrase a host claim and do not replace `{claim:...}` "
+                    "with `{evidence:...}`. Evidence citations authorize numeric facts; "
+                    "they do not authorize independently worded scientific conclusions.\n"
+                    "- A claim token cannot be attached to a heading, label, or other "
+                    "prose. If no exact host claim applies, omit the qualitative "
+                    "assertion.\n\n"
                     "LITERATURE RULE:\n"
                     "- Cite prior work only with an exact `[@key]` from the "
                     "run-bound literature digest below.\n"
@@ -4476,6 +4487,9 @@ class WriterAgent:
                     "- If the digest contains a `direct_comparator`, Introduction and "
                     "Discussion must each cite at least one such key. Methods must cite "
                     "at least one `method:<layer>` key when one is available.\n"
+                    "- When the digest contains `Run-bound typed methodology "
+                    "applications`, Methods must cite at least one exact key from that "
+                    "block next to the specific design or reporting choice it governs.\n"
                     "- `{evidence:literature_prisma}` supports the search process, "
                     "not what an individual paper found.\n"
                     "- Never invent an author, paper, comparison, mechanism, or "
@@ -4541,12 +4555,13 @@ def _writer_language_instruction(language: str) -> str:
         return (
             "OUTPUT LANGUAGE: zh / Simplified Chinese. Keep section headings "
             "as markdown headings. Preserve every `{evidence:<id>}` placeholder "
-            "exactly as ASCII; do not translate evidence ids, filenames, variable "
+            "and `{claim:<step>.<claim>}` token exactly as ASCII; do not translate "
+            "evidence ids, claim refs, filenames, variable "
             "names, or code-like tokens."
         )
     return (
         "OUTPUT LANGUAGE: en / English. Preserve every `{evidence:<id>}` "
-        "placeholder exactly as ASCII."
+        "placeholder and `{claim:<step>.<claim>}` token exactly as ASCII."
     )
 
 

@@ -40,6 +40,7 @@ from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
 from .manuscript_literature import (
     audit_manuscript_literature,
+    repair_missing_methods_method_citation,
     render_writer_literature_digest,
 )
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
@@ -859,7 +860,10 @@ def _draft_manuscript(
             context=agent_context,
             evidence_ids=preferred_writer_evidence_names,
             evidence_digest=writer_evidence_digest,
-            literature_digest=render_writer_literature_digest(literature),
+            literature_digest=render_writer_literature_digest(
+                literature,
+                plan=execute_result.plan,
+            ),
         )
     except Exception as exc:
         writer_error_message = f"{type(exc).__name__}: {exc}"
@@ -935,11 +939,29 @@ def _draft_manuscript(
                 detail={"miscitation_repairs": miscitation_repairs},
             )
         )
+    scaffold, method_citation_repair = repair_missing_methods_method_citation(
+        scaffold,
+        literature,
+        plan=execute_result.plan,
+    )
+    if method_citation_repair is not None:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_literature",
+                severity="warning",
+                message=(
+                    "Restored one omitted Methods citation from the exact "
+                    "Planner-bound reporting authority."
+                ),
+                detail={"repair": method_citation_repair},
+            )
+        )
     if (
         scaffold
         and pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT
     ):
         strict_missing_sentences: List[str] = []
+        strict_scientific_claim_sentences: List[str] = []
         try:
             evidence.enforce_evidence_bound_scaffold(scaffold)
         except EvidenceEnforcementError as exc:
@@ -950,19 +972,44 @@ def _draft_manuscript(
                     for sentence in raw_missing
                     if str(sentence).strip()
                 ]
-        if strict_missing_sentences:
+            raw_claims = (exc.detail or {}).get(
+                "unsupported_scientific_claim_sentences", []
+            )
+            if isinstance(raw_claims, list):
+                strict_scientific_claim_sentences = [
+                    str(sentence).strip()
+                    for sentence in raw_claims
+                    if str(sentence).strip()
+                ]
+        # Keep duplicate sentences: the same unsupported prose can appear in
+        # Abstract, Results and Conclusion, and each occurrence must be removed
+        # or replaced before the unchanged STRICT gate can pass.
+        rejected_sentences = [
+            *strict_missing_sentences,
+            *strict_scientific_claim_sentences,
+        ]
+        if rejected_sentences:
+            authoritative_claims = evidence.authoritative_scientific_claims(
+                per_step_records
+            )
+            claim_text_by_ref = {
+                claim.claim_ref: claim.render_text() for claim in authoritative_claims
+            }
             repair_decisions = decide_writer_evidence_repairs(
                 writer.llm,
                 evidence_ids=preferred_writer_evidence_names,
                 evidence_digest=writer_evidence_digest,
-                missing_sentences=strict_missing_sentences,
+                missing_sentences=rejected_sentences,
+                scientific_claims=claim_text_by_ref,
+                claim_required_sentences=strict_scientific_claim_sentences,
                 language=run_language,
             )
             scaffold, applied_evidence_repairs = (
                 _apply_writer_evidence_repair_decisions(
                     scaffold,
-                    missing_sentences=strict_missing_sentences,
+                    missing_sentences=rejected_sentences,
                     decisions=repair_decisions,
+                    allowed_claim_refs=tuple(claim_text_by_ref),
                 )
             )
             findings.append(

@@ -5,8 +5,10 @@ from easyicu.research_agent.literature import (
 )
 from easyicu.research_agent.reporting.manuscript_literature import (
     audit_manuscript_literature,
+    repair_missing_methods_method_citation,
     render_writer_literature_digest,
 )
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
 def _bundle() -> LiteratureBundle:
@@ -42,13 +44,45 @@ def _bundle() -> LiteratureBundle:
     )
 
 
+def _plan_with_reporting_binding() -> AnalysisPlan:
+    return AnalysisPlan(
+        research_question="Describe an ICU cohort.",
+        steps=[
+            AnalysisStep(
+                step_id="01_primary_description",
+                planned_analysis_role="primary",
+                intent="Estimate the prespecified descriptive quantities.",
+                expected_outputs=["table:description"],
+                method="descriptive",
+                literature_citation_keys=["strobe_2007"],
+                literature_design_bindings=[
+                    {
+                        "citation_key": "strobe_2007",
+                        "design_elements": ["reporting"],
+                        "application": (
+                            "Report the setting, analysis unit, denominator, "
+                            "missing data and prespecified analyses."
+                        ),
+                    }
+                ],
+            )
+        ],
+    )
+
+
 def test_writer_digest_exposes_exact_key_and_relevance() -> None:
-    digest = render_writer_literature_digest(_bundle())
+    digest = render_writer_literature_digest(
+        _bundle(),
+        plan=_plan_with_reporting_binding(),
+    )
     assert "[@paper_2024]" in digest
     assert "A relevant ICU cohort" in digest
     assert "Direct comparator" in digest
     assert "direct_comparator" in digest
     assert "method:" in digest
+    assert "Run-bound typed methodology applications" in digest
+    assert "step=01_primary_description" in digest
+    assert "design_elements=reporting" in digest
 
 
 def test_manuscript_literature_audit_rejects_aggregate_only_or_unknown() -> None:
@@ -113,3 +147,60 @@ Comparison with prior work [@paper_2024].
     assert audit.status == "blocked"
     assert audit.missing_required_citation_sections == []
     assert audit.methods_method_source_missing is True
+
+
+def test_missing_methods_citation_is_repaired_only_from_exact_plan_binding() -> None:
+    manuscript = """## Introduction
+Prior work defines the comparator [@paper_2024].
+
+## Methods
+The prespecified cohort and analysis are described below.
+
+## Discussion
+The result is compared with the retained ICU study [@paper_2024].
+"""
+
+    repaired, repair = repair_missing_methods_method_citation(
+        manuscript,
+        _bundle(),
+        plan=_plan_with_reporting_binding(),
+    )
+
+    assert repair is not None
+    assert repair["citation_key"] == "strobe_2007"
+    assert "run-bound observational reporting guidance [@strobe_2007]" in repaired
+    assert audit_manuscript_literature(repaired, _bundle()).status == "pass"
+
+
+def test_missing_methods_citation_stays_blocked_without_typed_binding() -> None:
+    manuscript = """## Introduction
+Prior work defines the comparator [@paper_2024].
+
+## Methods
+The prespecified cohort and analysis are described below.
+
+## Discussion
+The result is compared with the retained ICU study [@paper_2024].
+"""
+    unbound_plan = AnalysisPlan(
+        research_question="Describe an ICU cohort.",
+        steps=[
+            AnalysisStep(
+                step_id="01_primary_description",
+                planned_analysis_role="primary",
+                intent="Describe the cohort.",
+                expected_outputs=["table:description"],
+                method="descriptive",
+            )
+        ],
+    )
+
+    repaired, repair = repair_missing_methods_method_citation(
+        manuscript,
+        _bundle(),
+        plan=unbound_plan,
+    )
+
+    assert repaired == manuscript
+    assert repair is None
+    assert audit_manuscript_literature(repaired, _bundle()).status == "blocked"

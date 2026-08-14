@@ -362,16 +362,24 @@ def _apply_writer_evidence_repair_decisions(
     *,
     missing_sentences: Sequence[str],
     decisions: Sequence[Mapping[str, object]],
+    allowed_claim_refs: Sequence[str] = (),
 ) -> tuple[str, List[Dict[str, object]]]:
-    """Apply a validated writer citation/drop decision set without rewriting.
+    """Apply a validated writer citation/drop/claim decision without rewriting.
 
-    The LLM chooses only between registered citations and deletion. This host
-    function preserves every cited sentence byte-for-byte apart from appending
-    the selected evidence placeholders, so the repair cannot quietly change a
-    number, direction, population, or interpretation.
+    The LLM chooses only among registered citations, one exact registered host
+    claim, and deletion. This host function preserves every cited sentence
+    byte-for-byte apart from appending the selected evidence placeholders. A
+    claim decision replaces the whole sentence with one exact host-issued
+    token; no model-authored direction, population, number, or interpretation
+    survives that replacement.
     """
 
     sentences = [str(sentence).strip() for sentence in missing_sentences]
+    allowed_claims = {
+        str(claim_ref).strip()
+        for claim_ref in allowed_claim_refs
+        if str(claim_ref).strip()
+    }
     if len(decisions) != len(sentences):
         raise ValueError("writer evidence repair must decide every missing sentence")
     rewritten = scaffold
@@ -407,12 +415,38 @@ def _apply_writer_evidence_repair_decisions(
             replacement = target
             for evidence_id in evidence_ids:
                 replacement = _append_evidence_citation(replacement, evidence_id)
+        elif action == "claim":
+            if evidence_ids:
+                raise ValueError("claim decision cannot include evidence ids")
+            claim_ref = str(decision.get("claim_ref") or "").strip()
+            if claim_ref not in allowed_claims:
+                raise ValueError("claim decision requires an allowed claim_ref")
+            token = "{claim:" + claim_ref + "}"
+            target_offset = rewritten.find(target)
+            line_start = rewritten.rfind("\n", 0, target_offset) + 1
+            before_target = rewritten[line_start:target_offset]
+            if before_target.lstrip().startswith("#"):
+                # Scientific findings do not belong in a manuscript title or
+                # heading.  A model-selected claim is safely dropped here; the
+                # unchanged strict gate still validates the remaining draft.
+                replacement = ""
+                action = "drop"
+            else:
+                labelled = re.match(
+                    r"^(?P<label>\*\*[^*\n]{1,80}:\*\*)\s+.+$",
+                    target,
+                )
+                replacement = (
+                    f"{labelled.group('label')}\n\n{token}"
+                    if labelled is not None
+                    else token
+                )
         elif action == "drop":
             if evidence_ids:
                 raise ValueError("drop decision cannot include evidence ids")
             replacement = ""
         else:
-            raise ValueError("writer evidence repair action must be cite or drop")
+            raise ValueError("writer evidence repair action must be cite, claim, or drop")
         rewritten = rewritten.replace(target, replacement, 1)
         seen.add(index)
         applied.append(
@@ -421,6 +455,11 @@ def _apply_writer_evidence_repair_decisions(
                 "action": action,
                 "evidence_ids": evidence_ids,
                 "sentence": target[:500],
+                **(
+                    {"claim_ref": str(decision.get("claim_ref") or "").strip()}
+                    if str(decision.get("claim_ref") or "").strip()
+                    else {}
+                ),
             }
         )
     return rewritten, sorted(applied, key=lambda item: int(item["index"]))

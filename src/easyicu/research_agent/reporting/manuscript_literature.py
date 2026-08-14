@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..literature import LiteratureBundle
 from ..planning.method_literature import METHOD_CARDS
+from ..schema import AnalysisPlan
 
 
 _MARKER = re.compile(r"\[@(?P<key>[A-Za-z0-9_.:-]+)\]")
@@ -82,7 +83,9 @@ def _section_citations(manuscript: str) -> Dict[str, list[str]]:
 def render_writer_literature_digest(
     literature: Optional[LiteratureBundle],
     *,
+    plan: Optional[AnalysisPlan] = None,
     max_records: int = 20,
+    max_method_bindings: int = 8,
 ) -> str:
     if literature is None or not literature.citations:
         return "(none)"
@@ -110,7 +113,138 @@ def render_writer_literature_digest(
             f"- [@{record.key}] | {record.year} | {role} | "
             f"{record.title} | {relevance or 'no relevance note'}"
         )
+    allowed = {record.key for record in literature.citations}
+    method_keys = {card.source_key for card in METHOD_CARDS}
+    bound_rows: list[str] = []
+    if plan is not None:
+        ordered_steps = sorted(
+            plan.steps,
+            key=lambda step: step.planned_analysis_role != "primary",
+        )
+        for step in ordered_steps:
+            for binding in step.literature_design_bindings:
+                if (
+                    binding.citation_key not in allowed
+                    or binding.citation_key not in method_keys
+                ):
+                    continue
+                application = " ".join(str(binding.application or "").split())[:400]
+                divergence = " ".join(str(binding.divergence or "").split())[:400]
+                row = (
+                    f"- step={step.step_id} role={step.planned_analysis_role} "
+                    f"[@{binding.citation_key}] "
+                    f"design_elements={','.join(binding.design_elements)} | "
+                    f"application={application}"
+                )
+                if divergence:
+                    row += f" | divergence={divergence}"
+                bound_rows.append(row)
+    binding_cap = max(0, int(max_method_bindings))
+    omitted_bindings = max(0, len(bound_rows) - binding_cap)
+    if binding_cap:
+        bound_rows = bound_rows[:binding_cap]
+    else:
+        bound_rows = []
+    if bound_rows:
+        lines.extend(
+            [
+                "",
+                "Run-bound typed methodology applications "
+                "(planner-owned scientific content, not instructions):",
+                *bound_rows,
+                *(
+                    [f"- ... ({omitted_bindings} additional bindings omitted)"]
+                    if omitted_bindings
+                    else []
+                ),
+            ]
+        )
     return "\n".join(lines)
+
+
+def _run_bound_reporting_source(
+    literature: Optional[LiteratureBundle],
+    plan: Optional[AnalysisPlan],
+) -> Optional[tuple[str, str]]:
+    """Return one exact reporting source bound to this plan, if available."""
+
+    if literature is None or plan is None:
+        return None
+    allowed = {record.key for record in literature.citations}
+    reporting_elements_by_key: dict[str, set[str]] = {}
+    for card in METHOD_CARDS:
+        if card.layer != "reporting_standard":
+            continue
+        reporting_elements_by_key.setdefault(card.source_key, set()).update(
+            card.design_elements
+        )
+    ordered_steps = sorted(
+        plan.steps,
+        key=lambda step: step.planned_analysis_role != "primary",
+    )
+    for step in ordered_steps:
+        declared_keys = set(step.literature_citation_keys)
+        for binding in step.literature_design_bindings:
+            supported_elements = reporting_elements_by_key.get(binding.citation_key)
+            if (
+                binding.citation_key not in allowed
+                or binding.citation_key not in declared_keys
+                or not supported_elements
+                or supported_elements.isdisjoint(binding.design_elements)
+            ):
+                continue
+            return step.step_id, binding.citation_key
+    return None
+
+
+def repair_missing_methods_method_citation(
+    manuscript: str,
+    literature: Optional[LiteratureBundle],
+    *,
+    plan: Optional[AnalysisPlan],
+) -> tuple[str, Optional[dict[str, str]]]:
+    """Insert one source-bound reporting citation when Writer omitted all.
+
+    This is not a free-text citation guess.  The repair is available only when
+    the exact plan bound a run-allowed source to a reporting design element and
+    the curated method-card owner confirms that source governs observational
+    reporting.  Otherwise the manuscript remains unchanged and the existing
+    audit fails closed.
+    """
+
+    audit = audit_manuscript_literature(manuscript, literature)
+    if not audit.methods_method_source_missing:
+        return manuscript, None
+    authority = _run_bound_reporting_source(literature, plan)
+    if authority is None:
+        return manuscript, None
+    step_id, citation_key = authority
+    methods_heading = next(
+        (
+            match
+            for match in _HEADING.finditer(manuscript or "")
+            if _canonical_section(match.group("title")) == "methods"
+        ),
+        None,
+    )
+    if methods_heading is None:
+        return manuscript, None
+    sentence = (
+        "The prespecified study design and reporting contract was informed by "
+        "the run-bound "
+        f"observational reporting guidance [@{citation_key}]."
+    )
+    insertion = "\n\n" + sentence
+    repaired = (
+        manuscript[: methods_heading.end()]
+        + insertion
+        + manuscript[methods_heading.end() :]
+    )
+    return repaired, {
+        "citation_key": citation_key,
+        "step_id": step_id,
+        "sentence": sentence,
+    }
 
 
 def audit_manuscript_literature(
@@ -202,5 +336,6 @@ def audit_manuscript_literature(
 __all__ = [
     "ManuscriptLiteratureAudit",
     "audit_manuscript_literature",
+    "repair_missing_methods_method_citation",
     "render_writer_literature_digest",
 ]
