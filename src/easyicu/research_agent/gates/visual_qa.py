@@ -33,7 +33,7 @@ from ..providers.factory import (
     authorized_complete_with_images,
     provider_transport_destination,
 )
-from ..providers.llm import llm_supports_vision
+from ..providers.capabilities import llm_supports_vision
 from ..schema import ValidationFinding
 from .figure_egress import (
     TRANSPORT_COMPLETED,
