@@ -327,6 +327,36 @@ def test_primary_estimate_bound_false_when_runner_blocked():
     assert _deterministic_primary_estimate_bound(recs) is False
 
 
+def test_typed_descriptive_primary_is_bound_only_with_its_exact_receipt_shape():
+    summary = {
+        "status": "ok",
+        "interpretation_class": "exposure_outcome_distribution",
+        "analysis_role": "primary",
+        "analysis_set": "bound_typed_cohort",
+        "interpretation_ceiling": "descriptive_unadjusted_not_causal",
+        "descriptive_estimates": {
+            "schema_version": "easyicu.exposure_outcome_descriptive_estimates/1",
+            "analysis_role": "primary",
+            "analysis_set": "bound_typed_cohort",
+            "interpretation_ceiling": "descriptive_unadjusted_not_causal",
+            "exposure_prevalence": [{"level": 0, "estimate_pct": 60.0}],
+            "outcome_absolute_risks": [{"level": 0, "estimate_pct": 8.0}],
+            "risk_difference": None,
+        },
+    }
+    recs = [
+        {
+            "step_id": "01_distribution",
+            "deterministic_standard_analysis": "exposure_outcome_distribution",
+            "step_summary": summary,
+        }
+    ]
+
+    assert _deterministic_primary_estimate_bound(recs) is True
+    summary["interpretation_ceiling"] = "associated"
+    assert _deterministic_primary_estimate_bound(recs) is False
+
+
 def test_legacy_deterministic_ordinal_marker_does_not_claim_primary_ownership():
     # Legacy records remain readable, but a retired runner marker cannot regain
     # ownership of a scientific estimand.

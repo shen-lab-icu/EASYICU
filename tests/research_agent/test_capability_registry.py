@@ -39,6 +39,10 @@ _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
         "execution.runners.survival_primary_executor",
         "survival_primary_executor_code",
     ),
+    "exposure_outcome_distribution": (
+        "execution.runners.exposure_outcome_distribution_executor",
+        "exposure_outcome_distribution_executor_code",
+    ),
 }
 
 
@@ -102,7 +106,11 @@ def test_only_typed_host_validated_primary_capabilities_default_to_reportable():
         if capability.scientific_validation == "reportable"
     }
 
-    assert reportable == {"survival_time_to_event_v1", "association_adjusted_v1"}
+    assert reportable == {
+        "survival_time_to_event_v1",
+        "association_adjusted_v1",
+        "descriptive_exposure_outcome_distribution_v1",
+    }
     for capability in cr.CAPABILITY_REGISTRY:
         if capability.capability_id in reportable:
             assert capability.scientific_validator_owner
@@ -134,6 +142,7 @@ def test_partition_helpers_are_consistent():
     llm = set(cr.llm_coded_primary_families())
     assert det == {
         "Association — exact single-model adjusted",
+        "Descriptive — typed exposure/outcome absolute risks",
         "Survival / time-to-event",
     }
     assert llm
@@ -145,6 +154,7 @@ def test_survival_and_exact_association_have_deterministic_primary_owners():
     fams = cr.families_without_deterministic_primary()
     assert fams == set(get_args(StudyDesignFamily)) - {
         "association",
+        "descriptive",
         "time_to_event",
     }
 
@@ -234,6 +244,72 @@ def test_plan_contract_selects_exact_or_freeform_association_capability(ra):
         ).capability_id
         == "association_freeform_v1"
     )
+
+
+def test_only_exact_typed_descriptive_primary_selects_the_reportable_owner(ra):
+    exact = ra.AnalysisPlan(
+        research_question="Describe exposure prevalence and observed mortality.",
+        analysis_type="descriptive_epidemiology",
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_distribution",
+                planned_analysis_role="primary",
+                intent="Report prespecified unadjusted descriptive risks.",
+                method="descriptive",
+                inputs=["artifact:analysis_cohort", "exposure", "death"],
+                expected_outputs=["table:exposure_outcome_distribution"],
+                descriptive_claim={
+                    "unresolved_limitations": [
+                        "post_baseline_exposure_opportunity_unresolved"
+                    ]
+                },
+                exposure_outcome_distribution_spec={
+                    "exposure": "exposure",
+                    "exposure_levels": [0, 1],
+                    "outcome": "death",
+                    "outcome_levels": [0, 1],
+                    "outcome_positive_value": 1,
+                    "level_match_policy": "exact_typed",
+                    "denominator_policy": "all_declared_rows",
+                    "missing_outcome_policy": "structural_absence_is_non_event",
+                    "confidence_level": 0.95,
+                },
+            )
+        ],
+    )
+    ordinary = ra.AnalysisPlan(
+        research_question="Describe the cohort.",
+        analysis_type="descriptive_epidemiology",
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                planned_analysis_role="primary",
+                intent="Describe baseline characteristics.",
+                method="descriptive",
+                inputs=["artifact:analysis_cohort"],
+                expected_outputs=["table:table_one"],
+            )
+        ],
+    )
+
+    exact_verdict = cr.resolve_primary_capability(
+        analysis_type=exact.analysis_type,
+        plan=exact,
+    )
+    ordinary_verdict = cr.resolve_primary_capability(
+        analysis_type=ordinary.analysis_type,
+        plan=ordinary,
+    )
+
+    assert exact_verdict.capability_id == (
+        "descriptive_exposure_outcome_distribution_v1"
+    )
+    assert exact_verdict.execution_owner == "host_deterministic"
+    assert exact_verdict.owner_claimed is True
+    assert exact_verdict.scientific_validation == "reportable"
+    assert ordinary_verdict.capability_id == "descriptive_measurement_v1"
+    assert ordinary_verdict.execution_owner == "agent_coded"
+    assert ordinary_verdict.scientific_validation == "analysis_only"
 
 
 def test_live_auxiliary_dispatch_matches_registry_in_both_directions():

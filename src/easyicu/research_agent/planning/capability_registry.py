@@ -34,6 +34,11 @@ from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
 from ..contracts.capability_ids import CAPABILITY_FAMILIES
 from ..contracts.association_execution import association_execution_verdict
+from ..contracts.descriptive_execution import (
+    DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
+    EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+    exposure_outcome_distribution_execution_verdict,
+)
 from ..contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_OUTPUT,
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
@@ -402,6 +407,55 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         capability_id="descriptive_measurement_v1",
         result_contract="registered summary/source-data products",
         required_diagnostics=("denominators", "measurement availability"),
+    ),
+    ScientificCapability(
+        family="descriptive",
+        label="Descriptive — typed exposure/outcome absolute risks",
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-computed exposure prevalence, outcome absolute risks and an "
+            "optional prespecified unadjusted risk difference under an exact "
+            "typed descriptive-only contract"
+        ),
+        primary_runner=EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+        primary_runner_module=(
+            "execution.runners.exposure_outcome_distribution_executor"
+        ),
+        figure="deterministic",
+        figure_renderer="base_association_skill",
+        data_contract=(
+            "one digest-bound typed cohort",
+            "ExposureOutcomeDistributionSpec/2 with closed typed levels",
+            "DescriptiveClaimContract/1 with descriptive_only ceiling",
+        ),
+        fail_closed=(
+            "The owner declines an untyped cohort, an incomplete distribution "
+            "design, any adjusted/causal owner contract, or any claim ceiling "
+            "above descriptive-only. Runtime evidence and host-derived claim "
+            "metadata must reproduce from the exact registered summary bytes."
+        ),
+        notes=(
+            "This narrow primary capability does not upgrade ordinary Table One "
+            "or measurement-audit steps in the broader descriptive family."
+        ),
+        capability_id=DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
+        result_contract=(
+            "exposure_outcome_distribution/2 summary + digest-bound "
+            "ScientificClaimRegistration"
+        ),
+        required_diagnostics=(
+            "closed exposure/outcome levels and denominators",
+            "interval/dependence contract",
+            "descriptive-only noncausal claim ceiling",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner=(
+            "execution.runners.exposure_outcome_distribution_executor"
+        ),
+        scientific_validator_contract=(
+            "exposure_outcome_distribution_result_receipt_valid + "
+            "ScientificClaimRegistration"
+        ),
     ),
 )
 
@@ -786,6 +840,20 @@ def resolve_primary_capability(
         return _verdict_for(capability, analysis_family=canonical)
 
     primary = primary_steps[0]
+    if canonical == "descriptive_epidemiology":
+        descriptive_verdict = exposure_outcome_distribution_execution_verdict(
+            primary
+        )
+        if descriptive_verdict.claimed:
+            capability = get_capability_by_id(
+                DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID
+            )
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=True,
+                owner_reason=descriptive_verdict.reason,
+            )
     declared = str(getattr(primary, "scientific_capability", "") or "").strip()
     if declared:
         declared_capability = get_capability_by_id(declared)

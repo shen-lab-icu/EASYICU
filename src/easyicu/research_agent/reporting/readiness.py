@@ -68,6 +68,10 @@ from ..authority.source_fingerprints import (
     registered_source_fingerprints_match as _source_fingerprints_match,
 )
 from ..authority.step_recovery import StepRecoverySignature
+from ..contracts.descriptive_execution import (
+    EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+    exposure_outcome_distribution_result_receipt_valid,
+)
 from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
@@ -1430,12 +1434,28 @@ def _partition_findings_by_supersession(
 
 # Exact primary owners that may bind a deterministic headline result.
 _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
-    {ADJUSTED_ASSOCIATION_ANALYSIS_KIND, SURVIVAL_PRIMARY_ANALYSIS_KIND}
+    {
+        ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+        EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+        SURVIVAL_PRIMARY_ANALYSIS_KIND,
+    }
 )
 
 
 def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
     """Require a complete primary effect emitted by a currently registered owner."""
+
+    for record in per_step_records or []:
+        if not isinstance(record, dict):
+            continue
+        if record.get("deterministic_standard_analysis") != (
+            EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND
+        ):
+            continue
+        if exposure_outcome_distribution_result_receipt_valid(
+            record.get("step_summary")
+        ):
+            return True
     from ..robustness.primary_effect import (
         _extract_primary_effect_payload_from_records,
     )

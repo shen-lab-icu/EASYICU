@@ -13,6 +13,7 @@ CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     "prediction_risk_model_v1": "prediction",
     "phenotyping_cluster_v1": "phenotyping",
     "descriptive_measurement_v1": "descriptive",
+    "descriptive_exposure_outcome_distribution_v1": "descriptive",
 }
 
 

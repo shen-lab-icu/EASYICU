@@ -263,6 +263,22 @@ def test_a_scientific_or_widened_contract_is_refused() -> None:
             ),
         )
     )
+    assert exposure_outcome_distribution_executor_owns_step(
+        _step(
+            planned_analysis_role="primary",
+            scientific_capability=(
+                "descriptive_exposure_outcome_distribution_v1"
+            ),
+            descriptive_claim=DescriptiveClaimContract(
+                unresolved_limitations=(
+                    "post_baseline_exposure_opportunity_unresolved",
+                )
+            ),
+        )
+    )
+    assert not exposure_outcome_distribution_executor_owns_step(
+        _step(scientific_capability="association_adjusted_v1")
+    )
     assert not exposure_outcome_distribution_executor_owns_step(
         _step(
             planned_analysis_role="primary",
