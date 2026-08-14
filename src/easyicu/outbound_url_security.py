@@ -67,6 +67,11 @@ def validate_outbound_http_endpoint(
         _refuse("host_does_not_resolve")
 
     loopback_only = all(address.is_loopback for address in addresses)
+    if any(address.is_loopback for address in addresses) and not loopback_only:
+        # A hostname that spans loopback and public space has no single network
+        # trust class.  Accepting it would let the resolver choose the public
+        # answer during validation and the loopback answer during connect.
+        _refuse("mixed_address_scope")
     proxy_exception = (
         parsed.scheme == "https"
         and host.lower() in {str(item).lower() for item in proxy_fake_ip_https_hosts}
