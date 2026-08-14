@@ -33,6 +33,9 @@ from easyicu.research_agent.execution.runners.exposure_outcome_distribution_rend
     run_exposure_outcome_distribution_figure,
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
+from easyicu.research_agent.contracts.declared_product import (
+    declared_product_contract_findings,
+)
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -374,13 +377,44 @@ def test_patient_cluster_intervals_and_risk_difference_render_from_one_product(
         "patient_cluster_robust_wald"
     )
     assert summary["interpretation_ceiling"] == ("descriptive_unadjusted_not_causal")
-    assert summary["descriptive_contrast"]["risk_difference_covariance"] == (
-        "cluster_robust"
+    assert "descriptive_contrast" not in summary
+    assert not any(
+        key.startswith("risk_difference_")
+        for key in summary["declared_design"]
     )
     contrast_source = out / f"{PRODUCT}_risk_difference_source_data.csv"
     assert contrast_source.is_file()
     contrast = pd.read_csv(contrast_source).iloc[0]
-    assert contrast["interpretation_ceiling"] == ("descriptive_unadjusted_not_causal")
+    assert int(contrast["source_row_index"]) == 2
+    assert contrast["risk_difference_covariance"] == "cluster_robust"
+    assert float(contrast["risk_difference_pct"]) == pytest.approx(25.0)
+    findings = declared_product_contract_findings(
+        step=_step(),
+        step_summary=summary,
+        effect_method_authorized=False,
+        effect_figure_source_authorized=True,
+        out_dir=out,
+    )
+    assert not [
+        finding
+        for finding in findings
+        if finding.detail.get("kind") == "unauthorized_effect_product"
+    ]
+    forged_summary = dict(summary)
+    forged_summary["descriptive_contrast"] = {
+        "risk_difference_pct": float(contrast["risk_difference_pct"])
+    }
+    forged = declared_product_contract_findings(
+        step=_step(),
+        step_summary=forged_summary,
+        effect_method_authorized=False,
+        effect_figure_source_authorized=True,
+        out_dir=out,
+    )
+    assert any(
+        finding.detail.get("kind") == "unauthorized_effect_product"
+        for finding in forged
+    )
     contract = json.loads((out / f"{PRODUCT}.figure_contract.json").read_text())
     assert (
         "does not authorize association or causal interpretation"

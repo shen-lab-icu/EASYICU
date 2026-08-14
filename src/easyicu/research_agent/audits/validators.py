@@ -11966,8 +11966,25 @@ class FigureSourceDataValidator:
                 & ~left_finite
                 & ~right_finite
             )
-            parse_failure = (left_present & left.isna()) | (
-                right_present & right.isna()
+            # Some semantically textual receipt columns contain words such as
+            # ``risk`` or ``effect`` in their names and therefore enter the
+            # numeric-value candidate set.  A byte-faithful projection of an
+            # upstream value like ``cluster_robust`` must not be rejected just
+            # because both sides are (correctly) non-numeric.  This remains
+            # fail-closed for unequal text, one-sided absence, or one-sided
+            # numeric parsing.
+            same_semantic_text = (
+                left_present
+                & right_present
+                & left.isna()
+                & right.isna()
+                & left_raw.astype(str)
+                .str.strip()
+                .eq(right_raw.astype(str).str.strip())
+            )
+            parse_failure = (
+                ((left_present & left.isna()) | (right_present & right.isna()))
+                & ~same_semantic_text
             )
             bad = (
                 (left_present ^ right_present)
@@ -11977,12 +11994,13 @@ class FigureSourceDataValidator:
                     left_present
                     & right_present
                     & ~comparable
+                    & ~same_semantic_text
                     & ~same_nonfinite
                     & ~parse_failure
                 )
             )
             return (
-                bool(comparable.any() and not bad.any()),
+                bool((comparable | same_semantic_text).any() and not bad.any()),
                 bool(bad.any()),
                 bad,
                 left,

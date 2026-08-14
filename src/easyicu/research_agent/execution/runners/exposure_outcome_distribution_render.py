@@ -766,7 +766,29 @@ def run_exposure_outcome_distribution_figure(
         ]
     ].to_csv(outcome_source, index=False)
     if contrast is not None:
-        pd.DataFrame([contrast]).to_csv(contrast_source, index=False)
+        # Keep the figure source as an exact, row-addressable projection of the
+        # parent table.  ``contrast`` also carries reader conveniences derived
+        # across the two exposure rows (their labels, risks, and denominators),
+        # so serialising that mapping creates a new synthetic row that no parent
+        # row can authenticate.  The parent already stores the prespecified RD
+        # and its uncertainty on its unique ``overall`` row; publish only those
+        # same-name fields plus the row identity used by the source-data gate.
+        contrast_columns = [
+            "risk_difference_n",
+            "risk_difference_pct",
+            "risk_difference_standard_error_pct",
+            "risk_difference_ci_low_pct",
+            "risk_difference_ci_high_pct",
+            "risk_difference_covariance",
+            "risk_difference_cluster_count",
+            "risk_difference_reference_index",
+            "risk_difference_comparison_index",
+            "risk_difference_effect_measure",
+            "risk_difference_interval_method",
+        ]
+        parent_contrast = frame.loc[[total.name], contrast_columns].copy()
+        parent_contrast.insert(0, "source_row_index", [int(total.name)])
+        parent_contrast.to_csv(contrast_source, index=False)
 
     import matplotlib.pyplot as plt
 
@@ -994,9 +1016,10 @@ def run_exposure_outcome_distribution_figure(
         "source_evidence_id": binding.get("evidence_id"),
         "source_rows_consumed": int(len(frame)),
         "cohort_n": int(total["n_rows"]),
-        # Echoed from the bound table, not re-decided: a reader of the summary
-        # can see which design the drawing was made under without opening the
-        # plan, and a mismatch against the parent is detectable.
+        # Echo only non-result design coordinates from the bound table.  The RD
+        # numbers remain in the digest-bound parent and its source-data
+        # projection; copying them into this rendering-only step summary makes
+        # the renderer look like a second effect-estimation owner.
         "declared_design": {
             key: (
                 None
@@ -1013,8 +1036,8 @@ def run_exposure_outcome_distribution_figure(
                 else str(value)
             )
             for key, value in design.items()
+            if not str(key).startswith("risk_difference_")
         },
-        "descriptive_contrast": contrast,
         "figure_path": f"{figure_product}.png",
         "figure_contract": contract_path.name,
         "contract_files": [contract_path.name],
