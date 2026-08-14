@@ -40,7 +40,7 @@ from .mcp_policy import (
 )
 
 MCP_BEARER_TOKEN_ENV = "EASYICU_MCP_BEARER_TOKEN"
-MCP_TLS_OR_PROXY_ASSURANCE_ENV = "EASYICU_MCP_TLS_OR_PROXY_ASSURED"
+MCP_TRUSTED_REVERSE_PROXY_ENV = "EASYICU_MCP_TRUSTED_REVERSE_PROXY"
 DEFAULT_HTTP_MAX_BODY_BYTES = 1024 * 1024
 DEFAULT_MAX_CONCURRENT_TOOL_CALLS = 4
 LOOPBACK_ANONYMOUS_SCOPES = frozenset({SCOPE_METADATA})
@@ -197,22 +197,32 @@ def validate_http_server_config(
     host: str,
     bearer_token: Optional[str],
     *,
-    tls_or_trusted_proxy_assured: bool = False,
+    trusted_reverse_proxy: bool = False,
+    tls_certfile: Optional[str] = None,
+    tls_keyfile: Optional[str] = None,
 ) -> Optional[str]:
     """Fail closed before binding an externally reachable MCP socket."""
 
     token = str(bearer_token or "").strip() or None
+    cert = str(tls_certfile or "").strip() or None
+    key = str(tls_keyfile or "").strip() or None
+    if bool(cert) != bool(key):
+        raise ValueError("direct MCP TLS requires both a certificate and private key")
+    if cert is not None and key is not None:
+        for label, value in (("TLS certificate", cert), ("TLS private key", key)):
+            path = os.path.expanduser(value)
+            if os.path.islink(path) or not os.path.isfile(path):
+                raise ValueError(f"{label} must be an existing regular file")
     if not _is_loopback_host(host):
         if token is None:
             raise ValueError(
                 "non-loopback MCP HTTP binding requires an independent bearer token "
                 f"in {MCP_BEARER_TOKEN_ENV}"
             )
-        if tls_or_trusted_proxy_assured is not True:
+        if not trusted_reverse_proxy and (cert is None or key is None):
             raise ValueError(
-                "non-loopback MCP Streamable HTTP requires explicit TLS or trusted "
-                "reverse-proxy assurance; pass --tls-or-trusted-proxy only when "
-                "that transport boundary is configured"
+                "direct non-loopback MCP Streamable HTTP requires --tls-certfile "
+                "and --tls-keyfile, or explicit --trusted-reverse-proxy mode"
             )
     if token is not None:
         for secret_name in ("OPENAI_API_KEY", "OPENROUTER_API_KEY"):
@@ -354,7 +364,9 @@ def create_streamable_http_app(
     host: str = "127.0.0.1",
     port: int = 8765,
     bearer_token: Optional[str] = None,
-    tls_or_trusted_proxy_assured: bool = False,
+    trusted_reverse_proxy: bool = False,
+    tls_certfile: Optional[str] = None,
+    tls_keyfile: Optional[str] = None,
     allowed_hosts: Optional[Sequence[str]] = None,
     allowed_origins: Optional[Sequence[str]] = None,
     max_body_bytes: int = DEFAULT_HTTP_MAX_BODY_BYTES,
@@ -364,7 +376,9 @@ def create_streamable_http_app(
     token = validate_http_server_config(
         host,
         bearer_token,
-        tls_or_trusted_proxy_assured=tls_or_trusted_proxy_assured,
+        trusted_reverse_proxy=trusted_reverse_proxy,
+        tls_certfile=tls_certfile,
+        tls_keyfile=tls_keyfile,
     )
     exact_hosts = list(dict.fromkeys([*_default_allowed_hosts(host, port), *(allowed_hosts or ())]))
     exact_origins = list(
@@ -427,7 +441,9 @@ def _run_streamable_http(
     host: str,
     port: int,
     bearer_token: Optional[str],
-    tls_or_trusted_proxy_assured: bool,
+    trusted_reverse_proxy: bool,
+    tls_certfile: Optional[str],
+    tls_keyfile: Optional[str],
     allowed_hosts: Sequence[str],
     allowed_origins: Sequence[str],
     max_body_bytes: int,
@@ -439,12 +455,20 @@ def _run_streamable_http(
         host=host,
         port=port,
         bearer_token=bearer_token,
-        tls_or_trusted_proxy_assured=tls_or_trusted_proxy_assured,
+        trusted_reverse_proxy=trusted_reverse_proxy,
+        tls_certfile=tls_certfile,
+        tls_keyfile=tls_keyfile,
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
         max_body_bytes=max_body_bytes,
     )
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        ssl_certfile=tls_certfile,
+        ssl_keyfile=tls_keyfile,
+    )
     return 0
 
 
@@ -466,13 +490,15 @@ def main(
     parser.add_argument("--allowed-host", action="append", default=[])
     parser.add_argument("--allowed-origin", action="append", default=[])
     parser.add_argument(
-        "--tls-or-trusted-proxy",
+        "--trusted-reverse-proxy",
         action="store_true",
         help=(
-            "assert that a non-loopback bind is protected by TLS directly or by "
-            "a configured trusted TLS-terminating reverse proxy"
+            "assert that a non-loopback bind is behind a configured trusted "
+            "TLS-terminating reverse proxy"
         ),
     )
+    parser.add_argument("--tls-certfile")
+    parser.add_argument("--tls-keyfile")
     parser.add_argument(
         "--max-request-bytes",
         type=int,
@@ -497,13 +523,15 @@ def main(
                 host=args.host,
                 port=args.port,
                 bearer_token=os.environ.get(MCP_BEARER_TOKEN_ENV),
-                tls_or_trusted_proxy_assured=(
-                    args.tls_or_trusted_proxy
-                    or str(os.environ.get(MCP_TLS_OR_PROXY_ASSURANCE_ENV, ""))
+                trusted_reverse_proxy=(
+                    args.trusted_reverse_proxy
+                    or str(os.environ.get(MCP_TRUSTED_REVERSE_PROXY_ENV, ""))
                     .strip()
                     .lower()
                     in {"1", "true", "yes", "on"}
                 ),
+                tls_certfile=args.tls_certfile,
+                tls_keyfile=args.tls_keyfile,
                 allowed_hosts=args.allowed_host,
                 allowed_origins=args.allowed_origin,
                 max_body_bytes=args.max_request_bytes,
@@ -520,7 +548,7 @@ __all__ = [
     "DEFAULT_MAX_CONCURRENT_TOOL_CALLS",
     "LOOPBACK_ANONYMOUS_SCOPES",
     "MCP_BEARER_TOKEN_ENV",
-    "MCP_TLS_OR_PROXY_ASSURANCE_ENV",
+    "MCP_TRUSTED_REVERSE_PROXY_ENV",
     "create_mcp_server",
     "create_streamable_http_app",
     "main",

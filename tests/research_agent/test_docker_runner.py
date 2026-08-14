@@ -74,6 +74,14 @@ def _make_cohort(tmp_path: Path) -> Path:
     return p
 
 
+def _read_env_file(path: Path) -> Dict[str, str]:
+    return dict(
+        line.split("=", 1)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if "=" in line
+    )
+
+
 class _FakeProc:
     def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0):
         self.stdout = stdout
@@ -283,6 +291,7 @@ def test_build_command_has_safety_knobs(
         step_id="step_x",
         script_path=script_path,
         out_dir=out_dir,
+        env_file_path=tmp_path / "step-x.env",
     )
     joined = " ".join(cmd)
 
@@ -324,9 +333,8 @@ def test_build_command_has_safety_knobs(
         "type=bind" in s and s.endswith("target=/easyicu-run/steps/step_x") for s in cmd
     ), f"step directory must not be writable in {joined}"
     # Env injection.
-    assert "-e" in cmd
-    env_pairs = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"]
-    env_dict = dict(p.split("=", 1) for p in env_pairs)
+    assert "--env-file" in cmd
+    env_dict = _read_env_file(tmp_path / "step-x.env")
     assert env_dict["COHORT_PARQUET"] == "/cohort.parquet"
     assert env_dict["EASYICU_COHORT_ROWS"] == "2"
     assert env_dict["STEP_OUT_DIR"] == "/easyicu-step-output"
@@ -358,10 +366,10 @@ def test_build_command_maps_resolved_inputs_manifest_into_container(
         script_path=script_path,
         out_dir=out_dir,
         resolved_inputs_path=manifest,
+        env_file_path=tmp_path / "consume.env",
     )
 
-    env_pairs = [cmd[i + 1] for i, token in enumerate(cmd) if token == "-e"]
-    env_dict = dict(pair.split("=", 1) for pair in env_pairs)
+    env_dict = _read_env_file(tmp_path / "consume.env")
     assert env_dict["EASYICU_RESOLVED_INPUTS_JSON"] == (
         "/easyicu-run/resolved_inputs/consume.json"
     )
@@ -386,10 +394,10 @@ def test_run_owned_cohort_uses_one_canonical_container_path(
         step_id="consume",
         script_path=script_path,
         out_dir=out_dir,
+        env_file_path=tmp_path / "cohort.env",
     )
 
-    env_pairs = [cmd[i + 1] for i, token in enumerate(cmd) if token == "-e"]
-    env_dict = dict(pair.split("=", 1) for pair in env_pairs)
+    env_dict = _read_env_file(tmp_path / "cohort.env")
     expected = "/easyicu-run/evidence/analysis_cohort.parquet"
     assert env_dict["COHORT_PARQUET"] == expected
     assert env_dict["COHORT_PATH"] == expected
@@ -436,10 +444,10 @@ def test_build_command_maps_digest_bound_authority_snapshot_into_container(
         out_dir=out_dir,
         authority_snapshot_path=snapshot_path,
         authority_snapshot_sha256=snapshot_sha256,
+        env_file_path=tmp_path / "authority.env",
     )
 
-    env_pairs = [cmd[i + 1] for i, token in enumerate(cmd) if token == "-e"]
-    env_dict = dict(pair.split("=", 1) for pair in env_pairs)
+    env_dict = _read_env_file(tmp_path / "authority.env")
     assert env_dict["EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT"] == (
         "/easyicu-run/steps/consume/.run_artifact_authority_snapshot.json"
     )
@@ -480,6 +488,7 @@ def test_build_command_passes_through_advanced_flags(
         step_id="step_y",
         script_path=script_path,
         out_dir=out_dir,
+        env_file_path=tmp_path / "advanced.env",
     )
     assert "--network=bridge" in cmd
     assert "--cpus=1.5" in cmd
@@ -490,8 +499,8 @@ def test_build_command_passes_through_advanced_flags(
         "type=bind" in s and f"source={extra_mount_src}" in s and "readonly" in s
         for s in cmd
     )
-    env_pairs = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"]
-    assert "PUBMED_API_KEY=abc" in env_pairs
+    assert _read_env_file(tmp_path / "advanced.env")["PUBMED_API_KEY"] == "abc"
+    assert not any("PUBMED_API_KEY=abc" in token for token in cmd)
 
 
 @pytest.mark.parametrize(
@@ -615,6 +624,30 @@ def test_docker_runner_rejects_unsafe_auto_mounted_path_env(
             candidate.unlink(missing_ok=True)
 
 
+def test_docker_runner_rejects_socket_inside_extra_mount_directory(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    source = Path(tempfile.mkdtemp(prefix="easyicu-mount-")).resolve()
+    socket_path = source / "service.sock"
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(socket_path))
+    try:
+        with pytest.raises(ValueError, match="unsafe special file"):
+            ra.DockerRunner(
+                workdir=tmp_path / "run",
+                cohort_parquet=cohort,
+                extra_mounts=[(str(source), "/easyicu-extra/source", "ro")],
+            )
+    finally:
+        listener.close()
+        socket_path.unlink(missing_ok=True)
+        shutil.rmtree(source)
+
+
 @pytest.mark.parametrize(
     "step_id",
     ["safe,target=cohort.parquet", "safe,readonly", "safe=target", "safe\nline"],
@@ -721,6 +754,92 @@ def test_run_invokes_subprocess_and_writes_log(
     # Script persisted to disk before run.
     assert result.script_path.read_text(encoding="utf-8") == "print('hi')\n"
     assert not (result.cwd / ".run_artifact_authority_snapshot.json").exists()
+
+
+def test_run_keeps_secret_values_out_of_argv_and_cleans_owner_only_env_file(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    observed: Dict[str, Any] = {}
+    secret = "docker-secret-value"
+
+    def inspect_main_env_file() -> None:
+        command = captured[-1]
+        if "--env-file" not in command:
+            return
+        path = Path(command[command.index("--env-file") + 1])
+        observed["path"] = path
+        observed["mode"] = os.stat(path).st_mode & 0o777
+        observed["payload"] = path.read_text(encoding="utf-8")
+
+    _install_fake_subprocess(
+        monkeypatch,
+        captured=captured,
+        run_side_effect=inspect_main_env_file,
+    )
+    runner = ra.DockerRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort,
+        extra_env={"SERVICE_API_KEY": secret},
+    )
+
+    result = runner.run(step_id="secret", code="print('ok')\n")
+
+    assert result.succeeded
+    assert observed["mode"] == 0o600
+    assert f"SERVICE_API_KEY={secret}" in observed["payload"]
+    assert not observed["path"].exists()
+    assert all(secret not in token for command in captured for token in command)
+    run_command = next(command for command in captured if "--env-file" in command)
+    assert not any("=" in token and secret in token for token in run_command)
+
+
+def test_docker_run_retains_only_bounded_output_tail(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import easyicu.research_agent.execution.runner as runner_module
+
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+    monkeypatch.setattr(
+        runner,
+        "_capture_runtime_provenance",
+        lambda: (
+            {"image_id": "sha256:" + "a" * 64, "repo_digests": []},
+            "numpy==2.0.0\n",
+        ),
+    )
+    monkeypatch.setattr(runner, "_start_ghost_container_monitor", lambda **kwargs: None)
+
+    def fake_run(command, *args, **kwargs):
+        del args
+        if "--env-file" in command:
+            chunk = b"x" * (64 * 1024)
+            for _ in range((runner_module.MAX_RUNNER_CAPTURE_BYTES * 2) // len(chunk)):
+                os.write(kwargs["stdout"], chunk)
+            return _FakeProc()
+        if command[1:3] == ["container", "inspect"]:
+            return _FakeProc(returncode=1, stderr="Error: No such container")
+        if command[1] in {"stop", "wait", "rm", "kill"}:
+            return _FakeProc()
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+
+    result = runner.run(step_id="noisy", code="print('ok')\n")
+
+    assert result.succeeded
+    assert "earlier runner output truncated" in result.stdout
+    assert len(result.stdout.encode("utf-8")) <= (
+        runner_module.MAX_RUNNER_CAPTURE_BYTES + 64
+    )
 
 
 def test_docker_coder_capabilities_use_image_snapshot_before_first_step(
@@ -1446,7 +1565,8 @@ def test_each_run_recreates_the_output_mount_directory(
         target == "/easyicu-step-output" for _command, _source, target in output_mounts
     )
     for command, _source, target in output_mounts:
-        assert f"STEP_OUT_DIR={target}" in command
+        assert "--env-file" in command
+        assert not any(token.startswith("STEP_OUT_DIR=") for token in command)
     assert not list((tmp_path / "run" / "steps" / "repeat").glob(".outputs-*"))
 
 
@@ -1889,10 +2009,12 @@ def test_build_command_mounts_explicit_external_path_env_read_only(
     script_path.write_text("print('ok')\n", encoding="utf-8")
 
     cmd = runner.build_command(
-        step_id="trajectory", script_path=script_path, out_dir=out_dir
+        step_id="trajectory",
+        script_path=script_path,
+        out_dir=out_dir,
+        env_file_path=tmp_path / "trajectory.env",
     )
-    env_pairs = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"]
-    env_dict = dict(pair.split("=", 1) for pair in env_pairs)
+    env_dict = _read_env_file(tmp_path / "trajectory.env")
 
     assert env_dict["TRAJECTORY_PARQUET"].startswith("/easyicu-inputs/")
     assert str(trajectory) not in env_dict["TRAJECTORY_PARQUET"]
