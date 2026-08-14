@@ -875,21 +875,28 @@ def run_exposure_outcome_distribution_figure(
     add_panel_label(ax_b, "B", x=-0.14, y=1.04)
     if contrast is not None:
         coverage = 100.0 * float(contrast["confidence_level"])
+        contrast_annotation = (
+            f"Risk difference (comparison − reference): "
+            f"{float(contrast['risk_difference_pct']):.1f} pp "
+            f"({coverage:.0f}% CI "
+            f"{float(contrast['risk_difference_ci_low_pct']):.1f} to "
+            f"{float(contrast['risk_difference_ci_high_pct']):.1f}); "
+            f"{contrast['risk_difference_covariance']}"
+        )
         ax_b.text(
             0.0,
             -0.23,
-            (
-                f"Risk difference (comparison − reference): "
-                f"{float(contrast['risk_difference_pct']):.1f} pp "
-                f"({coverage:.0f}% CI "
-                f"{float(contrast['risk_difference_ci_low_pct']):.1f} to "
-                f"{float(contrast['risk_difference_ci_high_pct']):.1f}); "
-                f"{contrast['risk_difference_covariance']}"
+            textwrap.fill(
+                contrast_annotation,
+                width=54,
+                break_long_words=False,
+                break_on_hyphens=False,
             ),
             transform=ax_b.transAxes,
             ha="left",
             va="top",
             fontsize=6.0,
+            linespacing=1.25,
             color=palette["neutral"],
         )
     fig.subplots_adjust(

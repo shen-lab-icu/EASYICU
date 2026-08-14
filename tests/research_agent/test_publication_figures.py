@@ -1307,6 +1307,18 @@ def test_publication_figure_skill_e1_typed_distribution_projects_both_panels(
         evidence_id="exposure_outcome_distribution",
         produced_by_step="03_distribution",
     )
+    missingness = tmp_path / "measurement_missingness.csv"
+    missingness.write_text(
+        "variable,missing_fraction\nage,0.0\ndeath,0.0\n",
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="table",
+        description="E1 measurement missingness.",
+        source_path=missingness,
+        evidence_id="measurement_missingness",
+        produced_by_step="02_table_one",
+    )
     context = ra.ResearchContext(
         research_question="Describe Sepsis-3 and in-hospital mortality.",
         cohort=ra.CohortDescriptor(
@@ -1321,7 +1333,11 @@ def test_publication_figure_skill_e1_typed_distribution_projects_both_panels(
     )
     plan = ra.AnalysisPlan(
         research_question=context.research_question,
-        display_labels={"sep3_sofa1_max": "Sepsis-3"},
+        display_labels={
+            "sep3_sofa1_max": "标准 Sepsis-3 状态（0–24小时）",
+            "age": "ICU入科时年龄（岁）",
+            "death": "院内死亡",
+        },
         steps=[
             ra.AnalysisStep(
                 step_id="03_distribution",
@@ -1374,6 +1390,11 @@ def test_publication_figure_skill_e1_typed_distribution_projects_both_panels(
     assert "percentage points" in contract["panels"][0]["claim"]
     assert "analysed denominators" in contract["panels"][1]["claim"]
     assert "relative estimate" not in json.dumps(contract)
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "primary_estimand",
+        "descriptive_result",
+        "data_quality",
+    ]
 
 
 def test_figure_contract_enforces_unique_panel_ids():

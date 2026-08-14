@@ -407,6 +407,13 @@ def test_e1_wide_grouped_summary_is_rendered_by_the_same_owner(
         "source_data": ["age_distribution_source_data.csv"],
         "source_products": ["table:distribution_prevalence"],
     }
+    from easyicu.research_agent.figures.publication import audit_publication_exports
+
+    assert not [
+        finding
+        for finding in audit_publication_exports([out_dir / "age_distribution.svg"])
+        if "outside the canvas" in finding.message
+    ]
     _assert_valid_bundle(
         step=step,
         run_dir=run_dir,

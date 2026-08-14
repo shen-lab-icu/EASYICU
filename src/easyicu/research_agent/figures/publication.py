@@ -554,7 +554,23 @@ def apply_publication_style(
 
     plt.rcParams.update({
         "font.family": "sans-serif",
-        "font.sans-serif": ["Arial", "DejaVu Sans", "Liberation Sans"],
+        # Prefer a journal-compatible Unicode sans when one is installed, then
+        # fall back to the ordinary Latin families.  A Latin-only first choice
+        # makes valid Planner-owned Chinese labels rasterise as tofu boxes even
+        # though the editable SVG still carries the original text.
+        "font.sans-serif": [
+            "Noto Sans CJK SC",
+            "Source Han Sans SC",
+            "Arial Unicode MS",
+            "PingFang SC",
+            "Hiragino Sans GB",
+            "Heiti SC",
+            "Microsoft YaHei",
+            "SimHei",
+            "Arial",
+            "DejaVu Sans",
+            "Liberation Sans",
+        ],
         "svg.fonttype": "none",
         "pdf.fonttype": 42,
         "font.size": font_size,
@@ -607,6 +623,7 @@ def save_publication_figure(
     basename: Optional[str] = None,
     formats: Optional[Sequence[ExportFormat]] = None,
     dpi: int = 300,
+    pad_inches: float = 0.04,
     output_path: Optional[str | Path] = None,
     step_out_dir: Optional[str | Path] = None,
     **legacy_kwargs: object,
@@ -628,6 +645,10 @@ def save_publication_figure(
         Raster DPI for PNG exports. TIFF exports are capped to a
         journal-reasonable 300 DPI and compressed with LZW so agent
         reruns do not silently produce 100MB+ artefacts.
+    pad_inches:
+        Outer export gutter added after tight bounding-box calculation.
+        Renderers with long, declared category labels may request more than
+        the compact default without changing the plot or QA thresholds.
     """
     stem_path: Path
     resolved_contract = figure_contract or contract
@@ -834,7 +855,7 @@ def save_publication_figure(
                     pass
             saved[fmt] = path
             continue
-        kwargs = {"bbox_inches": "tight", "pad_inches": 0.04}
+        kwargs = {"bbox_inches": "tight", "pad_inches": float(pad_inches)}
         if fmt == "png":
             kwargs["dpi"] = dpi
         elif fmt == "tiff":
