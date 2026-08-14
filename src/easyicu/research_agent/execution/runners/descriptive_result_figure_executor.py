@@ -348,6 +348,7 @@ def _write_contract_and_summary(
         contract=contract,
         formats=("png", "svg", "pdf", "tiff"),
         dpi=300,
+        pad_inches=0.14,
     )
     figure_files = [path.name for key, path in outputs.items() if key != "contract"]
     summary = {
@@ -536,7 +537,10 @@ def run_descriptive_result_figure(
                 va="center",
                 fontsize=7,
             )
-        fig.tight_layout()
+        # Leave a real outer gutter around arbitrary declared group labels.
+        # The default tight-layout pad can place a long first y tick fractionally
+        # outside the SVG viewBox even when the raster looks merely "close".
+        fig.tight_layout(pad=1.8)
         summary = _write_contract_and_summary(
             fig=fig,
             out_dir=out_dir,

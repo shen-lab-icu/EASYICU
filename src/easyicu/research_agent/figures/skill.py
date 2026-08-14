@@ -14,6 +14,7 @@ import json
 import re
 import shutil
 import sys
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -741,7 +742,21 @@ class PublicationFigureSkill:
                 linestyle="--",
                 linewidth=0.8,
             )
-        ax.set_yticks(y, plot_df["label"].astype(str).tolist())
+        y_labels = plot_df["label"].astype(str).tolist()
+        if typed_distribution:
+            # This typed row combines an exposure label with both contrast
+            # levels.  Preserve every word, but wrap the presentation label so
+            # multilingual Planner labels do not consume or leave the canvas.
+            y_labels = [
+                textwrap.fill(
+                    label,
+                    width=32,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+                for label in y_labels
+            ]
+        ax.set_yticks(y, y_labels)
         ax.invert_yaxis()
         ax.set_xlabel(str(axis_meta["xlabel"]))
         ax.set_ylabel("")
@@ -768,20 +783,6 @@ class PublicationFigureSkill:
             left_pad = max(span * 0.12, 0.05)
             ax.set_xlim(left_anchor - left_pad, right_anchor + right_pad)
         text_x = right_anchor + right_pad * 0.12
-        # The annotation-column header lives in the title band as a
-        # right-anchored title. Earlier placements collided in the SVG QA:
-        # inside the axes at y=0.96 it overlapped the row-0 annotation
-        # (inverted y-axis puts row 0 on top), and free-floating above the
-        # axes at y=1.02 it overlapped long left titles on short axes.
-        # Left/right titles share one band with opposite anchors, so they
-        # stay apart for realistic title lengths.
-        ax.set_title(
-            str(axis_meta["header"]),
-            loc="right",
-            pad=4,
-            fontsize=6.8,
-            color=palette.get("baseline", "#272727"),
-        )
         for idx, (center, lo, hi) in enumerate(zip(estimate, lower, upper)):
             ax.text(
                 text_x,
@@ -792,10 +793,11 @@ class PublicationFigureSkill:
                 fontsize=6.5,
                 color=palette.get("baseline", "#272727"),
             )
-        # Keep the title band short enough that the left scientific label and
-        # the right interval header remain distinct in compact journal panels.
-        # The target outcome is already explicit in the figure contract and
-        # caption; repeating a long endpoint name here caused real SVG overlap.
+        # Do not add a second, right-aligned interval header to this compact
+        # title band.  The x-axis already names the measure and unit, while the
+        # point labels show estimate (lower-upper) and the FigureContract names
+        # the interval.  Repeating all of that as a second title is redundant
+        # and can overlap the scientific title in a legitimate narrow panel.
         primary_panel_title = (
             f"{estimate_label} risk difference"
             if typed_distribution

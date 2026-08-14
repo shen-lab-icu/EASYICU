@@ -33,6 +33,7 @@ from easyicu.research_agent.execution.runners.exposure_outcome_distribution_rend
     run_exposure_outcome_distribution_figure,
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
+from easyicu.research_agent.figures.publication import audit_publication_exports
 from easyicu.research_agent.contracts.declared_product import (
     declared_product_contract_findings,
 )
@@ -420,6 +421,11 @@ def test_patient_cluster_intervals_and_risk_difference_render_from_one_product(
         "does not authorize association or causal interpretation"
         in contract["statistics_note"]
     )
+    assert not [
+        finding
+        for finding in audit_publication_exports([out / f"{PRODUCT}.svg"])
+        if "outside the canvas" in finding.message
+    ]
 
 
 def test_tampered_patient_cluster_uncertainty_is_refused(
