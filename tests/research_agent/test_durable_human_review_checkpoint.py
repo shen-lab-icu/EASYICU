@@ -316,6 +316,87 @@ def test_execution_start_receipt_allows_restart_before_first_execute_side_effect
     assert load_checkpoint(checkpoint_path, require_pending=False).state == "completed"
 
 
+def test_restart_reconciles_provider_resumed_before_decision_commit(
+    monkeypatch, tmp_path
+) -> None:
+    from easyicu.research_agent.orchestration import human_review_restore
+
+    _force_approvable_plan_review(monkeypatch)
+    workdir = tmp_path / "runs"
+    pending = _pipeline(workdir).run(
+        question="Does age describe hospital mortality?",
+        cohort=_cohort(),
+        target_outcome="death",
+    )
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision="approved",
+            reviewer="test reviewer",
+            decided_at="2026-08-14T03:12:00Z",
+        )
+        for request in pending.requests
+    ]
+    events: list[tuple[str, str]] = []
+
+    class _ProviderTask:
+        state = "paused"
+
+        def reconcile_review_pause(self, *, paused_at: str) -> None:
+            events.append(("reconcile", paused_at))
+            self.state = "paused"
+
+        def resume(self) -> None:
+            events.append(("resume", self.state))
+            self.state = "running"
+
+        def pause(self) -> None:
+            events.append(("pause", self.state))
+            self.state = "paused"
+
+        def assert_active(self) -> float:
+            return 600.0
+
+        def cap_timeout(self, requested_seconds: float) -> float:
+            return requested_seconds
+
+    provider = _ProviderTask()
+    real_recorder = human_review_restore.persist_human_review_records
+    monkeypatch.setattr(
+        human_review_restore,
+        "persist_human_review_records",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            SystemExit("crash before decision commit")
+        ),
+    )
+    interrupted = _pipeline(workdir)
+    interrupted._provider_hard_stop = provider
+    with pytest.raises(SystemExit, match="before decision commit"):
+        interrupted.resume_human_review(decisions, run_id=pending.run_id)
+
+    checkpoint_path = Path(pending.run_dir) / "human_review_checkpoint.json"
+    checkpoint = load_checkpoint(checkpoint_path, require_pending=False)
+    assert checkpoint.state == "pending"
+    assert provider.state == "running"
+
+    monkeypatch.setattr(
+        human_review_restore, "persist_human_review_records", real_recorder
+    )
+    restarted = _pipeline(workdir)
+    restarted._provider_hard_stop = provider
+    result = restarted.resume_human_review(decisions, run_id=pending.run_id)
+
+    assert result.run_id == pending.run_id
+    assert events[:4] == [
+        ("reconcile", checkpoint.created_at),
+        ("resume", "paused"),
+        ("reconcile", checkpoint.created_at),
+        ("resume", "paused"),
+    ]
+    assert load_checkpoint(checkpoint_path, require_pending=False).state == "completed"
+
+
 def test_restart_after_decision_checkpoint_reuses_exact_server_stamped_records(
     monkeypatch, tmp_path
 ) -> None:

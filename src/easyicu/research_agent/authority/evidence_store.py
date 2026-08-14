@@ -107,6 +107,7 @@ from .scientific_claim_registry import (
 from .manuscript_claim_policy import (
     expand_scientific_claim_tokens,
     filter_evidence_bound_scaffold,
+    malformed_authority_placeholder_sentences,
 )
 from .source_fingerprints import registered_source_fingerprints_match
 from ..schema import EvidenceRecord
@@ -3071,6 +3072,19 @@ class EvidenceStore:
         manuscript containing ``[evidence missing: …]`` markers can be
         written out.
         """
+        malformed_authority = malformed_authority_placeholder_sentences(scaffold)
+        if malformed_authority and (
+            self.enforcement_mode is EvidenceEnforcementMode.STRICT
+        ):
+            raise EvidenceEnforcementError(
+                "STRICT evidence mode: manuscript authority placeholders are "
+                "malformed, case-mutated, or unclosed.",
+                detail={
+                    "malformed_authority_placeholder_sentences": list(
+                        malformed_authority
+                    )
+                },
+            )
         current_ids = (
             {
                 record.evidence_id

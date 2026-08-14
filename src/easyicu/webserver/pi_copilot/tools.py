@@ -2907,7 +2907,13 @@ def _run(
                     if run_type == "full"
                     else "native_summary"
                 ),
-                **({"credential_source": "pi_verified"} if run_type == "full" else {}),
+                **(
+                    {
+                        "credential_source": "pi_verified",
+                    }
+                    if run_type == "full"
+                    else {}
+                ),
                 **(
                     {"literature_search_authorized": True}
                     if run_type == "full" and literature_search_authorized

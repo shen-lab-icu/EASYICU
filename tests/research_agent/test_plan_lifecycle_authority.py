@@ -11,6 +11,7 @@ from easyicu.research_agent.authority.plan_lifecycle import (
     PlanLifecycleAuthorityError,
     PlanTransformationReceipt,
     ProposedPlan,
+    load_approved_executable_plan,
     load_normalized_plan,
     persist_approved_executable_plan,
     persist_normalized_plan,
@@ -100,6 +101,30 @@ def test_normalized_and_approved_stages_are_immutable_evidence(
     )
     assert approved_path.name == "approved_executable_plan_revision_1.json"
     assert evidence.get("approved_executable_plan_revision_1") is not None
+    assert load_approved_executable_plan(
+        run_dir=tmp_path,
+        evidence=evidence,
+        revision=1,
+        expected_plan_sha256=approved.plan_sha256,
+        expected_decision_set_sha256=approved.decision_set_sha256,
+    ) == approved
+
+    with pytest.raises(PlanLifecycleAuthorityError, match="reviewed plan digest"):
+        load_approved_executable_plan(
+            run_dir=tmp_path,
+            evidence=evidence,
+            revision=1,
+            expected_plan_sha256="0" * 64,
+            expected_decision_set_sha256=approved.decision_set_sha256,
+        )
+    with pytest.raises(PlanLifecycleAuthorityError, match="decision-set digest"):
+        load_approved_executable_plan(
+            run_dir=tmp_path,
+            evidence=evidence,
+            revision=1,
+            expected_plan_sha256=approved.plan_sha256,
+            expected_decision_set_sha256="0" * 64,
+        )
 
     tampered = json.loads(lineage_path.read_text(encoding="utf-8"))
     tampered["plan_payload"]["research_question"] = "Changed after approval."

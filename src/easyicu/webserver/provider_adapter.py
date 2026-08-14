@@ -50,6 +50,10 @@ _WEB_RESEARCH_AGENT_MAX_ESTIMATED_COST_USD = 100.0
 _WEB_RESEARCH_AGENT_MAX_WALL_CLOCK_SECONDS = 21_600.0
 _WEB_RESEARCH_AGENT_INPUT_COST_PER_MILLION = 10.0
 _WEB_RESEARCH_AGENT_OUTPUT_COST_PER_MILLION = 30.0
+_WEB_PLANNER_CANARY_MAX_PROVIDER_ATTEMPTS = 24
+_WEB_PLANNER_CANARY_MAX_TOTAL_TOKENS = 250_000
+_WEB_PLANNER_CANARY_MAX_ESTIMATED_COST_USD = 10.0
+_WEB_PLANNER_CANARY_MAX_WALL_CLOCK_SECONDS = 1_800.0
 
 
 class ProviderAdapterError(ValueError):
@@ -60,24 +64,35 @@ class ProviderAdapterError(ValueError):
         self.detail = detail
 
 
-def web_research_agent_hard_stop_limits() -> "ProviderHardStopLimits":
-    """Return the one reviewed stop-loss used by Web config and live service."""
+def web_research_agent_hard_stop_limits(
+    mode: str = "full_reviewed",
+) -> "ProviderHardStopLimits":
+    """Return the explicit reviewed stop-loss for one Web pipeline launch mode."""
 
     from easyicu.research_agent.authority.provider_hard_stop import (
         ProviderHardStopLimits,
     )
 
+    selected = str(mode or "").strip().lower()
+    if selected == "planner_canary":
+        attempts = _WEB_PLANNER_CANARY_MAX_PROVIDER_ATTEMPTS
+        tokens = _WEB_PLANNER_CANARY_MAX_TOTAL_TOKENS
+        cost = _WEB_PLANNER_CANARY_MAX_ESTIMATED_COST_USD
+        wall_clock = _WEB_PLANNER_CANARY_MAX_WALL_CLOCK_SECONDS
+    elif selected == "full_reviewed":
+        attempts = _WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS
+        tokens = _WEB_RESEARCH_AGENT_MAX_TOTAL_TOKENS
+        cost = _WEB_RESEARCH_AGENT_MAX_ESTIMATED_COST_USD
+        wall_clock = _WEB_RESEARCH_AGENT_MAX_WALL_CLOCK_SECONDS
+    else:
+        raise ValueError(f"Unknown Web Research Agent budget mode: {mode!r}")
     return ProviderHardStopLimits(
-        max_provider_attempts_per_run=_WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS,
-        max_provider_attempts_per_batch=_WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS,
-        max_total_tokens_per_run=_WEB_RESEARCH_AGENT_MAX_TOTAL_TOKENS,
-        max_total_tokens_per_batch=_WEB_RESEARCH_AGENT_MAX_TOTAL_TOKENS,
-        max_estimated_cost_usd_per_batch=(
-            _WEB_RESEARCH_AGENT_MAX_ESTIMATED_COST_USD
-        ),
-        max_wall_clock_seconds_per_task=(
-            _WEB_RESEARCH_AGENT_MAX_WALL_CLOCK_SECONDS
-        ),
+        max_provider_attempts_per_run=attempts,
+        max_provider_attempts_per_batch=attempts,
+        max_total_tokens_per_run=tokens,
+        max_total_tokens_per_batch=tokens,
+        max_estimated_cost_usd_per_batch=cost,
+        max_wall_clock_seconds_per_task=wall_clock,
         input_cost_usd_per_million_tokens=(
             _WEB_RESEARCH_AGENT_INPUT_COST_PER_MILLION
         ),
@@ -601,6 +616,7 @@ def _credential_public_metadata(credentials: Dict[str, str]) -> Dict[str, Any]:
         "credentials_loaded": True,
         "credential_source": credentials["api_key_env"],
         "credential_fingerprint": _fingerprint(credentials["api_key"]),
+        "endpoint_fingerprint": _fingerprint(credentials["base_url"]),
         "base_url_configured": True,
         "base_url_endpoint": "chat_completions",
         "base_url_source": credentials["base_url_env"],

@@ -26,7 +26,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from easyicu.concept.export_metadata import (
     ExportMetadataError,
@@ -38,6 +38,7 @@ from easyicu.concept_output_sources import (
     ConceptLoadPlanError,
     compile_concept_load_plan,
 )
+from easyicu.databases import normalize_database_key
 from easyicu.outcome_availability import structural_outcome_unavailability
 from easyicu.webserver.input_validation import parse_bool
 
@@ -2711,6 +2712,129 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
         "modules": modules,
         "files": files,
         "summary": summary,
+    }
+
+
+def validate_research_pipeline_source(
+    raw_path: str,
+    *,
+    database: Any,
+    expected_binding: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Bind a pipeline launch to one prepared, manifest-backed data package."""
+
+    path = Path(raw_path).expanduser()
+    try:
+        path = path.resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise ExportCohortError("research_pipeline_source_not_found") from exc
+    if not path.is_dir():
+        raise ExportCohortError("research_pipeline_source_not_directory")
+
+    requested = str(database or "").strip()
+    if not requested:
+        raise ExportCohortError("research_pipeline_database_required")
+    try:
+        requested_database = normalize_database_key(requested)
+    except KeyError as exc:
+        raise ExportCohortError(
+            "research_pipeline_database_unknown",
+            {"database": requested},
+        ) from exc
+
+    candidates = (path / "_manifest.json", path / "easyicu_export_manifest.json")
+    if not any(item.exists() for item in candidates):
+        raw_files = sorted(
+            item.suffix.lower()
+            for item in path.iterdir()
+            if item.is_file()
+            and item.suffix.lower() in {".csv", ".xlsx", ".xls"}
+        )
+        raise ExportCohortError(
+            "research_pipeline_manifest_required",
+            {"raw_file_types": sorted(set(raw_files))},
+        )
+
+    from easyicu.research_agent.intake.export_package import (
+        ExportPackageError,
+        open_export_package,
+    )
+
+    try:
+        with open_export_package(path) as package:
+            try:
+                manifest_database = normalize_database_key(package.database)
+            except KeyError as exc:
+                raise ExportCohortError(
+                    "research_pipeline_manifest_database_unknown",
+                    {"database": package.database},
+                ) from exc
+            if manifest_database != requested_database:
+                raise ExportCohortError(
+                    "research_pipeline_database_mismatch",
+                    {
+                        "requested_database": requested_database,
+                        "manifest_database": manifest_database,
+                    },
+                )
+            binding = {
+                "schema_version": "easyicu.web-prepared-package-binding/1",
+                "database": requested_database,
+                "package_kind": package.manifest_kind,
+                "export_authority_sha256": package.authority_sha256,
+                "column_metadata_sha256": package.column_metadata_sha256,
+                "feature_definitions_sha256": package.feature_definitions_sha256,
+                "source_seal_kind": package.source_seal_kind,
+                "manifest": {
+                    "relative_path": package.manifest_path.name,
+                    "sha256": package.manifest_sha256,
+                    "size_bytes": package.manifest_path.stat().st_size,
+                },
+                "files": [
+                    {
+                        "relative_path": item.relative_path,
+                        "sha256": item.identity.sha256,
+                        "size_bytes": item.identity.size,
+                    }
+                    for item in sorted(package.files, key=lambda value: value.relative_path)
+                ],
+            }
+    except ExportCohortError:
+        raise
+    except (ExportPackageError, FileNotFoundError, OSError) as exc:
+        if expected_binding is not None:
+            raise ExportCohortError(
+                "research_pipeline_package_binding_changed",
+                {
+                    "expected_binding_sha256": expected_binding.get(
+                        "binding_sha256"
+                    ),
+                    "observed_binding_sha256": None,
+                },
+            ) from exc
+        raise ExportCohortError("research_pipeline_manifest_invalid") from exc
+
+    binding["binding_sha256"] = hashlib.sha256(
+        json.dumps(
+            binding,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if expected_binding is not None and dict(expected_binding) != binding:
+        raise ExportCohortError(
+            "research_pipeline_package_binding_changed",
+            {
+                "expected_binding_sha256": expected_binding.get("binding_sha256"),
+                "observed_binding_sha256": binding["binding_sha256"],
+            },
+        )
+
+    return {
+        "ok": True,
+        "path": str(path),
+        "binding": binding,
     }
 
 

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import pandas as pd
 
 from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
 from easyicu.research_agent.reporting.result_card import (
@@ -25,6 +26,7 @@ from easyicu.research_agent.orchestration.workflow import (
 from easyicu.webserver import (
     agent_pipeline_runs,
     agent_runs,
+    dataio,
     literature_authority,
     provider_adapter,
 )
@@ -83,6 +85,70 @@ def _complete_study() -> dict[str, Any]:
         "export_format": "parquet",
         "analysis_goal": "Descriptive prognostic association",
     }
+
+
+def _write_pipeline_export(root: Path, *, database: str = "miiv") -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(
+        root / "demographics.parquet", index=False
+    )
+    (root / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "database": database,
+                "format": "parquet",
+                "concept_selection": {
+                    "mode": "explicit",
+                    "modules": {"demographics": ["age"]},
+                },
+                "feature_definitions": {"included": False},
+                "files": [
+                    {
+                        "file": "demographics.parquet",
+                        "module": "demographics",
+                        "concepts": 1,
+                        "concept_ids": ["age"],
+                        "rows": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
+def _study_with_package_binding(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    export = _write_pipeline_export(root)
+    study = {
+        **_complete_study(),
+        "data_source": {"path": str(export), "database": "miiv"},
+    }
+    receipt = dataio.validate_research_pipeline_source(
+        str(export),
+        database="miiv",
+    )
+    return study, dict(receipt["binding"])
+
+
+_PI_PROVIDER_ENVIRONMENT = {
+    "OPENAI_API_KEY": "test-private-provider-key",
+    "OPENAI_BASE_URL": "http://127.0.0.1:8317/v1",
+    "OPENAI_MODEL": "test-local-model",
+    "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
+}
+
+
+def test_web_cancellation_is_a_typed_progress_control_signal() -> None:
+    from easyicu.research_agent.orchestration.progress import ProgressControlSignal
+
+    assert issubclass(agent_pipeline_runs.ResearchPipelineRunError, ProgressControlSignal)
+    job = SimpleNamespace(cancel_requested=True, emit=lambda _event: None)
+
+    with pytest.raises(ProgressControlSignal) as raised:
+        agent_pipeline_runs._progress(job, step="planning", label="Planning")
+
+    assert raised.value.code == "research_pipeline_cancelled"
 
 
 def _nonapprovable_review_payload(*, finding_code: str) -> dict[str, Any]:
@@ -416,6 +482,47 @@ def test_pipeline_factory_rejects_non_executable_time_window_label_before_job(
     assert exc.value.code == "research_pipeline_time_window_hours_required"
     assert exc.value.details == {"field": "time_window.hours"}
     assert foundation_called is False
+
+
+@pytest.mark.parametrize("hours", ["not-a-number", True, float("nan")])
+def test_pipeline_factory_rejects_invalid_time_window_without_24h_fallback(
+    hours: Any,
+) -> None:
+    study = {
+        **_complete_study(),
+        "time_window": {"hours": hours, "anchor": "ICU admission"},
+    }
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        agent_pipeline_runs.make_research_pipeline_run_runner(
+            export_path="/typed/demo",
+            study_context=study,
+            project_root=None,
+            provider={"provider": "openai", "external": True},
+        )
+
+    assert exc.value.code == "research_pipeline_time_window_invalid"
+
+
+@pytest.mark.parametrize("database", [None, "unknown-icu-database"])
+def test_pipeline_factory_rejects_missing_or_unknown_database(database: Any) -> None:
+    source = dict(_complete_study()["data_source"])
+    source["database"] = database
+    study = {**_complete_study(), "data_source": source}
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        agent_pipeline_runs.make_research_pipeline_run_runner(
+            export_path="/typed/demo",
+            study_context=study,
+            project_root=None,
+            provider={"provider": "openai", "external": True},
+        )
+
+    assert exc.value.code == (
+        "research_pipeline_database_required"
+        if database is None
+        else "research_pipeline_database_unknown"
+    )
 
 
 def test_pipeline_factory_rejects_clinical_anchor_as_materialization_anchor(
@@ -2536,6 +2643,9 @@ def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
 
     class _Pipeline:
         def resume_human_review(self, decisions, *, run_id, progress_callback=None):
+            # Simulate the pipeline's run-locked Provider transition. The Web
+            # bridge is forbidden from calling TaskProviderHardStop.resume.
+            hard_stop.ledger.resume_task(hard_stop.task_id)
             calls["decisions"] = decisions
             calls["run_id"] = run_id
             progress_callback(
@@ -2543,7 +2653,9 @@ def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
             )
             return SimpleNamespace(manifest_path=run_dir / "manifest.json")
 
-    study = _complete_study()
+    study, package_binding = _study_with_package_binding(
+        tmp_path / "resume-package"
+    )
     hard_stop = agent_pipeline_runs._start_web_provider_hard_stop(
         wrapper_dir=tmp_path / "wrapper",
         job_id="resume-contract",
@@ -2551,6 +2663,12 @@ def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
             study_context_owner.scientific_configuration_sha256(study)
         ),
     )
+    hard_stop.pause()
+
+    def web_resume_forbidden(_self: Any) -> None:
+        raise AssertionError("Web must not resume Provider state before Pipeline lock")
+
+    monkeypatch.setattr(type(hard_stop), "resume", web_resume_forbidden)
     entry = agent_pipeline_runs._PendingRun(
         pipeline=_Pipeline(),
         pending=pending,
@@ -2559,6 +2677,7 @@ def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
         provider={},
         acquisition=_acquisition_receipt(),
         created_at=1.0,
+        prepared_package_binding=package_binding,
         provider_hard_stop=hard_stop,
     )
     monkeypatch.setitem(agent_pipeline_runs._PENDING, pending.run_id, entry)
@@ -2578,7 +2697,7 @@ def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
             self.events.append(event)
 
     job = _Job()
-    assert hard_stop.ledger.snapshot()["tasks"][0]["status"] == "running"
+    assert hard_stop.ledger.snapshot()["tasks"][0]["status"] == "paused"
     result = agent_pipeline_runs.resume_research_pipeline(
         run_id=pending.run_id,
         study_context_id=study["id"],
@@ -2623,7 +2742,9 @@ def test_recoverable_review_resume_failure_keeps_pending_run_and_pauses_budget(
         def resume_human_review(self, decisions, *, run_id, progress_callback=None):
             raise ValueError("review decision evidence could not be persisted")
 
-    study = _complete_study()
+    study, package_binding = _study_with_package_binding(
+        tmp_path / "recoverable-package"
+    )
     hard_stop = agent_pipeline_runs._start_web_provider_hard_stop(
         wrapper_dir=tmp_path / "wrapper",
         job_id="recoverable-review",
@@ -2632,6 +2753,11 @@ def test_recoverable_review_resume_failure_keeps_pending_run_and_pauses_budget(
         ),
     )
     hard_stop.pause()
+
+    def web_pause_forbidden(_self: Any) -> None:
+        raise AssertionError("Web must not pause Provider state after Pipeline returns")
+
+    monkeypatch.setattr(type(hard_stop), "pause", web_pause_forbidden)
     entry = agent_pipeline_runs._PendingRun(
         pipeline=_Pipeline(),
         pending=pending,
@@ -2640,6 +2766,7 @@ def test_recoverable_review_resume_failure_keeps_pending_run_and_pauses_budget(
         provider={},
         acquisition=_acquisition_receipt(),
         created_at=1.0,
+        prepared_package_binding=package_binding,
         provider_hard_stop=hard_stop,
     )
     monkeypatch.setitem(agent_pipeline_runs._PENDING, pending.run_id, entry)
@@ -2686,7 +2813,9 @@ def test_review_resume_claim_is_exclusive_before_touching_provider_budget(
         def resume_human_review(self, *args, **kwargs):
             raise AssertionError("a second job must not touch the live workflow")
 
-    study = _complete_study()
+    study, package_binding = _study_with_package_binding(
+        tmp_path / "contended-package"
+    )
     hard_stop = agent_pipeline_runs._start_web_provider_hard_stop(
         wrapper_dir=tmp_path / "wrapper",
         job_id="already-claimed-review",
@@ -2703,6 +2832,7 @@ def test_review_resume_claim_is_exclusive_before_touching_provider_budget(
         provider={},
         acquisition=_acquisition_receipt(),
         created_at=1.0,
+        prepared_package_binding=package_binding,
         provider_hard_stop=hard_stop,
     )
     monkeypatch.setitem(agent_pipeline_runs._PENDING, pending.run_id, entry)
@@ -2895,11 +3025,13 @@ def test_web_runner_timeout_is_typed_and_records_bounded_retry_diagnostic(
         lambda _config, *, services: FakePipeline(),
     )
     project_root = tmp_path / "projects"
+    export_path = _write_pipeline_export(tmp_path / "export")
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-        export_path=str(tmp_path / "export"),
+        export_path=str(export_path),
         study_context=_complete_study(),
         project_root=str(project_root),
         provider={"provider": "openai", "external": True},
+        provider_environment=_PI_PROVIDER_ENVIRONMENT,
     )
 
     class Job:
@@ -3134,11 +3266,13 @@ def test_web_runner_delegates_to_research_agent_pipeline(
         fake_from_config,
     )
 
+    export_path = _write_pipeline_export(tmp_path / "export")
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-        export_path=str(tmp_path / "export"),
+        export_path=str(export_path),
         study_context=_complete_study(),
         project_root=str(tmp_path / "projects"),
         provider={"provider": "openai", "external": True},
+        provider_environment=_PI_PROVIDER_ENVIRONMENT,
     )
 
     class Job:
@@ -3158,6 +3292,10 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["acquire"]["llm"]._role == "acquisition"
     assert calls["services"].provider_hard_stop is not None
     assert (
+        calls["services"].human_review_gate.reviewer_identity_resolver()
+        == "easyicu_local_web_operator"
+    )
+    assert (
         calls["acquire"]["llm"]._task
         is calls["services"].provider_hard_stop
     )
@@ -3176,11 +3314,20 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["config"].require_reportable_scientific_capability is True
     assert calls["config"].required_primary_cohort_selection_mode == "all_input_rows"
     assert calls["config"].enable_pubmed is False
-    assert calls["config"].max_provider_attempts_per_run == 192
-    assert calls["config"].max_total_tokens_per_run == 2_000_000
+    assert calls["config"].max_provider_attempts_per_run == 24
+    assert calls["config"].max_total_tokens_per_run == 250_000
+    assert calls["config"].max_estimated_cost_usd_per_batch == 10.0
+    assert calls["config"].runner_kind == "docker"
+    assert calls["config"].runner_network == "none"
+    assert calls["config"].runner_image == "easyicu-research-agent:1.0.0"
+    assert calls["config"].submission_profile_name == "npj_dm_e1_canary_dev"
+    assert calls["config"].submission_profile_version == "20260814"
+    assert calls["config"].enable_memory is False
+    assert calls["config"].enable_experience_bank is False
+    assert calls["config"].enable_reviewed_memory is False
     assert (
         calls["services"].provider_hard_stop.ledger.limits
-        == provider_adapter.web_research_agent_hard_stop_limits()
+        == provider_adapter.web_research_agent_hard_stop_limits("planner_canary")
     )
     ledger = json.loads(
         (
@@ -3259,11 +3406,13 @@ def test_web_runner_enables_live_pubmed_only_with_host_authorization(
         "from_config",
         fake_from_config,
     )
+    export_path = _write_pipeline_export(tmp_path / "export")
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-        export_path=str(tmp_path / "export"),
+        export_path=str(export_path),
         study_context=_complete_study(),
         project_root=str(tmp_path / "projects"),
         provider={"provider": "openai", "external": True},
+        provider_environment=_PI_PROVIDER_ENVIRONMENT,
         literature_search_authorized=True,
     )
 
@@ -3360,11 +3509,13 @@ def test_web_runner_reuses_digest_bound_web_literature_without_second_search(
         "from_config",
         fake_from_config,
     )
+    export_path = _write_pipeline_export(tmp_path / "export")
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-        export_path=str(tmp_path / "export"),
+        export_path=str(export_path),
         study_context=study,
         project_root=str(tmp_path / "projects"),
         provider={"provider": "openai", "external": True},
+        provider_environment=_PI_PROVIDER_ENVIRONMENT,
         literature_search_authorized=True,
     )
 
@@ -3457,6 +3608,283 @@ def test_pi_verified_provider_environment_is_full_pipeline_only(
         "error": "pi_provider_research_pipeline_only"
     }
 
+    with pytest.raises(Exception) as direct_fallback:
+        agent_route._provider_environment_for_agent_run(
+            credential_source="scientific_provider",
+            engine="research_agent_pipeline",
+            run_type="full",
+            external_llm_opt_in=True,
+        )
+    assert getattr(direct_fallback.value, "detail") == {
+        "error": "research_pipeline_pi_verified_credentials_required"
+    }
+
+
+@pytest.mark.parametrize("suffix", [".csv", ".xlsx"])
+def test_pipeline_route_rejects_raw_tabular_files_before_provider_resolution(
+    suffix: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver.routes import agent as agent_route
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / f"patients{suffix}").write_text("stay_id\n1\n", encoding="utf-8")
+    study = {
+        **_complete_study(),
+        "data_source": {"path": str(raw), "database": "miiv"},
+    }
+    monkeypatch.setattr(agent_route.context_store, "get_context", lambda _id: study)
+    provider_called = False
+
+    def provider_environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+        nonlocal provider_called
+        provider_called = True
+        return dict(_PI_PROVIDER_ENVIRONMENT)
+
+    monkeypatch.setattr(
+        agent_route.PiProviderConfigStore,
+        "research_agent_environment",
+        provider_environment,
+    )
+
+    with pytest.raises(Exception) as raised:
+        agent_route.jobs_agent_run(
+            {
+                "path": str(raw),
+                "study_context_id": study["id"],
+                "engine": "research_agent_pipeline",
+                "run_type": "full",
+                "credential_source": "pi_verified",
+                "external_llm_opt_in": True,
+            }
+        )
+
+    assert getattr(raised.value, "detail")["error"] in {
+        "research_pipeline_manifest_required",
+        "no_export_files",
+    }
+    assert provider_called is False
+
+
+def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver.pi_copilot.workspace import ProjectWorkspace
+    from easyicu.webserver.routes import agent as agent_route
+
+    export = _write_pipeline_export(tmp_path / "export")
+    study = {
+        **_complete_study(),
+        "data_source": {"path": str(export), "database": "miiv"},
+    }
+    workspace = ProjectWorkspace(tmp_path / "pi-workspace")
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(agent_route.context_store, "get_context", lambda _id: study)
+    monkeypatch.setattr(
+        agent_route,
+        "_research_pipeline_workspace",
+        lambda: workspace,
+    )
+    monkeypatch.setattr(
+        agent_route.PiProviderConfigStore,
+        "research_agent_environment",
+        lambda self, **_kwargs: dict(_PI_PROVIDER_ENVIRONMENT),
+    )
+    monkeypatch.setattr(agent_route.settings_store, "load_settings", lambda: {"ai_enabled": True})
+    monkeypatch.setattr(
+        agent_route.capabilities,
+        "validate_compute_target",
+        lambda _body: {"ok": True, "compute_target": "local"},
+    )
+    monkeypatch.setattr(
+        agent_route.agent_runs,
+        "resolve_agent_provider_config",
+        lambda **_kwargs: {"provider": "openai", "external": True},
+    )
+    monkeypatch.setattr(
+        agent_route.context_store,
+        "build_agent_context_binding",
+        lambda *_args, **_kwargs: {},
+    )
+
+    def make_runner(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return lambda _job: {"gate": {"status": "blocked"}}
+
+    monkeypatch.setattr(
+        agent_route.agent_pipeline_runs,
+        "make_research_pipeline_run_runner",
+        make_runner,
+    )
+    monkeypatch.setattr(
+        agent_route,
+        "submit_job",
+        lambda _kind, _runner: SimpleNamespace(id="job-workspace", kind="agent-run", status="queued"),
+    )
+    monkeypatch.setattr(
+        agent_route.context_store,
+        "handoff_context",
+        lambda *_args, **_kwargs: {"revision": 5},
+    )
+    monkeypatch.setattr(
+        agent_route.capabilities,
+        "record_tool_event",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = agent_route.jobs_agent_run(
+        {
+            "path": str(export),
+            "study_context_id": study["id"],
+            "engine": "research_agent_pipeline",
+            "run_type": "full",
+            "credential_source": "pi_verified",
+            "external_llm_opt_in": True,
+            "project_root": str(tmp_path / "client-controlled"),
+        }
+    )
+
+    assert result["job_id"] == "job-workspace"
+    assert Path(captured["project_root"]) == workspace.project_root(study["id"])
+    assert Path(captured["project_root"]) != tmp_path / "client-controlled"
+    assert captured["budget_mode"] == "planner_canary"
+
+
+def test_pipeline_route_rejects_client_selected_full_reviewed_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver.routes import agent as agent_route
+
+    export = _write_pipeline_export(tmp_path / "export")
+    study = {
+        **_complete_study(),
+        "data_source": {"path": str(export), "database": "miiv"},
+    }
+    monkeypatch.setattr(agent_route.context_store, "get_context", lambda _id: study)
+
+    with pytest.raises(Exception) as raised:
+        agent_route.jobs_agent_run(
+            {
+                "path": str(export),
+                "study_context_id": study["id"],
+                "engine": "research_agent_pipeline",
+                "run_type": "full",
+                "budget_mode": "full_reviewed",
+            }
+        )
+
+    assert getattr(raised.value, "detail") == {
+        "error": "research_pipeline_budget_mode_server_owned"
+    }
+
+
+def test_planner_canary_cannot_be_approved_into_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver.routes import agent as agent_route
+
+    monkeypatch.setattr(agent_route.settings_store, "load_settings", lambda: {"ai_enabled": True})
+    monkeypatch.setattr(
+        agent_route.agent_pipeline_runs,
+        "pending_review",
+        lambda _run_id: {
+            "study_id": "study-workflow",
+            "resumable_here": True,
+            "budget_mode": "planner_canary",
+        },
+    )
+
+    with pytest.raises(Exception) as raised:
+        agent_route.jobs_agent_run_review(
+            {
+                "run_id": "run-canary",
+                "study_context_id": "study-workflow",
+                "decision": "approved",
+                "external_llm_opt_in": True,
+            }
+        )
+
+    assert getattr(raised.value, "detail") == {
+        "error": "research_pipeline_planner_canary_execution_blocked"
+    }
+
+
+def test_pipeline_bridge_cannot_approve_canary_when_route_is_bypassed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Review canary plan.",
+        authority_sha256="a" * 64,
+        payload={"reason": "operator_plan_approval_required"},
+    )
+    pending = HumanReviewPending(
+        run_id="run-canary-bypass",
+        thread_id="run-canary-bypass",
+        run_dir=str(tmp_path / "run-canary-bypass"),
+        requests=(request,),
+    )
+    pipeline_called = False
+
+    class _Pipeline:
+        def resume_human_review(self, *_args: Any, **_kwargs: Any) -> Any:
+            nonlocal pipeline_called
+            pipeline_called = True
+            raise AssertionError("canary must not reach execution")
+
+    monkeypatch.setitem(
+        agent_pipeline_runs._PENDING,
+        pending.run_id,
+        agent_pipeline_runs._PendingRun(
+            pipeline=_Pipeline(),
+            pending=pending,
+            wrapper_dir=tmp_path,
+            study={"id": "study-canary"},
+            provider={},
+            acquisition=SimpleNamespace(),
+            created_at=1.0,
+            budget_mode="planner_canary",
+        ),
+    )
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        agent_pipeline_runs.resume_research_pipeline(
+            run_id=pending.run_id,
+            study_context_id="study-canary",
+            decision="approved",
+            reviewer="server reviewer",
+            note="",
+            job=SimpleNamespace(emit=lambda _event: None, cancel_requested=False),
+        )
+
+    assert exc.value.code == "research_pipeline_planner_canary_execution_blocked"
+    assert pipeline_called is False
+
+
+def test_signoff_ignores_client_reviewer_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver.routes import agent as agent_route
+
+    captured: dict[str, Any] = {}
+
+    def create_signoff(_project_dir: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(agent_route.agent_runs, "create_human_signoff", create_signoff)
+
+    agent_route.post_agent_run_signoff(
+        {"project_dir": "/server/run", "reviewer": "client-claims-to-be-PI"}
+    )
+
+    assert captured["reviewer"] == "easyicu_local_web_operator"
+
 
 def test_research_pipeline_runner_uses_in_memory_provider_authority(
     tmp_path: Path,
@@ -3523,8 +3951,9 @@ def test_research_pipeline_runner_uses_in_memory_provider_authority(
         lambda _config, *, services: FakePipeline(),
     )
 
+    export_path = _write_pipeline_export(tmp_path / "export")
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-        export_path=str(tmp_path / "export"),
+        export_path=str(export_path),
         study_context=_complete_study(),
         project_root=str(tmp_path / "projects"),
         provider={"provider": "openai", "external": True},
@@ -3544,6 +3973,147 @@ def test_research_pipeline_runner_uses_in_memory_provider_authority(
     assert captured["environment"] == expected_environment
     assert result["provider"]["model"] == "test-local-model"
     assert "test-private-provider-key" not in json.dumps(result)
+
+
+def test_pipeline_bridge_rejects_direct_scientific_provider_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export = _write_pipeline_export(tmp_path / "export")
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_data_foundation_profile",
+        lambda **_kwargs: _foundation_profile(),
+    )
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        agent_pipeline_runs.make_research_pipeline_run_runner(
+            export_path=str(export),
+            study_context=_complete_study(),
+            project_root=str(tmp_path / "projects"),
+            provider={"provider": "openai", "external": True},
+            provider_environment=None,
+        )
+
+    assert exc.value.code == "research_pipeline_pi_verified_credentials_required"
+
+
+def test_pipeline_revalidates_package_before_provider_or_acquisition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export = _write_pipeline_export(tmp_path / "export")
+    study = {
+        **_complete_study(),
+        "data_source": {"path": str(export), "database": "miiv"},
+    }
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_data_foundation_profile",
+        lambda **_kwargs: _foundation_profile(),
+    )
+    provider_called = False
+
+    def provider_client(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("provider must not be reached after package drift")
+
+    monkeypatch.setattr(
+        provider_adapter,
+        "build_research_agent_provider_client",
+        provider_client,
+    )
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(export),
+        study_context=study,
+        project_root=str(tmp_path / "projects"),
+        provider={"provider": "openai", "external": True},
+        provider_environment=_PI_PROVIDER_ENVIRONMENT,
+    )
+    (export / "demographics.parquet").write_bytes(b"changed-after-submit")
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        runner(SimpleNamespace(id="job-drift", emit=lambda _event: None))
+
+    assert exc.value.code == "research_pipeline_package_binding_changed"
+    assert provider_called is False
+
+
+def test_plan_approval_revalidates_the_exact_prepared_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study, package_binding = _study_with_package_binding(tmp_path / "package")
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Review package-bound plan.",
+        authority_sha256="f" * 64,
+        payload={"reason": "operator_plan_approval_required"},
+    )
+    pending = HumanReviewPending(
+        run_id="run-package-drift",
+        thread_id="run-package-drift",
+        run_dir=str(tmp_path / "run-package-drift"),
+        requests=(request,),
+    )
+    pipeline_called = False
+
+    class _Pipeline:
+        def resume_human_review(self, *_args: Any, **_kwargs: Any) -> Any:
+            nonlocal pipeline_called
+            pipeline_called = True
+            raise AssertionError("drifted package must not reach Pipeline")
+
+    entry = agent_pipeline_runs._PendingRun(
+        pipeline=_Pipeline(),
+        pending=pending,
+        wrapper_dir=tmp_path,
+        study=study,
+        provider={},
+        acquisition=SimpleNamespace(),
+        created_at=1.0,
+        prepared_package_binding=package_binding,
+    )
+    monkeypatch.setitem(agent_pipeline_runs._PENDING, pending.run_id, entry)
+    export = Path(study["data_source"]["path"])
+    (export / "demographics.parquet").write_bytes(b"changed-before-approval")
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        agent_pipeline_runs.resume_research_pipeline(
+            run_id=pending.run_id,
+            study_context_id=study["id"],
+            decision="approved",
+            reviewer="server reviewer",
+            note="",
+            job=SimpleNamespace(emit=lambda _event: None, cancel_requested=False),
+            current_study_context=study,
+        )
+
+    assert exc.value.code == "research_pipeline_package_binding_changed"
+    assert pipeline_called is False
+
+
+def test_provider_public_identity_binds_endpoint_without_disclosing_it() -> None:
+    common = {
+        "provider": "openai",
+        "api_key": "test-key",
+        "api_key_env": "OPENAI_API_KEY",
+        "base_url_env": "OPENAI_BASE_URL",
+        "model": "test-model",
+        "model_env": "OPENAI_MODEL",
+        "auth_header": "authorization",
+    }
+
+    first = provider_adapter._credential_public_metadata(
+        {**common, "base_url": "https://one.example/v1/chat/completions"}
+    )
+    second = provider_adapter._credential_public_metadata(
+        {**common, "base_url": "https://two.example/v1/chat/completions"}
+    )
+
+    assert first["endpoint_fingerprint"] != second["endpoint_fingerprint"]
+    assert "one.example" not in json.dumps(first)
 
 
 def test_web_data_foundation_profile_keeps_continuous_outcome_static(

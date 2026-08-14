@@ -291,6 +291,9 @@ class PipelineConfig:
     # the Guided Web Copilot enables this because its product contract is
     # plan -> user confirmation -> execution.
     require_human_plan_review: bool = False
+    # A diagnostic Planner-only run may persist and expose the exact review
+    # checkpoint, but no caller may resume it into Execute.
+    planner_only: bool = False
     # Formal interactive runs must not spend execution budget on a capability
     # whose registered scientific ceiling is analysis-only. Diagnostic callers
     # may leave this disabled and retain the honest lower claim ceiling.
