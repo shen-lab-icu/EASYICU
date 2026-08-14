@@ -278,6 +278,11 @@ def test_initial_authority_names_context_required_dependence_binding() -> None:
     assert '"dependence": {"strobe_2007": ["dependence"]}' in authority
     assert '"reporting_standard"' in authority
     assert '"record_2015": ["reporting"]' in authority
+    assert "Minimal schema-valid examples by required layer" in authority
+    assert (
+        '"literature_citation_keys": ["strobe_2007"]' in authority
+    )
+    assert '"design_elements": ["dependence"]' in authority
 
 
 def test_primary_plan_must_bind_a_screened_direct_comparator() -> None:
