@@ -135,6 +135,37 @@ def test_operator_plan_review_policy_pauses_without_error_findings() -> None:
     assert request.payload["plan_review_authority"]["plan_sha256"]
 
 
+def test_resume_scientific_migration_forces_review_without_global_policy() -> None:
+    from easyicu.research_agent.orchestration.workflow import (
+        human_review_requests_for_plan,
+    )
+
+    requests = human_review_requests_for_plan(
+        findings=[
+            SimpleNamespace(
+                validator="planner_schema_migration",
+                severity="error",
+                message="A new Planner model roster requires approval.",
+                evidence_ids=[],
+                detail={
+                    "reason": "resume_scientific_migration_requires_review",
+                    "human_review_required": True,
+                    "approval_allowed": True,
+                },
+            )
+        ],
+        plan={"research_question": "Does X predict Y?", "steps": []},
+        require_plan_review=False,
+    )
+
+    assert len(requests) == 1
+    assert requests[0].kind == "scientific_stop"
+    assert (
+        requests[0].payload["reason"]
+        == "resume_scientific_migration_requires_review"
+    )
+
+
 def test_human_review_rejects_duplicate_request_ids_before_pause() -> None:
     request = HumanReviewRequest.create(
         kind="scientific_stop",
