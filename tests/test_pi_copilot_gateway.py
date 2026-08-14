@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,37 @@ from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = REPO_ROOT / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app"
+
+
+def _wait_for(predicate, *, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.005)
+    raise AssertionError("condition was not met before timeout")
+
+
+def _tool_request(
+    *,
+    request_id: str,
+    parent_request_id: str,
+    session_id: str,
+    name: str,
+) -> dict:
+    return {
+        "protocol_version": PROTOCOL_VERSION,
+        "kind": "tool_request",
+        "request_id": request_id,
+        "parent_request_id": parent_request_id,
+        "session_id": session_id,
+        "method": "tool.execute",
+        "params": {"name": name, "arguments": {}},
+    }
+
+
+def _enable_tool_dispatcher(gateway: PiGatewayClient) -> None:
+    gateway._tool_dispatcher = gateway._new_tool_dispatcher()
 
 
 def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
@@ -194,6 +227,7 @@ def test_host_reauthorizes_tool_request_and_rejects_unknown_fields(
     gateway = PiGatewayClient(
         app_dir=APP_DIR, session_dir=tmp_path, tool_executor=execute
     )
+    _enable_tool_dispatcher(gateway)
     context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-test"))
     gateway._pending["parent"] = _PendingRequest(tool_context=context)
     writes = []
@@ -210,6 +244,8 @@ def test_host_reauthorizes_tool_request_and_rejects_unknown_fields(
             "params": {"name": "easyicu_inspect_context", "arguments": {}},
         }
     )
+    assert gateway._tool_dispatcher is not None
+    assert gateway._tool_dispatcher.wait_until_idle(2)
     assert calls == [("easyicu_inspect_context", {}, context)]
     assert writes[-1]["ok"] is True
 
@@ -241,6 +277,232 @@ def test_host_reauthorizes_tool_request_and_rejects_unknown_fields(
     )
     assert writes[-1]["ok"] is False
     assert writes[-1]["error"]["code"] == "pi_tool_request_invalid"
+    gateway.close()
+
+
+def test_slow_tool_in_one_session_does_not_block_other_session_or_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slow_started = threading.Event()
+    release_slow = threading.Event()
+    writes: list[dict] = []
+    events: list[dict] = []
+
+    def execute(name, arguments, context):
+        if name == "slow":
+            slow_started.set()
+            assert release_slow.wait(2)
+        return {"code": f"{name}_ok"}
+
+    gateway = PiGatewayClient(
+        app_dir=APP_DIR,
+        session_dir=tmp_path,
+        tool_executor=execute,
+        tool_dispatch_max_workers=2,
+    )
+    _enable_tool_dispatcher(gateway)
+    monkeypatch.setattr(gateway, "_write", lambda payload: writes.append(dict(payload)))
+    context_a = ToolExecutionContext(session=PiSessionRecord(session_id="session-a"))
+    context_b = ToolExecutionContext(session=PiSessionRecord(session_id="session-b"))
+    gateway._pending["parent-a"] = _PendingRequest(tool_context=context_a)
+    gateway._pending["parent-b"] = _PendingRequest(
+        tool_context=context_b,
+        event_sink=lambda event: events.append(dict(event)),
+    )
+
+    gateway._handle_tool_request(
+        _tool_request(
+            request_id="tool-a",
+            parent_request_id="parent-a",
+            session_id="session-a",
+            name="slow",
+        )
+    )
+    assert slow_started.wait(1)
+    gateway._handle_tool_request(
+        _tool_request(
+            request_id="tool-b",
+            parent_request_id="parent-b",
+            session_id="session-b",
+            name="fast",
+        )
+    )
+    gateway._handle_payload(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "kind": "event",
+            "request_id": "parent-b",
+            "session_id": "session-b",
+            "event": {"type": "progress", "summary": "still responsive"},
+        }
+    )
+
+    _wait_for(lambda: any(row.get("request_id") == "tool-b" for row in writes))
+    assert not any(row.get("request_id") == "tool-a" for row in writes)
+    assert events == [{"type": "progress", "summary": "still responsive"}]
+
+    release_slow.set()
+    assert gateway._tool_dispatcher is not None
+    assert gateway._tool_dispatcher.wait_until_idle(2)
+    gateway.close()
+
+
+def test_host_tools_are_strictly_ordered_within_one_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_started = threading.Event()
+    release_first = threading.Event()
+    order: list[str] = []
+    writes: list[dict] = []
+    write_threads: list[str] = []
+
+    def execute(name, arguments, context):
+        order.append(f"{name}:start")
+        if name == "first":
+            first_started.set()
+            assert release_first.wait(2)
+        order.append(f"{name}:end")
+        return {"code": f"{name}_ok"}
+
+    gateway = PiGatewayClient(
+        app_dir=APP_DIR,
+        session_dir=tmp_path,
+        tool_executor=execute,
+        tool_dispatch_max_workers=2,
+    )
+    _enable_tool_dispatcher(gateway)
+    def record_write(payload):
+        writes.append(dict(payload))
+        write_threads.append(threading.current_thread().name)
+
+    monkeypatch.setattr(gateway, "_write", record_write)
+    context = ToolExecutionContext(session=PiSessionRecord(session_id="same-session"))
+    gateway._pending["parent-1"] = _PendingRequest(tool_context=context)
+    gateway._pending["parent-2"] = _PendingRequest(tool_context=context)
+
+    gateway._handle_tool_request(
+        _tool_request(
+            request_id="tool-1",
+            parent_request_id="parent-1",
+            session_id="same-session",
+            name="first",
+        )
+    )
+    assert first_started.wait(1)
+    gateway._handle_tool_request(
+        _tool_request(
+            request_id="tool-2",
+            parent_request_id="parent-2",
+            session_id="same-session",
+            name="second",
+        )
+    )
+    time.sleep(0.03)
+    assert order == ["first:start"]
+
+    release_first.set()
+    assert gateway._tool_dispatcher is not None
+    assert gateway._tool_dispatcher.wait_until_idle(2)
+    assert order == ["first:start", "first:end", "second:start", "second:end"]
+    assert [row["request_id"] for row in writes] == ["tool-1", "tool-2"]
+    assert set(write_threads) == {"easyicu-pi-host-tool-writer"}
+    gateway.close()
+
+
+def test_host_tool_queue_capacity_and_shutdown_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    writes: list[dict] = []
+
+    def execute(name, arguments, context):
+        started.set()
+        assert release.wait(2)
+        return {"code": "late_success"}
+
+    gateway = PiGatewayClient(
+        app_dir=APP_DIR,
+        session_dir=tmp_path,
+        tool_executor=execute,
+        tool_dispatch_max_workers=1,
+        tool_dispatch_max_pending=1,
+    )
+    _enable_tool_dispatcher(gateway)
+    monkeypatch.setattr(gateway, "_write", lambda payload: writes.append(dict(payload)))
+    for suffix in ("a", "b"):
+        gateway._pending[f"parent-{suffix}"] = _PendingRequest(
+            tool_context=ToolExecutionContext(
+                session=PiSessionRecord(session_id=f"session-{suffix}")
+            )
+        )
+
+    gateway._handle_tool_request(
+        _tool_request(
+            request_id="tool-a",
+            parent_request_id="parent-a",
+            session_id="session-a",
+            name="slow",
+        )
+    )
+    assert started.wait(1)
+    gateway._handle_tool_request(
+        _tool_request(
+            request_id="tool-b",
+            parent_request_id="parent-b",
+            session_id="session-b",
+            name="never-run",
+        )
+    )
+    assert writes[-1]["error"]["code"] == "pi_host_tool_dispatcher_full"
+
+    gateway.close()
+    _wait_for(lambda: any(row.get("request_id") == "tool-a" for row in writes))
+    closed = next(row for row in writes if row.get("request_id") == "tool-a")
+    assert closed["ok"] is False
+    assert closed["error"]["code"] == "pi_host_tool_dispatcher_closed"
+    release.set()
+    time.sleep(0.03)
+    assert len([row for row in writes if row.get("request_id") == "tool-a"]) == 1
+
+
+def test_host_tool_exception_is_sanitized_by_dispatcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writes: list[dict] = []
+
+    def execute(name, arguments, context):
+        raise RuntimeError("secret traceback detail")
+
+    gateway = PiGatewayClient(
+        app_dir=APP_DIR,
+        session_dir=tmp_path,
+        tool_executor=execute,
+    )
+    _enable_tool_dispatcher(gateway)
+    monkeypatch.setattr(gateway, "_write", lambda payload: writes.append(dict(payload)))
+    gateway._pending["parent"] = _PendingRequest(
+        tool_context=ToolExecutionContext(
+            session=PiSessionRecord(session_id="session")
+        )
+    )
+    gateway._handle_tool_request(
+        _tool_request(
+            request_id="tool",
+            parent_request_id="parent",
+            session_id="session",
+            name="boom",
+        )
+    )
+    assert gateway._tool_dispatcher is not None
+    assert gateway._tool_dispatcher.wait_until_idle(2)
+    assert writes[-1]["error"]["code"] == "pi_host_tool_failed"
+    assert "secret" not in writes[-1]["error"]["message"]
+    gateway.close()
 
 
 def test_host_rejects_unknown_sidecar_response_fields(tmp_path: Path) -> None:
