@@ -420,6 +420,18 @@ def descriptive_claim_shape_guide() -> str:
     )
 
 
+def descriptive_claim_example_fragment() -> str:
+    """Render the worked-example fragment from the claim schema owner."""
+
+    return (
+        '      "descriptive_claim": {\n'
+        '        "claim_ceiling": "descriptive_only",\n'
+        '        "unresolved_limitations": '
+        '["post_baseline_exposure_opportunity_unresolved"]\n'
+        "      },\n"
+    )
+
+
 def figure_panel_shape_guide() -> str:
     """Publish the exact case-neutral visual-semantics declaration."""
 
@@ -933,6 +945,7 @@ __all__ = [
     "render_methodological_principles",
     "normalize_literature_citation_keys",
     "bind_literature_citation_authority",
+    "descriptive_claim_example_fragment",
     "literature_citation_retry_suffix",
     "required_method_layers_for_context",
     "required_method_layers_for_plan",
