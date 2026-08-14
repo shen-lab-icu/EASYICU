@@ -13,17 +13,13 @@ from pathlib import Path
 
 
 ALLOWED_STATUSES = frozenset(
-    {
-        "optional-by-design",
-        "awaiting-wiring",
-        "entry-point",
-        "support-surface",
-        "external-consumer",
-        "compatibility",
-    }
+    {"production_reachable", "experimental", "disabled"}
 )
 
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+TEST_REFERENCE_PATTERN = re.compile(
+    r"^(tests/[A-Za-z0-9_./-]+\.py)::(test_[A-Za-z0-9_]+)$"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +81,26 @@ def _current_graph(repo_root: Path) -> dict:
         text=True,
     )
     return json.loads(result.stdout)
+
+
+def _production_test_reference(
+    repo_root: Path,
+    raw_reference: str,
+) -> str | None:
+    """Return a stable finding when a production reachability test is invalid."""
+
+    reference = raw_reference.strip().strip("`")
+    match = TEST_REFERENCE_PATTERN.fullmatch(reference)
+    if match is None:
+        return "must be an exact tests/...py::test_name reference"
+    relative_path, test_name = match.groups()
+    test_path = repo_root / relative_path
+    if not test_path.is_file():
+        return f"points to missing test file: {relative_path}"
+    source = test_path.read_text(encoding="utf-8")
+    if re.search(rf"^def {re.escape(test_name)}\s*\(", source, flags=re.MULTILINE) is None:
+        return f"points to missing test function: {reference}"
+    return None
 
 
 def zero_inbound_leaf_paths(graph: dict) -> tuple[str, ...]:
@@ -149,13 +165,25 @@ def audit_capability_inventory(
             findings.append(
                 f"capability inventory points to missing path: {row.module}"
             )
+        if row.status == "production_reachable":
+            if "→" not in row.activation:
+                findings.append(
+                    "production capability lacks a public-API-to-executor route: "
+                    f"{row.module}"
+                )
+            test_finding = _production_test_reference(root, row.tests)
+            if test_finding is not None:
+                findings.append(
+                    "production capability lacks a valid reachability integration "
+                    f"test: {row.module} ({test_finding})"
+                )
         if DATE_PATTERN.fullmatch(row.review):
             review_date = date.fromisoformat(row.review)
             if review_date < current_date:
                 findings.append(
                     f"capability review is overdue: {row.module} ({row.review})"
                 )
-        elif row.status not in {"entry-point", "compatibility"}:
+        elif row.status != "disabled":
             findings.append(f"capability review date is invalid: {row.module}")
 
     current_graph = graph if graph is not None else _current_graph(root)
