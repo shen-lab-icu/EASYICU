@@ -4417,6 +4417,7 @@ def run_execute_phase(
             profile_ref=pipeline._submission_profile_ref,
             context=coder_context,
             step=step,
+            analysis_type=plan.analysis_type,
             resolved_input_bindings=resolved_input_bindings,
             plausibility_scope=plausibility_authority.scope,
             runtime_import_names=pipeline._validated_runtime_capabilities or (),

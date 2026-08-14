@@ -252,6 +252,7 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "dynamic discrimination and calibration evaluation",
             "temporal subgroup and drift checks",
         ),
+        capability_id="dynamic_prediction_landmark_v1",
         guardrails=(
             "Do not treat longitudinal forecasting as a static prediction problem.",
             "Keep prediction time, observation window, and target horizon distinct.",
@@ -464,6 +465,7 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Do not silently escalate a quality audit into an outcome model.",
             "Report what was audited and what was not available to audit.",
         ),
+        capability_id="descriptive_measurement_v1",
     ),
     "measurement_bias_audit": AnalysisTypeSpec(
         key="measurement_bias_audit",
@@ -493,6 +495,7 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Do not interpret availability of a lab or score as a neutral random sample.",
             "Separate true physiology from who was selected to be measured.",
         ),
+        capability_id="descriptive_measurement_v1",
     ),
     "cohort_definition_sensitivity": AnalysisTypeSpec(
         key="cohort_definition_sensitivity",
@@ -1448,6 +1451,49 @@ def planner_analysis_type_guide(*, detail: str = "full") -> str:
     return "\n".join(lines)
 
 
+def planner_analysis_type_switch_guide(*, detail: str = "full") -> str:
+    """Budget-aware compact menu for switching away from the inferred family.
+
+    ``locked_analysis_type_guide`` already publishes the inferred family's
+    modules and guardrails. Repeating that level of detail for every alternate
+    family cost every Planner request more than five kilobytes. This menu keeps
+    every family and its scientific description selectable while the separate
+    action catalog carries method-level detail for the active family. Every
+    rung retains every family; only alternate-family prose is shortened.
+    """
+
+    if detail not in CATALOG_DETAIL_LADDER:
+        raise ValueError(
+            f"unknown analysis-type switch-menu detail {detail!r}; "
+            f"expected one of {CATALOG_DETAIL_LADDER}"
+        )
+
+    if detail == "names_only":
+        return (
+            "ANALYSIS TYPES: "
+            + ",".join(spec.key for spec in list_analysis_types())
+            + ". Switch only for a better estimand; explain."
+        )
+    lines = ["ANALYSIS-TYPE SWITCH MENU (all families remain selectable):"]
+    for spec in list_analysis_types():
+        if detail == "full":
+            lines.append(f"- {spec.key}: {spec.description}")
+        elif detail == "without_guardrails":
+            lines.append(f"- {spec.key}: {spec.name}")
+        else:  # pragma: no cover - returned above; keeps the ladder exhaustive.
+            lines.append(f"- {spec.key}")
+    lines.append(
+        "Use the inferred-family block unless another family better matches the "
+        "estimand; explain any switch in rationale."
+    )
+    if detail != "full":
+        lines.append(
+            "Alternate-family descriptions were shortened only to fit the request "
+            "budget; no family was removed."
+        )
+    return "\n".join(lines)
+
+
 def locked_analysis_type_guide(spec: AnalysisTypeSpec) -> str:
     """Focused, advisory prompt block naming the inferred family.
 
@@ -1498,6 +1544,7 @@ __all__ = [
     "infer_analysis_type",
     "strong_trajectory_clustering_framing",
     "planner_analysis_type_guide",
+    "planner_analysis_type_switch_guide",
     "locked_analysis_type_guide",
     "analysis_type_catalog_markdown",
 ]

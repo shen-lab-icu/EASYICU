@@ -43,8 +43,9 @@ from ..planning.analysis_types import (
     infer_analysis_type,
     locked_analysis_type_guide,
     CATALOG_DETAIL_LADDER,
-    planner_analysis_type_guide,
+    planner_analysis_type_switch_guide,
 )
+from ..planning import scientific_action_catalog as _scientific_actions
 from ..planning.primary_result_contract import (
     family_primary_result_execution_guide,
     primary_result_contract_guide,
@@ -991,7 +992,8 @@ def _build_planner_user_prompt(
         + _payload.planner_descriptive_robustness_guidance(inferred_analysis_type.key)
         + locked_analysis_type_guide(inferred_analysis_type)
         + "\n\n"
-        + planner_analysis_type_guide(detail=catalog_detail)
+        + _scientific_actions.planner_scientific_action_guide(inferred_analysis_type.key, detail=catalog_detail) + "\n\n"
+        + planner_analysis_type_switch_guide(detail=catalog_detail)
         + "\n\n"
         + trajectory_planner_contract_guide(
             context=context,
@@ -1378,6 +1380,7 @@ def _planner_retry_response_projection(raw: str) -> str:
     step_keys = (
         "step_id",
         "planned_analysis_role",
+        "scientific_action_id",
         "inputs",
         "expected_outputs",
         "method",
@@ -1436,6 +1439,7 @@ def _planner_retry_response_projection(raw: str) -> str:
     minimal_step_keys = (
         "step_id",
         "planned_analysis_role",
+        "scientific_action_id",
         "inputs",
         "expected_outputs",
         "method",
@@ -1639,6 +1643,7 @@ class PlannerAgent:
                 direct_comparator_literature_keys=direct_comparator_keys,
                 enforce_article_contract=enforce_article_contract,
                 article_contract_context=article_contract_context,
+                require_scientific_actions=True,
             ),
             role="planner",
             max_retries=PLANNER_MAX_RETRIES,
@@ -1657,7 +1662,7 @@ class PlannerAgent:
                 "claim_id, and citation_ids), "
                 "steps (array of objects "
                 "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
-                "method, icu_rule_refs, sensitivity_spec_ids, "
+                "method, optional scientific_action_id, icu_rule_refs, sensitivity_spec_ids, "
                 "literature_citation_keys (exact keys from "
                 "the supplied literature bundle that support this step), "
                 "literature_design_bindings (records with citation_key, exact "
@@ -1693,6 +1698,7 @@ class PlannerAgent:
         direct_comparator_literature_keys: Optional[Sequence[str]] = None,
         enforce_article_contract: bool = False,
         article_contract_context: Optional[ResearchContext] = None,
+        require_scientific_actions: bool = False,
     ) -> AnalysisPlan:
         text = raw.strip()
         # Strip a fenced block anywhere in the response (already
@@ -1741,6 +1747,7 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
+        _scientific_actions.validate_plan_scientific_action_selections(plan=plan, inferred_analysis_type=infer_analysis_type(context).key, require_result_actions=require_scientific_actions)
         # Repeated-unit covariance is study authority, not Planner prose.  The
         # binder parses only the closed JSON design in ResearchContext and
         # projects its verified row-identity derivation into the plan digest.
@@ -2164,6 +2171,7 @@ class ReplannerAgent(PlannerAgent):
                     "AnalysisPlan schema. Keep completed steps unchanged and "
                     "revise only the remaining steps when the probe summary or "
                     "completed step outputs justify it.\n\n"
+                    + _scientific_actions.planner_scientific_action_guide(current_plan.analysis_type, detail="names_only") + "\n\n"
                     + trajectory_planner_contract_guide(
                         context=context,
                         analysis_type=current_plan.analysis_type,
@@ -2215,6 +2223,7 @@ class ReplannerAgent(PlannerAgent):
                 allowed_know_how_decisions=decision_authority,
                 allowed_literature_citation_keys=allowed_citation_keys,
                 direct_comparator_literature_keys=direct_comparator_keys,
+                require_scientific_actions=True,
             )
             if candidate.know_how_decisions != current_plan.know_how_decisions:
                 raise ValueError(

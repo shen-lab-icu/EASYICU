@@ -9,7 +9,11 @@ It performs no query, network call, screening decision, or persistence.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Optional
+
+from .concept_availability import normalize_concept_name
+from .concept_catalog import ConceptCatalog, load_concept_catalog
 
 
 @dataclass(frozen=True)
@@ -32,14 +36,18 @@ _MATERIALIZED_SUFFIXES = (
     "_n",
 )
 
+_SEPSIS3_IDENTITY = LiteratureConceptIdentity(
+    concept_id="sep3",
+    canonical_phrase="Sepsis-3",
+    retrieval_alternatives=(("Sepsis-3",),),
+    screening_role_term="Sepsis-3",
+    screening_required_terms=("Sepsis-3",),
+)
+
 _IDENTITIES = {
-    "sep3_sofa1": LiteratureConceptIdentity(
-        concept_id="sep3_sofa1",
-        canonical_phrase="Sepsis-3",
-        retrieval_alternatives=(("Sepsis-3",),),
-        screening_role_term="Sepsis-3",
-        screening_required_terms=("Sepsis-3",),
-    ),
+    "sep3": _SEPSIS3_IDENTITY,
+    "sepsis3": _SEPSIS3_IDENTITY,
+    "sep3_sofa1": _SEPSIS3_IDENTITY,
     "sep3_sofa2": LiteratureConceptIdentity(
         concept_id="sep3_sofa2",
         canonical_phrase="SOFA-2 sepsis",
@@ -108,8 +116,42 @@ def concept_id(value: Any) -> str:
     return token
 
 
+@lru_cache(maxsize=1)
+def _shared_concept_catalog() -> ConceptCatalog:
+    """Load the shared dictionary projection once for literature consumers."""
+
+    return load_concept_catalog()
+
+
+def _catalog_identity(value: Any) -> Optional[LiteratureConceptIdentity]:
+    """Project any registered EasyICU concept into a conservative query term.
+
+    The concept catalog owns more than 280 dictionary/derived ICU concepts. Its
+    first alias is the owner-issued canonical clinical description; we use that
+    single phrase as the generic retrieval alternative. Rich composite concepts
+    that need multi-term screening remain explicit overrides in ``_IDENTITIES``.
+    This avoids both a benchmark-sized allowlist and unsafe generic synonym ORs.
+    """
+
+    requested = concept_id(value)
+    canonical_id = normalize_concept_name(requested)
+    catalog = _shared_concept_catalog()
+    aliases = catalog.concept_aliases.get(canonical_id) or []
+    phrase = " ".join(str(aliases[0] if aliases else "").split())[:180]
+    if not phrase:
+        return None
+    return LiteratureConceptIdentity(
+        concept_id=canonical_id,
+        canonical_phrase=phrase,
+        retrieval_alternatives=((phrase,),),
+        screening_role_term=phrase,
+        screening_required_terms=(),
+    )
+
+
 def literature_concept_identity(value: Any) -> Optional[LiteratureConceptIdentity]:
-    return _IDENTITIES.get(concept_id(value))
+    identity = _IDENTITIES.get(concept_id(value))
+    return identity if identity is not None else _catalog_identity(value)
 
 
 def literature_concept_phrase(value: Any, *, fallback: Any = None) -> str:
@@ -123,14 +165,17 @@ def literature_concept_phrase(value: Any, *, fallback: Any = None) -> str:
     raw = " ".join(str(value or "").split())[:180]
     if not raw:
         return ""
-    identity = literature_concept_identity(raw)
-    if identity is not None:
-        return identity.canonical_phrase
+    explicit_identity = _IDENTITIES.get(concept_id(raw))
+    if explicit_identity is not None:
+        return explicit_identity.canonical_phrase
     phrase_alias = _PHRASE_ALIASES.get(concept_id(raw))
     if phrase_alias:
         return phrase_alias
     fallback_text = " ".join(str(fallback or "").split())[:180]
-    return fallback_text or raw.replace("_", " ")
+    if fallback_text:
+        return fallback_text
+    identity = _catalog_identity(raw)
+    return identity.canonical_phrase if identity is not None else raw.replace("_", " ")
 
 
 __all__ = [

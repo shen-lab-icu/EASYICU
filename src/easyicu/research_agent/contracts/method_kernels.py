@@ -182,11 +182,35 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
         # plain "fit an adjusted logistic regression" step, where trajectory
         # timing is not the question. A family list is a relevance claim, and
         # claiming a family too widely crowds out the tool the step needs.
-        families=("time_to_event", "survival", "causal_emulation"),
+        families=(
+            "time_to_event",
+            "survival",
+            "causal_emulation",
+            "dynamic_prediction",
+        ),
         fallback=(
             "re-deriving onsets from the trajectory inside the analysis script "
             "— the failure this module was written for, where a 'measured but "
             "event-absent' row (e.g. a stage-0 record) was counted as an onset"
+        ),
+    ),
+    MethodKernel(
+        module="dynamic_prediction",
+        requires=("numpy", "pandas", "sklearn"),
+        entrypoints=(
+            "build_landmark_feature_matrix",
+            "attach_landmark_outcomes",
+            "evaluate_landmark_probabilities",
+            "DynamicPredictionEvaluation",
+        ),
+        capability=(
+            "leakage-safe landmark feature slices, observable future-horizon "
+            "labels, and per-landmark AUROC/Brier/calibration evaluation"
+        ),
+        families=("dynamic_prediction",),
+        fallback=(
+            "no ad-hoc fallback: hand-written row slicing can leak post-landmark "
+            "measurements or label censored horizons as non-events"
         ),
     ),
     MethodKernel(

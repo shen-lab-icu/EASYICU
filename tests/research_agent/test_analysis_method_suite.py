@@ -16,6 +16,11 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.figures import FAMILY_RENDERERS
+from easyicu.research_agent.contracts.method_kernels import KERNEL_MODULE_NAMES
+from easyicu.research_agent.contracts.method_packages import (
+    BASELINE_PACKAGES,
+    CURATED_METHOD_PACKAGES,
+)
 from easyicu.research_agent.planning import analysis_method_suite as ams
 from easyicu.research_agent.planning import capability_registry as cr
 from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
@@ -60,6 +65,24 @@ def test_tiers_and_implementations_use_closed_vocabulary():
             suite.family,
             m.key,
             m.implementation,
+        )
+
+
+def test_method_resource_bindings_reference_the_curated_owners():
+    package_names = {
+        *BASELINE_PACKAGES,
+        *(package.import_name for package in CURATED_METHOD_PACKAGES),
+    }
+    for suite, method in _ALL_METHODS:
+        assert set(method.kernel_modules) <= set(KERNEL_MODULE_NAMES), (
+            suite.family,
+            method.key,
+            method.kernel_modules,
+        )
+        assert set(method.software_packages) <= package_names, (
+            suite.family,
+            method.key,
+            method.software_packages,
         )
 
 
@@ -193,6 +216,23 @@ def test_accessors_and_roadmap_nonempty():
     assert ams.supporting_methods("prediction")  # reviewer-expected depth set
     assert ams.planned_methods(), "there should be a declared planned roadmap"
     assert ams.deterministic_methods(), "some methods are deterministic today"
+
+
+def test_dynamic_prediction_reuses_reviewed_temporal_and_sklearn_resources():
+    prediction = ams.get_suite("prediction")
+    assert prediction is not None
+    dynamic = next(method for method in prediction.methods if method.key == "dynamic_prediction")
+
+    assert dynamic.tier == "primary"
+    assert dynamic.implementation == "llm_coded"
+    assert dynamic.kernel_modules == ("dynamic_prediction", "temporal_features")
+    assert dynamic.software_packages == ("sklearn",)
+    assert dynamic.required_inputs
+    assert dynamic.composition_action_ids == (
+        "prediction.discrimination_calibration",
+        "prediction.calibration_metrics",
+        "prediction.internal_validation",
+    )
 
 
 def test_docs_analysis_method_suite_matches_registry():

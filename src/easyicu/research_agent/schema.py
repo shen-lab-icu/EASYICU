@@ -1881,6 +1881,17 @@ class AnalysisStep(BaseModel):
         description="Logical outputs — table_name, figure_name, statistic_name.",
     )
     method: Optional[str] = None
+    scientific_action_id: Optional[str] = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$",
+        description=(
+            "Exact family.method_key selected from the host-published scientific "
+            "action catalog. It binds a reviewed method/resource coordinate; it "
+            "does not upgrade Coder-generated work to a deterministic owner or "
+            "publication-ready claim. Null preserves historical plans and steps "
+            "that are not scientific analyses."
+        ),
+    )
     scientific_capability: Optional[str] = Field(
         default=None,
         description=(

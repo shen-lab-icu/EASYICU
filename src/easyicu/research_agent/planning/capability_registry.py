@@ -359,6 +359,48 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         required_diagnostics=("split/leakage", "discrimination", "calibration"),
     ),
     ScientificCapability(
+        family="prediction",
+        label="Dynamic prediction / landmark early warning",
+        primary_analysis="llm_coded",
+        primary_estimand=(
+            "Time-updated binary risks at prespecified landmarks and target "
+            "horizons using only measurements available by each prediction time"
+        ),
+        primary_runner=None,
+        primary_runner_module=None,
+        figure="deterministic",
+        figure_renderer="prediction",
+        data_contract=(
+            "longitudinal rows with patient/stay identity and measurement time",
+            "prespecified prediction landmarks, lookback windows and target horizons",
+            "event time plus follow-up/censoring time sufficient to observe each horizon",
+            "patient-level development/validation split with preprocessing fitted inside each training split",
+        ),
+        fail_closed=(
+            "Missing event/follow-up times, post-landmark feature leakage, an "
+            "unobservable target horizon, or a row-level rather than patient-level "
+            "split blocks the action. Static prediction is offered only as a "
+            "user-confirmed alternative, never as an automatic substitute."
+        ),
+        notes=(
+            "Landmark construction and metric evaluation use digest-bound reviewed "
+            "kernels and sklearn; model fitting remains Coder-generated and "
+            "analysis-only until a typed host fit/result validator is registered."
+        ),
+        capability_id="dynamic_prediction_landmark_v1",
+        result_contract=(
+            "typed scientific action + leakage-safe landmark dataset receipt + "
+            "registered per-landmark discrimination/calibration products"
+        ),
+        required_diagnostics=(
+            "prediction-time/observation-window/target-horizon separation",
+            "patient-level split and leakage audit",
+            "per-landmark discrimination, calibration and horizon observability",
+            "temporal subgroup or drift assessment when data support it",
+        ),
+        scientific_validation="analysis_only",
+    ),
+    ScientificCapability(
         family="phenotyping",
         label="Phenotyping / clustering",
         primary_analysis="llm_coded",

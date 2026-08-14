@@ -23,6 +23,63 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 
+_SCIENTIFIC_ACTION_ID = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
+_SCIENTIFIC_ACTION_STATUSES = frozenset(
+    {"direct", "composed", "alternative", "unavailable"}
+)
+
+
+def _scientific_action_projection(value: Any) -> Optional[Dict[str, Any]]:
+    """Validate the one browser-safe exception payload this generic owner accepts."""
+
+    if not isinstance(value, dict) or value.get("schema_version") != (
+        "easyicu.scientific_action_resolution/1"
+    ):
+        return None
+    status = str(value.get("status") or "")
+    issue_code = str(value.get("issue_code") or "")
+    requested = str(value.get("requested_action_id") or "")
+    detail = str(value.get("detail") or "")
+    if (
+        status not in _SCIENTIFIC_ACTION_STATUSES
+        or not re.fullmatch(r"[a-z][a-z0-9_]{2,120}", issue_code)
+        or (requested and not _SCIENTIFIC_ACTION_ID.fullmatch(requested))
+        or len(detail) > 3_000
+        or not isinstance(value.get("requires_user_confirmation"), bool)
+    ):
+        return None
+
+    def _action_ids(key: str) -> Optional[List[str]]:
+        raw = value.get(key)
+        if not isinstance(raw, list) or len(raw) > 16:
+            return None
+        items = [str(item) for item in raw]
+        return items if all(_SCIENTIFIC_ACTION_ID.fullmatch(item) for item in items) else None
+
+    selected = _action_ids("selected_action_ids")
+    alternatives = _action_ids("alternative_action_ids")
+    requirements = value.get("missing_requirements")
+    if (
+        selected is None
+        or alternatives is None
+        or not isinstance(requirements, list)
+        or len(requirements) > 16
+        or any(len(str(item)) > 500 for item in requirements)
+    ):
+        return None
+    return {
+        "schema_version": "easyicu.scientific_action_resolution/1",
+        "status": status,
+        "requested_action_id": requested,
+        "selected_action_ids": selected,
+        "alternative_action_ids": alternatives,
+        "missing_requirements": [str(item) for item in requirements],
+        "issue_code": issue_code,
+        "requires_user_confirmation": value["requires_user_confirmation"],
+        "detail": detail,
+    }
+
+
 class JobCapacityError(RuntimeError):
     def __init__(self, *, max_running: int, running: int) -> None:
         self.max_running = max_running
@@ -89,12 +146,12 @@ class Job:
             status = "cancelled" if self.cancel_requested else "done"
             return self.finish(status, result=result)
 
-    def fail_from_runner(self, error: str) -> bool:
+    def fail_from_runner(self, error: str, result: Any = None) -> bool:
         """Atomically let an accepted cancellation win over a late failure."""
         with self._lock:
             if self.cancel_requested:
                 return self.finish("cancelled")
-            return self.finish("failed", error=error)
+            return self.finish("failed", result=result, error=error)
 
     def request_cancel(self, reason: Optional[str] = None) -> bool:
         """Mark this job for cooperative cancellation.
@@ -191,7 +248,43 @@ class JobManager:
             message = str(exc)
             code = str(getattr(exc, "code", "") or "").strip()
             if code and re.fullmatch(r"[a-z][a-z0-9_]{2,120}", code):
-                message = f"{code}: {message}"
+                if not message.startswith(f"{code}:"):
+                    message = f"{code}: {message}"
+            projection = _scientific_action_projection(
+                getattr(exc, "user_action_required", None)
+            )
+            if projection is not None:
+                alternatives = [
+                    str(value)
+                    for value in projection.get("alternative_action_ids", [])
+                    if str(value).strip()
+                ]
+                label = (
+                    "Scientific method needs your confirmation: "
+                    + ", ".join(alternatives)
+                    if alternatives
+                    else "Scientific method is not executable with the current inputs"
+                )
+                job.emit(
+                    {
+                        # ``progress`` is deliberately used here: both Classic
+                        # Agent and Guided Pi already stream this event type, so
+                        # the recoverable gap is visible without a second UI
+                        # event/rendering stack.  The exact typed payload is
+                        # retained for the assistant and the terminal result.
+                        "type": "progress",
+                        "step": "scientific_action_gap",
+                        "status": "action_required",
+                        "reason_code": str(projection.get("issue_code") or ""),
+                        "label": label,
+                        "action": projection,
+                    }
+                )
+                job.fail_from_runner(
+                    message,
+                    result={"action_required": projection},
+                )
+                return
             job.fail_from_runner(message)
         finally:
             with self._lock:

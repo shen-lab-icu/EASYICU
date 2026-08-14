@@ -197,6 +197,17 @@ def test_get_capability_disambiguates_association():
     assert "free-form" in freeform.label.lower()
 
 
+def test_dynamic_prediction_has_an_honest_analysis_only_capability():
+    capability = cr.get_capability_by_id("dynamic_prediction_landmark_v1")
+    assert capability is not None
+    assert capability.family == "prediction"
+    assert capability.primary_analysis == "llm_coded"
+    assert capability.scientific_validation == "analysis_only"
+    assert capability.primary_runner is None
+    assert "patient-level" in " ".join(capability.data_contract)
+    assert "Static prediction" in capability.fail_closed
+
+
 def test_plan_contract_selects_exact_or_freeform_association_capability(ra):
     exact = ra.AnalysisPlan(
         research_question="Estimate one adjusted association.",
