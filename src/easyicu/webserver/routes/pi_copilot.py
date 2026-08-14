@@ -278,11 +278,13 @@ def get_pi_copilot_workspace_file(
 def get_pi_copilot_workspace_preview(
     project_id: ShortText,
     file: WorkspaceFileText,
+    checked_sha256: Sha256Text,
 ) -> HTMLResponse:
     try:
         payload = get_pi_copilot_service().get_workspace_preview(
             project_id=project_id,
             relative_file=file,
+            checked_sha256=checked_sha256,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

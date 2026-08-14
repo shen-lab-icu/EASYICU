@@ -47,6 +47,7 @@ class FakeService:
             "ok": True,
             "artifact": {
                 "file": kwargs["relative_file"],
+                "checked_sha256": kwargs["checked_sha256"],
                 "media_type": "text/html",
                 "text": "<h1>Sandboxed preview</h1><script>document.title='demo'</script>",
             },
@@ -215,7 +216,10 @@ def test_project_workspace_file_and_preview_routes_are_bounded(monkeypatch) -> N
 
     preview = client.get(
         "/api/copilot/pi/projects/guided-project-2/workspace/preview",
-        params={"file": "prototype/index.html"},
+        params={
+            "file": "prototype/index.html",
+            "checked_sha256": "a" * 64,
+        },
     )
     assert preview.status_code == 200
     assert "Workspace artifact · Unvalidated" in preview.text
@@ -238,6 +242,38 @@ def test_project_workspace_file_and_preview_routes_are_bounded(monkeypatch) -> N
         ).status_code
         == 422
     )
+    assert (
+        client.get(
+            "/api/copilot/pi/projects/guided-project-2/workspace/preview",
+            params={"file": "prototype/index.html"},
+        ).status_code
+        == 422
+    )
+
+
+def test_workspace_preview_surfaces_stale_checked_bytes_as_conflict(monkeypatch) -> None:
+    class StalePreviewService(FakeService):
+        def get_workspace_preview(self, **kwargs) -> dict:
+            raise PiCopilotError(
+                "pi_workspace_preview_check_stale",
+                "The file changed after its static check.",
+                status_code=409,
+            )
+
+    monkeypatch.setattr(
+        route_module,
+        "get_pi_copilot_service",
+        lambda: StalePreviewService(),
+    )
+    response = TestClient(app).get(
+        "/api/copilot/pi/projects/guided-project-2/workspace/preview",
+        params={
+            "file": "prototype/index.html",
+            "checked_sha256": "a" * 64,
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "pi_workspace_preview_check_stale"
 
 
 def test_project_workflow_route_is_project_scoped(monkeypatch) -> None:

@@ -2532,6 +2532,7 @@ def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
         "file": "index.html",
         "label": "index.html",
         "media_type": "text/html",
+        "checked_sha256": checked["details"]["checked_sha256"],
         "authority_class": "workspace_artifact",
         "scientific_evidence": False,
         "validation_status": "unvalidated",
