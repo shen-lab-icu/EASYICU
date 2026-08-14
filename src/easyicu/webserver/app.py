@@ -20,6 +20,10 @@ from easyicu.webserver.host_security import (
     resolve_allowed_hosts,
     trusts_proxy,
 )
+from easyicu.webserver.deployment_lease import (
+    acquire_single_process_lease,
+    release_single_process_lease,
+)
 from easyicu.webserver.routes.agent import artifact_router as agent_artifact_router
 from easyicu.webserver.routes.agent import control_router as agent_control_router
 from easyicu.webserver.routes.copilot import router as copilot_router
@@ -63,6 +67,16 @@ def _package_version() -> str:
 
 
 app = FastAPI(title="EasyICU", version=_package_version())
+
+
+@app.on_event("startup")
+def _acquire_web_deployment_lease() -> None:
+    acquire_single_process_lease()
+
+
+@app.on_event("shutdown")
+def _release_web_deployment_lease() -> None:
+    release_single_process_lease()
 
 
 WEB_ALLOWED_HOSTS = resolve_allowed_hosts()

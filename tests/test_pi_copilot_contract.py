@@ -25,6 +25,7 @@ from easyicu.webserver.pi_copilot.contracts import (
     PiProjectBindingHandoffReceipt,
     PiSessionRecord,
     ToolExecutionContext,
+    WorkspaceMutationLimitError,
 )
 from easyicu.webserver.pi_copilot.projections import (
     ensure_safe_projection,
@@ -2432,13 +2433,18 @@ def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
     )
     preview = tool_module.execute_tool(
         "easyicu_preview_project_file",
-        {"file": "index.html"},
+        {
+            "file": "index.html",
+            "checked_sha256": checked["details"]["checked_sha256"],
+        },
         granted,
     )
 
     assert first["code"] == "pi_workspace_file_written"
     assert second["code"] == "pi_workspace_file_edited"
     assert checked["details"]["valid"] is True
+    assert first["details"]["mutation_receipt"]["ordinal"] == 1
+    assert second["details"]["mutation_receipt"]["ordinal"] == 2
     assert preview["details"]["resource"] == {
         "kind": "webpage",
         "file": "index.html",
@@ -2583,6 +2589,15 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
     assert workspace_grant.has_capability("workspace_write") is True
     assert workspace_grant.has_capability("configure") is False
     assert workspace_grant.consume_once("workspace_write") == "capability"
+    receipts = [
+        workspace_grant.reserve_workspace_mutation(
+            "write" if index % 2 == 0 else "edit"
+        )
+        for index in range(8)
+    ]
+    assert receipts[-1].ordinal == 8
+    with pytest.raises(WorkspaceMutationLimitError, match="limit"):
+        workspace_grant.reserve_workspace_mutation("write")
     literature_grant = HostTurnGrant.from_actions(["literature"])
     assert literature_grant.was_provided("literature") is True
     assert literature_grant.consume_once("literature") == "granted"

@@ -808,6 +808,38 @@ def test_human_review_pause_does_not_consume_active_execution_time(
     assert final["elapsed_seconds"] == pytest.approx(6.0)
 
 
+def test_restarted_host_attaches_to_paused_task_without_resetting_budget(
+    tmp_path,
+):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLedger,
+    )
+
+    path = tmp_path / "restarted-ledger.json"
+    limits = _limits(max_wall_clock_seconds_per_task=60.0)
+    first = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+    )
+    first.start_task("task-a").pause()
+
+    reopened = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+        resume_existing=True,
+    )
+    attached = reopened.start_task("task-a")
+    assert reopened.snapshot()["tasks"][0]["status"] == "paused"
+    attached.resume()
+    assert attached.assert_active() > 0
+
+
 def test_wall_clock_exhaustion_is_terminal_and_persisted(tmp_path):
     from easyicu.research_agent.authority.provider_hard_stop import (
         ProviderHardStopExceeded,

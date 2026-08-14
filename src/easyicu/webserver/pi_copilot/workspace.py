@@ -578,70 +578,105 @@ class ProjectWorkspace:
             }
 
     def check_file(self, project_id: str, relative_file: Any) -> Dict[str, Any]:
-        with self._project_lock(project_id):
-            candidate, relative, text, _raw = self._read_complete_file(
+        with self._project_lock(project_id), self._project_file_lock(project_id):
+            candidate, relative, text, raw = self._read_complete_file(
                 project_id, relative_file
             )
-        suffix = Path(relative).suffix.lower()
-        try:
-            if suffix in {".html", ".htm"}:
-                parser = _HTMLCheck(convert_charrefs=True)
-                parser.feed(text)
-                parser.close()
-                checker = "html.parser"
-            elif suffix == ".json":
-                json.loads(text)
-                checker = "json"
-            elif suffix == ".py":
-                ast.parse(text, filename=relative)
-                checker = "python-ast"
-            elif suffix in {".js", ".mjs"}:
-                node = shutil.which("node")
-                if not node:
-                    raise PiCopilotError(
-                        "pi_workspace_checker_unavailable",
-                        "Node.js is unavailable for the JavaScript syntax check.",
+            suffix = Path(relative).suffix.lower()
+            try:
+                if suffix in {".html", ".htm"}:
+                    parser = _HTMLCheck(convert_charrefs=True)
+                    parser.feed(text)
+                    parser.close()
+                    checker = "html.parser"
+                elif suffix == ".json":
+                    json.loads(text)
+                    checker = "json"
+                elif suffix == ".py":
+                    ast.parse(text, filename=relative)
+                    checker = "python-ast"
+                elif suffix in {".js", ".mjs"}:
+                    node = shutil.which("node")
+                    if not node:
+                        raise PiCopilotError(
+                            "pi_workspace_checker_unavailable",
+                            "Node.js is unavailable for the JavaScript syntax check.",
+                        )
+                    handle = tempfile.NamedTemporaryFile(
+                        mode="wb",
+                        dir=str(candidate.parent),
+                        prefix=".pi-check-",
+                        suffix=suffix,
+                        delete=False,
                     )
-                result = subprocess.run(
-                    [node, "--check", str(candidate)],
-                    cwd=self.project_root(project_id),
-                    env=_node_check_environment(),
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    check=False,
-                )
-                if result.returncode:
-                    raise ValueError((result.stderr or result.stdout).strip()[:2000])
-                checker = "node --check"
-            elif suffix == ".css":
-                if text.count("{") != text.count("}"):
-                    raise ValueError("CSS braces are unbalanced")
-                checker = "css-braces"
-            else:
-                checker = "utf-8"
-        except PiCopilotError:
-            raise
-        except Exception as exc:
-            raise PiCopilotError(
-                "pi_workspace_check_failed",
-                "The project file did not pass its bounded static check.",
-                details={"file": relative, "reason": str(exc)[:2000]},
-            ) from exc
+                    checked_copy = Path(handle.name)
+                    try:
+                        with handle:
+                            handle.write(raw)
+                            handle.flush()
+                            os.fsync(handle.fileno())
+                        checked_copy.chmod(0o600)
+                        result = subprocess.run(
+                            [node, "--check", str(checked_copy)],
+                            cwd=self.project_root(project_id),
+                            env=_node_check_environment(),
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                            check=False,
+                        )
+                    finally:
+                        checked_copy.unlink(missing_ok=True)
+                    if result.returncode:
+                        raise ValueError(
+                            (result.stderr or result.stdout).strip()[:2000]
+                        )
+                    checker = "node --check"
+                elif suffix == ".css":
+                    if text.count("{") != text.count("}"):
+                        raise ValueError("CSS braces are unbalanced")
+                    checker = "css-braces"
+                else:
+                    checker = "utf-8"
+            except PiCopilotError:
+                raise
+            except Exception as exc:
+                raise PiCopilotError(
+                    "pi_workspace_check_failed",
+                    "The project file did not pass its bounded static check.",
+                    details={"file": relative, "reason": str(exc)[:2000]},
+                ) from exc
+            checked_sha256 = hashlib.sha256(raw).hexdigest()
         return {
             "file": relative,
             "media_type": self._media_type(candidate),
             "checker": checker,
             "valid": True,
+            "checked_sha256": checked_sha256,
             "check_scope": "bounded_static_syntax",
             **_authority_metadata(),
         }
 
-    def preview_file(self, project_id: str, relative_file: Any) -> Dict[str, Any]:
-        with self._project_lock(project_id):
+    def preview_file(
+        self,
+        project_id: str,
+        relative_file: Any,
+        *,
+        checked_sha256: Any,
+    ) -> Dict[str, Any]:
+        with self._project_lock(project_id), self._project_file_lock(project_id):
             candidate, relative, text, raw = self._read_complete_file(
                 project_id, relative_file
             )
+            expected = self._expected_sha256(checked_sha256)
+            current = hashlib.sha256(raw).hexdigest()
+            if expected is None or expected != current:
+                raise PiCopilotError(
+                    "pi_workspace_preview_check_stale",
+                    "The file changed after its static check; check it again before preview.",
+                    status_code=409,
+                    details={"file": relative, "current_sha256": current},
+                )
         if Path(relative).suffix.lower() not in PREVIEW_SUFFIXES:
             raise PiCopilotError(
                 "pi_workspace_preview_type_unsupported",
@@ -652,7 +687,8 @@ class ProjectWorkspace:
             "file": relative,
             "media_type": self._media_type(candidate),
             "size": len(raw),
-            "sha256": hashlib.sha256(raw).hexdigest(),
+            "sha256": current,
+            "checked_sha256": current,
             "text": text,
             "truncated": False,
             **_authority_metadata(),

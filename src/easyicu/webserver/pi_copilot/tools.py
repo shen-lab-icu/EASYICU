@@ -33,6 +33,7 @@ from .contracts import (
     PiCopilotError,
     PiToolResult,
     ToolExecutionContext,
+    WorkspaceMutationLimitError,
 )
 from .literature_tool_projection import compile_literature_tool_projection
 from .projections import (
@@ -3527,6 +3528,15 @@ def _write_project_file(
     if blocked:
         return blocked
     assert workspace is not None and context.session.project_id
+    try:
+        mutation = context.grant.reserve_workspace_mutation("write")
+    except WorkspaceMutationLimitError:
+        return _workspace_result(
+            context,
+            status="blocked",
+            code="pi_workspace_mutation_limit_reached",
+            summary="This message reached its bounded project-file mutation limit.",
+        )
     payload = workspace.write_file(
         context.session.project_id,
         params["file"],
@@ -3537,7 +3547,11 @@ def _write_project_file(
         status="ok",
         code="pi_workspace_file_written",
         summary=f"Created {payload['file']}.",
-        details={**payload, "resource": _workspace_resource(payload)},
+        details={
+            **payload,
+            "mutation_receipt": mutation.model_dump(mode="json"),
+            "resource": _workspace_resource(payload),
+        },
     )
 
 
@@ -3553,6 +3567,15 @@ def _edit_project_file(
     if blocked:
         return blocked
     assert workspace is not None and context.session.project_id
+    try:
+        mutation = context.grant.reserve_workspace_mutation("edit")
+    except WorkspaceMutationLimitError:
+        return _workspace_result(
+            context,
+            status="blocked",
+            code="pi_workspace_mutation_limit_reached",
+            summary="This message reached its bounded project-file mutation limit.",
+        )
     payload = workspace.edit_file(
         context.session.project_id,
         params["file"],
@@ -3565,7 +3588,11 @@ def _edit_project_file(
         status="ok",
         code="pi_workspace_file_edited",
         summary=f"Edited {payload['file']} with one exact replacement.",
-        details={**payload, "resource": _workspace_resource(payload)},
+        details={
+            **payload,
+            "mutation_receipt": mutation.model_dump(mode="json"),
+            "resource": _workspace_resource(payload),
+        },
     )
 
 
@@ -3590,12 +3617,20 @@ def _check_project_file(
 def _preview_project_file(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("file",), required=("file",))
+    _require_args(
+        params,
+        allowed=("file", "checked_sha256"),
+        required=("file", "checked_sha256"),
+    )
     workspace, blocked = _workspace_access(context)
     if blocked:
         return blocked
     assert workspace is not None and context.session.project_id
-    payload = workspace.preview_file(context.session.project_id, params["file"])
+    payload = workspace.preview_file(
+        context.session.project_id,
+        params["file"],
+        checked_sha256=params["checked_sha256"],
+    )
     resource = _workspace_resource(payload, kind="webpage")
     return _workspace_result(
         context,

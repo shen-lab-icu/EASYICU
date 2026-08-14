@@ -93,6 +93,7 @@ from .figures.missingness_publication import (
 from .figures.sealed_registry import sealed_renderer_adapter
 from .replication.envelope import (
     ENVELOPE_SCHEMA_VERSION,
+    ReproCallRecord,
     ReproEnvelope,
     envelope_role_resolver,
 )
@@ -182,6 +183,17 @@ from .orchestration.config import (
     assert_step_provider_budget_funds_its_repairs,
 )
 from .orchestration.instance_lifecycle import PipelineInstanceLifecycleLease
+from .orchestration.human_review_checkpoint import (
+    HumanReviewCheckpoint,
+    HumanReviewCheckpointError,
+    checkpoint_path as human_review_checkpoint_path,
+    load_checkpoint as load_human_review_checkpoint,
+    write_checkpoint as write_human_review_checkpoint,
+)
+from .orchestration.human_review_restore import (
+    persist_human_review_records,
+    restore_durable_human_review_pause,
+)
 from .orchestration.services import PipelineServices
 from .orchestration.progress import (
     ResumableProgressChannel,
@@ -468,11 +480,12 @@ from .authority.run_input import (
     RunInputIdentityError,
     build_environment_identity,
     build_scientific_identity,
+    load_verified_run_input_capsule,
     prepare_existing_resume_input,
     seal_run_input_capsule,
     verify_legacy_trajectory_capsule_receipt,
 )
-from .authority.plan_review import ReviewExecutionAuthority
+from .authority.plan_review import PlanReviewAuthority, ReviewExecutionAuthority
 from .canonical_json import canonical_sha256
 from .authority.run_lock import (
     acquire_run_execution_lock,
@@ -561,6 +574,16 @@ def _pipeline_instance_lifecycle(
                 "_instance_lifecycle_lease", PipelineInstanceLifecycleLease()
             )
             pending_run_id = _pending_review_run_id(self)
+            if operation == "resume" and not pending_run_id:
+                requested_run_id = kwargs.get("run_id")
+                if requested_run_id:
+                    candidate = Path(self.workdir) / str(requested_run_id)
+                    if human_review_checkpoint_path(candidate).is_file():
+                        # This only lets the lifecycle lease reserve the
+                        # candidate coordinate. The resume method still loads
+                        # and verifies the complete checkpoint before it can
+                        # publish a live pause or execute anything.
+                        pending_run_id = str(requested_run_id)
             token = (
                 lease.begin_run(pending_review_run_id=pending_run_id)
                 if operation == "run"
@@ -4106,6 +4129,339 @@ class ResearchAgentPipeline:
     # Public API
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _relative_run_path(run_dir: Path, value: Optional[Path]) -> Optional[str]:
+        if value is None:
+            return None
+        resolved = Path(value).resolve()
+        try:
+            return resolved.relative_to(run_dir.resolve()).as_posix()
+        except ValueError as exc:
+            raise HumanReviewCheckpointError(
+                "human-review handoff path escapes its run directory"
+            ) from exc
+
+    def _persist_review_checkpoint(
+        self,
+        *,
+        plan_result: _PlanPhaseResult,
+        requests: Sequence[Any],
+        run_id: str,
+        run_dir: Path,
+        cohort_path: Path,
+        trajectory_binding: Optional[StagedTrajectoryBinding],
+        runtime_capabilities: Sequence[str],
+        runtime_bundle: Optional[Mapping[str, Any]],
+        run_environment_identity: Mapping[str, Any],
+        notes: Optional[str],
+        database: str,
+        target_outcome: Optional[str],
+        stop_after_step_id: Optional[str],
+        stop_after_analysis: bool,
+        manuscript_title: Optional[str],
+        manuscript_authors: Optional[Sequence[str]],
+        run_language: str,
+        force_writer_probe: bool,
+        scientific_identity: Mapping[str, Any],
+        experiment_spec_path: Optional[Path],
+        cache_key: Optional[str],
+        skill_obj: Optional[ClinicalSkill],
+    ) -> Optional[HumanReviewCheckpoint]:
+        """Persist a fresh Plan→Review handoff without serializing live objects.
+
+        A run already resumed from a prior execution checkpoint may contain
+        legacy scientific migrations.  That is deliberately left on the
+        existing same-process path: making it durable would require a second
+        authority contract for migration history, which this narrow P0 does
+        not invent.
+        """
+
+        if plan_result.resume_state is not None:
+            return None
+        capsule = plan_result.evidence.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
+        if capsule is None:
+            raise HumanReviewCheckpointError(
+                "cannot persist human review without a run-input capsule"
+            )
+        execution_authorities: list[ReviewExecutionAuthority] = []
+        for request in requests:
+            payload = request.payload if hasattr(request, "payload") else {}
+            raw_authority = (
+                payload.get("plan_review_authority")
+                if isinstance(payload, Mapping)
+                else None
+            )
+            if not isinstance(raw_authority, Mapping):
+                raise HumanReviewCheckpointError(
+                    "human-review request lacks plan-review authority"
+                )
+            authority = PlanReviewAuthority.model_validate(raw_authority)
+            if authority.execution is None:
+                raise HumanReviewCheckpointError(
+                    "human-review request lacks execution authority"
+                )
+            execution_authorities.append(authority.execution)
+        if not execution_authorities or any(
+            item != execution_authorities[0] for item in execution_authorities[1:]
+        ):
+            raise HumanReviewCheckpointError(
+                "human-review requests do not share one execution authority"
+            )
+        execution_authority = execution_authorities[0]
+        if execution_authority.run_input_capsule_sha256 != str(capsule.sha256):
+            raise HumanReviewCheckpointError(
+                "review execution authority does not bind the run-input capsule"
+            )
+        trajectory_payload: Optional[dict[str, Any]] = None
+        if trajectory_binding is not None:
+            trajectory_payload = {
+                "path": self._relative_run_path(run_dir, trajectory_binding.path),
+                "sha256": trajectory_binding.sha256,
+                "size": trajectory_binding.size,
+                "authority_ref": (
+                    trajectory_binding.authority_ref.to_dict()
+                    if trajectory_binding.authority_ref is not None
+                    else None
+                ),
+                "legacy_capsule_receipt": (
+                    {
+                        "capsule_sha256": (
+                            trajectory_binding.legacy_capsule_receipt.capsule_sha256
+                        ),
+                        "trajectory_relative_path": (
+                            trajectory_binding.legacy_capsule_receipt.trajectory_relative_path
+                        ),
+                        "trajectory_sha256": (
+                            trajectory_binding.legacy_capsule_receipt.trajectory_sha256
+                        ),
+                        "trajectory_size": (
+                            trajectory_binding.legacy_capsule_receipt.trajectory_size
+                        ),
+                        "universe_authority_sha256": (
+                            trajectory_binding.legacy_capsule_receipt.universe_authority_sha256
+                        ),
+                        "schema_version": (
+                            trajectory_binding.legacy_capsule_receipt.schema_version
+                        ),
+                    }
+                    if trajectory_binding.legacy_capsule_receipt is not None
+                    else None
+                ),
+            }
+        repro_payload = None
+        if plan_result.repro_envelope is not None:
+            repro_payload = {
+                "seed": plan_result.repro_envelope.seed,
+                "preview_max_chars": plan_result.repro_envelope.preview_max_chars,
+                "include_previews": plan_result.repro_envelope.include_previews,
+                "env_snapshot": dict(plan_result.repro_envelope.env_snapshot),
+                "calls": [
+                    item.to_json() for item in plan_result.repro_envelope.calls
+                ],
+            }
+        plan_handoff = {
+            "context": plan_result.context.model_dump(mode="json"),
+            "agent_context": plan_result.agent_context.model_dump(mode="json"),
+            "context_path": self._relative_run_path(run_dir, plan_result.context_path),
+            "findings": [item.model_dump(mode="json") for item in plan_result.findings],
+            "plan": plan_result.plan.model_dump(mode="json"),
+            "plan_path": self._relative_run_path(run_dir, plan_result.plan_path),
+            "llm_signature": plan_result.llm_signature,
+            "used_mock_llm": bool(plan_result.used_mock_llm),
+            "prompt_version": plan_result.prompt_version,
+            "prompt_files": dict(plan_result.prompt_files),
+            "started_at": plan_result.started_at.isoformat(),
+            "allowed_literature_citation_keys": list(
+                plan_result.allowed_literature_citation_keys
+            ),
+            "direct_comparator_literature_keys": list(
+                plan_result.direct_comparator_literature_keys
+            ),
+            "preplan_literature": (
+                plan_result.preplan_literature.model_dump(mode="json")
+                if plan_result.preplan_literature is not None
+                else None
+            ),
+            "repro_envelope": repro_payload,
+        }
+        execution_coordinates = {
+            "cohort_path": self._relative_run_path(run_dir, cohort_path),
+            "trajectory_binding": trajectory_payload,
+            "notes": notes,
+            "database": database,
+            "target_outcome": target_outcome,
+            "stop_after_step_id": stop_after_step_id,
+            "stop_after_analysis": bool(stop_after_analysis),
+            "manuscript_title": manuscript_title,
+            "manuscript_authors": list(manuscript_authors or ()),
+            "run_language": run_language,
+            "force_writer_probe": bool(force_writer_probe),
+            "scientific_identity": dict(scientific_identity),
+            "experiment_spec_path": self._relative_run_path(
+                run_dir, experiment_spec_path
+            ),
+            "cache_key": cache_key,
+            "skill_key": skill_obj.key if skill_obj is not None else None,
+        }
+        checkpoint = HumanReviewCheckpoint.create(
+            run_id=run_id,
+            pipeline_config_sha256=self._config.canonical_digest(),
+            environment_identity=run_environment_identity,
+            llm_signature_sha256=canonical_sha256(plan_result.llm_signature),
+            run_input_capsule_sha256=str(capsule.sha256),
+            capability_activation_sha256=(
+                execution_authority.capability_activation_sha256
+            ),
+            runtime_capabilities=runtime_capabilities,
+            runtime_bundle=runtime_bundle,
+            requests=tuple(requests),
+            plan_handoff=plan_handoff,
+            execution_coordinates=execution_coordinates,
+        )
+        write_human_review_checkpoint(
+            human_review_checkpoint_path(run_dir), checkpoint
+        )
+        return checkpoint
+
+    def _restore_role_handoff(
+        self,
+        *,
+        run_id: str,
+        run_dir: Path,
+        repro_payload: Optional[Mapping[str, Any]],
+    ) -> tuple[Callable[[str], Any], Optional[CostMeter], Optional[ReproEnvelope]]:
+        llm = self._llm
+        if llm is None:
+            raise HumanReviewCheckpointError(
+                "durable human-review resume requires the configured provider"
+            )
+        repro_envelope: Optional[ReproEnvelope] = None
+        if self._enable_reproducibility_envelope:
+            if not isinstance(repro_payload, Mapping):
+                raise HumanReviewCheckpointError(
+                    "reproducibility envelope is absent from the plan handoff"
+                )
+            try:
+                calls = [
+                    ReproCallRecord(**dict(item))
+                    for item in list(repro_payload.get("calls") or ())
+                ]
+                repro_envelope = ReproEnvelope(
+                    run_id=run_id,
+                    seed=repro_payload.get("seed"),
+                    preview_max_chars=int(
+                        repro_payload.get("preview_max_chars") or 280
+                    ),
+                    include_previews=bool(repro_payload.get("include_previews")),
+                    calls=calls,
+                    env_snapshot=dict(repro_payload.get("env_snapshot") or {}),
+                )
+            except Exception as exc:
+                raise HumanReviewCheckpointError(
+                    "reproducibility envelope cannot be rehydrated"
+                ) from exc
+        base_role_resolver = (
+            envelope_role_resolver(llm, repro_envelope, seed=self._llm_seed)
+            if repro_envelope is not None
+            else lambda role: resolve_role_client(llm, role)
+        )
+        if self._provider_hard_stop is not None:
+
+            def stopped_role_resolver(role: str):
+                base = base_role_resolver(role)
+                if base is None or isinstance(base, HardStopClient):
+                    return base
+                return HardStopClient(
+                    base, role=role, task=self._provider_hard_stop
+                )
+
+        else:
+            stopped_role_resolver = base_role_resolver
+        cost_meter = None
+        if self._enable_cost_tracking:
+            cost_meter = (
+                CostMeter(
+                    price_table=dict(self._cost_price_table),
+                    runtime_dir=run_dir / ".runtime",
+                )
+                if self._cost_price_table is not None
+                else CostMeter(runtime_dir=run_dir / ".runtime")
+            )
+
+            class _RoleResolverShim:
+                name = "restored_role_resolver_shim"
+
+                def for_role(self, role: str):
+                    return stopped_role_resolver(role)
+
+                def complete(self, *_args: Any, **_kwargs: Any):
+                    raise RuntimeError("call for_role() before provider use")
+
+            role_resolver = metered_role_resolver(_RoleResolverShim(), cost_meter)
+        else:
+            role_resolver = stopped_role_resolver
+        return role_resolver, cost_meter, repro_envelope
+
+    @staticmethod
+    def _checkpoint_run_path(
+        *,
+        run_dir: Path,
+        relative_path: Any,
+        required: bool = True,
+    ) -> Optional[Path]:
+        """Resolve one checkpoint path without permitting path substitution."""
+
+        if relative_path is None:
+            if required:
+                raise HumanReviewCheckpointError(
+                    "durable human-review checkpoint is missing a required path"
+                )
+            return None
+        text = str(relative_path).strip()
+        candidate = (run_dir / text).resolve()
+        try:
+            candidate.relative_to(run_dir.resolve())
+        except ValueError as exc:
+            raise HumanReviewCheckpointError(
+                "durable human-review checkpoint path escapes its run directory"
+            ) from exc
+        if candidate.is_symlink() or not candidate.is_file():
+            raise HumanReviewCheckpointError(
+                "durable human-review checkpoint references a missing artifact"
+            )
+        return candidate
+
+    def _restore_durable_human_review_pause(
+        self,
+        *,
+        run_id: str,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]],
+    ) -> Dict[str, Any]:
+        """Delegate restart recovery to its digest-bound owner."""
+
+        return restore_durable_human_review_pause(
+            self,
+            run_id=run_id,
+            progress_callback=progress_callback,
+            plan_result_factory=_PlanPhaseResult,
+        )
+    def _record_human_review_records(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        *,
+        run_id: str,
+        run_dir: Path,
+        evidence: EvidenceStore,
+    ) -> None:
+        """Delegate decision persistence to the checkpoint owner."""
+
+        persist_human_review_records(
+            records,
+            run_id=run_id,
+            run_dir=run_dir,
+            evidence=evidence,
+            submission_profile_name=self._submission_profile_name,
+        )
     @_pipeline_instance_lifecycle("run")
     @exclusive_run_execution
     @_one_capability_job
@@ -5017,7 +5373,31 @@ class ResearchAgentPipeline:
                 )
 
         gate = self._human_review_gate
-        from .orchestration.workflow import build_pipeline_workflow
+        from .orchestration.workflow import WorkflowPaused, build_pipeline_workflow
+
+        checkpoint_commit: Dict[str, Any] = {
+            "path": None,
+            "decision_sha256": None,
+        }
+
+        def _commit_human_review_execution() -> None:
+            path = checkpoint_commit.get("path")
+            if path is None:
+                return
+            decision_sha256 = str(
+                checkpoint_commit.get("decision_sha256") or ""
+            )
+            if not re.fullmatch(r"[0-9a-f]{64}", decision_sha256):
+                raise HumanReviewCheckpointError(
+                    "durable review decision set is not digest bound"
+                )
+            checkpoint = load_human_review_checkpoint(Path(path))
+            write_human_review_checkpoint(
+                Path(path),
+                checkpoint.transitioned(
+                    "consumed", decision_sha256=decision_sha256
+                ),
+            )
 
         workflow = build_pipeline_workflow(
             plan_invoker=_plan_invoker,
@@ -5027,6 +5407,7 @@ class ResearchAgentPipeline:
             provenance_hook=_provenance_hook,
             human_review_invoker=_human_review_invoker,
             human_review_recorder=_human_review_recorder,
+            human_review_execution_commit=_commit_human_review_execution,
             reviewer_identity_resolver=(
                 getattr(gate, "reviewer_identity_resolver", None)
                 if gate is not None
@@ -5034,12 +5415,48 @@ class ResearchAgentPipeline:
             ),
         )
         outcome = workflow.start()
+        durable_checkpoint = None
+        if isinstance(outcome, WorkflowPaused):
+            if not reviewed_plan:
+                raise HumanReviewCheckpointError(
+                    "workflow paused without a typed plan handoff"
+                )
+            durable_checkpoint = self._persist_review_checkpoint(
+                plan_result=reviewed_plan[-1],
+                requests=outcome.requests,
+                run_id=run_id,
+                run_dir=run_dir,
+                cohort_path=cohort_path,
+                trajectory_binding=staged_trajectory_binding,
+                runtime_capabilities=runtime_capabilities,
+                runtime_bundle=self._validated_runtime_bundle,
+                run_environment_identity=run_environment_identity,
+                notes=notes,
+                database=database,
+                target_outcome=target_outcome,
+                stop_after_step_id=stop_after_step_id,
+                stop_after_analysis=stop_after_analysis,
+                manuscript_title=manuscript_title,
+                manuscript_authors=manuscript_authors,
+                run_language=run_language,
+                force_writer_probe=force_writer_probe,
+                scientific_identity=run_scientific_identity,
+                experiment_spec_path=experiment_spec_path,
+                cache_key=cache_key,
+                skill_obj=skill_obj,
+            )
+            if durable_checkpoint is not None:
+                checkpoint_commit["path"] = str(
+                    human_review_checkpoint_path(run_dir)
+                )
         return self._pipeline_result_or_pending(
             outcome,
             workflow=workflow,
             run_id=run_id,
             run_dir=run_dir,
             progress_channel=progress_channel,
+            durable_checkpoint=durable_checkpoint,
+            checkpoint_commit=checkpoint_commit,
         )
 
     def _pipeline_result_or_pending(
@@ -5050,6 +5467,8 @@ class ResearchAgentPipeline:
         run_id: str,
         run_dir: Path,
         progress_channel: Optional[ResumableProgressChannel] = None,
+        durable_checkpoint: Optional[HumanReviewCheckpoint] = None,
+        checkpoint_commit: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """Return the run's result, or the typed pause that replaced it.
 
@@ -5065,6 +5484,15 @@ class ResearchAgentPipeline:
 
         if isinstance(outcome, WorkflowCompleted):
             self._pending_human_review = None
+            if checkpoint_commit and checkpoint_commit.get("path"):
+                path = Path(str(checkpoint_commit["path"]))
+                checkpoint = load_human_review_checkpoint(
+                    path, require_pending=False
+                )
+                if checkpoint.state == "consumed":
+                    write_human_review_checkpoint(
+                        path, checkpoint.transitioned("completed")
+                    )
             return outcome.final_result
 
         if not isinstance(outcome, WorkflowPaused):
@@ -5077,6 +5505,12 @@ class ResearchAgentPipeline:
             thread_id=run_id,
             run_dir=str(run_dir),
             requests=outcome.requests,
+            resume_scope=(
+                "durable_checkpoint"
+                if durable_checkpoint is not None
+                else "same_process"
+            ),
+            resume_pid=(None if durable_checkpoint is not None else os.getpid()),
         )
         # Held so ``resume_human_review`` can drive the same state machine: its
         # invokers close over this run's evidence store, run dir and services.
@@ -5103,6 +5537,7 @@ class ResearchAgentPipeline:
             # only the transport callback; the workflow, plan and scientific
             # authority remain the exact objects reviewed by the operator.
             "progress_sink": progress_channel,
+            "checkpoint_commit": checkpoint_commit,
         }
         return pending
 
@@ -5136,10 +5571,9 @@ class ResearchAgentPipeline:
         a decision that does not bind the request it claims to answer, so an
         approval cannot be replayed against a different pause.
 
-        Resume is ``same_process`` only (see
-        :data:`~easyicu.research_agent.orchestration.workflow.HUMAN_REVIEW_RESUME_SCOPE`);
-        the pause object states that in ``resume_scope``/``resume_pid`` so a
-        caller can check before asking a human for a decision it cannot deliver.
+        A fresh Plan-phase pause is also persisted as a digest-bound checkpoint.
+        When ``run_id`` names that checkpoint, a new pipeline instance may
+        reconstruct the reviewed handoff without invoking Planner again.
         """
 
         from .orchestration.workflow import (
@@ -5148,15 +5582,17 @@ class ResearchAgentPipeline:
         )
 
         pending_state = self._pending_human_review
+        if not pending_state and run_id is not None:
+            pending_state = self._restore_durable_human_review_pause(
+                run_id=str(run_id),
+                progress_callback=progress_callback,
+            )
         if not pending_state:
             raise RuntimeError(
                 "no human review is pending on this pipeline instance. "
-                "resume_human_review() answers the pause returned by run(), "
-                "and that pause is resumable only in the process and pipeline "
-                "instance that produced it (HumanReviewPending.resume_scope == "
-                f"{HUMAN_REVIEW_RESUME_SCOPE!r}): the plan phase's live "
-                "evidence store cannot be checkpointed, so a new process has "
-                "nothing to resume from. Re-run instead."
+                "resume_human_review() requires either the live pause returned "
+                "by run() or its exact durable checkpoint coordinate "
+                f"(legacy scope {HUMAN_REVIEW_RESUME_SCOPE!r})."
             )
         pending = pending_state["pending"]
         if not pending.resumable_here:
@@ -5184,6 +5620,14 @@ class ResearchAgentPipeline:
             item if isinstance(item, Mapping) else item.model_dump(mode="json")
             for item in decisions
         ]
+        checkpoint_commit = pending_state.get("checkpoint_commit")
+        if isinstance(checkpoint_commit, dict) and checkpoint_commit.get("path"):
+            checkpoint_commit["decision_sha256"] = canonical_sha256(
+                sorted(
+                    (dict(item) for item in payload),
+                    key=lambda item: str(item.get("review_id") or ""),
+                )
+            )
         # Same writer lease ``run`` holds, bound to the paused run's own id
         # rather than a fresh one: resuming writes into that run's directory
         # and evidence store, so it must not proceed while another call is
@@ -5218,11 +5662,29 @@ class ResearchAgentPipeline:
                     if isinstance(progress_channel, ResumableProgressChannel)
                     else None
                 ),
+                checkpoint_commit=(
+                    checkpoint_commit
+                    if isinstance(checkpoint_commit, dict)
+                    else None
+                ),
             )
         except HumanReviewRejected:
             # The workflow has recorded the rejection and discarded its live
             # handoff. Do not keep presenting the public pipeline pause as
             # answerable or allow a later approval attempt against it.
+            if isinstance(checkpoint_commit, dict) and checkpoint_commit.get("path"):
+                path = Path(str(checkpoint_commit["path"]))
+                selected = load_human_review_checkpoint(path)
+                write_human_review_checkpoint(
+                    path,
+                    selected.transitioned(
+                        "failed",
+                        decision_sha256=str(
+                            checkpoint_commit.get("decision_sha256") or ""
+                        )
+                        or None,
+                    ),
+                )
             self._pending_human_review = None
             raise
         except Exception:
@@ -5235,6 +5697,25 @@ class ResearchAgentPipeline:
                 "rejected",
                 "completed",
             }:
+                if (
+                    isinstance(checkpoint_commit, dict)
+                    and checkpoint_commit.get("path")
+                ):
+                    path = Path(str(checkpoint_commit["path"]))
+                    selected = load_human_review_checkpoint(
+                        path, require_pending=False
+                    )
+                    if selected.state in {"pending", "consumed"}:
+                        write_human_review_checkpoint(
+                            path,
+                            selected.transitioned(
+                                "failed",
+                                decision_sha256=str(
+                                    checkpoint_commit.get("decision_sha256") or ""
+                                )
+                                or None,
+                            ),
+                        )
                 self._pending_human_review = None
             raise
 
