@@ -18,6 +18,7 @@ from easyicu.research_agent.literature import (
 from easyicu.research_agent.literature_concepts import (
     concept_id,
     literature_concept_identity,
+    literature_concept_phrase as _owned_literature_concept_phrase,
 )
 
 DIRECT_COMPARATOR_FALLBACK_STRATUM = "typed_direct_observational_comparator"
@@ -235,20 +236,7 @@ def population_kind(scope: Dict[str, Any]) -> str:
 
 
 def concept_phrase(value: Any) -> str:
-    raw = _clean(value, 180)
-    if not raw:
-        return ""
-    normalized_concept_id = concept_id(value)
-    labels = {
-        "sep3_sofa1": "Sepsis-3",
-        "sep3_sofa2": "SOFA-2 sepsis",
-        "death": "mortality",
-        "mortality": "mortality",
-        "hospital_mortality": "hospital mortality",
-        "lact": "lactate",
-        "lactate": "lactate",
-    }
-    return labels.get(normalized_concept_id, raw.replace("_", " "))
+    return _owned_literature_concept_phrase(value)
 
 
 def _axis_query_alternatives(

@@ -33,15 +33,6 @@ _HIDDEN_COLUMNS = {
     "timestamp",
     "datetime",
 }
-_PREFERRED_PREDICTORS = [
-    ("sofa2_score", "sofa2"),
-    ("sepsis3_sofa2", "sep3_sofa2"),
-    ("vitals", "shock_index"),
-    ("vitals", "map"),
-    ("vitals", "hr"),
-    ("vitals", "spo2"),
-    ("outcome", "los_icu"),
-]
 
 
 def build_agent_output_artifacts(
@@ -373,15 +364,9 @@ def _table1_payload(
             groups,
             true_values={"f", "female"},
         ),
-        _numeric_table_row(
-            "SOFA-2 score", "sofa2_score", "sofa2", frames, groups, aggregate="max"
-        ),
         _numeric_table_row("ICU length of stay", "outcome", "los_icu", frames, groups),
         _numeric_table_row(
             "Hospital length of stay", "outcome", "los_hosp", frames, groups
-        ),
-        _categorical_bool_row(
-            "Sepsis-3 (SOFA-2 based)", "sepsis3_sofa2", "sep3_sofa2", frames, groups
         ),
     ]
     variables = [row for row in variables if row is not None]
@@ -632,14 +617,12 @@ def _select_predictor(
     feature_values: Dict[Tuple[str, str], Dict[str, float]],
     death_by_entity: Dict[str, bool],
 ) -> Optional[Dict[str, Any]]:
-    candidates = _PREFERRED_PREDICTORS + sorted(feature_values.keys())
-    seen: set[Tuple[str, str]] = set()
+    candidates = sorted(feature_values.keys())
     best: Optional[Dict[str, Any]] = None
     for module, feature in candidates:
         key = (module, feature)
-        if key in seen:
+        if feature.casefold() == "death":
             continue
-        seen.add(key)
         values = feature_values.get(key)
         if not values:
             continue
@@ -655,8 +638,6 @@ def _select_predictor(
             "n_entities": len(pairs),
             "auc": auc,
         }
-        if key in _PREFERRED_PREDICTORS:
-            return candidate
         if best is None or len(pairs) > int(best.get("n_entities") or 0):
             best = candidate
     return best

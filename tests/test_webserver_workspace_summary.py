@@ -5897,9 +5897,11 @@ def test_agent_run_job_uses_active_registry_and_writes_bounded_artifacts(
         row["feature"] for row in artifact_payloads["table1_summary.json"]["variables"]
     } >= {
         "age",
-        "sofa2",
         "los_icu",
     }
+    assert {
+        row["feature"] for row in artifact_payloads["table1_summary.json"]["variables"]
+    }.isdisjoint({"sofa2", "sep3_sofa2"})
     missing_rows = artifact_payloads["missingness_audit.json"]["rows"]
     assert artifact_payloads["missingness_audit.json"]["status"] == "ok"
     assert {row["feature"] for row in missing_rows} >= {"age", "death", "sofa2", "hr"}
@@ -5909,6 +5911,7 @@ def test_agent_run_job_uses_active_registry_and_writes_bounded_artifacts(
     roc = artifact_payloads["roc_curve.json"]
     assert roc["kind"] == "roc_curve"
     assert roc["status"] == "ok"
+    assert roc["predictor"]["feature"] == "age"
     assert roc["points"]
     calibration = artifact_payloads["calibration_curve.json"]
     assert calibration["kind"] == "calibration_curve"

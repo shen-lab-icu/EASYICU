@@ -40,7 +40,7 @@ def publication_label(value: Any) -> str:
     token = str(value or "").strip()
     mapping = {
         "sepsis3": "Sepsis-3",
-        "sep3_sofa2_max": "Sepsis-3",
+        "sep3_sofa2_max": "Experimental SOFA-2 Sepsis-3 phenotype",
         "age": "Age",
         "age_filled": "Age",
         "age_per_10y": "Age, per 10 years",

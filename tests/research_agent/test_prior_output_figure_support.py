@@ -40,6 +40,10 @@ def test_legacy_overview_reads_other_steps_in_stable_order(tmp_path: Path) -> No
 
 def test_legacy_labels_and_truncation_remain_stable() -> None:
     assert publication_label("sepsis3") == "Sepsis-3"
+    assert publication_label("sep3_sofa2_max") == (
+        "Experimental SOFA-2 Sepsis-3 phenotype"
+    )
+    assert publication_label("sep3_sofa2_max") != "Sepsis-3"
     assert publication_label("age_per_10y") == "Age, per 10 years"
     assert publication_label("custom_first") == "Custom"
     assert short_figure_label("123456", limit=5) == "1234..."

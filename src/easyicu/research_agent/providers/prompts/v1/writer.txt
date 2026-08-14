@@ -22,9 +22,10 @@ deterministic gate. There is no soft margin. Therefore:
     sentence. If you cannot satisfy this, drop the sentence.
   * ONE ID PER NUMBER, NOT ONE PER SENTENCE. A sentence that prints
     values coming from different steps must cite EVERY step that owns
-    one of them. "X had 14 missing observations among 94,458 stays"
-    takes two ids: the audit step that counted the 14, and the cohort
-    step whose summary reports the 94,458. Citing only one of them
+    one of them. The schematic, non-binding sentence "Variable A had
+    N_missing observations unavailable among N_total stays" takes two ids:
+    the audit step that counted N_missing, and the cohort step
+    whose summary reports N_total. Citing only one of them
     blocks the whole manuscript: the binder restricts each value to the
     evidence the sentence names, finds that no candidate belongs to it,
     and refuses rather than attaching another step's number to your
