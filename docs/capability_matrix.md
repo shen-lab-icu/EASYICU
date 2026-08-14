@@ -14,6 +14,7 @@ _Generated from `easyicu.research_agent.planning.capability_registry`. Do not ed
 | Prediction / risk modelling | LLM-coded ⚠️ | LLM-coded discrimination + calibration (AUROC, calibration); value-provenance verified | — | deterministic ✅ (`prediction`) | LLM code failure -> repair -> fail-closed. manuscript_numeric_auditor catches rounded/hallucinated metrics (caught AUROC 0.766->0.7 in a pilot). |
 | Phenotyping / clustering | LLM-coded ⚠️ | Agent-planned cluster solution; outcome-by-cluster kept descriptive (not causal) | — | deterministic ✅ (`phenotyping`) | figure_strategy anti-pattern blocks 'clusters are causal entities'; an LLM failure fails closed to diagnostic_only. |
 | Descriptive / measurement audit | LLM-coded ⚠️ | LLM-coded descriptive summaries / Table One / measurement-process audits | — | deterministic ✅ (`base_association_skill`) | Evidence STRICT mode blocks unbound sentences; the plausibility gate flags implausible descriptives before they reach the manuscript. |
+| Descriptive — typed exposure/outcome absolute risks | deterministic ✅ | Host-computed exposure prevalence, outcome absolute risks and an optional prespecified unadjusted risk difference under an exact typed descriptive-only contract | `exposure_outcome_distribution` | deterministic ✅ (`base_association_skill`) | The owner declines an untyped cohort, an incomplete distribution design, any adjusted/causal owner contract, or any claim ceiling above descriptive-only. Runtime evidence and host-derived claim metadata must reproduce from the exact registered summary bytes. |
 
 ## Scientific claim readiness
 
@@ -29,6 +30,7 @@ A capability can execute an analysis without having a sufficient scientific vali
 | `prediction_risk_model_v1` | registered discrimination and calibration products | — | split/leakage; discrimination; calibration | analysis_only ⚠️ |
 | `phenotyping_cluster_v1` | registered clustering, profile, and stability products | — | representation; cluster stability; descriptive outcome use | analysis_only ⚠️ |
 | `descriptive_measurement_v1` | registered summary/source-data products | — | denominators; measurement availability | analysis_only ⚠️ |
+| `descriptive_exposure_outcome_distribution_v1` | exposure_outcome_distribution/2 summary + digest-bound ScientificClaimRegistration | `execution.runners.exposure_outcome_distribution_executor` / `exposure_outcome_distribution_result_receipt_valid + ScientificClaimRegistration` | closed exposure/outcome levels and denominators; interval/dependence contract; descriptive-only noncausal claim ceiling | reportable ✅ |
 
 ## Auxiliary deterministic runners (support, not family-primary)
 

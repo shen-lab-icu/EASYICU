@@ -48,6 +48,11 @@ from ...contracts.claim_ceiling import (
     BOUND_TYPED_COHORT_ANALYSIS_SET,
     EXPOSURE_OBSERVED_ANALYSIS_SET,
 )
+from ...contracts.descriptive_execution import (
+    EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+    EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT,
+    exposure_outcome_distribution_execution_verdict,
+)
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep, ExposureOutcomeDistributionSpec, _typed_level_key
 from .plausibility_receipt import host_plausibility_receipt_injected
@@ -70,8 +75,6 @@ __all__ = [
     "run_exposure_outcome_distribution_from_env",
     "wilson_interval",
 ]
-
-EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT = "table:exposure_outcome_distribution"
 
 #: The design columns. Every row repeats them, which is the price of a product
 #: that a downstream consumer can check without being told anything else.
@@ -179,33 +182,10 @@ def _typed_cohort_input(step: AnalysisStep) -> str:
 def exposure_outcome_distribution_executor_owns_step(step: AnalysisStep) -> bool:
     """Own only a step whose distribution design is completely declared."""
 
-    spec = step.exposure_outcome_distribution_spec
-    if spec is None:
-        return False
-    role = str(step.planned_analysis_role or "").strip().casefold()
-    primary_is_descriptive = bool(
-        role == "primary"
-        and str(step.method or "").strip().casefold() == "descriptive"
-        and step.descriptive_claim is not None
-        and step.descriptive_claim.claim_ceiling == "descriptive_only"
-    )
-    return bool(
-        str(step.method or "").strip().casefold() in {"descriptive", "distribution"}
-        and (role == "auxiliary" or primary_is_descriptive)
-        and list(step.expected_outputs or []) == [EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT]
-        and _typed_cohort_input(step)
-        and not step.model_requirements
-        and step.family_primary_result_requirement is None
-        and step.scientific_capability is None
-        and step.table_one_spec is None
-        and step.trajectory_stability_spec is None
-    )
+    return exposure_outcome_distribution_execution_verdict(step).claimed
 
 
 #: The analysis kind this owner reports, in selection and in its verdict.
-EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND = "exposure_outcome_distribution"
-
-
 def exposure_outcome_distribution_declaration_verdict(
     step: AnalysisStep,
 ) -> OwnershipVerdict:
