@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Callable, MutableMapping, Sequence
 
 from ..canonical_json import canonical_sha256
 from ..schema import AnalysisPlan, ValidationFinding
+from .run_coordination import RunTransition
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,4 +98,48 @@ def runtime_replan_review_pause(
     )
 
 
-__all__ = ["RuntimeReplanReviewPause", "runtime_replan_review_pause"]
+def record_runtime_replan_review_pause(
+    require_human_plan_review: bool,
+    current_plan: AnalysisPlan,
+    candidate_plan: AnalysisPlan,
+    trigger: str,
+    state: MutableMapping[str, Any],
+    findings: list[ValidationFinding],
+    flush_partial_manifest: Callable[[dict[str, Any]], None],
+) -> bool:
+    pause = runtime_replan_review_pause(
+        require_human_plan_review=require_human_plan_review,
+        current_plan=current_plan,
+        candidate_plan=candidate_plan,
+        trigger=trigger,
+    )
+    if pause is None:
+        return False
+    state["disabled"] = True
+    state["human_review_pause"] = pause
+    findings.append(pause.finding())
+    flush_partial_manifest({"runtime_replan_review_pending": pause.manifest_payload()})
+    return True
+
+
+def runtime_replan_pause_transition(
+    state: MutableMapping[str, Any],
+) -> RunTransition | None:
+    if state.get("human_review_pause") is None:
+        return None
+    return RunTransition.pause("runtime_replan_human_review_required")
+
+
+def first_plan_block_reason(
+    conditions: Sequence[tuple[bool, str]],
+) -> str | None:
+    return next((reason for blocked, reason in conditions if blocked), None)
+
+
+__all__ = [
+    "RuntimeReplanReviewPause",
+    "first_plan_block_reason",
+    "record_runtime_replan_review_pause",
+    "runtime_replan_pause_transition",
+    "runtime_replan_review_pause",
+]

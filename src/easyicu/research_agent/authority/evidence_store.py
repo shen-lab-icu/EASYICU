@@ -60,7 +60,6 @@ import secrets
 import stat
 import tempfile
 import threading
-from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -87,6 +86,12 @@ from .evidence_snapshot import (
     load_current_evidence_snapshot,
     projection_sha256,
     validate_evidence_authority_root_marker,
+)
+from .numeric_claim_identity import (
+    NumericClaim as NumericClaim,
+    NumericEffectScale as NumericEffectScale,
+    NumericEstimand as NumericEstimand,
+    infer_numeric_claim_identity as _infer_numeric_claim_identity,
 )
 from .scientific_claims import (
     ScientificClaim,
@@ -645,216 +650,6 @@ _NUMERIC_IN_PROSE_RE = re.compile(
     r")"
     r"(?![A-Za-z_\d]|\.\d)"  # not followed by identifier / decimal continuation
 )
-
-
-class NumericEffectScale(str, enum.Enum):
-    """Effect-measure identity carried by a manuscript-bindable number."""
-
-    ODDS_RATIO = "odds_ratio"
-    HAZARD_RATIO = "hazard_ratio"
-    RISK_RATIO = "risk_ratio"
-
-
-class NumericEstimand(str, enum.Enum):
-    """A number's role within an effect estimate and its interval."""
-
-    POINT_ESTIMATE = "point_estimate"
-    CONFIDENCE_INTERVAL_LOWER = "confidence_interval_lower"
-    CONFIDENCE_INTERVAL_UPPER = "confidence_interval_upper"
-
-
-def _coerce_numeric_effect_scale(value: Any) -> Optional[NumericEffectScale]:
-    if value is None or value == "":
-        return None
-    if isinstance(value, NumericEffectScale):
-        return value
-    normalized = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
-    aliases = {
-        "or": NumericEffectScale.ODDS_RATIO,
-        "odds_ratio": NumericEffectScale.ODDS_RATIO,
-        "adjusted_odds_ratio": NumericEffectScale.ODDS_RATIO,
-        "hr": NumericEffectScale.HAZARD_RATIO,
-        "hazard_ratio": NumericEffectScale.HAZARD_RATIO,
-        "adjusted_hazard_ratio": NumericEffectScale.HAZARD_RATIO,
-        "rr": NumericEffectScale.RISK_RATIO,
-        "risk_ratio": NumericEffectScale.RISK_RATIO,
-        "relative_risk": NumericEffectScale.RISK_RATIO,
-        "adjusted_risk_ratio": NumericEffectScale.RISK_RATIO,
-    }
-    return aliases.get(normalized)
-
-
-def _infer_numeric_claim_identity(
-    source_field: str,
-    *,
-    declared_effect_scale: Any = None,
-) -> Tuple[Optional[NumericEffectScale], Optional[NumericEstimand]]:
-    """Infer only identities that are explicit in a source coordinate."""
-
-    source = str(source_field or "").strip().lower()
-    normalized = re.sub(r"[^a-z0-9]+", "_", source).strip("_")
-    tokens = set(normalized.split("_"))
-
-    scale: Optional[NumericEffectScale] = None
-    if "odds_ratio" in normalized or "or" in tokens:
-        scale = NumericEffectScale.ODDS_RATIO
-    elif "hazard_ratio" in normalized or "hr" in tokens:
-        scale = NumericEffectScale.HAZARD_RATIO
-    elif (
-        "risk_ratio" in normalized
-        or "relative_risk" in normalized
-        or "rr" in tokens
-    ):
-        scale = NumericEffectScale.RISK_RATIO
-
-    excluded_tokens = {"se", "stderr", "std", "error", "variance", "p", "value"}
-    if tokens & excluded_tokens and not ({"ci", "interval"} & tokens):
-        return None, None
-
-    lower = bool(
-        re.search(r"(?:ci|interval)_(?:95_)?(?:low|lower|lcl)(?:_|$)", normalized)
-        or re.search(r"(?:ci|interval)(?:_|\[|$).*\[0\]$", source)
-    )
-    upper = bool(
-        re.search(r"(?:ci|interval)_(?:95_)?(?:high|upper|ucl)(?:_|$)", normalized)
-        or re.search(r"(?:ci|interval)(?:_|\[|$).*\[1\]$", source)
-    )
-    if lower:
-        estimand = NumericEstimand.CONFIDENCE_INTERVAL_LOWER
-    elif upper:
-        estimand = NumericEstimand.CONFIDENCE_INTERVAL_UPPER
-    else:
-        leaf = re.split(r"[.\[]", source)[-1]
-        point_names = {
-            "adjusted_effect",
-            "effect_estimate",
-            "estimate",
-            "odds_ratio",
-            "hazard_ratio",
-            "risk_ratio",
-            "relative_risk",
-        }
-        estimand = (
-            NumericEstimand.POINT_ESTIMATE
-            if scale is not None or leaf in point_names
-            else None
-        )
-
-    if estimand is not None and scale is None:
-        scale = _coerce_numeric_effect_scale(declared_effect_scale)
-    return scale, estimand
-
-
-@dataclass
-class NumericClaim:
-    """One numeric leaf the manuscript may cite, tied back to its source.
-
-    Fields:
-
-    * ``value`` — literal string form (preserves precision/formatting)
-    * ``canonical`` — float for tolerance-based matching
-    * ``evidence_id`` — owning evidence record (e.g. the
-      ``step_summary.json`` for the step)
-    * ``step_id`` — step that emitted this value
-    * ``source_field`` — dotted path inside step_summary
-      (e.g. ``primary_or`` or ``stratified.male.auc``)
-    * ``tolerance`` — relative tolerance for fuzzy matching when the
-      manuscript prints a rounded version of the canonical value
-    * ``effect_scale`` / ``estimand`` — typed identity for ratio estimates and
-      their ordered confidence-interval endpoints; older persisted claims infer
-      these from ``source_field`` when possible
-
-    Phase-1 derived-claim fields (Commit 2, May 2026). All optional;
-    when ``formula is None`` the claim is a regular step_summary leaf
-    and behaviour is byte-identical to pre-derived versions.
-
-    * ``formula`` — the source expression as a string (e.g.
-      ``exp(log(primary_or) - 1.96 * primary_or_se)``). When set, the
-      claim was computed at register-time from one or more source
-      claims via the restricted-AST evaluator
-      (``_evaluate_derived_formula``).
-    * ``explanation`` — short human-readable rationale for the
-      formula (e.g. ``"low 95% CI for primary OR, log-normal
-      approximation"``). Surfaces in audit reports and the writer
-      digest's derived block.
-    * ``derived_from`` — list of ``(source_step_id, source_field)``
-      pairs identifying which source claims the formula references.
-      Captured at register-time so audit can replay derivation
-      without re-parsing the formula string.
-
-    Inspired by data-to-paper's ``\\num{<formula>, "<explanation>"}``
-    macro (NEJM AI 2024); evaluated at register-time rather than
-    compile-time so the result is persisted as a regular claim and
-    can be matched by the existing reverse-binder.
-    """
-
-    value: str
-    canonical: float
-    evidence_id: str
-    step_id: str
-    source_field: str
-    tolerance: float = 1e-3
-    effect_scale: Optional[NumericEffectScale] = None
-    estimand: Optional[NumericEstimand] = None
-    # Derived-claim metadata. Default `None` / empty list so existing
-    # step_summary leaves serialise to the same JSON as before.
-    formula: Optional[str] = None
-    explanation: Optional[str] = None
-    derived_from: List[Tuple[str, str]] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        declared_scale = _coerce_numeric_effect_scale(self.effect_scale)
-        inferred_scale, inferred_estimand = _infer_numeric_claim_identity(
-            self.source_field,
-            declared_effect_scale=declared_scale,
-        )
-        self.estimand = (
-            self.estimand
-            if isinstance(self.estimand, NumericEstimand)
-            else NumericEstimand(self.estimand)
-            if self.estimand
-            else inferred_estimand
-        )
-        self.effect_scale = inferred_scale or (
-            declared_scale if self.estimand is not None else None
-        )
-
-    @property
-    def is_derived(self) -> bool:
-        return self.formula is not None
-
-    def to_dict(self) -> Dict[str, Any]:
-        payload = asdict(self)
-        if self.effect_scale is None:
-            payload.pop("effect_scale", None)
-        else:
-            payload["effect_scale"] = self.effect_scale.value
-        if self.estimand is None:
-            payload.pop("estimand", None)
-        else:
-            payload["estimand"] = self.estimand.value
-        if not self.is_derived:
-            # Preserve the pre-derived JSON shape for ordinary numeric
-            # leaves so old audit tooling does not suddenly see empty
-            # formula/provenance fields on every claim.
-            payload.pop("formula", None)
-            payload.pop("explanation", None)
-            payload.pop("derived_from", None)
-        return payload
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "NumericClaim":
-        known = {f for f in cls.__dataclass_fields__}
-        clean = {k: v for k, v in data.items() if k in known}
-        # ``derived_from`` may come back from JSON as list-of-lists;
-        # coerce inner pairs to tuples for hashability + .__eq__ parity
-        # with the dataclass-default empty list.
-        if "derived_from" in clean and clean["derived_from"]:
-            clean["derived_from"] = [
-                tuple(pair) if not isinstance(pair, tuple) else pair
-                for pair in clean["derived_from"]
-            ]
-        return cls(**clean)
 
 
 # ---------------------------------------------------------------------------

@@ -94,7 +94,7 @@ def test_pause_transition_never_applies_or_executes_the_revised_plan() -> None:
 
 def test_execute_phase_gates_before_registering_or_applying_candidate_plan() -> None:
     source = inspect.getsource(run_execute_phase)
-    review_gate = source.index("review_pause = runtime_replan_review_pause")
+    review_gate = source.index("replan_review.record_runtime_replan_review_pause")
     cohort_application = source.index("_resolve_cohort_definition(revised, reason=reason)")
     registration = source.index(
         "plan_path = _register_plan_revision(revised, reason=reason)"
