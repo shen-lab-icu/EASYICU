@@ -94,8 +94,8 @@ _TEARDOWN_ABSENCE_BUDGET_SECONDS = 60.0
 _TEARDOWN_ABSENCE_POLL_SECONDS = 2.0
 
 # Generated code can write forever even when its computation is otherwise
-# bounded. Stream captures to anonymous files and retain only this tail in host
-# memory, RunResult, and evidence logs.
+# bounded. Drain pipes continuously and retain only this tail in host memory,
+# RunResult, and evidence logs.
 MAX_RUNNER_CAPTURE_BYTES = 1024 * 1024
 _CAPTURE_TRUNCATED_MARKER = b"[... earlier runner output truncated ...]\n"
 
@@ -200,6 +200,30 @@ def _validated_real_mount_source(raw_source: str, *, label: str) -> Path:
     elif stat.S_ISDIR(metadata.st_mode):
         if resolved == Path(resolved.anchor):
             raise ValueError(f"DockerRunner {label} cannot expose a filesystem root")
+        pending = [resolved]
+        while pending:
+            directory = pending.pop()
+            try:
+                entries = list(os.scandir(directory))
+            except OSError as exc:
+                raise ValueError(
+                    f"DockerRunner {label} directory cannot be inspected safely"
+                ) from exc
+            for entry in entries:
+                try:
+                    entry_metadata = entry.stat(follow_symlinks=False)
+                except OSError as exc:
+                    raise ValueError(
+                        f"DockerRunner {label} directory cannot be inspected safely"
+                    ) from exc
+                mode = entry_metadata.st_mode
+                if stat.S_ISDIR(mode):
+                    pending.append(Path(entry.path))
+                elif not stat.S_ISREG(mode) or entry_metadata.st_nlink != 1:
+                    raise ValueError(
+                        f"DockerRunner {label} directory contains an unsafe special "
+                        f"file: {Path(entry.path).relative_to(resolved)}"
+                    )
     else:
         raise ValueError(
             f"DockerRunner {label} must be a regular file or real directory"
@@ -424,31 +448,147 @@ def _terminate_process_group(
         pass
 
 
-def _bounded_capture_text(stream: object, fallback: object = None) -> str:
-    """Read at most the configured tail of one streamed binary capture."""
+class _BoundedCaptureTail:
+    """Thread-safe fixed-capacity byte tail for one drained process pipe."""
 
-    payload = b""
-    try:
-        stream.flush()  # type: ignore[attr-defined]
-        stream.seek(0, os.SEEK_END)  # type: ignore[attr-defined]
-        size = int(stream.tell())  # type: ignore[attr-defined]
-        truncated = size > MAX_RUNNER_CAPTURE_BYTES
-        stream.seek(  # type: ignore[attr-defined]
-            max(0, size - MAX_RUNNER_CAPTURE_BYTES), os.SEEK_SET
-        )
-        payload = stream.read(MAX_RUNNER_CAPTURE_BYTES)  # type: ignore[attr-defined]
+    def __init__(self) -> None:
+        self._payload = bytearray()
+        self._truncated = False
+        self._lock = threading.Lock()
+
+    def append(self, chunk: object) -> None:
+        if not chunk:
+            return
+        data = chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8")
+        with self._lock:
+            overflow = len(self._payload) + len(data) - MAX_RUNNER_CAPTURE_BYTES
+            if overflow > 0:
+                self._truncated = True
+                if overflow >= len(self._payload):
+                    self._payload.clear()
+                else:
+                    del self._payload[:overflow]
+            self._payload.extend(data[-MAX_RUNNER_CAPTURE_BYTES:])
+            if len(self._payload) > MAX_RUNNER_CAPTURE_BYTES:
+                del self._payload[:-MAX_RUNNER_CAPTURE_BYTES]
+
+    def text(self, fallback: object = None) -> str:
+        with self._lock:
+            payload = bytes(self._payload)
+            truncated = self._truncated
+        if not payload:
+            encoded = _as_text(fallback).encode("utf-8")
+            truncated = len(encoded) > MAX_RUNNER_CAPTURE_BYTES
+            payload = encoded[-MAX_RUNNER_CAPTURE_BYTES:]
         if truncated:
             payload = _CAPTURE_TRUNCATED_MARKER + payload
-    except (AttributeError, OSError, TypeError, ValueError):
-        payload = b""
-    if payload:
         return payload.decode("utf-8", errors="replace")
-    text = _as_text(fallback)
-    encoded = text.encode("utf-8")
-    if len(encoded) <= MAX_RUNNER_CAPTURE_BYTES:
-        return text
-    return (_CAPTURE_TRUNCATED_MARKER + encoded[-MAX_RUNNER_CAPTURE_BYTES:]).decode(
-        "utf-8", errors="replace"
+
+
+def _drain_capture_stream(
+    stream: object, tail: _BoundedCaptureTail, stop: threading.Event
+) -> None:
+    try:
+        while True:
+            try:
+                chunk = stream.read(64 * 1024)  # type: ignore[attr-defined]
+            except BlockingIOError:
+                if stop.wait(0.01):
+                    return
+                continue
+            if chunk is None:
+                if stop.wait(0.01):
+                    return
+                continue
+            if not chunk:
+                return
+            tail.append(chunk)
+    except (OSError, ValueError):
+        return
+
+
+def _start_capture_drain(
+    stream: object, *, name: str
+) -> tuple[_BoundedCaptureTail, threading.Thread, threading.Event]:
+    tail = _BoundedCaptureTail()
+    stop = threading.Event()
+    try:
+        os.set_blocking(stream.fileno(), False)  # type: ignore[attr-defined]
+    except (AttributeError, OSError, ValueError):
+        pass
+    thread = threading.Thread(
+        target=_drain_capture_stream,
+        args=(stream, tail, stop),
+        name=name,
+        daemon=True,
+    )
+    thread.start()
+    return tail, thread, stop
+
+
+def _finish_capture_drain(
+    stream: object, thread: threading.Thread, stop: threading.Event
+) -> None:
+    thread.join(timeout=5.0)
+    if thread.is_alive():
+        stop.set()
+        thread.join(timeout=1.0)
+    try:
+        stream.close()  # type: ignore[attr-defined]
+    except (AttributeError, OSError, ValueError):
+        pass
+
+
+def _run_with_bounded_output(
+    cmd: Sequence[str], **kwargs: object
+) -> subprocess.CompletedProcess:
+    """Run through ``subprocess.run`` while draining bounded pipe tails.
+
+    Docker tests and integrations historically replace ``subprocess.run``;
+    retaining that call boundary keeps those controls injectable without ever
+    asking the real subprocess module for unbounded ``capture_output``.
+    """
+
+    stdout_read, stdout_write = os.pipe()
+    stderr_read, stderr_write = os.pipe()
+    stdout_stream = os.fdopen(stdout_read, "rb", buffering=0)
+    stderr_stream = os.fdopen(stderr_read, "rb", buffering=0)
+    stdout_tail, stdout_thread, stdout_stop = _start_capture_drain(
+        stdout_stream, name="easyicu-capture-stdout"
+    )
+    stderr_tail, stderr_thread, stderr_stop = _start_capture_drain(
+        stderr_stream, name="easyicu-capture-stderr"
+    )
+    proc: object = None
+    timeout_error: Optional[subprocess.TimeoutExpired] = None
+    try:
+        proc = subprocess.run(  # noqa: S603 - caller supplies reviewed argv
+            cmd,
+            stdout=stdout_write,
+            stderr=stderr_write,
+            **kwargs,
+        )
+    except subprocess.TimeoutExpired as exc:
+        timeout_error = exc
+    finally:
+        os.close(stdout_write)
+        os.close(stderr_write)
+        _finish_capture_drain(stdout_stream, stdout_thread, stdout_stop)
+        _finish_capture_drain(stderr_stream, stderr_thread, stderr_stop)
+    if timeout_error is not None:
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout_error.timeout,
+            output=stdout_tail.text(timeout_error.stdout),
+            stderr=stderr_tail.text(timeout_error.stderr),
+        ) from None
+    if proc is None:  # pragma: no cover - subprocess.run returns or raises
+        raise RuntimeError("subprocess produced no result")
+    return subprocess.CompletedProcess(
+        cmd,
+        int(proc.returncode),  # type: ignore[attr-defined]
+        stdout_tail.text(getattr(proc, "stdout", None)),
+        stderr_tail.text(getattr(proc, "stderr", None)),
     )
 
 
@@ -480,76 +620,58 @@ def _run_capturing_with_descendant_reaping(
     child is launched in a new session and, on timeout, the whole process group
     is signalled before ``TimeoutExpired`` is re-raised with the captured
     partial output (so the caller's bytes-safe timeout handler is unchanged).
-    Non-POSIX platforms keep the plain ``subprocess.run`` behaviour.
+    Non-POSIX platforms use the same bounded drains but fall back to killing
+    only the direct child because POSIX process groups are unavailable.
     """
 
-    capture = dict(cwd=cwd, env=dict(env))
-    if os.name != "posix":
-        with (
-            tempfile.TemporaryFile() as stdout_file,
-            tempfile.TemporaryFile() as stderr_file,
-        ):
+    proc = subprocess.Popen(  # noqa: S603 - configured argv, no shell
+        cmd,
+        cwd=cwd,
+        env=dict(env),
+        start_new_session=os.name == "posix",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.stdout is None or proc.stderr is None:  # pragma: no cover - PIPE contract
+        _terminate_process_group(proc, process_group_id=proc.pid)
+        raise RuntimeError("runner process pipes were not created")
+    stdout_tail, stdout_thread, stdout_stop = _start_capture_drain(
+        proc.stdout, name=f"easyicu-runner-{proc.pid}-stdout"
+    )
+    stderr_tail, stderr_thread, stderr_stop = _start_capture_drain(
+        proc.stderr, name=f"easyicu-runner-{proc.pid}-stderr"
+    )
+    process_group_id = proc.pid if os.name == "posix" else None
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    finally:
+        # This covers normal exit, timeout, KeyboardInterrupt/cancellation, and
+        # arbitrary wait/pipe failures. Descendants are dead before evidence is
+        # inspected, and the direct child is reaped before returning or raising.
+        _terminate_process_group(proc, process_group_id=process_group_id)
+        try:
+            proc.wait(timeout=5.0)
+        except (OSError, subprocess.TimeoutExpired):
             try:
-                proc = subprocess.run(  # noqa: S603 - configured argv, no shell
-                    cmd,
-                    timeout=timeout,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    **capture,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise subprocess.TimeoutExpired(
-                    cmd,
-                    timeout,
-                    output=_bounded_capture_text(stdout_file, exc.stdout),
-                    stderr=_bounded_capture_text(stderr_file, exc.stderr),
-                ) from None
-            return subprocess.CompletedProcess(
-                cmd,
-                proc.returncode,
-                _bounded_capture_text(stdout_file),
-                _bounded_capture_text(stderr_file),
-            )
-
-    with (
-        tempfile.TemporaryFile() as stdout_file,
-        tempfile.TemporaryFile() as stderr_file,
-    ):
-        with subprocess.Popen(  # noqa: S603 - configured argv, no shell
-            cmd,
-            start_new_session=True,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            **capture,
-        ) as proc:
-            process_group_id = proc.pid
+                proc.kill()
+            except (OSError, ProcessLookupError):
+                pass
             try:
-                fallback_stdout, fallback_stderr = proc.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired as exc:
-                _terminate_process_group(proc, process_group_id=process_group_id)
-                fallback_stdout, fallback_stderr = proc.communicate()
-                raise subprocess.TimeoutExpired(
-                    cmd,
-                    timeout,
-                    output=_bounded_capture_text(
-                        stdout_file,
-                        fallback_stdout if fallback_stdout is not None else exc.stdout,
-                    ),
-                    stderr=_bounded_capture_text(
-                        stderr_file,
-                        fallback_stderr if fallback_stderr is not None else exc.stderr,
-                    ),
-                ) from None
-            # PID 1 may exit while descendants continue with inherited output
-            # descriptors. The dedicated session guarantees this group is not
-            # the host's process group; terminate it before evidence collection.
-            _terminate_process_group(proc, process_group_id=process_group_id)
-            return subprocess.CompletedProcess(
-                cmd,
-                proc.returncode,
-                _bounded_capture_text(stdout_file, fallback_stdout),
-                _bounded_capture_text(stderr_file, fallback_stderr),
-            )
+                proc.wait(timeout=1.0)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        _finish_capture_drain(proc.stdout, stdout_thread, stdout_stop)
+        _finish_capture_drain(proc.stderr, stderr_thread, stderr_stop)
+    stdout = stdout_tail.text()
+    stderr = stderr_tail.text()
+    if timed_out:
+        raise subprocess.TimeoutExpired(
+            cmd, timeout, output=stdout, stderr=stderr
+        ) from None
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
 def _remove_authority_snapshot(path: Path) -> None:
@@ -1736,6 +1858,8 @@ class DockerRunner:
         self.extra_mounts = self._validated_extra_mounts(extra_mounts or ())
         self.extra_env = dict(extra_env or {})
         reject_reserved_runner_env(self.extra_env, owner="DockerRunner")
+        if any("\n" in value or "\r" in value for value in self.extra_env.values()):
+            raise ValueError("DockerRunner extra_env values cannot contain newlines")
         self.pull_image = bool(pull_image)
         # Resource caps are ON by default. The timeout alone does not bound
         # damage: generated code can exhaust host memory, fork until the host
@@ -1997,6 +2121,7 @@ class DockerRunner:
         authority_snapshot_path: Optional[Path] = None,
         authority_snapshot_sha256: Optional[str] = None,
         authority_snapshot_error: Optional[str] = None,
+        env_file_path: Optional[Path] = None,
     ) -> List[str]:
         """Compose the ``docker run`` argv for a single step."""
         step_id = _safe_path_component(step_id, label="step_id")
@@ -2157,8 +2282,30 @@ class DockerRunner:
             env[_RUN_ARTIFACT_AUTHORITY_ERROR_ENV] = " ".join(
                 str(authority_snapshot_error).split()
             )[:1000]
-        for key, value in env.items():
-            cmd.extend(["-e", f"{key}={value}"])
+        if env_file_path is None:
+            # Inspection-only callers get a value-free argv. Production run()
+            # supplies an owner-only transient env file instead.
+            for key in env:
+                cmd.extend(["-e", key])
+        else:
+            env_file_path = Path(env_file_path)
+            if not env_file_path.is_absolute():
+                raise ValueError("DockerRunner env file path must be absolute")
+            payload = "".join(f"{key}={value}\n" for key, value in env.items())
+            descriptor = os.open(
+                env_file_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except BaseException:
+                env_file_path.unlink(missing_ok=True)
+                raise
+            cmd.extend(["--env-file", str(env_file_path)])
 
         # Production passes the immutable sha256 id captured before execution;
         # the mutable tag remains metadata only.
@@ -2184,10 +2331,9 @@ class DockerRunner:
             if not self.pull_image:
                 return
             try:
-                subprocess.run(  # noqa: S603 - argv list, no shell
+                _run_with_bounded_output(
                     [self.docker_executable, "pull", self.image],
                     check=False,
-                    capture_output=True,
                     text=True,
                     timeout=max(60.0, self.timeout_seconds),
                 )
@@ -2202,7 +2348,7 @@ class DockerRunner:
         with self._image_identity_lock:
             if self._cached_image_identity is not None:
                 return self._cached_image_identity
-            inspect_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+            inspect_proc = _run_with_bounded_output(
                 [
                     self.docker_executable,
                     "image",
@@ -2210,7 +2356,6 @@ class DockerRunner:
                     "--format={{json .}}",
                     self.image,
                 ],
-                capture_output=True,
                 text=True,
                 timeout=max(30.0, min(self.timeout_seconds, 120.0)),
                 encoding="utf-8",
@@ -2329,9 +2474,8 @@ class DockerRunner:
                     fallback_name=container_name,
                 )
                 try:
-                    capture_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                    capture_proc = _run_with_bounded_output(
                         capture_cmd,
-                        capture_output=True,
                         text=True,
                         timeout=max(15.0, min(self.timeout_seconds, 60.0)),
                         encoding="utf-8",
@@ -2632,9 +2776,8 @@ class DockerRunner:
             args: Sequence[str], *, timeout: float
         ) -> Optional[subprocess.CompletedProcess[str]]:
             try:
-                return subprocess.run(  # noqa: S603 - argv list, no shell
+                return _run_with_bounded_output(
                     [self.docker_executable, *args],
-                    capture_output=True,
                     text=True,
                     timeout=timeout,
                     encoding="utf-8",
@@ -2742,14 +2885,13 @@ class DockerRunner:
         """
 
         try:
-            inspect_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+            inspect_proc = _run_with_bounded_output(
                 [
                     self.docker_executable,
                     "container",
                     "inspect",
                     container_ref,
                 ],
-                capture_output=True,
                 text=True,
                 timeout=10.0,
                 encoding="utf-8",
@@ -2806,9 +2948,8 @@ class DockerRunner:
                         return
                     continue
                 try:
-                    top_proc = subprocess.run(  # noqa: S603 - fixed Docker argv
+                    top_proc = _run_with_bounded_output(
                         [self.docker_executable, "top", container_ref, "-eo", "pid"],
-                        capture_output=True,
                         text=True,
                         timeout=5.0,
                         encoding="utf-8",
@@ -2825,14 +2966,13 @@ class DockerRunner:
                     empty_snapshots = 0 if process_rows else empty_snapshots + 1
                     if empty_snapshots >= 2:
                         try:
-                            subprocess.run(  # noqa: S603 - fixed Docker argv
+                            _run_with_bounded_output(
                                 [
                                     self.docker_executable,
                                     "rm",
                                     "--force",
                                     container_ref,
                                 ],
-                                capture_output=True,
                                 text=True,
                                 timeout=10.0,
                                 encoding="utf-8",
@@ -2926,23 +3066,29 @@ class DockerRunner:
         # attempt-owned copy overlaid at the canonical container path; publish
         # the same bytes back to ``steps/<id>/analysis.py`` only after teardown.
         cidfile = self._docker_cidfile_path(attempt_id)
+        env_file_path = Path(tempfile.gettempdir()) / f"easyicu-docker-{attempt_id}.env"
         sentinel = self.workdir / f".docker-{step_id}-{attempt_id}.sentinel"
         control_script_path = sentinel.with_suffix(".analysis.py")
         control_log_path = sentinel.with_suffix(".run.log")
         container_name = f"easyicu-ra-{attempt_id}"
         self._write_regular_file(sentinel, f"name:{container_name}\n")
         self._write_regular_file(control_script_path, code)
-        cmd = self.build_command(
-            step_id=step_id,
-            script_path=script_path,
-            out_dir=staged_out_dir,
-            immutable_script_path=control_script_path,
-            runtime_image=str(runtime_provenance["image_id"]),
-            resolved_inputs_path=resolved_inputs_path,
-            authority_snapshot_path=authority_snapshot_path,
-            authority_snapshot_sha256=authority_snapshot_sha256,
-            authority_snapshot_error=authority_snapshot_error,
-        )
+        try:
+            cmd = self.build_command(
+                step_id=step_id,
+                script_path=script_path,
+                out_dir=staged_out_dir,
+                immutable_script_path=control_script_path,
+                runtime_image=str(runtime_provenance["image_id"]),
+                resolved_inputs_path=resolved_inputs_path,
+                authority_snapshot_path=authority_snapshot_path,
+                authority_snapshot_sha256=authority_snapshot_sha256,
+                authority_snapshot_error=authority_snapshot_error,
+                env_file_path=env_file_path,
+            )
+        except BaseException:
+            env_file_path.unlink(missing_ok=True)
+            raise
         # Keep the host-written cidfile outside the step's read-write mount so
         # generated code cannot replace the container id used for teardown.
         cmd.insert(2, f"--cidfile={cidfile}")
@@ -2951,15 +3097,18 @@ class DockerRunner:
         timed_out = False
         teardown_confirmed = False
         started = time.monotonic()
-        ghost_monitor = self._start_ghost_container_monitor(
-            cidfile=cidfile,
-            fallback_name=container_name,
-        )
         try:
-            proc = subprocess.run(  # noqa: S603 - argv list, no shell
+            ghost_monitor = self._start_ghost_container_monitor(
+                cidfile=cidfile,
+                fallback_name=container_name,
+            )
+        except BaseException:
+            env_file_path.unlink(missing_ok=True)
+            raise
+        try:
+            proc = _run_with_bounded_output(
                 cmd,
                 cwd=str(step_dir),
-                capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
                 encoding="utf-8",
@@ -2998,6 +3147,7 @@ class DockerRunner:
             returncode = -1
             timed_out = True
         finally:
+            env_file_path.unlink(missing_ok=True)
             if ghost_monitor is not None:
                 monitor_stop, monitor_thread = ghost_monitor
                 monitor_stop.set()
@@ -3106,7 +3256,7 @@ def select_safe_runner_kind(
     docker_detail = f"Docker executable {requested_executable!r} was not found"
     if resolved_docker is not None:
         try:
-            probe = subprocess.run(  # noqa: S603 - fixed Docker argv, no shell
+            probe = _run_with_bounded_output(
                 [
                     resolved_docker,
                     "image",
@@ -3114,7 +3264,6 @@ def select_safe_runner_kind(
                     runtime_image,
                     "--format={{.Id}}",
                 ],
-                capture_output=True,
                 text=True,
                 timeout=max(0.1, float(probe_timeout_seconds)),
                 check=False,

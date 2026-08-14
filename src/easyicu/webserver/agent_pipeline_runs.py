@@ -62,9 +62,14 @@ from easyicu.webserver.scientific_readiness_projection import (
 from easyicu.webserver.agent_review_recovery import (
     WebReviewRecoveryError,
     WebReviewRecoveryRecord,
+    WebReviewRecoverySeed,
     get_record as get_review_recovery_record,
     put_record as put_review_recovery_record,
+    put_recovery_seed,
+    register_pipeline_work_root,
     remove_record as remove_review_recovery_record,
+    remove_recovery_seed,
+    unregister_pipeline_work_root_if_unused,
 )
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
@@ -1967,6 +1972,11 @@ def _register_pending(entry: _PendingRun) -> None:
             _PENDING.pop(oldest, None)
 
 
+def _remove_local_recovery(wrapper_dir: Path) -> None:
+    remove_recovery_seed(wrapper_dir)
+    unregister_pipeline_work_root_if_unused(Path(wrapper_dir).parent.parent)
+
+
 def _start_web_provider_hard_stop(
     *,
     wrapper_dir: Path,
@@ -2524,6 +2534,45 @@ def make_research_pipeline_run_runner(
                     provider_hard_stop=provider_hard_stop,
                 ),
             )
+            try:
+                config_payload = config.recovery_payload()
+                PipelineConfig.from_recovery_payload(
+                    config_payload,
+                    expected_digest=config.canonical_digest(),
+                )
+            except ValueError as exc:
+                raise ResearchPipelineRunError(
+                    "research_pipeline_review_config_not_recoverable",
+                    "The run configuration cannot be reconstructed safely.",
+                ) from exc
+            recovery_seed = WebReviewRecoverySeed.create(
+                wrapper_dir=str(wrapper_dir.resolve()),
+                study=study,
+                scientific_configuration_sha256=(
+                    study_context_owner.scientific_configuration_sha256(study)
+                ),
+                provider_meta=dict(provider),
+                provider_public=dict(provider_public),
+                credential_source=(
+                    "pi_verified"
+                    if research_provider_environment is not None
+                    else "scientific_provider"
+                ),
+                pipeline_config=config_payload,
+                pipeline_config_sha256=config.canonical_digest(),
+                acquisition_projection=_acquisition_recovery_projection(acquisition),
+                hard_stop_ledger_path=str(provider_hard_stop.ledger.path.resolve()),
+                hard_stop_task_id=str(provider_hard_stop.task_id),
+                hard_stop_declaration_sha256=(
+                    study_context_owner.scientific_configuration_sha256(study)
+                ),
+                created_at=time.time(),
+            )
+            # This local seed precedes Planner execution. If the process dies
+            # after the pipeline checkpoint but before the global index update,
+            # bounded reconciliation can still discover the exact pause.
+            register_pipeline_work_root(root)
+            put_recovery_seed(recovery_seed)
             preferences = _research_user_preferences(
                 study,
                 patient_grouping=patient_grouping,
@@ -2581,46 +2630,8 @@ def make_research_pipeline_run_runner(
             if isinstance(outcome, HumanReviewPending):
                 run_dir = Path(outcome.run_dir)
                 _pause_web_provider_hard_stop(provider_hard_stop)
-                try:
-                    config_payload = config.recovery_payload()
-                    PipelineConfig.from_recovery_payload(
-                        config_payload,
-                        expected_digest=config.canonical_digest(),
-                    )
-                except ValueError as exc:
-                    raise ResearchPipelineRunError(
-                        "research_pipeline_review_config_not_recoverable",
-                        "The paused run configuration cannot be reconstructed safely.",
-                    ) from exc
                 put_review_recovery_record(
-                    WebReviewRecoveryRecord.create(
-                        run_id=str(outcome.run_id),
-                        wrapper_dir=str(wrapper_dir.resolve()),
-                        study=study,
-                        scientific_configuration_sha256=(
-                            study_context_owner.scientific_configuration_sha256(study)
-                        ),
-                        provider_meta=dict(provider),
-                        provider_public=dict(provider_public),
-                        credential_source=(
-                            "pi_verified"
-                            if research_provider_environment is not None
-                            else "scientific_provider"
-                        ),
-                        pipeline_config=config_payload,
-                        pipeline_config_sha256=config.canonical_digest(),
-                        acquisition_projection=_acquisition_recovery_projection(
-                            acquisition
-                        ),
-                        hard_stop_ledger_path=str(
-                            provider_hard_stop.ledger.path.resolve()
-                        ),
-                        hard_stop_task_id=str(provider_hard_stop.task_id),
-                        hard_stop_declaration_sha256=(
-                            study_context_owner.scientific_configuration_sha256(study)
-                        ),
-                        created_at=time.time(),
-                    )
+                    recovery_seed.record(str(outcome.run_id))
                 )
                 entry = _PendingRun(
                     pipeline=pipeline,
@@ -2647,6 +2658,7 @@ def make_research_pipeline_run_runner(
                     pending=outcome,
                 )
             _finish_web_provider_hard_stop(provider_hard_stop)
+            _remove_local_recovery(wrapper_dir)
             return _write_projection(
                 wrapper_dir=wrapper_dir,
                 study=study,
@@ -2759,6 +2771,7 @@ def resume_research_pipeline(
             with _PENDING_LOCK:
                 _PENDING.pop(key, None)
             remove_review_recovery_record(key)
+            _remove_local_recovery(entry.wrapper_dir)
             _finish_web_provider_hard_stop(
                 entry.provider_hard_stop,
                 error="configuration_superseded",
@@ -2847,6 +2860,7 @@ def resume_research_pipeline(
         )
     except HumanReviewRejected:
         remove_review_recovery_record(key)
+        _remove_local_recovery(entry.wrapper_dir)
         _finish_web_provider_hard_stop(
             entry.provider_hard_stop,
             error="human_review_rejected",
@@ -2875,6 +2889,7 @@ def resume_research_pipeline(
                 error=_pipeline_failure_category(exc),
             )
             remove_review_recovery_record(key)
+            _remove_local_recovery(entry.wrapper_dir)
         raise ResearchPipelineRunError(
             "research_pipeline_review_resume_failed",
             "The governed Research Agent run could not resume after plan review.",
@@ -2897,6 +2912,7 @@ def resume_research_pipeline(
         )
     _finish_web_provider_hard_stop(entry.provider_hard_stop)
     remove_review_recovery_record(key)
+    _remove_local_recovery(entry.wrapper_dir)
     return _write_projection(
         wrapper_dir=entry.wrapper_dir,
         study=entry.study,

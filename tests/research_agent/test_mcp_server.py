@@ -125,6 +125,80 @@ def test_mcp_run_schema_and_server_reject_additional_properties(
     assert constructed == []
 
 
+def test_every_mcp_tool_schema_is_closed_and_direct_dispatch_rejects_unknown_args(
+    ra,
+) -> None:
+    from easyicu.research_agent.mcp_server import TOOL_SCHEMAS, dispatch
+
+    assert TOOL_SCHEMAS
+    for tool in TOOL_SCHEMAS:
+        assert tool["inputSchema"]["additionalProperties"] is False
+        result = dispatch(tool["name"], {"__undeclared__": True})
+        assert result["error_code"] == "invalid_argument", tool["name"]
+        assert "additional properties" in result["error"]
+
+
+def test_extraction_requires_explicit_patient_data_scope(
+    ra, monkeypatch
+) -> None:
+    import easyicu
+    from easyicu.research_agent.mcp_server import dispatch
+
+    calls = []
+    monkeypatch.setenv(MCP_SCOPES_ENV, "metadata")
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **_kwargs: calls.append(True),
+        raising=False,
+    )
+
+    for tool, arguments in (
+        ("research_agent.load_concepts", {"concepts": ["hr"]}),
+        ("research_agent.extract_concept", {"concept": "hr"}),
+    ):
+        result = dispatch(tool, arguments)
+        assert result["error_code"] == "scope_not_granted"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [
+        ("chunk_size", 0),
+        ("chunk_size", 10_000_001),
+        ("batch_size", 0),
+        ("batch_size", 1_000_001),
+        ("parallel_workers", 0),
+        ("parallel_workers", 65),
+        ("concept_workers", 0),
+        ("concept_workers", 65),
+    ],
+)
+def test_extraction_worker_and_chunk_arguments_are_bounded(
+    ra, monkeypatch, argument, value
+) -> None:
+    import easyicu
+    from easyicu.research_agent.mcp_server import dispatch
+
+    calls = []
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"metadata,{SCOPE_READ_PATIENT_DATA}")
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **_kwargs: calls.append(True),
+        raising=False,
+    )
+
+    result = dispatch(
+        "research_agent.load_concepts",
+        {"concepts": ["hr"], argument: value},
+    )
+
+    assert result["error_code"] == "invalid_argument"
+    assert calls == []
+
+
 def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
     from easyicu.research_agent.mcp_server import TOOL_SCHEMAS, dispatch
 
@@ -353,6 +427,7 @@ def test_mcp_load_concepts_returns_runtime_availability(ra, tmp_path, monkeypatc
         return pd.DataFrame(columns=["icustay_id", "charttime", "norepi_rate"])
 
     monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts, raising=False)
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"metadata,{SCOPE_READ_PATIENT_DATA}")
 
     result = dispatch(
         "research_agent.load_concepts",
@@ -548,6 +623,7 @@ def test_mcp_rejects_forwarded_dictionary_paths_outside_roots_before_extraction(
         lambda **kwargs: calls.append(kwargs) or pd.DataFrame({"x": [1]}),
         raising=False,
     )
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"metadata,{SCOPE_READ_PATIENT_DATA}")
 
     result = mcp.dispatch(
         "research_agent.load_concepts",
@@ -697,6 +773,10 @@ def test_mcp_multi_concept_outputs_are_collision_safe_and_mapped(
         lambda **_kwargs: frames,
         raising=False,
     )
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV,
+        f"metadata,write_artifacts,bind_evidence,{SCOPE_READ_PATIENT_DATA}",
+    )
 
     result = mcp.dispatch(
         "research_agent.load_concepts",
@@ -745,6 +825,10 @@ def test_mcp_concept_output_refuses_to_overwrite_existing_file(
         lambda **_kwargs: pd.DataFrame({"value": [1]}),
         raising=False,
     )
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV,
+        f"metadata,write_artifacts,{SCOPE_READ_PATIENT_DATA}",
+    )
     target = tmp_path / "existing.parquet"
     sentinel = b"do-not-overwrite"
     target.write_bytes(sentinel)
@@ -778,6 +862,10 @@ def test_mcp_multi_output_preflights_every_destination_before_writing(
         "load_concepts",
         lambda **_kwargs: frames,
         raising=False,
+    )
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV,
+        f"metadata,write_artifacts,{SCOPE_READ_PATIENT_DATA}",
     )
     output_dir = tmp_path / "exports"
     output_dir.mkdir()

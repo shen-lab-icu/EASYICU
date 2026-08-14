@@ -22,6 +22,7 @@ from easyicu.research_agent.mcp_policy import (
     MCP_ALLOWED_ROOTS_ENV,
     MCP_PATIENT_DATA_TOKEN_ENV,
     MCP_SCOPES_ENV,
+    SCOPE_READ_PATIENT_DATA,
     granted_scopes,
 )
 from easyicu.research_agent.mcp_server import (
@@ -570,10 +571,57 @@ async def test_anonymous_loopback_http_cannot_start_pipeline(
     assert started == []
 
 
-def test_remote_http_bind_requires_an_independent_token(
+@pytest.mark.anyio
+async def test_anonymous_loopback_http_cannot_extract_patient_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import easyicu
+
+    called: list[bool] = []
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **_kwargs: called.append(True),
+        raising=False,
+    )
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"metadata,{SCOPE_READ_PATIENT_DATA}")
+    app = _http_app()
+    call = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "research_agent.load_concepts",
+            "arguments": {"concepts": ["hr"]},
+        },
+    }
+    async with app.router.lifespan_context(app):
+        async with _http_client(app) as client:
+            response = await client.post(
+                "/mcp",
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+                json=call,
+            )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "scope_not_granted"
+    assert called == []
+
+
+def test_remote_http_bind_requires_an_independent_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
+    cert = tmp_path / "server.crt"
+    key = tmp_path / "server.key"
+    cert.write_text("test certificate", encoding="utf-8")
+    key.write_text("test private key", encoding="utf-8")
 
     with pytest.raises(ValueError, match="non-loopback"):
         validate_http_server_config("0.0.0.0", None)
@@ -581,15 +629,66 @@ def test_remote_http_bind_requires_an_independent_token(
         validate_http_server_config(
             "0.0.0.0",
             "provider-secret",
-            tls_or_trusted_proxy_assured=True,
+            trusted_reverse_proxy=True,
         )
-    with pytest.raises(ValueError, match="TLS or trusted reverse-proxy assurance"):
+    with pytest.raises(ValueError, match="direct non-loopback"):
         validate_http_server_config("0.0.0.0", "independent-mcp-token")
     assert (
         validate_http_server_config(
             "0.0.0.0",
             "independent-mcp-token",
-            tls_or_trusted_proxy_assured=True,
+            trusted_reverse_proxy=True,
         )
         == "independent-mcp-token"
     )
+    assert (
+        validate_http_server_config(
+            "0.0.0.0",
+            "independent-mcp-token",
+            tls_certfile=str(cert),
+            tls_keyfile=str(key),
+        )
+        == "independent-mcp-token"
+    )
+    with pytest.raises(ValueError, match="both a certificate and private key"):
+        validate_http_server_config(
+            "0.0.0.0",
+            "independent-mcp-token",
+            tls_certfile=str(cert),
+        )
+
+
+def test_direct_remote_http_configures_uvicorn_with_tls_files(
+    tmp_path, monkeypatch
+) -> None:
+    import uvicorn
+
+    from easyicu.research_agent import mcp_transport
+
+    cert = tmp_path / "server.crt"
+    key = tmp_path / "server.key"
+    cert.write_text("test certificate", encoding="utf-8")
+    key.write_text("test private key", encoding="utf-8")
+    captured = {}
+    monkeypatch.setattr(
+        uvicorn,
+        "run",
+        lambda _app, **kwargs: captured.update(kwargs),
+    )
+
+    result = mcp_transport._run_streamable_http(
+        server=_server(),
+        host="0.0.0.0",
+        port=8765,
+        bearer_token="independent-mcp-token",
+        trusted_reverse_proxy=False,
+        tls_certfile=str(cert),
+        tls_keyfile=str(key),
+        allowed_hosts=(),
+        allowed_origins=(),
+        max_body_bytes=1024,
+    )
+
+    assert result == 0
+    assert captured["ssl_certfile"] == str(cert)
+    assert captured["ssl_keyfile"] == str(key)

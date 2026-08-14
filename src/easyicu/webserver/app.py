@@ -24,6 +24,10 @@ from easyicu.webserver.deployment_lease import (
     acquire_single_process_lease,
     release_single_process_lease,
 )
+from easyicu.webserver.agent_review_recovery import (
+    WebReviewRecoveryError,
+    reconcile_records as reconcile_review_recovery_records,
+)
 from easyicu.webserver.routes.agent import artifact_router as agent_artifact_router
 from easyicu.webserver.routes.agent import control_router as agent_control_router
 from easyicu.webserver.routes.copilot import router as copilot_router
@@ -72,6 +76,12 @@ app = FastAPI(title="EasyICU", version=_package_version())
 @app.on_event("startup")
 def _acquire_web_deployment_lease() -> None:
     acquire_single_process_lease()
+    try:
+        reconcile_review_recovery_records()
+    except WebReviewRecoveryError:
+        # A damaged private index must not make the whole local Web UI
+        # unavailable; individual recovery queries still fail closed.
+        pass
 
 
 @app.on_event("shutdown")

@@ -12,6 +12,11 @@ now share ``_as_text``.
 from __future__ import annotations
 
 import subprocess
+import io
+import os
+import signal
+import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -84,9 +89,6 @@ def test_run_capturing_reaps_whole_process_group_on_timeout(monkeypatch):
     # On timeout the executor must signal the child's whole process group, not
     # only the direct child, so a background descendant of generated code dies
     # instead of surviving to mutate step outputs after evidence collection.
-    import os
-    import signal
-
     events: dict = {}
 
     class _FakeProc:
@@ -95,33 +97,27 @@ def test_run_capturing_reaps_whole_process_group_on_timeout(monkeypatch):
 
         def __init__(self):
             self._calls = 0
+            self.stdout = io.BytesIO(b"partial-out")
+            self.stderr = io.BytesIO(b"partial-err")
 
-        def communicate(self, timeout=None):
+        def wait(self, timeout=None):
             self._calls += 1
             if self._calls == 1:
                 raise subprocess.TimeoutExpired(
                     cmd=["python"],
                     timeout=timeout,
-                    output="partial-out",
-                    stderr="partial-err",
                 )
-            return ("partial-out", "partial-err")
+            self.returncode = -9
+            return self.returncode
 
         def kill(self):
             events["direct_kill"] = True
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
 
     def _fake_popen(cmd, *, start_new_session=False, **kwargs):
         events["start_new_session"] = start_new_session
         return _FakeProc()
 
     monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(runner_mod.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(
         runner_mod.os,
         "killpg",
@@ -167,18 +163,14 @@ def test_normal_completion_still_terminates_the_dedicated_process_group(monkeypa
     class _FakeProc:
         pid = 4343
         returncode = 0
+        stdout = io.BytesIO(b"ok")
+        stderr = io.BytesIO()
 
-        def communicate(self, timeout=None):
-            return ("ok", "")
+        def wait(self, timeout=None):
+            return self.returncode
 
         def poll(self):
             return self.returncode
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
 
     monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _FakeProc())
     monkeypatch.setattr(
@@ -195,10 +187,13 @@ def test_normal_completion_still_terminates_the_dedicated_process_group(monkeypa
     assert events["killpg"] == (4343, signal.SIGKILL)
 
 
-def test_run_capturing_bounds_generated_output_in_host_memory(tmp_path):
-    import os
-    import sys
+def test_run_capturing_bounds_generated_output_without_temp_backing(
+    tmp_path, monkeypatch
+):
+    def forbid_temporary_file(*args, **kwargs):
+        raise AssertionError("runner capture must not use unbounded temporary files")
 
+    monkeypatch.setattr(runner_mod.tempfile, "TemporaryFile", forbid_temporary_file)
     size = runner_mod.MAX_RUNNER_CAPTURE_BYTES * 2
     result = runner_mod._run_capturing_with_descendant_reaping(
         [sys.executable, "-c", f"print('x' * {size})"],
@@ -211,6 +206,89 @@ def test_run_capturing_bounds_generated_output_in_host_memory(tmp_path):
     assert len(result.stdout.encode("utf-8")) <= (
         runner_mod.MAX_RUNNER_CAPTURE_BYTES + 64
     )
+
+
+@pytest.mark.parametrize("error", [RuntimeError("wait failed"), KeyboardInterrupt()])
+def test_wait_exceptions_still_reap_the_process_group(monkeypatch, error):
+    events = {}
+
+    class _FakeProc:
+        pid = 4545
+        returncode = None
+        stdout = io.BytesIO(b"partial")
+        stderr = io.BytesIO()
+
+        def __init__(self):
+            self.calls = 0
+
+        def wait(self, timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise error
+            self.returncode = -9
+            return self.returncode
+
+        def kill(self):
+            events["direct_kill"] = True
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _FakeProc())
+    monkeypatch.setattr(
+        runner_mod.os,
+        "killpg",
+        lambda pgid, sig: events.__setitem__("killpg", (pgid, sig)),
+    )
+
+    with pytest.raises(type(error), match=str(error) if str(error) else None):
+        runner_mod._run_capturing_with_descendant_reaping(
+            ["python", "x.py"], cwd="/tmp", env={}, timeout=1
+        )
+
+    assert events["killpg"] == (4545, signal.SIGKILL)
+    assert "direct_kill" not in events
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_real_keyboard_interrupt_reaps_the_spawned_process_group(tmp_path):
+    pid_path = tmp_path / "child.pid"
+    previous = signal.getsignal(signal.SIGALRM)
+
+    def interrupt(_signum, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGALRM, interrupt)
+    signal.setitimer(signal.ITIMER_REAL, 0.2)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            runner_mod._run_capturing_with_descendant_reaping(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import os,time; "
+                        f"open({str(pid_path)!r}, 'w').write(str(os.getpid())); "
+                        "time.sleep(30)"
+                    ),
+                ],
+                cwd=str(tmp_path),
+                env=dict(os.environ),
+                timeout=30,
+            )
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+    pid = int(pid_path.read_text(encoding="utf-8"))
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail(f"interrupted runner process {pid} survived cleanup")
 
 
 def test_runner_redacts_explicit_secrets_from_result_and_log(tmp_path, monkeypatch):

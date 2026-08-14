@@ -870,65 +870,9 @@ class ProviderHardStopLedger:
                     if error_type is not None
                     else "completed_usage_unreported"
                 )
-                # Unknown usage cannot release the completion hold. Some
-                # reviewed gateways may strip or ignore the caller's cap before
-                # forwarding, which is exactly why the larger pre-transport
-                # reservation exists. Only provider-reported usage proves a
-                # smaller completion and permits release below this worst case.
-
-                # THE PROMPT HOLD NEEDS THE SAME RELEASE PATH, FOR THE SAME
-                # REASON.
-                #
-                # ``_prompt_token_reservation`` bounds a prompt by its UTF-8
-                # byte count -- one token per byte, which is a true ceiling and
-                # about four times the truth. Its own docstring says why that
-                # is safe: "successful calls release the unused reservation
-                # back to their provider-reported usage." A failed call had no
-                # such release and kept the byte-denominated hold forever.
-                #
-                # MEASURED on verify12, 2026-08-04, from the batch's durable
-                # ledger: a successful call was charged 23,436 tokens and a
-                # failed one 90,542 -- a call that returned nothing cost 3.9x
-                # one that returned an answer. Over the m1 run, 19 of 39 calls
-                # failed and took 707,014 tokens, 35% of the 2,000,000 run
-                # ceiling and 2.75x the 256,708 the successful calls actually
-                # used. All nine analysis steps then passed and the manuscript
-                # writer was refused a 150,931-token reservation.
-                #
-                # The release lands on the estimator this codebase already
-                # calibrated for exactly this question rather than a new
-                # number: ``estimate_prompt_tokens`` divides by
-                # ``CONSERVATIVE_BYTES_PER_TOKEN = 3.0``, deliberately below
-                # the 3.7685 minimum measured over real receipts, so the
-                # charge still over-counts every observed ratio. The provider
-                # framing allowance is already in tokens and is kept whole.
-                # A ledger written before this field existed keeps its full
-                # hold: no bytes recorded, nothing to release.
-                payload_bytes = int(call.get("prompt_payload_bytes") or 0)
-                held_prompt = int(call.get("prompt_token_reservation") or 0)
-                if payload_bytes > 0:
-                    from ..providers.prompt_budget import estimate_prompt_tokens
-
-                    released_prompt = (
-                        estimate_prompt_tokens(payload_bytes)
-                        + PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION
-                    )
-                    if 0 < released_prompt < held_prompt:
-                        given_back = held_prompt - released_prompt
-                        call["prompt_token_reservation"] = released_prompt
-                        call["accounted_tokens"] = max(
-                            0, int(call.get("accounted_tokens") or 0) - given_back
-                        )
-                        call["accounted_estimated_cost_usd"] = max(
-                            0.0,
-                            float(call.get("accounted_estimated_cost_usd") or 0.0)
-                            - (
-                                given_back
-                                * self.limits.input_cost_usd_per_million_tokens
-                            )
-                            / 1_000_000.0,
-                        )
-                        call["unreported_prompt_hold_released"] = given_back
+                # Unknown usage cannot release either hold. The prompt byte
+                # bound and completion floor are what made the decision
+                # pre-transport; only a provider receipt proves a lower charge.
                 self._persist_locked()
                 return
             prompt_tokens = max(0, int(usage.get("prompt_tokens") or 0))

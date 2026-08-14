@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,8 +12,12 @@ import pytest
 from easyicu.webserver.agent_review_recovery import (
     WebReviewRecoveryError,
     WebReviewRecoveryRecord,
+    WebReviewRecoverySeed,
     get_record,
     put_record,
+    put_recovery_seed,
+    reconcile_records,
+    register_pipeline_work_root,
     remove_record,
 )
 
@@ -86,6 +91,125 @@ def test_recovery_index_concurrent_updates_do_not_lose_records(tmp_path) -> None
     assert [record.run_id for record in loaded if record is not None] == run_ids
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert set(payload["records"]) == set(run_ids)
+
+
+def _durable_seed(
+    root: Path,
+    *,
+    run_id: str = "run_reconciled",
+    study_id: str = "study-a",
+) -> tuple[Path, str]:
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+    from easyicu.research_agent.orchestration.human_review_checkpoint import (
+        HumanReviewCheckpoint,
+        write_checkpoint,
+    )
+    from easyicu.research_agent.orchestration.workflow import HumanReviewRequest
+
+    wrapper = root / study_id / "run_job-a"
+    pipeline_root = wrapper / "pipeline"
+    config = PipelineConfig(workdir=pipeline_root)
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Review this plan.",
+        authority_sha256="a" * 64,
+        payload={"reason": "operator_plan_approval_required"},
+    )
+    checkpoint = HumanReviewCheckpoint.create(
+        run_id=run_id,
+        pipeline_config_sha256=config.canonical_digest(),
+        environment_identity={},
+        llm_signature_sha256="c" * 64,
+        run_input_capsule_sha256="d" * 64,
+        capability_activation_sha256="e" * 64,
+        runtime_capabilities=(),
+        runtime_bundle=None,
+        requests=(request,),
+        plan_handoff={},
+        execution_coordinates={},
+    )
+    run_dir = pipeline_root / run_id
+    write_checkpoint(run_dir / "human_review_checkpoint.json", checkpoint)
+    seed = WebReviewRecoverySeed.create(
+        wrapper_dir=str(wrapper.resolve()),
+        study={"id": study_id, "question": "A question"},
+        scientific_configuration_sha256="a" * 64,
+        provider_meta={"provider": "openai", "external": True},
+        provider_public={"provider": "openai", "model": "model-a"},
+        credential_source="pi_verified",
+        pipeline_config=config.recovery_payload(),
+        pipeline_config_sha256=config.canonical_digest(),
+        acquisition_projection={"selected_concepts": ["age"]},
+        hard_stop_ledger_path=str(wrapper / ".runtime" / "ledger.json"),
+        hard_stop_task_id="web-job-a",
+        hard_stop_declaration_sha256="b" * 64,
+        created_at=1.0,
+    )
+    put_recovery_seed(seed)
+    return wrapper, run_id
+
+
+def test_missing_global_record_is_reconciled_from_exact_durable_checkpoint(
+    tmp_path,
+) -> None:
+    index = tmp_path / "review-index.json"
+    root = tmp_path / "projects"
+    _wrapper, run_id = _durable_seed(root)
+    register_pipeline_work_root(root, path=index)
+
+    loaded = get_record(run_id, path=index)
+
+    assert loaded is not None
+    assert loaded.run_id == run_id
+    assert loaded.pipeline_config_sha256
+
+
+def test_reconciliation_rejects_a_tampered_local_seed(tmp_path) -> None:
+    index = tmp_path / "review-index.json"
+    root = tmp_path / "projects"
+    wrapper, run_id = _durable_seed(root)
+    register_pipeline_work_root(root, path=index)
+    seed_path = wrapper / ".runtime" / "web_review_recovery_seed.json"
+    payload = json.loads(seed_path.read_text(encoding="utf-8"))
+    payload["study"]["question"] = "tampered"
+    seed_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert reconcile_records(path=index) == 0
+    assert get_record(run_id, path=index) is None
+
+
+def test_reconciliation_scan_is_bounded(tmp_path) -> None:
+    index = tmp_path / "review-index.json"
+    root = tmp_path / "projects"
+    _durable_seed(root, run_id="run_first", study_id="study-first")
+    _durable_seed(root, run_id="run_second", study_id="study-second")
+    register_pipeline_work_root(root, path=index)
+
+    reconcile_records(path=index, max_candidates=1)
+    payload = json.loads(index.read_text(encoding="utf-8"))
+    assert len(payload["records"]) == 1
+
+
+def test_windows_lock_fallback_serializes_without_fcntl(
+    tmp_path, monkeypatch
+) -> None:
+    import easyicu.webserver.agent_review_recovery as recovery
+
+    calls = []
+
+    class _Msvcrt:
+        LK_LOCK = 1
+        LK_UNLCK = 2
+
+        @staticmethod
+        def locking(_descriptor, mode, length):
+            calls.append((mode, length))
+
+    monkeypatch.setattr(recovery, "fcntl", None)
+    monkeypatch.setattr(recovery, "msvcrt", _Msvcrt)
+    put_record(_record(), path=tmp_path / "windows-index.json")
+
+    assert calls == [(_Msvcrt.LK_LOCK, 1), (_Msvcrt.LK_UNLCK, 1)]
 
 
 @pytest.mark.parametrize(

@@ -1,39 +1,4 @@
-"""Unknown usage releases only the conservative prompt over-reservation.
-
-``_prompt_token_reservation`` bounds a prompt by its UTF-8 byte count::
-
-    prompt_bytes + 16 * len(messages) + 64 + PROVIDER_PROMPT_OVERHEAD_...
-
-and says why that is safe: "Every tokenizer token consumes at least one encoded
-byte."  True, and about four times the truth -- the same codebase measured the
-ratio on real receipts and wrote it down::
-
-    providers/prompt_budget.py
-      bytes/token over the 2026-07-23 E1 replay (8 real calls, all roles)
-        min 3.7685   max 4.3812   mean 3.99
-      CONSERVATIVE_BYTES_PER_TOKEN = 3.0     # deliberately below every sample
-
-The prompt's byte-denominated hold can safely release to the calibrated
-conservative estimator after a failed call. The completion hold cannot: a
-reviewed gateway may ignore or strip the requested cap, so unknown completion
-usage must keep the provider-maximum reserve.
-
-MEASURED on verify12, 2026-08-04, from the batch's own durable ledger:
-
-    a successful call   accounted_tokens =  23,436   (provider-reported)
-    a failed  call      accounted_tokens =  90,542   (86,446 prompt + 4,096)
-
-A call that returned nothing cost 3.9x one that returned an answer.  Over the
-m1 run: 19 of 39 calls failed and were charged 707,014 tokens -- 35% of the
-2,000,000 run ceiling, and 2.75x the 256,708 the 20 successful calls actually
-used.  The manuscript writer was then refused a 150,931-token reservation, so
-all nine analysis steps passed and the run produced no manuscript.
-
-The reservation itself is not the problem and is unchanged: before a call, a
-byte bound is the honest worst case.  What changes is the release, and it
-releases to the estimator this codebase already calibrated for this exact
-question rather than to a new number.
-"""
+"""Unknown provider usage retains the original pre-transport prompt bound."""
 
 from __future__ import annotations
 
@@ -47,11 +12,6 @@ from easyicu.research_agent.authority.provider_hard_stop import (
     PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION,
     ProviderHardStopLedger,
     ProviderHardStopLimits,
-)
-from easyicu.research_agent.providers.prompt_budget import (
-    CONSERVATIVE_BYTES_PER_TOKEN,
-    OBSERVED_BYTES_PER_TOKEN,
-    estimate_prompt_tokens,
 )
 
 _CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
@@ -104,54 +64,73 @@ def _one_failed_call(tmp_path, *, prompt: str, max_tokens: int = 4096) -> dict:
     return calls[0]
 
 
-def test_a_failed_call_is_not_charged_a_token_for_every_byte(tmp_path):
-    """The defect, at the size the recorded run hit it."""
-
+def test_a_failed_call_keeps_a_token_for_every_prompt_byte(tmp_path):
     prompt = "x" * 82_000
     call = _one_failed_call(tmp_path, prompt=prompt)
 
     assert call["state"] == "failed_usage_unknown"
     charged_prompt = int(call["prompt_token_reservation"])
-    assert charged_prompt < len(prompt), (
-        f"a failed call was charged {charged_prompt} prompt tokens for a "
-        f"{len(prompt)}-byte "
-        "prompt -- at least one token per byte"
-    )
+    assert charged_prompt >= len(prompt.encode("utf-8"))
     assert (
         int(call["completion_token_reservation"])
         == PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR
     )
+    assert "unreported_prompt_hold_released" not in call
 
 
-def test_the_release_uses_the_estimator_this_codebase_calibrated(tmp_path):
-    """Not a new constant: the one the prompt-budget guard already uses."""
-
+def test_unknown_usage_keeps_the_exact_original_prompt_hold(tmp_path):
     prompt = "x" * 82_000
-    call = _one_failed_call(tmp_path, prompt=prompt, max_tokens=4096)
-
-    expected_prompt = (
-        estimate_prompt_tokens(len(prompt.encode("utf-8")))
-        + PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION
+    ledger = _ledger(tmp_path)
+    ledger.start_task("m1")
+    attempt = ledger.reserve_transport_attempt(
+        task_id="m1",
+        role="writer",
+        model="gpt-test",
+        messages=[_Message(prompt)],
+        max_tokens=4096,
+        prior_attempt_id=None,
     )
-    assert int(call["accounted_tokens"]) == (
-        expected_prompt + PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR
-    ), call
+    before = json.loads((tmp_path / "ledger.json").read_text(encoding="utf-8"))[
+        "tasks"
+    ][0]["calls"][0]
+    ledger.finish_transport_attempt(
+        task_id="m1", attempt_id=attempt, usage=None, error_type="TransportRetry"
+    )
+    after = json.loads((tmp_path / "ledger.json").read_text(encoding="utf-8"))[
+        "tasks"
+    ][0]["calls"][0]
+
+    assert after["prompt_token_reservation"] == before["prompt_token_reservation"]
+    assert after["accounted_tokens"] == before["accounted_tokens"]
+    assert after["accounted_estimated_cost_usd"] == pytest.approx(
+        before["accounted_estimated_cost_usd"]
+    )
 
 
-def test_the_released_estimate_still_over_counts_every_observed_ratio(tmp_path):
-    """Failing closed is preserved: the divisor is below all real receipts.
+def test_completed_but_unreported_usage_keeps_both_original_holds(tmp_path):
+    ledger = _ledger(tmp_path)
+    ledger.start_task("m1")
+    attempt = ledger.reserve_transport_attempt(
+        task_id="m1",
+        role="writer",
+        model="gpt-test",
+        messages=[_Message("x" * 82_000)],
+        max_tokens=4096,
+        prior_attempt_id=None,
+    )
+    before = ledger.snapshot()["tasks"][0]["calls"][0]
 
-    3.0 against a measured minimum of 3.7685 means the release is still an
-    over-charge, just not a 4x one.
-    """
+    ledger.finish_transport_attempt(
+        task_id="m1", attempt_id=attempt, usage=None, error_type=None
+    )
+    after = ledger.snapshot()["tasks"][0]["calls"][0]
 
-    assert CONSERVATIVE_BYTES_PER_TOKEN < OBSERVED_BYTES_PER_TOKEN
-
-    prompt_bytes = 82_000
-    call = _one_failed_call(tmp_path, prompt="x" * prompt_bytes)
-    truthful = prompt_bytes / OBSERVED_BYTES_PER_TOKEN
-
-    assert int(call["prompt_token_reservation"]) > truthful
+    assert after["state"] == "completed_usage_unreported"
+    assert after["prompt_token_reservation"] == before["prompt_token_reservation"]
+    assert after["completion_token_reservation"] == before[
+        "completion_token_reservation"
+    ]
+    assert after["accounted_tokens"] == before["accounted_tokens"]
 
 
 def test_the_reservation_before_the_call_is_unchanged(tmp_path):

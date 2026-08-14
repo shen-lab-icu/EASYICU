@@ -1295,6 +1295,10 @@ TOOLS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
     "research_agent.bind_evidence": _tool_bind_evidence,
 }
 
+MAX_MCP_EXTRACTION_WORKERS = 64
+MAX_MCP_EXTRACTION_CHUNK_SIZE = 10_000_000
+MAX_MCP_EXTRACTION_BATCH_SIZE = 1_000_000
+
 
 # Tool schemas — mirrored after MCP's tool descriptor format.
 TOOL_SCHEMAS: List[Dict[str, Any]] = [
@@ -1537,15 +1541,31 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                         {"type": "array", "items": {"type": "string"}},
                     ]
                 },
-                "chunk_size": {"type": "integer"},
+                "chunk_size": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_MCP_EXTRACTION_CHUNK_SIZE,
+                },
                 "progress": {"type": "boolean"},
-                "parallel_workers": {"type": "integer"},
-                "concept_workers": {"type": "integer"},
+                "parallel_workers": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_MCP_EXTRACTION_WORKERS,
+                },
+                "concept_workers": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_MCP_EXTRACTION_WORKERS,
+                },
                 "parallel_backend": {"type": "string"},
                 "max_patients": {"type": "integer"},
                 "limit": {"type": "integer"},
                 "sample_strategy": {"type": "string"},
-                "batch_size": {"type": "integer"},
+                "batch_size": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_MCP_EXTRACTION_BATCH_SIZE,
+                },
                 "memory_efficient": {"type": "boolean"},
                 "preview_rows": {
                     "type": "integer",
@@ -1670,11 +1690,41 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     },
 ]
 
+# The official SDK validates these schemas for protocol calls. Direct Python
+# dispatch uses the same declarations below, so no tool has a looser second
+# entry point merely because it was called in-process.
+for _tool_schema in TOOL_SCHEMAS:
+    _tool_schema["inputSchema"]["additionalProperties"] = False
 
-#: Minimum scope each tool needs before it may run at all. Patient-level
-#: disclosure is deliberately *not* listed here: extraction still runs without
-#: it (the parquet stays server-side and the evidence record is still written);
-#: what the missing scope removes is the row preview in the response.
+_TOOL_INPUT_SCHEMAS = {
+    str(tool["name"]): tool["inputSchema"] for tool in TOOL_SCHEMAS
+}
+
+
+def _validate_dispatch_arguments(tool_name: str, arguments: Mapping[str, Any]) -> None:
+    schema = _TOOL_INPUT_SCHEMAS[tool_name]
+    properties = schema.get("properties") or {}
+    unknown = sorted(set(arguments) - set(properties))
+    if unknown:
+        raise ValueError(
+            f"{tool_name} does not accept additional properties: "
+            + ", ".join(unknown)
+        )
+    for name, value in arguments.items():
+        declaration = properties.get(name)
+        if not isinstance(declaration, Mapping) or declaration.get("type") != "integer":
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be an integer")
+        minimum = declaration.get("minimum")
+        maximum = declaration.get("maximum")
+        if minimum is not None and value < minimum:
+            raise ValueError(f"{name} must be at least {minimum}")
+        if maximum is not None and value > maximum:
+            raise ValueError(f"{name} must be at most {maximum}")
+
+
+#: Minimum scope each tool needs before it may run at all.
 TOOL_SCOPES: Dict[str, str] = {
     "research_agent.run": SCOPE_RUN_PIPELINE,
     "research_agent.list_skills": SCOPE_METADATA,
@@ -1686,8 +1736,8 @@ TOOL_SCOPES: Dict[str, str] = {
     "research_agent.assess_export_coverage": SCOPE_METADATA,
     "research_agent.audit_cohort": SCOPE_METADATA,
     "research_agent.run_validator": SCOPE_METADATA,
-    "research_agent.load_concepts": SCOPE_METADATA,
-    "research_agent.extract_concept": SCOPE_METADATA,
+    "research_agent.load_concepts": SCOPE_READ_PATIENT_DATA,
+    "research_agent.extract_concept": SCOPE_READ_PATIENT_DATA,
     "research_agent.cross_database_concept_availability": SCOPE_METADATA,
     "research_agent.bind_evidence": SCOPE_BIND_EVIDENCE,
 }
@@ -1713,6 +1763,7 @@ def dispatch(
             "known": list(TOOLS),
         }
     try:
+        _validate_dispatch_arguments(tool_name, arguments)
         required = TOOL_SCOPES.get(tool_name)
         if required is not None:
             require_scope(required, tool=tool_name)
