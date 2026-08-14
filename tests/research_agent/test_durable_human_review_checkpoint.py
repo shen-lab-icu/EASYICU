@@ -160,3 +160,60 @@ def test_checkpoint_tampering_fails_before_a_pause_is_restored(
 
     with pytest.raises(HumanReviewCheckpointError, match="corrupt or invalid"):
         _pipeline(workdir).resume_human_review([], run_id=pending.run_id)
+
+
+def test_execution_start_receipt_allows_restart_before_first_execute_side_effect(
+    monkeypatch, tmp_path
+) -> None:
+    _force_approvable_plan_review(monkeypatch)
+    workdir = tmp_path / "runs"
+    pending = _pipeline(workdir).run(
+        question="Does age describe hospital mortality?",
+        cohort=_cohort(),
+        target_outcome="death",
+    )
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision="approved",
+            reviewer="test reviewer",
+            decided_at="2026-08-14T03:12:00Z",
+        )
+        for request in pending.requests
+    ]
+    real_execute = ResearchAgentPipeline._run_execute_phase
+
+    def crash_before_execute_side_effect(self, **kwargs):
+        raise SystemExit("simulated process crash")
+
+    monkeypatch.setattr(
+        ResearchAgentPipeline,
+        "_run_execute_phase",
+        crash_before_execute_side_effect,
+    )
+    with pytest.raises(SystemExit, match="simulated process crash"):
+        _pipeline(workdir).resume_human_review(
+            decisions,
+            run_id=pending.run_id,
+        )
+
+    checkpoint_path = Path(pending.run_dir) / "human_review_checkpoint.json"
+    interrupted = load_checkpoint(checkpoint_path, require_pending=False)
+    assert interrupted.state == "executing"
+    assert interrupted.execution_start_receipt is not None
+    assert interrupted.approved_decisions
+    assert interrupted.approved_decision_records
+
+    monkeypatch.setattr(
+        ResearchAgentPipeline,
+        "_run_execute_phase",
+        real_execute,
+    )
+    result = _pipeline(workdir).resume_human_review(
+        decisions,
+        run_id=pending.run_id,
+    )
+
+    assert result.run_id == pending.run_id
+    assert load_checkpoint(checkpoint_path, require_pending=False).state == "completed"

@@ -588,7 +588,10 @@ class PipelineWorkflow:
         human_review_recorder: Optional[
             Callable[[Sequence[Mapping[str, Any]]], None]
         ] = None,
-        human_review_execution_commit: Optional[Callable[[], None]] = None,
+        human_review_execution_commit: Optional[
+            Callable[[Sequence[Mapping[str, Any]]], None]
+        ] = None,
+        human_review_execution_start: Optional[Callable[[], None]] = None,
         reviewer_identity_resolver: Optional[Callable[[], str]] = None,
     ) -> None:
         self._plan_invoker = plan_invoker
@@ -599,6 +602,7 @@ class PipelineWorkflow:
         self._human_review_invoker = human_review_invoker
         self._human_review_recorder = human_review_recorder
         self._human_review_execution_commit = human_review_execution_commit
+        self._human_review_execution_start = human_review_execution_start
         self._reviewer_identity_resolver = reviewer_identity_resolver
         self._state = "created"
         self._plan_result: Optional[_PlanPhaseResult] = None
@@ -625,6 +629,8 @@ class PipelineWorkflow:
         *,
         plan_result: _PlanPhaseResult,
         requests: Sequence[HumanReviewRequest | Mapping[str, Any]],
+        decision_payloads: Sequence[Mapping[str, Any]] = (),
+        decision_records: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         """Restore one already-verified typed pause without re-running Plan.
 
@@ -655,6 +661,15 @@ class PipelineWorkflow:
             item.model_dump(mode="json") for item in parsed
         )
         self._pause_digest = canonical_sha256(list(self._pause_snapshot))
+        if decision_payloads or decision_records:
+            if not decision_payloads or not decision_records:
+                raise HumanReviewAuthorityError(
+                    "restored decision cache requires payloads and records"
+                )
+            key = canonical_sha256([dict(item) for item in decision_payloads])
+            self._decision_record_cache[key] = tuple(
+                dict(item) for item in decision_records
+            )
         self._state = "paused"
         try:
             self._verify_pause_still_binds_live_state()
@@ -797,7 +812,7 @@ class PipelineWorkflow:
             # the human decision is durably recorded but before the first
             # analysis side effect. A duplicate resume can therefore neither
             # execute twice nor lose a correctable decision-validation retry.
-            self._human_review_execution_commit()
+            self._human_review_execution_commit(tuple(records))
         try:
             return self._finish(tuple(records))
         except Exception:
@@ -988,6 +1003,8 @@ class PipelineWorkflow:
     ) -> WorkflowCompleted:
         if self._plan_result is None:
             raise RuntimeError("workflow cannot execute without a plan result")
+        if self._human_review_execution_start is not None:
+            self._human_review_execution_start()
         execute_result = self._execute_invoker(self._plan_result)
         write_result = self._write_invoker(self._plan_result, execute_result)
         final_result = self._finalise_invoker(
@@ -1019,7 +1036,10 @@ def build_pipeline_workflow(
     human_review_recorder: Optional[
         Callable[[Sequence[Mapping[str, Any]]], None]
     ] = None,
-    human_review_execution_commit: Optional[Callable[[], None]] = None,
+    human_review_execution_commit: Optional[
+        Callable[[Sequence[Mapping[str, Any]]], None]
+    ] = None,
+    human_review_execution_start: Optional[Callable[[], None]] = None,
     reviewer_identity_resolver: Optional[Callable[[], str]] = None,
 ) -> WorkflowEngine:
     """Build the explicit phase dispatcher for one pipeline run."""
@@ -1033,5 +1053,6 @@ def build_pipeline_workflow(
         human_review_invoker=human_review_invoker,
         human_review_recorder=human_review_recorder,
         human_review_execution_commit=human_review_execution_commit,
+        human_review_execution_start=human_review_execution_start,
         reviewer_identity_resolver=reviewer_identity_resolver,
     )

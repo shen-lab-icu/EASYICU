@@ -151,12 +151,17 @@ def restore_durable_human_review_pause(
     run_id: str,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]],
     plan_result_factory: Callable[..., Any],
+    load_resume_state: Callable[[Path], Optional[Dict[str, Any]]],
 ) -> Dict[str, Any]:
     """Restore one verified pause without repeating Plan or provider calls."""
 
     run_dir = (Path(pipeline.workdir) / str(run_id)).resolve()
     checkpoint_file = checkpoint_path(run_dir)
-    checkpoint = load_checkpoint(checkpoint_file)
+    checkpoint = load_checkpoint(checkpoint_file, require_pending=False)
+    if checkpoint.state in {"consumed", "completed", "failed"}:
+        raise HumanReviewCheckpointError(
+            f"durable human-review checkpoint is already {checkpoint.state}"
+        )
     if checkpoint.run_id != str(run_id) or checkpoint.thread_id != str(run_id):
         raise HumanReviewCheckpointError(
             "durable human-review checkpoint belongs to a different run"
@@ -288,7 +293,9 @@ def restore_durable_human_review_pause(
         cost_meter=cost_meter,
         repro_envelope=repro_envelope,
         started_at=started_at,
-        resume_state=None,
+        resume_state=(
+            load_resume_state(run_dir) if checkpoint.state == "executing" else None
+        ),
         allowed_literature_citation_keys=tuple(
             str(item)
             for item in list(handoff.get("allowed_literature_citation_keys") or ())
@@ -437,27 +444,58 @@ def restore_durable_human_review_pause(
 
     checkpoint_commit: Dict[str, Any] = {
         "path": str(checkpoint_file),
-        "decision_sha256": None,
+        "decision_sha256": checkpoint.consumed_decision_sha256,
+        "decision_payloads": list(checkpoint.approved_decisions),
     }
 
-    def commit_human_review_execution() -> None:
+    def commit_human_review_execution(
+        decision_records: Sequence[Mapping[str, Any]],
+    ) -> None:
         decision_sha256 = str(checkpoint_commit.get("decision_sha256") or "")
         if not re.fullmatch(r"[0-9a-f]{64}", decision_sha256):
             raise HumanReviewCheckpointError(
                 "durable review decision set is not digest bound"
             )
-        selected = load_checkpoint(checkpoint_file)
-        approve_normalized_plan_for_execution(
-            run_dir=run_dir,
-            evidence=evidence,
-            revision=plan_result.plan.revision,
-            review_requests=selected.requests,
-            decision_set_sha256=decision_sha256,
-        )
-        write_checkpoint(
-            checkpoint_file,
-            selected.transitioned("consumed", decision_sha256=decision_sha256),
-        )
+        decision_payloads = checkpoint_commit.get("decision_payloads")
+        if not isinstance(decision_payloads, list) or not decision_payloads:
+            raise HumanReviewCheckpointError(
+                "durable review decision payloads are unavailable"
+            )
+        selected = load_checkpoint(checkpoint_file, require_pending=False)
+        if selected.state == "pending":
+            approve_normalized_plan_for_execution(
+                run_dir=run_dir,
+                evidence=evidence,
+                revision=plan_result.plan.revision,
+                review_requests=selected.requests,
+                decision_set_sha256=decision_sha256,
+            )
+            write_checkpoint(
+                checkpoint_file,
+                selected.approved(
+                    decisions=decision_payloads,
+                    decision_records=decision_records,
+                    decision_sha256=decision_sha256,
+                ),
+            )
+        elif selected.state in {"approved_pending_execution", "executing"}:
+            if (
+                selected.consumed_decision_sha256 != decision_sha256
+                or list(selected.approved_decisions) != decision_payloads
+                or list(selected.approved_decision_records)
+                != [dict(item) for item in decision_records]
+            ):
+                raise HumanReviewCheckpointError(
+                    "restored approval does not match the durable decision set"
+                )
+        else:
+            raise HumanReviewCheckpointError(
+                f"checkpoint state {selected.state!r} is not resumable"
+            )
+
+    def commit_human_review_execution_start() -> None:
+        selected = load_checkpoint(checkpoint_file, require_pending=False)
+        write_checkpoint(checkpoint_file, selected.execution_started())
 
     workflow = build_pipeline_workflow(
         plan_invoker=lambda: (_ for _ in ()).throw(
@@ -474,13 +512,19 @@ def restore_durable_human_review_pause(
             submission_profile_name=pipeline._submission_profile_name,
         ),
         human_review_execution_commit=commit_human_review_execution,
+        human_review_execution_start=commit_human_review_execution_start,
         reviewer_identity_resolver=(
             getattr(pipeline._human_review_gate, "reviewer_identity_resolver", None)
             if pipeline._human_review_gate is not None
             else None
         ),
     )
-    workflow.restore_paused(plan_result=plan_result, requests=checkpoint.requests)
+    workflow.restore_paused(
+        plan_result=plan_result,
+        requests=checkpoint.requests,
+        decision_payloads=checkpoint.approved_decisions,
+        decision_records=checkpoint.approved_decision_records,
+    )
     pending = HumanReviewPending(
         run_id=str(run_id),
         thread_id=str(run_id),
