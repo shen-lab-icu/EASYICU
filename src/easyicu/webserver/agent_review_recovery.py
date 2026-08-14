@@ -22,8 +22,10 @@ class WebReviewRecoveryRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.web-review-recovery/1"] = (
-        "easyicu.web-review-recovery/1"
+    schema_version: Literal[
+        "easyicu.web-review-recovery/1", "easyicu.web-review-recovery/2"
+    ] = (
+        "easyicu.web-review-recovery/2"
     )
     run_id: str
     wrapper_dir: str
@@ -33,6 +35,9 @@ class WebReviewRecoveryRecord(BaseModel):
     provider_public: Dict[str, Any]
     credential_source: Literal["pi_verified", "scientific_provider"]
     pipeline_config: Dict[str, Any]
+    pipeline_config_sha256: Optional[str] = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
     acquisition_projection: Dict[str, Any]
     hard_stop_ledger_path: str
     hard_stop_task_id: str
@@ -42,6 +47,11 @@ class WebReviewRecoveryRecord(BaseModel):
 
     @model_validator(mode="after")
     def _verify_digest(self) -> "WebReviewRecoveryRecord":
+        if (
+            self.schema_version == "easyicu.web-review-recovery/2"
+            and self.pipeline_config_sha256 is None
+        ):
+            raise ValueError("Web review recovery v2 requires a pipeline digest")
         payload = self.model_dump(mode="json", exclude={"record_sha256"})
         if canonical_sha256(payload) != self.record_sha256:
             raise ValueError("Web review recovery digest mismatch")
@@ -49,8 +59,10 @@ class WebReviewRecoveryRecord(BaseModel):
 
     @classmethod
     def create(cls, **values: Any) -> "WebReviewRecoveryRecord":
+        values = dict(values)
+        values.pop("schema_version", None)
         payload = {
-            "schema_version": "easyicu.web-review-recovery/1",
+            "schema_version": "easyicu.web-review-recovery/2",
             **values,
         }
         payload["record_sha256"] = canonical_sha256(payload)

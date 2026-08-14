@@ -25,6 +25,7 @@ def _record(run_id: str = "run_a") -> WebReviewRecoveryRecord:
         provider_public={"provider": "openai", "model": "model-a"},
         credential_source="pi_verified",
         pipeline_config={"workdir": "/private/project/run_job/pipeline"},
+        pipeline_config_sha256="c" * 64,
         acquisition_projection={"selected_concepts": ["age"]},
         hard_stop_ledger_path="/private/project/run_job/.runtime/ledger.json",
         hard_stop_task_id="web-job-a",

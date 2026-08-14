@@ -30,6 +30,96 @@ from ..planning.cohort_contract import CohortSelectionMode
 from ..providers.prompt_budget import DEFAULT_MAX_PROMPT_TOKENS
 
 
+class PipelineConfigRecoveryError(ValueError):
+    """A pipeline configuration cannot be persisted for exact recovery."""
+
+
+_RECOVERY_BLOCKED_FIELDS = frozenset(
+    {
+        "pubmed_api_key",
+        "tavily_api_key",
+        # Runner kwargs are deliberately opaque and may carry headers,
+        # connection strings, mounts, or other live-host details.  A host that
+        # needs durable review recovery must keep them out of the declarative
+        # checkpoint rather than guessing which nested values are safe.
+        "runner_kwargs",
+    }
+)
+
+_RECOVERY_SECRET_KEY_PARTS = (
+    "api_key",
+    "authorization",
+    "client_secret",
+    "connection_string",
+    "cookie",
+    "database_url",
+    "dsn",
+    "password",
+    "private_key",
+    "proxy_authorization",
+    "refresh_token",
+    "access_token",
+)
+
+
+def _recovery_key_is_secret(key: str) -> bool:
+    normalized = str(key).strip().lower().replace("-", "_")
+    return any(part in normalized for part in _RECOVERY_SECRET_KEY_PARTS)
+
+
+def _render_recovery_value(value: Any, *, path: str) -> Any:
+    """Render one config value losslessly or reject unsafe opaque state.
+
+    This is intentionally distinct from :meth:`canonical_payload`.  The
+    canonical payload is a provenance projection and hashes values below any
+    key named ``key``; that is correct for broad log redaction but not
+    reversible (literature citation keys are ordinary scientific identities).
+    Durable recovery instead preserves schema-owned identities and refuses
+    actual credential-shaped values outright.
+    """
+
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        if string_contains_secret(value):
+            raise PipelineConfigRecoveryError(
+                f"pipeline_config_recovery_secret_value:{path}"
+            )
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        rendered: Dict[str, Any] = {}
+        for raw_key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
+            key = str(raw_key)
+            item_path = f"{path}.{key}" if path else key
+            if _recovery_key_is_secret(key) and item not in (None, "", (), [], {}):
+                raise PipelineConfigRecoveryError(
+                    f"pipeline_config_recovery_secret_field:{item_path}"
+                )
+            rendered[key] = _render_recovery_value(item, path=item_path)
+        return rendered
+    if isinstance(value, (list, tuple)):
+        return [
+            _render_recovery_value(item, path=f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, (set, frozenset)):
+        rendered = [
+            _render_recovery_value(item, path=f"{path}[]") for item in value
+        ]
+        return sorted(
+            rendered,
+            key=lambda item: json.dumps(
+                item, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ),
+        )
+    raise PipelineConfigRecoveryError(
+        "pipeline_config_recovery_unsupported_value:"
+        f"{path}:{type(value).__module__}.{type(value).__qualname__}"
+    )
+
+
 def step_provider_call_entitlement(
     *,
     max_code_repair_attempts: int,
@@ -635,6 +725,62 @@ class PipelineConfig:
             for key, value in sorted(self._field_values().items())
         }
 
+    def recovery_payload(self) -> Dict[str, Any]:
+        """Return a lossless, credential-free payload for durable resume.
+
+        ``canonical_payload`` is intentionally one-way: it hashes anything
+        below a broadly sensitive key name so provenance can be written even
+        for opaque caller mappings.  Reconstructing a live configuration from
+        that projection changes ordinary schema-owned identities such as a
+        literature citation ``key``.  Recovery therefore has its own contract:
+        preserve all supported declarative values exactly, and refuse fields
+        that may carry credentials or opaque runner state.
+        """
+
+        values = self._field_values()
+        for field_name in sorted(_RECOVERY_BLOCKED_FIELDS):
+            value = values.get(field_name)
+            if value not in (None, "", (), [], {}):
+                raise PipelineConfigRecoveryError(
+                    f"pipeline_config_recovery_field_not_persistable:{field_name}"
+                )
+        return {
+            key: _render_recovery_value(value, path=key)
+            for key, value in sorted(values.items())
+        }
+
+    @classmethod
+    def from_recovery_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        expected_digest: str,
+    ) -> "PipelineConfig":
+        """Reconstruct and bind one persisted config to its original digest."""
+
+        if not isinstance(payload, Mapping):
+            raise PipelineConfigRecoveryError(
+                "pipeline_config_recovery_payload_not_mapping"
+            )
+        digest = str(expected_digest or "")
+        if len(digest) != 64 or any(
+            character not in "0123456789abcdef" for character in digest
+        ):
+            raise PipelineConfigRecoveryError(
+                "pipeline_config_recovery_digest_invalid"
+            )
+        try:
+            config = cls(**dict(payload))
+        except (TypeError, ValueError) as exc:
+            raise PipelineConfigRecoveryError(
+                "pipeline_config_recovery_payload_invalid"
+            ) from exc
+        if config.canonical_digest() != digest:
+            raise PipelineConfigRecoveryError(
+                "pipeline_config_recovery_digest_mismatch"
+            )
+        return config
+
     def canonical_digest(self) -> str:
         """SHA-256 over :meth:`canonical_payload`, for run provenance."""
 
@@ -645,6 +791,7 @@ class PipelineConfig:
 
 
 __all__ = [
+    "PipelineConfigRecoveryError",
     "PipelineConfig",
     "assert_step_provider_budget_funds_its_repairs",
     "step_provider_call_entitlement",
