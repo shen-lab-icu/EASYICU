@@ -44,7 +44,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..audits.aggregate_row import unlabelled_aggregate_row_findings
 from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
-from ..audits.envelope_consumers import StepSummaryFractionEnvelopeDualReader
+from ..audits.envelope_consumers import (
+    RegisteredOutputEnvelopeConsumer,
+    StepSummaryFractionEnvelopeDualReader,
+)
 from ..audits.validators import (
     CrossStepCohortLockValidator,
     CrossStepReconciliationTraceValidator,
@@ -700,6 +703,10 @@ def _step_deterministic_contract_findings(
     ) = None,
     final_fraction_envelope: StepResultEnvelope | None = None,
     final_fraction_current_status: str | None = None,
+    final_registered_output_envelope_validator: (
+        RegisteredOutputEnvelopeConsumer | None
+    ) = None,
+    final_registered_output_evidence_store: Any = None,
 ) -> List[ValidationFinding]:
     """The shared pre-registration deterministic contract-validator sequence.
 
@@ -768,11 +775,19 @@ def _step_deterministic_contract_findings(
         step_summary=step_summary,
         completed_step_records=completed_step_records,
     )
-    findings += cross_step_registered_output_validator.audit(
-        step=step,
-        step_summary=step_summary,
-        completed_step_records=completed_step_records,
-    )
+    if final_registered_output_envelope_validator is not None:
+        findings += final_registered_output_envelope_validator.audit(
+            step=step,
+            step_summary=step_summary,
+            completed_step_records=completed_step_records,
+            evidence_store=final_registered_output_evidence_store,
+        )
+    else:
+        findings += cross_step_registered_output_validator.audit(
+            step=step,
+            step_summary=step_summary,
+            completed_step_records=completed_step_records,
+        )
     findings += cross_step_reconciliation_trace_validator.audit(
         step=step,
         step_summary=step_summary,

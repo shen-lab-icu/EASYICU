@@ -1011,6 +1011,7 @@ def _revalidate_scientific_success(
                 script_text=script_text,
                 attempt_id=attempt_id,
                 checkpoint_id=checkpoint_id,
+                evidence_store=request.evidence,
                 stat_validator=StatisticalValidator(),
                 clinical_validator=ClinicalConstraintValidator(),
                 statistical_guard=StatisticalGuard(),

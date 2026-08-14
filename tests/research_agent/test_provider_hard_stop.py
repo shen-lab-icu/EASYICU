@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -838,6 +839,62 @@ def test_restarted_host_attaches_to_paused_task_without_resetting_budget(
     assert reopened.snapshot()["tasks"][0]["status"] == "paused"
     attached.resume()
     assert attached.assert_active() > 0
+
+
+def test_restart_after_pause_resume_uses_persisted_active_wall_clock_anchor(
+    tmp_path,
+    monkeypatch,
+):
+    from easyicu.research_agent.authority import provider_hard_stop as owner
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLedger,
+    )
+
+    wall = [datetime(2026, 8, 14, tzinfo=timezone.utc)]
+    monotonic = [100.0]
+
+    class _ClockDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = wall[0]
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(owner, "datetime", _ClockDateTime)
+    monkeypatch.setattr(owner.time, "monotonic", lambda: monotonic[0])
+    path = tmp_path / "resume-anchor-ledger.json"
+    limits = _limits(max_wall_clock_seconds_per_task=60.0)
+    first = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+    )
+    task = first.start_task("task-a")
+    monotonic[0] += 5.0
+    wall[0] += timedelta(seconds=5)
+    task.pause()
+
+    monotonic[0] += 10_000.0
+    wall[0] += timedelta(seconds=10_000)
+    task.resume()
+    resumed_row = first.snapshot()["tasks"][0]
+    assert resumed_row["elapsed_seconds"] == pytest.approx(5.0)
+    assert resumed_row["active_started_at"] is not None
+
+    monotonic[0] += 2.0
+    wall[0] += timedelta(seconds=2)
+    reopened = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+        resume_existing=True,
+    )
+
+    attached = reopened.start_task("task-a")
+    assert attached.assert_active() == pytest.approx(53.0)
 
 
 def test_wall_clock_exhaustion_is_terminal_and_persisted(tmp_path):

@@ -19,7 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from ..audits.envelope_consumers import StepSummaryFractionEnvelopeDualReader
+from ..audits.envelope_consumers import (
+    RegisteredOutputEnvelopeConsumer,
+    StepSummaryFractionEnvelopeDualReader,
+)
 from ..audits.validators import (
     ClinicalConstraintValidator,
     CrossStepCohortLockValidator,
@@ -222,6 +225,7 @@ def _evaluate_final_deterministic_gates(
     script_text: str,
     attempt_id: str,
     checkpoint_id: str,
+    evidence_store: Any,
     stat_validator: StatisticalValidator,
     clinical_validator: ClinicalConstraintValidator,
     statistical_guard: StatisticalGuard,
@@ -314,6 +318,10 @@ def _evaluate_final_deterministic_gates(
         final_fraction_envelope_validator=StepSummaryFractionEnvelopeDualReader(),
         final_fraction_envelope=result_envelope_snapshot.envelope,
         final_fraction_current_status=current_step_status,
+        final_registered_output_envelope_validator=(
+            RegisteredOutputEnvelopeConsumer()
+        ),
+        final_registered_output_evidence_store=evidence_store,
     )
     contract_findings.extend(
         figure_contract_validator.audit(

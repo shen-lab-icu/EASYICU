@@ -11,6 +11,7 @@ import pytest
 from easyicu.research_agent.orchestration.human_review_checkpoint import (
     HumanReviewCheckpointError,
     load_checkpoint,
+    write_checkpoint,
 )
 from easyicu.research_agent.orchestration.workflow import HumanReviewDecision
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
@@ -217,3 +218,210 @@ def test_execution_start_receipt_allows_restart_before_first_execute_side_effect
 
     assert result.run_id == pending.run_id
     assert load_checkpoint(checkpoint_path, require_pending=False).state == "completed"
+
+
+def test_restart_after_decision_checkpoint_reuses_exact_server_stamped_records(
+    monkeypatch, tmp_path
+) -> None:
+    from easyicu.research_agent.orchestration import human_review_restore
+
+    _force_approvable_plan_review(monkeypatch)
+    workdir = tmp_path / "runs"
+    pending = _pipeline(workdir).run(
+        question="Does age describe hospital mortality?",
+        cohort=_cohort(),
+        target_outcome="death",
+    )
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision="approved",
+            reviewer="test reviewer",
+            decided_at="2026-08-14T03:12:00Z",
+        )
+        for request in pending.requests
+    ]
+    real_recorder = human_review_restore.persist_human_review_records
+
+    def crash_before_decision_evidence(*_args, **_kwargs):
+        raise SystemExit("crash after durable decision prepare")
+
+    monkeypatch.setattr(
+        human_review_restore,
+        "persist_human_review_records",
+        crash_before_decision_evidence,
+    )
+    with pytest.raises(SystemExit, match="durable decision prepare"):
+        _pipeline(workdir).resume_human_review(decisions, run_id=pending.run_id)
+
+    checkpoint_path = Path(pending.run_dir) / "human_review_checkpoint.json"
+    interrupted = load_checkpoint(checkpoint_path, require_pending=False)
+    assert interrupted.state == "pending"
+    assert interrupted.approved_decisions
+    stamped_records = list(interrupted.approved_decision_records)
+
+    monkeypatch.setattr(
+        human_review_restore,
+        "persist_human_review_records",
+        real_recorder,
+    )
+    result = _pipeline(workdir).resume_human_review(decisions, run_id=pending.run_id)
+
+    persisted = json.loads(
+        (Path(pending.run_dir) / "human_review_decisions.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert result.run_id == pending.run_id
+    assert persisted["decisions"] == stamped_records
+    assert load_checkpoint(checkpoint_path, require_pending=False).state == "completed"
+
+
+def test_rejection_recorder_crash_converges_after_restart(monkeypatch, tmp_path) -> None:
+    from easyicu.research_agent.orchestration import human_review_restore
+    from easyicu.research_agent.orchestration.workflow import HumanReviewRejected
+
+    _force_approvable_plan_review(monkeypatch)
+    workdir = tmp_path / "runs"
+    pending = _pipeline(workdir).run(
+        question="Does age describe hospital mortality?",
+        cohort=_cohort(),
+        target_outcome="death",
+    )
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision="rejected",
+            reviewer="test reviewer",
+            decided_at="2026-08-14T03:12:00Z",
+        )
+        for request in pending.requests
+    ]
+    real_recorder = human_review_restore.persist_human_review_records
+    monkeypatch.setattr(
+        human_review_restore,
+        "persist_human_review_records",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(SystemExit("crash")),
+    )
+    with pytest.raises(SystemExit, match="crash"):
+        _pipeline(workdir).resume_human_review(decisions, run_id=pending.run_id)
+
+    checkpoint_path = Path(pending.run_dir) / "human_review_checkpoint.json"
+    assert load_checkpoint(checkpoint_path, require_pending=False).state == "pending"
+    monkeypatch.setattr(
+        human_review_restore,
+        "persist_human_review_records",
+        real_recorder,
+    )
+
+    with pytest.raises(HumanReviewRejected):
+        _pipeline(workdir).resume_human_review(decisions, run_id=pending.run_id)
+
+    assert load_checkpoint(checkpoint_path, require_pending=False).state == "rejected"
+    status = json.loads(
+        (Path(pending.run_dir) / "run_status.json").read_text(encoding="utf-8")
+    )
+    assert status["status"] == "human_review_rejected"
+
+
+def test_legacy_pending_checkpoint_converges_from_recorded_decision_evidence(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.orchestration import human_review_restore
+
+    _force_approvable_plan_review(monkeypatch)
+    workdir = tmp_path / "runs"
+    pending = _pipeline(workdir).run(
+        question="Does age describe hospital mortality?",
+        cohort=_cohort(),
+        target_outcome="death",
+    )
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision="approved",
+            reviewer="test reviewer",
+            decided_at="2026-08-14T03:12:00Z",
+        )
+        for request in pending.requests
+    ]
+    checkpoint_path = Path(pending.run_dir) / "human_review_checkpoint.json"
+    original_pending = load_checkpoint(checkpoint_path, require_pending=False)
+    real_commit = human_review_restore.commit_human_review_decision
+    monkeypatch.setattr(
+        human_review_restore,
+        "commit_human_review_decision",
+        lambda **_kwargs: (_ for _ in ()).throw(SystemExit("commit crash")),
+    )
+    with pytest.raises(SystemExit, match="commit crash"):
+        _pipeline(workdir).resume_human_review(decisions, run_id=pending.run_id)
+    assert (Path(pending.run_dir) / "human_review_decisions.json").is_file()
+
+    # Recreate the historical ordering where evidence reached disk before the
+    # checkpoint learned the exact decision records.
+    write_checkpoint(checkpoint_path, original_pending)
+    monkeypatch.setattr(
+        human_review_restore,
+        "commit_human_review_decision",
+        real_commit,
+    )
+    result = _pipeline(workdir).resume_human_review(decisions, run_id=pending.run_id)
+
+    assert result.run_id == pending.run_id
+    assert load_checkpoint(checkpoint_path, require_pending=False).state == "completed"
+
+
+@pytest.mark.parametrize(
+    ("method_name", "expected_phase"),
+    [
+        ("_run_write_phase", "write_in_progress"),
+        ("_finalise_success", "finalize_in_progress"),
+    ],
+)
+def test_restart_fails_closed_in_post_analysis_side_effect_phase(
+    monkeypatch,
+    tmp_path,
+    method_name,
+    expected_phase,
+) -> None:
+    _force_approvable_plan_review(monkeypatch)
+    workdir = tmp_path / "runs"
+    pending = _pipeline(workdir).run(
+        question="Does age describe hospital mortality?",
+        cohort=_cohort(),
+        target_outcome="death",
+    )
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision="approved",
+            reviewer="test reviewer",
+            decided_at="2026-08-14T03:12:00Z",
+        )
+        for request in pending.requests
+    ]
+    calls = 0
+
+    def crash_after_phase_marker(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise SystemExit("simulated post-analysis crash")
+
+    monkeypatch.setattr(
+        ResearchAgentPipeline,
+        method_name,
+        crash_after_phase_marker,
+    )
+    with pytest.raises(SystemExit, match="post-analysis crash"):
+        _pipeline(workdir).resume_human_review(decisions, run_id=pending.run_id)
+
+    checkpoint_path = Path(pending.run_dir) / "human_review_checkpoint.json"
+    assert load_checkpoint(checkpoint_path, require_pending=False).state == expected_phase
+    with pytest.raises(HumanReviewCheckpointError, match=expected_phase):
+        _pipeline(workdir).resume_human_review(decisions, run_id=pending.run_id)
+    assert calls == 1

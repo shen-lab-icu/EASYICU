@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..agents.core import CriticAgent, ManuscriptAgent
 from ..audits.manuscript_claims import audit_manuscript_numeric_claims
+from ..audits.envelope_consumers import RegisteredOutputEnvelopeConsumer
 from .bibtex import render_bibtex
 from ..review.causal_audit import run_causal_audit
 from ..contracts.runtime import (
@@ -35,6 +36,7 @@ from ..authority.evidence_store import (
     EvidenceEnforcementMode,
     sha256_of_file,
 )
+from ..authority.runtime_artifacts import current_step_records
 from ..figures.skill import PublicationFigureSkill
 from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
@@ -822,9 +824,15 @@ def _draft_manuscript(
             )
     writer_error_message: Optional[str] = None
     try:
+        writer_authority_records = (
+            RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+                current_step_records(per_step_records),
+                evidence_store=evidence,
+            )
+        )
         if pipeline._writer_digest_widened:
             writer_evidence_digest = _render_writer_evidence_digest_v2(
-                per_step_records,
+                writer_authority_records,
                 context=context,
                 run_dir=run_dir,
                 evidence=evidence,
@@ -834,7 +842,7 @@ def _draft_manuscript(
             writer_evidence_digest = _render_writer_evidence_digest(
                 context=context,
                 run_dir=run_dir,
-                per_step_records=per_step_records,
+                per_step_records=writer_authority_records,
             )
         writer_digest_path = run_dir / "writer_evidence_digest.md"
         writer_digest_path.write_text(writer_evidence_digest, encoding="utf-8")
@@ -851,6 +859,7 @@ def _draft_manuscript(
                 generation_mode="system",
                 metadata={
                     "writer_digest_widened": bool(pipeline._writer_digest_widened),
+                    "step_result_envelope_authority": True,
                     "writer_digest_secondary_cap_per_step": int(
                         pipeline._writer_digest_secondary_cap_per_step
                     ),

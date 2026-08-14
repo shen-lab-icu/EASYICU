@@ -115,6 +115,7 @@ from .cohort_routing import (
     bind_step_execution_cohort as _bind_step_execution_cohort,
     bound_step_execution_cohort_path as _bound_step_execution_cohort_path,
 )
+from .replan_review import runtime_replan_review_pause
 from .concept_audit import (
     ConceptAuditAuthority,
     ConceptAuditCoordinator,
@@ -1049,6 +1050,7 @@ def run_execute_phase(
         # run that keeps self-blocking falls back to an honest diagnostic_only
         # rather than looping the replanner indefinitely.
         "directed_model_replans": 0,
+        "human_review_pause": None,
     }
     role_resolver = plan_result.role_resolver
     llm_signature = plan_result.llm_signature
@@ -1081,8 +1083,8 @@ def run_execute_phase(
     # (probe, statistical validators, robustness fitter, and the step runner)
     # reads THAT — so the declared inclusion/exclusion is enforced once,
     # consistently, instead of being silently re-implemented (or skipped) by
-    # each generated step. The full universe stays reachable via the runner's
-    # EASYICU_UNIVERSE_PARQUET env for explicit robustness steps.
+    # each generated step. The full universe is injected only into runners for
+    # typed steps whose cohort/robustness contract explicitly authorizes it.
     universe_path = cohort_path
     run_input_authority_state = ExecutionInputAuthorityState.bind(
         universe_path=universe_path,
@@ -1648,8 +1650,8 @@ def run_execute_phase(
                     "predicates and applied them: analysis cohort "
                     f"n={result['n_cohort']} of universe n={result['n_universe']}. "
                     "Downstream steps now read the filtered cohort "
-                    "(COHORT_PARQUET); the full universe stays available as "
-                    "EASYICU_UNIVERSE_PARQUET."
+                    "(COHORT_PARQUET); the full universe is exposed only to "
+                    "explicitly authorized typed steps."
                 ),
                 detail={
                     "stage": "execute_repair",
@@ -1870,6 +1872,23 @@ def run_execute_phase(
                         detail={"reason": reason},
                     )
                 )
+            return current_plan
+
+        review_pause = runtime_replan_review_pause(
+            require_human_plan_review=bool(
+                pipeline._config.require_human_plan_review
+            ),
+            current_plan=current_plan,
+            candidate_plan=revised,
+            trigger=reason,
+        )
+        if review_pause is not None:
+            _replan_state["disabled"] = True
+            _replan_state["human_review_pause"] = review_pause
+            findings.append(review_pause.finding())
+            _flush_partial_manifest(
+                {"runtime_replan_review_pending": review_pause.manifest_payload()}
+            )
             return current_plan
 
         # Substantive revision: reset the no-op streak and register it.
@@ -4950,6 +4969,7 @@ def run_execute_phase(
             script_text=code,
             attempt_id=attempt_id,
             checkpoint_id=review_checkpoint_id,
+            evidence_store=evidence,
             stat_validator=stat_validator,
             clinical_validator=clinical_validator,
             statistical_guard=statistical_guard,
@@ -5232,8 +5252,8 @@ def run_execute_phase(
             # alias is added to pending_success_aliases so the SAME success
             # transaction below promotes it; a rolled-back commit therefore
             # leaves an unpublished record that the loader can never recover as
-            # current authority.  Shadow-only: paper_authorized stays false and
-            # no downstream consumer reads it yet.
+            # current authority. The final validator and writer consume the
+            # verified sidecar through RegisteredOutputEnvelopeConsumer.
             sidecar_snapshot = (
                 final_gate_findings.result_envelope_snapshot.envelope
                 if final_gate_findings.result_envelope_snapshot is not None
@@ -5424,21 +5444,25 @@ def run_execute_phase(
         and run_input_authority_state.development_sample is None
     )
     plan_block_reason = (
-        "endpoint_contract_blocked"
-        if endpoint_contract_blocked
+        "runtime_replan_human_review_required"
+        if _replan_state.get("human_review_pause") is not None
         else (
-            "trajectory_plan_contract_blocked"
-            if trajectory_plan_blocked
+            "endpoint_contract_blocked"
+            if endpoint_contract_blocked
             else (
-                "typed_plan_dag_blocked"
-                if typed_plan_dag_blocked
+                "trajectory_plan_contract_blocked"
+                if trajectory_plan_blocked
                 else (
-                    "product_promise_blocked"
-                    if product_promise_blocked
+                    "typed_plan_dag_blocked"
+                    if typed_plan_dag_blocked
                     else (
-                        "development_sample_unauthorized"
-                        if development_sample_blocked
-                        else None
+                        "product_promise_blocked"
+                        if product_promise_blocked
+                        else (
+                            "development_sample_unauthorized"
+                            if development_sample_blocked
+                            else None
+                        )
                     )
                 )
             )
@@ -5646,6 +5670,17 @@ def run_execute_phase(
             directed_plan = _maybe_directed_model_replan(
                 failed_step=step, failed_record=record
             )
+            if _replan_state.get("human_review_pause") is not None:
+                emit_progress(
+                    "pause",
+                    "A substantive runtime replan is awaiting a new human review.",
+                    status="paused",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                )
+                return RunTransition.pause(
+                    "runtime_replan_human_review_required"
+                )
             if directed_plan is not None:
                 return RunTransition.replan(
                     directed_plan,
@@ -5657,14 +5692,24 @@ def run_execute_phase(
                 and _successful_step_requests_replan(record)
                 and has_remaining
             ):
-                return RunTransition.replan(
-                    _maybe_replan(
-                        current_plan=plan,
-                        reason=step.step_id,
-                        probe_summary_payload=probe_summary,
-                        completed_records=per_step_records,
-                    )
+                revised_plan = _maybe_replan(
+                    current_plan=plan,
+                    reason=step.step_id,
+                    probe_summary_payload=probe_summary,
+                    completed_records=per_step_records,
                 )
+                if _replan_state.get("human_review_pause") is not None:
+                    emit_progress(
+                        "pause",
+                        "A substantive runtime replan is awaiting a new human review.",
+                        status="paused",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                    )
+                    return RunTransition.pause(
+                        "runtime_replan_human_review_required"
+                    )
+                return RunTransition.replan(revised_plan)
             return RunTransition.continue_run()
 
         def _apply_revised_plan(

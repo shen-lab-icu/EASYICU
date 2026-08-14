@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
@@ -69,3 +71,138 @@ def test_recovery_index_never_silently_evicts_a_pending_pause(tmp_path) -> None:
 
     assert get_record("old", path=path) is not None
     assert get_record("new", path=path) is None
+
+
+def test_recovery_index_concurrent_updates_do_not_lose_records(tmp_path) -> None:
+    path = tmp_path / "review-index.json"
+    run_ids = [f"run_{index:03d}" for index in range(64)]
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(lambda run_id: put_record(_record(run_id), path=path), run_ids))
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        loaded = list(pool.map(lambda run_id: get_record(run_id, path=path), run_ids))
+
+    assert [record.run_id for record in loaded if record is not None] == run_ids
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert set(payload["records"]) == set(run_ids)
+
+
+@pytest.mark.parametrize(
+    "checkpoint_state",
+    ["pending", "approved_pending_execution", "executing"],
+)
+def test_web_post_approval_recovery_reuses_exact_stored_decisions(
+    tmp_path,
+    monkeypatch,
+    checkpoint_state,
+) -> None:
+    from easyicu.research_agent.canonical_json import canonical_sha256
+    from easyicu.research_agent.orchestration.human_review_checkpoint import (
+        HumanReviewCheckpoint,
+        write_checkpoint,
+    )
+    from easyicu.research_agent.orchestration.workflow import (
+        HumanReviewPending,
+        HumanReviewRequest,
+    )
+    from easyicu.webserver import agent_pipeline_runs
+
+    run_id = f"run-{checkpoint_state}"
+    run_dir = tmp_path / "pipeline" / run_id
+    run_dir.mkdir(parents=True)
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Review this plan.",
+        authority_sha256="a" * 64,
+        payload={"reason": "operator_plan_approval_required"},
+    )
+    decisions = [
+        {
+            "review_id": request.review_id,
+            "authority_sha256": request.authority_sha256,
+            "decision": "approved",
+            "reviewer": "original reviewer",
+            "decided_at": "2026-08-14T01:02:03Z",
+            "note": "original note",
+        }
+    ]
+    records = [
+        {
+            "review_id": request.review_id,
+            "decision": "approved",
+            "server_decided_at": "2026-08-14T01:02:04+00:00",
+        }
+    ]
+    checkpoint = HumanReviewCheckpoint.create(
+        run_id=run_id,
+        pipeline_config_sha256="b" * 64,
+        environment_identity={},
+        llm_signature_sha256="c" * 64,
+        run_input_capsule_sha256="d" * 64,
+        capability_activation_sha256="e" * 64,
+        runtime_capabilities=(),
+        runtime_bundle=None,
+        requests=(request,),
+        plan_handoff={},
+        execution_coordinates={},
+    ).decision_recorded(
+        decisions=decisions,
+        decision_records=records,
+        decision_sha256=canonical_sha256(decisions),
+    )
+    if checkpoint_state != "pending":
+        checkpoint = checkpoint.decision_committed()
+    if checkpoint_state == "executing":
+        checkpoint = checkpoint.execution_started()
+    write_checkpoint(run_dir / "human_review_checkpoint.json", checkpoint)
+    recovery_values = _record(run_id).model_dump(exclude={"record_sha256"})
+    recovery_values["wrapper_dir"] = str(tmp_path)
+    recovered_pending = agent_pipeline_runs._checkpoint_pending_from_record(
+        WebReviewRecoveryRecord.create(**recovery_values)
+    )
+    assert recovered_pending.run_id == run_id
+
+    captured = {}
+
+    class _Pipeline:
+        def resume_human_review(self, submitted, **_kwargs):
+            captured["decisions"] = submitted
+            return SimpleNamespace(manifest_path=run_dir / "manifest.json")
+
+    pending = HumanReviewPending(
+        run_id=run_id,
+        thread_id=run_id,
+        run_dir=str(run_dir),
+        requests=(request,),
+        resume_scope="durable_checkpoint",
+        resume_pid=None,
+    )
+    entry = agent_pipeline_runs._PendingRun(
+        pipeline=_Pipeline(),
+        pending=pending,
+        wrapper_dir=tmp_path,
+        study={"id": "study-a"},
+        provider={},
+        acquisition=SimpleNamespace(),
+        created_at=1.0,
+    )
+    monkeypatch.setitem(agent_pipeline_runs._PENDING, run_id, entry)
+    monkeypatch.setattr(agent_pipeline_runs, "remove_review_recovery_record", lambda *_: None)
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_write_projection",
+        lambda **_kwargs: {"status": "complete"},
+    )
+
+    result = agent_pipeline_runs.resume_research_pipeline(
+        run_id=run_id,
+        study_context_id="study-a",
+        decision="approved",
+        reviewer="different retry reviewer",
+        note="different retry note",
+        job=SimpleNamespace(emit=lambda _event: None),
+    )
+
+    assert result == {"status": "complete"}
+    assert captured["decisions"] == decisions

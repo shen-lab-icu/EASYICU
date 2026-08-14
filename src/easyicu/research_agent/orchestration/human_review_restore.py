@@ -8,7 +8,9 @@ invoke Planner or infer missing checkpoint state.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -39,13 +41,39 @@ from ..contracts.runtime import _WritePhaseResult
 from ..skills import get_skill
 from .human_review_checkpoint import (
     HumanReviewCheckpointError,
+    HumanReviewCheckpointPhaseUncertain,
     checkpoint_path,
     load_checkpoint,
     write_checkpoint,
 )
 from .progress import ResumableProgressChannel
 from .profiles import is_paper_facing_profile
-from .workflow import HumanReviewPending, build_pipeline_workflow
+from .workflow import HumanReviewDecision, HumanReviewPending, build_pipeline_workflow
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    """Publish review evidence durably before registering its digest."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def persist_human_review_records(
@@ -75,17 +103,13 @@ def persist_human_review_records(
                 f"(unauthenticated: {', '.join(unauthenticated)})"
             )
     decisions_path = run_dir / "human_review_decisions.json"
-    decisions_path.write_text(
-        json.dumps(
-            {
-                "schema": "easyicu.human_review_decisions/1",
-                "run_id": run_id,
-                "decisions": decision_records,
-            },
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
+    _atomic_write_json(
+        decisions_path,
+        {
+            "schema": "easyicu.human_review_decisions/1",
+            "run_id": run_id,
+            "decisions": decision_records,
+        },
     )
     evidence.register_file(
         kind="log",
@@ -106,33 +130,29 @@ def persist_human_review_records(
     if not rejected:
         return
     run_status_path = run_dir / "run_status.json"
-    run_status_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "easyicu.run_status/2",
-                "run_id": run_id,
-                "status": "human_review_rejected",
-                "strict_fail_closed": True,
-                "terminal_reason": "operator_rejected",
-                "rejected_review_ids": rejected,
-                "gates": {
-                    "human_review_approved": False,
-                    "execution_complete": False,
-                    "manuscript_ready": False,
-                    "publication_ready": False,
-                    "publication_artifacts_ready": False,
-                    "execution_paper_eligible": False,
-                    "paper_authorized": False,
-                },
-                "canonical_outputs": {
-                    "human_review_decisions": "human_review_decisions.json",
-                    "run_status": "run_status.json",
-                },
+    _atomic_write_json(
+        run_status_path,
+        {
+            "schema_version": "easyicu.run_status/2",
+            "run_id": run_id,
+            "status": "human_review_rejected",
+            "strict_fail_closed": True,
+            "terminal_reason": "operator_rejected",
+            "rejected_review_ids": rejected,
+            "gates": {
+                "human_review_approved": False,
+                "execution_complete": False,
+                "manuscript_ready": False,
+                "publication_ready": False,
+                "publication_artifacts_ready": False,
+                "execution_paper_eligible": False,
+                "paper_authorized": False,
             },
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
+            "canonical_outputs": {
+                "human_review_decisions": "human_review_decisions.json",
+                "run_status": "run_status.json",
+            },
+        },
     )
     evidence.register_file(
         kind="log",
@@ -161,7 +181,100 @@ def bind_checkpoint_decision_payloads(
     checkpoint_commit["decision_sha256"] = canonical_sha256(ordered)
 
 
-def commit_human_review_execution_approval(
+def recover_checkpoint_decisions_from_evidence(
+    checkpoint_file: Path,
+    *,
+    run_dir: Path,
+) -> Any:
+    """Converge the historical recorder-before-checkpoint crash window."""
+
+    checkpoint = load_checkpoint(checkpoint_file, require_pending=False)
+    if checkpoint.state != "pending" or checkpoint.approved_decisions_sha256:
+        return checkpoint
+    decisions_path = run_dir / "human_review_decisions.json"
+    if not decisions_path.is_file() or decisions_path.is_symlink():
+        return checkpoint
+    try:
+        envelope = json.loads(decisions_path.read_text(encoding="utf-8"))
+        records = envelope["decisions"]
+        if (
+            envelope.get("schema") != "easyicu.human_review_decisions/1"
+            or envelope.get("run_id") != checkpoint.run_id
+            or not isinstance(records, list)
+        ):
+            raise ValueError("invalid decision evidence envelope")
+        requests = {request.review_id: request for request in checkpoint.requests}
+        payloads = []
+        for raw_record in records:
+            if not isinstance(raw_record, Mapping):
+                raise ValueError("invalid decision record")
+            record = dict(raw_record)
+            request = requests.get(str(record.get("review_id") or ""))
+            if request is None:
+                raise ValueError("decision record does not bind a paused request")
+            payload = HumanReviewDecision(
+                review_id=request.review_id,
+                authority_sha256=str(record.get("authority_sha256") or ""),
+                decision=str(record.get("decision") or ""),
+                reviewer=str(record.get("claimed_reviewer") or ""),
+                decided_at=str(record.get("claimed_decided_at") or ""),
+                note=str(record.get("note") or ""),
+            ).model_dump(mode="json")
+            if (
+                record.get("request_sha256")
+                != canonical_sha256(request.model_dump(mode="json"))
+                or record.get("decision_sha256") != canonical_sha256(payload)
+            ):
+                raise ValueError("decision record digest mismatch")
+            payloads.append(payload)
+        if len(payloads) != len(checkpoint.requests):
+            raise ValueError("decision evidence does not cover the request set")
+        by_id = {item["review_id"]: item for item in payloads}
+        ordered = [by_id[request.review_id] for request in checkpoint.requests]
+        by_record_id = {str(item["review_id"]): dict(item) for item in records}
+        ordered_records = [
+            by_record_id[request.review_id] for request in checkpoint.requests
+        ]
+    except Exception as exc:
+        raise HumanReviewCheckpointError(
+            "existing human-review decision evidence cannot be recovered"
+        ) from exc
+    recovered = checkpoint.decision_recorded(
+        decisions=ordered,
+        decision_records=ordered_records,
+        decision_sha256=canonical_sha256(ordered),
+    )
+    write_checkpoint(checkpoint_file, recovered)
+    return recovered
+
+
+def prepare_human_review_decision(
+    *,
+    checkpoint_file: Path,
+    decision_payloads: Sequence[Mapping[str, Any]],
+    decision_records: Sequence[Mapping[str, Any]],
+    decision_sha256: str,
+) -> None:
+    """Stage exact decisions before any separately persisted review evidence."""
+
+    payloads = [dict(item) for item in decision_payloads]
+    records = [dict(item) for item in decision_records]
+    if not re.fullmatch(r"[0-9a-f]{64}", str(decision_sha256)) or not payloads:
+        raise HumanReviewCheckpointError(
+            "durable review decision set is unavailable or not digest bound"
+        )
+    selected = load_checkpoint(checkpoint_file, require_pending=False)
+    write_checkpoint(
+        checkpoint_file,
+        selected.decision_recorded(
+            decisions=payloads,
+            decision_records=records,
+            decision_sha256=str(decision_sha256),
+        ),
+    )
+
+
+def commit_human_review_decision(
     *,
     checkpoint_file: Path,
     run_dir: Path,
@@ -171,7 +284,7 @@ def commit_human_review_execution_approval(
     decision_records: Sequence[Mapping[str, Any]],
     decision_sha256: str,
 ) -> None:
-    """Durably bind approval before any reviewed Execute side effect."""
+    """Commit staged evidence and authorize an approved plan before Execute."""
 
     payloads = [dict(item) for item in decision_payloads]
     records = [dict(item) for item in decision_records]
@@ -184,7 +297,20 @@ def commit_human_review_execution_approval(
             "durable review decision payloads are unavailable"
         )
     selected = load_checkpoint(checkpoint_file, require_pending=False)
+    if (
+        selected.consumed_decision_sha256 != str(decision_sha256)
+        or list(selected.approved_decisions) != payloads
+        or list(selected.approved_decision_records) != records
+    ):
+        raise HumanReviewCheckpointError(
+            "restored decision does not match the durable decision set"
+        )
     if selected.state == "pending":
+        selected = selected.decision_committed()
+        write_checkpoint(checkpoint_file, selected)
+    if selected.state == "rejected":
+        return
+    if selected.state in {"approved_pending_execution", "executing"}:
         approve_normalized_plan_for_execution(
             run_dir=run_dir,
             evidence=evidence,
@@ -192,24 +318,6 @@ def commit_human_review_execution_approval(
             review_requests=selected.requests,
             decision_set_sha256=str(decision_sha256),
         )
-        write_checkpoint(
-            checkpoint_file,
-            selected.approved(
-                decisions=payloads,
-                decision_records=records,
-                decision_sha256=str(decision_sha256),
-            ),
-        )
-        return
-    if selected.state in {"approved_pending_execution", "executing"}:
-        if (
-            selected.consumed_decision_sha256 != str(decision_sha256)
-            or list(selected.approved_decisions) != payloads
-            or list(selected.approved_decision_records) != records
-        ):
-            raise HumanReviewCheckpointError(
-                "restored approval does not match the durable decision set"
-            )
         return
     raise HumanReviewCheckpointError(
         f"checkpoint state {selected.state!r} is not resumable"
@@ -223,6 +331,21 @@ def mark_human_review_execution_started(checkpoint_file: Path) -> None:
     write_checkpoint(checkpoint_file, selected.execution_started())
 
 
+def mark_human_review_execution_phase(
+    checkpoint_file: Path,
+    phase: str,
+) -> None:
+    """Fail-closed marker around Write and Finalize side-effect boundaries."""
+
+    if phase not in {"write_in_progress", "finalize_in_progress"}:
+        raise ValueError(f"unsupported human-review execution phase: {phase!r}")
+    selected = load_checkpoint(checkpoint_file, require_pending=False)
+    write_checkpoint(
+        checkpoint_file,
+        selected.execution_phase_started(phase),  # type: ignore[arg-type]
+    )
+
+
 def fail_human_review_checkpoint(checkpoint_commit: Mapping[str, Any]) -> None:
     """Terminalise a resumable durable handoff without hiding its last state."""
 
@@ -230,6 +353,11 @@ def fail_human_review_checkpoint(checkpoint_commit: Mapping[str, Any]) -> None:
     if not path:
         return
     selected = load_checkpoint(Path(str(path)), require_pending=False)
+    if selected.state in {"write_in_progress", "finalize_in_progress"}:
+        # The exception proves failure, but not whether the paid/irreversible
+        # side effect happened before it was raised. Preserve the explicit
+        # phase so restart cannot mistake this for a safely replayable failure.
+        return
     if selected.state not in {
         "pending",
         "approved_pending_execution",
@@ -259,8 +387,17 @@ def restore_durable_human_review_pause(
 
     run_dir = (Path(pipeline.workdir) / str(run_id)).resolve()
     checkpoint_file = checkpoint_path(run_dir)
-    checkpoint = load_checkpoint(checkpoint_file, require_pending=False)
-    if checkpoint.state in {"consumed", "completed", "failed"}:
+    checkpoint = recover_checkpoint_decisions_from_evidence(
+        checkpoint_file,
+        run_dir=run_dir,
+    )
+    if checkpoint.state in {"write_in_progress", "finalize_in_progress"}:
+        raise HumanReviewCheckpointPhaseUncertain(
+            "durable human-review recovery is fail-closed at explicit checkpoint "
+            f"phase {checkpoint.state!r}; paid or irreversible side effects may "
+            "already have occurred and will not be replayed automatically"
+        )
+    if checkpoint.state in {"rejected", "consumed", "completed", "failed"}:
         raise HumanReviewCheckpointError(
             f"durable human-review checkpoint is already {checkpoint.state}"
         )
@@ -550,10 +687,20 @@ def restore_durable_human_review_pause(
         "decision_payloads": list(checkpoint.approved_decisions),
     }
 
+    def prepare_human_review_execution(
+        decision_records: Sequence[Mapping[str, Any]],
+    ) -> None:
+        prepare_human_review_decision(
+            checkpoint_file=checkpoint_file,
+            decision_payloads=checkpoint_commit.get("decision_payloads") or (),
+            decision_records=decision_records,
+            decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
+        )
+
     def commit_human_review_execution(
         decision_records: Sequence[Mapping[str, Any]],
     ) -> None:
-        commit_human_review_execution_approval(
+        commit_human_review_decision(
             checkpoint_file=checkpoint_file,
             run_dir=run_dir,
             evidence=evidence,
@@ -565,6 +712,12 @@ def restore_durable_human_review_pause(
 
     def commit_human_review_execution_start() -> None:
         mark_human_review_execution_started(checkpoint_file)
+
+    def commit_human_review_write_start() -> None:
+        mark_human_review_execution_phase(checkpoint_file, "write_in_progress")
+
+    def commit_human_review_finalize_start() -> None:
+        mark_human_review_execution_phase(checkpoint_file, "finalize_in_progress")
 
     workflow = build_pipeline_workflow(
         plan_invoker=lambda: (_ for _ in ()).throw(
@@ -580,8 +733,11 @@ def restore_durable_human_review_pause(
             evidence=evidence,
             submission_profile_name=pipeline._submission_profile_name,
         ),
+        human_review_decision_prepare=prepare_human_review_execution,
         human_review_execution_commit=commit_human_review_execution,
         human_review_execution_start=commit_human_review_execution_start,
+        human_review_write_start=commit_human_review_write_start,
+        human_review_finalize_start=commit_human_review_finalize_start,
         reviewer_identity_resolver=(
             getattr(pipeline._human_review_gate, "reviewer_identity_resolver", None)
             if pipeline._human_review_gate is not None

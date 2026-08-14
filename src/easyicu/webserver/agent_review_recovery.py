@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
+from contextlib import contextmanager
+from fcntl import LOCK_EX, LOCK_UN, flock
 from pathlib import Path
-from typing import Any, Dict, Literal, Mapping, Optional
+from typing import Any, Dict, Iterator, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -15,6 +18,36 @@ from easyicu.research_agent.canonical_json import canonical_sha256
 
 class WebReviewRecoveryError(RuntimeError):
     """The private Web recovery index is absent, corrupt, or drifted."""
+
+
+_LOCKS_GUARD = threading.Lock()
+_PATH_LOCKS: Dict[str, threading.RLock] = {}
+
+
+@contextmanager
+def _locked(path: Path) -> Iterator[None]:
+    """Serialize index reads and read-modify-write cycles across hosts/threads."""
+
+    selected = Path(path)
+    selected.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    key = str(selected.resolve())
+    with _LOCKS_GUARD:
+        thread_lock = _PATH_LOCKS.setdefault(key, threading.RLock())
+    lock_path = selected.with_name(f".{selected.name}.lock")
+    with thread_lock:
+        if lock_path.is_symlink():
+            raise WebReviewRecoveryError("Web review recovery lock cannot be a symlink")
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(lock_path, flags, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            flock(descriptor, LOCK_EX)
+            yield
+        finally:
+            flock(descriptor, LOCK_UN)
+            os.close(descriptor)
 
 
 class WebReviewRecoveryRecord(BaseModel):
@@ -102,6 +135,11 @@ def _write(path: Path, payload: Mapping[str, Any]) -> None:
             os.fsync(handle.fileno())
         os.replace(temp_name, path)
         path.chmod(0o600)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         try:
             Path(temp_name).unlink()
@@ -116,19 +154,22 @@ def put_record(
     max_records: int = 128,
 ) -> None:
     selected = path or default_store_path()
-    payload = _read(selected)
-    records = dict(payload["records"])
-    if record.run_id not in records and len(records) >= max_records:
-        raise WebReviewRecoveryError(
-            "Web review recovery capacity is full; no pending review was evicted"
-        )
-    records[record.run_id] = record.model_dump(mode="json")
-    _write(selected, {**payload, "records": records})
+    with _locked(selected):
+        payload = _read(selected)
+        records = dict(payload["records"])
+        if record.run_id not in records and len(records) >= max_records:
+            raise WebReviewRecoveryError(
+                "Web review recovery capacity is full; no pending review was evicted"
+            )
+        records[record.run_id] = record.model_dump(mode="json")
+        _write(selected, {**payload, "records": records})
 
 
 def get_record(run_id: str, *, path: Optional[Path] = None) -> Optional[WebReviewRecoveryRecord]:
-    payload = _read(path or default_store_path())
-    raw = payload["records"].get(str(run_id))
+    selected = path or default_store_path()
+    with _locked(selected):
+        payload = _read(selected)
+        raw = payload["records"].get(str(run_id))
     if raw is None:
         return None
     try:
@@ -139,7 +180,8 @@ def get_record(run_id: str, *, path: Optional[Path] = None) -> Optional[WebRevie
 
 def remove_record(run_id: str, *, path: Optional[Path] = None) -> None:
     selected = path or default_store_path()
-    payload = _read(selected)
-    records = dict(payload["records"])
-    if records.pop(str(run_id), None) is not None:
-        _write(selected, {**payload, "records": records})
+    with _locked(selected):
+        payload = _read(selected)
+        records = dict(payload["records"])
+        if records.pop(str(run_id), None) is not None:
+            _write(selected, {**payload, "records": records})

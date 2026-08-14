@@ -71,6 +71,7 @@ from ..orchestration.resume import store_quarantined_concept_draft
 from ..repair_registry import is_sealed_renderer_repair
 from ..authority.provider_budget import ProviderCallBudgetReceiptError
 from .step_attempt_bootstrap import RAW_UNIVERSE_EXECUTION_ROLE
+from .cohort_routing import step_may_access_preselection_universe
 from ..authority.run_input import canonical_sha256
 from ..authority.step_capsule import (
     StepAuthorityCapsuleError,
@@ -706,6 +707,10 @@ def _candidate_execute_transition(
         "deterministic_standard": "standard executor script",
     }.get(state.current_generation_mode, "repaired script")
     execution_runner = host.runner
+    preselection_universe_authorized = step_may_access_preselection_universe(
+        step=attempt.step,
+        plan=host.plan,
+    )
     state.execution_timeout_seconds = host.pipeline._timeout_seconds
     if attempt.worker_progress.deterministic_standard_executor_used:
         # Give a registered standard's exact typed workload its dedicated
@@ -713,14 +718,17 @@ def _candidate_execute_transition(
         state.execution_timeout_seconds = (
             host.pipeline._standard_executor_timeout_seconds
         )
-    if attempt.step_execution_cohort_path != host.cohort_path or (
-        attempt.worker_progress.deterministic_standard_executor_used
+    if (
+        attempt.step_execution_cohort_path != host.cohort_path
+        or attempt.worker_progress.deterministic_standard_executor_used
+        or preselection_universe_authorized
     ):
         execution_runner = host.pipeline._build_runner(
             run_dir=host.run_dir,
             cohort_path=attempt.step_execution_cohort_path,
             target_outcome=host.context.target_outcome,
             universe_path=host.universe_path,
+            preselection_universe_authorized=preselection_universe_authorized,
             **host.run_input_authority_state.runner_bindings(),
             timeout_seconds=state.execution_timeout_seconds,
         )
@@ -779,6 +787,9 @@ def _candidate_execute_transition(
                 "configured_image": str(host.pipeline._runner_image or ""),
                 "configured_network": str(host.pipeline._runner_network),
                 "effective_network": runner_network_identity,
+                "preselection_universe_authorized": (
+                    preselection_universe_authorized
+                ),
                 "runner_authority_identity_sha256": (
                     runner_authority_identity
                     if isinstance(runner_authority_identity, str)
