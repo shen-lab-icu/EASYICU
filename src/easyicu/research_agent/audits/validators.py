@@ -57,6 +57,7 @@ from ..schema import (
 )
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.factory import authorized_complete
+from ..research_context.builder import _descriptor_endpoint_semantic_key
 from ..research_context.outbound import (
     format_outbound_safe_context,
     outbound_safe_script,
@@ -1292,7 +1293,15 @@ def _downgrade_metadata_supported_outcome_findings(
         return list(findings)
     if str(getattr(descriptor.role, "value", descriptor.role)) != "outcome":
         return list(findings)
-    source = descriptor.source_concept.lower()
+    # Owner-issued concept metadata keeps ``source_concept`` as the physical
+    # concept id (e.g. ``death``) and carries the endpoint semantics in the
+    # description.  Project to the same endpoint semantic key the context
+    # builder compares, so a metadata-bound mortality flag is downgraded on
+    # exactly the same terms as an inferred one.
+    source = (
+        _descriptor_endpoint_semantic_key(descriptor)
+        or descriptor.source_concept.lower()
+    )
     if source not in {
         "icu_mortality",
         "hospital_mortality",
