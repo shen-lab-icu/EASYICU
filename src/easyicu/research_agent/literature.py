@@ -298,7 +298,15 @@ class HypothesisBlueprintAgent:
         return HypothesisBlueprint(
             research_question=context.research_question,
             hypothesis=hypothesis,
-            hypothesis_type="confirmatory" if prior_keys else "exploratory",
+            hypothesis_type=(
+                "confirmatory"
+                if any(
+                    decision.disposition == "include"
+                    and decision.evidence_role == "direct_comparator"
+                    for decision in literature.screening_decisions
+                )
+                else "exploratory"
+            ),
             prior_literature_keys=prior_keys,
             novelty_rationale=_novelty_rationale(literature),
             feasible_variables=feasible_variables,

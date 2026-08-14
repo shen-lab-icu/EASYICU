@@ -46,6 +46,7 @@ from .article_contract import (
     article_contract_audit_payload,
     summarize_article_contract_coverage,
 )
+from .administrative_authority import load_manuscript_administrative_authority
 from .display_suite import (
     DISPLAY_SUITE_AUDIT_REGISTRATION,
     display_suite_audit_payload,
@@ -1968,6 +1969,9 @@ def _compute_readiness_gates(
         )
         and scientific_maturity_gates["scientific_maturity_article_grade"]
     )
+    administrative_authority = load_manuscript_administrative_authority(run_dir)
+    administrative_metadata_verified = administrative_authority is not None
+    submission_ready = publication_ready and administrative_metadata_verified
     return {
         **execution,
         **run_completion_axes(
@@ -1989,6 +1993,13 @@ def _compute_readiness_gates(
         "replan_budget_hit": replan_budget_hit,
         "replan_budget_advisory": replan_budget_hit and not replan_budget_exhausted,
         "publication_ready": publication_ready,
+        "administrative_metadata_verified": administrative_metadata_verified,
+        "administrative_authority_sha256": (
+            administrative_authority.authority_sha256
+            if administrative_authority is not None
+            else None
+        ),
+        "submission_ready": submission_ready,
         **scientific_maturity_gates,
         "manuscript_generated": manuscript_generated,
         **manuscript_text_gate,
@@ -2531,6 +2542,9 @@ def _render_author_review_note(
         "- supporting_figure_contracts: "
         f"`{gates.get('display_supporting_figure_contract_count')}`",
         f"- publication_ready: `{gates['publication_ready']}`",
+        "- administrative_metadata_verified: "
+        f"`{gates.get('administrative_metadata_verified')}`",
+        f"- submission_ready: `{gates.get('submission_ready')}`",
         "",
     ]
     superseded_error_keys = {

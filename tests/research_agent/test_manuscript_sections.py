@@ -4,6 +4,9 @@ from easyicu.research_agent.reporting.manuscript_sections import (
     MANUSCRIPT_SECTION_SPECS,
     render_manuscript_sections,
 )
+from easyicu.research_agent.reporting.administrative_authority import (
+    ManuscriptAdministrativeAuthority,
+)
 
 
 def test_manuscript_section_contract_has_fixed_publication_order() -> None:
@@ -42,7 +45,13 @@ def test_manuscript_section_assembly_is_ordered_and_forwards_common_context() ->
     )
 
     expected_names = [spec.section_name for spec in MANUSCRIPT_SECTION_SPECS]
-    assert rendered.split("\n\n") == [f"## {name}" for name in expected_names]
+    rendered_sections = rendered.split("\n\n")
+    assert rendered_sections[: len(expected_names)] == [
+        f"## {name}" for name in expected_names
+    ]
+    assert "requires author verification" in rendered
+    assert "released alongside this manuscript" not in rendered
+    assert "declare no conflicts" not in rendered
     assert sorted(seen) == sorted((name, "sealed-context") for name in expected_names)
 
 
@@ -52,3 +61,30 @@ def test_section_specs_keep_literature_and_evidence_boundaries() -> None:
     assert "method-source key" in instructions["methods"]
     assert "{evidence:id}" in instructions["results"]
     assert "specific population" in instructions["discussion"]
+    assert "host owns those administrative facts" in instructions["conclusion"]
+    assert "released alongside this manuscript" not in instructions["methods"]
+
+
+def test_verified_administrative_authority_is_rendered_exactly() -> None:
+    authority = ManuscriptAdministrativeAuthority.issue(
+        authority_id="submission-metadata-v1",
+        verified_by="corresponding author",
+        verified_at="2026-08-14T02:00:00Z",
+        data_and_code_availability="Verified data statement.",
+        funding="Verified funding statement.",
+        ethics="Verified ethics statement.",
+        conflicts_of_interest="Verified disclosure statement.",
+        artifact_release="Verified artifact inventory statement.",
+    )
+
+    rendered = render_manuscript_sections(
+        call_section=lambda **kwargs: f"## {kwargs['section_name']}",
+        common={},
+        administrative_authority=authority,
+    )
+
+    assert "Verified data statement." in rendered
+    assert "Verified funding statement." in rendered
+    assert "Verified ethics statement." in rendered
+    assert "Verified disclosure statement." in rendered
+    assert "Verified artifact inventory statement." in rendered

@@ -583,6 +583,61 @@ def test_hypothesis_blueprint_agent_uses_literature_and_domain_gates(ra):
     assert "Hypothesis blueprint" in prompt
     assert "cross_database_feasibility" in prompt
     assert "recommended_step_skeleton" in prompt
+    # Curated definitions and methods provide context; they do not make the
+    # study hypothesis prespecified or confirmatory.
+    assert blueprint.hypothesis_type == "exploratory"
+
+
+def test_hypothesis_blueprint_requires_included_direct_comparator_for_confirmatory(ra):
+    schema = ra.schema
+    from easyicu.research_agent.literature import (
+        CitationRecord,
+        HypothesisBlueprintAgent,
+        LiteratureBundle,
+        LiteratureScreeningDecision,
+    )
+
+    context = schema.ResearchContext(
+        research_question="Is exposure associated with mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[
+            schema.ConceptDescriptor(name="exposure", role="lab", dtype="float64"),
+            schema.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        ],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+    citation = CitationRecord(
+        key="direct_study",
+        title="Direct observational comparator",
+        year="2025",
+    )
+    literature = LiteratureBundle(
+        research_question=context.research_question,
+        citations=[citation],
+        screening_decisions=[
+            LiteratureScreeningDecision(
+                citation_key=citation.key,
+                source="PubMed",
+                disposition="include",
+                evidence_role="direct_comparator",
+                rationale="Exact population, exposure, and outcome match.",
+                population_match=True,
+                exposure_match=True,
+                outcome_match=True,
+                design_excerpt_available=True,
+            )
+        ],
+    )
+
+    blueprint = HypothesisBlueprintAgent().run(context=context, literature=literature)
+
+    assert blueprint.hypothesis_type == "confirmatory"
 
 
 def test_blueprint_prompt_exposes_related_design_without_authorizing_copy(ra):

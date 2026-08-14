@@ -12,6 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from .administrative_authority import (
+    ManuscriptAdministrativeAuthority,
+    render_manuscript_administrative_sections,
+)
+
 
 @dataclass(frozen=True)
 class ManuscriptSectionSpec:
@@ -101,10 +106,10 @@ MANUSCRIPT_SECTION_SPECS = (
             "analysis, ICU-rule-specific strata or missingness-pattern audits "
             "raised by the research context).\n"
             "### Software and reproducibility\n"
-            "  One sentence: 'Analyses were conducted through the EasyICU "
-            "research-agent pipeline; the full reproducibility envelope "
-            "(prompt/response SHA-256 hashes, per-step scripts, and dependency "
-            "lockfile) is released as supplementary material.'\n"
+            "  State that analyses were conducted through the EasyICU "
+            "research-agent pipeline and describe only run artifacts named in "
+            "the machine digest. Do not claim that any artifact is released, "
+            "public, or supplementary material; the host owns release facts.\n"
             "Target: 400-600 words. Cite at least one exact method-source key "
             "from the literature digest when available; do not cite a disease "
             "definition paper as statistical-method authority."
@@ -188,9 +193,8 @@ MANUSCRIPT_SECTION_SPECS = (
     ),
     ManuscriptSectionSpec(
         key="conclusion",
-        section_name="Conclusion, Data availability, Funding, COI",
+        section_name="Conclusion",
         instruction=(
-            "Write these sections exactly:\n"
             "## Conclusion\n"
             "1-2 sentences. Associational phrasing. Each conclusion sentence "
             "must either be one exact host-authorized claim token or cite at "
@@ -199,16 +203,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "sensitivity, limitation, or validation evidence.\n\n"
             "If a host-authorized scientific claim is supplied, use its exact "
             "standalone `{claim:<step>.<claim>}` token for the current-study "
-            "conclusion; the host will render and cite it.\n\n"
-            "## Data and code availability\n"
-            "'The cohort, generated scripts, SHA-256 evidence store, "
-            "reproducibility envelope, STROBE checklist, and supplementary "
-            "tables are released alongside this manuscript.'\n\n"
-            "## Funding\n"
-            "'Funding information was not available to the analysis agent and "
-            "should be completed by the authors before journal submission.'\n\n"
-            "## Conflicts of interest\n"
-            "'The authors declare no conflicts of interest.'"
+            "conclusion; the host will render and cite it. Do not write funding, "
+            "ethics, conflicts, data/code availability, or release statements; "
+            "the host owns those administrative facts."
         ),
         max_tokens=512,
     ),
@@ -219,8 +216,9 @@ def render_manuscript_sections(
     *,
     call_section: Callable[..., str],
     common: Mapping[str, Any],
+    administrative_authority: ManuscriptAdministrativeAuthority | None = None,
 ) -> str:
-    """Dispatch independent sections concurrently and assemble fixed order."""
+    """Dispatch scientific sections and append host-owned administrative facts."""
 
     with ThreadPoolExecutor(max_workers=len(MANUSCRIPT_SECTION_SPECS)) as executor:
         futures = [
@@ -234,7 +232,13 @@ def render_manuscript_sections(
             for spec in MANUSCRIPT_SECTION_SPECS
         ]
         sections = [future.result() for future in futures]
-    return "\n\n".join(section.strip() for section in sections if section.strip())
+    scientific = "\n\n".join(
+        section.strip() for section in sections if section.strip()
+    )
+    administrative = render_manuscript_administrative_sections(
+        administrative_authority
+    )
+    return "\n\n".join(part for part in (scientific, administrative) if part)
 
 
 __all__ = [
