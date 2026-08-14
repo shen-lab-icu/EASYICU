@@ -14,9 +14,13 @@ fail immediately instead of waiting behind a long-running analysis.
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Lock
-from typing import Literal, Optional
+from typing import Any, Callable, Literal, Mapping, Optional
+
+from .human_review_checkpoint import checkpoint_path as human_review_checkpoint_path
 
 
 LifecycleState = Literal["idle", "running", "paused", "resuming"]
@@ -187,10 +191,72 @@ class PipelineInstanceLifecycleLease:
         )
 
 
+def _pending_review_run_id(pipeline: Any) -> Optional[str]:
+    """Project the live pause coordinate without exposing its mutable handoff."""
+
+    state = getattr(pipeline, "_pending_human_review", None)
+    if not isinstance(state, Mapping):
+        return None
+    pending = state.get("pending")
+    run_id = getattr(pending, "run_id", None)
+    return str(run_id) if run_id else None
+
+
+def pipeline_instance_lifecycle(
+    operation: LifecycleOperation,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Bind a public pipeline call to this owner's fail-fast lifecycle.
+
+    The run-id file lock remains the cross-process writer owner. This adapter
+    protects mutable fields shared by different run ids on one pipeline object,
+    including a durable human-review pause adopted after process restart.
+    """
+
+    if operation not in {"run", "resume"}:  # pragma: no cover - typed invariant
+        raise ValueError(f"unsupported pipeline lifecycle operation: {operation!r}")
+
+    def decorate(method: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(method)
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            # ``setdefault`` keeps legacy ``__new__``-constructed test doubles
+            # compatible without creating two owners for concurrent callers.
+            lease = self.__dict__.setdefault(
+                "_instance_lifecycle_lease", PipelineInstanceLifecycleLease()
+            )
+            pending_run_id = _pending_review_run_id(self)
+            if operation == "resume" and not pending_run_id:
+                requested_run_id = kwargs.get("run_id")
+                if requested_run_id:
+                    candidate = Path(self.workdir) / str(requested_run_id)
+                    if human_review_checkpoint_path(candidate).is_file():
+                        # Reservation only: resume still verifies the complete
+                        # checkpoint before publishing a pause or executing.
+                        pending_run_id = str(requested_run_id)
+            token = (
+                lease.begin_run(pending_review_run_id=pending_run_id)
+                if operation == "run"
+                else lease.begin_resume(pending_review_run_id=pending_run_id)
+            )
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                pending_run_id = _pending_review_run_id(self)
+                if pending_run_id:
+                    lease.hold_for_review(token, run_id=pending_run_id)
+                else:
+                    lease.release(token)
+
+        setattr(wrapper, "__easyicu_instance_lifecycle__", operation)
+        return wrapper
+
+    return decorate
+
+
 __all__ = [
     "PipelineInstanceLifecycleBusy",
     "PipelineInstanceLifecycleError",
     "PipelineInstanceLifecycleLease",
     "PipelineInstanceLifecycleSnapshot",
     "PipelineInstanceLifecycleToken",
+    "pipeline_instance_lifecycle",
 ]

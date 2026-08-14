@@ -182,7 +182,10 @@ from .orchestration.config import (
     PipelineConfig,
     assert_step_provider_budget_funds_its_repairs,
 )
-from .orchestration.instance_lifecycle import PipelineInstanceLifecycleLease
+from .orchestration.instance_lifecycle import (
+    PipelineInstanceLifecycleLease,
+    pipeline_instance_lifecycle as _pipeline_instance_lifecycle,
+)
 from .orchestration.human_review_checkpoint import (
     HumanReviewCheckpoint,
     HumanReviewCheckpointError,
@@ -191,6 +194,10 @@ from .orchestration.human_review_checkpoint import (
     write_checkpoint as write_human_review_checkpoint,
 )
 from .orchestration.human_review_restore import (
+    bind_checkpoint_decision_payloads,
+    commit_human_review_execution_approval,
+    fail_human_review_checkpoint,
+    mark_human_review_execution_started,
     persist_human_review_records,
     restore_durable_human_review_pause,
 )
@@ -537,74 +544,6 @@ def _one_capability_job(method: Callable[..., Any]) -> Callable[..., Any]:
             return method(self, *args, **kwargs)
 
     return wrapper
-
-
-def _pending_review_run_id(pipeline: Any) -> Optional[str]:
-    """Project the live pause coordinate without exposing its mutable handoff."""
-
-    state = getattr(pipeline, "_pending_human_review", None)
-    if not isinstance(state, Mapping):
-        return None
-    pending = state.get("pending")
-    run_id = getattr(pending, "run_id", None)
-    return str(run_id) if run_id else None
-
-
-def _pipeline_instance_lifecycle(
-    operation: str,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Bind one public call to the pipeline object's fail-fast lifecycle.
-
-    Owner: ``orchestration.instance_lifecycle``.  This adapter only projects
-    the pipeline's live human-review coordinate into that dependency-neutral
-    state machine.  The run-id file lock remains the cross-process writer
-    owner; this lease protects instance fields shared by different run ids.
-    """
-
-    if operation not in {"run", "resume"}:  # pragma: no cover - module invariant
-        raise ValueError(f"unsupported pipeline lifecycle operation: {operation!r}")
-
-    def decorate(method: Callable[..., Any]) -> Callable[..., Any]:
-        @functools.wraps(method)
-        def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-            # ``setdefault`` keeps legacy ``__new__``-constructed test doubles
-            # and same-process hot-reload objects compatible without creating
-            # two owners when concurrent callers arrive together.
-            lease = self.__dict__.setdefault(
-                "_instance_lifecycle_lease", PipelineInstanceLifecycleLease()
-            )
-            pending_run_id = _pending_review_run_id(self)
-            if operation == "resume" and not pending_run_id:
-                requested_run_id = kwargs.get("run_id")
-                if requested_run_id:
-                    candidate = Path(self.workdir) / str(requested_run_id)
-                    if human_review_checkpoint_path(candidate).is_file():
-                        # This only lets the lifecycle lease reserve the
-                        # candidate coordinate. The resume method still loads
-                        # and verifies the complete checkpoint before it can
-                        # publish a live pause or execute anything.
-                        pending_run_id = str(requested_run_id)
-            token = (
-                lease.begin_run(pending_review_run_id=pending_run_id)
-                if operation == "run"
-                else lease.begin_resume(pending_review_run_id=pending_run_id)
-            )
-            try:
-                return method(self, *args, **kwargs)
-            finally:
-                # A pause is a reserved lifecycle, not a completed call.  The
-                # live handoff is deliberately retained across the human wait;
-                # only a completed/rejected/terminal resume clears it.
-                pending_run_id = _pending_review_run_id(self)
-                if pending_run_id:
-                    lease.hold_for_review(token, run_id=pending_run_id)
-                else:
-                    lease.release(token)
-
-        setattr(wrapper, "__easyicu_instance_lifecycle__", operation)
-        return wrapper
-
-    return decorate
 
 
 def _defer_typed_plan_dag_findings_until_probe(
@@ -5428,71 +5367,25 @@ class ResearchAgentPipeline:
             path = checkpoint_commit.get("path")
             if path is None:
                 return
-            decision_sha256 = str(
-                checkpoint_commit.get("decision_sha256") or ""
-            )
-            if not re.fullmatch(r"[0-9a-f]{64}", decision_sha256):
-                raise HumanReviewCheckpointError(
-                    "durable review decision set is not digest bound"
-                )
-            decision_payloads = checkpoint_commit.get("decision_payloads")
-            if not isinstance(decision_payloads, list) or not decision_payloads:
-                raise HumanReviewCheckpointError(
-                    "durable review decision payloads are unavailable"
-                )
-            checkpoint = load_human_review_checkpoint(
-                Path(path), require_pending=False
-            )
             if not reviewed_plan:
                 raise HumanReviewCheckpointError(
                     "approved execution has no restored typed plan handoff"
                 )
-            plan_result = reviewed_plan[-1]
-            if checkpoint.state == "pending":
-                _plan_lifecycle.approve_normalized_plan_for_execution(
-                    run_dir=run_dir,
-                    evidence=plan_result.evidence,
-                    revision=plan_result.plan.revision,
-                    review_requests=checkpoint.requests,
-                    decision_set_sha256=decision_sha256,
-                )
-            if checkpoint.state == "pending":
-                write_human_review_checkpoint(
-                    Path(path),
-                    checkpoint.approved(
-                        decisions=decision_payloads,
-                        decision_records=decision_records,
-                        decision_sha256=decision_sha256,
-                    ),
-                )
-            elif checkpoint.state in {
-                "approved_pending_execution",
-                "executing",
-            }:
-                if (
-                    checkpoint.consumed_decision_sha256 != decision_sha256
-                    or list(checkpoint.approved_decisions) != decision_payloads
-                    or list(checkpoint.approved_decision_records)
-                    != [dict(item) for item in decision_records]
-                ):
-                    raise HumanReviewCheckpointError(
-                        "restored approval does not match the durable decision set"
-                    )
-            else:
-                raise HumanReviewCheckpointError(
-                    f"checkpoint state {checkpoint.state!r} is not resumable"
-                )
+            commit_human_review_execution_approval(
+                checkpoint_file=Path(path),
+                run_dir=run_dir,
+                evidence=reviewed_plan[-1].evidence,
+                plan_revision=reviewed_plan[-1].plan.revision,
+                decision_payloads=checkpoint_commit.get("decision_payloads") or (),
+                decision_records=decision_records,
+                decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
+            )
 
         def _commit_human_review_execution_start() -> None:
             path = checkpoint_commit.get("path")
             if path is None:
                 return
-            checkpoint = load_human_review_checkpoint(
-                Path(path), require_pending=False
-            )
-            write_human_review_checkpoint(
-                Path(path), checkpoint.execution_started()
-            )
+            mark_human_review_execution_started(Path(path))
 
         workflow = build_pipeline_workflow(
             plan_invoker=_plan_invoker,
@@ -5718,15 +5611,9 @@ class ResearchAgentPipeline:
         ]
         checkpoint_commit = pending_state.get("checkpoint_commit")
         if isinstance(checkpoint_commit, dict) and checkpoint_commit.get("path"):
-            by_review_id = {
-                str(item.get("review_id") or ""): dict(item) for item in payload
-            }
-            ordered_payload = [
-                by_review_id.get(request.review_id, {})
-                for request in pending.requests
-            ]
-            checkpoint_commit["decision_payloads"] = ordered_payload
-            checkpoint_commit["decision_sha256"] = canonical_sha256(ordered_payload)
+            bind_checkpoint_decision_payloads(
+                checkpoint_commit, requests=pending.requests, payload=payload
+            )
         # Same writer lease ``run`` holds, bound to the paused run's own id
         # rather than a fresh one: resuming writes into that run's directory
         # and evidence store, so it must not proceed while another call is
@@ -5771,19 +5658,8 @@ class ResearchAgentPipeline:
             # The workflow has recorded the rejection and discarded its live
             # handoff. Do not keep presenting the public pipeline pause as
             # answerable or allow a later approval attempt against it.
-            if isinstance(checkpoint_commit, dict) and checkpoint_commit.get("path"):
-                path = Path(str(checkpoint_commit["path"]))
-                selected = load_human_review_checkpoint(path)
-                write_human_review_checkpoint(
-                    path,
-                    selected.transitioned(
-                        "failed",
-                        decision_sha256=str(
-                            checkpoint_commit.get("decision_sha256") or ""
-                        )
-                        or None,
-                    ),
-                )
+            if isinstance(checkpoint_commit, dict):
+                fail_human_review_checkpoint(checkpoint_commit)
             self._pending_human_review = None
             raise
         except Exception:
@@ -5796,30 +5672,8 @@ class ResearchAgentPipeline:
                 "rejected",
                 "completed",
             }:
-                if (
-                    isinstance(checkpoint_commit, dict)
-                    and checkpoint_commit.get("path")
-                ):
-                    path = Path(str(checkpoint_commit["path"]))
-                    selected = load_human_review_checkpoint(
-                        path, require_pending=False
-                    )
-                    if selected.state in {
-                        "pending",
-                        "approved_pending_execution",
-                        "executing",
-                        "consumed",
-                    }:
-                        write_human_review_checkpoint(
-                            path,
-                            selected.transitioned(
-                                "failed",
-                                decision_sha256=str(
-                                    checkpoint_commit.get("decision_sha256") or ""
-                                )
-                                or None,
-                            ),
-                        )
+                if isinstance(checkpoint_commit, dict):
+                    fail_human_review_checkpoint(checkpoint_commit)
                 self._pending_human_review = None
             raise
 
