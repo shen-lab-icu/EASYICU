@@ -714,7 +714,12 @@ def _candidate_execute_transition(
     owner_capability = (
         PreselectionUniverseOwnerCapability.DETERMINISTIC_ROBUSTNESS_REPLAY
         if state.current_generation_mode in {"fallback", "deterministic_standard"}
-        and _robustness_sensitivity_runner_owns_step(attempt.step)
+        and _robustness_sensitivity_runner_owns_step(
+            attempt.step.method,
+            attempt.step.step_id,
+            attempt.step.expected_outputs,
+            step=attempt.step,
+        )
         else None
     )
     universe_capability = preselection_universe_capability(
