@@ -116,3 +116,29 @@ Diagnostic receipt:
 
 Final pre-commit dirty-worktree receipt:
 `/var/folders/68/cz0swdq52vx1_rh5m4gql6v00000gn/T/opencode/e1-final-worktree-release.json`
+
+## First live Planner canary follow-up
+
+- Commit `a56657b09255b30cb3b3f4f5e05eb83455f7b3f8` passed the clean
+  exact-head framework release (`137 passed`) at
+  `/var/folders/68/cz0swdq52vx1_rh5m4gql6v00000gn/T/opencode/e1-clean-release-a56657b.json`.
+- Exact-head runner image `easyicu-research-agent:a56657b` / `:1.0.0` has
+  digest `sha256:8d8fc67c0a7cc15f7a82171a3c8b0213874727542d5ac03734dfa249b1d54bdd`;
+  network-none import smoke confirmed the installed canary profile is
+  `planner_only=true`.
+- The legacy MIMIC-IV prepared export validated as a development-only source:
+  export authority `c509a5c6b2e9d5aae0f4ec6212bad5b44910adcd91ec27c19b2d3a00ead39160`,
+  Web package binding `d0806e9a61945bf8b6135a34592a97d96ac7e15ca5e8091f5b69abc086e678aa`.
+- Web preflight first rejected an unsupported first-stay restriction before any
+  Provider call. The StudyContext was honestly narrowed to all adult ICU stays
+  and descriptive proportions only; scientific configuration digest is
+  `98792d7cd1885487c59073546abefe9efae561999fb6b65de2bd53b4a44c14db`.
+- Live job `03a26d114d4f` reached Luna. Acquisition succeeded, then two Planner
+  outputs failed structured validation; attempt 3 was blocked before transport.
+  The ledger proved the canary's 24-attempt declaration could not be funded by
+  its 250k-token/$10 aggregate stops because every call must conservatively
+  reserve the Provider's 128k completion ceiling.
+- Follow-up fix bounds the canary to its actual shape: one acquisition plus five
+  Planner attempts, with six calls, 1.2M reserved tokens, and a $30 conservative
+  aggregate ceiling. This changes reservation authority, not actual usage, and
+  still cannot enter Execute.

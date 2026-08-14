@@ -3314,9 +3314,9 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["config"].require_reportable_scientific_capability is True
     assert calls["config"].required_primary_cohort_selection_mode == "all_input_rows"
     assert calls["config"].enable_pubmed is False
-    assert calls["config"].max_provider_attempts_per_run == 24
-    assert calls["config"].max_total_tokens_per_run == 250_000
-    assert calls["config"].max_estimated_cost_usd_per_batch == 10.0
+    assert calls["config"].max_provider_attempts_per_run == 6
+    assert calls["config"].max_total_tokens_per_run == 1_200_000
+    assert calls["config"].max_estimated_cost_usd_per_batch == 30.0
     assert calls["config"].runner_kind == "docker"
     assert calls["config"].runner_network == "none"
     assert calls["config"].runner_image == "easyicu-research-agent:1.0.0"
