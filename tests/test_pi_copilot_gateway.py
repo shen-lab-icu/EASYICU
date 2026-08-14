@@ -411,7 +411,7 @@ def test_host_tools_are_strictly_ordered_within_one_session(
     gateway.close()
 
 
-def test_host_tool_queue_capacity_and_shutdown_fail_closed(
+def test_host_tool_queue_capacity_and_shutdown_reports_active_mutation_unknown(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -445,7 +445,7 @@ def test_host_tool_queue_capacity_and_shutdown_fail_closed(
             request_id="tool-a",
             parent_request_id="parent-a",
             session_id="session-a",
-            name="slow",
+            name="easyicu_run",
         )
     )
     assert started.wait(1)
@@ -459,14 +459,21 @@ def test_host_tool_queue_capacity_and_shutdown_fail_closed(
     )
     assert writes[-1]["error"]["code"] == "pi_host_tool_dispatcher_full"
 
-    gateway.close()
+    assert gateway._tool_dispatcher is not None
+    gateway._tool_dispatcher.shutdown(timeout=0.01)
     _wait_for(lambda: any(row.get("request_id") == "tool-a" for row in writes))
     closed = next(row for row in writes if row.get("request_id") == "tool-a")
     assert closed["ok"] is False
-    assert closed["error"]["code"] == "pi_host_tool_dispatcher_closed"
+    assert closed["error"]["code"] == "pi_host_tool_outcome_unknown"
+    assert closed["error"]["details"] == {
+        "operation_id": "tool-a",
+        "operation_state": "outcome_unknown",
+    }
     release.set()
     time.sleep(0.03)
     assert len([row for row in writes if row.get("request_id") == "tool-a"]) == 1
+    gateway._tool_dispatcher = None
+    gateway.close()
 
 
 def test_host_tool_exception_is_sanitized_by_dispatcher(
@@ -502,6 +509,68 @@ def test_host_tool_exception_is_sanitized_by_dispatcher(
     assert gateway._tool_dispatcher.wait_until_idle(2)
     assert writes[-1]["error"]["code"] == "pi_host_tool_failed"
     assert "secret" not in writes[-1]["error"]["message"]
+    gateway.close()
+
+
+def test_dispatcher_shutdown_cancels_queued_mutation_without_running_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    executed: list[str] = []
+    writes: list[dict] = []
+
+    def execute(name, arguments, context):
+        executed.append(name)
+        if name == "easyicu_run":
+            started.set()
+            assert release.wait(2)
+        return {"code": "ok"}
+
+    gateway = PiGatewayClient(
+        app_dir=APP_DIR,
+        session_dir=tmp_path,
+        tool_executor=execute,
+        tool_dispatch_max_workers=1,
+        tool_dispatch_max_pending=2,
+    )
+    _enable_tool_dispatcher(gateway)
+    monkeypatch.setattr(gateway, "_write", lambda payload: writes.append(dict(payload)))
+    context = ToolExecutionContext(session=PiSessionRecord(session_id="same-session"))
+    gateway._pending["parent-a"] = _PendingRequest(tool_context=context)
+    gateway._pending["parent-b"] = _PendingRequest(tool_context=context)
+    gateway._handle_tool_request(
+        _tool_request(
+            request_id="tool-a",
+            parent_request_id="parent-a",
+            session_id="same-session",
+            name="easyicu_run",
+        )
+    )
+    assert started.wait(1)
+    gateway._handle_tool_request(
+        _tool_request(
+            request_id="tool-b",
+            parent_request_id="parent-b",
+            session_id="same-session",
+            name="easyicu_write_project_file",
+        )
+    )
+
+    assert gateway._tool_dispatcher is not None
+    gateway._tool_dispatcher.shutdown(timeout=0.01)
+    _wait_for(lambda: len(writes) == 2)
+    by_id = {row["request_id"]: row for row in writes}
+    assert by_id["tool-a"]["error"]["code"] == "pi_host_tool_outcome_unknown"
+    assert by_id["tool-b"]["error"]["code"] == "pi_host_tool_dispatcher_closed"
+    assert by_id["tool-b"]["error"]["details"]["operation_state"] == (
+        "cancelled_before_execution"
+    )
+    assert executed == ["easyicu_run"]
+
+    release.set()
+    gateway._tool_dispatcher = None
     gateway.close()
 
 

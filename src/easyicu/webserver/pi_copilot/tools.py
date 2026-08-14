@@ -103,6 +103,9 @@ WORKSPACE_TOOLS = frozenset(
     }
 )
 ALLOWED_TOOLS = READ_TOOLS | CONTROL_TOOLS | WORKSPACE_TOOLS
+MUTATING_HOST_TOOLS = CONTROL_TOOLS | frozenset(
+    {"easyicu_write_project_file", "easyicu_edit_project_file"}
+)
 
 
 def _bounded_model_text(value: Any, limit: int = 1_200) -> str:

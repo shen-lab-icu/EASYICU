@@ -25,6 +25,8 @@ class HostToolOutcome:
     result: Optional[dict] = None
     error_code: Optional[str] = None
     error_message: Optional[str] = None
+    operation_id: Optional[str] = None
+    operation_state: Optional[str] = None
 
     @property
     def ok(self) -> bool:
@@ -43,8 +45,11 @@ class HostToolDispatchRejected(RuntimeError):
 @dataclass(eq=False)
 class _HostToolTask:
     session_id: str
+    operation_id: str
+    mutating: bool
     execute: Callable[[], dict]
     respond: Callable[[HostToolOutcome], None]
+    started: bool = False
     terminal: bool = False
 
 
@@ -96,6 +101,8 @@ class HostToolDispatcher:
         self,
         *,
         session_id: str,
+        operation_id: str,
+        mutating: bool,
         execute: Callable[[], dict],
         respond: Callable[[HostToolOutcome], None],
     ) -> None:
@@ -103,6 +110,8 @@ class HostToolDispatcher:
 
         task = _HostToolTask(
             session_id=str(session_id),
+            operation_id=str(operation_id),
+            mutating=bool(mutating),
             execute=execute,
             respond=respond,
         )
@@ -144,6 +153,10 @@ class HostToolDispatcher:
             )
 
     def _execute_task(self, task: _HostToolTask) -> None:
+        with self._lock:
+            if task.terminal:
+                return
+            task.started = True
         try:
             result = task.execute()
             if not isinstance(result, dict):
@@ -220,22 +233,67 @@ class HostToolDispatcher:
             )
 
     def shutdown(self, *, timeout: float = 2.0) -> None:
-        """Reject future work and fail queued/in-flight requests closed."""
+        """Reject future work without misreporting active mutation outcomes.
+
+        Work that has not started is deterministically cancelled.  An active
+        mutation gets a bounded opportunity to finish; if it outlives that
+        window its response is ``outcome_unknown`` rather than ``failed``
+        because Python cannot roll back an already-running Future.
+        """
 
         with self._lock:
             if not self._accepting:
                 return
             self._accepting = False
-            tasks = list(self._active_by_session.values())
+            scheduled = list(self._active_by_session.values())
+            queued_tasks: list[_HostToolTask] = []
             for queued in self._queued_by_session.values():
-                tasks.extend(queued)
+                queued_tasks.extend(queued)
             self._queued_by_session.clear()
-        closed = HostToolOutcome(
-            error_code="pi_host_tool_dispatcher_closed",
-            error_message="The EasyICU host-tool dispatcher closed before completion.",
-        )
-        for task in tasks:
-            self._offer_outcome(task, closed)
+            queued_tasks.extend(task for task in scheduled if not task.started)
+        for task in queued_tasks:
+            self._offer_outcome(
+                task,
+                HostToolOutcome(
+                    error_code="pi_host_tool_dispatcher_closed",
+                    error_message=(
+                        "The EasyICU host-tool operation was cancelled before execution."
+                    ),
+                    operation_id=task.operation_id,
+                    operation_state="cancelled_before_execution",
+                ),
+            )
+
+        # Let already-running operations publish their real terminal result.
+        self.wait_until_idle(timeout)
+        with self._lock:
+            unresolved = [
+                task
+                for task in self._active_by_session.values()
+                if task.started and not task.terminal
+            ]
+        for task in unresolved:
+            if task.mutating:
+                outcome = HostToolOutcome(
+                    error_code="pi_host_tool_outcome_unknown",
+                    error_message=(
+                        "The host connection closed while a mutating operation was "
+                        "still running. Its outcome is unknown; inspect the project "
+                        "workflow before retrying."
+                    ),
+                    operation_id=task.operation_id,
+                    operation_state="outcome_unknown",
+                )
+            else:
+                outcome = HostToolOutcome(
+                    error_code="pi_host_tool_dispatcher_closed",
+                    error_message=(
+                        "The EasyICU host-tool read was interrupted during shutdown."
+                    ),
+                    operation_id=task.operation_id,
+                    operation_state="interrupted",
+                )
+            self._offer_outcome(task, outcome)
         self.wait_until_idle(timeout)
         self._executor.shutdown(wait=False, cancel_futures=True)
         try:
