@@ -693,6 +693,8 @@ def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox()
     assert "scientific_evidence: false" in preview
     assert "validation_status: 'unvalidated'" in preview
     assert "claim_ceiling: 'unsupported'" in preview
+    assert "checked_sha256: checkedSha256" in preview
+    assert "state.resource.checked_sha256" in preview
     assert "Workspace artifact · Unvalidated" in preview
     assert "scientific evidence" in preview
     assert 'sandbox="allow-scripts"' in preview

@@ -1572,11 +1572,16 @@ class PiCopilotService:
         *,
         project_id: str,
         relative_file: str,
+        checked_sha256: str,
     ) -> Dict[str, Any]:
         clean = self._assert_project_initialized(project_id)
         return {
             "ok": True,
-            "artifact": self.workspace.preview_file(clean, relative_file),
+            "artifact": self.workspace.preview_file(
+                clean,
+                relative_file,
+                checked_sha256=checked_sha256,
+            ),
         }
 
     def get_data_package_review(

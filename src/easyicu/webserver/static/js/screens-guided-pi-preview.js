@@ -98,11 +98,14 @@
     const file = String(value.file || '').trim().replace(/\\/g, '/');
     if (!file || file.startsWith('/') || file.includes('\0')) return null;
     if (file.split('/').some(part => !part || part === '.' || part === '..')) return null;
+    const checkedSha256 = String(value.checked_sha256 || '').trim().toLowerCase();
     return {
       kind: value.kind === 'webpage' ? 'webpage' : 'file',
       file: file.slice(0, 240),
       label: String(value.label || file.split('/').pop() || file).slice(0, 160),
       media_type: String(value.media_type || 'text/plain').slice(0, 120),
+      ...(value.kind === 'webpage' && /^[a-f0-9]{64}$/.test(checkedSha256)
+        ? { checked_sha256: checkedSha256 } : {}),
       authority_class: 'workspace_artifact',
       scientific_evidence: false,
       validation_status: 'unvalidated',
@@ -130,7 +133,11 @@
         : '';
     }
     return api.piCopilotWorkspacePreviewUrl
-      ? api.piCopilotWorkspacePreviewUrl(state.projectId, state.resource.file)
+      ? api.piCopilotWorkspacePreviewUrl(
+          state.projectId,
+          state.resource.file,
+          state.resource.checked_sha256,
+        )
       : '';
   }
   function setAsideOpen(open) {

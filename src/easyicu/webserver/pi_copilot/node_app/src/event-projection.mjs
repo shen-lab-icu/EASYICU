@@ -154,12 +154,14 @@ function projectedResource(value) {
   const kind = value.kind === "webpage" ? "webpage" : "file";
   const fallbackLabel = file.split("/").at(-1) || file;
   const sha256 = safeSha256(value.sha256);
+  const checkedSha256 = kind === "webpage" ? safeSha256(value.checked_sha256) : "";
   return {
     kind,
     file,
     label: boundedText(value.label || fallbackLabel, 160),
     media_type: boundedText(value.media_type || "text/plain", 120),
     ...(sha256 ? { sha256 } : {}),
+    ...(checkedSha256 ? { checked_sha256: checkedSha256 } : {}),
   };
 }
 
@@ -179,6 +181,8 @@ function toolResource(toolName, args) {
     kind: name === "easyicu_preview_project_file" ? "webpage" : "file",
     file: params?.file,
     media_type: name === "easyicu_preview_project_file" ? "text/html" : "text/plain",
+    checked_sha256: name === "easyicu_preview_project_file"
+      ? params?.checked_sha256 : undefined,
   });
 }
 

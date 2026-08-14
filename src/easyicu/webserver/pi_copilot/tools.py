@@ -3278,13 +3278,17 @@ def _workspace_access(
 def _workspace_resource(
     payload: Mapping[str, Any], *, kind: str = "file"
 ) -> Dict[str, Any]:
-    return {
+    resource = {
         "kind": kind,
         "file": str(payload.get("file") or ""),
         "label": Path(str(payload.get("file") or "artifact")).name,
         "media_type": str(payload.get("media_type") or "text/plain"),
         **dict(WORKSPACE_ARTIFACT_AUTHORITY),
     }
+    checked_sha256 = str(payload.get("checked_sha256") or "").strip().lower()
+    if kind == "webpage" and re.fullmatch(r"[0-9a-f]{64}", checked_sha256):
+        resource["checked_sha256"] = checked_sha256
+    return resource
 
 
 def _load_skill(
