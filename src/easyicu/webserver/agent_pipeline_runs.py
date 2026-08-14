@@ -2106,14 +2106,22 @@ def _recover_pending_run(
 
     pending = _checkpoint_pending_from_record(record)
     wrapper_dir = Path(record.wrapper_dir).resolve()
-    config = PipelineConfig(**record.pipeline_config)
-    if config.canonical_digest() != record.pipeline_config.get(
-        "pipeline_config_sha256", config.canonical_digest()
-    ):
-        # The Pipeline's own checkpoint performs the authoritative config
-        # digest comparison. This branch only rejects an impossible embedded
-        # self-coordinate if a future schema adds one.
-        raise WebReviewRecoveryError("Web review pipeline config is inconsistent")
+    if record.pipeline_config_sha256 is None:
+        # Historical /1 records predate the exact recovery digest.  They remain
+        # readable, but cannot be promoted to durable resume authority: the
+        # Pipeline checkpoint only proves a mismatch after reconstruction.
+        raise WebReviewRecoveryError(
+            "Web review recovery record predates the exact pipeline config digest"
+        )
+    try:
+        config = PipelineConfig.from_recovery_payload(
+            record.pipeline_config,
+            expected_digest=record.pipeline_config_sha256,
+        )
+    except ValueError as exc:
+        raise WebReviewRecoveryError(
+            "Web review pipeline config is inconsistent"
+        ) from exc
     if Path(config.workdir).resolve() != (wrapper_dir / "pipeline").resolve():
         raise WebReviewRecoveryError("Web review pipeline workdir drifted")
     client, provider_public = provider_adapter.build_research_agent_provider_client(
@@ -2547,14 +2555,17 @@ def make_research_pipeline_run_runner(
             if isinstance(outcome, HumanReviewPending):
                 run_dir = Path(outcome.run_dir)
                 _pause_web_provider_hard_stop(provider_hard_stop)
-                config_payload = config.canonical_payload()
-                if PipelineConfig(**config_payload).canonical_digest() != (
-                    config.canonical_digest()
-                ):
+                try:
+                    config_payload = config.recovery_payload()
+                    PipelineConfig.from_recovery_payload(
+                        config_payload,
+                        expected_digest=config.canonical_digest(),
+                    )
+                except ValueError as exc:
                     raise ResearchPipelineRunError(
                         "research_pipeline_review_config_not_recoverable",
                         "The paused run configuration cannot be reconstructed safely.",
-                    )
+                    ) from exc
                 put_review_recovery_record(
                     WebReviewRecoveryRecord.create(
                         run_id=str(outcome.run_id),
@@ -2571,6 +2582,7 @@ def make_research_pipeline_run_runner(
                             else "scientific_provider"
                         ),
                         pipeline_config=config_payload,
+                        pipeline_config_sha256=config.canonical_digest(),
                         acquisition_projection=_acquisition_recovery_projection(
                             acquisition
                         ),
