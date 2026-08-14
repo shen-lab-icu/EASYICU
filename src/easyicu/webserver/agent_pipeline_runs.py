@@ -2178,6 +2178,20 @@ def _recover_pending_run(
         declaration_sha256=record.hard_stop_declaration_sha256,
         resume_existing=True,
     )
+    from easyicu.research_agent.orchestration.human_review_checkpoint import (
+        checkpoint_path,
+        load_checkpoint,
+    )
+
+    checkpoint = load_checkpoint(
+        checkpoint_path(Path(pending.run_dir)),
+        require_pending=False,
+    )
+    if checkpoint.state == "pending":
+        ledger.reconcile_review_pause(
+            task_id,
+            paused_at=checkpoint.created_at,
+        )
     task = ledger.start_task(task_id)
     pipeline = ResearchAgentPipeline.from_config(
         config,
@@ -2486,6 +2500,7 @@ def make_research_pipeline_run_runner(
                 # valid Web analysis fail at the writing boundary.
                 writer_digest_widened=True,
                 require_human_plan_review=True,
+                require_reportable_scientific_capability=True,
                 required_primary_cohort_selection_mode=(
                     _primary_cohort_selection_mode(study)
                 ),

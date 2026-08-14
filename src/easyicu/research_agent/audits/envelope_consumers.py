@@ -23,6 +23,7 @@ from easyicu.research_agent.authority.result_envelope_sidecar import (
 from easyicu.research_agent.authority.runtime_artifacts import (
     verified_run_evidence_path,
 )
+from easyicu.research_agent.authority.run_input import _host_probe_authority_error
 from easyicu.research_agent.contracts.result_envelope import (
     StepResultEnvelope,
     rebuild_observed_scalar_tree,
@@ -385,6 +386,31 @@ class RegisteredOutputEnvelopeConsumer(CrossStepRegisteredOutputValidator):
         authoritative: list[Dict[str, Any]] = []
         for raw_record in completed_step_records:
             record = dict(raw_record)
+            if (
+                record.get("step_id") == "00_probe"
+                and record.get("generation_mode") == "deterministic_probe"
+                and record.get("step_authority_kind") == "host_deterministic_probe"
+            ):
+                # Probe summaries guide planning and diagnostics only. They are
+                # not manuscript evidence and never enter the ordinary executor
+                # sidecar lifecycle, so omit them instead of exposing an
+                # unsealed scalar tree or making every full run fail at Writer.
+                evidence_records = {
+                    item.evidence_id: item.model_dump(mode="json")
+                    for item in evidence_store.records()
+                }
+                probe_error = _host_probe_authority_error(
+                    record=record,
+                    evidence_ids=record.get("evidence_ids") or [],
+                    step_id="00_probe",
+                    run_dir=Path(evidence_store.root),
+                    records=evidence_records,
+                )
+                if probe_error is not None:
+                    raise RegisteredOutputAuthorityError(
+                        f"host deterministic probe authority is invalid: {probe_error}"
+                    )
+                continue
             status = str(record.get("status") or "").strip().lower()
             if status not in self._SUCCESSFUL_STATUSES:
                 authoritative.append(record)

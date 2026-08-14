@@ -14,6 +14,10 @@ from easyicu.research_agent.orchestration.human_review_checkpoint import (
     write_checkpoint,
 )
 from easyicu.research_agent.orchestration.workflow import HumanReviewDecision
+from easyicu.research_agent.authority.provider_hard_stop import (
+    ProviderHardStopLedger,
+    ProviderHardStopLimits,
+)
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
 from easyicu.research_agent.providers.mocks import MockLLMClient
 
@@ -122,6 +126,98 @@ def test_new_pipeline_instance_resumes_without_running_planner_again(
     assert approved["plan_sha256"] == lineage["plan_sha256"]
     assert approved["normalized_plan_authority_sha256"] == lineage["authority_sha256"]
     assert approved["decision_set_sha256"] == checkpoint.consumed_decision_sha256
+
+
+def test_same_pipeline_resumes_its_paused_provider_clock(monkeypatch, tmp_path) -> None:
+    _force_approvable_plan_review(monkeypatch)
+    workdir = tmp_path / "runs"
+    pipeline = _pipeline(workdir)
+    limits = ProviderHardStopLimits(
+        max_provider_attempts_per_run=100,
+        max_provider_attempts_per_batch=100,
+        max_total_tokens_per_run=1_000_000,
+        max_total_tokens_per_batch=1_000_000,
+        max_estimated_cost_usd_per_batch=100.0,
+        max_wall_clock_seconds_per_task=600.0,
+        input_cost_usd_per_million_tokens=20.0,
+        output_cost_usd_per_million_tokens=120.0,
+    )
+    ledger = ProviderHardStopLedger(
+        path=tmp_path / "provider_hard_stop.json",
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="test-batch",
+        declaration_sha256="a" * 64,
+    )
+    pipeline._provider_hard_stop = ledger.start_task("task-a")
+
+    pending = pipeline.run(
+        question="Does age describe hospital mortality?",
+        cohort=_cohort(),
+        target_outcome="death",
+    )
+    assert ledger.snapshot()["tasks"][0]["status"] == "paused"
+
+    result = pipeline.resume_human_review(
+        [
+            HumanReviewDecision(
+                review_id=request.review_id,
+                authority_sha256=request.authority_sha256,
+                decision="approved",
+                reviewer="test reviewer",
+                decided_at="2026-08-14T03:12:00Z",
+            )
+            for request in pending.requests
+        ],
+        run_id=pending.run_id,
+    )
+
+    assert result.run_id == pending.run_id
+    assert ledger.snapshot()["tasks"][0]["status"] != "paused"
+
+
+def test_exhausted_provider_resume_is_terminal_and_not_masked(
+    monkeypatch, tmp_path
+) -> None:
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopExceeded,
+    )
+
+    _force_approvable_plan_review(monkeypatch)
+    pipeline = _pipeline(tmp_path / "runs")
+    pending = pipeline.run(
+        question="Does age describe hospital mortality?",
+        cohort=_cohort(),
+        target_outcome="death",
+    )
+
+    class ExhaustedTask:
+        def resume(self) -> None:
+            raise ProviderHardStopExceeded(
+                code="TASK_WALL_CLOCK_EXHAUSTED",
+                detail="review resume exhausted the active-time budget",
+            )
+
+        def pause(self) -> None:
+            raise AssertionError("terminal budget exhaustion must not be re-paused")
+
+    pipeline._provider_hard_stop = ExhaustedTask()
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision="approved",
+            reviewer="test reviewer",
+            decided_at="2026-08-14T03:12:00Z",
+        )
+        for request in pending.requests
+    ]
+
+    with pytest.raises(ProviderHardStopExceeded) as stopped:
+        pipeline.resume_human_review(decisions, run_id=pending.run_id)
+
+    assert stopped.value.code == "TASK_WALL_CLOCK_EXHAUSTED"
+    assert pipeline.has_resumable_human_review is False
 
 
 def test_changed_pipeline_configuration_cannot_resume_checkpoint(

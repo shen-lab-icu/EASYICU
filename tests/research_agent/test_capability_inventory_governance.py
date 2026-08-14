@@ -41,6 +41,7 @@ def test_every_production_capability_binds_a_real_reachability_test() -> None:
         relative_path, test_name = reference.split("::", 1)
         source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         assert f"def {test_name}(" in source
+        assert "call:" in row.proof
 
 
 def test_production_status_fails_closed_without_route_and_exact_test(tmp_path) -> None:
@@ -50,9 +51,9 @@ def test_production_status_fails_closed_without_route_and_exact_test(tmp_path) -
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "research_agent_capability_inventory.md").write_text(
-        "| module | LOC | status | owner | activation precondition | tests | review |\n"
-        "| --- | ---: | --- | --- | --- | --- | --- |\n"
-        "| `reachable.py` | 1 | `production_reachable` | owner | direct call | 3 | 2099-01-01 |\n",
+        "| module | LOC | status | owner | activation precondition | tests | route proof | review |\n"
+        "| --- | ---: | --- | --- | --- | --- | --- | --- |\n"
+        "| `reachable.py` | 1 | `production_reachable` | owner | direct call | 3 | - | 2099-01-01 |\n",
         encoding="utf-8",
     )
 
@@ -78,9 +79,9 @@ def test_production_status_rejects_a_missing_test_function(tmp_path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "research_agent_capability_inventory.md").write_text(
-        "| module | LOC | status | owner | activation precondition | tests | review |\n"
-        "| --- | ---: | --- | --- | --- | --- | --- |\n"
-        "| `reachable.py` | 1 | `production_reachable` | owner | API → executor | `tests/test_reachable.py::test_missing` | 2099-01-01 |\n",
+        "| module | LOC | status | owner | activation precondition | tests | route proof | review |\n"
+        "| --- | ---: | --- | --- | --- | --- | --- | --- |\n"
+        "| `reachable.py` | 1 | `production_reachable` | owner | API → executor | `tests/test_reachable.py::test_missing` | `call:public_api` | 2099-01-01 |\n",
         encoding="utf-8",
     )
 
@@ -91,6 +92,36 @@ def test_production_status_rejects_a_missing_test_function(tmp_path) -> None:
     )
 
     assert any("points to missing test function" in item for item in findings)
+
+
+def test_production_status_rejects_a_test_that_does_not_traverse_route(
+    tmp_path,
+) -> None:
+    package = tmp_path / "src" / "easyicu" / "research_agent"
+    package.mkdir(parents=True)
+    (package / "reachable.py").write_text("VALUE = 1\n", encoding="utf-8")
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_reachable.py").write_text(
+        "def test_route():\n    unrelated()\n    assert trace['other']\n",
+        encoding="utf-8",
+    )
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "research_agent_capability_inventory.md").write_text(
+        "| module | LOC | status | owner | activation precondition | tests | route proof | review |\n"
+        "| --- | ---: | --- | --- | --- | --- | --- | --- |\n"
+        "| `reachable.py` | 1 | `production_reachable` | owner | API → executor | `tests/test_reachable.py::test_route` | `call:public_api;trace:executor` | 2099-01-01 |\n",
+        encoding="utf-8",
+    )
+
+    findings = audit_capability_inventory(
+        tmp_path,
+        today=date(2026, 8, 14),
+        graph={"modules": {}, "edges": []},
+    )
+
+    assert any("declared public call is absent" in item for item in findings)
 
 
 def test_zero_inbound_projection_excludes_package_initializers() -> None:

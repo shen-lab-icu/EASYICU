@@ -38,6 +38,29 @@ def test_or_prose_picks_odds_ratio_candidate(ra, tmp_path: Path) -> None:
     assert binding_map["claim_1"].source_field == "primary_association.odds_ratio"
 
 
+def test_effect_scale_prose_rejects_an_untyped_same_value_count(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="2.0",
+        canonical=2.0,
+        evidence_id="e_summary",
+        step_id="02_model",
+        source_field="n_groups",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The odds ratio was 2.0.",
+        evidence=store,
+    )
+
+    assert binding_map == {}
+    assert untraced == ["2.0"]
+
+
 def test_mortality_prose_picks_mortality_candidate(ra, tmp_path: Path) -> None:
     from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 

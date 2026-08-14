@@ -604,6 +604,49 @@ class ProviderHardStopLedger:
             self._task_started_monotonic.pop(normalized, None)
             self._persist_locked()
 
+    def reconcile_review_pause(self, task_id: str, *, paused_at: str) -> None:
+        """Converge a crash-window running task to its durable review pause.
+
+        The human-review checkpoint is fsynced separately from this ledger. If
+        the process dies between those writes, restart must charge activity only
+        through the checkpoint timestamp, not through the later restart time.
+        """
+
+        normalized = str(task_id).strip()
+        with self._lock:
+            task = self._task_locked(normalized)
+            if task.get("status") == "paused":
+                return
+            if task.get("status") != "running":
+                raise ProviderHardStopLedgerError(
+                    "Provider hard-stop review pause cannot reconcile from "
+                    f"{task.get('status')!r}"
+                )
+            try:
+                prior_elapsed = float(task.get("elapsed_seconds") or 0.0)
+                active_started_at = datetime.fromisoformat(
+                    str(task.get("active_started_at") or task["started_at"])
+                )
+                checkpoint_at = datetime.fromisoformat(str(paused_at))
+                if active_started_at.tzinfo is None or checkpoint_at.tzinfo is None:
+                    raise ValueError("review pause timestamps must be timezone-aware")
+                active_delta = (checkpoint_at - active_started_at).total_seconds()
+                if active_delta < 0.0:
+                    raise ValueError("review checkpoint predates active execution")
+                elapsed = prior_elapsed + active_delta
+                if not math.isfinite(elapsed) or elapsed < 0.0:
+                    raise ValueError("invalid reconciled elapsed wall clock")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ProviderHardStopLedgerError(
+                    "Provider hard-stop review pause timestamp is invalid"
+                ) from exc
+            task["status"] = "paused"
+            task["paused_at"] = checkpoint_at.isoformat()
+            task["elapsed_seconds"] = round(elapsed, 6)
+            task["active_started_at"] = None
+            self._task_started_monotonic.pop(normalized, None)
+            self._persist_locked()
+
     def resume_task(self, task_id: str) -> None:
         """Resume a paused task under its cumulative active-time ceiling."""
 
@@ -864,7 +907,41 @@ class ProviderHardStopLedger:
             call = matches[0]
             call["finished_at"] = _utc_now()
             call["error_type"] = str(error_type) if error_type else None
-            if error_type is not None or not isinstance(usage, Mapping):
+            def reported_tokens(name: str) -> Optional[int]:
+                if not isinstance(usage, Mapping) or usage.get(name) is None:
+                    return None
+                value = usage[name]
+                if isinstance(value, bool) or not isinstance(value, int):
+                    return None
+                return value if value >= 0 else None
+
+            reported_prompt = reported_tokens("prompt_tokens")
+            reported_completion = reported_tokens("completion_tokens")
+            reported_total_value = reported_tokens("total_tokens")
+            component_usage_complete = (
+                reported_prompt is not None
+                and reported_completion is not None
+                and reported_prompt + reported_completion > 0
+            )
+            usage_consistent = not (
+                reported_total_value is not None
+                and (
+                    any(
+                        component is not None and component > reported_total_value
+                        for component in (reported_prompt, reported_completion)
+                    )
+                    or (
+                        component_usage_complete
+                        and reported_prompt + reported_completion
+                        > reported_total_value
+                    )
+                )
+            )
+            has_reported_token_usage = usage_consistent and (
+                component_usage_complete
+                or bool(reported_total_value and reported_total_value > 0)
+            )
+            if error_type is not None or not has_reported_token_usage:
                 call["state"] = (
                     "failed_usage_unknown"
                     if error_type is not None
@@ -875,12 +952,12 @@ class ProviderHardStopLedger:
                 # pre-transport; only a provider receipt proves a lower charge.
                 self._persist_locked()
                 return
-            prompt_tokens = max(0, int(usage.get("prompt_tokens") or 0))
-            completion_tokens = max(0, int(usage.get("completion_tokens") or 0))
+            prompt_tokens = reported_prompt or 0
+            completion_tokens = reported_completion or 0
             component_total = prompt_tokens + completion_tokens
             reported_total = max(
                 component_total,
-                max(0, int(usage.get("total_tokens") or 0)),
+                reported_total_value or 0,
             )
             reserved_total = int(call.get("accounted_tokens") or 0)
             reserved_completion = int(call.get("completion_token_reservation") or 0)
@@ -1088,6 +1165,11 @@ class TaskProviderHardStop:
         """Resume execution without charging the intervening human wait."""
 
         self.ledger.resume_task(self.task_id)
+
+    def reconcile_review_pause(self, *, paused_at: str) -> None:
+        """Recover the exact active-time boundary from a durable checkpoint."""
+
+        self.ledger.reconcile_review_pause(self.task_id, paused_at=paused_at)
 
     def finish(
         self,

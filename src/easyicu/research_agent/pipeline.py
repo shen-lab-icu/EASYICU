@@ -2957,6 +2957,9 @@ class ResearchAgentPipeline:
                 figure_strategy=article_figure_strategy,
                 run_dir=run_dir,
                 evidence=evidence,
+                require_reportable_capability=(
+                    self._config.require_reportable_scientific_capability
+                ),
             )
             findings.append(review_gate.finding)
         know_how_binding.persist_prompt_metrics(
@@ -5377,6 +5380,8 @@ class ResearchAgentPipeline:
                 checkpoint_commit["path"] = str(
                     human_review_checkpoint_path(run_dir)
                 )
+                if self._provider_hard_stop is not None:
+                    self._provider_hard_stop.pause()
         return self._pipeline_result_or_pending(
             outcome,
             workflow=workflow,
@@ -5513,6 +5518,7 @@ class ResearchAgentPipeline:
             HUMAN_REVIEW_RESUME_SCOPE,
             HumanReviewRejected,
         )
+        from .authority.provider_hard_stop import ProviderHardStopExceeded
 
         pending_state = self._pending_human_review
         if not pending_state and run_id is not None:
@@ -5573,6 +5579,8 @@ class ResearchAgentPipeline:
                 # historical mutable callback sink.
                 progress_channel["callback"] = progress_callback
         try:
+            if self._provider_hard_stop is not None:
+                self._provider_hard_stop.resume()
             with run_heartbeat_scope(run_id=pending.run_id):
                 bind_active_run_heartbeat(
                     Path(pending.run_dir),
@@ -5606,19 +5614,19 @@ class ResearchAgentPipeline:
                 fail_human_review_checkpoint(checkpoint_commit)
             self._pending_human_review = None
             raise
-        except Exception:
+        except Exception as exc:
             # Validation failures leave the workflow paused so the caller can
             # correct and resubmit the exact decision set. Once execution,
             # writing or finalisation terminalises the workflow, however, the
             # live handoff is no longer resumable and must not be retained.
-            if getattr(workflow, "state", None) in {
-                "failed",
-                "rejected",
-                "completed",
-            }:
+            if isinstance(exc, ProviderHardStopExceeded) or getattr(
+                workflow, "state", None
+            ) in {"failed", "rejected", "completed"}:
                 if isinstance(checkpoint_commit, dict):
                     fail_human_review_checkpoint(checkpoint_commit)
                 self._pending_human_review = None
+            elif self._provider_hard_stop is not None:
+                self._provider_hard_stop.pause()
             raise
 
     def run_from_spec(

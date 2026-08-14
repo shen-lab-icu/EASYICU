@@ -1494,6 +1494,53 @@ def planner_analysis_type_switch_guide(*, detail: str = "full") -> str:
     return "\n".join(lines)
 
 
+def host_authorized_analysis_family(context: ResearchContext) -> Optional[str]:
+    """Return the canonical caller-authorized family, if one was supplied."""
+
+    raw = str(
+        getattr(context.user_preferences, "inferred_analysis_family", "") or ""
+    ).strip()
+    if not raw:
+        return None
+    canonical = canonical_analysis_family(raw)
+    if canonical is None:
+        raise ValueError(f"Host-authorized inferred_analysis_family is unknown: {raw!r}")
+    return canonical
+
+
+def planner_analysis_family_authority_guide(
+    context: ResearchContext,
+    inferred: AnalysisTypeSpec,
+    *,
+    detail: str,
+) -> str:
+    """Publish either the ordinary switch menu or the caller's closed family."""
+
+    authorized = host_authorized_analysis_family(context)
+    if authorized is None:
+        return planner_analysis_type_switch_guide(detail=detail)
+    return (
+        "HOST-AUTHORIZED ANALYSIS FAMILY: `analysis_type` MUST remain "
+        f"{inferred.key!r}. The caller has already approved this typed family; "
+        "do not switch families. If it cannot answer the question, expose the "
+        "incompatibility for host review rather than substituting another family."
+    )
+
+
+def validate_host_authorized_analysis_family(
+    context: ResearchContext,
+    observed: str,
+) -> None:
+    """Reject a Planner family that replaces explicit caller authority."""
+
+    authorized = host_authorized_analysis_family(context)
+    if authorized is not None and observed != authorized:
+        raise ValueError(
+            "Planner analysis_type conflicts with the host-authorized analysis "
+            f"family: expected {authorized!r}, observed {observed!r}"
+        )
+
+
 def locked_analysis_type_guide(spec: AnalysisTypeSpec) -> str:
     """Focused, advisory prompt block naming the inferred family.
 
@@ -1511,8 +1558,9 @@ def locked_analysis_type_guide(spec: AnalysisTypeSpec) -> str:
         "calls for. Do not default to a generic association/logistic plan when the "
         "suggested family is survival, trajectory_clustering, dynamic_prediction, "
         "causal_inference, etc. If the research question clearly belongs to a "
-        "different family than the suggestion above, you may switch — but only "
-        "with an explicit one-line justification in `rationale`.\n"
+        "different family than the suggestion above and the caller did not bind "
+        "a typed family, you may switch with an explicit one-line justification "
+        "in `rationale`; caller-bound family authority may not be replaced.\n"
     )
 
 
@@ -1545,6 +1593,9 @@ __all__ = [
     "strong_trajectory_clustering_framing",
     "planner_analysis_type_guide",
     "planner_analysis_type_switch_guide",
+    "host_authorized_analysis_family",
+    "planner_analysis_family_authority_guide",
+    "validate_host_authorized_analysis_family",
     "locked_analysis_type_guide",
     "analysis_type_catalog_markdown",
 ]

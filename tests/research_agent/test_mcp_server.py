@@ -548,9 +548,13 @@ def test_mcp_run_constructs_explicit_llm(ra, tmp_path, monkeypatch):
             seen["llm_kwargs"] = kwargs
 
     class FakePipeline:
-        def __init__(self, *, workdir, llm):
-            seen["workdir"] = workdir
-            seen["llm"] = llm
+        @classmethod
+        def from_config(cls, config, *, services):
+            seen["workdir"] = config.workdir
+            seen["llm"] = services.llm
+            seen["hard_stop"] = services.provider_hard_stop
+            seen["hard_stop_limit"] = config.max_provider_attempts_per_run
+            return cls()
 
         def run(self, *, cohort, **kwargs):
             seen["cohort"] = cohort
@@ -580,6 +584,8 @@ def test_mcp_run_constructs_explicit_llm(ra, tmp_path, monkeypatch):
     assert seen["llm_kwargs"]["model"] == "test-model"
     assert seen["cohort"] == str(cohort)
     assert seen["run_kwargs"]["question"] == "Inspect the cohort."
+    assert seen["hard_stop"].ledger.path.is_file()
+    assert seen["hard_stop_limit"] == 96
 
 
 def test_mcp_write_scope_is_checked_before_concept_extraction(
@@ -660,8 +666,10 @@ def test_mcp_run_returns_explicit_unresumable_pending(ra, tmp_path, monkeypatch)
     )
 
     class FakePipeline:
-        def __init__(self, **_kwargs):
-            pass
+        @classmethod
+        def from_config(cls, _config, *, services):
+            assert services.provider_hard_stop is not None
+            return cls()
 
         def run(self, **_kwargs):
             return pending
@@ -729,8 +737,10 @@ def test_mcp_run_loopback_override_does_not_forward_environment_key(
             seen.update(kwargs)
 
     class FakePipeline:
-        def __init__(self, *, workdir, llm):
-            pass
+        @classmethod
+        def from_config(cls, _config, *, services):
+            assert services.provider_hard_stop is not None
+            return cls()
 
         def run(self, *, cohort, **kwargs):
             return SimpleNamespace(model_dump=lambda: {"status": "ok"})

@@ -1401,6 +1401,100 @@ def test_writer_records_are_rebuilt_from_verified_envelope_authority(
         )
 
 
+def test_writer_records_exclude_the_host_deterministic_probe(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    authority_ids = {}
+    for field, kind, filename, content in (
+        (
+            "probe_summary_evidence_id",
+            "statistic",
+            "probe_summary.json",
+            '{"n_rows":800,"n_columns":11}',
+        ),
+        (
+            "probe_table_evidence_id",
+            "table",
+            "probe_variable_profile.csv",
+            "variable,missing\nage,0\n",
+        ),
+    ):
+        source = tmp_path / filename
+        source.write_text(content, encoding="utf-8")
+        evidence_record = store.register_file(
+            kind=kind,
+            description="Host probe authority.",
+            source_path=source,
+            produced_by_step="00_probe",
+            producer="pipeline",
+            generation_mode="deterministic_probe",
+        )
+        authority_ids[field] = evidence_record.evidence_id
+    probe = {
+        "step_id": "00_probe",
+        "status": "ok",
+        "generation_mode": "deterministic_probe",
+        "step_authority_kind": "host_deterministic_probe",
+        "step_summary": {"n_rows": 800, "n_columns": 11},
+        "evidence_ids": list(authority_ids.values()),
+        **authority_ids,
+    }
+
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+        [probe], evidence_store=store
+    )
+
+    assert projected == []
+
+
+def test_writer_probe_exclusion_requires_verified_host_evidence(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    probe = {
+        "step_id": "00_probe",
+        "status": "ok",
+        "generation_mode": "deterministic_probe",
+        "step_authority_kind": "host_deterministic_probe",
+        "step_summary": {"n_rows": 800, "n_columns": 11},
+        "evidence_ids": ["missing_summary", "missing_table"],
+        "probe_summary_evidence_id": "missing_summary",
+        "probe_table_evidence_id": "missing_table",
+    }
+
+    with pytest.raises(RegisteredOutputAuthorityError, match="missing_summary"):
+        RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+            [probe], evidence_store=store
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("step_id", "01_analysis"),
+        ("generation_mode", "model_generated"),
+        ("step_authority_kind", "planner_authorized"),
+    ],
+)
+def test_writer_probe_exclusion_requires_the_exact_reserved_identity(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    record = {
+        "step_id": "00_probe",
+        "status": "ok",
+        "generation_mode": "deterministic_probe",
+        "step_authority_kind": "host_deterministic_probe",
+        "step_summary": {"n_rows": 800, "n_columns": 11},
+        "evidence_ids": ["statistic_probe_summary"],
+    }
+    record[field] = value
+
+    with pytest.raises(RegisteredOutputAuthorityError, match="no live"):
+        RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+            [record], evidence_store=store
+        )
+
+
 def test_writer_primary_table_reads_immutable_envelope_product_after_raw_mutation(
     tmp_path: Path,
 ) -> None:

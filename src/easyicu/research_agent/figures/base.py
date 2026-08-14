@@ -17,11 +17,12 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
 from ..authority.evidence_store import EvidenceStore
+from ..authority.runtime_artifacts import verified_run_evidence_path
 from ..schema import EvidenceRecord
 
 
@@ -74,6 +75,17 @@ def read_table(path: Path) -> pd.DataFrame:
     raise ValueError(f"unsupported table format for figure renderer: {path.name}")
 
 
+def verified_record_path(run_dir: Path, record: EvidenceRecord) -> Path:
+    """Resolve one registered record only when its current bytes still verify."""
+
+    path = verified_run_evidence_path(run_dir, record)
+    if path is None:
+        raise ValueError(
+            f"evidence {record.evidence_id!r} is missing, unsafe, or digest-stale"
+        )
+    return path
+
+
 def find_table_records(
     evidence: EvidenceStore,
     names: Sequence[str],
@@ -109,6 +121,25 @@ def find_table_records(
     return ordered
 
 
+def first_normalisable_record(
+    evidence: EvidenceStore,
+    names: Sequence[str],
+    *,
+    run_dir: Path,
+    normalise: Callable[[pd.DataFrame], pd.DataFrame],
+) -> Optional[EvidenceRecord]:
+    """Return the first matching verified table accepted by ``normalise``."""
+
+    for record in find_table_records(evidence, names):
+        try:
+            frame = normalise(read_table(verified_record_path(run_dir, record)))
+        except Exception:
+            continue
+        if not frame.empty:
+            return record
+    return None
+
+
 def load_table(
     evidence: EvidenceStore,
     run_dir: Path,
@@ -127,7 +158,10 @@ def load_table(
 
     for record in find_table_records(evidence, names):
         try:
-            frame = read_table(run_dir / record.relative_path)
+            path = verified_run_evidence_path(run_dir, record)
+            if path is None:
+                continue
+            frame = read_table(path)
         except Exception:
             continue
         if frame is None or frame.empty or len(frame) < min_rows:

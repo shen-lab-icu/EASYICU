@@ -3173,6 +3173,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["config"].writer_digest_widened is True
     assert calls["config"].enable_reproducibility_envelope is True
     assert calls["config"].require_human_plan_review is True
+    assert calls["config"].require_reportable_scientific_capability is True
     assert calls["config"].required_primary_cohort_selection_mode == "all_input_rows"
     assert calls["config"].enable_pubmed is False
     assert calls["config"].max_provider_attempts_per_run == 192

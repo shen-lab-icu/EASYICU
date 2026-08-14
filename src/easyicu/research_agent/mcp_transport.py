@@ -20,7 +20,6 @@ from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from typing import Any, Optional
 
-import anyio
 import mcp.server.stdio
 import mcp.types as mcp_types
 from mcp.server.lowlevel import Server
@@ -67,8 +66,15 @@ class _BoundedDispatcher:
         invoke: Callable[[], dict[str, Any]],
         *,
         state: dict[str, bool],
+        queue_timeout_seconds: Optional[float] = None,
     ) -> dict[str, Any]:
-        await self._slots.acquire()
+        if queue_timeout_seconds is None:
+            await self._slots.acquire()
+        else:
+            await asyncio.wait_for(
+                self._slots.acquire(),
+                timeout=queue_timeout_seconds,
+            )
         state["started"] = True
         try:
             # asyncio.to_thread preserves the request ContextVars carrying MCP
@@ -78,9 +84,28 @@ class _BoundedDispatcher:
             self._slots.release()
             raise
         task.add_done_callback(self._worker_finished)
-        # The request may time out or be cancelled; the synchronous dispatcher
-        # cannot be killed safely and retains the slot until this task finishes.
-        return await asyncio.shield(task)
+        # A running synchronous dispatcher cannot be killed safely. Do not let
+        # protocol cancellation detach it from request lifecycle: retain the
+        # slot and wait for the actual operation to converge before propagating
+        # cancellation.
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError as cancelled:
+            while True:
+                if task.done():
+                    break
+                try:
+                    await asyncio.shield(task)
+                    break
+                except asyncio.CancelledError:
+                    # Repeated protocol cancellation still cannot detach the
+                    # synchronous worker from this request lifecycle.
+                    continue
+                except BaseException:
+                    # The caller cancelled first. Converge the worker and keep
+                    # that cancellation authoritative over a later worker error.
+                    break
+            raise cancelled
 
     def _worker_finished(self, task: asyncio.Task[dict[str, Any]]) -> None:
         self._slots.release()
@@ -107,10 +132,10 @@ def create_mcp_server(
 ) -> Server:
     """Build the official low-level SDK server around EasyICU contracts.
 
-    ``tool_timeout_seconds`` bounds how long the protocol request waits. The
-    dispatcher is synchronous, so a timed-out worker is allowed to finish
-    inside a slot that remains occupied until the actual call returns instead
-    of being unsafely killed or leaking concurrency capacity.
+    ``tool_timeout_seconds`` bounds queue wait before dispatch starts. Once a
+    synchronous dispatcher starts, the request waits for its real completion;
+    returning a timeout while paid or mutating work continues would create an
+    unsafe detached operation.
     """
 
     if max_concurrent_tool_calls <= 0:
@@ -140,28 +165,19 @@ def create_mcp_server(
         invoke = partial(dispatcher, name, dict(arguments))
         dispatch_state = {"started": False}
         try:
-            if tool_timeout_seconds is None:
-                result = await dispatcher_supervisor.run(
-                    invoke,
-                    state=dispatch_state,
-                )
-            else:
-                with anyio.fail_after(tool_timeout_seconds):
-                    result = await dispatcher_supervisor.run(
-                        invoke,
-                        state=dispatch_state,
-                    )
+            result = await dispatcher_supervisor.run(
+                invoke,
+                state=dispatch_state,
+                queue_timeout_seconds=tool_timeout_seconds,
+            )
         except TimeoutError:
             result = {
                 "error": (
-                    f"tool {name!r} exceeded the configured MCP request timeout"
+                    f"tool {name!r} exceeded the configured MCP queue timeout"
                 ),
                 "error_code": "tool_timeout",
-                # True means the synchronous worker may still finish after this
-                # response; false means the request timed out waiting for a
-                # slot and its dispatcher was never started.
                 "dispatch_started": dispatch_state["started"],
-                "execution_may_continue": dispatch_state["started"],
+                "execution_may_continue": False,
             }
 
         safe_result = _json_safe(result)
@@ -508,9 +524,9 @@ def main(
         "--tool-timeout-seconds",
         type=float,
         help=(
-            "maximum seconds an MCP request waits for a tool; a synchronous "
-            "worker that has already started remains bounded and finishes "
-            "in-process"
+            "maximum seconds an MCP request waits for a dispatcher slot; once "
+            "a synchronous worker starts, the request waits for its real "
+            "in-process completion"
         ),
     )
     args = parser.parse_args(list(argv) if argv is not None else None)

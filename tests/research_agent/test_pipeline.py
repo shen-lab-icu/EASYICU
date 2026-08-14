@@ -105,6 +105,18 @@ def _allow_reportable_capability_for_readiness_unit(
         "assess_scientific_capability",
         lambda **_kwargs: assessment,
     )
+    monkeypatch.setattr(
+        readiness_module,
+        "scientific_maturity_readiness_gates",
+        lambda _audit: {
+            "scientific_maturity_article_grade": True,
+            "scientific_maturity_status": "article_grade",
+            "scientific_maturity_score": 100,
+            "scientific_maturity_dimension_scores": {},
+            "scientific_maturity_findings": [],
+            "scientific_maturity_facts": {},
+        },
+    )
 
 
 def _stable_plan_rules(plan: str):
@@ -1013,6 +1025,7 @@ def test_method_substitution_contract_repair_is_blocked_when_budget_is_zero(
                     # overadjustment auditor never runs -- so the step would fail
                     # the product contract instead of the rule under test.
                     "method": "logistic_regression",
+                    "scientific_capability": "association_freeform_v1",
                     "icu_rule_refs": ["no_overadjustment_for_exposure_constituents"],
                 }
             ],
@@ -1149,6 +1162,7 @@ def test_generic_association_figure_coder_failure_fails_closed(
                     "inputs": ["sepsis3", "death"],
                     "expected_outputs": ["statistic:primary_or"],
                     "method": "logistic_regression",
+                    "scientific_capability": "association_freeform_v1",
                     "icu_rule_refs": [],
                 },
                 {
@@ -2018,7 +2032,11 @@ def test_correlation_heatmap_gets_base_alias(ra):
 
 def test_pipeline_can_pause_after_analysis_phase(ra, synthetic_cohort, tmp_path: Path):
     events = []
-    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+        enable_probe_step=False,
+    )
     result = pipeline.run(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
@@ -9287,7 +9305,14 @@ def test_critic_ignores_manuscript_metadata_sections(ra):
 def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
     ra, synthetic_cohort, tmp_path: Path, monkeypatch
 ):
-    def fake_manuscript_run(self, *, context, evidence_ids, evidence_digest=None):
+    def fake_manuscript_run(
+        self,
+        *,
+        context,
+        evidence_ids,
+        evidence_digest=None,
+        **_kwargs,
+    ):
         return (
             "The model's performance was consistent across folds, indicating robustness.\n\n"
             "Baseline characteristics are summarised in Table 1 {evidence:research_context}.\n"

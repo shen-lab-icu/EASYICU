@@ -365,12 +365,16 @@ def fail_human_review_checkpoint(checkpoint_commit: Mapping[str, Any]) -> None:
         "consumed",
     }:
         return
+    decision_sha256 = (
+        str(checkpoint_commit.get("decision_sha256") or "") or None
+        if selected.state != "pending"
+        else None
+    )
     write_checkpoint(
         Path(str(path)),
         selected.transitioned(
             "failed",
-            decision_sha256=str(checkpoint_commit.get("decision_sha256") or "")
-            or None,
+            decision_sha256=decision_sha256,
         ),
     )
 

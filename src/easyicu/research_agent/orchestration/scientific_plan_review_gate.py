@@ -146,6 +146,7 @@ def prepare_scientific_plan_review_gate(
     figure_strategy: ArticleFigureStrategy,
     run_dir: Path,
     evidence: EvidenceStore,
+    require_reportable_capability: bool = False,
 ) -> ScientificPlanReviewGate:
     """Build, bind, and project the exact review offered to a human."""
 
@@ -154,6 +155,7 @@ def prepare_scientific_plan_review_gate(
         plan=plan,
         literature=literature,
         figure_strategy=figure_strategy,
+        require_reportable_capability=require_reportable_capability,
     )
     review, artifact_path = persist_or_validate_scientific_plan_review(
         run_dir=run_dir,
