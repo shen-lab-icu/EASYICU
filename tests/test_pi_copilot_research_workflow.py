@@ -13,6 +13,10 @@ from easyicu.research_agent.acquisition.catalog import AvailableCatalog, Catalog
 from easyicu.research_agent.reporting.result_card import (
     build_result_interpretation_card,
 )
+from easyicu.research_agent.planning.scientific_review import (
+    PlanScientificFinding,
+    PlanScientificReview,
+)
 from easyicu.research_agent.schema import UserPreferences
 from easyicu.research_agent.orchestration.workflow import (
     HumanReviewPending,
@@ -79,6 +83,88 @@ def _complete_study() -> dict[str, Any]:
         "export_format": "parquet",
         "analysis_goal": "Descriptive prognostic association",
     }
+
+
+def _nonapprovable_review_payload(*, finding_code: str) -> dict[str, Any]:
+    return PlanScientificReview(
+        status="changes_required",
+        approval_allowed=False,
+        top_journal_candidate=False,
+        score=70,
+        dimension_scores={"study_design": 70},
+        findings=[
+            PlanScientificFinding(
+                code=finding_code,
+                severity="major",
+                dimension="study_design",
+                message="The exact reviewed plan needs bounded follow-up.",
+                remediation="Address the finding without changing the study authority.",
+            )
+        ],
+        context_sha256="a" * 64,
+        plan_sha256="b" * 64,
+        literature_sha256="c" * 64,
+        figure_strategy_sha256="d" * 64,
+        generated_at="2026-08-14T00:00:00Z",
+    ).model_dump(mode="json")
+
+
+@pytest.mark.parametrize(
+    ("finding_code", "expected_fragment"),
+    [
+        ("DIRECT_COMPARATOR_NOT_ESTABLISHED", ""),
+        (
+            "CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED",
+            "CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED",
+        ),
+    ],
+)
+def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
+    finding_code: str,
+    expected_fragment: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study = _complete_study()
+    source_run_id = "run-reviewed-plan"
+    monkeypatch.setattr(
+        agent_runs,
+        "list_run_history",
+        lambda **_kwargs: {
+            "runs": [
+                {
+                    "run_id": source_run_id,
+                    "project_dir": "/private/reviewed-run",
+                    "scientific_configuration_sha256": (
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        agent_runs,
+        "read_run_review",
+        lambda _project_dir: {
+            "ok": True,
+            "artifact_payloads": {
+                "scientific_plan_review.json": _nonapprovable_review_payload(
+                    finding_code=finding_code
+                )
+            },
+        },
+    )
+
+    contract = agent_pipeline_runs._compile_plan_revision_contract(
+        study=study,
+        project_root="/private/projects",
+        source_run_id=source_run_id,
+    )
+
+    if expected_fragment:
+        assert expected_fragment in contract
+        assert "generate a fresh plan" in contract
+    else:
+        assert contract == ""
 
 
 def test_workflow_projection_advances_only_from_owner_receipts() -> None:

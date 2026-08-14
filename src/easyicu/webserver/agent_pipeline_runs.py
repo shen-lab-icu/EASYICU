@@ -2017,6 +2017,70 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         }
 
 
+def _compile_plan_revision_contract(
+    *,
+    study: Mapping[str, Any],
+    project_root: Optional[str],
+    source_run_id: str,
+) -> str:
+    """Compile an exact prior review into an Agent-owned revision contract.
+
+    An empty return value is intentional: it means the prior non-approvable
+    review contains only study-authority, external-evidence, or independent-
+    review findings, so the next attempt must be a fully fresh Plan rather than
+    a constrained revision of the old one.
+    """
+
+    history = agent_runs.list_run_history(
+        study_id=_clean_text(study.get("id"), 160),
+        project_root=project_root,
+        limit=100,
+    )
+    source_row = next(
+        (
+            row
+            for row in history.get("runs", [])
+            if _clean_text(row.get("run_id"), 160) == source_run_id
+        ),
+        None,
+    )
+    if not isinstance(source_row, Mapping):
+        raise ResearchPipelineRunError(
+            "plan_revision_source_not_found",
+            "The exact prior scientific review could not be found.",
+        )
+    current_digest = study_context_owner.scientific_configuration_sha256(study)
+    if _clean_text(source_row.get("scientific_configuration_sha256"), 80) != (
+        current_digest
+    ):
+        raise ResearchPipelineRunError(
+            "plan_revision_source_configuration_superseded",
+            "The scientific setup changed after the reviewed plan; its repair contract cannot be reused.",
+        )
+    source_review = agent_runs.read_run_review(
+        str(source_row.get("project_dir") or "")
+    )
+    review_payload = (
+        (source_review.get("artifact_payloads") or {}).get(
+            "scientific_plan_review.json"
+        )
+        if source_review.get("ok")
+        else None
+    )
+    if not isinstance(review_payload, Mapping):
+        raise ResearchPipelineRunError(
+            "plan_revision_scientific_review_missing",
+            "The prior run has no digest-verified scientific review to compile.",
+        )
+    parsed_review = PlanScientificReview.model_validate(review_payload)
+    if parsed_review.approval_allowed:
+        raise ResearchPipelineRunError(
+            "plan_revision_source_not_changes_required",
+            "Only a non-approvable scientific review may seed a fresh plan revision.",
+        )
+    return render_agent_plan_revision_contract(parsed_review)
+
+
 def make_research_pipeline_run_runner(
     *,
     export_path: str,
@@ -2097,63 +2161,11 @@ def make_research_pipeline_run_runner(
         wrapper_dir.mkdir(parents=True, exist_ok=True)
         bound_plan_revision_contract = ""
         if source_run_id:
-            history = agent_runs.list_run_history(
-                study_id=_clean_text(study.get("id"), 160),
+            bound_plan_revision_contract = _compile_plan_revision_contract(
+                study=study,
                 project_root=project_root,
-                limit=100,
+                source_run_id=source_run_id,
             )
-            source_row = next(
-                (
-                    row
-                    for row in history.get("runs", [])
-                    if _clean_text(row.get("run_id"), 160) == source_run_id
-                ),
-                None,
-            )
-            if not isinstance(source_row, Mapping):
-                raise ResearchPipelineRunError(
-                    "plan_revision_source_not_found",
-                    "The exact prior scientific review could not be found.",
-                )
-            current_digest = study_context_owner.scientific_configuration_sha256(
-                study
-            )
-            if _clean_text(
-                source_row.get("scientific_configuration_sha256"), 80
-            ) != current_digest:
-                raise ResearchPipelineRunError(
-                    "plan_revision_source_configuration_superseded",
-                    "The scientific setup changed after the reviewed plan; its repair contract cannot be reused.",
-                )
-            source_review = agent_runs.read_run_review(
-                str(source_row.get("project_dir") or "")
-            )
-            review_payload = (
-                (source_review.get("artifact_payloads") or {}).get(
-                    "scientific_plan_review.json"
-                )
-                if source_review.get("ok")
-                else None
-            )
-            if not isinstance(review_payload, Mapping):
-                raise ResearchPipelineRunError(
-                    "plan_revision_scientific_review_missing",
-                    "The prior run has no digest-verified scientific review to compile.",
-                )
-            parsed_review = PlanScientificReview.model_validate(review_payload)
-            if parsed_review.approval_allowed:
-                raise ResearchPipelineRunError(
-                    "plan_revision_source_not_changes_required",
-                    "Only a non-approvable scientific review may seed a fresh plan revision.",
-                )
-            bound_plan_revision_contract = render_agent_plan_revision_contract(
-                parsed_review
-            )
-            if not bound_plan_revision_contract:
-                raise ResearchPipelineRunError(
-                    "plan_revision_has_no_agent_owned_findings",
-                    "The prior review contains no plan-owned finding the Agent may repair.",
-                )
         _progress(job, step="provider", label="Research Agent provider authorized")
         client, provider_public = provider_adapter.build_research_agent_provider_client(
             dict(provider),
