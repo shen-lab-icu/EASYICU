@@ -157,3 +157,82 @@ def test_run_capturing_returns_completed_process_for_real_command(tmp_path):
     assert result.returncode == 0
     assert "hi" in result.stdout
     assert "err" in result.stderr
+
+
+def test_normal_completion_still_terminates_the_dedicated_process_group(monkeypatch):
+    import signal
+
+    events = {}
+
+    class _FakeProc:
+        pid = 4343
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return ("ok", "")
+
+        def poll(self):
+            return self.returncode
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _FakeProc())
+    monkeypatch.setattr(
+        runner_mod.os,
+        "killpg",
+        lambda pgid, sig: events.__setitem__("killpg", (pgid, sig)),
+    )
+
+    result = runner_mod._run_capturing_with_descendant_reaping(
+        ["python", "x.py"], cwd="/tmp", env={}, timeout=1
+    )
+
+    assert result.returncode == 0
+    assert events["killpg"] == (4343, signal.SIGKILL)
+
+
+def test_run_capturing_bounds_generated_output_in_host_memory(tmp_path):
+    import os
+    import sys
+
+    size = runner_mod.MAX_RUNNER_CAPTURE_BYTES * 2
+    result = runner_mod._run_capturing_with_descendant_reaping(
+        [sys.executable, "-c", f"print('x' * {size})"],
+        cwd=str(tmp_path),
+        env=dict(os.environ),
+        timeout=30,
+    )
+
+    assert "earlier runner output truncated" in result.stdout
+    assert len(result.stdout.encode("utf-8")) <= (
+        runner_mod.MAX_RUNNER_CAPTURE_BYTES + 64
+    )
+
+
+def test_runner_redacts_explicit_secrets_from_result_and_log(tmp_path, monkeypatch):
+    secret = "runner-secret-value"
+    runner = CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=_cohort(tmp_path),
+        extra_env={"SERVICE_API_KEY": secret},
+        allow_unsafe_host_fallback=True,
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_run_capturing_with_descendant_reaping",
+        lambda *a, **k: subprocess.CompletedProcess(
+            a[0], 1, f"token={secret}", f"SERVICE_API_KEY={secret}"
+        ),
+    )
+
+    result = runner.run(step_id="01_secret", code="raise RuntimeError()")
+    log = result.runner_log_path.read_text(encoding="utf-8")
+
+    assert secret not in result.stdout
+    assert secret not in result.stderr
+    assert secret not in log
+    assert "[REDACTED]" in result.stdout + result.stderr + log

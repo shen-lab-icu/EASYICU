@@ -38,7 +38,9 @@ from .mcp_policy import (
     process_scopes,
     scope_override,
 )
+
 MCP_BEARER_TOKEN_ENV = "EASYICU_MCP_BEARER_TOKEN"
+MCP_TLS_OR_PROXY_ASSURANCE_ENV = "EASYICU_MCP_TLS_OR_PROXY_ASSURED"
 DEFAULT_HTTP_MAX_BODY_BYTES = 1024 * 1024
 DEFAULT_MAX_CONCURRENT_TOOL_CALLS = 4
 LOOPBACK_ANONYMOUS_SCOPES = frozenset({SCOPE_METADATA})
@@ -194,15 +196,24 @@ def _is_loopback_host(host: str) -> bool:
 def validate_http_server_config(
     host: str,
     bearer_token: Optional[str],
+    *,
+    tls_or_trusted_proxy_assured: bool = False,
 ) -> Optional[str]:
     """Fail closed before binding an externally reachable MCP socket."""
 
     token = str(bearer_token or "").strip() or None
-    if not _is_loopback_host(host) and token is None:
-        raise ValueError(
-            "non-loopback MCP HTTP binding requires an independent bearer token "
-            f"in {MCP_BEARER_TOKEN_ENV}"
-        )
+    if not _is_loopback_host(host):
+        if token is None:
+            raise ValueError(
+                "non-loopback MCP HTTP binding requires an independent bearer token "
+                f"in {MCP_BEARER_TOKEN_ENV}"
+            )
+        if tls_or_trusted_proxy_assured is not True:
+            raise ValueError(
+                "non-loopback MCP Streamable HTTP requires explicit TLS or trusted "
+                "reverse-proxy assurance; pass --tls-or-trusted-proxy only when "
+                "that transport boundary is configured"
+            )
     if token is not None:
         for secret_name in ("OPENAI_API_KEY", "OPENROUTER_API_KEY"):
             provider_secret = os.environ.get(secret_name)
@@ -343,13 +354,18 @@ def create_streamable_http_app(
     host: str = "127.0.0.1",
     port: int = 8765,
     bearer_token: Optional[str] = None,
+    tls_or_trusted_proxy_assured: bool = False,
     allowed_hosts: Optional[Sequence[str]] = None,
     allowed_origins: Optional[Sequence[str]] = None,
     max_body_bytes: int = DEFAULT_HTTP_MAX_BODY_BYTES,
 ) -> Starlette:
     """Create a stateless JSON Streamable HTTP app using the official SDK."""
 
-    token = validate_http_server_config(host, bearer_token)
+    token = validate_http_server_config(
+        host,
+        bearer_token,
+        tls_or_trusted_proxy_assured=tls_or_trusted_proxy_assured,
+    )
     exact_hosts = list(dict.fromkeys([*_default_allowed_hosts(host, port), *(allowed_hosts or ())]))
     exact_origins = list(
         dict.fromkeys(
@@ -411,6 +427,7 @@ def _run_streamable_http(
     host: str,
     port: int,
     bearer_token: Optional[str],
+    tls_or_trusted_proxy_assured: bool,
     allowed_hosts: Sequence[str],
     allowed_origins: Sequence[str],
     max_body_bytes: int,
@@ -422,6 +439,7 @@ def _run_streamable_http(
         host=host,
         port=port,
         bearer_token=bearer_token,
+        tls_or_trusted_proxy_assured=tls_or_trusted_proxy_assured,
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
         max_body_bytes=max_body_bytes,
@@ -448,6 +466,14 @@ def main(
     parser.add_argument("--allowed-host", action="append", default=[])
     parser.add_argument("--allowed-origin", action="append", default=[])
     parser.add_argument(
+        "--tls-or-trusted-proxy",
+        action="store_true",
+        help=(
+            "assert that a non-loopback bind is protected by TLS directly or by "
+            "a configured trusted TLS-terminating reverse proxy"
+        ),
+    )
+    parser.add_argument(
         "--max-request-bytes",
         type=int,
         default=DEFAULT_HTTP_MAX_BODY_BYTES,
@@ -471,6 +497,13 @@ def main(
                 host=args.host,
                 port=args.port,
                 bearer_token=os.environ.get(MCP_BEARER_TOKEN_ENV),
+                tls_or_trusted_proxy_assured=(
+                    args.tls_or_trusted_proxy
+                    or str(os.environ.get(MCP_TLS_OR_PROXY_ASSURANCE_ENV, ""))
+                    .strip()
+                    .lower()
+                    in {"1", "true", "yes", "on"}
+                ),
                 allowed_hosts=args.allowed_host,
                 allowed_origins=args.allowed_origin,
                 max_body_bytes=args.max_request_bytes,
@@ -487,6 +520,7 @@ __all__ = [
     "DEFAULT_MAX_CONCURRENT_TOOL_CALLS",
     "LOOPBACK_ANONYMOUS_SCOPES",
     "MCP_BEARER_TOKEN_ENV",
+    "MCP_TLS_OR_PROXY_ASSURANCE_ENV",
     "create_mcp_server",
     "create_streamable_http_app",
     "main",

@@ -94,6 +94,37 @@ def test_mcp_python_dispatch_remains_available(ra):
     assert "skills" in result
 
 
+def test_mcp_run_schema_and_server_reject_additional_properties(
+    ra, tmp_path, monkeypatch
+):
+    import easyicu.research_agent.mcp_server as mcp
+
+    schema = next(
+        item for item in mcp.TOOL_SCHEMAS if item["name"] == "research_agent.run"
+    )["inputSchema"]
+    assert schema["additionalProperties"] is False
+
+    constructed = []
+    monkeypatch.setattr(
+        mcp,
+        "_build_run_llm",
+        lambda _args: constructed.append(True) or (object(), None),
+    )
+    result = mcp.dispatch(
+        "research_agent.run",
+        {
+            "question": "q",
+            "cohort_path": str(tmp_path / "cohort.parquet"),
+            "model": "m",
+            "trajectory_path": "/outside/forwarded.parquet",
+        },
+    )
+
+    assert result["error_code"] == "invalid_argument"
+    assert "additional properties" in result["error"]
+    assert constructed == []
+
+
 def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
     from easyicu.research_agent.mcp_server import TOOL_SCHEMAS, dispatch
 
@@ -474,6 +505,60 @@ def test_mcp_run_constructs_explicit_llm(ra, tmp_path, monkeypatch):
     assert seen["llm_kwargs"]["model"] == "test-model"
     assert seen["cohort"] == str(cohort)
     assert seen["run_kwargs"]["question"] == "Inspect the cohort."
+
+
+def test_mcp_write_scope_is_checked_before_concept_extraction(
+    ra, tmp_path, monkeypatch
+):
+    import easyicu
+    import easyicu.research_agent.mcp_server as mcp
+
+    calls = []
+    monkeypatch.setenv(MCP_SCOPES_ENV, "metadata")
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **kwargs: calls.append(kwargs) or pd.DataFrame({"x": [1]}),
+        raising=False,
+    )
+
+    result = mcp.dispatch(
+        "research_agent.load_concepts",
+        {
+            "concepts": ["lact"],
+            "output_path": str(tmp_path / "must-not-exist.parquet"),
+        },
+    )
+
+    assert result["error_code"] == "scope_not_granted"
+    assert calls == []
+    assert not (tmp_path / "must-not-exist.parquet").exists()
+
+
+def test_mcp_rejects_forwarded_dictionary_paths_outside_roots_before_extraction(
+    ra, tmp_path, monkeypatch
+):
+    import easyicu
+    import easyicu.research_agent.mcp_server as mcp
+
+    calls = []
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **kwargs: calls.append(kwargs) or pd.DataFrame({"x": [1]}),
+        raising=False,
+    )
+
+    result = mcp.dispatch(
+        "research_agent.load_concepts",
+        {
+            "concepts": ["lact"],
+            "dict_path": [str(tmp_path / "allowed.json"), "/outside/dict.json"],
+        },
+    )
+
+    assert result["error_code"] == "path_not_allowed"
+    assert calls == []
 
 
 def test_mcp_run_returns_explicit_unresumable_pending(ra, tmp_path, monkeypatch):

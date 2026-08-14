@@ -578,8 +578,18 @@ def test_remote_http_bind_requires_an_independent_token(
     with pytest.raises(ValueError, match="non-loopback"):
         validate_http_server_config("0.0.0.0", None)
     with pytest.raises(ValueError, match="must not reuse OPENAI_API_KEY"):
-        validate_http_server_config("0.0.0.0", "provider-secret")
-    assert (
+        validate_http_server_config(
+            "0.0.0.0",
+            "provider-secret",
+            tls_or_trusted_proxy_assured=True,
+        )
+    with pytest.raises(ValueError, match="TLS or trusted reverse-proxy assurance"):
         validate_http_server_config("0.0.0.0", "independent-mcp-token")
+    assert (
+        validate_http_server_config(
+            "0.0.0.0",
+            "independent-mcp-token",
+            tls_or_trusted_proxy_assured=True,
+        )
         == "independent-mcp-token"
     )

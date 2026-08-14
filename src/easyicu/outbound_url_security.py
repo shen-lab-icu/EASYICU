@@ -85,6 +85,11 @@ def validate_outbound_http_endpoint(
             _refuse("link_local_or_reserved_address")
         if address.is_private:
             _refuse("private_address")
+        if not address.is_global:
+            # ``is_private`` does not cover every non-routable class. In
+            # particular, IPv4 shared address space (100.64.0.0/10, CGNAT) is
+            # neither private nor global according to ``ipaddress``.
+            _refuse("non_global_address")
     if parsed.scheme == "http" and not loopback_only:
         _refuse("plaintext_to_non_loopback")
     return text
