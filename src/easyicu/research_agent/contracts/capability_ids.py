@@ -11,6 +11,7 @@ CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     "association_adjusted_v1": "association",
     "association_freeform_v1": "association",
     "prediction_risk_model_v1": "prediction",
+    "dynamic_prediction_landmark_v1": "prediction",
     "phenotyping_cluster_v1": "phenotyping",
     "descriptive_measurement_v1": "descriptive",
     "descriptive_exposure_outcome_distribution_v1": "descriptive",

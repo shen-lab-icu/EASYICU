@@ -9,6 +9,22 @@ _Generated from `easyicu.research_agent.planning.analysis_method_suite`. Do not 
 
 A `planned` method carries no runner. It must fail closed if requested as a primary estimand — e.g. competing-risks CIF is never answered with a Cox HR.
 
+## Reviewed Planner → Coder resource bindings
+
+These exact coordinates are published to Planner through the scientific-action catalog and selected into Coder authority when that action is chosen. A reviewed kernel remains Coder-generated unless a deterministic runner is named above; the binding does not upgrade its claim ceiling.
+
+| Scientific action | Reviewed kernels | Runtime packages |
+| --- | --- | --- |
+| `time_to_event.cox_hr` | — | `lifelines` |
+| `time_to_event.km_logrank` | — | `lifelines` |
+| `time_to_event.ph_check` | `ph_schoenfeld` | `lifelines` |
+| `time_to_event.rmst` | `rmst` | — |
+| `prediction.delong_ci` | `delong_auc` | — |
+| `prediction.decision_curve` | `decision_curve` | — |
+| `prediction.feature_attribution` | — | `shap` |
+| `prediction.conformal_intervals` | `conformal` | — |
+| `prediction.dynamic_prediction` | `dynamic_prediction`, `temporal_features` | `sklearn` |
+
 ## Survival / time-to-event
 
 | Method | Tier | Implementation | Produces | Runner |
@@ -63,7 +79,7 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 | Conformal prediction intervals | exploratory | LLM-coded ⚠️ | conformal coverage table | — |
 | External / cross-database validation | planned | planned ⛔ | external-cohort performance + recalibration | — |
 | Net reclassification / IDI vs a baseline model | planned | planned ⛔ | NRI / IDI table | — |
-| Dynamic / landmark prediction (time-updated risk) | planned | planned ⛔ | landmark performance over time | — |
+| Dynamic / landmark prediction (time-updated risk) | primary | LLM-coded ⚠️ | landmark performance over time | — |
 
 ## Phenotyping / clustering (cross-sectional + longitudinal trajectory)
 
@@ -101,7 +117,6 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 | association | Mediation / quantitative bias analysis | Decompose direct/indirect effects or quantify plausible bias. |
 | prediction | External / cross-database validation | Transportability of discrimination + calibration to a second ICU database. |
 | prediction | Net reclassification / IDI vs a baseline model | Incremental value of new predictors over an established score. |
-| prediction | Dynamic / landmark prediction (time-updated risk) | Re-estimated risk from time-updated features (landmarking). |
 | phenotyping | LCGA / group-based trajectory modelling (GBTM) | Latent-class growth / group-based trajectory model — a model-based longitudinal method. |
 | phenotyping | Mixed-effects / growth-mixture trajectory models | Random-effects longitudinal models with latent classes. |
 | phenotyping | DTW / time-series distance clustering | Cluster raw trajectories under a shape-aware (dynamic time warping) distance. |

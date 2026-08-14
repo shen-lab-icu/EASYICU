@@ -819,9 +819,7 @@ def _candidate_execute_transition(
     # is quiescent before its bind-mounted output directory is reused;
     # it therefore owns cleanup inside ``run``. Other backends retain
     # the pipeline's established pre-execution clearing behaviour.
-    attempt.step_record["state.execution_timeout_seconds"] = (
-        state.execution_timeout_seconds
-    )
+    attempt.step_record["execution_timeout_seconds"] = state.execution_timeout_seconds
     if replay_execution is not None:
         if (
             replay_execution.capsule.execution.execution_context_sha256
