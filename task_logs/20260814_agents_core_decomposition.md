@@ -1,5 +1,8 @@
 # 2026-08-14 — agents/core.py decomposition batch (P3 structure debt, batch 1)
 
+> Update 2026-08-14 (later batch): the three pre-existing failures below were
+> fixed in a follow-up commit — see "Post-batch fixes" at the end.
+
 ## Scope
 
 One owner, one batch: the 4,933-line `research_agent/agents/core.py` monolith
@@ -67,5 +70,24 @@ Dependency order (acyclic, verified): `_support ← planner ← replanner`,
 - `tests/test_repository_hygiene.py` also fails on this HEAD for unowned
   top-level `literature_concepts.py` / `literature_excerpt.py` — verified
   pre-existing via stash control, unrelated to this batch.
+
+## Post-batch fixes (same day, separate commit)
+
+1. **Hygiene**: `literature_concepts.py` / `literature_excerpt.py` registered
+   in `tools/arch_baselines/research_agent_top_level_ownership.json` under
+   `shared_contract` (introduced by 2ef77e7/0d59ad2 without manifest rows).
+2. **Replanner crash on plans without a canonical analysis_type** (surface
+   exposed by 2ef77e7's action-guide call): `agents/replanner.py` now omits
+   the action guide when `canonical_analysis_family(current_plan.analysis_type)`
+   is None instead of raising — a replan must not invent a family the locked
+   plan never declared. Synthetic-plan fixture updated to carry the new
+   `measurement_audit_spec` contract (`missingness_profile`).
+3. **Stale monkeypatch seam**: `test_deferred_llm_audit_...` now patches
+   `execution.candidate_loop.deterministic_contract_repair`; the loop moved
+   out of `execution.phase` in 1e5182a and the test kept patching the old
+   owner, silently skipping the deterministic-repair stage it verifies.
+
+Verification: affected suites 55 passed; combined focused batch 878 passed;
+ruff clean.
 - Layer taxonomy for authority/gates/audits/repairs/contracts is now
   documented in `docs/research_agent_layer_ownership.md`.
