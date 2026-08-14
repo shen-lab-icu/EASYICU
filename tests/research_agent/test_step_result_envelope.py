@@ -18,6 +18,7 @@ from easyicu.research_agent.audits.envelope_shadow import (
     compare_validator_shadow_inputs,
 )
 from easyicu.research_agent.audits.envelope_consumers import (
+    RegisteredOutputAuthorityError,
     RegisteredOutputEnvelopeConsumer,
     StepSummaryFractionEnvelopeDualReader,
 )
@@ -720,7 +721,7 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     assert "absolute_unbound_path" in _issue_codes(rejected_envelope)
 
 
-def test_sealed_envelope_wires_only_the_final_validation_consumer() -> None:
+def test_sealed_envelope_wires_live_final_validation_consumer() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     pipeline_source = (repo_root / "src/easyicu/research_agent/pipeline.py").read_text(
         encoding="utf-8"
@@ -740,11 +741,10 @@ def test_sealed_envelope_wires_only_the_final_validation_consumer() -> None:
     assert final_validation_source.count("compile_sealed_step_result_shadow(") == 1
     assert final_validation_source.count("StepSummaryFractionEnvelopeDualReader()") == 1
     assert final_validation_source.count("final_fraction_envelope_validator=") == 1
-    # M8-B1 lands the envelope-authoritative RegisteredOutputEnvelopeConsumer as
-    # a pure, fully-tested unit; the live final-gate wiring is the separate B2
-    # slice.  Until B2, the consumer must NOT appear in the phase orchestration.
-    assert "RegisteredOutputEnvelopeConsumer" not in phase_source
-    assert "RegisteredOutputEnvelopeConsumer" not in final_validation_source
+    # The phase remains orchestration-only; final validation owns the live
+    # envelope-authoritative registered-output consumer.
+    assert "RegisteredOutputEnvelopeConsumer()" not in phase_source
+    assert final_validation_source.count("RegisteredOutputEnvelopeConsumer()") == 1
 
 
 def test_registered_tables_compile_typed_population_missingness_and_estimate(
@@ -1178,7 +1178,12 @@ def _modern_upstream_record(
         "attempt_id": attempt_id,
         "review_checkpoint_id": checkpoint_id,
         "script_evidence_id": script_evidence_id,
-        "step_summary": {"status": status},
+        "step_summary": {
+            "status": status,
+            "output_files": {
+                "table:exposure_outcome_summary": "exposure_outcome_summary.csv"
+            },
+        },
     }
 
 
@@ -1313,6 +1318,48 @@ def test_registered_output_consumer_fails_closed_on_tampered_sidecar(
     assert (
         findings[0].detail["sidecar_unavailable_reason"] == "artifact_path_unverified"
     )
+
+
+def test_registered_output_consumer_fails_closed_on_legacy_summary_disagreement(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+    record["step_summary"] = {"status": "ok", "output_files": {}}
+
+    findings = RegisteredOutputEnvelopeConsumer().audit(
+        step=_consumer_step(),
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[record],
+        evidence_store=store,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["registered_output_authority_disagreement"] is True
+    assert "canonical_source_digest_mismatch" in findings[0].detail["mismatch_codes"]
+
+
+def test_writer_records_are_rebuilt_from_verified_envelope_authority(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+        [record], evidence_store=store
+    )
+
+    assert projected[0]["step_summary"]["status"] == "ok"
+    assert projected[0]["writer_result_envelope_evidence_id"] == sidecar_id
+    record["step_summary"] = {"status": "ok", "hazard_ratio": 1.42}
+    with pytest.raises(RegisteredOutputAuthorityError):
+        RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+            [record], evidence_store=store
+        )
 
 
 def test_registered_output_consumer_ignores_failed_upstream_step(

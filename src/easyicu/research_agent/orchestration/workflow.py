@@ -588,10 +588,15 @@ class PipelineWorkflow:
         human_review_recorder: Optional[
             Callable[[Sequence[Mapping[str, Any]]], None]
         ] = None,
+        human_review_decision_prepare: Optional[
+            Callable[[Sequence[Mapping[str, Any]]], None]
+        ] = None,
         human_review_execution_commit: Optional[
             Callable[[Sequence[Mapping[str, Any]]], None]
         ] = None,
         human_review_execution_start: Optional[Callable[[], None]] = None,
+        human_review_write_start: Optional[Callable[[], None]] = None,
+        human_review_finalize_start: Optional[Callable[[], None]] = None,
         reviewer_identity_resolver: Optional[Callable[[], str]] = None,
     ) -> None:
         self._plan_invoker = plan_invoker
@@ -601,8 +606,11 @@ class PipelineWorkflow:
         self._provenance_hook = provenance_hook
         self._human_review_invoker = human_review_invoker
         self._human_review_recorder = human_review_recorder
+        self._human_review_decision_prepare = human_review_decision_prepare
         self._human_review_execution_commit = human_review_execution_commit
         self._human_review_execution_start = human_review_execution_start
+        self._human_review_write_start = human_review_write_start
+        self._human_review_finalize_start = human_review_finalize_start
         self._reviewer_identity_resolver = reviewer_identity_resolver
         self._state = "created"
         self._plan_result: Optional[_PlanPhaseResult] = None
@@ -801,18 +809,19 @@ class PipelineWorkflow:
         # paid for, to recover from a transient write. Stay paused instead:
         # `_requests` and `_plan_result` are intact, so the same decision can
         # be resubmitted. Only a failure past this point is terminal.
-        if rejected_ids:
-            self._record_human_review(records)
-            self._discard_live_pause(state="rejected")
-            raise HumanReviewRejected(rejected_ids)
-
+        if self._human_review_decision_prepare is not None:
+            # The checkpoint receives the exact server-stamped records first.
+            # A crash in the evidence writer can then replay byte-identical
+            # records rather than generating a colliding timestamp on restart.
+            self._human_review_decision_prepare(tuple(records))
         self._record_human_review(records)
         if self._human_review_execution_commit is not None:
-            # The checkpoint owner atomically consumes the pause here: after
-            # the human decision is durably recorded but before the first
-            # analysis side effect. A duplicate resume can therefore neither
-            # execute twice nor lose a correctable decision-validation retry.
+            # Commit only after decision evidence is durable. Rejections and
+            # approvals share this transition so both crash windows converge.
             self._human_review_execution_commit(tuple(records))
+        if rejected_ids:
+            self._discard_live_pause(state="rejected")
+            raise HumanReviewRejected(rejected_ids)
         try:
             return self._finish(tuple(records))
         except Exception:
@@ -1006,7 +1015,11 @@ class PipelineWorkflow:
         if self._human_review_execution_start is not None:
             self._human_review_execution_start()
         execute_result = self._execute_invoker(self._plan_result)
+        if self._human_review_write_start is not None:
+            self._human_review_write_start()
         write_result = self._write_invoker(self._plan_result, execute_result)
+        if self._human_review_finalize_start is not None:
+            self._human_review_finalize_start()
         final_result = self._finalise_invoker(
             self._plan_result,
             execute_result,
@@ -1036,10 +1049,15 @@ def build_pipeline_workflow(
     human_review_recorder: Optional[
         Callable[[Sequence[Mapping[str, Any]]], None]
     ] = None,
+    human_review_decision_prepare: Optional[
+        Callable[[Sequence[Mapping[str, Any]]], None]
+    ] = None,
     human_review_execution_commit: Optional[
         Callable[[Sequence[Mapping[str, Any]]], None]
     ] = None,
     human_review_execution_start: Optional[Callable[[], None]] = None,
+    human_review_write_start: Optional[Callable[[], None]] = None,
+    human_review_finalize_start: Optional[Callable[[], None]] = None,
     reviewer_identity_resolver: Optional[Callable[[], str]] = None,
 ) -> WorkflowEngine:
     """Build the explicit phase dispatcher for one pipeline run."""
@@ -1052,7 +1070,10 @@ def build_pipeline_workflow(
         provenance_hook=provenance_hook,
         human_review_invoker=human_review_invoker,
         human_review_recorder=human_review_recorder,
+        human_review_decision_prepare=human_review_decision_prepare,
         human_review_execution_commit=human_review_execution_commit,
         human_review_execution_start=human_review_execution_start,
+        human_review_write_start=human_review_write_start,
+        human_review_finalize_start=human_review_finalize_start,
         reviewer_identity_resolver=reviewer_identity_resolver,
     )

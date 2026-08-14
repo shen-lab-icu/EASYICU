@@ -41,6 +41,10 @@ class HumanReviewCheckpointConsumed(HumanReviewCheckpointError):
     reason_code = "human_review_checkpoint_consumed"
 
 
+class HumanReviewCheckpointPhaseUncertain(HumanReviewCheckpointError):
+    reason_code = "human_review_checkpoint_phase_uncertain"
+
+
 class HumanReviewCheckpoint(BaseModel):
     """Complete typed coordinates for reconstructing one Plan-phase pause."""
 
@@ -49,13 +53,17 @@ class HumanReviewCheckpoint(BaseModel):
     schema_version: Literal[
         "easyicu.human_review_checkpoint/1",
         "easyicu.human_review_checkpoint/2",
+        "easyicu.human_review_checkpoint/3",
     ] = (
-        "easyicu.human_review_checkpoint/2"
+        "easyicu.human_review_checkpoint/3"
     )
     state: Literal[
         "pending",
         "approved_pending_execution",
         "executing",
+        "write_in_progress",
+        "finalize_in_progress",
+        "rejected",
         "consumed",
         "completed",
         "failed",
@@ -123,6 +131,14 @@ class HumanReviewCheckpoint(BaseModel):
         for label, observed, payload in checks:
             if canonical_sha256(payload) != observed:
                 raise ValueError(f"{label} does not bind its checkpoint payload")
+        decision_fields = (
+            bool(self.approved_decisions),
+            bool(self.approved_decision_records),
+            self.approved_decisions_sha256 is not None,
+            self.consumed_decision_sha256 is not None,
+        )
+        if any(decision_fields) and not all(decision_fields):
+            raise ValueError("durable decisions must be present as a complete set")
         if self.approved_decisions_sha256 is not None:
             approved_payload = {
                 "decisions": list(self.approved_decisions),
@@ -139,9 +155,12 @@ class HumanReviewCheckpoint(BaseModel):
                 raise ValueError(
                     "execution_start_receipt_sha256 does not bind its receipt"
                 )
-        if self.schema_version.endswith("/2") and self.state in {
+        if self.schema_version.endswith(("/2", "/3")) and self.state in {
             "approved_pending_execution",
             "executing",
+            "write_in_progress",
+            "finalize_in_progress",
+            "rejected",
             "completed",
         }:
             if (
@@ -153,8 +172,10 @@ class HumanReviewCheckpoint(BaseModel):
                 raise ValueError(
                     "approved checkpoint state requires exact durable decisions"
                 )
-        if self.schema_version.endswith("/2") and self.state in {
+        if self.schema_version.endswith(("/2", "/3")) and self.state in {
             "executing",
+            "write_in_progress",
+            "finalize_in_progress",
             "completed",
         } and (
             self.execution_start_receipt is None
@@ -162,8 +183,11 @@ class HumanReviewCheckpoint(BaseModel):
         ):
             raise ValueError("executing checkpoint state requires a start receipt")
         unsigned = self.model_dump(mode="json", exclude={"checkpoint_sha256"})
-        if self.schema_version == "easyicu.human_review_checkpoint/1":
-            # A v1 checkpoint predates the v2 optional fields.  Preserve its
+        if self.schema_version in {
+            "easyicu.human_review_checkpoint/1",
+            "easyicu.human_review_checkpoint/2",
+        }:
+            # Older checkpoints predate later optional fields. Preserve their
             # original canonical bytes rather than hashing injected defaults.
             unsigned = {
                 key: value
@@ -201,7 +225,7 @@ class HumanReviewCheckpoint(BaseModel):
         capabilities = tuple(sorted({str(item) for item in runtime_capabilities}))
         bundle = dict(runtime_bundle) if runtime_bundle is not None else None
         body: dict[str, Any] = {
-            "schema_version": "easyicu.human_review_checkpoint/2",
+            "schema_version": "easyicu.human_review_checkpoint/3",
             "state": "pending",
             "run_id": str(run_id),
             "thread_id": str(run_id),
@@ -240,6 +264,9 @@ class HumanReviewCheckpoint(BaseModel):
         state: Literal[
             "approved_pending_execution",
             "executing",
+            "write_in_progress",
+            "finalize_in_progress",
+            "rejected",
             "consumed",
             "completed",
             "failed",
@@ -297,6 +324,67 @@ class HumanReviewCheckpoint(BaseModel):
         body["checkpoint_sha256"] = canonical_sha256(body)
         return type(self).model_validate(body)
 
+    def decision_recorded(
+        self,
+        *,
+        decisions: Sequence[Mapping[str, Any]],
+        decision_records: Sequence[Mapping[str, Any]],
+        decision_sha256: str,
+    ) -> "HumanReviewCheckpoint":
+        """Durably stage exact decisions before writing their evidence files."""
+
+        decision_payload = tuple(dict(item) for item in decisions)
+        record_payload = tuple(dict(item) for item in decision_records)
+        if canonical_sha256(list(decision_payload)) != str(decision_sha256):
+            raise HumanReviewCheckpointError(
+                "recorded decision digest does not bind decision payloads"
+            )
+        if not decision_payload or not record_payload:
+            raise HumanReviewCheckpointError("recorded decision set is empty")
+        if self.approved_decisions_sha256 is not None:
+            if (
+                self.consumed_decision_sha256 == str(decision_sha256)
+                and self.approved_decisions == decision_payload
+                and self.approved_decision_records == record_payload
+            ):
+                return self
+            raise HumanReviewCheckpointConsumed(
+                "checkpoint already records a different decision set"
+            )
+        if self.state != "pending":
+            raise HumanReviewCheckpointConsumed(
+                f"checkpoint cannot record decisions from state {self.state!r}"
+            )
+        body = self.model_dump(mode="json", exclude={"checkpoint_sha256"})
+        body["consumed_decision_sha256"] = str(decision_sha256)
+        body["approved_decisions"] = list(decision_payload)
+        body["approved_decision_records"] = list(record_payload)
+        body["approved_decisions_sha256"] = canonical_sha256(
+            {
+                "decisions": list(decision_payload),
+                "records": list(record_payload),
+            }
+        )
+        body["checkpoint_sha256"] = canonical_sha256(body)
+        return type(self).model_validate(body)
+
+    def decision_committed(self) -> "HumanReviewCheckpoint":
+        """Commit staged decisions after their evidence has been persisted."""
+
+        if self.state in {"approved_pending_execution", "rejected"}:
+            return self
+        if self.state != "pending" or self.approved_decisions_sha256 is None:
+            raise HumanReviewCheckpointError(
+                "checkpoint has no staged durable decision to commit"
+            )
+        rejected = any(
+            str(record.get("decision") or "") == "rejected"
+            for record in self.approved_decision_records
+        )
+        return self.transitioned(
+            "rejected" if rejected else "approved_pending_execution"
+        )
+
     def execution_started(
         self,
         *,
@@ -325,6 +413,24 @@ class HumanReviewCheckpoint(BaseModel):
         body["execution_start_receipt_sha256"] = canonical_sha256(receipt)
         body["checkpoint_sha256"] = canonical_sha256(body)
         return type(self).model_validate(body)
+
+    def execution_phase_started(
+        self,
+        state: Literal["write_in_progress", "finalize_in_progress"],
+    ) -> "HumanReviewCheckpoint":
+        """Persist an irreversible post-analysis phase before its side effects."""
+
+        allowed_from = {
+            "write_in_progress": {"executing", "write_in_progress"},
+            "finalize_in_progress": {"write_in_progress", "finalize_in_progress"},
+        }
+        if self.state == state:
+            return self
+        if self.state not in allowed_from[state]:
+            raise HumanReviewCheckpointConsumed(
+                f"checkpoint cannot enter {state!r} from state {self.state!r}"
+            )
+        return self.transitioned(state)
 
 
 def checkpoint_path(run_dir: Path) -> Path:
@@ -412,6 +518,7 @@ __all__ = [
     "HumanReviewCheckpointConsumed",
     "HumanReviewCheckpointError",
     "HumanReviewCheckpointExpired",
+    "HumanReviewCheckpointPhaseUncertain",
     "checkpoint_path",
     "load_checkpoint",
     "write_checkpoint",

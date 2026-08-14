@@ -195,10 +195,12 @@ from .orchestration.human_review_checkpoint import (
 )
 from .orchestration.human_review_restore import (
     bind_checkpoint_decision_payloads,
-    commit_human_review_execution_approval,
+    commit_human_review_decision,
     fail_human_review_checkpoint,
+    mark_human_review_execution_phase,
     mark_human_review_execution_started,
     persist_human_review_records,
+    prepare_human_review_decision,
     restore_durable_human_review_pause,
 )
 from .orchestration.services import PipelineServices
@@ -2008,6 +2010,7 @@ class ResearchAgentPipeline:
         cohort_path: Path,
         target_outcome: Optional[str] = None,
         universe_path: Optional[Path] = None,
+        preselection_universe_authorized: bool = False,
         universe_is_typed: bool = False,
         universe_authority_ref: Optional[MaterializedCohortAuthorityRef] = None,
         trajectory_path: Optional[Path] = None,
@@ -2024,9 +2027,9 @@ class ResearchAgentPipeline:
         ``run(step_id=..., code=...) -> RunResult``.
 
         ``cohort_path`` is the canonical analysis cohort the steps read as
-        ``COHORT_PARQUET``. ``universe_path`` (when given) is exposed as
-        ``EASYICU_UNIVERSE_PARQUET`` so explicit robustness steps can reach the
-        pre-纳排 universe without re-running extraction.
+        ``COHORT_PARQUET``. ``universe_path`` remains host authority metadata;
+        it is exposed as ``EASYICU_UNIVERSE_PARQUET`` only when the caller has
+        authorized this exact typed robustness/cohort-construction step.
         """
         # Runner capability discovery is scoped to the backend selected for
         # this build.  Clear a Docker snapshot left in the current ContextVar
@@ -2053,7 +2056,13 @@ class ResearchAgentPipeline:
         )
         if target_outcome:
             extra_env["OUTCOME_COL"] = target_outcome
-        if universe_path is not None:
+        if not isinstance(preselection_universe_authorized, bool):
+            raise TypeError("preselection_universe_authorized must be a bool")
+        if preselection_universe_authorized and universe_path is None:
+            raise ValueError(
+                "pre-selection universe authorization requires universe_path"
+            )
+        if preselection_universe_authorized:
             extra_env["EASYICU_UNIVERSE_PARQUET"] = str(universe_path)
         if trajectory_path is not None:
             candidate = Path(trajectory_path).expanduser()
@@ -2965,7 +2974,7 @@ class ResearchAgentPipeline:
         # data every downstream step reads — instead of relying on each
         # LLM-generated step to re-apply 纳排 (which run10/run11 showed it does
         # not, so the primary model ran on the full universe). The full universe
-        # stays reachable via EASYICU_UNIVERSE_PARQUET for robustness steps.
+        # is exposed only to typed robustness/cohort-construction steps.
         if not reused_prior_plan:
             analysis_cohort = materialize_locked_analysis_cohort(
                 run_dir=run_dir,
@@ -2983,7 +2992,7 @@ class ResearchAgentPipeline:
                             f"n={analysis_cohort['n_cohort']} of universe "
                             f"n={analysis_cohort['n_universe']}. Downstream steps read "
                             "the filtered cohort (COHORT_PARQUET); the full universe "
-                            "stays available as EASYICU_UNIVERSE_PARQUET."
+                            "is available only to explicitly authorized typed steps."
                         ),
                         detail={
                             "n_universe": analysis_cohort["n_universe"],
@@ -5240,117 +5249,12 @@ class ResearchAgentPipeline:
             return requests
 
         def _human_review_recorder(records):
-            if not records:
-                return
-            from .orchestration.profiles import is_paper_facing_profile
-
-            decision_records = list(records)
-            if is_paper_facing_profile(self._submission_profile_name):
-                # Field names follow the workflow decision record,
-                # which emits a flat record. Reading a nested ``request`` key
-                # here raised KeyError on every real decision and turned the
-                # authentication check into a crash.
-                unauthenticated = [
-                    str(record.get("review_id") or "<unknown>")
-                    for record in decision_records
-                    if record.get("reviewer_identity_source") != "authenticated"
-                ]
-                if unauthenticated:
-                    raise RuntimeError(
-                        "human review under submission profile "
-                        f"{self._submission_profile_name!r} requires an "
-                        "authenticated reviewer identity; a client-claimed "
-                        "reviewer is diagnostic-only "
-                        f"(unauthenticated: {', '.join(unauthenticated)})"
-                    )
-            decisions_path = run_dir / "human_review_decisions.json"
-            decisions_path.write_text(
-                json.dumps(
-                    {
-                        "schema": "easyicu.human_review_decisions/1",
-                        "run_id": run_id,
-                        "decisions": decision_records,
-                    },
-                    indent=2,
-                    sort_keys=True,
-                ),
-                encoding="utf-8",
+            self._record_human_review_records(
+                records,
+                run_id=run_id,
+                run_dir=run_dir,
+                evidence=_review_evidence_store(),
             )
-            # Registering into this run's own store is what puts the decision
-            # into the final manifest: workflow state is discarded at exit, so an
-            # unregistered approval leaves the run unable to answer who
-            # authorised it, against which digest, and when.
-            review_evidence = _review_evidence_store()
-            review_evidence.register_file(
-                kind="log",
-                description=(
-                    "Operator decisions for the human-review interrupts raised "
-                    "by this run, with server-stamped decision time and the "
-                    "authority digest each decision was bound to."
-                ),
-                source_path=decisions_path,
-                evidence_id="human_review_decisions",
-                producer="pipeline",
-                generation_mode="human_confirmed",
-            )
-            rejected_review_ids = [
-                str(record.get("review_id") or "<unknown>")
-                for record in decision_records
-                if record.get("decision") == "rejected"
-            ]
-            if rejected_review_ids:
-                # A rejection ends before the normal finalisation phase, so
-                # write the canonical run-level receipt here. This lets a
-                # restarted process distinguish a terminal operator refusal
-                # from a merely paused or abandoned run without reconstructing
-                # state from the decision log.
-                run_status_path = run_dir / "run_status.json"
-                run_status_path.write_text(
-                    json.dumps(
-                        {
-                            "schema_version": "easyicu.run_status/2",
-                            "run_id": run_id,
-                            "status": "human_review_rejected",
-                            "strict_fail_closed": True,
-                            "terminal_reason": "operator_rejected",
-                            "rejected_review_ids": rejected_review_ids,
-                            "gates": {
-                                "human_review_approved": False,
-                                "execution_complete": False,
-                                "manuscript_ready": False,
-                                "publication_ready": False,
-                                # The paper-authority contract is three axes.
-                                # State all three: a consumer that has to tell
-                                # "absent" from "explicitly false" is reading a
-                                # different schema from a completed run's.
-                                "publication_artifacts_ready": False,
-                                "execution_paper_eligible": False,
-                                "paper_authorized": False,
-                            },
-                            "canonical_outputs": {
-                                "human_review_decisions": (
-                                    "human_review_decisions.json"
-                                ),
-                                "run_status": "run_status.json",
-                            },
-                        },
-                        indent=2,
-                        sort_keys=True,
-                    ),
-                    encoding="utf-8",
-                )
-                review_evidence.register_file(
-                    kind="log",
-                    description=(
-                        "Fail-closed terminal status for an operator-rejected "
-                        "human-review pause."
-                    ),
-                    source_path=run_status_path,
-                    evidence_id="run_status",
-                    aliases=["run_status"],
-                    producer="pipeline",
-                    generation_mode="system",
-                )
 
         gate = self._human_review_gate
         from .orchestration.workflow import WorkflowPaused, build_pipeline_workflow
@@ -5360,6 +5264,19 @@ class ResearchAgentPipeline:
             "decision_sha256": None,
             "decision_payloads": None,
         }
+
+        def _prepare_human_review_execution(
+            decision_records: Sequence[Mapping[str, Any]],
+        ) -> None:
+            path = checkpoint_commit.get("path")
+            if path is None:
+                return
+            prepare_human_review_decision(
+                checkpoint_file=Path(path),
+                decision_payloads=checkpoint_commit.get("decision_payloads") or (),
+                decision_records=decision_records,
+                decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
+            )
 
         def _commit_human_review_execution(
             decision_records: Sequence[Mapping[str, Any]],
@@ -5371,7 +5288,7 @@ class ResearchAgentPipeline:
                 raise HumanReviewCheckpointError(
                     "approved execution has no restored typed plan handoff"
                 )
-            commit_human_review_execution_approval(
+            commit_human_review_decision(
                 checkpoint_file=Path(path),
                 run_dir=run_dir,
                 evidence=reviewed_plan[-1].evidence,
@@ -5387,6 +5304,16 @@ class ResearchAgentPipeline:
                 return
             mark_human_review_execution_started(Path(path))
 
+        def _commit_human_review_write_start() -> None:
+            path = checkpoint_commit.get("path")
+            if path is not None:
+                mark_human_review_execution_phase(Path(path), "write_in_progress")
+
+        def _commit_human_review_finalize_start() -> None:
+            path = checkpoint_commit.get("path")
+            if path is not None:
+                mark_human_review_execution_phase(Path(path), "finalize_in_progress")
+
         workflow = build_pipeline_workflow(
             plan_invoker=_plan_invoker,
             execute_invoker=_execute_invoker,
@@ -5395,8 +5322,11 @@ class ResearchAgentPipeline:
             provenance_hook=_provenance_hook,
             human_review_invoker=_human_review_invoker,
             human_review_recorder=_human_review_recorder,
+            human_review_decision_prepare=_prepare_human_review_execution,
             human_review_execution_commit=_commit_human_review_execution,
             human_review_execution_start=_commit_human_review_execution_start,
+            human_review_write_start=_commit_human_review_write_start,
+            human_review_finalize_start=_commit_human_review_finalize_start,
             reviewer_identity_resolver=(
                 getattr(gate, "reviewer_identity_resolver", None)
                 if gate is not None
@@ -5478,7 +5408,12 @@ class ResearchAgentPipeline:
                 checkpoint = load_human_review_checkpoint(
                     path, require_pending=False
                 )
-                if checkpoint.state in {"executing", "consumed"}:
+                if checkpoint.state in {
+                    "executing",
+                    "write_in_progress",
+                    "finalize_in_progress",
+                    "consumed",
+                }:
                     write_human_review_checkpoint(
                         path, checkpoint.transitioned("completed")
                     )

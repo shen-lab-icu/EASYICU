@@ -484,6 +484,94 @@ def test_bind_numeric_values_attaches_footnotes(ra, tmp_path: Path):
     assert "evidence=evid_assoc" in bound
 
 
+@pytest.mark.parametrize("misstated_scale", ("HR", "RR"))
+def test_sole_odds_ratio_claim_cannot_bind_as_another_effect_scale(
+    ra,
+    tmp_path: Path,
+    misstated_scale: str,
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    claim = store.register_numeric_claim(
+        value="1.42",
+        canonical=1.42,
+        evidence_id="evid_assoc",
+        step_id="03_assoc",
+        source_field="primary_or",
+    )
+
+    assert claim.effect_scale.value == "odds_ratio"
+    assert claim.estimand.value == "point_estimate"
+    with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
+        bind_numeric_values(
+            f"The {misstated_scale} was 1.42.",
+            evidence=store,
+            enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
+        )
+
+    assert exc_info.value.detail["untraced"] == ["1.42"]
+
+
+def test_effect_scale_identity_round_trips_old_and_new_claim_payloads(ra) -> None:
+    from easyicu.research_agent.authority.evidence_store import NumericClaim
+
+    current = NumericClaim(
+        value="1.42",
+        canonical=1.42,
+        evidence_id="evid_assoc",
+        step_id="03_assoc",
+        source_field="primary_or",
+    )
+    payload = current.to_dict()
+    restored = NumericClaim.from_dict(payload)
+    legacy = NumericClaim.from_dict(
+        {
+            "value": "1.42",
+            "canonical": 1.42,
+            "evidence_id": "evid_assoc",
+            "step_id": "03_assoc",
+            "source_field": "primary_or",
+        }
+    )
+
+    assert payload["effect_scale"] == "odds_ratio"
+    assert payload["estimand"] == "point_estimate"
+    assert restored.effect_scale == legacy.effect_scale == current.effect_scale
+    assert restored.estimand == legacy.estimand == current.estimand
+
+
+def test_point_estimate_and_ci_endpoints_bind_to_their_own_estimands(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    store.register_step_summary_numerics(
+        step_id="03_assoc",
+        evidence_id="evid_assoc",
+        summary={
+            "effect_scale": "odds_ratio",
+            "primary_or": 1.42,
+            "or_ci_lower": 1.42,
+            "or_ci_upper": 1.71,
+        },
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The OR was 1.42 (95% CI 1.42-1.71).",
+        evidence=store,
+        enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
+    )
+
+    assert untraced == []
+    assert [claim.source_field for claim in binding_map.values()] == [
+        "primary_or",
+        "or_ci_lower",
+        "or_ci_upper",
+    ]
+
+
 def test_bind_numeric_values_handles_percent_and_rounding(ra, tmp_path: Path):
     from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 

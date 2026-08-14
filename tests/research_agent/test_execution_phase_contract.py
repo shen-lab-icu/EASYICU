@@ -1560,6 +1560,11 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         "StepSummaryFractionEnvelopeDualReader",
         PassthroughFractionEnvelopeValidator,
     )
+    monkeypatch.setattr(
+        final_validation,
+        "RegisteredOutputEnvelopeConsumer",
+        lambda: StubValidator("cross_step_registered_output"),
+    )
 
     validator_names = {
         "stat_validator": "statistical",
@@ -1599,6 +1604,7 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         script_text="",
         attempt_id="attempt-2",
         checkpoint_id="checkpoint-9",
+        evidence_store=object(),
         **{argument: StubValidator(name) for argument, name in validator_names.items()},
     )
 
@@ -1746,6 +1752,7 @@ def test_final_fraction_consumer_fails_closed_when_sealed_compile_fails(
         script_text="",
         attempt_id="attempt-1",
         checkpoint_id="checkpoint-1",
+        evidence_store=object(),
         stat_validator=EmptyValidator(),
         clinical_validator=EmptyValidator(),
         statistical_guard=EmptyValidator(),

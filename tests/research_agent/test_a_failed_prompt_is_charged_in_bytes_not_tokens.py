@@ -1,4 +1,4 @@
-"""The run ledger reserves prompts at one token per byte and never lets go.
+"""Unknown usage releases only the conservative prompt over-reservation.
 
 ``_prompt_token_reservation`` bounds a prompt by its UTF-8 byte count::
 
@@ -13,11 +13,10 @@ ratio on real receipts and wrote it down::
         min 3.7685   max 4.3812   mean 3.99
       CONSERVATIVE_BYTES_PER_TOKEN = 3.0     # deliberately below every sample
 
-The over-reservation is harmless while it is released, and the docstring relies
-on exactly that: "successful calls release the unused reservation back to their
-provider-reported usage."  A FAILED call has no such release, so it keeps the
-byte-denominated hold forever -- the same shape as the completion hold fixed in
-``00edc91``, one field along.
+The prompt's byte-denominated hold can safely release to the calibrated
+conservative estimator after a failed call. The completion hold cannot: a
+reviewed gateway may ignore or strip the requested cap, so unknown completion
+usage must keep the provider-maximum reserve.
 
 MEASURED on verify12, 2026-08-04, from the batch's own durable ledger:
 
@@ -44,6 +43,7 @@ import pathlib
 import pytest
 
 from easyicu.research_agent.authority.provider_hard_stop import (
+    PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR,
     PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION,
     ProviderHardStopLedger,
     ProviderHardStopLimits,
@@ -111,10 +111,15 @@ def test_a_failed_call_is_not_charged_a_token_for_every_byte(tmp_path):
     call = _one_failed_call(tmp_path, prompt=prompt)
 
     assert call["state"] == "failed_usage_unknown"
-    charged = int(call["accounted_tokens"])
-    assert charged < len(prompt), (
-        f"a failed call was charged {charged} tokens for a {len(prompt)}-byte "
+    charged_prompt = int(call["prompt_token_reservation"])
+    assert charged_prompt < len(prompt), (
+        f"a failed call was charged {charged_prompt} prompt tokens for a "
+        f"{len(prompt)}-byte "
         "prompt -- at least one token per byte"
+    )
+    assert (
+        int(call["completion_token_reservation"])
+        == PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR
     )
 
 
@@ -128,7 +133,9 @@ def test_the_release_uses_the_estimator_this_codebase_calibrated(tmp_path):
         estimate_prompt_tokens(len(prompt.encode("utf-8")))
         + PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION
     )
-    assert int(call["accounted_tokens"]) == expected_prompt + 4096, call
+    assert int(call["accounted_tokens"]) == (
+        expected_prompt + PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR
+    ), call
 
 
 def test_the_released_estimate_still_over_counts_every_observed_ratio(tmp_path):
@@ -144,7 +151,7 @@ def test_the_released_estimate_still_over_counts_every_observed_ratio(tmp_path):
     call = _one_failed_call(tmp_path, prompt="x" * prompt_bytes)
     truthful = prompt_bytes / OBSERVED_BYTES_PER_TOKEN
 
-    assert int(call["accounted_tokens"]) > truthful
+    assert int(call["prompt_token_reservation"]) > truthful
 
 
 def test_the_reservation_before_the_call_is_unchanged(tmp_path):

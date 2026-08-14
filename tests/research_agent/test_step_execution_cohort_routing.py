@@ -5,13 +5,19 @@ import hashlib
 import inspect
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
-from easyicu.research_agent.schema import AnalysisStep
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    RobustnessReplaySpec,
+)
 from easyicu.research_agent.execution.cohort_routing import (
     StepExecutionCohortRoutingError,
     bind_step_execution_cohort,
     bound_step_execution_cohort_path,
+    step_may_access_preselection_universe,
 )
 from easyicu.research_agent.execution.envelope_sealing import (
     compile_sealed_step_result_shadow,
@@ -263,3 +269,101 @@ def test_execute_phase_routes_runner_and_gates_to_the_bound_step_cohort() -> Non
         for call in ast.walk(final_gate_tree)
         if isinstance(call, ast.Call)
     )
+
+
+def _run_universe_environment_probe(
+    *, ra, tmp_path: Path, step: AnalysisStep, plan: AnalysisPlan
+) -> tuple[object, str]:
+    cohort_path = tmp_path / f"{step.step_id}_cohort.parquet"
+    universe_path = tmp_path / f"{step.step_id}_universe.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+    pd.DataFrame({"stay_id": [1, 2]}).to_parquet(universe_path, index=False)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / f"work_{step.step_id}",
+        enable_memory=False,
+        runner_kind="subprocess",
+        runner_kwargs={"allow_unsafe_host_fallback": True},
+    )
+    runner = pipeline._build_runner(
+        run_dir=tmp_path / f"run_{step.step_id}",
+        cohort_path=cohort_path,
+        universe_path=universe_path,
+        preselection_universe_authorized=step_may_access_preselection_universe(
+            step=step,
+            plan=plan,
+        ),
+    )
+    result = runner.run(
+        step_id=step.step_id,
+        code=(
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'universe_env.txt').write_text("
+            "os.environ.get('EASYICU_UNIVERSE_PARQUET', '<absent>'))\n"
+        ),
+    )
+    assert result.succeeded, result.stderr
+    observed = (result.out_dir / "universe_env.txt").read_text(encoding="utf-8")
+    return runner, observed
+
+
+def test_ordinary_primary_script_cannot_access_preselection_universe(
+    ra, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("EASYICU_UNIVERSE_PARQUET", "/ambient/forged.parquet")
+    step = AnalysisStep(
+        step_id="01_primary",
+        planned_analysis_role="primary",
+        intent="Estimate the primary association on the locked cohort.",
+        method="adjusted_association",
+        expected_outputs=["table:primary_estimate"],
+    )
+    plan = AnalysisPlan(research_question="Q", steps=[step])
+
+    runner, observed = _run_universe_environment_probe(
+        ra=ra,
+        tmp_path=tmp_path,
+        step=step,
+        plan=plan,
+    )
+
+    assert step_may_access_preselection_universe(step=step, plan=plan) is False
+    assert "EASYICU_UNIVERSE_PARQUET" not in runner.extra_env
+    assert observed == "<absent>"
+
+
+def test_typed_robustness_script_receives_digest_bound_preselection_universe(
+    ra, tmp_path: Path
+) -> None:
+    step = AnalysisStep(
+        step_id="02_robustness",
+        intent="Replay the locked robustness grid.",
+        method="arbitrary_label_does_not_grant_authority",
+        expected_outputs=["table:robustness_summary"],
+        robustness_replay_spec=RobustnessReplaySpec(
+            products=[
+                {
+                    "product_id": "robustness_summary",
+                    "output": "robustness_summary",
+                }
+            ]
+        ),
+    )
+    plan = AnalysisPlan(research_question="Q", steps=[step])
+
+    runner, observed = _run_universe_environment_probe(
+        ra=ra,
+        tmp_path=tmp_path,
+        step=step,
+        plan=plan,
+    )
+    without_universe = runner.__class__(
+        workdir=tmp_path / "run_without_universe",
+        cohort_parquet=runner.cohort_parquet,
+        python_executable=runner.python_executable,
+        allow_unsafe_host_fallback=True,
+    )
+
+    assert step_may_access_preselection_universe(step=step, plan=plan) is True
+    assert observed == runner.extra_env["EASYICU_UNIVERSE_PARQUET"]
+    assert runner.authority_identity_sha256 != without_universe.authority_identity_sha256

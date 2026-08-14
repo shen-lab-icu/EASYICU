@@ -185,10 +185,17 @@ def _rehydrate_acquisition_projection(payload: Mapping[str, Any]) -> Any:
     )
 
 
-def _checkpoint_pending_from_record(record: WebReviewRecoveryRecord) -> Any:
+def _checkpoint_pending_from_record(
+    record: WebReviewRecoveryRecord,
+    *,
+    recover_recorded_decisions: bool = False,
+) -> Any:
     from easyicu.research_agent.orchestration.human_review_checkpoint import (
         checkpoint_path,
         load_checkpoint,
+    )
+    from easyicu.research_agent.orchestration.human_review_restore import (
+        recover_checkpoint_decisions_from_evidence,
     )
     from easyicu.research_agent.orchestration.workflow import HumanReviewPending
 
@@ -198,9 +205,25 @@ def _checkpoint_pending_from_record(record: WebReviewRecoveryRecord) -> Any:
         run_dir.relative_to((wrapper_dir / "pipeline").resolve())
     except ValueError as exc:
         raise WebReviewRecoveryError("Web review run path escaped its wrapper") from exc
-    checkpoint = load_checkpoint(checkpoint_path(run_dir))
+    checkpoint_file = checkpoint_path(run_dir)
+    checkpoint = (
+        recover_checkpoint_decisions_from_evidence(
+            checkpoint_file,
+            run_dir=run_dir,
+        )
+        if recover_recorded_decisions
+        else load_checkpoint(checkpoint_file, require_pending=False)
+    )
     if checkpoint.run_id != record.run_id:
         raise WebReviewRecoveryError("Web review checkpoint belongs to another run")
+    if checkpoint.state not in {
+        "pending",
+        "approved_pending_execution",
+        "executing",
+    }:
+        raise WebReviewRecoveryError(
+            f"Web review checkpoint state {checkpoint.state!r} is not resumable"
+        )
     return HumanReviewPending(
         run_id=record.run_id,
         thread_id=record.run_id,
@@ -2104,7 +2127,10 @@ def _recover_pending_run(
     from easyicu.research_agent.orchestration.config import PipelineConfig
     from easyicu.research_agent.orchestration.services import PipelineServices
 
-    pending = _checkpoint_pending_from_record(record)
+    pending = _checkpoint_pending_from_record(
+        record,
+        recover_recorded_decisions=True,
+    )
     wrapper_dir = Path(record.wrapper_dir).resolve()
     if record.pipeline_config_sha256 is None:
         # Historical /1 records predate the exact recovery digest.  They remain
@@ -2751,17 +2777,45 @@ def resume_research_pipeline(
             "research_pipeline_review_decision_invalid",
             "Choose approved or rejected for the pending plan review.",
         )
-    decisions = [
-        {
-            "review_id": request.review_id,
-            "authority_sha256": request.authority_sha256,
-            "decision": resolved,
-            "reviewer": _clean_text(reviewer, 200) or "local_web_reviewer",
-            "decided_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "note": _clean_text(note, 1_000),
-        }
-        for request in entry.pending.requests
-    ]
+    stored_decisions: List[Dict[str, Any]] = []
+    checkpoint_file = Path(entry.pending.run_dir) / "human_review_checkpoint.json"
+    if checkpoint_file.is_file():
+        from easyicu.research_agent.orchestration.human_review_checkpoint import (
+            load_checkpoint,
+        )
+
+        checkpoint = load_checkpoint(checkpoint_file, require_pending=False)
+        if checkpoint.state not in {
+            "pending",
+            "approved_pending_execution",
+            "executing",
+        }:
+            raise ResearchPipelineRunError(
+                "research_pipeline_review_checkpoint_not_resumable",
+                f"The saved review is in non-resumable phase {checkpoint.state!r}.",
+            )
+        stored_decisions = [dict(item) for item in checkpoint.approved_decisions]
+    if stored_decisions:
+        stored_kinds = {str(item.get("decision") or "") for item in stored_decisions}
+        if stored_kinds != {resolved}:
+            raise ResearchPipelineRunError(
+                "research_pipeline_review_decision_already_recorded",
+                "This review already has a different durable decision.",
+            )
+        decisions = stored_decisions
+    else:
+        decided_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        decisions = [
+            {
+                "review_id": request.review_id,
+                "authority_sha256": request.authority_sha256,
+                "decision": resolved,
+                "reviewer": _clean_text(reviewer, 200) or "local_web_reviewer",
+                "decided_at": decided_at,
+                "note": _clean_text(note, 1_000),
+            }
+            for request in entry.pending.requests
+        ]
     _progress(
         job,
         step="human_review",

@@ -71,6 +71,16 @@ def test_write_phase_never_reads_append_only_evidence_without_current_ledger() -
     assert "evidence.records()" not in source
 
 
+def test_live_writer_digest_uses_verified_result_envelope_records() -> None:
+    source = inspect.getsource(write_phase._draft_manuscript)
+
+    authority_call = source.index("authoritative_writer_records(")
+    digest_call = source.index("_render_writer_evidence_digest_v2(")
+    assert authority_call < digest_call
+    assert source.count("per_step_records=writer_authority_records") == 1
+    assert source.count("writer_authority_records,") == 2
+
+
 def test_preferred_writer_evidence_names_excludes_records_with_active_findings(
     tmp_path: Path,
 ) -> None:

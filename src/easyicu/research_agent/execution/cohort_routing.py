@@ -18,10 +18,27 @@ from ..contracts.primary_cohort import (
     reserved_primary_cohort_product,
 )
 from ..schema import AnalysisPlan, AnalysisStep
+from .runners.deterministic_robustness import robustness_replay_spec_is_emittable
 
 
 class StepExecutionCohortRoutingError(RuntimeError):
     """A typed analysis-cohort binding cannot be exposed without ambiguity."""
+
+
+def step_may_access_preselection_universe(
+    *, step: AnalysisStep, plan: AnalysisPlan
+) -> bool:
+    """Return whether a typed step contract authorizes universe exposure.
+
+    Ordinary generated and primary analyses consume only their selected cohort.
+    The pre-selection universe is a separate scientific authority granted only
+    to the unique closed-cohort producer or to a fully declared locked-grid
+    robustness replay.  Method prose and analysis role never grant access.
+    """
+
+    return primary_analysis_cohort_producer_uses_universe(
+        step=step, plan=plan
+    ) or robustness_replay_spec_is_emittable(step)
 
 
 def step_execution_cohort_path(
@@ -137,5 +154,6 @@ __all__ = [
     "StepExecutionCohortRoutingError",
     "bind_step_execution_cohort",
     "bound_step_execution_cohort_path",
+    "step_may_access_preselection_universe",
     "step_execution_cohort_path",
 ]

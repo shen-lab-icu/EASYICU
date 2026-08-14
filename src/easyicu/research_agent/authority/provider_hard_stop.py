@@ -374,8 +374,9 @@ class ProviderHardStopLedger:
                     "task_id": task_id,
                     "status": "pending",
                     "started_at": None,
+                    "active_started_at": None,
                     "finished_at": None,
-                    "elapsed_seconds": None,
+                    "elapsed_seconds": 0.0,
                     "paused_at": None,
                     "error": None,
                     "blocked_by": None,
@@ -409,8 +410,15 @@ class ProviderHardStopLedger:
                 if task.get("status") != "running":
                     continue
                 try:
-                    started_at = datetime.fromisoformat(str(task["started_at"]))
-                    elapsed = max(0.0, (now_utc - started_at).total_seconds())
+                    prior_elapsed = float(task.get("elapsed_seconds") or 0.0)
+                    active_started_at = datetime.fromisoformat(
+                        str(task.get("active_started_at") or task["started_at"])
+                    )
+                    elapsed = prior_elapsed + max(
+                        0.0, (now_utc - active_started_at).total_seconds()
+                    )
+                    if not math.isfinite(elapsed) or elapsed < 0.0:
+                        raise ValueError("invalid elapsed wall clock")
                 except (KeyError, TypeError, ValueError):
                     elapsed = self.limits.max_wall_clock_seconds_per_task
                 self._task_started_monotonic[str(task["task_id"])] = (
@@ -550,12 +558,13 @@ class ProviderHardStopLedger:
                 task["resume_count"] = len(attempts)
                 task["status"] = "running"
                 task["finished_at"] = None
-                task["elapsed_seconds"] = None
+                task["elapsed_seconds"] = prior_elapsed
                 task["error"] = None
                 task["blocked_by"] = None
                 task["score_summary"] = {}
                 if not task.get("started_at"):
                     task["started_at"] = _utc_now()
+                task["active_started_at"] = _utc_now()
                 self._task_started_monotonic[normalized] = (
                     time.monotonic() - prior_elapsed
                 )
@@ -566,7 +575,10 @@ class ProviderHardStopLedger:
                     f"Provider hard-stop task cannot start from {status!r}"
                 )
             task["status"] = "running"
-            task["started_at"] = _utc_now()
+            started_at = _utc_now()
+            task["started_at"] = started_at
+            task["active_started_at"] = started_at
+            task["elapsed_seconds"] = 0.0
             task["paused_at"] = None
             self._task_started_monotonic[normalized] = time.monotonic()
             self._persist_locked()
@@ -588,6 +600,7 @@ class ProviderHardStopLedger:
             task["status"] = "paused"
             task["paused_at"] = _utc_now()
             task["elapsed_seconds"] = round(elapsed, 6)
+            task["active_started_at"] = None
             self._task_started_monotonic.pop(normalized, None)
             self._persist_locked()
 
@@ -616,6 +629,7 @@ class ProviderHardStopLedger:
             if prior_elapsed >= self.limits.max_wall_clock_seconds_per_task:
                 task["status"] = "budget_exhausted"
                 task["finished_at"] = _utc_now()
+                task["active_started_at"] = None
                 task["error"] = "TASK_WALL_CLOCK_EXHAUSTED"
                 self._persist_locked()
                 raise ProviderHardStopExceeded(
@@ -628,7 +642,8 @@ class ProviderHardStopLedger:
                 )
             task["status"] = "running"
             task["paused_at"] = None
-            task["elapsed_seconds"] = None
+            task["elapsed_seconds"] = prior_elapsed
+            task["active_started_at"] = _utc_now()
             self._task_started_monotonic[normalized] = (
                 time.monotonic() - prior_elapsed
             )
@@ -668,6 +683,7 @@ class ProviderHardStopLedger:
                 task["status"] = "budget_exhausted"
                 task["finished_at"] = _utc_now()
                 task["elapsed_seconds"] = round(elapsed, 6)
+                task["active_started_at"] = None
                 task["error"] = "TASK_WALL_CLOCK_EXHAUSTED"
                 self._persist_locked()
                 raise ProviderHardStopExceeded(
@@ -854,56 +870,11 @@ class ProviderHardStopLedger:
                     if error_type is not None
                     else "completed_usage_unreported"
                 )
-                # A RESERVATION IS A HOLD, AND EVERY HOLD NEEDS A RELEASE PATH.
-                #
-                # ``completion_reserve`` is deliberately taken as
-                # ``max(requested_completion, FLOOR)`` before transport, because
-                # a gateway may return more than we asked for and we must not
-                # start a call we could not afford in the worst case.  A
-                # reported call then releases that hold down to the provider's
-                # own numbers.  An UNREPORTED call had no release path at all,
-                # so it stayed charged at the floor forever.
-                #
-                # MEASURED on a survival-analysis fixture, 2026-08-03.  The
-                # local gateway was answering
-                # HTTP 500 in 0.98 s with ``Post ".../responses": EOF`` -- the
-                # upstream connection died while the request was still being
-                # sent, about a quarter of the time a successful call needs to
-                # come back (3.5-7.9 s).  Every one of the 14 attempts asked for
-                # 4,096 completion tokens (2,048 for repair).  The 10 that died
-                # were each charged the 128,000 floor: 1,848,481 of the run's
-                # 2,000,000 tokens, and $45.39 of the batch's $100, for output
-                # that provably never existed.  The run died at step 3 of 9 --
-                # not on any analysis defect, on its own accounting.
-                #
-                # The floor exists to absorb a provider REPORTING more than it
-                # was asked for; with no report there is nothing to absorb, and
-                # ``requested_completion`` is the true ceiling on what the
-                # provider could have produced for this request.  So release the
-                # completion hold to what the caller actually authorized and
-                # keep the prompt reservation in full -- those bytes may have
-                # reached the provider and been billed.  Attempt storms stay
-                # bounded by ``max_provider_attempts_per_{run,batch}``, which is
-                # the guard that owns retry count; the token ceiling should
-                # charge tokens that could actually be at risk.
-                #
-                # Same 14 attempts under this rule: 699,021 tokens instead of
-                # 1,944,205, leaving 1.3M for the analysis that was starved.
-                requested_completion = int(call.get("requested_completion_tokens") or 0)
-                held_completion = int(call.get("completion_token_reservation") or 0)
-                if 0 < requested_completion < held_completion:
-                    released = held_completion - requested_completion
-                    call["completion_token_reservation"] = requested_completion
-                    call["accounted_tokens"] = max(
-                        0, int(call.get("accounted_tokens") or 0) - released
-                    )
-                    call["accounted_estimated_cost_usd"] = max(
-                        0.0,
-                        float(call.get("accounted_estimated_cost_usd") or 0.0)
-                        - (released * self.limits.output_cost_usd_per_million_tokens)
-                        / 1_000_000.0,
-                    )
-                    call["unreported_completion_hold_released"] = released
+                # Unknown usage cannot release the completion hold. Some
+                # reviewed gateways may strip or ignore the caller's cap before
+                # forwarding, which is exactly why the larger pre-transport
+                # reservation exists. Only provider-reported usage proves a
+                # smaller completion and permits release below this worst case.
 
                 # THE PROMPT HOLD NEEDS THE SAME RELEASE PATH, FOR THE SAME
                 # REASON.
@@ -1059,6 +1030,7 @@ class ProviderHardStopLedger:
             task["status"] = "failed" if error is not None else "completed"
             task["finished_at"] = _utc_now()
             task["elapsed_seconds"] = round(elapsed, 6)
+            task["active_started_at"] = None
             task["error"] = _safe_error_summary(error)
             task["score_summary"] = _safe_score_summary(score)
             self._task_started_monotonic.pop(str(task_id), None)

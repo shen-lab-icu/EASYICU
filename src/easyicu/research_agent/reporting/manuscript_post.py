@@ -27,6 +27,8 @@ from ..authority.evidence_store import (
     EvidenceEnforcementError,
     EvidenceEnforcementMode,
     EvidenceStore,
+    NumericEffectScale,
+    NumericEstimand,
     NumericClaim,
     _NUMERIC_IN_PROSE_RE,
 )
@@ -1363,9 +1365,25 @@ def _select_numeric_claim(
     context: str,
     previous_step_id: Optional[str],
     lineage: Optional[Mapping[str, frozenset[str]]] = None,
+    prose_effect_scale: Optional[NumericEffectScale] = None,
+    prose_estimand: Optional[NumericEstimand] = None,
 ) -> tuple[Optional[NumericClaim], bool]:
     """Return ``(claim, ambiguous)`` for one manuscript numeric literal."""
 
+    candidates = [
+        (claim, distance)
+        for claim, distance in candidates
+        if not (
+            prose_effect_scale is not None
+            and claim.effect_scale is not None
+            and claim.effect_scale is not prose_effect_scale
+        )
+        and not (
+            prose_estimand is not None
+            and claim.estimand is not None
+            and claim.estimand is not prose_estimand
+        )
+    ]
     if not candidates:
         return None, False
 
@@ -1488,6 +1506,64 @@ def _select_numeric_claim(
 
 
 _NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(r"(?:[.!?](?=\s|$)|\n{2,})")
+
+_EFFECT_SCALE_PHRASE_PATTERNS = {
+    NumericEffectScale.ODDS_RATIO: re.compile(r"\bodds[\s-]+ratios?\b", re.I),
+    NumericEffectScale.HAZARD_RATIO: re.compile(r"\bhazard[\s-]+ratios?\b", re.I),
+    NumericEffectScale.RISK_RATIO: re.compile(
+        r"\b(?:risk[\s-]+ratios?|relative[\s-]+risks?)\b", re.I
+    ),
+}
+_CI_MARKER = r"(?:95\s*%\s*(?:CI|confidence\s+interval)|confidence\s+interval)"
+_PLAIN_PROSE_NUMBER = r"[-+]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?"
+
+
+def _prose_effect_scale(context: str) -> Optional[NumericEffectScale]:
+    scales = {
+        scale
+        for scale, pattern in _EFFECT_SCALE_PHRASE_PATTERNS.items()
+        if pattern.search(context or "")
+    }
+    abbreviation_scales = {
+        "OR": NumericEffectScale.ODDS_RATIO,
+        "HR": NumericEffectScale.HAZARD_RATIO,
+        "RR": NumericEffectScale.RISK_RATIO,
+    }
+    scales.update(
+        abbreviation_scales[token]
+        for token in re.findall(r"\b(?:OR|HR|RR)\b", context or "")
+    )
+    return next(iter(scales)) if len(scales) == 1 else None
+
+
+def _prose_numeric_estimand(text: str, *, start: int, end: int) -> Optional[NumericEstimand]:
+    """Classify an explicitly labelled point estimate or ordered CI endpoint."""
+
+    prefix = text[max(0, start - 180) : start]
+    suffix = text[end : min(len(text), end + 100)]
+    separator = r"(?:-|–|—|\bto\b)"
+    if re.search(_CI_MARKER + r".{0,50}$", prefix, flags=re.I | re.S):
+        if re.match(r"\s*" + separator + r"\s*" + _PLAIN_PROSE_NUMBER, suffix):
+            return NumericEstimand.CONFIDENCE_INTERVAL_LOWER
+    if re.search(
+        _CI_MARKER
+        + r".{0,80}?"
+        + _PLAIN_PROSE_NUMBER
+        + r"\s*"
+        + separator
+        + r"\s*$",
+        prefix,
+        flags=re.I | re.S,
+    ):
+        return NumericEstimand.CONFIDENCE_INTERVAL_UPPER
+    if re.search(
+        r"(?:\b(?:OR|HR|RR)\b|\b(?:odds|hazard|risk)[\s-]+ratio)"
+        r"\s*(?:=|:|,|\bof\b|\bwas\b)\s*$",
+        prefix,
+        flags=re.I,
+    ):
+        return NumericEstimand.POINT_ESTIMATE
+    return None
 
 
 def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
@@ -1770,6 +1846,12 @@ def bind_numeric_values(
             context=context,
             previous_step_id=previous_step_id,
             lineage=lineage,
+            prose_effect_scale=_prose_effect_scale(context),
+            prose_estimand=_prose_numeric_estimand(
+                manuscript,
+                start=start,
+                end=end,
+            ),
         )
         if claim is None:
             untraced.append(value)
@@ -1811,6 +1893,10 @@ def bind_numeric_values(
                 f"field={claim.source_field}",
                 f"evidence={claim.evidence_id}",
             ]
+            if claim.effect_scale is not None:
+                fields.append(f"effect_scale={claim.effect_scale.value}")
+            if claim.estimand is not None:
+                fields.append(f"estimand={claim.estimand.value}")
             display_value = display_values.get(fid)
             if display_value and display_value != claim.value:
                 fields.extend(
