@@ -787,7 +787,8 @@ def _build_planner_user_prompt(
         "        },\n"
         '        "confidence_level": 0.95\n'
         "      },\n"
-        '      "cohort_definition_spec": null\n'
+        + _payload.descriptive_claim_example_fragment()
+        + '      "cohort_definition_spec": null\n'
         "    }\n"
         "  ],\n"
         '  "robustness_specs": [\n'
@@ -1411,6 +1412,22 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
+        # Family inference is a Planner hint, not execution authority. Resolve
+        # the closed family before family-scoped action/literature validation so
+        # a typo receives the precise retryable contract error rather than an
+        # incidental downstream catalog lookup failure.
+        declared_family = str(plan.analysis_type or "").strip()
+        if not declared_family:
+            plan.analysis_type = infer_analysis_type(context).key
+        else:
+            canonical_family = canonical_analysis_family(declared_family)
+            if canonical_family is None:
+                raise ValueError(
+                    "Unknown analysis_type declaration "
+                    f"{declared_family!r}; choose a key from the analysis-type "
+                    "catalog instead of inventing or misspelling a family"
+                )
+            plan.analysis_type = canonical_family
         _scientific_actions.validate_plan_scientific_action_selections(plan=plan, inferred_analysis_type=infer_analysis_type(context).key, require_result_actions=require_scientific_actions)
         # Repeated-unit covariance is study authority, not Planner prose.  The
         # binder parses only the closed JSON design in ResearchContext and
@@ -1599,23 +1616,6 @@ class PlannerAgent:
         _validate_table_one_observed_levels(plan, context)
         if not llm_is_mockish(getattr(self, "llm", None)):
             validate_fresh_planner_typed_product_specs(plan, context=context)
-        # Family inference is a planner hint, not execution authority. Preserve
-        # a valid agent-selected family (and its rationale); only fill the field
-        # when the agent omitted it. A non-empty declaration is nevertheless a
-        # closed execution contract: typos/novel labels must trigger the
-        # structured retry loop instead of bypassing family-specific checks.
-        declared_family = str(plan.analysis_type or "").strip()
-        if not declared_family:
-            plan.analysis_type = infer_analysis_type(context).key
-        else:
-            canonical_family = canonical_analysis_family(declared_family)
-            if canonical_family is None:
-                raise ValueError(
-                    "Unknown analysis_type declaration "
-                    f"{declared_family!r}; choose a key from the analysis-type "
-                    "catalog instead of inventing or misspelling a family"
-                )
-            plan.analysis_type = canonical_family
         validate_plan_typed_bindings_against_context(plan=plan, context=context)
         validate_plan_against_adjustment_authority(plan=plan, context=context)
         primary_cohort_findings = primary_analysis_cohort_plan_findings(plan=plan)

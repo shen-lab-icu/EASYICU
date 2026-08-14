@@ -581,6 +581,7 @@ def test_missing_endpoint_is_blocked_after_planner_and_replanner_miss(
     from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
     from easyicu.research_agent.schema import AnalysisStep
 
+    citation_key = "endpoint_contract_fixture"
     step = AnalysisStep(
         step_id="02_primary_survival",
         planned_analysis_role="primary",
@@ -588,6 +589,17 @@ def test_missing_endpoint_is_blocked_after_planner_and_replanner_miss(
         inputs=[],
         expected_outputs=["table:survival_estimate"],
         method="survival_model",
+        literature_citation_keys=[citation_key],
+        literature_design_bindings=[
+            {
+                "citation_key": citation_key,
+                "design_elements": ["reporting"],
+                "application": (
+                    "Keep this endpoint-gate fixture's reporting declaration "
+                    "source-bound while the endpoint itself remains absent."
+                ),
+            }
+        ],
     )
     missing_endpoint_plan = _plan(steps=[step])
     llm = PatternScriptedMockLLMClient(
@@ -607,6 +619,7 @@ def test_missing_endpoint_is_blocked_after_planner_and_replanner_miss(
 
     def run_without_article_suite(self, context, **kwargs):
         kwargs["enforce_article_contract"] = False
+        kwargs["allowed_literature_citation_keys"] = [citation_key]
         return original_planner_run(self, context, **kwargs)
 
     monkeypatch.setattr(PlannerAgent, "run", run_without_article_suite)
