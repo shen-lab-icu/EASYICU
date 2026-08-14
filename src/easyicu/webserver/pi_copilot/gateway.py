@@ -30,7 +30,7 @@ from .host_tool_dispatcher import (
     HostToolOutcome,
 )
 from .provider_config import PiProviderConfig, PiProviderConfigStore
-from .tools import execute_tool
+from .tools import MUTATING_HOST_TOOLS, execute_tool
 
 MAX_PROTOCOL_LINE_BYTES = 1024 * 1024
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 15 * 60
@@ -679,6 +679,8 @@ class PiGatewayClient:
         try:
             dispatcher.submit(
                 session_id=session_id,
+                operation_id=request_id,
+                mutating=tool_name in MUTATING_HOST_TOOLS,
                 execute=execute,
                 respond=respond,
             )
@@ -706,6 +708,16 @@ class PiGatewayClient:
                     "code": str(outcome.error_code or "pi_host_tool_failed"),
                     "message": str(
                         outcome.error_message or "The EasyICU host tool failed."
+                    ),
+                    **(
+                        {
+                            "details": {
+                                "operation_id": outcome.operation_id,
+                                "operation_state": outcome.operation_state,
+                            }
+                        }
+                        if outcome.operation_id and outcome.operation_state
+                        else {}
                     ),
                 },
             }
