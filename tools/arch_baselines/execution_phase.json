@@ -1,6 +1,6 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "a5164d84813e4707c05542365f9044ecdf5de9aa26d9c49dcac7f4b21ef3941b",
+  "tool_sha256": "796d205b384207a1b9a2ccb05f086c0b3e8fe04c48badcdd08b577c7d21964ff",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
@@ -76,9 +76,51 @@
       "shim_bypass_violations": []
     },
     "audits/validators.py": {
-      "loc": 13815,
-      "sha256": "a40055e5c53b220f53e9897a3f7d3b61e52937d3673f3c3a467ddec4ed359a99",
-      "intra_package_import_edges": 15,
+      "loc": 2797,
+      "sha256": "0f23e19af876d486495e87b24c4fd33677e00e383f2dd0d654837f407987680a",
+      "intra_package_import_edges": 22,
+      "shim_bypass_violations": []
+    },
+    "audits/cohort.py": {
+      "loc": 132,
+      "sha256": "0af285c496908e6fb5f293cbb7d1685d38d257aa1b6c80e6c32f83c0cfba5b2a",
+      "intra_package_import_edges": 2,
+      "shim_bypass_violations": []
+    },
+    "audits/cross_step.py": {
+      "loc": 4316,
+      "sha256": "16896f0f85ff68749b41cd5af7f332abf2bb840e1441395bcd43ffb021e45965",
+      "intra_package_import_edges": 5,
+      "shim_bypass_violations": []
+    },
+    "audits/statistical.py": {
+      "loc": 683,
+      "sha256": "a47025972f2fd01991b041c4343e7c4a62a860ceaa07e82033ef21ff2cc526a9",
+      "intra_package_import_edges": 3,
+      "shim_bypass_violations": []
+    },
+    "audits/figures.py": {
+      "loc": 5509,
+      "sha256": "077776071c99c266fa3e2cf8bfc3cd473f513fc60074d1607088adf2242ab4cd",
+      "intra_package_import_edges": 4,
+      "shim_bypass_violations": []
+    },
+    "audits/clinical.py": {
+      "loc": 164,
+      "sha256": "d0a6ed9c88086756e5452165053d4a99a3a8c7ae05fc7af30af839f5c8cfa9a7",
+      "intra_package_import_edges": 1,
+      "shim_bypass_violations": []
+    },
+    "audits/publication.py": {
+      "loc": 210,
+      "sha256": "13606300959f926dd35941935aaa44a26124b3f17533beda3ae1edbeacd81897",
+      "intra_package_import_edges": 2,
+      "shim_bypass_violations": []
+    },
+    "audits/_v_support.py": {
+      "loc": 209,
+      "sha256": "a24cd7db7fc54010706aaa22e4463e1d16dd852f6bc852584fe633bb4a8586f5",
+      "intra_package_import_edges": 1,
       "shim_bypass_violations": []
     },
     "plan_utils.py": {
@@ -106,9 +148,9 @@
       "shim_bypass_violations": []
     },
     "agents/replanner.py": {
-      "loc": 294,
-      "sha256": "fe63aeb0e9f4b7f871a563d4966c4add52b76a83918c26d8ebc90a395dd604cc",
-      "intra_package_import_edges": 9,
+      "loc": 308,
+      "sha256": "810074596ab79398321f318056a23ccfcf7fcf6104cd2863979e1bb8323eb7d9",
+      "intra_package_import_edges": 10,
       "shim_bypass_violations": []
     },
     "agents/roles.py": {
@@ -178,7 +220,13 @@
       "callable_closure_captured_names": 79
     }
   },
-  "baseline_reason": "agents/core.py decomposition batch: the 4,933-line monolith was split into owner modules (_support/planner/replanner/roles/coder/reporting) behind a thin re-export facade; the facade keeps the historical import surface and identity contract. All six new owners are appended to TARGET_FILES so the lower-is-better ratchet gates them from day one. Deltas in other files are committed improvements from HEAD 26bdcdc..223d45c, absorbed here only because the ratchet is lower-is-better; nothing grew.",
+  "baseline_reason": "audits/validators.py decomposition batch: the 13,815-line monolith split into cohort/cross_step/statistical/figures/clinical/publication owners plus _v_support, with the concept-audit owner (and the authorized_complete seam tests patch) staying in validators.py behind a thin re-export facade; figures.py keeps the mutually referencing figure validators together to preserve zero import cycles. New owners appended to TARGET_FILES. The only growth, agents/replanner.py +14 loc, is the reviewed analysis_type guard from the test-seam fix batch, not drift.",
+  "baseline_accepted_growth": {
+    "agents/replanner.py": {
+      "loc_was": 294,
+      "loc_now": 308
+    }
+  },
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -311,6 +359,15 @@
     },
     {
       "reason": "agents/core.py decomposition batch: the 4,933-line monolith was split into owner modules (_support/planner/replanner/roles/coder/reporting) behind a thin re-export facade; the facade keeps the historical import surface and identity contract. All six new owners are appended to TARGET_FILES so the lower-is-better ratchet gates them from day one. Deltas in other files are committed improvements from HEAD 26bdcdc..223d45c, absorbed here only because the ratchet is lower-is-better; nothing grew."
+    },
+    {
+      "reason": "audits/validators.py decomposition batch: the 13,815-line monolith split into cohort/cross_step/statistical/figures/clinical/publication owners plus _v_support, with the concept-audit owner (and the authorized_complete seam tests patch) staying in validators.py behind a thin re-export facade; figures.py keeps the mutually referencing figure validators together to preserve zero import cycles. New owners appended to TARGET_FILES. The only growth, agents/replanner.py +14 loc, is the reviewed analysis_type guard from the test-seam fix batch, not drift.",
+      "accepted_growth": {
+        "agents/replanner.py": {
+          "loc_was": 294,
+          "loc_now": 308
+        }
+      }
     }
   ]
 }
