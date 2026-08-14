@@ -2,6 +2,8 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 
 const STRUCTURAL_TOKEN_RESERVE = 4096;
+const MIN_SESSION_TOKEN_BUDGET = 1_000_000;
+const DEFAULT_SESSION_CONTEXT_MULTIPLIER = 20;
 export const SHELL_BUDGET_RECEIPT = "easyicu.shell-budget/1";
 export const SHELL_BUDGET_RECEIPT_V2 = "easyicu.shell-budget/2";
 const MICRO_USD_PER_USD = 1_000_000;
@@ -20,6 +22,14 @@ export function estimatedInputTokenUpperBound(context) {
   // Pi is text-only in EasyICU. UTF-8 bytes are a conservative ceiling for
   // byte-tokenized text; the fixed reserve covers message/tool framing.
   return Buffer.byteLength(encoded, "utf8") + STRUCTURAL_TOKEN_RESERVE;
+}
+
+export function defaultShellSessionTokenBudget(contextWindow) {
+  const boundedContext = integer(contextWindow, 200_000, 8192);
+  return Math.max(
+    MIN_SESSION_TOKEN_BUDGET,
+    boundedContext * DEFAULT_SESSION_CONTEXT_MULTIPLIER,
+  );
 }
 
 function budgetError(code, message, details) {

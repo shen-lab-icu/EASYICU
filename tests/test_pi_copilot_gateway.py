@@ -656,6 +656,7 @@ def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
     projection = (APP_DIR / "src" / "event-projection.mjs").read_text(encoding="utf-8")
 
     assert "EASYICU_PI_SESSION_TOKEN_BUDGET" in source
+    assert "defaultShellSessionTokenBudget(contextWindow)" in source
     assert "pi_shell_token_budget_exhausted" in budget
     assert "EASYICU_PI_MAX_COST_USD_PER_MESSAGE" in source
     assert "pi_shell_session_cost_budget_exhausted" in budget
@@ -673,7 +674,8 @@ def test_shell_budget_guard_blocks_each_provider_boundary() -> None:
         pytest.skip("Node is not installed")
     module = APP_DIR / "src" / "shell-budget.mjs"
     script = f"""
-      import {{ providerCallReceipt, restoredProviderCallCount, ShellBudgetGuard }} from {json.dumps(module.as_uri())};
+      import {{ defaultShellSessionTokenBudget, providerCallReceipt, restoredProviderCallCount, ShellBudgetGuard }} from {json.dumps(module.as_uri())};
+      console.log(defaultShellSessionTokenBudget(100000), defaultShellSessionTokenBudget(200000));
       const tokenGuard = new ShellBudgetGuard({{
         tokenBudget: 5000,
         maxOutputTokens: 1000,
@@ -776,6 +778,7 @@ def test_shell_budget_guard_blocks_each_provider_boundary() -> None:
         check=True,
     )
     assert completed.stdout.splitlines() == [
+        "2000000 4000000",
         "pi_shell_token_budget_exhausted",
         "pi_shell_message_provider_call_budget_exhausted",
         "9",

@@ -16,7 +16,10 @@ import {
 import { Type } from "typebox";
 
 import { normalizePiEvent, projectTranscriptMessage } from "./event-projection.mjs";
-import { ShellBudgetGuard } from "./shell-budget.mjs";
+import {
+  defaultShellSessionTokenBudget,
+  ShellBudgetGuard,
+} from "./shell-budget.mjs";
 
 const PROTOCOL_VERSION = "easyicu.pi-copilot/1";
 const MAX_LINE_BYTES = 1024 * 1024;
@@ -266,17 +269,25 @@ function modelConfig() {
     throw Object.assign(new Error(`unsupported Pi API transport: ${api}`), { code: "pi_api_transport_unsupported" });
   }
   const maxTokens = integerEnv("EASYICU_PI_MAX_TOKENS", 16384, 256, 131072);
+  const contextWindow = integerEnv(
+    "EASYICU_PI_CONTEXT_WINDOW", 200000, 8192, 2000000,
+  );
   return {
     apiKey,
     baseUrl,
     model,
     provider,
     api,
-    contextWindow: integerEnv("EASYICU_PI_CONTEXT_WINDOW", 200000, 8192, 2000000),
+    contextWindow,
     maxTokens,
     sessionTokenBudget: Math.max(
       maxTokens,
-      integerEnv("EASYICU_PI_SESSION_TOKEN_BUDGET", 1000000, 16384, 100000000),
+      integerEnv(
+        "EASYICU_PI_SESSION_TOKEN_BUDGET",
+        defaultShellSessionTokenBudget(contextWindow),
+        16384,
+        100000000,
+      ),
     ),
     maxProviderCallsPerMessage: integerEnv(
       "EASYICU_PI_MAX_PROVIDER_CALLS_PER_MESSAGE", 8, 1, 64,

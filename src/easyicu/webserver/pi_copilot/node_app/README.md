@@ -48,7 +48,7 @@ Optional variables:
 - `EASYICU_PI_API` (`openai-completions` or `openai-responses`)
 - `EASYICU_PI_CONTEXT_WINDOW` (default `200000`)
 - `EASYICU_PI_MAX_TOKENS` (default `16384`)
-- `EASYICU_PI_SESSION_TOKEN_BUDGET` (default `1000000`; provider-call checked cumulative ceiling)
+- `EASYICU_PI_SESSION_TOKEN_BUDGET` (default: the greater of `1000000` or 20 configured context windows; provider-call checked cumulative ceiling)
 - `EASYICU_PI_CWD` (normally a private empty workspace supplied by the host)
 - `EASYICU_PI_MAX_PROVIDER_CALLS_PER_MESSAGE` (default `8`)
 - `EASYICU_PI_MAX_PROVIDER_CALLS_PER_SESSION` (default `128`)
