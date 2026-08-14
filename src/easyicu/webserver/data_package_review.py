@@ -17,6 +17,9 @@ from typing import Any, Dict, Mapping, Optional
 
 from easyicu.research_agent.acquisition.catalog import build_available_catalog
 from easyicu.webserver import cohort_review, sources
+from easyicu.webserver.data_package_execution_readiness import (
+    build_data_package_execution_readiness,
+)
 
 
 class DataPackageReviewError(RuntimeError):
@@ -522,8 +525,34 @@ def build_registered_data_package_review(
     source_projection.pop("path", None)
     quality = aggregate.get("quality")
     quality = quality if isinstance(quality, Mapping) else {}
+    execution_readiness = build_data_package_execution_readiness(
+        study,
+        source_path=source_path,
+        catalog_by_id=catalog_by_id,
+        registered_denominator=denominator,
+    )
+    eligibility = execution_readiness["eligible_denominator"]
+    runtime_readiness = execution_readiness["runtime_readiness"]
+    blocking.extend(
+        {
+            "availability_status": "semantic_review_required",
+            "reason_code": reason,
+        }
+        for reason in runtime_readiness["required_findings"]
+    )
+    if eligibility.get("status") != "ready":
+        blocking.append(
+            {
+                "availability_status": "semantic_review_required",
+                "reason_code": str(
+                    eligibility.get("reason_code")
+                    or "cohort_eligibility_denominator_unavailable"
+                ),
+            }
+        )
+
     payload: Dict[str, Any] = {
-        "schema_version": "easyicu.data-package-review/1",
+        "schema_version": "easyicu.data-package-review/2",
         "status": "blocked" if blocking else "ready_for_plan",
         "code": (
             "easyicu_data_package_review_blocked"
@@ -543,6 +572,8 @@ def build_registered_data_package_review(
             "count": denominator,
             "basis": "registered_export_distinct_entity_aggregate",
         },
+        "eligible_denominator": eligibility,
+        "runtime_readiness": runtime_readiness,
         "cohort_review": {
             "label": str((study.get("cohort") or {}).get("label") or "")[:1000]
             if isinstance(study.get("cohort"), Mapping)

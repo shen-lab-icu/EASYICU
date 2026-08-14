@@ -5,10 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 
+import pandas as pd
 import pytest
 
 from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
+from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
 from easyicu.webserver import data_package_review as review_owner
+from easyicu.webserver import data_package_execution_readiness as readiness_owner
 
 
 def _study(path: str) -> dict:
@@ -226,6 +229,210 @@ def test_review_digest_changes_with_study_revision(
         changed, registry=registry
     )
     assert first["review_sha256"] != second["review_sha256"]
+
+
+def test_review_proves_eligible_denominator_grouping_and_landmark_inputs(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = str(tmp_path / "registered")
+    registry = {
+        "sources": [
+            {
+                "id": "src_demo",
+                "path": source_path,
+                "database": "miiv",
+                "ok": True,
+                "modules": [
+                    "demographics",
+                    "outcome",
+                    "sepsis3_sofa2",
+                ],
+            }
+        ]
+    }
+    aggregate = _aggregate(source_path)
+    aggregate["coverage"].append(
+        {
+            "module": "demographics",
+            "metric_kind": "coverage",
+            "covered_entities": 100,
+            "coverage_pct": 100.0,
+        }
+    )
+    monkeypatch.setattr(
+        review_owner.cohort_review,
+        "cohort_review_summary",
+        lambda _body: aggregate,
+    )
+    monkeypatch.setattr(
+        review_owner,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source=source_path,
+            concepts=[
+                CatalogConcept("age", file_name="demographics.parquet"),
+                CatalogConcept(
+                    "sep3_sofa2",
+                    file_name="sepsis3_sofa2.parquet",
+                    column_role="event_status",
+                ),
+                CatalogConcept(
+                    "death", file_name="outcome.parquet", column_role="event_status"
+                ),
+                CatalogConcept("los_icu", file_name="outcome.parquet"),
+                CatalogConcept(
+                    "icu_readmission",
+                    file_name="outcome.parquet",
+                    column_role="event_status",
+                ),
+            ],
+        ),
+    )
+
+    def read_concept(_root, concept_id):
+        if concept_id == "age":
+            return pd.DataFrame(
+                {"stay_id": range(100), "age": [17, *([18] * 99)]}
+            )
+        if concept_id == "death":
+            return pd.DataFrame(
+                {"stay_id": [1, 2], "charttime": [8.0, None], "death": [1, 0]}
+            )
+        if concept_id == "sep3_sofa2":
+            return pd.DataFrame(
+                {"stay_id": [1], "charttime": [4.0], "sep3_sofa2": [True]}
+            )
+        raise KeyError(concept_id)
+
+    monkeypatch.setattr(readiness_owner, "read_exported_concept", read_concept)
+    monkeypatch.setattr(
+        readiness_owner.source_identity_authority,
+        "resolve_patient_grouping_authority",
+        lambda **_kwargs: PatientGroupingBinding(
+            mapping_path=tmp_path / "mapping.parquet",
+            mapping_sha256="a" * 64,
+            mapping_stay_column="stay_id",
+            mapping_patient_column="subject_id",
+            authority_coordinates={
+                "authority_ref": "test/patient-groups/v1",
+                "export_manifest_sha256": "b" * 64,
+                "grouping_derivation": "prefix_before_:s",
+            },
+        ),
+    )
+    study = {
+        **_study(source_path),
+        "cohort": {"label": "Adults", "age_min": 18, "exclude_readmissions": False},
+        "modules": ["demographics", "outcome", "sepsis3_sofa2"],
+        "analysis_design": {
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "patient",
+        },
+        "sensitivity_specs": [
+            {
+                "spec_id": "landmark_24h",
+                "axis": "timing",
+                "strategy": "landmark",
+                "landmark_hours": 24,
+                "require_alive_at_landmark": True,
+                "exclude_negative_event_times": True,
+            },
+            {
+                "spec_id": "non_readmission",
+                "axis": "repeated_stays",
+                "strategy": "non_readmission_restriction",
+                "execution_variables": ["icu_readmission"],
+            },
+        ],
+    }
+
+    payload = review_owner.build_registered_data_package_review(study, registry=registry)
+
+    assert payload["schema_version"] == "easyicu.data-package-review/2"
+    assert payload["status"] == "ready_for_plan"
+    assert payload["eligible_denominator"] == {
+        "status": "ready",
+        "count": 99,
+        "basis": "typed_age_eligibility",
+        "age_min": 18.0,
+        "age_max": None,
+        "missing_age_count": 0,
+        "excluded_by_age_count": 1,
+    }
+    readiness = payload["runtime_readiness"]
+    assert readiness["status"] == "ready"
+    assert readiness["patient_grouping"]["output_identity_column"] == (
+        "patient_stay_id"
+    )
+    assert readiness["outcome_event_time"]["materialized_column"] == "death_time"
+    assert readiness["observation_duration"]["unit"] == "days"
+    assert readiness["readmission_indicator"]["status"] == "ready"
+    assert source_path not in json.dumps(payload)
+
+
+def test_required_landmark_time_missing_blocks_package_review(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = str(tmp_path / "registered")
+    registry = {
+        "sources": [
+            {
+                "id": "src_demo",
+                "path": source_path,
+                "database": "miiv",
+                "ok": True,
+                "modules": ["outcome", "sepsis3_sofa2"],
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        review_owner.cohort_review,
+        "cohort_review_summary",
+        lambda _body: _aggregate(source_path),
+    )
+    monkeypatch.setattr(
+        review_owner,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source=source_path,
+            concepts=[
+                CatalogConcept(
+                    "sep3_sofa2",
+                    file_name="sepsis3_sofa2.parquet",
+                    column_role="event_status",
+                ),
+                CatalogConcept(
+                    "death", file_name="outcome.parquet", column_role="event_status"
+                ),
+                CatalogConcept("los_icu", file_name="outcome.parquet"),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        readiness_owner,
+        "read_exported_concept",
+        lambda _root, concept_id: pd.DataFrame(
+            {"stay_id": [1], concept_id: [True]}
+        ),
+    )
+    study = {
+        **_study(source_path),
+        "sensitivity_specs": [
+            {
+                "spec_id": "landmark_24h",
+                "axis": "timing",
+                "strategy": "landmark",
+                "landmark_hours": 24,
+            }
+        ],
+    }
+
+    payload = review_owner.build_registered_data_package_review(study, registry=registry)
+
+    assert payload["status"] == "blocked"
+    assert "landmark_outcome_event_time_unavailable" in payload["blocking_findings"]
+    assert "landmark_exposure_time_unavailable" in payload["blocking_findings"]
 
 
 def test_review_snapshot_reopens_after_live_study_advances(tmp_path) -> None:
