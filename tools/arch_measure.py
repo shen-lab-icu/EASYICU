@@ -74,6 +74,10 @@ RA = REPO_ROOT / "src" / "easyicu" / "research_agent"
 # comparable.
 TARGET_FILES: List[Path] = [
     RA / "execution/phase.py",
+    # 2026-08-14 phase.py decomposition batch: self-contained pre-loop
+    # helpers moved to execution/phase_support.py behind a facade import;
+    # run_execute_phase and every test-patched seam stay in phase.py.
+    RA / "execution/phase_support.py",
     RA / "pipeline.py",
     # 2026-08-14 pipeline.py decomposition batch: the publication-bundle
     # renderer family moved to reporting/publication_bundles.py behind a
