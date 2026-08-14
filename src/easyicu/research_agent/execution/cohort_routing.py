@@ -9,8 +9,9 @@ under two names and is forced either to fail or to guess which one is primary.
 
 from __future__ import annotations
 
+import enum
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping
+from typing import Any, Mapping, MutableMapping, Optional
 
 from ..authority.evidence_store import sha256_of_file
 from ..contracts.primary_cohort import (
@@ -18,27 +19,69 @@ from ..contracts.primary_cohort import (
     reserved_primary_cohort_product,
 )
 from ..schema import AnalysisPlan, AnalysisStep
-from .runners.deterministic_robustness import robustness_replay_spec_is_emittable
 
 
 class StepExecutionCohortRoutingError(RuntimeError):
     """A typed analysis-cohort binding cannot be exposed without ambiguity."""
 
 
+class PreselectionUniverseOwnerCapability(str, enum.Enum):
+    """Typed owner authority to expose the pre-selection universe to a runner."""
+
+    PRIMARY_COHORT_PRODUCER = "primary_cohort_producer"
+    DETERMINISTIC_ROBUSTNESS_REPLAY = "deterministic_robustness_replay"
+
+
+def preselection_universe_capability(
+    *,
+    step: AnalysisStep,
+    plan: AnalysisPlan,
+    owner_capability: Optional[PreselectionUniverseOwnerCapability] = None,
+) -> Optional[PreselectionUniverseOwnerCapability]:
+    """Return the exact typed authority that may expose the universe.
+
+    Robustness declarations describe science, not which code is executing it.
+    The deterministic owner must therefore carry its capability explicitly;
+    ordinary generated code receives no universe merely because its step has a
+    replay-shaped declaration.
+    """
+
+    if owner_capability is not None and not isinstance(
+        owner_capability, PreselectionUniverseOwnerCapability
+    ):
+        raise TypeError("owner_capability must be a PreselectionUniverseOwnerCapability")
+    if primary_analysis_cohort_producer_uses_universe(step=step, plan=plan):
+        return PreselectionUniverseOwnerCapability.PRIMARY_COHORT_PRODUCER
+    if (
+        owner_capability
+        is PreselectionUniverseOwnerCapability.DETERMINISTIC_ROBUSTNESS_REPLAY
+    ):
+        return owner_capability
+    return None
+
+
 def step_may_access_preselection_universe(
-    *, step: AnalysisStep, plan: AnalysisPlan
+    *,
+    step: AnalysisStep,
+    plan: AnalysisPlan,
+    owner_capability: Optional[PreselectionUniverseOwnerCapability] = None,
 ) -> bool:
     """Return whether a typed step contract authorizes universe exposure.
 
     Ordinary generated and primary analyses consume only their selected cohort.
     The pre-selection universe is a separate scientific authority granted only
-    to the unique closed-cohort producer or to a fully declared locked-grid
-    robustness replay.  Method prose and analysis role never grant access.
+    to the unique closed-cohort producer or an explicit deterministic-owner
+    capability. Method prose, analysis role, and replay shape never grant access.
     """
 
-    return primary_analysis_cohort_producer_uses_universe(
-        step=step, plan=plan
-    ) or robustness_replay_spec_is_emittable(step)
+    return (
+        preselection_universe_capability(
+            step=step,
+            plan=plan,
+            owner_capability=owner_capability,
+        )
+        is not None
+    )
 
 
 def step_execution_cohort_path(
@@ -151,9 +194,11 @@ def bind_step_execution_cohort(
 
 
 __all__ = [
+    "PreselectionUniverseOwnerCapability",
     "StepExecutionCohortRoutingError",
     "bind_step_execution_cohort",
     "bound_step_execution_cohort_path",
+    "preselection_universe_capability",
     "step_may_access_preselection_universe",
     "step_execution_cohort_path",
 ]

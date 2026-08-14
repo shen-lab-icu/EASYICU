@@ -513,6 +513,118 @@ def test_sole_odds_ratio_claim_cannot_bind_as_another_effect_scale(
     assert exc_info.value.detail["untraced"] == ["1.42"]
 
 
+def test_each_numeric_mention_uses_its_own_effect_scale_in_one_sentence(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    for value, field in (
+        ("1.21", "odds_ratio"),
+        ("1.43", "hazard_ratio"),
+        ("1.65", "risk_ratio"),
+    ):
+        store.register_numeric_claim(
+            value=value,
+            canonical=float(value),
+            evidence_id=f"evid_{field}",
+            step_id=f"step_{field}",
+            source_field=field,
+        )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The OR was 1.21, the HR was 1.43, and the RR was 1.65.",
+        evidence=store,
+        enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
+    )
+
+    assert untraced == []
+    assert [claim.effect_scale.value for claim in binding_map.values()] == [
+        "odds_ratio",
+        "hazard_ratio",
+        "risk_ratio",
+    ]
+
+
+def test_swapped_effect_values_in_a_multi_scale_sentence_fail_strict(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    store.register_numeric_claim(
+        value="1.21",
+        canonical=1.21,
+        evidence_id="evid_or",
+        step_id="step_or",
+        source_field="odds_ratio",
+    )
+    store.register_numeric_claim(
+        value="1.43",
+        canonical=1.43,
+        evidence_id="evid_hr",
+        step_id="step_hr",
+        source_field="hazard_ratio",
+    )
+
+    with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
+        bind_numeric_values(
+            "The OR was 1.43 while the HR was 1.21.",
+            evidence=store,
+            enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
+        )
+
+    assert exc_info.value.detail["untraced"] == ["1.43", "1.21"]
+
+
+@pytest.mark.parametrize(
+    ("source_field", "declared_scale"),
+    (
+        ("log_odds_ratio", "odds_ratio"),
+        ("log_hazard_ratio", "hazard_ratio"),
+        ("log_risk_ratio", "risk_ratio"),
+    ),
+)
+def test_transformed_ratio_fields_never_become_published_ratio_claims(
+    source_field: str,
+    declared_scale: str,
+) -> None:
+    from easyicu.research_agent.authority.numeric_claim_identity import (
+        NumericClaim,
+        NumericEstimand,
+        infer_numeric_claim_identity,
+    )
+
+    assert infer_numeric_claim_identity(
+        source_field,
+        declared_effect_scale=declared_scale,
+    ) == (None, None)
+    claim = NumericClaim(
+        value="0.35",
+        canonical=0.35,
+        evidence_id="evid_model",
+        step_id="step_model",
+        source_field=source_field,
+        effect_scale=declared_scale,
+        estimand=NumericEstimand.POINT_ESTIMATE,
+    )
+    assert claim.effect_scale is None
+
+
+def test_conflicting_declared_and_source_effect_scales_fail_closed() -> None:
+    from easyicu.research_agent.authority.numeric_claim_identity import NumericClaim
+
+    with pytest.raises(ValueError, match="declared effect scale conflicts"):
+        NumericClaim(
+            value="1.42",
+            canonical=1.42,
+            evidence_id="evid_assoc",
+            step_id="step_assoc",
+            source_field="primary_or",
+            effect_scale="hazard_ratio",
+        )
+
+
 def test_effect_scale_identity_round_trips_old_and_new_claim_payloads(ra) -> None:
     from easyicu.research_agent.authority.evidence_store import NumericClaim
 

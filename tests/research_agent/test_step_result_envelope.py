@@ -44,6 +44,9 @@ from easyicu.research_agent.contracts.result_envelope import (
 )
 from easyicu.research_agent.contracts import result_envelope as result_envelope_module
 from easyicu.research_agent.schema import AnalysisStep
+from easyicu.research_agent.reporting.writer_evidence import (
+    _render_writer_evidence_digest,
+)
 
 
 def _issue_codes(envelope: StepResultEnvelope) -> set[str]:
@@ -1187,6 +1190,25 @@ def _modern_upstream_record(
     }
 
 
+def _register_upstream_table(
+    store: EvidenceStore,
+    source: Path,
+    *,
+    evidence_id: str = "table_exposure_outcome_summary_8368e5ab",
+    script_evidence_id: str = "code_04_risk",
+):
+    return store.register_file(
+        kind="table",
+        description="Registered upstream table fixture.",
+        source_path=source,
+        produced_by_step=_UPSTREAM_STEP,
+        script_evidence_id=script_evidence_id,
+        evidence_id=evidence_id,
+        producer="runner",
+        publish_aliases=False,
+    )
+
+
 def _consumer_step() -> AnalysisStep:
     return AnalysisStep(
         step_id=_CONSUMER_STEP,
@@ -1346,6 +1368,7 @@ def test_writer_records_are_rebuilt_from_verified_envelope_authority(
 ) -> None:
     store = EvidenceStore(tmp_path / "run")
     envelope = _upstream_table_envelope(tmp_path)
+    _register_upstream_table(store, tmp_path / "exposure_outcome_summary.csv")
     sidecar_id = _commit_upstream_sidecar(store, envelope)
     record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
 
@@ -1355,7 +1378,102 @@ def test_writer_records_are_rebuilt_from_verified_envelope_authority(
 
     assert projected[0]["step_summary"]["status"] == "ok"
     assert projected[0]["writer_result_envelope_evidence_id"] == sidecar_id
+    assert projected[0]["writer_artifact_bindings"] == {
+        "table:exposure_outcome_summary": {
+            "product_id": "table:exposure_outcome_summary",
+            "kind": "table",
+            "envelope_relative_path": "exposure_outcome_summary.csv",
+            "sha256": envelope.artifacts[0].sha256,
+            "byte_size": envelope.artifacts[0].byte_size,
+            "evidence_id": "table_exposure_outcome_summary_8368e5ab",
+            "evidence_relative_path": next(
+                record.relative_path
+                for record in store.records()
+                if record.evidence_id
+                == "table_exposure_outcome_summary_8368e5ab"
+            ),
+        }
+    }
     record["step_summary"] = {"status": "ok", "hazard_ratio": 1.42}
+    with pytest.raises(RegisteredOutputAuthorityError):
+        RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+            [record], evidence_store=store
+        )
+
+
+def test_writer_primary_table_reads_immutable_envelope_product_after_raw_mutation(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    output_dir = run_dir / "steps" / _UPSTREAM_STEP / "outputs"
+    output_dir.mkdir(parents=True)
+    raw_table = output_dir / "primary_association.csv"
+    raw_table.write_text(
+        "term,odds_ratio,or_lower,or_upper,p_value\n"
+        "exposure,1.25,1.10,1.42,0.004\n",
+        encoding="utf-8",
+    )
+    summary = {
+        "status": "ok",
+        "primary_association_path": raw_table.name,
+        "output_files": {"table:primary_association": raw_table.name},
+    }
+    envelope = normalize_step_result_shadow(
+        step_id=_UPSTREAM_STEP,
+        step_summary=summary,
+        output_dir=output_dir,
+        status="ok",
+    )
+    store = EvidenceStore(run_dir)
+    artifact = _register_upstream_table(
+        store,
+        raw_table,
+        evidence_id="table_primary_association_fixture",
+    )
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+    record["evidence_ids"] = [artifact.evidence_id, sidecar_id]
+    record["step_summary"] = summary
+
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+        [record], evidence_store=store
+    )
+    raw_table.write_text(
+        "term,odds_ratio,or_lower,or_upper,p_value\n"
+        "tampered_label,999,998,1000,0.999\n",
+        encoding="utf-8",
+    )
+
+    digest = _render_writer_evidence_digest(
+        projected,
+        run_dir=run_dir,
+        evidence=store,
+    )
+
+    assert '"exposure_or": 1.25' in digest
+    assert '"exposure_p_value": 0.004' in digest
+    assert "tampered_label" not in digest
+    assert "999" not in digest
+
+
+@pytest.mark.parametrize("tamper", ["replace", "remove"])
+def test_writer_primary_table_fails_before_prompt_when_immutable_copy_is_lost(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    artifact = _register_upstream_table(
+        store, tmp_path / "exposure_outcome_summary.csv"
+    )
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+    target = store.root / artifact.relative_path
+    if tamper == "replace":
+        target.write_text("group,n\ntampered,999\n", encoding="utf-8")
+    else:
+        target.unlink()
+
     with pytest.raises(RegisteredOutputAuthorityError):
         RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
             [record], evidence_store=store

@@ -1518,21 +1518,56 @@ _CI_MARKER = r"(?:95\s*%\s*(?:CI|confidence\s+interval)|confidence\s+interval)"
 _PLAIN_PROSE_NUMBER = r"[-+]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?"
 
 
-def _prose_effect_scale(context: str) -> Optional[NumericEffectScale]:
-    scales = {
-        scale
-        for scale, pattern in _EFFECT_SCALE_PHRASE_PATTERNS.items()
-        if pattern.search(context or "")
-    }
+def _prose_effect_scale(
+    text: str, *, start: int, end: int
+) -> Optional[NumericEffectScale]:
+    """Resolve the scale label governing one numeric mention.
+
+    Scale is mention-local rather than sentence-global: a results sentence may
+    legitimately report OR, HR, and RR together. A following label is used only
+    when it is directly postfix to the number; otherwise the latest preceding
+    label governs the point estimate and any CI endpoints that follow it.
+    """
+
     abbreviation_scales = {
         "OR": NumericEffectScale.ODDS_RATIO,
         "HR": NumericEffectScale.HAZARD_RATIO,
         "RR": NumericEffectScale.RISK_RATIO,
     }
-    scales.update(
-        abbreviation_scales[token]
-        for token in re.findall(r"\b(?:OR|HR|RR)\b", context or "")
+    context_start = 0
+    for boundary in _NUMERIC_SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
+        context_start = boundary.end()
+    next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
+    context_end = next_boundary.start() if next_boundary is not None else len(text)
+    context = text[context_start:context_end]
+    mentions: list[tuple[int, int, NumericEffectScale]] = []
+    for scale, pattern in _EFFECT_SCALE_PHRASE_PATTERNS.items():
+        mentions.extend(
+            (context_start + match.start(), context_start + match.end(), scale)
+            for match in pattern.finditer(context)
+        )
+    mentions.extend(
+        (
+            context_start + match.start(),
+            context_start + match.end(),
+            abbreviation_scales[match.group(0)],
+        )
+        for match in re.finditer(r"\b(?:OR|HR|RR)\b", context)
     )
+    if not mentions:
+        return None
+
+    following = sorted((item for item in mentions if item[0] >= end), key=lambda x: x[0])
+    if following:
+        label_start, _label_end, scale = following[0]
+        between = text[end:label_start]
+        if len(between) <= 12 and re.fullmatch(r"[\s()\[\],:=-]*", between):
+            return scale
+    preceding = [item for item in mentions if item[1] <= start]
+    if not preceding:
+        return None
+    latest_end = max(item[1] for item in preceding)
+    scales = {item[2] for item in preceding if item[1] == latest_end}
     return next(iter(scales)) if len(scales) == 1 else None
 
 
@@ -1846,7 +1881,11 @@ def bind_numeric_values(
             context=context,
             previous_step_id=previous_step_id,
             lineage=lineage,
-            prose_effect_scale=_prose_effect_scale(context),
+            prose_effect_scale=_prose_effect_scale(
+                manuscript,
+                start=start,
+                end=end,
+            ),
             prose_estimand=_prose_numeric_estimand(
                 manuscript,
                 start=start,
