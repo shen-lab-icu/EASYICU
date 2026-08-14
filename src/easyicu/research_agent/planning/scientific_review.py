@@ -38,6 +38,7 @@ from .method_literature import method_binding_support
 from .novelty_contract import NOVELTY_REVIEW_DIMENSIONS
 from .publication_readiness import build_publication_readiness_facts
 from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
+from .capability_registry import assess_scientific_capability
 
 
 ScientificReviewSeverity = Literal["blocker", "major", "minor"]
@@ -977,6 +978,7 @@ def build_plan_scientific_review(
     plan: AnalysisPlan,
     literature: Optional[LiteratureBundle] = None,
     figure_strategy: Optional[ArticleFigureStrategy] = None,
+    require_reportable_capability: bool = False,
 ) -> PlanScientificReview:
     """Score and adjudicate the exact proposed plan before human approval."""
 
@@ -1011,6 +1013,33 @@ def build_plan_scientific_review(
     covariate_temporal_roles = dict(
         getattr(preferences, "covariate_temporal_roles", {}) or {}
     )
+    capability_assessment = assess_scientific_capability(
+        analysis_type=plan.analysis_type,
+        context=context,
+        plan=plan,
+    )
+    if (
+        require_reportable_capability
+        and not capability_assessment.claim_ceiling_allows_reportable
+    ):
+        findings.append(
+            PlanScientificFinding(
+                code="SCIENTIFIC_CAPABILITY_NOT_REPORTABLE",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "This formal run requires a reportable scientific capability, "
+                    f"but {capability_assessment.capability_id or plan.analysis_type!r} "
+                    f"has claim ceiling {capability_assessment.claim_ceiling!r}."
+                ),
+                evidence_refs=["analysis_plan.json"],
+                remediation=(
+                    "Revise the plan to use a registered typed capability with a "
+                    "deterministic scientific validator, or start a separately "
+                    "labelled diagnostic run that permits analysis-only output."
+                ),
+            )
+        )
 
     if not literature_facts["search_conducted"] or not literature_facts["sources_returning"]:
         findings.append(
@@ -1585,6 +1614,8 @@ def build_plan_scientific_review(
         dimension_scores=dimensions,
         findings=findings,
         facts={
+            "scientific_capability": capability_assessment.to_dict(),
+            "reportable_capability_required": bool(require_reportable_capability),
             "score_interpretation": {
                 "scope": "pre_execution_plan",
                 "figures": (

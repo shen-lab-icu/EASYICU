@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import subprocess
@@ -30,6 +31,7 @@ class CapabilityRow:
     owner: str
     activation: str
     tests: str
+    proof: str
     review: str
 
     def covers(self, relative_path: str) -> bool:
@@ -47,7 +49,7 @@ def parse_inventory(path: Path) -> tuple[CapabilityRow, ...]:
         if not line.startswith("| `"):
             continue
         cells = [cell.strip() for cell in line.strip("|").split("|")]
-        if len(cells) != 7:
+        if len(cells) != 8:
             continue
         module = cells[0].strip("`")
         status = cells[2].strip("`")
@@ -63,7 +65,8 @@ def parse_inventory(path: Path) -> tuple[CapabilityRow, ...]:
                 owner=cells[3],
                 activation=cells[4],
                 tests=cells[5],
-                review=cells[6],
+                proof=cells[6],
+                review=cells[7],
             )
         )
     return tuple(rows)
@@ -100,6 +103,76 @@ def _production_test_reference(
     source = test_path.read_text(encoding="utf-8")
     if re.search(rf"^def {re.escape(test_name)}\s*\(", source, flags=re.MULTILINE) is None:
         return f"points to missing test function: {reference}"
+    return None
+
+
+def _call_name(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _call_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def _production_route_proof(
+    repo_root: Path,
+    *,
+    raw_reference: str,
+    raw_proof: str,
+) -> str | None:
+    """Verify that the named test invokes and asserts its declared route."""
+
+    reference = raw_reference.strip().strip("`")
+    match = TEST_REFERENCE_PATTERN.fullmatch(reference)
+    if match is None:
+        return "cannot inspect route proof without an exact test reference"
+    proof = raw_proof.strip().strip("`")
+    tokens = tuple(item.strip() for item in proof.split(";") if item.strip())
+    if not tokens or proof == "-":
+        return "must declare at least one call:<public_entrypoint> proof token"
+    invalid = [
+        token
+        for token in tokens
+        if not token.startswith(("call:", "trace:")) or not token.split(":", 1)[1]
+    ]
+    if invalid:
+        return f"contains invalid proof tokens: {invalid!r}"
+    if not any(token.startswith("call:") for token in tokens):
+        return "must declare at least one call:<public_entrypoint> proof token"
+
+    relative_path, test_name = match.groups()
+    tree = ast.parse((repo_root / relative_path).read_text(encoding="utf-8"))
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == test_name
+    ]
+    if len(functions) != 1:
+        return f"cannot uniquely parse test function: {reference}"
+    function = functions[0]
+    call_names = {
+        _call_name(node.func)
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+    }
+    asserted_strings = {
+        str(node.value)
+        for assertion in ast.walk(function)
+        if isinstance(assertion, ast.Assert)
+        for node in ast.walk(assertion.test)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    for token in tokens:
+        kind, expected = token.split(":", 1)
+        if kind == "call" and not any(
+            observed == expected or observed.endswith("." + expected)
+            for observed in call_names
+        ):
+            return f"declared public call is absent from test AST: {expected}"
+        if kind == "trace" and expected not in asserted_strings:
+            return f"declared downstream trace is not asserted by the test: {expected}"
     return None
 
 
@@ -177,6 +250,17 @@ def audit_capability_inventory(
                     "production capability lacks a valid reachability integration "
                     f"test: {row.module} ({test_finding})"
                 )
+            else:
+                proof_finding = _production_route_proof(
+                    root,
+                    raw_reference=row.tests,
+                    raw_proof=row.proof,
+                )
+                if proof_finding is not None:
+                    findings.append(
+                        "production capability reachability test does not prove "
+                        f"its declared route: {row.module} ({proof_finding})"
+                    )
         if DATE_PATTERN.fullmatch(row.review):
             review_date = date.fromisoformat(row.review)
             if review_date < current_date:

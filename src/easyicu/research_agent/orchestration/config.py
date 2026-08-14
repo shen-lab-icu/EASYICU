@@ -291,6 +291,10 @@ class PipelineConfig:
     # the Guided Web Copilot enables this because its product contract is
     # plan -> user confirmation -> execution.
     require_human_plan_review: bool = False
+    # Formal interactive runs must not spend execution budget on a capability
+    # whose registered scientific ceiling is analysis-only. Diagnostic callers
+    # may leave this disabled and retain the honest lower claim ceiling.
+    require_reportable_scientific_capability: bool = False
 
     # --- evidence enforcement -------------------------------------------
     # "soft" (default): unsupported sentences are filtered and unresolved
@@ -587,6 +591,14 @@ class PipelineConfig:
             frozen = _deep_freeze(value)
             if frozen is not value:
                 object.__setattr__(self, field_def.name, frozen)
+        if (
+            self.require_reportable_scientific_capability
+            and not self.require_human_plan_review
+        ):
+            raise ValueError(
+                "require_reportable_scientific_capability requires "
+                "require_human_plan_review so the pre-execution gate cannot be skipped"
+            )
         assert_step_provider_budget_funds_its_repairs(
             max_step_provider_calls=self.max_step_provider_calls,
             max_code_repair_attempts=self.max_code_repair_attempts,

@@ -59,6 +59,10 @@ from .research_context.outbound import (
     project_outbound_records,
 )
 from .authority.evidence_store import EvidenceStore
+from .authority.provider_hard_stop import (
+    ProviderHardStopLedger,
+    ProviderHardStopLimits,
+)
 from .gates.figure_egress import (
     RESERVED_PRIVACY_METADATA_KEYS,
     TRUSTED_FIGURE_PRODUCERS,
@@ -66,6 +70,8 @@ from .gates.figure_egress import (
 from .providers.llm import OpenAIClient
 from .pipeline import ResearchAgentPipeline
 from .providers import ProviderConfigurationError, build_provider_client
+from .orchestration.config import PipelineConfig
+from .orchestration.services import PipelineServices
 from .skills import list_skills
 from .audits.validators import CohortAuditor, ConceptUsageAuditor
 from .mcp_policy import (
@@ -211,6 +217,52 @@ _RUN_PIPELINE_ARGUMENTS = _RUN_TOOL_ARGUMENTS - {
     "request_timeout",
 }
 
+_MCP_PROVIDER_HARD_STOP_LIMITS = ProviderHardStopLimits(
+    max_provider_attempts_per_run=96,
+    max_provider_attempts_per_batch=96,
+    max_total_tokens_per_run=1_000_000,
+    max_total_tokens_per_batch=1_000_000,
+    max_estimated_cost_usd_per_batch=100.0,
+    max_wall_clock_seconds_per_task=14_400.0,
+    input_cost_usd_per_million_tokens=20.0,
+    output_cost_usd_per_million_tokens=120.0,
+)
+
+
+def _mcp_provider_hard_stop(
+    *,
+    workdir: Path,
+    provider_identity: Mapping[str, Any],
+):
+    """Create the durable aggregate Provider boundary for one MCP run."""
+
+    task_id = "mcp-" + uuid.uuid4().hex
+    ledger_dir = workdir / ".mcp_provider_hard_stop"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    declaration = {
+        "schema_version": "easyicu.mcp_provider_hard_stop_declaration/1",
+        "provider": str(provider_identity.get("provider") or "openai"),
+        "model": str(provider_identity.get("model") or ""),
+        "base_url": str(provider_identity.get("base_url") or ""),
+        "limits": _MCP_PROVIDER_HARD_STOP_LIMITS.canonical_payload(),
+    }
+    declaration_sha256 = hashlib.sha256(
+        json.dumps(
+            declaration,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    ledger = ProviderHardStopLedger(
+        path=(ledger_dir / f"{task_id}.json").resolve(),
+        task_ids=(task_id,),
+        limits=_MCP_PROVIDER_HARD_STOP_LIMITS,
+        batch_id=task_id,
+        declaration_sha256=declaration_sha256,
+    )
+    return ledger.start_task(task_id)
+
 
 def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
     require_scope(SCOPE_RUN_PIPELINE, tool="research_agent.run")
@@ -220,6 +272,9 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
             "research_agent.run does not accept additional properties: "
             + ", ".join(unknown)
         )
+    provider_identity = {
+        key: args.get(key) for key in ("provider", "model", "base_url")
+    }
     workdir = resolve_within_roots(
         args.pop("workdir", None) or "./research_output", field="workdir"
     )
@@ -240,9 +295,38 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
     if config_error is not None:
         return config_error
     run_args = {key: args[key] for key in _RUN_PIPELINE_ARGUMENTS if key in args}
+    provider_hard_stop = _mcp_provider_hard_stop(
+        workdir=workdir,
+        provider_identity=provider_identity,
+    )
+    limits = _MCP_PROVIDER_HARD_STOP_LIMITS
     try:
-        pipeline = ResearchAgentPipeline(workdir=workdir, llm=llm)
+        config = PipelineConfig(
+            workdir=workdir,
+            max_provider_attempts_per_run=limits.max_provider_attempts_per_run,
+            max_provider_attempts_per_batch=limits.max_provider_attempts_per_batch,
+            max_total_tokens_per_run=limits.max_total_tokens_per_run,
+            max_total_tokens_per_batch=limits.max_total_tokens_per_batch,
+            max_estimated_cost_usd_per_batch=(
+                limits.max_estimated_cost_usd_per_batch
+            ),
+            max_wall_clock_seconds_per_task=limits.max_wall_clock_seconds_per_task,
+            provider_input_cost_usd_per_million_tokens=(
+                limits.input_cost_usd_per_million_tokens
+            ),
+            provider_output_cost_usd_per_million_tokens=(
+                limits.output_cost_usd_per_million_tokens
+            ),
+        )
+        pipeline = ResearchAgentPipeline.from_config(
+            config,
+            services=PipelineServices(
+                llm=llm,
+                provider_hard_stop=provider_hard_stop,
+            ),
+        )
     except Exception as exc:
+        provider_hard_stop.finish(error="mcp_pipeline_initialization_error")
         return {
             "error": (
                 "configuration_error: could not initialise the requested LLM "
@@ -250,10 +334,15 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
             ),
             "error_code": "llm_configuration_invalid",
         }
-    result = pipeline.run(cohort=cohort, **run_args)
+    try:
+        result = pipeline.run(cohort=cohort, **run_args)
+    except BaseException as exc:
+        provider_hard_stop.finish(error=type(exc).__name__)
+        raise
     from .orchestration.workflow import HumanReviewPending
 
     if isinstance(result, HumanReviewPending):
+        provider_hard_stop.finish(error="mcp_external_resume_unsupported")
         payload = result.model_dump(mode="json")
         payload.update(
             {
@@ -269,6 +358,7 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
         return payload
+    provider_hard_stop.finish()
     return result.model_dump()
 
 

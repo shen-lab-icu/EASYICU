@@ -1375,12 +1375,10 @@ def _select_numeric_claim(
         for claim, distance in candidates
         if not (
             prose_effect_scale is not None
-            and claim.effect_scale is not None
             and claim.effect_scale is not prose_effect_scale
         )
         and not (
             prose_estimand is not None
-            and claim.estimand is not None
             and claim.estimand is not prose_estimand
         )
     ]
@@ -1540,6 +1538,14 @@ def _prose_effect_scale(
     next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
     context_end = next_boundary.start() if next_boundary is not None else len(text)
     context = text[context_start:context_end]
+    local_prefix = text[max(context_start, start - 24) : start]
+    local_suffix = text[end : min(context_end, end + 32)]
+    if re.search(r"\bp\s*[<=>]\s*$", local_prefix, re.I) or re.match(
+        r"\s*(?:patients?|stays?|admissions?|observations?|rows?|groups?)\b",
+        local_suffix,
+        re.I,
+    ):
+        return None
     mentions: list[tuple[int, int, NumericEffectScale]] = []
     for scale, pattern in _EFFECT_SCALE_PHRASE_PATTERNS.items():
         mentions.extend(

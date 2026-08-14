@@ -10,7 +10,7 @@ from ..planning.analysis_types import (
     infer_analysis_type,
     locked_analysis_type_guide,
     CATALOG_DETAIL_LADDER,
-    planner_analysis_type_switch_guide,
+    planner_analysis_family_authority_guide, validate_host_authorized_analysis_family,
 )
 from ..planning import scientific_action_catalog as _scientific_actions
 from ..planning.primary_result_contract import (
@@ -657,7 +657,9 @@ def _build_planner_user_prompt(
         + locked_analysis_type_guide(inferred_analysis_type)
         + "\n\n"
         + _scientific_actions.planner_scientific_action_guide(inferred_analysis_type.key, detail=catalog_detail) + "\n\n"
-        + planner_analysis_type_switch_guide(detail=catalog_detail)
+        + planner_analysis_family_authority_guide(
+            context, inferred_analysis_type, detail=catalog_detail
+        )
         + "\n\n"
         + trajectory_planner_contract_guide(
             context=context,
@@ -1412,10 +1414,7 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
-        # Family inference is a Planner hint, not execution authority. Resolve
-        # the closed family before family-scoped action/literature validation so
-        # a typo receives the precise retryable contract error rather than an
-        # incidental downstream catalog lookup failure.
+        # Resolve the closed family before family-scoped validation.
         declared_family = str(plan.analysis_type or "").strip()
         if not declared_family:
             plan.analysis_type = infer_analysis_type(context).key
@@ -1428,6 +1427,7 @@ class PlannerAgent:
                     "catalog instead of inventing or misspelling a family"
                 )
             plan.analysis_type = canonical_family
+        validate_host_authorized_analysis_family(context, plan.analysis_type)
         _scientific_actions.validate_plan_scientific_action_selections(plan=plan, inferred_analysis_type=infer_analysis_type(context).key, require_result_actions=require_scientific_actions)
         # Repeated-unit covariance is study authority, not Planner prose.  The
         # binder parses only the closed JSON design in ResearchContext and

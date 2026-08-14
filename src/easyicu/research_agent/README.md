@@ -517,10 +517,12 @@ variable is absent). Keep prepared exports inside an explicitly configured
 read root; do not grant a database volume or home directory more broadly than
 the MCP client needs.
 
-`--tool-timeout-seconds` is an optional request-wait ceiling, not a hard
-process kill: a synchronous tool that already started remains inside the
-bounded worker pool and is allowed to finish. Pipeline-level runner timeouts
-remain the authority for stopping managed analysis subprocesses.
+`--tool-timeout-seconds` optionally limits how long a request waits for a
+dispatcher slot. It is not a started-tool or process-kill timeout: once a
+synchronous tool starts, the request remains attached and waits for its real
+completion inside the bounded worker pool. Pipeline runner timeouts and the
+durable Provider wall-clock ledger remain the authorities for managed analysis
+and paid Provider work.
 
 ### Testing / CI
 

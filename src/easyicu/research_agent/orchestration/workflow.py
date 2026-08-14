@@ -270,7 +270,13 @@ def _plan_authority_payload(
     digests: dict[str, str] = {}
     if evidence is not None:
         try:
-            for record in evidence.records():
+            verified_records = getattr(evidence, "verified_records", None)
+            records = (
+                verified_records()
+                if callable(verified_records)
+                else evidence.records()
+            )
+            for record in records:
                 digests[str(record.evidence_id)] = str(record.sha256)
         except Exception as exc:  # noqa: BLE001 - re-raised as a typed blocker
             # Swallowing this produced an approval request whose authority

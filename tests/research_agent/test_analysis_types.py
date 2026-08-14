@@ -784,6 +784,48 @@ def test_parse_preserves_agent_selected_family_and_rationale(ra):
     assert "fixed binary endpoint" in plan.rationale
 
 
+def test_parse_rejects_switch_from_host_authorized_analysis_family(ra):
+    import importlib
+
+    agents = importlib.import_module("easyicu.research_agent.agents.core")
+    ctx = ra.ResearchContext(
+        research_question="Estimate the adjusted association with hospital death.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="miiv", n_patients=200, n_stays=200
+        ),
+        variables=[],
+        target_outcome="death",
+        primary_exposure="exposure",
+        user_preferences=ra.schema.UserPreferences(
+            inferred_analysis_family="association_study"
+        ),
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "analysis_type": "survival",
+            "steps": [
+                {
+                    "step_id": "01_model",
+                    "planned_analysis_role": "primary",
+                    "intent": "Fit a Cox model instead.",
+                    "method": "cox_proportional_hazards",
+                    "expected_outputs": ["table:hazard_ratio"],
+                }
+            ],
+        }
+    )
+    planner = agents.PlannerAgent.__new__(agents.PlannerAgent)
+    planner.last_dropped_plan_keys = {"top_level": [], "steps": []}
+
+    with pytest.raises(ValueError, match="host-authorized analysis family"):
+        agents.PlannerAgent._parse(planner, raw, ctx)
+
+    prompt = agents.PlannerAgent.request_messages(ctx)[1].content
+    assert "HOST-AUTHORIZED ANALYSIS FAMILY" in prompt
+    assert "do not switch families" in prompt
+
+
 def test_parse_rejects_unknown_analysis_type_instead_of_bypassing_contract(ra):
     import importlib
 

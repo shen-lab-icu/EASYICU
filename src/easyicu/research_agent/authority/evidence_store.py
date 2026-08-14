@@ -2806,6 +2806,29 @@ class EvidenceStore:
         with self._lock:
             return list(self._records)
 
+    def verified_records(self) -> List[EvidenceRecord]:
+        """Return every registered record only when its current bytes verify.
+
+        Approval and other authority-building boundaries need an all-or-nothing
+        view: silently dropping one stale record would let a reviewer approve a
+        different evidence set from the one originally registered.
+        """
+
+        from .runtime_artifacts import verified_run_evidence_path
+
+        records = self.records()
+        stale = [
+            record.evidence_id
+            for record in records
+            if verified_run_evidence_path(self.root, record) is None
+        ]
+        if stale:
+            raise EvidenceAuthorityIntegrityError(
+                "registered evidence bytes no longer match their authority: "
+                f"{sorted(stale)!r}"
+            )
+        return records
+
     def ids(self) -> List[str]:
         with self._lock:
             return [r.evidence_id for r in self._records]

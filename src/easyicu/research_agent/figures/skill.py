@@ -17,7 +17,7 @@ import sys
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -35,7 +35,11 @@ from .publication import (
     make_figure_contract,
     save_publication_figure,
 )
-from .base import first_exact_column as _first_col
+from .base import (
+    first_exact_column as _first_col,
+    first_normalisable_record as _first_normalisable_record,
+    verified_record_path as _verified_record_path,
+)
 from .display_labels import display_label as _display_label
 from .exposure_outcome_distribution import (
     normalise_distribution_risk_difference,
@@ -48,7 +52,6 @@ from . import RenderedFigure, render_family_figure
 from ..robustness.panel import RobustnessPanel, load_robustness_panel
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
 from ..planning.study_design import infer_study_design_family
-
 
 class _PrimaryLineageEvidenceView:
     """Read-only evidence view limited to Planner-primary descendants."""
@@ -259,7 +262,13 @@ class PublicationFigureSkill:
                 "robustness_panel.json",
                 kind="statistic",
             )
-            robustness_panel = load_robustness_panel(run_dir / "robustness_panel.json")
+            robustness_panel = (
+                load_robustness_panel(
+                    _verified_record_path(run_dir, robustness_record)
+                )
+                if robustness_record is not None
+                else None
+            )
             if robustness_record is not None and robustness_panel is not None:
                 try:
                     return self._render_robustness_panel(
@@ -317,7 +326,7 @@ class PublicationFigureSkill:
             )
         if primary is not None:
             try:
-                frame = _read_table(run_dir / primary.relative_path)
+                frame = _read_table(_verified_record_path(run_dir, primary))
                 strata = _first_normalisable_record(
                     # Absolute-risk context is deliberately an auxiliary result
                     # upstream of the adjusted primary model. Restricting this
@@ -398,7 +407,13 @@ class PublicationFigureSkill:
             "robustness_panel.json",
             kind="statistic",
         )
-        robustness_panel = load_robustness_panel(run_dir / "robustness_panel.json")
+        robustness_panel = (
+            load_robustness_panel(
+                _verified_record_path(run_dir, robustness_record)
+            )
+            if robustness_record is not None
+            else None
+        )
         if robustness_record is not None and robustness_panel is not None:
             try:
                 return self._render_robustness_panel(
@@ -630,7 +645,7 @@ class PublicationFigureSkill:
         if strata_record is not None:
             try:
                 strata_df = _normalise_strata_frame(
-                    _read_table(run_dir / strata_record.relative_path),
+                    _read_table(_verified_record_path(run_dir, strata_record)),
                     display_labels=plan.display_labels,
                 )
                 if not strata_df.empty:
@@ -645,7 +660,7 @@ class PublicationFigureSkill:
         if missingness_record is not None:
             try:
                 missingness_df = _normalise_missingness_frame(
-                    _read_table(run_dir / missingness_record.relative_path),
+                    _read_table(_verified_record_path(run_dir, missingness_record)),
                     display_labels=plan.display_labels,
                 )
                 if not missingness_df.empty:
@@ -1493,7 +1508,7 @@ class PublicationFigureSkill:
         for suffix, target in targets.items():
             source = figure_records.get(suffix)
             if source is not None:
-                shutil.copy2(run_dir / source.relative_path, target)
+                shutil.copy2(_verified_record_path(run_dir, source), target)
         if not targets["pdf"].exists() or not targets["tiff"].exists():
             image = Image.open(targets["png"]).convert("RGB")
             if not targets["pdf"].exists():
@@ -1510,7 +1525,7 @@ class PublicationFigureSkill:
             ]
         )
         contract = _contract_promoted_from_source(
-            run_dir / contract_source.relative_path,
+            _verified_record_path(run_dir, contract_source),
             source_ids=source_ids,
         )
         contract_path = out_dir / "easyicu_publication_figure.figure_contract.json"
@@ -1611,8 +1626,8 @@ class PublicationFigureSkill:
         pdf_target = out_dir / "easyicu_publication_figure.pdf"
         tiff_target = out_dir / "easyicu_publication_figure.tiff"
 
-        shutil.copy2(run_dir / svg_record.relative_path, svg_target)
-        shutil.copy2(run_dir / png_record.relative_path, png_target)
+        shutil.copy2(_verified_record_path(run_dir, svg_record), svg_target)
+        shutil.copy2(_verified_record_path(run_dir, png_record), png_target)
 
         image = Image.open(png_target).convert("RGB")
         image.save(pdf_target, "PDF", resolution=300.0)
@@ -2626,12 +2641,21 @@ def _has_curated_publication_figure_bundle(
         if preferred_step_bundle is not None
         else set()
     )
-    fresh_bundle = False
+    contract_record = evidence.get("publication_figure_contract")
+    if contract_record is None:
+        return False
+    try:
+        contract_path = _verified_record_path(run_dir, contract_record)
+    except ValueError:
+        return False
+
+    generation_groups: Dict[Tuple[str, str, str, str, str], List[EvidenceRecord]] = {}
     for record in evidence.records():
         metadata = record.metadata or {}
         if (
             record.kind == "figure"
             and _is_run_level_publication_figure(record)
+            and metadata.get("contract_evidence_id") == contract_record.evidence_id
             and _source_fingerprints_match(evidence, metadata)
             and _figure_skill_policy_matches(metadata)
         ):
@@ -2646,46 +2670,60 @@ def _has_curated_publication_figure_bundle(
                 metadata.get("source_evidence_ids") or []
             ):
                 continue
-            fresh_bundle = True
-            break
-    if not fresh_bundle:
+            generation_key = (
+                str(metadata.get("contract_evidence_id") or ""),
+                str(metadata.get("figure_id") or ""),
+                json.dumps(
+                    metadata.get("source_evidence_sha256") or {},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                str(record.script_evidence_id or ""),
+                str(metadata.get("figure_privacy_audit_evidence_id") or ""),
+            )
+            generation_groups.setdefault(generation_key, []).append(record)
+    if not generation_groups:
         return False
-
-    contract_candidates: List[Path] = []
-    contract_record = evidence.get("publication_figure_contract")
-    if contract_record is not None:
-        contract_candidates.append(run_dir / contract_record.relative_path)
-    contract_candidates.append(
-        run_dir
-        / "publication_figures"
-        / "easyicu_publication_figure.figure_contract.json"
+    complete_generation = False
+    for records in generation_groups.values():
+        verified_suffixes: set[str] = set()
+        try:
+            for record in records:
+                verified_figure = _verified_record_path(run_dir, record)
+                verified_suffixes.add(verified_figure.suffix.lower())
+                source_ids = (record.metadata or {}).get("source_evidence_ids") or []
+                for source_id in source_ids:
+                    source_record = evidence.get(str(source_id))
+                    if source_record is None:
+                        raise ValueError("publication figure source is unregistered")
+                    _verified_record_path(run_dir, source_record)
+        except ValueError:
+            continue
+        if {".svg", ".png"} <= verified_suffixes:
+            complete_generation = True
+            break
+    if not complete_generation:
+        return False
+    findings = FigureContractQualityValidator().audit_contract_file(
+        contract_path,
+        manuscript_facing=True,
     )
-    for contract_path in contract_candidates:
-        if not contract_path.exists():
-            continue
-        findings = FigureContractQualityValidator().audit_contract_file(
-            contract_path,
-            manuscript_facing=True,
-        )
-        if any(finding.severity == "error" for finding in findings):
-            continue
-        if context is not None:
-            try:
-                payload = json.loads(contract_path.read_text(encoding="utf-8"))
-            except Exception:
-                payload = {}
-            if isinstance(payload, dict) and not _contract_primary_strategy_ready(
-                context,
-                payload,
-            ):
-                continue
-        if not _promoted_contract_preserves_preferred_chart_types(
-            contract_path,
-            preferred_step_bundle,
+    if any(finding.severity == "error" for finding in findings):
+        return False
+    if context is not None:
+        try:
+            payload = json.loads(contract_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and not _contract_primary_strategy_ready(
+            context,
+            payload,
         ):
-            continue
-        return True
-    return False
+            return False
+    return _promoted_contract_preserves_preferred_chart_types(
+        contract_path,
+        preferred_step_bundle,
+    )
 
 
 def _plan_requests_figures(plan: AnalysisPlan) -> bool:
@@ -2709,53 +2747,6 @@ def _first_existing_record(
             continue
         basename = Path(record.relative_path).stem.lower()
         if any(token in basename for token in name_set):
-            return record
-    return None
-
-
-def _first_normalisable_record(
-    evidence: EvidenceStore,
-    names: Sequence[str],
-    *,
-    run_dir: Path,
-    normalise: Callable[[pd.DataFrame], pd.DataFrame],
-) -> Optional[EvidenceRecord]:
-    """First matching table record whose normalized frame is non-empty.
-
-    ``_first_existing_record`` returns the first *name* match, but an
-    alias can resolve to a semantically different table whose columns the
-    panel normalizer rejects (e.g. ``missingness_summary`` binding to a
-    numeric-coercion audit with ``original_missing_*`` columns). Stopping
-    there silently drops the side panel even when a perfectly renderable
-    sibling table is registered, so this variant keeps scanning until a
-    candidate actually normalizes.
-    """
-
-    name_set = {str(name).lower() for name in names}
-    candidates: List[EvidenceRecord] = []
-    seen: set[str] = set()
-    for name in names:
-        record = evidence.get(name)
-        if (
-            record is not None
-            and record.kind == "table"
-            and record.evidence_id not in seen
-        ):
-            candidates.append(record)
-            seen.add(record.evidence_id)
-    for record in evidence.records():
-        if record.kind != "table" or record.evidence_id in seen:
-            continue
-        basename = Path(record.relative_path).stem.lower()
-        if any(token in basename for token in name_set):
-            candidates.append(record)
-            seen.add(record.evidence_id)
-    for record in candidates:
-        try:
-            frame = normalise(_read_table(run_dir / record.relative_path))
-        except Exception:
-            continue
-        if not frame.empty:
             return record
     return None
 
@@ -2792,7 +2783,7 @@ def _select_primary_association_record(
         if record.evidence_id.lower() in name_set:
             score += 4.0
         try:
-            frame = _read_table(run_dir / record.relative_path)
+            frame = _read_table(_verified_record_path(run_dir, record))
             cols = {str(c).lower(): c for c in frame.columns}
             if "point_estimate" in cols:
                 score += 18.0

@@ -135,6 +135,72 @@ def test_legacy_reviewed_client_is_reserved_before_invocation(tmp_path):
     assert "hello" not in json.dumps(payload)
 
 
+def test_metadata_only_usage_cannot_release_the_transport_reservation(tmp_path):
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+
+    class MetadataOnlyUsageClient:
+        name = "metadata-only"
+
+        def complete_with_usage(self, messages, **kwargs):
+            return "ok", {"actual_model": "provider/model"}
+
+    ledger = _ledger(tmp_path)
+    task = ledger.start_task("E1")
+    response = HardStopClient(
+        MetadataOnlyUsageClient(),
+        role="planner",
+        task=task,
+    ).complete(_message(), max_tokens=32)
+
+    assert response == "ok"
+    call = ledger.snapshot()["tasks"][0]["calls"][0]
+    assert call["state"] == "completed_usage_unreported"
+    assert call["accounted_tokens"] > 0
+    assert call["accounted_estimated_cost_usd"] > 0
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_tokens": 4},
+        {"completion_tokens": 4},
+        {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        {"prompt_tokens": "invalid", "completion_tokens": 4},
+        {"prompt_tokens": True, "completion_tokens": True},
+        {"prompt_tokens": 4.9, "completion_tokens": 4},
+        {"prompt_tokens": 4, "completion_tokens": 4, "total_tokens": 2},
+        {"prompt_tokens": 100, "total_tokens": 1},
+        {"completion_tokens": 100, "total_tokens": 1},
+        {"prompt_tokens": 6, "completion_tokens": 6, "total_tokens": 10},
+    ],
+)
+def test_partial_or_zero_usage_cannot_release_the_transport_reservation(
+    tmp_path,
+    usage,
+):
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+
+    class PartialUsageClient:
+        name = "partial-usage"
+
+        def complete_with_usage(self, messages, **kwargs):
+            return "ok", usage
+
+    ledger = _ledger(tmp_path)
+    task = ledger.start_task("E1")
+    response = HardStopClient(
+        PartialUsageClient(),
+        role="planner",
+        task=task,
+    ).complete(_message(), max_tokens=32)
+
+    assert response == "ok"
+    call = ledger.snapshot()["tasks"][0]["calls"][0]
+    assert call["state"] == "completed_usage_unreported"
+    assert call["accounted_tokens"] > 0
+    assert call["accounted_estimated_cost_usd"] > 0
+
+
 def test_explicit_resume_reopens_completed_task_without_resetting_limits(
     tmp_path,
 ):
@@ -895,6 +961,64 @@ def test_restart_after_pause_resume_uses_persisted_active_wall_clock_anchor(
 
     attached = reopened.start_task("task-a")
     assert attached.assert_active() == pytest.approx(53.0)
+
+
+def test_restart_reconciles_checkpoint_pause_without_charging_downtime(
+    tmp_path,
+    monkeypatch,
+):
+    from easyicu.research_agent.authority import provider_hard_stop as owner
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLedger,
+    )
+
+    wall = [datetime(2026, 8, 14, tzinfo=timezone.utc)]
+    monotonic = [100.0]
+
+    class _ClockDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = wall[0]
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(owner, "datetime", _ClockDateTime)
+    monkeypatch.setattr(owner.time, "monotonic", lambda: monotonic[0])
+    path = tmp_path / "crash-window-ledger.json"
+    limits = _limits(max_wall_clock_seconds_per_task=60.0)
+    first = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+    )
+    first.start_task("task-a")
+    monotonic[0] += 5.0
+    wall[0] += timedelta(seconds=5)
+    checkpoint_created_at = wall[0].isoformat()
+
+    # The checkpoint reached disk, but the process died before task.pause().
+    monotonic[0] += 10_000.0
+    wall[0] += timedelta(seconds=10_000)
+    reopened = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+        resume_existing=True,
+    )
+    reopened.reconcile_review_pause(
+        "task-a",
+        paused_at=checkpoint_created_at,
+    )
+
+    row = reopened.snapshot()["tasks"][0]
+    assert row["status"] == "paused"
+    assert row["elapsed_seconds"] == pytest.approx(5.0)
+    task = reopened.start_task("task-a")
+    task.resume()
+    assert task.assert_active() == pytest.approx(55.0)
 
 
 def test_wall_clock_exhaustion_is_terminal_and_persisted(tmp_path):

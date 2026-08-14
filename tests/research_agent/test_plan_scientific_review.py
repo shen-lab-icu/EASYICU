@@ -199,6 +199,32 @@ def _plan(*, typed_bindings: bool = True) -> AnalysisPlan:
     )
 
 
+def test_formal_review_blocks_an_analysis_only_primary_capability() -> None:
+    plan = _plan()
+    freeform_primary = plan.steps[0].model_copy(
+        update={
+            "method": "custom_interaction_model",
+            "expected_outputs": ["table:custom_interaction_estimates"],
+            "model_requirements": [],
+            "scientific_capability": "association_freeform_v1",
+        }
+    )
+    plan = plan.model_copy(update={"steps": [freeform_primary, *plan.steps[1:]]})
+
+    review = build_plan_scientific_review(
+        context=_context(),
+        plan=plan,
+        require_reportable_capability=True,
+    )
+
+    assert review.approval_allowed is False
+    assert review.status == "changes_required"
+    assert review.facts["scientific_capability"]["claim_ceiling"] == "analysis_only"
+    assert "SCIENTIFIC_CAPABILITY_NOT_REPORTABLE" in {
+        finding.code for finding in review.findings
+    }
+
+
 def _literature() -> LiteratureBundle:
     query = "adult ICU exposure mortality observational cohort"
     return LiteratureBundle(

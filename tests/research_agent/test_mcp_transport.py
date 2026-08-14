@@ -31,6 +31,7 @@ from easyicu.research_agent.mcp_server import (
     dispatch as application_dispatch,
 )
 from easyicu.research_agent.mcp_transport import (
+    _BoundedDispatcher,
     create_mcp_server,
     create_streamable_http_app,
     validate_http_server_config,
@@ -158,15 +159,14 @@ async def test_sdk_preserves_structured_error_contract() -> None:
 
 
 @pytest.mark.anyio
-async def test_tool_timeout_returns_error_and_server_remains_usable() -> None:
-    release = threading.Event()
+async def test_tool_timeout_does_not_detach_a_started_dispatch() -> None:
     calls = 0
 
     def dispatcher(_name: str, _arguments: dict | None) -> dict:
         nonlocal calls
         calls += 1
         if calls == 1:
-            release.wait(timeout=2)
+            time.sleep(0.08)
         return {"call": calls}
 
     server = _server(
@@ -178,39 +178,31 @@ async def test_tool_timeout_returns_error_and_server_remains_usable() -> None:
         raise_exceptions=True,
     ) as session:
         await session.initialize()
-        timed_out = await session.call_tool("research_agent.list_skills", {})
-        release.set()
-        await asyncio.sleep(0.05)
+        started = time.monotonic()
+        first = await session.call_tool("research_agent.list_skills", {})
+        elapsed = time.monotonic() - started
         completed = await session.call_tool("research_agent.list_skills", {})
 
-    assert timed_out.isError is True
-    assert timed_out.structuredContent["error_code"] == "tool_timeout"
-    assert timed_out.structuredContent["dispatch_started"] is True
-    assert timed_out.structuredContent["execution_may_continue"] is True
+    assert first.isError is False
+    assert elapsed >= 0.07
     assert completed.isError is False
 
 
 @pytest.mark.anyio
-async def test_timed_out_dispatchers_hold_slots_until_workers_finish() -> None:
-    """Sequential timeouts must not turn a capacity of two into many threads.
-
-    A purely concurrent burst did not expose the bug because requests waiting
-    for a slot timed out together. Repeated calls did: each timeout released
-    AnyIO's limiter token while its abandoned worker kept running.
-    """
+async def test_queue_timeout_never_starts_a_detached_worker() -> None:
 
     lock = threading.Lock()
     release = threading.Event()
     active = 0
-    maximum = 0
     calls = 0
+    started = threading.Event()
 
     def dispatcher(_name: str, _arguments: dict | None) -> dict:
-        nonlocal active, maximum, calls
+        nonlocal active, calls
         with lock:
             calls += 1
             active += 1
-            maximum = max(maximum, active)
+            started.set()
         try:
             release.wait(timeout=2)
             return {"ok": True}
@@ -220,7 +212,7 @@ async def test_timed_out_dispatchers_hold_slots_until_workers_finish() -> None:
 
     server = _server(
         dispatcher=dispatcher,
-        max_concurrent_tool_calls=2,
+        max_concurrent_tool_calls=1,
         tool_timeout_seconds=0.03,
     )
     try:
@@ -229,21 +221,21 @@ async def test_timed_out_dispatchers_hold_slots_until_workers_finish() -> None:
             raise_exceptions=True,
         ) as session:
             await session.initialize()
-            timed_out = [
-                await session.call_tool("research_agent.list_skills", {})
-                for _ in range(8)
-            ]
+            running = asyncio.create_task(
+                session.call_tool("research_agent.list_skills", {})
+            )
+            while not started.is_set():
+                await asyncio.sleep(0.005)
+            timed_out = await session.call_tool("research_agent.list_skills", {})
 
-            assert all(result.isError for result in timed_out)
-            assert maximum == 2
-            assert calls == 2
-            assert sum(
-                bool(result.structuredContent["dispatch_started"])
-                for result in timed_out
-            ) == 2
+            assert timed_out.isError is True
+            assert timed_out.structuredContent["error_code"] == "tool_timeout"
+            assert timed_out.structuredContent["dispatch_started"] is False
+            assert timed_out.structuredContent["execution_may_continue"] is False
+            assert calls == 1
 
             release.set()
-            await asyncio.sleep(0.1)
+            first = await running
             completed = await session.call_tool(
                 "research_agent.list_skills",
                 {},
@@ -251,9 +243,9 @@ async def test_timed_out_dispatchers_hold_slots_until_workers_finish() -> None:
     finally:
         release.set()
 
+    assert first.isError is False
     assert completed.isError is False
-    assert calls == 3
-    assert maximum == 2
+    assert calls == 2
 
 
 @pytest.mark.anyio
@@ -337,6 +329,50 @@ async def test_client_cancellation_retains_slot_until_worker_finishes() -> None:
 
     assert completed.isError is False
     assert calls == 2
+
+
+@pytest.mark.anyio
+async def test_cancelled_dispatch_keeps_cancellation_authoritative_over_worker_error(
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    supervisor = _BoundedDispatcher(1)
+
+    def failing_dispatcher() -> dict:
+        started.set()
+        release.wait(timeout=2)
+        raise RuntimeError("worker failed after cancellation")
+
+    running = asyncio.create_task(
+        supervisor.run(failing_dispatcher, state={"started": False})
+    )
+    assert await asyncio.to_thread(started.wait, 1)
+    running.cancel()
+    running.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert await supervisor.run(
+        lambda: {"ok": True}, state={"started": False}
+    ) == {"ok": True}
+
+
+@pytest.mark.anyio
+async def test_worker_cancelled_error_converges_without_spinning() -> None:
+    supervisor = _BoundedDispatcher(1)
+
+    def cancelled_dispatcher() -> dict:
+        raise asyncio.CancelledError
+
+    running = asyncio.create_task(
+        supervisor.run(cancelled_dispatcher, state={"started": False})
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(running, timeout=0.5)
+    assert await supervisor.run(
+        lambda: {"ok": True}, state={"started": False}
+    ) == {"ok": True}
 
 
 @pytest.mark.anyio

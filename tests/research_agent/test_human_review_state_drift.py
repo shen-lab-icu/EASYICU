@@ -137,6 +137,37 @@ def test_an_untouched_plan_resumes_normally() -> None:
     assert calls == ["plan", "execute", "write", "finalise"]
 
 
+def test_review_authority_rejects_registered_evidence_byte_drift(tmp_path) -> None:
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+
+    evidence = EvidenceStore(tmp_path)
+    record = evidence.register_json(
+        kind="log",
+        description="Review-bound evidence.",
+        payload={"status": "reviewed"},
+        filename="review_bound.json",
+        evidence_id="review_bound",
+    )
+    requests = human_review_requests_for_plan(
+        findings=[_stop_finding()],
+        plan=_plan(),
+        evidence=evidence,
+    )
+    assert requests
+
+    (tmp_path / record.relative_path).write_text(
+        '{"status":"tampered"}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HumanReviewAuthorityError, match="bytes no longer match"):
+        human_review_requests_for_plan(
+            findings=[_stop_finding()],
+            plan=_plan(),
+            evidence=evidence,
+        )
+
+
 def test_a_rewritten_request_payload_is_refused() -> None:
     """`frozen=True` freezes the attributes; the payload dict stays mutable.
 

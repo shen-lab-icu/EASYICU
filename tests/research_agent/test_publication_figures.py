@@ -336,14 +336,21 @@ def test_curated_publication_bundle_requires_current_policy_version(ra, tmp_path
                         "role": "primary_estimand",
                         "claim": "Primary estimate is shown.",
                         "evidence_ids": [source_record.evidence_id],
-                    }
+                    },
+                    {
+                        "panel_id": "B",
+                        "title": "Sensitivity context",
+                        "role": "sensitivity",
+                        "claim": "Sensitivity context is shown.",
+                        "evidence_ids": [source_record.evidence_id],
+                    },
                 ],
                 "source_data": [source_record.evidence_id],
             }
         ),
         encoding="utf-8",
     )
-    evidence.register_file(
+    contract_record = evidence.register_file(
         kind="log",
         description="Publication figure contract.",
         source_path=contract_path,
@@ -362,8 +369,126 @@ def test_curated_publication_bundle_requires_current_policy_version(ra, tmp_path
             evidence_id=f"publication_figure_{suffix}",
             producer="publication_figure_skill",
             generation_mode="deterministic_figure_skill",
-            metadata={"figure_role": "publication_figure", **stale_metadata},
+            metadata={
+                "figure_role": "publication_figure",
+                "contract_evidence_id": contract_record.evidence_id,
+                **stale_metadata,
+            },
         )
+
+    assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
+
+
+def test_curated_publication_bundle_rejects_digest_stale_figure_bytes(
+    ra, tmp_path: Path
+):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.figures.skill import (
+        _has_curated_publication_figure_bundle,
+        _source_fingerprint_metadata,
+    )
+
+    evidence = EvidenceStore(tmp_path)
+    source_path = tmp_path / "publication_figure_source_data.csv"
+    source_path.write_text("term,estimate\nsepsis3,1.05\n", encoding="utf-8")
+    source_record = evidence.register_file(
+        kind="table",
+        description="Publication source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_data",
+    )
+    metadata = _source_fingerprint_metadata(evidence, [source_record.evidence_id])
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "figure_id": "easyicu_publication_figure",
+                "core_claim": "Current figure contract.",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Primary estimate",
+                        "role": "primary_estimand",
+                        "claim": "Primary estimate is shown.",
+                        "evidence_ids": [source_record.evidence_id],
+                    },
+                    {
+                        "panel_id": "B",
+                        "title": "Sensitivity context",
+                        "role": "sensitivity",
+                        "claim": "Sensitivity context is shown.",
+                        "evidence_ids": [source_record.evidence_id],
+                    },
+                ],
+                "source_data": [source_record.evidence_id],
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract_record = evidence.register_file(
+        kind="log",
+        description="Publication figure contract.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata=metadata,
+    )
+    figure_path = tmp_path / "easyicu_publication_figure.svg"
+    figure_path.write_text("<svg></svg>", encoding="utf-8")
+    figure_record = evidence.register_file(
+        kind="figure",
+        description="Publication figure export.",
+        source_path=figure_path,
+        evidence_id="publication_figure_svg",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={
+            "figure_role": "publication_figure",
+            "figure_id": "easyicu_publication_figure",
+            "contract_evidence_id": contract_record.evidence_id,
+            "figure_privacy_audit_evidence_id": "privacy-a",
+            **metadata,
+        },
+    )
+    assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
+    png_path = tmp_path / "easyicu_publication_figure.png"
+    png_path.write_bytes(b"png")
+    evidence.register_file(
+        kind="figure",
+        description="Publication figure export.",
+        source_path=png_path,
+        evidence_id="publication_figure_png",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={
+            "figure_role": "publication_figure",
+            "figure_id": "easyicu_publication_figure",
+            "contract_evidence_id": contract_record.evidence_id,
+            "figure_privacy_audit_evidence_id": "privacy-b",
+            **metadata,
+        },
+    )
+    assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
+    evidence.register_file(
+        kind="figure",
+        description="Publication figure export.",
+        source_path=png_path,
+        evidence_id="publication_figure_png_current",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={
+            "figure_role": "publication_figure",
+            "figure_id": "easyicu_publication_figure",
+            "contract_evidence_id": contract_record.evidence_id,
+            "figure_privacy_audit_evidence_id": "privacy-a",
+            **metadata,
+        },
+    )
+    assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is True
+    (tmp_path / figure_record.relative_path).write_text(
+        "<svg>tampered</svg>", encoding="utf-8"
+    )
 
     assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
 
@@ -1973,6 +2098,77 @@ def test_publication_figure_skill_renders_from_registered_association_table(
     assert len(inventory) == 1
     assert inventory[0].contract_registered is True
     assert inventory[0].provenance_valid is True
+
+
+def test_publication_figure_refuses_digest_stale_association_table(
+    ra, tmp_path: Path
+):
+    run_dir = tmp_path / "run"
+    source = tmp_path / "primary_association.csv"
+    pd.DataFrame(
+        {
+            "variable": ["lactate"],
+            "odds_ratio": [1.35],
+            "or_lower": [1.10],
+            "or_upper": [1.66],
+        }
+    ).to_csv(source, index=False)
+    evidence = ra.EvidenceStore(run_dir)
+    record = evidence.register_file(
+        kind="table",
+        description="Primary association table.",
+        source_path=source,
+        evidence_id="primary_association",
+        produced_by_step="04_primary_association",
+    )
+    context = ra.ResearchContext(
+        research_question="Is lactate associated with mortality?",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=2,
+            n_stays=2,
+        ),
+        variables=[
+            ra.ConceptDescriptor(name="lactate", role="lab", dtype="float64"),
+            ra.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        ],
+        target_outcome="death",
+        primary_exposure="lactate",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="04_primary_association",
+                intent="Estimate the primary association.",
+                inputs=["lactate", "death"],
+                expected_outputs=[
+                    "table:primary_association",
+                    "figure:primary_association_curve",
+                ],
+                planned_analysis_role="primary",
+            )
+        ],
+    )
+    pd.DataFrame(
+        {
+            "variable": ["lactate"],
+            "odds_ratio": [9.99],
+            "or_lower": [8.0],
+            "or_upper": [12.0],
+        }
+    ).to_csv(run_dir / record.relative_path, index=False)
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+    )
+
+    assert result.generated is False
+    assert not any(record.kind == "figure" for record in evidence.records())
 
 
 def test_association_forest_axis_metadata_tracks_effect_measure(ra):
