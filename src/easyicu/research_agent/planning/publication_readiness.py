@@ -11,6 +11,7 @@ from typing import Any, Mapping, Optional
 
 from ..reporting.article_contract import (
     build_article_analysis_contract,
+    declared_primary_lineage_step_ids,
     roles_covered_by_plan,
 )
 from ..schema import AnalysisPlan, ResearchContext
@@ -95,23 +96,45 @@ def _figure_role_facts(
         if any(str(value).startswith("figure:") for value in step.expected_outputs)
     ]
     required = [item for item in strategy.role_strategies if item.required]
+    primary_lineage_ids = declared_primary_lineage_step_ids(plan)
+    hero_requires_primary_lineage = strategy.analysis_family == "descriptive"
+
+    def role_step_candidates(role: Any) -> list[Any]:
+        if not hero_requires_primary_lineage or role.role != strategy.hero_role:
+            return figure_steps
+        return [step for step in figure_steps if step.step_id in primary_lineage_ids]
+
     covered_roles = sorted(
         {
             role.role
             for role in required
-            if any(figure_step_covers_role(step, role) for step in figure_steps)
+            if any(
+                figure_step_covers_role(step, role)
+                for step in role_step_candidates(role)
+            )
         }
     )
     valid_panels = [
         panel
         for step in figure_steps
         for panel in step.figure_panels
-        if any(figure_panel_covers_role(panel, role) for role in required)
+        if any(
+            figure_panel_covers_role(panel, role)
+            and (
+                not hero_requires_primary_lineage
+                or role.role != strategy.hero_role
+                or step.step_id in primary_lineage_ids
+            )
+            for role in required
+        )
     ]
     chart_types = sorted({panel.chart_type for panel in valid_panels})
     required_roles = sorted(item.role for item in required)
     return {
         "required_roles": required_roles,
+        "hero_role": strategy.hero_role,
+        "hero_requires_primary_lineage": hero_requires_primary_lineage,
+        "primary_lineage_step_ids": sorted(primary_lineage_ids),
         "covered_roles": covered_roles,
         "missing_roles": sorted(set(required_roles) - set(covered_roles)),
         "figure_step_count": len(figure_steps),

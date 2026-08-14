@@ -43,6 +43,13 @@ _AUDIT_PANEL_TOKENS = (
     "calibration",
 )
 
+_PRIMARY_RESULT_FIGURE_TEMPLATES = {
+    EXPOSURE_OUTCOME_DISTRIBUTION_INPUT: (EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS),
+    GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT: (
+        GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS
+    ),
+}
+
 
 def _method_head(method: str) -> str:
     normalized = re.sub(
@@ -91,6 +98,80 @@ def step_declares_audit_panel(step: AnalysisStep) -> bool:
         ):
             return True
     return False
+
+
+def ensure_primary_result_figure_step(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Append one known deterministic renderer for a unique primary table.
+
+    Existing secondary figures do not satisfy the article hero role.  When the
+    Planner's single primary step already owns exactly one table supported by a
+    deterministic figure contract, the host can safely add its rendering-only
+    descendant without choosing an estimand or scanning run files.
+    """
+
+    primary_steps = [
+        step for step in plan.steps if step.planned_analysis_role == "primary"
+    ]
+    if len(primary_steps) != 1:
+        return plan, []
+    primary_sources = [
+        str(output)
+        for output in primary_steps[0].expected_outputs
+        if str(output) in _PRIMARY_RESULT_FIGURE_TEMPLATES
+    ]
+    if len(primary_sources) != 1:
+        return plan, []
+    source = primary_sources[0]
+    if dedicated_renderer_consumes_typed_source(plan.steps, source=source):
+        return plan, []
+
+    occupied_step_ids = {str(step.step_id) for step in plan.steps}
+    next_index = len(plan.steps) + 1
+    while (step_id := f"{next_index:02d}_primary_result_figure") in occupied_step_ids:
+        next_index += 1
+    occupied_outputs = {
+        str(output) for step in plan.steps for output in step.expected_outputs
+    }
+    figure_output = "figure:primary_result"
+    suffix = 2
+    while figure_output in occupied_outputs:
+        figure_output = f"figure:primary_result_{suffix}"
+        suffix += 1
+    figure_step = AnalysisStep(
+        step_id=step_id,
+        planned_analysis_role="auxiliary",
+        intent=(
+            "Render the exact primary descriptive result table using its "
+            "registered deterministic article-figure contract. Do not choose "
+            "another result, recalculate an estimand, or scan run files."
+        ),
+        method="visualization",
+        inputs=[source],
+        expected_outputs=[figure_output],
+        icu_rule_refs=["visualization_rule"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=source, mode="all_rows")
+        ],
+    )
+    return plan.model_copy(update={"steps": [*plan.steps, figure_step]}), [
+        ValidationFinding(
+            validator="primary_result_figure_contract",
+            severity="warning",
+            message=(
+                "Bound a rendering-only primary-result figure to the unique "
+                f"typed primary source {source!r}."
+            ),
+            detail={
+                "reason": "primary_result_figure_bound_to_typed_primary_source",
+                "step_id": step_id,
+                "source_product": source,
+                "figure_output": figure_output,
+            },
+        )
+    ]
 
 
 def ensure_data_quality_figure_step(
@@ -305,5 +386,6 @@ __all__ = [
     "bind_deterministic_figure_panels",
     "dedicated_renderer_consumes_typed_source",
     "ensure_data_quality_figure_step",
+    "ensure_primary_result_figure_step",
     "step_declares_audit_panel",
 ]

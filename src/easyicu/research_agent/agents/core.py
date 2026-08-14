@@ -109,6 +109,9 @@ from ..planning.robustness_contract import (
     RobustnessPlanError,
     validate_planner_robustness_specs,
 )
+from ..planning.planner_output_contract import (
+    validate_fresh_planner_typed_product_specs,
+)
 from ..planning.adjustment_authority import (
     validate_plan_against_adjustment_authority,
 )
@@ -1923,34 +1926,8 @@ class PlannerAgent:
                     f"every retrieved card: {undecided_cards!r}"
                 )
         _validate_table_one_observed_levels(plan, context)
-        missing_distribution_specs = [
-            step.step_id
-            for step in plan.steps
-            if "table:exposure_outcome_distribution" in step.expected_outputs
-            and step.exposure_outcome_distribution_spec is None
-        ]
-        if missing_distribution_specs and not llm_is_mockish(
-            getattr(self, "llm", None)
-        ):
-            raise ValueError(
-                "Planner exposure/outcome distribution steps must declare "
-                "exposure_outcome_distribution_spec; missing for "
-                f"{missing_distribution_specs!r}. The exposure, outcome, event "
-                "value and denominator policy are scientific choices and are not "
-                "inferred from column names or input order."
-            )
-        missing_table_one_specs = [
-            step.step_id
-            for step in plan.steps
-            if "table:table_one" in step.expected_outputs
-            and step.table_one_spec is None
-        ]
-        if missing_table_one_specs and not llm_is_mockish(getattr(self, "llm", None)):
-            raise ValueError(
-                "Planner Table 1 steps must declare table_one_spec; missing for "
-                f"{missing_table_one_specs!r}. Use table:cohort_summary for an "
-                "ungrouped descriptive table."
-            )
+        if not llm_is_mockish(getattr(self, "llm", None)):
+            validate_fresh_planner_typed_product_specs(plan)
         # Family inference is a planner hint, not execution authority. Preserve
         # a valid agent-selected family (and its rationale); only fill the field
         # when the agent omitted it. A non-empty declaration is nevertheless a
