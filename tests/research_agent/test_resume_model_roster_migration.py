@@ -640,3 +640,31 @@ def test_resume_migration_llm_failure_has_no_default_model_fallback(
     assert all(not step.model_requirements for step in plan.steps)
     assert not list(tmp_path.glob("analysis_plan_revision_*.json"))
     assert evidence.get("analysis_plan_revision_2") is None
+
+
+def test_paper_facing_resume_refuses_new_scientific_planner_authority(
+    tmp_path: Path,
+) -> None:
+    plan = _legacy_plan()
+    evidence = _evidence_with_base_plan(tmp_path, plan)
+    client = ScriptedMockLLMClient([_valid_packet_json()])
+
+    with pytest.raises(
+        LegacyResumePlanMigrationError,
+        match="create a fresh run",
+    ):
+        _migrate_legacy_resume_model_requirements(
+            plan=plan,
+            context=_context(tmp_path, plan),
+            run_dir=tmp_path,
+            resume_state={"per_step_records": []},
+            resume_from_step_id=None,
+            role_resolver=lambda _role: client,
+            evidence=evidence,
+            prompt_version="test-pack",
+            llm_signature="test-planner",
+            allow_scientific_migration=False,
+        )
+
+    assert client.calls == []
+    assert not list(tmp_path.glob("analysis_plan_revision_*.json"))

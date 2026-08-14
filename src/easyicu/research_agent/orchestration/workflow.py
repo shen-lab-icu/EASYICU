@@ -249,6 +249,7 @@ HUMAN_REVIEW_FINDING_REASONS: Mapping[str, str] = {
     "capability_review_required": "capability_request",
     "raw_ehr_provenance_unavailable": "protocol_claim",
     "plan_scientific_changes_required": "scientific_stop",
+    "resume_scientific_migration_requires_review": "scientific_stop",
     "scientific_stop": "scientific_stop",
 }
 

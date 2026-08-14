@@ -25,6 +25,7 @@ from ..authority.run_input import (
     load_verified_run_input_capsule,
 )
 from ..authority.runtime_artifacts import AuditLogger
+from ..authority.plan_lifecycle import approve_normalized_plan_for_execution
 from ..canonical_json import canonical_sha256
 from ..intake.materialized_trajectory import (
     MaterializedTrajectoryAuthorityRef,
@@ -446,6 +447,13 @@ def restore_durable_human_review_pause(
                 "durable review decision set is not digest bound"
             )
         selected = load_checkpoint(checkpoint_file)
+        approve_normalized_plan_for_execution(
+            run_dir=run_dir,
+            evidence=evidence,
+            revision=plan_result.plan.revision,
+            review_requests=selected.requests,
+            decision_set_sha256=decision_sha256,
+        )
         write_checkpoint(
             checkpoint_file,
             selected.transitioned("consumed", decision_sha256=decision_sha256),

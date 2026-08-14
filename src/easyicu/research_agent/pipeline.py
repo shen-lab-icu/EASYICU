@@ -156,7 +156,7 @@ from .authority.table_one_binding import (
 from .authority.resume_plan import (
     load_compatible_resume_plan as _load_compatible_resume_plan,
 )
-from .authority import pipeline_cache as _pipeline_cache
+from .authority import pipeline_cache as _pipeline_cache, plan_lifecycle as _plan_lifecycle
 from .planning.analysis_blueprint import (
     build_analysis_blueprint,
     render_analysis_blueprint_for_prompt,
@@ -1277,6 +1277,7 @@ def _migrate_legacy_resume_model_requirements(
     prompt_version: str,
     llm_signature: str,
     max_prompt_tokens: Optional[int] = None,
+    allow_scientific_migration: bool = True,
 ) -> tuple[AnalysisPlan, Optional[Path], tuple[str, ...]]:
     """Ask the planner LLM to migrate an old empty typed-model roster.
 
@@ -1299,6 +1300,11 @@ def _migrate_legacy_resume_model_requirements(
     )
     if not target_step_ids:
         return plan, None, ()
+    if not allow_scientific_migration:
+        raise LegacyResumePlanMigrationError(
+            "paper-facing legacy runs missing typed model authority cannot be "
+            "resumed with a new Planner decision; create a fresh run"
+        )
 
     target_steps = [
         {
@@ -1490,6 +1496,7 @@ class _PlanGenerationResult:
     plan_generation_mode: str
     used_mock_llm: bool
     planner_prompt_metrics: Optional[Dict[str, Any]]
+    proposed_plan: AnalysisPlan
 
 
 class ResearchAgentPipeline:
@@ -2312,6 +2319,7 @@ class ResearchAgentPipeline:
         reused_prior_plan = False
         reused_plan_path: Optional[Path] = None
         migrated_plan_path: Optional[Path] = None
+        proposed_plan: Optional[AnalysisPlan] = None
         if resume_state is not None:
             plan, _prior_plan_path = _load_compatible_resume_plan(
                 run_dir=run_dir,
@@ -2321,6 +2329,7 @@ class ResearchAgentPipeline:
                 prompt_pack_version=PROMPT_PACK_VERSION,
             )
             if plan is not None and plan.steps:
+                proposed_plan = plan.model_copy(deep=True)
                 restore_table_one_private_checkpoint(
                     run_dir=run_dir,
                     plan=plan,
@@ -2367,6 +2376,8 @@ class ResearchAgentPipeline:
                 )
 
         if reused_prior_plan:
+            from .orchestration.profiles import is_paper_facing_profile
+
             plan, migrated_plan_path, migrated_step_ids = (
                 _migrate_legacy_resume_model_requirements(
                     plan=plan,
@@ -2379,19 +2390,27 @@ class ResearchAgentPipeline:
                     prompt_version=prompt_version,
                     llm_signature=llm_signature,
                     max_prompt_tokens=self._max_prompt_tokens_per_call,
+                    allow_scientific_migration=not is_paper_facing_profile(
+                        self._submission_profile_name
+                    ),
                 )
             )
             if migrated_plan_path is not None:
-                plan_generation_mode = "resumed_planner_migration"
+                plan_generation_mode = "resume_with_scientific_migration"
                 findings.append(
                     ValidationFinding(
                         validator="planner_schema_migration",
-                        severity="warning",
+                        severity="error",
                         message=(
-                            "Migrated legacy remaining adjusted-association "
-                            "step(s) to the planner-owned typed model roster."
+                            "A new Planner decision migrated legacy remaining "
+                            "adjusted-association step(s) to a typed model roster; "
+                            "the revised plan requires fresh human approval."
                         ),
                         detail={
+                            "reason": "resume_scientific_migration_requires_review",
+                            "human_review_required": True,
+                            "approval_allowed": True,
+                            "generation_mode": "resume_with_scientific_migration",
                             "target_step_ids": list(migrated_step_ids),
                             "plan_path": str(migrated_plan_path.relative_to(run_dir)),
                         },
@@ -2406,7 +2425,8 @@ class ResearchAgentPipeline:
             )
             if lock_restore_path is not None:
                 migrated_plan_path = lock_restore_path
-                plan_generation_mode = "resumed_planner_migration"
+                if plan_generation_mode != "resume_with_scientific_migration":
+                    plan_generation_mode = "resume_with_authority_restore"
                 findings.append(
                     ValidationFinding(
                         validator="robustness_spec_lock",
@@ -2435,7 +2455,8 @@ class ResearchAgentPipeline:
             findings.extend(trajectory_migration_findings)
             if trajectory_migration_path is not None:
                 migrated_plan_path = trajectory_migration_path
-                plan_generation_mode = "resumed_planner_migration"
+                if plan_generation_mode == "resumed":
+                    plan_generation_mode = "resume_with_schema_migration"
                 findings.append(
                     ValidationFinding(
                         validator="plan_contract",
@@ -2468,7 +2489,8 @@ class ResearchAgentPipeline:
             )
             if figure_edge_migration_path is not None:
                 migrated_plan_path = figure_edge_migration_path
-                plan_generation_mode = "resumed_planner_migration"
+                if plan_generation_mode == "resumed":
+                    plan_generation_mode = "resume_with_schema_migration"
                 findings.append(
                     ValidationFinding(
                         validator="planner_schema_migration",
@@ -2664,6 +2686,8 @@ class ResearchAgentPipeline:
                             detail={"generation_mode": "cohort_retry"},
                         )
                     )
+        if proposed_plan is None:
+            proposed_plan = plan.model_copy(deep=True)
         return _PlanGenerationResult(
             plan=plan,
             reused_prior_plan=reused_prior_plan,
@@ -2672,6 +2696,7 @@ class ResearchAgentPipeline:
             plan_generation_mode=plan_generation_mode,
             used_mock_llm=used_mock_llm,
             planner_prompt_metrics=planner_prompt_metrics,
+            proposed_plan=proposed_plan,
         )
 
     def _validate_and_persist_plan(
@@ -2713,6 +2738,7 @@ class ResearchAgentPipeline:
         plan_generation_mode = generation.plan_generation_mode
         used_mock_llm = generation.used_mock_llm
         planner_prompt_metrics = generation.planner_prompt_metrics
+        host_normalization_input = plan.model_copy(deep=True)
         # Skip the plan-shaping transforms when resuming: the saved plan is
         # already in its final, transformed form, and re-running split/cap/
         # ensure_* could rename or reorder step_ids and break the resume skip
@@ -2931,6 +2957,17 @@ class ResearchAgentPipeline:
         for planned_step in plan.steps:
             bind_table_one_execution_spec(planned_step, agent_context)
             bind_step_declared_levels(planned_step, agent_context)
+        normalized_plan = _plan_lifecycle.build_normalized_plan_lineage(
+            proposed_plan=generation.proposed_plan,
+            proposed_source=plan_generation_mode,
+            pre_normalization_plan=host_normalization_input,
+            normalized_plan=plan,
+            resume_scientific_semantics_changed=plan_generation_mode in {
+                "resume_with_scientific_migration",
+                "resume_with_authority_restore",
+            },
+            host_scientific_semantics_changed=not reused_prior_plan,
+        )
         write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
         if not reused_prior_plan:
             plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
@@ -2952,6 +2989,9 @@ class ResearchAgentPipeline:
                     "used_mock_llm": used_mock_llm,
                 },
             )
+        _plan_lifecycle.persist_normalized_plan(
+            run_dir=run_dir, evidence=evidence, normalized=normalized_plan
+        )
         if self._config.require_human_plan_review:
             review_gate = prepare_scientific_plan_review_gate(
                 context=context,
@@ -5392,6 +5432,18 @@ class ResearchAgentPipeline:
                     "durable review decision set is not digest bound"
                 )
             checkpoint = load_human_review_checkpoint(Path(path))
+            if not reviewed_plan:
+                raise HumanReviewCheckpointError(
+                    "approved execution has no restored typed plan handoff"
+                )
+            plan_result = reviewed_plan[-1]
+            _plan_lifecycle.approve_normalized_plan_for_execution(
+                run_dir=run_dir,
+                evidence=plan_result.evidence,
+                revision=plan_result.plan.revision,
+                review_requests=checkpoint.requests,
+                decision_set_sha256=decision_sha256,
+            )
             write_human_review_checkpoint(
                 Path(path),
                 checkpoint.transitioned(

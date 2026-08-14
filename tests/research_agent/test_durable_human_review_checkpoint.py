@@ -107,6 +107,20 @@ def test_new_pipeline_instance_resumes_without_running_planner_again(
     )
     assert checkpoint.state == "completed"
     assert checkpoint.consumed_decision_sha256 is not None
+    run_dir = Path(pending.run_dir)
+    lineage_paths = list(run_dir.glob("plan_lifecycle_revision_*.json"))
+    approved_paths = list(run_dir.glob("approved_executable_plan_revision_*.json"))
+    assert len(lineage_paths) == 1
+    assert len(approved_paths) == 1
+    lineage = json.loads(lineage_paths[0].read_text(encoding="utf-8"))
+    approved = json.loads(approved_paths[0].read_text(encoding="utf-8"))
+    assert lineage["schema_version"] == "easyicu.normalized_plan/1"
+    assert lineage["proposed"]["schema_version"] == "easyicu.proposed_plan/1"
+    assert lineage["transformation_receipts"]
+    assert approved["schema_version"] == "easyicu.approved_executable_plan/1"
+    assert approved["plan_sha256"] == lineage["plan_sha256"]
+    assert approved["normalized_plan_authority_sha256"] == lineage["authority_sha256"]
+    assert approved["decision_set_sha256"] == checkpoint.consumed_decision_sha256
 
 
 def test_changed_pipeline_configuration_cannot_resume_checkpoint(
@@ -146,4 +160,3 @@ def test_checkpoint_tampering_fails_before_a_pause_is_restored(
 
     with pytest.raises(HumanReviewCheckpointError, match="corrupt or invalid"):
         _pipeline(workdir).resume_human_review([], run_id=pending.run_id)
-
