@@ -2,15 +2,21 @@
 
 Date: 2026-08-14
 Branch: `fix/pi-workspace-review-20260809`
-Exact reviewed HEAD: `9e52733`
+Exact reviewed code HEAD: `9c8f0ec`
 
 ## Outcome
 
 The research-agent offline framework release gate passes on a clean detached
-worktree at `9e52733`: 135 tests passed, with resource-context, architecture,
+worktree at `9c8f0ec`: 135 tests passed, with resource-context, architecture,
 module-graph, and normalized golden checks all green. This authorizes a bounded
 fresh Web E1 run; it is not itself the Web E1 acceptance result or Canonical9
 Provider authorization.
+
+The previously concurrent planning batch is now settled. The obsolete
+free-text measurement-audit heuristic was removed, tests point at the real
+Planner/Coder/Replanner owner modules, the Planner worked example carries its
+typed descriptive claim, and unknown analysis families fail with the precise
+closed-family contract error before downstream catalog validation.
 
 ## Closed blockers
 
@@ -51,14 +57,22 @@ Provider authorization.
 - `6b441d0` bounded runtime and recovery surfaces
 - `2bd8d22` governance and reviewable golden evidence
 - `9e52733` robustness owner capability call correction
+- `bf097fa` obsolete measurement-audit contract and stale facade-test removal
+- `697f42b` Planner example, family-validation ordering, and endpoint-fixture repair
+- `9c8f0ec` exact Planner prompt-envelope adjudication
 
 ## Verification
 
-- Clean framework release: 135 passed, 13 warnings.
-- Follow-up focused matrices: 401 passed, 1 skipped.
+- Clean framework release at `9c8f0ec`: 135 passed, 13 warnings.
+- Follow-up focused matrices: 401 passed, 1 skipped for the original blocker
+  closure; 148 passed plus 71 passed for the settled planning batch.
 - Architecture ratchet: `execution/phase.py` 5,944 LOC;
   `run_execute_phase` 4,987 lines; no lower-is-better regression.
-- Module graph baseline: 519 modules, 1,961 edges, zero cyclic SCCs.
+- Module graph after retiring the obsolete module: 518 modules, 1,960 edges,
+  zero cyclic SCCs.
+- The typed Planner worked example increases all nine offline fixture prompts
+  by 167 bytes; the measured maximum is 59,952 of the 120,000-byte production
+  limit, with zero provider calls and zero patient-data reads.
 - Repository hygiene, Ruff, and `git diff --check`: passed.
 
 ## E1 operating boundary
@@ -81,5 +95,5 @@ Provider authorization.
 - Native Windows locking and live Docker-daemon behavior have focused simulated
   coverage but still need their platform integration lanes.
 
-The separately staged planning batch present in the working tree is not part of
-`9e52733` and was not modified or included in these commits.
+The former separately staged planning batch is included in `bf097fa..9c8f0ec`
+and is covered by the clean exact-head release evidence above.
