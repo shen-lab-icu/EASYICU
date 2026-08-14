@@ -2886,8 +2886,12 @@ def test_llm_concept_auditor_prompt_includes_outcome_semantics(ra):
         target_outcome="death",
     )
     prompt = auditor._prompt(context=ctx, script_text="print('hello')", step=None)
-    assert "icu_mortality" in prompt
-    assert "explicitly treated as ICU mortality" in prompt
+    # Owner-issued concept metadata owns the endpoint semantics: the question
+    # text asks for ICU mortality, but the catalog binds `death` to hospital
+    # mortality, and the prompt must carry the owner-issued definition (the
+    # question may no longer silently redefine a physical concept).
+    assert "outcome_semantics" in prompt
+    assert "in hospital mortality" in prompt
     assert "named `full_stay` window is an administrative analysis span" in prompt
     assert "does not turn" in prompt
     assert "Named time windows:" in prompt

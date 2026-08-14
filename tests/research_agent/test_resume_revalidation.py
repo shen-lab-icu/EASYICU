@@ -1430,7 +1430,18 @@ def test_replay_uses_shared_gates_and_never_constructs_llm_auditor():
     assert "_evaluate_final_deterministic_gates(" in replay_source
     assert "LLMConceptAuditor(" not in replay_source
     assert "ConceptAuditCoordinator(" in fresh_source
-    assert "concept_audit.findings_for_code(" in fresh_source
+    # The shared-coordinator call moved to the candidate loop (1e5182a); the
+    # coordinator itself is still constructed by the execute phase and the
+    # concept-audit transition must go through it, never a fresh auditor.
+    from easyicu.research_agent.execution.candidate_loop import (
+        _candidate_concept_audit_transition,
+    )
+
+    concept_transition_source = inspect.getsource(
+        _candidate_concept_audit_transition
+    )
+    assert "concept_audit.findings_for_code(" in concept_transition_source
+    assert "LLMConceptAuditor(" not in concept_transition_source
     assert "deterministic_code_gate_findings(" in concept_execution_source
     assert "LLMConceptAuditor(" not in fresh_source
     assert "_evaluate_final_deterministic_gates(" in fresh_source

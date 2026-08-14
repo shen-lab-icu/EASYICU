@@ -229,15 +229,29 @@ def test_execute_phase_routes_runner_and_gates_to_the_bound_step_cohort() -> Non
         and call.func.id == "_bind_step_execution_cohort"
         for call in calls
     )
+    # The per-step runner build moved to the candidate loop (1e5182a): the
+    # execute phase binds the cohort, the candidate transition rebuilds the
+    # runner on it whenever the bound path diverges from the run cohort.
+    from easyicu.research_agent.execution.candidate_loop import (
+        _candidate_execute_transition,
+    )
+
+    candidate_calls = [
+        node
+        for node in ast.walk(
+            ast.parse(inspect.getsource(_candidate_execute_transition))
+        )
+        if isinstance(node, ast.Call)
+    ]
     runner_builds = [
         call
-        for call in calls
+        for call in candidate_calls
         if isinstance(call.func, ast.Attribute)
         and call.func.attr == "_build_runner"
         and any(
             keyword.arg == "cohort_path"
-            and isinstance(keyword.value, ast.Name)
-            and keyword.value.id == "step_execution_cohort_path"
+            and isinstance(keyword.value, ast.Attribute)
+            and keyword.value.attr == "step_execution_cohort_path"
             for keyword in call.keywords
         )
     ]
