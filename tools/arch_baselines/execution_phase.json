@@ -100,9 +100,9 @@
       "shim_bypass_violations": []
     },
     "audits/validators.py": {
-      "loc": 2797,
-      "sha256": "0f23e19af876d486495e87b24c4fd33677e00e383f2dd0d654837f407987680a",
-      "intra_package_import_edges": 22,
+      "loc": 2806,
+      "sha256": "eda551cf6a32cc56710ecec4d96609bf23577c5b093625682ad5bd6085f08ee7",
+      "intra_package_import_edges": 23,
       "shim_bypass_violations": []
     },
     "audits/cohort.py": {
@@ -202,9 +202,9 @@
       "shim_bypass_violations": []
     },
     "contracts/declared_product.py": {
-      "loc": 2228,
-      "sha256": "90e482b9382b26f1d768ae5c7e84277ec54b60fee6940d4ea5381687564b04e0",
-      "intra_package_import_edges": 8,
+      "loc": 2222,
+      "sha256": "adc59923be09ed83b4e9e5f962289c1d574eaca3390dead750d9dbd4aa84be4d",
+      "intra_package_import_edges": 9,
       "shim_bypass_violations": []
     },
     "figures/skill.py": {
@@ -244,7 +244,13 @@
       "callable_closure_captured_names": 79
     }
   },
-  "baseline_reason": "preflight.py decomposition batch: name-resolution statics (preflight_statics.py) and provenance/exposure-authority statics (preflight_provenance.py) moved byte-preserved behind the preflight facade; fixpoint ejection kept every seam-entangled checker (branch-local unbound, provenance fail-closed, typed-dataframe erasure, reconciliation swallowing) in preflight.py. 6,982 -> 6,268 loc, no growth; new owners ratcheted from day one.",
+  "baseline_reason": "duplicate-helper consolidation batch: 16 local _sha256_file definitions (four equivalent implementations) moved to canonical_json.sha256_file behind per-module aliases; repository-hygiene AST ratchet forbids reintroduction and freezes the current _finite upper bound. The only growth, audits/validators.py +9 loc, is the reviewed owner-metadata endpoint semantic-key fix from bfb6ff4 follow-up; it restores nonblocking outcome-ambiguity downgrades and closes a latent conflicting_labels KeyError.",
+  "baseline_accepted_growth": {
+    "audits/validators.py": {
+      "loc_was": 2797,
+      "loc_now": 2806
+    }
+  },
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -395,6 +401,15 @@
     },
     {
       "reason": "preflight.py decomposition batch: name-resolution statics (preflight_statics.py) and provenance/exposure-authority statics (preflight_provenance.py) moved byte-preserved behind the preflight facade; fixpoint ejection kept every seam-entangled checker (branch-local unbound, provenance fail-closed, typed-dataframe erasure, reconciliation swallowing) in preflight.py. 6,982 -> 6,268 loc, no growth; new owners ratcheted from day one."
+    },
+    {
+      "reason": "duplicate-helper consolidation batch: 16 local _sha256_file definitions (four equivalent implementations) moved to canonical_json.sha256_file behind per-module aliases; repository-hygiene AST ratchet forbids reintroduction and freezes the current _finite upper bound. The only growth, audits/validators.py +9 loc, is the reviewed owner-metadata endpoint semantic-key fix from bfb6ff4 follow-up; it restores nonblocking outcome-ambiguity downgrades and closes a latent conflicting_labels KeyError.",
+      "accepted_growth": {
+        "audits/validators.py": {
+          "loc_was": 2797,
+          "loc_now": 2806
+        }
+      }
     }
   ]
 }

@@ -38,6 +38,8 @@ inclusion/exclusion (纳排) deterministically and auditably.
 
 from __future__ import annotations
 
+from ..canonical_json import sha256_file as _sha256_file
+
 import hashlib
 import inspect
 import json
@@ -963,14 +965,6 @@ def _hash_df(df: pd.DataFrame) -> str:
     return hashlib.sha256(
         pd.util.hash_pandas_object(df, index=False).values.tobytes()
     ).hexdigest()
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _atomic_write_parquet(frame: pd.DataFrame, path: Path) -> None:

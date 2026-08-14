@@ -9,6 +9,7 @@ payloads and competing source owners are not.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import subprocess
 from pathlib import Path
@@ -23,8 +24,10 @@ REQUIRED_PATHS = (
     Path("docs/qa"),
     Path("docs/repository_layout.md"),
     Path("docs/research_agent_capability_inventory.md"),
+    Path("docs/research_agent_duplication_audit.md"),
     Path(".codegraph/.gitignore"),
     Path("tools/arch_baselines/research_agent_top_level_ownership.json"),
+    Path("tools/arch_baselines/research_agent_duplicate_helpers.json"),
 )
 
 FORBIDDEN_TRACKED_PARTS = frozenset(
@@ -53,6 +56,55 @@ FORBIDDEN_ROOT_FILES = frozenset({"design-qa.md"})
 TOP_LEVEL_OWNERSHIP_MANIFEST = Path(
     "tools/arch_baselines/research_agent_top_level_ownership.json"
 )
+DUPLICATE_HELPER_BASELINE = Path(
+    "tools/arch_baselines/research_agent_duplicate_helpers.json"
+)
+
+
+def _duplicate_helper_findings(root: Path) -> tuple[str, ...]:
+    """Reject new local copies while allowing the baseline to shrink."""
+
+    baseline_path = root / DUPLICATE_HELPER_BASELINE
+    if not baseline_path.exists():
+        return ()
+    try:
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return (f"duplicate-helper baseline is unreadable: {exc}",)
+    declared = baseline.get("helpers")
+    if not isinstance(declared, dict):
+        return ("duplicate-helper baseline lacks a helpers object",)
+
+    package_root = root / "src" / "easyicu" / "research_agent"
+    counts: dict[str, dict[str, int]] = {str(name): {} for name in declared}
+    findings: list[str] = []
+    for path in sorted(package_root.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, UnicodeDecodeError, SyntaxError) as exc:
+            findings.append(f"research-agent helper scan failed: {path}: {exc}")
+            continue
+        relative = path.relative_to(package_root).as_posix()
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name not in counts:
+                continue
+            counts[node.name][relative] = counts[node.name].get(relative, 0) + 1
+
+    for name, actual_by_file in sorted(counts.items()):
+        allowed = declared.get(name)
+        if not isinstance(allowed, dict):
+            findings.append(f"duplicate-helper baseline row is invalid: {name}")
+            continue
+        for relative, actual_count in sorted(actual_by_file.items()):
+            allowed_count = allowed.get(relative)
+            if not isinstance(allowed_count, int) or actual_count > allowed_count:
+                findings.append(
+                    "new local duplicate helper definition: "
+                    f"{name} x{actual_count} in {relative}"
+                )
+    return tuple(findings)
 
 
 def _tracked_files(repo_root: Path) -> tuple[Path, ...]:
@@ -132,6 +184,8 @@ def audit_repository(
                         findings.append(f"top-level module lacks an owner: {name}")
                     if not isinstance(row, dict) or not str(row.get("reason") or ""):
                         findings.append(f"top-level module lacks a reason: {name}")
+
+    findings.extend(_duplicate_helper_findings(root))
 
     return tuple(dict.fromkeys(findings))
 

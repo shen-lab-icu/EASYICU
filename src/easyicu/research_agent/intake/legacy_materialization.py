@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..canonical_json import sha256_file as _sha256_file
+
 import hashlib
 import json
 import re
@@ -12,14 +14,6 @@ import numpy as np
 import pandas as pd
 
 from .materialized_metadata import MaterializedMetadataError
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def load_verified_legacy_materialization_provenance(
