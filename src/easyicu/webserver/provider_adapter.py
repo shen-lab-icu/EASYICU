@@ -50,9 +50,15 @@ _WEB_RESEARCH_AGENT_MAX_ESTIMATED_COST_USD = 100.0
 _WEB_RESEARCH_AGENT_MAX_WALL_CLOCK_SECONDS = 21_600.0
 _WEB_RESEARCH_AGENT_INPUT_COST_PER_MILLION = 10.0
 _WEB_RESEARCH_AGENT_OUTPUT_COST_PER_MILLION = 30.0
-_WEB_PLANNER_CANARY_MAX_PROVIDER_ATTEMPTS = 24
-_WEB_PLANNER_CANARY_MAX_TOTAL_TOKENS = 250_000
-_WEB_PLANNER_CANARY_MAX_ESTIMATED_COST_USD = 10.0
+# One acquisition request plus the Planner's five bounded structured attempts.
+# The local OpenAI-compatible Provider exposes a 128k output ceiling, so each
+# transport must reserve that ceiling before it can start even though actual
+# completions are much smaller. These aggregate ceilings fund exactly those six
+# worst-case reservations; the old 24/250k/$10 tuple advertised attempts that
+# its token and cost stops made impossible after two Planner responses.
+_WEB_PLANNER_CANARY_MAX_PROVIDER_ATTEMPTS = 6
+_WEB_PLANNER_CANARY_MAX_TOTAL_TOKENS = 1_200_000
+_WEB_PLANNER_CANARY_MAX_ESTIMATED_COST_USD = 30.0
 _WEB_PLANNER_CANARY_MAX_WALL_CLOCK_SECONDS = 1_800.0
 
 
