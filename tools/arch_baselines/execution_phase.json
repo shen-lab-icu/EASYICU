@@ -1,6 +1,6 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "796d205b384207a1b9a2ccb05f086c0b3e8fe04c48badcdd08b577c7d21964ff",
+  "tool_sha256": "af72a57fcce1b9ee567d13e052a9476b57a218dc69559822db3770f9b1c850bb",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
@@ -10,9 +10,15 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 11273,
-      "sha256": "64713fe23707249b804ccd79796bf8f289e665e6f5bd8a58fc0ebd8c6d32c599",
+      "loc": 8543,
+      "sha256": "c4598dcb194cf379e39717145e6f2b10845e2ab2191b9fcfc14c146e8660eb48",
       "intra_package_import_edges": 115,
+      "shim_bypass_violations": []
+    },
+    "reporting/publication_bundles.py": {
+      "loc": 2734,
+      "sha256": "f256dbb899126e0562955d46636e1f94a963f6a40555fc29ddce91b44fe9cea1",
+      "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
@@ -220,13 +226,7 @@
       "callable_closure_captured_names": 79
     }
   },
-  "baseline_reason": "audits/validators.py decomposition batch: the 13,815-line monolith split into cohort/cross_step/statistical/figures/clinical/publication owners plus _v_support, with the concept-audit owner (and the authorized_complete seam tests patch) staying in validators.py behind a thin re-export facade; figures.py keeps the mutually referencing figure validators together to preserve zero import cycles. New owners appended to TARGET_FILES. The only growth, agents/replanner.py +14 loc, is the reviewed analysis_type guard from the test-seam fix batch, not drift.",
-  "baseline_accepted_growth": {
-    "agents/replanner.py": {
-      "loc_was": 294,
-      "loc_now": 308
-    }
-  },
+  "baseline_reason": "pipeline.py decomposition batch: the publication-bundle renderer family (37 functions) moved byte-preserved to reporting/publication_bundles.py behind a facade import; renderer dispatch plus every test-patched name stayed in pipeline.py (fixpoint ejection) so monkeypatch seams keep resolving through pipeline globals. 11,273 -> 8,543 loc, no growth anywhere. Two resume-suite failures are pre-existing (verified via path-scoped stash control).",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -368,6 +368,9 @@
           "loc_now": 308
         }
       }
+    },
+    {
+      "reason": "pipeline.py decomposition batch: the publication-bundle renderer family (37 functions) moved byte-preserved to reporting/publication_bundles.py behind a facade import; renderer dispatch plus every test-patched name stayed in pipeline.py (fixpoint ejection) so monkeypatch seams keep resolving through pipeline globals. 11,273 -> 8,543 loc, no growth anywhere. Two resume-suite failures are pre-existing (verified via path-scoped stash control)."
     }
   ]
 }
