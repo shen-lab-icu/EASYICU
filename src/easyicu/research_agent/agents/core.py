@@ -1088,7 +1088,7 @@ def _build_planner_user_prompt(
         # already does.
         "    {\n"
         '      "step_id": "03_exposure_outcome_distribution",\n'
-        '      "planned_analysis_role": "auxiliary",\n'
+        '      "planned_analysis_role": "primary",\n'
         '      "intent": "<one sentence>",\n'
         # Exactly one typed input (the cohort artifact, which carries the
         # digest and product contract), plus the exposure and outcome column
@@ -1668,7 +1668,7 @@ class PlannerAgent:
                 "table_one_spec, optional "
                 "trajectory_stability_spec, optional "
                 "exposure_outcome_distribution_spec, and optional "
-                "cohort_definition_spec), "
+                "cohort_definition_spec, optional descriptive_claim), "
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."

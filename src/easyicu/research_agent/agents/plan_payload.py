@@ -158,6 +158,35 @@ def _required_method_binding_options(
     }
 
 
+def _required_method_binding_examples(
+    options: dict[str, dict[str, list[str]]],
+) -> dict[str, dict[str, object]]:
+    """Render one minimal schema-valid binding example per required layer."""
+
+    examples: dict[str, dict[str, object]] = {}
+    for layer, sources in sorted(options.items()):
+        if not sources:
+            continue
+        source_key = sorted(sources)[0]
+        elements = sources[source_key]
+        if not elements:
+            continue
+        examples[layer] = {
+            "literature_citation_keys": [source_key],
+            "literature_design_bindings": [
+                {
+                    "citation_key": source_key,
+                    "design_elements": [elements[0]],
+                    "application": (
+                        f"Apply the source's {layer} method card to this step."
+                    ),
+                    "divergence": None,
+                }
+            ],
+        }
+    return examples
+
+
 def bind_literature_citation_authority(
     planning_contract_context: str,
     allowed_keys: Sequence[str],
@@ -187,6 +216,9 @@ def bind_literature_citation_authority(
     required_binding_options = _required_method_binding_options(
         method_cards,
         required_method_layers,
+    )
+    required_binding_examples = _required_method_binding_examples(
+        required_binding_options
     )
     authority = (
         "PRE-PLAN LITERATURE CITATION AUTHORITY (exact, run-bound):\n"
@@ -260,6 +292,14 @@ def bind_literature_citation_authority(
                 ensure_ascii=False,
                 sort_keys=True,
             )
+            + "\n- Minimal schema-valid examples by required layer (copy only "
+            "the layers that truly govern a scientific estimator; support "
+            "steps remain auxiliary): "
+            + json.dumps(
+                required_binding_examples,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             if required_binding_options
             else ""
         )
@@ -300,6 +340,9 @@ def literature_citation_retry_suffix(
         [card for card in METHOD_CARDS if card.source_key in method_source_keys],
         required_method_layers,
     )
+    required_binding_examples = _required_method_binding_examples(
+        required_binding_options
+    )
     return (
         " Allowed literature_citation_keys for this run are exactly: "
         + json.dumps(list(allowed_keys), ensure_ascii=False)
@@ -333,6 +376,12 @@ def literature_citation_retry_suffix(
             + ". Exact source/design-element options are: "
             + json.dumps(
                 required_binding_options,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            + ". Minimal schema-valid examples by required layer are: "
+            + json.dumps(
+                required_binding_examples,
                 ensure_ascii=False,
                 sort_keys=True,
             )

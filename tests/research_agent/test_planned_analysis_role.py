@@ -572,6 +572,9 @@ def test_planner_prompt_defines_required_role_without_case_specific_terms() -> N
     assert "Every step MUST explicitly declare `planned_analysis_role`" in prompt
     assert "at most one step may be primary" in prompt
     assert '"planned_analysis_role": "auxiliary"' in prompt
+    assert '"step_id": "03_exposure_outcome_distribution"' in prompt
+    assert '"planned_analysis_role": "primary"' in prompt
+    assert "support steps; do not give them a scientific role" in prompt
     assert "exactly one materialised closed primary-cohort product" in prompt
     assert "`artifact:cohort_defined` is not a cohort dataset" in prompt
     assert "Do not impute the primary exposure or outcome" in prompt

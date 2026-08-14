@@ -41,6 +41,13 @@ def primary_result_contract_guide() -> str:
     return (
         "Every step MUST explicitly declare `planned_analysis_role`; at most one "
         "step may be primary. "
+        "Use primary, secondary, or sensitivity only for a step that itself "
+        "estimates or compares a scientific result. Cohort construction, "
+        "Table 1, measurement/missingness audits, figures, and reporting are "
+        "auxiliary support steps; do not give them a scientific role merely "
+        "to attach literature citations. A descriptive exposure-outcome "
+        "distribution is primary when its rates or risk difference are the "
+        "study's headline result. "
         "An exposure-outcome association needs one primary adjusted model, not "
         "secondary feasibility work; a protocol/data audit may have none. "
         "For causal or survival work, the primary step MUST also declare one "
