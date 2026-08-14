@@ -6818,6 +6818,8 @@ def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(
 
     assert gates["manuscript_ready"] is True
     assert gates["publication_ready"] is False
+    assert gates["administrative_metadata_verified"] is False
+    assert gates["submission_ready"] is False
     assert artifact_paths["manuscript_ready"] == "manuscript_ready.md"
     assert (tmp_path / "manuscript_ready.md").read_text(
         encoding="utf-8"
