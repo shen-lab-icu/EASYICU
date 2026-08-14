@@ -31,6 +31,10 @@ from xml.etree import ElementTree as ET
 from easyicu.concept import catalog as concept_catalog
 from easyicu.research_agent.discovery.discovery_handoff import DiscoveryHandoffPacket
 from easyicu.research_agent.literature_excerpt import select_source_backed_excerpt
+from easyicu.research_agent.literature_concepts import (
+    concept_id as literature_concept_id,
+    literature_concept_phrase,
+)
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.ideas import direct_evidence_search
@@ -113,16 +117,6 @@ _EVENT_TRUE_STRINGS = {
     "non-invasive",
 }
 _EVENT_FALSE_STRINGS = {"0", "false", "f", "no", "n", "negative", "absent"}
-_MATERIALIZED_CONCEPT_SUFFIXES = (
-    "_first_time",
-    "_last_time",
-    "_measured",
-    "_first",
-    "_mean",
-    "_max",
-    "_min",
-    "_n",
-)
 _MAX_DISCOVERY_QUERIES = 6
 _DISCOVERY_QUERY_STRATA = (
     "broad_icu",
@@ -3450,22 +3444,13 @@ def _literature_concept_phrase(value: Any) -> str:
     raw = _clean(value or "", 180)
     if not raw:
         return ""
-    concept_id = raw
-    for suffix in _MATERIALIZED_CONCEPT_SUFFIXES:
-        if concept_id.endswith(suffix):
-            concept_id = concept_id[: -len(suffix)]
-            break
-    literature_labels = {
-        "sep3_sofa1": "Sepsis-3",
-        "sep3_sofa2": "SOFA-2 sepsis",
-        "death": "mortality",
-        "lact": "lactate",
-    }
-    if concept_id in literature_labels:
-        return literature_labels[concept_id]
-    if concept_id in concept_catalog.CONCEPT_DICTIONARY:
-        return _concept_label(concept_id)
-    return raw
+    normalized = literature_concept_id(raw)
+    fallback = (
+        _concept_label(normalized)
+        if normalized in concept_catalog.CONCEPT_DICTIONARY
+        else None
+    )
+    return literature_concept_phrase(raw, fallback=fallback)
 
 
 def _pubmed_title_abstract_clause(value: str) -> str:

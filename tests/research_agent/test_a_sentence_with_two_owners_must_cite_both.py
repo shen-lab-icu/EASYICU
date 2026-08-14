@@ -52,12 +52,14 @@ def test_the_rule_is_per_number_not_per_sentence():
     assert "must cite EVERY step that owns" in text
 
 
-def test_it_gives_the_two_owner_example_the_runs_actually_produced():
-    """An abstract rule is easy to satisfy in the wrong direction."""
+def test_it_gives_a_non_binding_two_owner_example():
+    """The global Writer prompt must teach the rule without a case answer."""
 
     text = _prompt()
 
-    assert "14 missing observations among 94,458 stays" in text
+    assert "N_missing observations unavailable among N_total stays" in text
+    assert "94,458" not in text
+    assert "schematic, non-binding" in text
     assert "takes two ids" in text
 
 

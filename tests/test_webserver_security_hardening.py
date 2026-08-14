@@ -411,6 +411,20 @@ def test_agent_outputs_label_bounded_500_stay_sample(tmp_path: Path) -> None:
         }
 
 
+def test_legacy_predictor_selection_has_no_sepsis_or_sofa_priority() -> None:
+    selected = agent_outputs._select_predictor(
+        {
+            ("labs", "creatinine"): {"1": 0.8, "2": 1.1, "3": 1.7, "4": 2.0},
+            ("sofa2_score", "sofa2"): {"1": 1.0, "2": 2.0, "3": 3.0},
+        },
+        {"1": False, "2": True, "3": False, "4": True},
+    )
+
+    assert selected is not None
+    assert selected["module"] == "labs"
+    assert selected["feature"] == "creatinine"
+
+
 def test_workspace_and_agent_use_id_first_predicate_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
