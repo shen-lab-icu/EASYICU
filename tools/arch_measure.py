@@ -75,6 +75,11 @@ RA = REPO_ROOT / "src" / "easyicu" / "research_agent"
 TARGET_FILES: List[Path] = [
     RA / "execution/phase.py",
     RA / "pipeline.py",
+    # 2026-08-14 pipeline.py decomposition batch: the publication-bundle
+    # renderer family moved to reporting/publication_bundles.py behind a
+    # facade import; renderer dispatch and every test-patched name stay in
+    # pipeline.py so module-global monkeypatch seams keep working.
+    RA / "reporting" / "publication_bundles.py",
     RA / "reporting" / "readiness.py",
     RA / "authority" / "typed_binding.py",
     RA / "authority" / "plan_authority.py",
