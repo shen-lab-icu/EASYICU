@@ -6,6 +6,7 @@ import json
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from ..planning import scientific_action_catalog as _scientific_actions
+from ..planning.analysis_types import canonical_analysis_family
 from ..trajectory.plan_contract import (
     trajectory_planner_contract_guide,
 )
@@ -207,7 +208,20 @@ class ReplannerAgent(PlannerAgent):
                     "AnalysisPlan schema. Keep completed steps unchanged and "
                     "revise only the remaining steps when the probe summary or "
                     "completed step outputs justify it.\n\n"
-                    + _scientific_actions.planner_scientific_action_guide(current_plan.analysis_type, detail="names_only") + "\n\n"
+                    # A replan must not invent a scientific family the locked
+                    # plan never declared.  When the (possibly legacy) plan has
+                    # no canonical analysis_type, omit the action guide rather
+                    # than guessing one: the plan's own steps remain the only
+                    # authority for what may be revised.
+                    + (
+                        _scientific_actions.planner_scientific_action_guide(
+                            current_plan.analysis_type, detail="names_only"
+                        )
+                        + "\n\n"
+                        if canonical_analysis_family(current_plan.analysis_type)
+                        is not None
+                        else ""
+                    )
                     + trajectory_planner_contract_guide(
                         context=context,
                         analysis_type=current_plan.analysis_type,
