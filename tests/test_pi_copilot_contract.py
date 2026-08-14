@@ -1800,6 +1800,88 @@ def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
     ]
 
 
+def test_preflight_only_history_replan_starts_fresh_pipeline_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed pre-projection pipeline must not deadlock fresh planning.
+
+    The nested Research Agent may have produced a candidate Plan before the
+    Web review projection failed.  That candidate is not a registered current
+    Plan authority and cannot be rejected through the resume endpoint.  The
+    durable registered history therefore remains the deterministic preflight.
+    A user-authorized replan starts a new run without mutating or reusing the
+    unregistered candidate.
+    """
+
+    from easyicu.webserver.routes import agent as agent_routes
+
+    study = {
+        "id": "study-preflight-only",
+        "revision": 11,
+        "question": "What is the prevalence and outcome association?",
+        "data_source": {"path": "/private/export", "database": "miiv"},
+        "active_job_id": None,
+    }
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: dict(study))
+    monkeypatch.setattr(
+        tool_module,
+        "_run_rows",
+        lambda _context: [
+            {
+                "run_id": "run-deterministic-preflight",
+                "study_id": study["id"],
+                "run_status": None,
+                "gate_status": "analysis_only",
+                "pending_review_reason_codes": [],
+                "artifact_names": [
+                    "run_context.json",
+                    "cohort_summary.json",
+                    "quality_gate.json",
+                ],
+            }
+        ],
+    )
+    submitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        agent_routes,
+        "jobs_agent_run",
+        lambda payload: (
+            submitted.append(dict(payload))
+            or {
+                "job_id": "job-fresh-after-bridge-failure",
+                "kind": "agent-run",
+                "status": "queued",
+                "study_context_id": study["id"],
+                "study_context_revision": study["revision"],
+                "engine": "research_agent_pipeline",
+            }
+        ),
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-preflight-only",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(
+                study_context_id=study["id"],
+                study_revision=study["revision"],
+                run_id="run-deterministic-preflight",
+            ),
+        ),
+        allowed_actions={"provider_run"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_request_replan",
+        {"reason": "The earlier pipeline ended before a review was registered."},
+        context,
+    )
+
+    assert result["code"] == "easyicu_full_run_submitted"
+    assert result["details"]["job_id"] == "job-fresh-after-bridge-failure"
+    assert submitted[0]["study_context_id"] == study["id"]
+    assert submitted[0]["run_type"] == "full"
+
+
 def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

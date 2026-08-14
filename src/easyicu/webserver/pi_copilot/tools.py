@@ -3193,10 +3193,24 @@ def _request_replan(
         and live_review.get("plan_approval_allowed") is not False
     )
     fresh_run_required = bool(same_study_plan and not current_review_is_resumable)
-    if fresh_run_required:
+    preflight_only_history = bool(
+        isinstance(study, Mapping)
+        and study.get("id")
+        and latest
+        and str(latest.get("study_id") or "") == str(study.get("id") or "")
+        and "agent_plan.json" not in artifacts
+        and not str(study.get("active_job_id") or "").strip()
+    )
+    if fresh_run_required or preflight_only_history:
         # Start a new digest-bound pipeline run. Never mutate or re-use the old
         # plan. This also covers terminal failed/cancelled/blocked histories:
         # their persisted run_id is evidence, not a live execution coordinate.
+        # A Web pipeline that failed before its review projection was committed
+        # is deliberately absent from the registered run-history authority. In
+        # that state the newest registered row remains the deterministic
+        # preflight and there is no current reviewable Plan to reject or reuse.
+        # Treat that as a fresh-plan request rather than inventing an in-place
+        # mutation of an unregistered nested pipeline artifact.
         # `_run` consumes the fresh provider grant and invalidates this turn
         # after submission.
         source_run_id = ""
