@@ -39,6 +39,7 @@ from ..authority.secret_redaction import (
     debug_capture_enabled,
     redact_debug_value,
 )
+from .capabilities import llm_supports_vision, model_looks_vision_capable
 from .protocol import LLMClient, LLMMessage
 
 #: Per-field ceiling for the optional LLM debug dump. A full prompt is tens of
@@ -597,7 +598,7 @@ class OpenAIClient:
         self.supports_vision = (
             bool(supports_vision)
             if supports_vision is not None
-            else _model_looks_vision_capable(model)
+            else model_looks_vision_capable(model)
         )
         if _model_looks_like_qwen3(model):
             self._extra_body.setdefault("enable_thinking", False)
@@ -1215,37 +1216,6 @@ def _completion_token_parameter_name(model: str) -> str:
     if leaf.startswith("gpt-5") or re.match(r"^o[134](?:-|$)", leaf):
         return "max_completion_tokens"
     return "max_tokens"
-
-
-def _model_looks_vision_capable(model: str) -> bool:
-    lowered = (model or "").strip().lower()
-    if not lowered:
-        return False
-    positive_tokens = (
-        "gpt-4o",
-        "omni",
-        "vision",
-        "gemini",
-        "qwen-vl",
-        "qwen2.5-vl",
-        "vl-",
-        "pixtral",
-        "llava",
-        "molmo",
-        "internvl",
-    )
-    negative_tokens = (
-        "coder",
-        "instruct",
-        "reasoner",
-        "embedding",
-        "rerank",
-        "whisper",
-        "audio",
-    )
-    if any(token in lowered for token in negative_tokens):
-        return False
-    return any(token in lowered for token in positive_tokens)
 
 
 def openrouter_reasoning_extra_body(model: str) -> Optional[Dict[str, Any]]:
@@ -2044,45 +2014,6 @@ def resolve_role_client(llm: Any, role: str) -> Any:
     if hasattr(llm, "for_role"):
         return llm.for_role(role)
     return llm
-
-
-def llm_supports_vision(client: Any) -> bool:
-    """Best-effort capability probe for optional figure-VLM review.
-
-    The pipeline uses this only to decide whether vision-based QA
-    should be enabled automatically. It stays intentionally
-    conservative: unknown clients default to ``False`` unless they
-    explicitly advertise ``supports_vision`` or expose a
-    ``complete_with_images`` method without a contradicting model
-    heuristic.
-    """
-
-    if client is None:
-        return False
-    if hasattr(client, "supports_vision"):
-        advertised = getattr(client, "supports_vision")
-        try:
-            return bool(advertised() if callable(advertised) else advertised)
-        except Exception:
-            return False
-    if hasattr(client, "for_role"):
-        try:
-            analyzer_client = client.for_role("analyzer")
-        except Exception:
-            analyzer_client = None
-        if analyzer_client is not None:
-            return llm_supports_vision(analyzer_client)
-    if hasattr(client, "iter_clients"):
-        try:
-            return any(llm_supports_vision(child) for child in client.iter_clients())
-        except Exception:
-            return False
-    if hasattr(client, "complete_with_images"):
-        model = getattr(client, "_model", None)
-        if model is None:
-            return True
-        return _model_looks_vision_capable(str(model))
-    return False
 
 
 def llm_is_mockish(client: Any) -> bool:

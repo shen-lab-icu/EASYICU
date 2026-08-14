@@ -49,7 +49,7 @@ class HardStopClient:
     def supports_vision(self) -> bool:
         """Preserve the wrapped client's capability instead of widening it."""
 
-        from .llm import llm_supports_vision
+        from .capabilities import llm_supports_vision
 
         return llm_supports_vision(self._inner)
 
