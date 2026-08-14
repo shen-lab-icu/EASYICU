@@ -89,9 +89,14 @@ transport, `coordination` (`RepairCoordinator`), per-cause handlers
 
 ## Interaction rules (the part that keeps them from merging)
 
-1. Dependency direction is one-way in practice:
-   `repairs → {gates, audits, contracts}` and `gates/audits → contracts`;
-   authority is imported by everyone but imports none of the other four.
+1. Dependency direction is one-way for domain implementations:
+   `repairs → {gates, audits, contracts}` and `gates/audits → contracts`.
+   Core authority storage/schema owners remain lower-level. Four explicit
+   integration adapters currently consume narrow cross-layer contracts:
+   `typed_binding → audits.step_summary_integrity`,
+   `{step_runtime, step_capsule} → gates.semantics`, and
+   `diagnostic_envelope → repairs.reasons`. These exceptions must not expand
+   without an import-contract review.
 2. A gate that starts repairing, an audit that starts rewriting, or a repair
    that starts binding evidence is a layering defect — split it, don't grow it.
 3. `ValidationFinding` is the shared vocabulary, not a shared owner: gates

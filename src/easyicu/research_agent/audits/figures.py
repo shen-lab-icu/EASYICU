@@ -6,7 +6,6 @@ other, so they share one owner module rather than an import cycle.
 
 from __future__ import annotations
 
-import hashlib
 import itertools
 import json
 import math
@@ -16,6 +15,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, 
 
 import pandas as pd
 
+from ..canonical_json import sha256_file as _sha256_file
 from ..planning.analysis_method_suite import figure_product_source_obligations
 from ..contracts.declared_product import (
     effect_adjustment_family,
@@ -2383,7 +2383,7 @@ class FigureSourceDataValidator:
                         )
                 elif (
                     not self._safe_regular_run_file(bound_path, run_dir=run_dir)
-                    or self._sha256_file(bound_path) != expected_sha
+                    or _sha256_file(bound_path) != expected_sha
                 ):
                     invalid_bound_evidence.append(raw_input)
                     continue
@@ -3585,14 +3585,6 @@ class FigureSourceDataValidator:
                 return False
         return True
 
-    @staticmethod
-    def _sha256_file(path: Path) -> str:
-        digest = hashlib.sha256()
-        with Path(path).open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
-
     @classmethod
     def _authoritative_table_evidence(
         cls,
@@ -3650,7 +3642,7 @@ class FigureSourceDataValidator:
             output_path = root / "steps" / step_id / "outputs" / logical_name
             if (
                 cls._safe_regular_run_file(output_path, run_dir=root)
-                and cls._sha256_file(output_path) == expected_sha
+                and _sha256_file(output_path) == expected_sha
             ):
                 authorised[evidence_id] = {
                     "path": output_path.resolve(),

@@ -1,20 +1,21 @@
 # Research-agent duplication and necessity audit
 
-Measured 2026-08-14 after the P3 decomposition batches and the first helper
-consolidation. Scope: `src/easyicu/research_agent/**/*.py`, top-level functions
-and classes only. This is a governance inventory, not permission to delete a
-module based on static in-degree alone.
+Measured 2026-08-14 after the P3 decomposition batches and helper
+consolidation. Inventory metrics count top-level functions and classes;
+duplicate-helper enforcement scans functions, methods, and nested functions in
+`src/easyicu/research_agent/**/*.py`. This is not permission to delete a module
+based on static in-degree alone.
 
 ## Current baseline
 
 | metric | value |
 | --- | ---: |
-| Python modules | 517 |
+| Python modules | 519 |
 | top-level definitions | 5,232 |
 | names defined in more than one module | 129 |
 | cyclic SCCs | 0 |
 | local `_sha256_file` definitions | 0 (16 consolidated) |
-| grandfathered local `_finite` definitions | 15 |
+| grandfathered local `_finite` definitions | 16 |
 
 ## Is every file necessary?
 
@@ -53,7 +54,7 @@ owner exists. The three-state capability inventory remains the authority.
 
 | helper | definitions / distinct bodies | risk / next action |
 | --- | --- | --- |
-| `_finite` | 15 / 8 | Different accepted input types, scalar coercion, and null/error behavior. Frozen by CI: no new copies. Next batch must define a typed finite-number policy in `scalar_utils.py`, migrate one semantic family at a time, and shrink the allowlist. |
+| `_finite` | 16 / 9 | Different accepted input types, scalar coercion, and null/error behavior. Frozen by CI at every function scope: no new copies. Next batch must define a typed finite-number policy in `scalar_utils.py`, migrate one semantic family at a time, and shrink the allowlist. |
 | `_method_head` | 17 / 9 | Some normalize aliases, some only split tokens, some depend on plan vocabulary. Route through `research_context.prompt_scope.normalised_method_head` only after call-site semantics are characterized. |
 | `_canonical_bytes` | 7 / 7 | The name hides seven schema-specific normalizers. Keep schema normalization local; only the final byte serialization should use `canonical_json_bytes`. |
 | `_call_name` | 4 / 3 | AST helpers differ on attributes/subscripts and unknown calls. Merge only after a shared AST-call-name contract and fixtures exist. |

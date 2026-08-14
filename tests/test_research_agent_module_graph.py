@@ -125,6 +125,36 @@ def test_diff_accepts_one_large_scc_split_into_more_smaller_sccs(
     assert graph.compare_snapshots(current, baseline) == []
 
 
+@pytest.mark.parametrize("metric", ["module_count", "top_level_module_count"])
+def test_diff_rejects_module_inventory_growth(tmp_path: Path, metric: str) -> None:
+    baseline = graph.build_snapshot(
+        _write_package(tmp_path), "demo", legacy_targets=("demo.a",)
+    )
+    current = copy.deepcopy(baseline)
+    current["metrics"][metric] += 1
+
+    errors = graph.compare_snapshots(current, baseline)
+
+    assert any(f"{metric} increased" in error for error in errors)
+
+
+def test_diff_rejects_malformed_or_incomplete_metrics(tmp_path: Path) -> None:
+    baseline = graph.build_snapshot(
+        _write_package(tmp_path), "demo", legacy_targets=("demo.a",)
+    )
+    malformed = copy.deepcopy(baseline)
+    malformed["metrics"] = []
+    assert graph.compare_snapshots(baseline, malformed) == [
+        "baseline snapshot lacks a valid metrics object"
+    ]
+
+    incomplete = copy.deepcopy(baseline)
+    del incomplete["metrics"]["module_count"]
+    assert "required metric missing: module_count" in graph.compare_snapshots(
+        baseline, incomplete
+    )
+
+
 def test_diff_rejects_missing_legacy_module_and_all_symbol(tmp_path: Path) -> None:
     baseline = graph.build_snapshot(
         _write_package(tmp_path), "demo", legacy_targets=("demo.a",)

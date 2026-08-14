@@ -620,6 +620,13 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
             "validator_findings": {
                 "count": len(finding_authority),
                 "set_sha256": _canonical_sha256(finding_authority),
+                "identities": [
+                    {
+                        key: finding[key]
+                        for key in ("validator", "severity", "reason", "step_id")
+                    }
+                    for finding in finding_authority
+                ],
                 "by_severity": {
                     severity: sum(
                         finding["severity"] == severity for finding in finding_authority

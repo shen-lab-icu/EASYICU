@@ -68,3 +68,28 @@ def test_hygiene_audit_rejects_new_duplicate_helpers(tmp_path: Path) -> None:
         "new local duplicate helper definition: "
         "_sha256_file x1 in new_helper.py"
     ) in findings
+
+
+def test_hygiene_audit_scans_methods_and_nested_helpers(tmp_path: Path) -> None:
+    baseline = tmp_path / "tools/arch_baselines/research_agent_duplicate_helpers.json"
+    baseline.parent.mkdir(parents=True)
+    baseline.write_text('{"helpers": {"_sha256_file": {}}}', encoding="utf-8")
+    helper = tmp_path / "src/easyicu/research_agent/nested_helper.py"
+    helper.parent.mkdir(parents=True)
+    helper.write_text(
+        "class Owner:\n"
+        "    def _sha256_file(self, path):\n"
+        "        return path.read_bytes()\n"
+        "def outer():\n"
+        "    def _sha256_file(path):\n"
+        "        return path.read_bytes()\n"
+        "    return _sha256_file\n",
+        encoding="utf-8",
+    )
+
+    findings = audit_repository(tmp_path, tracked_files=())
+
+    assert (
+        "new local duplicate helper definition: "
+        "_sha256_file x2 in nested_helper.py"
+    ) in findings

@@ -85,7 +85,7 @@ def _duplicate_helper_findings(root: Path) -> tuple[str, ...]:
             findings.append(f"research-agent helper scan failed: {path}: {exc}")
             continue
         relative = path.relative_to(package_root).as_posix()
-        for node in tree.body:
+        for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if node.name not in counts:
