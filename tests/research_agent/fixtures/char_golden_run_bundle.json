@@ -493,13 +493,12 @@
       "missing_evidence_count": 0,
       "missing_steps": [
         "05_robustness",
-        "06_publication_figure_fallback",
-        "07_audit_panel"
+        "06_publication_figure_fallback"
       ],
       "numeric_error_count": 0,
       "numeric_verified": false,
       "publication_ready": false,
-      "required_step_count": 7
+      "required_step_count": 6
     },
     "status": "diagnostic_only",
     "strict_fail_closed": true
@@ -588,10 +587,10 @@
     "by_severity": {
       "error": 1,
       "info": 3,
-      "warning": 9
+      "warning": 11
     },
-    "count": 13,
-    "set_sha256": "b8b6f1e00889b5ee5be221666779d75cf8319bcaab79bd0d57af91f93d119424"
+    "count": 15,
+    "set_sha256": "39b76f4f5736468df2bad010faa6cd1416b43f0208a8eb33cf6355be69e2de49"
   },
   "volatile_field_allowlist": [
     "absolute_path",
