@@ -754,7 +754,8 @@ def test_figure_catalog_fills_derived_concept_metadata(tmp_path: Path) -> None:
     assert catalog["urine24"]["description"] == "Explicit urine description"
     assert catalog["urine24"]["unit"] == "mL/24h"
     assert catalog["pafi"]["description"] == "Explicit P/F description"
-    assert catalog["pafi"]["unit"] == "mmHg"
+    # JAMA Network Open's 2026 correction removed mm Hg from ratio data.
+    assert catalog["pafi"]["unit"] == "ratio"
 
 
 def test_figure_script_prefers_its_checkout_src(monkeypatch, tmp_path: Path) -> None:

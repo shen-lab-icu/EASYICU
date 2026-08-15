@@ -58,8 +58,12 @@ dictionary plus its callbacks, not adding a code path per database.
 
 ## 4. Clinical score implementations
 
-- `sofa2.py`, `sepsis_sofa2.py`, `sepsis.py`, `kdigo_aki.py`, `scores.py`,
-  `circ_failure.py` — clinical scores layered on top of the concept layer.
+- `scores/sofa2.py` owns SOFA-2 component rules;
+  `scores/sofa2_validation.py` owns typed input-domain failures; and
+  `scores/sofa2_aggregate.py` owns observation/day-1 identity and aggregation
+  contracts. `scores/sepsis_sofa2.py`, `scores/sepsis.py`, `scores/kdigo_aki.py`,
+  `scores.py`, and `circ_failure.py` own the other clinical scores layered on
+  top of the concept layer.
   [`data/sofa2-dict.json`](data/sofa2-dict.json) extends the main
   dictionary with the SOFA-2 dependency closure (see
   [`data/README.md`](data/README.md)).
