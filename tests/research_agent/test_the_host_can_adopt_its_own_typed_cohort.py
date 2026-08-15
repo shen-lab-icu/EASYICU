@@ -343,6 +343,30 @@ def test_the_adopted_cohort_seals_a_host_owned_checkpoint(typed_run):
     ).read_bytes()
 
 
+def test_writer_excludes_only_a_verified_host_cohort_checkpoint(typed_run):
+    from easyicu.research_agent.audits.envelope_consumers import (
+        RegisteredOutputAuthorityError,
+        RegisteredOutputEnvelopeConsumer,
+    )
+
+    run_dir, _plan = typed_run
+    evidence, (_step_id, checkpoint, error) = _seal(run_dir, _sealable_plan())
+    assert error is None
+    assert checkpoint is not None
+
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+        [checkpoint], evidence_store=evidence
+    )
+
+    assert projected == []
+
+    checkpoint["cohort_table_evidence_id"] = "missing_authority"
+    with pytest.raises(RegisteredOutputAuthorityError, match="cohort authority"):
+        RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+            [checkpoint], evidence_store=evidence
+        )
+
+
 def test_the_host_refuses_a_conflicting_cohort_flow_step_output(typed_run):
     """Resume cannot overwrite a previously sealed producer location."""
 

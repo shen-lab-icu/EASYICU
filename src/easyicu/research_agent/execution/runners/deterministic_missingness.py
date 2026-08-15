@@ -1212,8 +1212,20 @@ def missingness_measurement_audit_code(
                     "measured_pct": 100.0 * measured_one_n / n_total,
                     "eligible_n": eligible_n,
                     "not_applicable_n": not_applicable_n,
+                    "applicable_pct": 100.0 * eligible_n / n_total,
+                    "available_within_applicable_pct": (
+                        100.0 * measured_one_n / eligible_n
+                        if eligible_n
+                        else np.nan
+                    ),
+                    "missing_within_applicable_pct": (
+                        100.0 * value_missing_n / eligible_n
+                        if eligible_n
+                        else np.nan
+                    ),
                     "event_present_n": event_present_n,
                     "event_absent_n": event_absent_n,
+                    "event_present_pct": 100.0 * event_present_n / n_total,
                     "before_origin_n": before_origin_n,
                     "value_present_but_measured_zero_n": present_but_zero,
                     "measured_but_value_missing_n": measured_but_missing,

@@ -165,6 +165,120 @@ def test_replay_event_keeps_only_reopenable_resource_identity_and_digest() -> No
     assert "/private" not in json.dumps(projected)
 
 
+def test_replay_keeps_system_validation_document_as_a_distinct_authority_kind() -> None:
+    digest = "c" * 64
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-15T00:00:00Z",
+            "tool_call_id": "call-system-validation",
+            "tool_name": "easyicu_inspect_run",
+            "status": "ok",
+            "code": "easyicu_run_projected",
+            "resource": {
+                "kind": "system_validation_document",
+                "run_id": "run_demo",
+                "artifact": "system_validation_report.html",
+                "label": "System validation dossier",
+                "media_type": "text/html",
+                "sha256": digest,
+                "path": "/private/must-not-persist",
+            },
+        }
+    )
+
+    assert projected is not None
+    assert projected["resource"] == {
+        "kind": "system_validation_document",
+        "run_id": "run_demo",
+        "artifact": "system_validation_report.html",
+        "label": "System validation dossier",
+        "media_type": "text/html",
+        "sha256": digest,
+    }
+
+
+def test_replay_drops_research_documents_without_a_digest() -> None:
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-15T00:00:00Z",
+            "tool_call_id": "call-unbound-document",
+            "tool_name": "easyicu_inspect_run",
+            "status": "ok",
+            "code": "easyicu_run_projected",
+            "resource": {
+                "kind": "system_validation_document",
+                "run_id": "run_demo",
+                "artifact": "system_validation_report.html",
+                "label": "Unbound dossier",
+                "media_type": "text/html",
+            },
+        }
+    )
+
+    assert projected is not None
+    assert "resource" not in projected
+
+
+def test_replay_webpage_resource_keeps_checked_digest() -> None:
+    digest = "b" * 64
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-15T00:00:00Z",
+            "tool_call_id": "call-preview",
+            "tool_name": "easyicu_preview_project_file",
+            "status": "ok",
+            "code": "pi_workspace_preview_ready",
+            "resource": {
+                "kind": "webpage",
+                "file": "prototype/index.html",
+                "label": "Prototype",
+                "media_type": "text/html",
+                "checked_sha256": digest,
+                "path": "/private/must-not-persist",
+            },
+        }
+    )
+
+    assert projected is not None
+    assert projected["resource"] == {
+        "kind": "webpage",
+        "file": "prototype/index.html",
+        "label": "Prototype",
+        "media_type": "text/html",
+        "checked_sha256": digest,
+    }
+    assert "/private" not in json.dumps(projected)
+
+
+@pytest.mark.parametrize("checked_sha256", [None, "", "not-a-digest"])
+def test_replay_webpage_resource_without_checked_digest_is_not_reopenable(
+    checked_sha256: str | None,
+) -> None:
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-15T00:00:00Z",
+            "tool_call_id": "call-preview",
+            "tool_name": "easyicu_preview_project_file",
+            "status": "ok",
+            "code": "pi_workspace_preview_ready",
+            "resource": {
+                "kind": "webpage",
+                "file": "prototype/index.html",
+                "label": "Prototype",
+                "media_type": "text/html",
+                "checked_sha256": checked_sha256,
+            },
+        }
+    )
+
+    assert projected is not None
+    assert "resource" not in projected
+
+
 def test_replay_store_itself_drops_text_deltas_and_private_event_fields(
     tmp_path: Path,
 ) -> None:

@@ -108,6 +108,28 @@ def _interval(
     return estimate, low, high, confidence, method, covariance, clusters
 
 
+def _counts_only_estimate(
+    payload: Mapping[str, Any], *, owner: str, bounded: bool
+) -> float:
+    estimate = _number(payload, "estimate_pct", owner=owner)
+    if bounded and not 0.0 <= estimate <= 100.0:
+        raise ValueError(f"{owner} absolute risk must remain within 0 to 100 percent")
+    if payload.get("interval_method") != "none_counts_only" or payload.get(
+        "covariance"
+    ) != "none_counts_only":
+        raise ValueError(f"{owner} counts-only authority drifted")
+    for field in (
+        "standard_error_pct",
+        "ci_low_pct",
+        "ci_high_pct",
+        "confidence_level",
+        "cluster_count",
+    ):
+        if payload.get(field) is not None:
+            raise ValueError(f"{owner}.{field} must be null for counts-only authority")
+    return estimate
+
+
 def _estimand(
     *,
     name: str,
@@ -217,9 +239,19 @@ def derive_descriptive_claim_payloads(
     if not isinstance(absolute_risks, list) or not absolute_risks:
         raise ValueError(f"{owner} requires at least one outcome absolute risk")
     claims: list[dict[str, Any]] = []
-    levels: dict[int, tuple[str, Any, int, float, tuple[float, float, float, float, str, str, int | None]]] = {}
+    levels: dict[
+        int,
+        tuple[
+            str,
+            Any,
+            int,
+            float,
+            tuple[float, float, float, float, str, str, int | None] | None,
+        ],
+    ] = {}
     seen_level_keys: set[str] = set()
     confidence_levels: set[float] = set()
+    counts_only_levels = 0
     for position, raw in enumerate(absolute_risks):
         item_owner = f"{owner}.outcome_absolute_risks[{position}]"
         if not isinstance(raw, dict):
@@ -236,6 +268,35 @@ def derive_descriptive_claim_payloads(
         denominator = _count(raw, "denominator", owner=item_owner)
         if denominator <= 0 or events > denominator:
             raise ValueError(f"{item_owner} events/denominator are inconsistent")
+        if raw.get("interval_method") == "none_counts_only":
+            if dependence is not None:
+                raise ValueError(
+                    f"{item_owner} counts-only authority cannot declare dependence"
+                )
+            estimate = _counts_only_estimate(raw, owner=item_owner, bounded=True)
+            if abs(estimate - 100.0 * events / denominator) > 1e-5:
+                raise ValueError(f"{item_owner} estimate does not equal events/denominator")
+            counts_only_levels += 1
+            levels[index] = (level_key, level, denominator, estimate, None)
+            claims.append(
+                {
+                    "schema_version": "easyicu.scientific_claim/2",
+                    "claim_id": f"observed_absolute_risk_level_{index}",
+                    "claim_type": "descriptive_absolute_risk",
+                    "exposure": f"{exposure}={_display_level(level)}",
+                    "outcome": outcome,
+                    "direction": "descriptive_only",
+                    "estimand": (
+                        f"observed absolute risk was {events}/{denominator} "
+                        f"({_format(estimate)} percent; counts only, no confidence "
+                        "interval)"
+                    ),
+                    "population": population,
+                    "analysis_role": role,
+                    "status": "supported",
+                }
+            )
+            continue
         interval = _interval(raw, owner=item_owner, bounded=True)
         if dependence is None:
             if interval[4] != "wilson" or interval[5] != "binomial_independent":
@@ -281,6 +342,12 @@ def derive_descriptive_claim_payloads(
         )
 
     contrast = estimates.get("risk_difference")
+    if counts_only_levels:
+        if counts_only_levels != len(absolute_risks):
+            raise ValueError(f"{owner} mixes counts-only and interval estimates")
+        if contrast is not None:
+            raise ValueError(f"{owner} counts-only authority requires null risk_difference")
+        return claims
     if contrast is None:
         return claims
     if not isinstance(contrast, dict):
@@ -315,6 +382,8 @@ def derive_descriptive_claim_payloads(
         raise ValueError(
             f"{contrast_owner} refers to an absent absolute-risk level"
         ) from exc
+    if reference_interval is None or comparison_interval is None:
+        raise ValueError(f"{contrast_owner} lacks interval authority")
     if _level_key(contrast.get("reference_level")) != reference_key or _level_key(
         contrast.get("comparison_level")
     ) != comparison_key:

@@ -323,11 +323,20 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             continue
         artifact_refs.append(
             {
-                "kind": "research_document" if name in {
-                    "manuscript_scaffold.pdf",
-                    "manuscript_scaffold.tex",
-                    "manuscript_scaffold.bib",
-                } else "research_artifact",
+                "kind": (
+                    "system_validation_document"
+                    if name in {
+                        "system_validation_report.html",
+                        "system_validation_report.pdf",
+                    }
+                    else "research_document"
+                    if name in {
+                        "manuscript_scaffold.pdf",
+                        "manuscript_scaffold.tex",
+                        "manuscript_scaffold.bib",
+                    }
+                    else "research_artifact"
+                ),
                 "run_id": run_id,
                 "artifact": name,
                 "label": name,
@@ -388,11 +397,20 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "pmid": _bounded_text(value.get("pmid"), 32),
             "authority_class": stable_code(value.get("authority_class")),
         }
-    if kind in {"research_artifact", "research_document"}:
+    if kind in {
+        "research_artifact",
+        "research_document",
+        "system_validation_document",
+    }:
         run_id = stable_code(value.get("run_id"))
         artifact = _bounded_text(value.get("artifact"), 160)
         digest = _bounded_text(value.get("sha256"), 64).lower()
-        if not run_id or not artifact or Path(artifact).name != artifact:
+        if (
+            not run_id
+            or not artifact
+            or Path(artifact).name != artifact
+            or not re.fullmatch(r"[a-f0-9]{64}", digest)
+        ):
             return None
         return {
             "kind": kind,
@@ -400,11 +418,7 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "artifact": artifact,
             "label": _bounded_text(value.get("label") or artifact, 160),
             "media_type": _bounded_text(value.get("media_type"), 120),
-            **(
-                {"sha256": digest}
-                if re.fullmatch(r"[a-f0-9]{64}", digest)
-                else {}
-            ),
+            "sha256": digest,
         }
     if kind == "data_package_review":
         study_id = stable_code(value.get("study_context_id"))
@@ -435,6 +449,9 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
         ):
             return None
         digest = _bounded_text(value.get("sha256"), 64).lower()
+        checked_digest = _bounded_text(value.get("checked_sha256"), 64).lower()
+        if kind == "webpage" and not re.fullmatch(r"[a-f0-9]{64}", checked_digest):
+            return None
         return {
             "kind": kind,
             "file": file_name,
@@ -445,6 +462,7 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
                 if re.fullmatch(r"[a-f0-9]{64}", digest)
                 else {}
             ),
+            **({"checked_sha256": checked_digest} if kind == "webpage" else {}),
         }
     return None
 

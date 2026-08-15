@@ -333,7 +333,20 @@ def register_pipeline_work_root(
     selected = path or default_store_path()
     with _locked(selected):
         payload = _read(selected)
-        roots = [str(Path(value).expanduser().resolve()) for value in payload["work_roots"]]
+        stored_roots = [
+            str(Path(value).expanduser().resolve()) for value in payload["work_roots"]
+        ]
+        temporary_root = Path(tempfile.gettempdir()).resolve()
+        roots = []
+        for value in stored_roots:
+            candidate = Path(value)
+            try:
+                candidate.relative_to(temporary_root)
+                temporary = True
+            except ValueError:
+                temporary = False
+            if not temporary or candidate.is_dir():
+                roots.append(value)
         rendered = str(selected_root)
         if rendered not in roots:
             if len(roots) >= max_roots:
@@ -341,6 +354,7 @@ def register_pipeline_work_root(
                     "Web review pipeline work-root capacity is full"
                 )
             roots.append(rendered)
+        if roots != stored_roots:
             _write(selected, {**payload, "work_roots": roots})
     return selected_root
 

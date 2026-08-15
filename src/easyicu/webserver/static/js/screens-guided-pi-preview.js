@@ -40,6 +40,17 @@
         media_type: 'application/json', authority_class: 'product_demo_projection',
       };
     }
+    if (value.kind === 'demo_document') {
+      const artifact = String(value.artifact || '').trim();
+      if (!/^system-validation-report\.(html|pdf)$/.test(artifact)) return null;
+      return {
+        kind: 'demo_document', artifact,
+        run_id: String(value.run_id || '').slice(0, 160),
+        label: String(value.label || artifact).slice(0, 160),
+        media_type: artifact.endsWith('.pdf') ? 'application/pdf' : 'text/html',
+        authority_class: 'engineering_validation_only',
+      };
+    }
     if (value.kind === 'literature_source') {
       const literature = window.EU_GUIDED_PI_LITERATURE;
       const authorityClass = value.authority_class === 'literature_method'
@@ -70,15 +81,18 @@
         media_type: 'application/json',
       };
     }
-    if (value.kind === 'research_document') {
+    if (value.kind === 'research_document' || value.kind === 'system_validation_document') {
       const runId = String(value.run_id || '').trim();
       const artifact = String(value.artifact || '').trim();
       if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(runId)) return null;
-      if (!/^manuscript_scaffold\.(pdf|tex|bib)$/.test(artifact)) return null;
+      const validationDocument = value.kind === 'system_validation_document';
+      if (validationDocument
+        ? !/^system_validation_report\.(html|pdf)$/.test(artifact)
+        : !/^manuscript_scaffold\.(pdf|tex|bib)$/.test(artifact)) return null;
       return {
-        kind: 'research_document', run_id: runId, artifact,
+        kind: validationDocument ? 'system_validation_document' : 'research_document', run_id: runId, artifact,
         label: String(value.label || artifact).slice(0, 160),
-        media_type: String(value.media_type || (artifact.endsWith('.pdf') ? 'application/pdf' : 'text/plain')).slice(0, 120),
+        media_type: String(value.media_type || (artifact.endsWith('.pdf') ? 'application/pdf' : (artifact.endsWith('.html') ? 'text/html' : 'text/plain'))).slice(0, 120),
       };
     }
     if (value.kind === 'data_package_review') {
@@ -113,7 +127,10 @@
     };
   }
   function isResearchArtifact() { return !!state.resource && state.resource.kind === 'research_artifact'; }
-  function isResearchDocument() { return !!state.resource && state.resource.kind === 'research_document'; }
+  function isResearchDocument() { return !!state.resource && (state.resource.kind === 'research_document' || state.resource.kind === 'system_validation_document'); }
+  function isDemoDocument() { return !!state.resource && state.resource.kind === 'demo_document'; }
+  function isDocument() { return isResearchDocument() || isDemoDocument(); }
+  function isSystemValidationDocument() { return !!state.resource && state.resource.kind === 'system_validation_document'; }
   function isDemoArtifact() { return !!state.resource && state.resource.kind === 'demo_artifact'; }
   function isDataPackageReview() { return !!state.resource && state.resource.kind === 'data_package_review'; }
   function isStructuredArtifact() { return isResearchArtifact() || isDemoArtifact() || isDataPackageReview(); }
@@ -127,16 +144,21 @@
   }
   function previewUrl() {
     const api = window.EU_API || {};
+    if (isDemoDocument()) {
+      return `/assets/demo/${state.resource.artifact}?v=20260815-reviewer-demo1`;
+    }
     if (isResearchDocument()) {
       return api.piCopilotResearchDocumentUrl
         ? api.piCopilotResearchDocumentUrl(state.projectId, state.resource.run_id, state.resource.artifact)
         : '';
     }
+    const checkedSha256 = String(state.resource && state.resource.checked_sha256 || '').trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(checkedSha256)) return '';
     return api.piCopilotWorkspacePreviewUrl
       ? api.piCopilotWorkspacePreviewUrl(
           state.projectId,
           state.resource.file,
-          state.resource.checked_sha256,
+          checkedSha256,
         )
       : '';
   }
@@ -151,6 +173,9 @@
   }
   function researchProvenance() {
     const governance = state.governance || {};
+    if (isSystemValidationDocument() || governance.authority_class === 'easyicu_system_validation_report') {
+      return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('System validation dossier · Engineering evidence only', '系统验证报告 · 仅限工程证据'))}</strong><span>${esc(tr('Not a clinical manuscript; cannot grant scientific or publication authority.', '不是临床论文；不能授予科学或发表权限。'))}</span></div>`;
+    }
     if (!state.governance) {
       return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('EasyICU run artifact · Governance pending', 'EasyICU 运行产物 · 治理状态待确认'))}</strong><span>${esc(tr('Loading Host gate status…', '正在加载 Host 运行闸状态…'))}</span></div>`;
     }
@@ -169,11 +194,10 @@
     return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(title)}</strong><span>${esc(detail)}</span></div>`;
   }
   function demoProvenance() {
-    const authority = String((state.payload && state.payload.source_authority) || '');
-    if (authority === 'independent_product_audit_20260811') {
-      return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Product demo · Historical run plus independent current audit', '产品演示 · 历史运行与独立当前审计'))}</strong><span>${esc(tr('The current sources adjudicate the historical canary; they were not retroactively inserted into that Agent run.', '当前来源用于裁决历史 canary；并未追溯性写入该 Agent 运行。'))}</span></div>`;
-    }
-    return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Product demo · Real engineering-canary aggregate', '产品演示 · 真实工程试跑聚合产物'))}</strong><span>${esc(tr('Read-only and non-reportable; not formal paper evidence.', '只读且不可报告；不是正式论文证据。'))}</span></div>`;
+    return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Bounded reviewer projection · Standard Web renderer', '有界审稿投影 · 标准 Web 渲染器'))}</strong><span>${esc(tr('A read-only projection derived from the registered run and rendered with the live Web artifact views; it is not the live artifact transport or publication evidence.', '这是从登记运行派生并复用真实 Web 产物视图的只读投影；它不是 live artifact transport，也不是投稿证据。'))}</span></div>`;
+  }
+  function demoDocumentProvenance() {
+    return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Reviewer demonstration complete · Engineering evidence', '审稿人演示完整完成 · 工程证据'))}</strong><span>${esc(tr('The workflow demonstration is complete; clinical manuscript and publication authority remain separate and were not granted.', '流程演示已完整完成；临床稿件与发表权限属于独立边界，本报告未授予这些权限。'))}</span></div>`;
   }
   function dataPackageProvenance() {
     return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Registered export · Pre-analysis review', '已登记数据源 · 分析前审阅'))}</strong><span>${esc(tr('Aggregate denominator and availability only; event rates, comparisons, and effect estimates are withheld until the governed analysis.', '仅展示聚合分母与可用性；事件率、组间比较和效应量留待受治理分析。'))}</span></div>`;
@@ -186,7 +210,7 @@
         ${isDataPackageReview() ? `<button type="button" role="tab" data-gpi-preview-mode="workbench" aria-selected="${state.mode === 'workbench'}">${icon('grid', 14)} ${tr('Workbench', '数据工作台')}</button>` : ''}
         <button type="button" role="tab" data-gpi-preview-mode="structured" aria-selected="${state.mode === 'structured'}">${icon('list', 14)} ${tr('Readable', '可读视图')}</button>
         <button type="button" role="tab" data-gpi-preview-mode="code" aria-selected="${state.mode === 'code'}">${icon('file', 14)} JSON</button>
-      </div>` : isHtml() ? `
+      </div>` : state.resource.kind === 'webpage' && isHtml() ? `
       <div class="gpi-preview-tabs" role="tablist" aria-label="${tr('Artifact views', '产物视图')}">
         <button type="button" role="tab" data-gpi-preview-mode="code" aria-selected="${state.mode === 'code'}">${icon('file', 14)} ${tr('Code', '代码')}</button>
         <button type="button" role="tab" data-gpi-preview-mode="web" aria-selected="${state.mode === 'web'}">${icon('globe', 14)} ${tr('Web preview', '网页预览')}</button>
@@ -201,19 +225,19 @@
       body = renderer && typeof renderer.renderSource === 'function'
         ? renderer.renderSource(state.resource)
         : `<div class="gpi-preview-state error">${esc(tr('Literature renderer unavailable', '文献渲染器不可用'))}</div>`;
-    } else if (state.mode === 'document' && isResearchDocument()) {
+    } else if (state.mode === 'document' && isDocument()) {
       body = `<iframe class="gpi-preview-frame gpi-preview-document-frame" src="${esc(previewUrl())}" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`;
     } else if (state.mode === 'web' && isHtml()) {
-      body = `<iframe class="gpi-preview-frame" src="${esc(previewUrl())}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`;
+      const url = previewUrl();
+      body = url
+        ? `<iframe class="gpi-preview-frame" src="${esc(url)}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
+        : `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The checked file digest is missing. Run the static check and prepare the preview again.', '文件检查摘要缺失。请重新执行静态检查并准备预览。')}</span></div>`;
     } else if (state.mode === 'workbench' && isDataPackageReview()) {
       body = `<div data-gpi-workbench-mount></div>`;
     } else if (state.mode === 'structured' && isStructuredArtifact()) {
       const renderer = window.AGENT_RENDER;
       const literature = window.EU_GUIDED_PI_LITERATURE;
-      const demo = window.EU_GUIDED_PI_DEMO;
-      body = isDemoArtifact() && demo && typeof demo.renderArtifact === 'function'
-        ? demo.renderArtifact(state.payload || {})
-        : state.resource.artifact === 'literature_evidence.json'
+      body = state.resource.artifact === 'literature_evidence.json'
         && literature && typeof literature.renderArtifact === 'function'
         ? literature.renderArtifact(state.payload || {})
         : renderer && typeof renderer.artifactStructuredView === 'function'
@@ -227,10 +251,10 @@
     }
     const reference = isDataPackageReview()
       ? `${state.resource.study_context_id} · rev ${state.resource.study_revision}`
-      : isStructuredArtifact() || isResearchDocument()
+      : isStructuredArtifact() || isDocument()
       ? `${state.resource.run_id} · ${state.resource.artifact}`
       : isLiteratureSource() ? state.resource.url : state.resource.file;
-    const provenance = isDemoArtifact() ? demoProvenance() : isDataPackageReview() ? dataPackageProvenance() : (isResearchArtifact() || isResearchDocument()) ? researchProvenance() : isLiteratureSource() ? `
+    const provenance = isDemoArtifact() ? demoProvenance() : isDemoDocument() ? demoDocumentProvenance() : isDataPackageReview() ? dataPackageProvenance() : (isResearchArtifact() || isResearchDocument()) ? researchProvenance() : isLiteratureSource() ? `
       <div class="gpi-preview-provenance is-research" role="note">
         <strong>${tr('Literature metadata · Search receipt', '文献元数据 · 检索回执')}</strong>
         <span>${tr('Design evidence, separate from patient/result evidence.', '设计依据；与患者/结果证据分开治理。')}</span>
@@ -255,7 +279,7 @@
     }
   }
   async function loadResource() {
-    if (!state.resource || isLiteratureSource() || isResearchDocument() || (!state.projectId && !isDemoArtifact())) return;
+    if (!state.resource || isLiteratureSource() || isDocument() || (!state.projectId && !isDemoArtifact())) return;
     const ticket = ++state.request;
     state.loading = true; state.error = ''; render();
     try {
@@ -264,7 +288,9 @@
       if (isDemoArtifact()) {
         const demo = window.EU_GUIDED_PI_DEMO;
         if (!demo || typeof demo.artifact !== 'function') throw new Error(tr('The product-demo artifact owner is unavailable.', '产品演示产物 owner 不可用。'));
-        const item = demo.artifact(state.resource.artifact);
+        const item = typeof demo.previewArtifact === 'function'
+          ? await demo.previewArtifact(state.resource.artifact)
+          : demo.artifact(state.resource.artifact);
         if (!item) throw new Error(tr('The selected demo artifact does not exist.', '所选演示产物不存在。'));
         payload = {
           payload: item,
@@ -298,14 +324,14 @@
   function open(resource, projectId) {
     const safe = safeResource(resource);
     const project = String(projectId || '').trim();
-    if (!safe || (!project && safe.kind !== 'demo_artifact' && safe.kind !== 'literature_source')) return;
+    if (!safe || (!project && safe.kind !== 'demo_artifact' && safe.kind !== 'demo_document' && safe.kind !== 'literature_source')) return;
     state.resource = safe;
     state.projectId = project;
     state.artifact = null;
     state.payload = null;
     state.governance = null;
     state.error = '';
-    state.mode = safe.kind === 'research_document' ? 'document' : (safe.kind === 'data_package_review' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
+    state.mode = safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
     render();
     if (state.mode !== 'web' && state.mode !== 'source' && state.mode !== 'document') loadResource();
   }

@@ -106,6 +106,9 @@ def test_new_pipeline_instance_resumes_without_running_planner_again(
 
     assert result.run_id == pending.run_id
     assert plan_calls == 1
+    assert restored._approved_capability_resources == (
+        restored._capability_runtime.approved_resources
+    )
     checkpoint = load_checkpoint(
         Path(pending.run_dir) / "human_review_checkpoint.json",
         require_pending=False,
@@ -359,6 +362,10 @@ def test_restart_reconciles_provider_resumed_before_decision_commit(
             return 600.0
 
         def cap_timeout(self, requested_seconds: float) -> float:
+            if self.state == "paused":
+                raise AssertionError(
+                    "durable runtime preflight must not inspect paused Provider time"
+                )
             return requested_seconds
 
     provider = _ProviderTask()
@@ -501,6 +508,95 @@ def test_rejection_recorder_crash_converges_after_restart(monkeypatch, tmp_path)
         (Path(pending.run_dir) / "run_status.json").read_text(encoding="utf-8")
     )
     assert status["status"] == "human_review_rejected"
+
+
+def test_rejection_restore_needs_no_execution_configuration_or_provider(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.orchestration import human_review_restore
+    from easyicu.research_agent.orchestration.workflow import HumanReviewRejected
+
+    _force_approvable_plan_review(monkeypatch)
+    workdir = tmp_path / "runs"
+    pending = _pipeline(workdir).run(
+        question="Does age describe hospital mortality?",
+        cohort=_cohort(),
+        target_outcome="death",
+    )
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision="rejected",
+            reviewer="test reviewer",
+            decided_at="2026-08-14T03:12:00Z",
+        )
+        for request in pending.requests
+    ]
+    monkeypatch.setattr(
+        human_review_restore,
+        "build_environment_identity",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("rejection must not inspect the execution environment")
+        ),
+    )
+
+    with pytest.raises(HumanReviewRejected):
+        _pipeline(workdir, llm=None, enable_visual_qa=True).resume_human_review(
+            decisions,
+            run_id=pending.run_id,
+        )
+
+    checkpoint_path = Path(pending.run_dir) / "human_review_checkpoint.json"
+    assert load_checkpoint(checkpoint_path, require_pending=False).state == "rejected"
+    assert not list(Path(pending.run_dir).glob("approved_executable_plan_revision_*.json"))
+
+
+def test_durable_restore_rebinds_host_only_declared_levels(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.orchestration import human_review_restore
+    from easyicu.research_agent.orchestration.workflow import HumanReviewRejected
+
+    _force_approvable_plan_review(monkeypatch)
+    workdir = tmp_path / "runs"
+    pending = _pipeline(workdir).run(
+        question="Does age describe hospital mortality?",
+        cohort=_cohort(),
+        target_outcome="death",
+    )
+    rebound_steps: list[str] = []
+    real_bind = human_review_restore.bind_step_declared_levels
+
+    def tracked_bind(step, context) -> None:
+        rebound_steps.append(step.step_id)
+        real_bind(step, context)
+
+    monkeypatch.setattr(
+        human_review_restore,
+        "bind_step_declared_levels",
+        tracked_bind,
+    )
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision="rejected",
+            reviewer="test reviewer",
+            decided_at="2026-08-15T04:30:00Z",
+        )
+        for request in pending.requests
+    ]
+
+    with pytest.raises(HumanReviewRejected):
+        _pipeline(workdir, llm=None).resume_human_review(
+            decisions,
+            run_id=pending.run_id,
+        )
+
+    assert rebound_steps
 
 
 def test_legacy_pending_checkpoint_converges_from_recorded_decision_evidence(

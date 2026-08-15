@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import re
 import secrets
 import tempfile
 import threading
@@ -1450,7 +1451,13 @@ class PiCopilotService:
             "pi_aborted": bool(state.get("aborted")),
         }
 
-    def list_sessions(self, *, project_id: str, limit: int = 30) -> Dict[str, Any]:
+    def list_sessions(
+        self,
+        *,
+        project_id: str,
+        limit: int = 30,
+        agent_mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
         clean_project_id = str(project_id or "").strip()
         if not clean_project_id:
             raise PiCopilotError(
@@ -1459,11 +1466,19 @@ class PiCopilotService:
                 status_code=409,
             )
         max_items = max(1, min(100, int(limit or 30)))
+        clean_agent_mode = str(agent_mode or "").strip()
+        if clean_agent_mode and clean_agent_mode not in {"research", "workspace"}:
+            raise PiCopilotError(
+                "pi_agent_mode_invalid",
+                "Pi conversation mode must be research or workspace.",
+                status_code=422,
+            )
         with self._lock:
             records = [
                 row
                 for row in self._read_records()
                 if row.project_id == clean_project_id
+                and (not clean_agent_mode or row.agent_mode == clean_agent_mode)
             ][:max_items]
         records = [
             self._reconcile_replay_execution(
@@ -1889,7 +1904,38 @@ class PiCopilotService:
                 status_code=409,
                 details={"document": clean_name},
             )
-        governance = agent_runs.project_artifact_governance(review, artifact=artifact)
+        payloads = review.get("artifact_payloads")
+        payloads = payloads if isinstance(payloads, Mapping) else {}
+        ledger = payloads.get("evidence_ledger.json")
+        ledger = ledger if isinstance(ledger, Mapping) else {}
+        registered = next(
+            (
+                item
+                for item in (ledger.get("artifacts") or [])
+                if isinstance(item, Mapping) and item.get("name") == clean_name
+            ),
+            None,
+        )
+        expected_sha256 = (
+            str(registered.get("sha256") or "").lower()
+            if isinstance(registered, Mapping)
+            else ""
+        )
+        current_sha256 = hashlib.sha256(loaded["content"]).hexdigest()
+        if (
+            not re.fullmatch(r"[a-f0-9]{64}", expected_sha256)
+            or current_sha256 != expected_sha256
+        ):
+            raise PiCopilotError(
+                "pi_research_document_digest_mismatch",
+                "The requested EasyICU document does not match its run ledger binding.",
+                status_code=409,
+                details={"document": clean_name},
+            )
+        governance = agent_runs.project_artifact_governance(
+            review,
+            artifact={**artifact, "sha256": current_sha256},
+        )
         if not governance.get("ok"):
             raise PiCopilotError(
                 str(

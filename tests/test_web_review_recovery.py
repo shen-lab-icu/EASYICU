@@ -219,6 +219,41 @@ def test_missing_global_record_is_reconciled_from_exact_durable_checkpoint(
     assert loaded.pipeline_config_sha256
 
 
+def test_register_pipeline_work_root_prunes_deleted_roots(tmp_path) -> None:
+    index = tmp_path / "review-index.json"
+    stale = tmp_path / "stale-projects"
+    stale.mkdir()
+    register_pipeline_work_root(stale, path=index, max_roots=1)
+    stale.rmdir()
+    current = tmp_path / "current-projects"
+    current.mkdir()
+
+    register_pipeline_work_root(current, path=index, max_roots=1)
+
+    payload = json.loads(index.read_text(encoding="utf-8"))
+    assert payload["work_roots"] == [str(current.resolve())]
+
+
+def test_register_pipeline_work_root_retains_unavailable_non_temporary_roots(
+    tmp_path, monkeypatch
+) -> None:
+    import easyicu.webserver.agent_review_recovery as recovery
+
+    system_temp = tmp_path / "system-temp"
+    system_temp.mkdir()
+    monkeypatch.setattr(recovery.tempfile, "gettempdir", lambda: str(system_temp))
+    index = tmp_path / "review-index.json"
+    durable = tmp_path / "external-durable-root"
+    durable.mkdir()
+    register_pipeline_work_root(durable, path=index, max_roots=1)
+    durable.rmdir()
+    candidate = system_temp / "new-projects"
+    candidate.mkdir()
+
+    with pytest.raises(WebReviewRecoveryError, match="capacity"):
+        register_pipeline_work_root(candidate, path=index, max_roots=1)
+
+
 def test_reconciliation_rejects_a_tampered_local_seed(tmp_path) -> None:
     index = tmp_path / "review-index.json"
     root = tmp_path / "projects"
@@ -533,6 +568,81 @@ def test_recovery_rejects_provider_endpoint_drift(
             record.run_id,
             provider_environment={},
         )
+
+
+def test_rejection_recovery_does_not_rebuild_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easyicu.research_agent as research_agent
+    from easyicu.research_agent.authority import provider_hard_stop
+    from easyicu.research_agent.orchestration.workflow import HumanReviewPending
+    from easyicu.webserver import agent_pipeline_runs
+
+    record, _export = _recoverable_package_record(tmp_path)
+    pending = HumanReviewPending(
+        run_id=record.run_id,
+        thread_id=record.run_id,
+        run_dir=str(Path(record.wrapper_dir) / "pipeline" / record.run_id),
+        requests=(),
+        resume_scope="durable_checkpoint",
+        resume_pid=None,
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "get_review_recovery_record",
+        lambda _run_id: record,
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_checkpoint_pending_from_record",
+        lambda _record, **_kwargs: pending,
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs.provider_adapter,
+        "build_research_agent_provider_client",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("rejection recovery must not rebuild the provider")
+        ),
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs.dataio,
+        "validate_research_pipeline_source",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("rejection recovery must not reopen the prepared package")
+        ),
+    )
+
+    class _Ledger:
+        def __init__(self, **_kwargs) -> None:
+            raise AssertionError("rejection recovery must not reopen the provider ledger")
+
+    captured_llm = object()
+    captured_hard_stop = object()
+
+    def pipeline_from_config(_config, *, services):
+        nonlocal captured_hard_stop, captured_llm
+        captured_llm = services.llm
+        captured_hard_stop = services.provider_hard_stop
+        return SimpleNamespace()
+
+    monkeypatch.setattr(provider_hard_stop, "ProviderHardStopLedger", _Ledger)
+    monkeypatch.setattr(
+        research_agent.ResearchAgentPipeline,
+        "from_config",
+        pipeline_from_config,
+    )
+
+    entry = agent_pipeline_runs._recover_pending_run(
+        record.run_id,
+        provider_environment=None,
+        rejection_only=True,
+    )
+
+    assert entry is not None
+    assert captured_llm is None
+    assert captured_hard_stop is None
+    assert entry.provider == record.provider_public
 
 
 @pytest.mark.parametrize(

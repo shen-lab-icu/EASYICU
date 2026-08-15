@@ -148,6 +148,7 @@ from .research_context.typed import parse_research_context_json
 from .gates.preplan import preplan_data_failure_reason, preplan_data_findings
 from .authority.context_numeric_claims import register_context_numeric_claims
 from .authority.declared_levels import bind_step_declared_levels
+from .authority.plan_input_closure import close_measurement_companion_inputs
 from .authority.table_one_binding import (
     bind_table_one_execution_spec,
     restore_table_one_private_checkpoint,
@@ -2022,6 +2023,7 @@ class ResearchAgentPipeline:
             VerifiedLegacyTrajectoryCapsuleReceipt
         ] = None,
         timeout_seconds: Optional[float] = None,
+        cap_provider_timeout: bool = True,
     ):
         """Return the configured runner backend for a single ``run()``.
 
@@ -2131,7 +2133,7 @@ class ResearchAgentPipeline:
         effective_timeout_seconds = (
             self._timeout_seconds if timeout_seconds is None else float(timeout_seconds)
         )
-        if self._provider_hard_stop is not None:
+        if self._provider_hard_stop is not None and cap_provider_timeout:
             effective_timeout_seconds = self._provider_hard_stop.cap_timeout(
                 effective_timeout_seconds
             )
@@ -2198,6 +2200,7 @@ class ResearchAgentPipeline:
         run_dir: Path,
         cohort_path: Path,
         target_outcome: Optional[str],
+        cap_provider_timeout: bool = True,
     ) -> Tuple[str, ...]:
         """Validate the real execution environment before Planner spend.
 
@@ -2212,6 +2215,7 @@ class ResearchAgentPipeline:
             cohort_path=cohort_path,
             target_outcome=target_outcome,
             universe_path=cohort_path,
+            cap_provider_timeout=cap_provider_timeout,
         )
         validate = getattr(runner, "validate_runtime_capabilities", None)
         if not callable(validate):
@@ -2741,6 +2745,14 @@ class ResearchAgentPipeline:
                 plan=plan
             )
             findings.extend(deterministic_panel_findings)
+            # Measurement provenance companions are public Coder inputs. Close
+            # them before lifecycle sealing and human review so Execute cannot
+            # change the exact Plan payload that the decision approved.
+            plan, companion_input_findings = close_measurement_companion_inputs(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(companion_input_findings)
 
             cap = self._max_total_steps
             plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
@@ -4438,6 +4450,7 @@ class ResearchAgentPipeline:
         *,
         run_id: str,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]],
+        rejection_only: bool = False,
     ) -> Dict[str, Any]:
         """Delegate restart recovery to its digest-bound owner."""
 
@@ -4447,6 +4460,7 @@ class ResearchAgentPipeline:
             progress_callback=progress_callback,
             plan_result_factory=_PlanPhaseResult,
             load_resume_state=_load_resume_state,
+            rejection_only=rejection_only,
         )
     def _record_human_review_records(
         self,
@@ -5541,6 +5555,7 @@ class ResearchAgentPipeline:
             pending_state = self._restore_durable_human_review_pause(
                 run_id=str(run_id),
                 progress_callback=progress_callback,
+                rejection_only=all_rejected,
             )
         if not pending_state:
             raise RuntimeError(
@@ -5624,7 +5639,11 @@ class ResearchAgentPipeline:
                 with run_heartbeat_scope(run_id=pending.run_id):
                     bind_active_run_heartbeat(
                         Path(pending.run_dir),
-                        task_timeout_seconds=self._heartbeat_wall_clock_remaining(),
+                        task_timeout_seconds=(
+                            None
+                            if all_rejected
+                            else self._heartbeat_wall_clock_remaining()
+                        ),
                     )
                     outcome = workflow.resume(payload)
                 return self._pipeline_result_or_pending(

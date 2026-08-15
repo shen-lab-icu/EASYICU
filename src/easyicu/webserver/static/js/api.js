@@ -415,9 +415,10 @@
   function loadPiCopilotProjectWorkflow(projectId) {
     return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId || '') + '/workflow');
   }
-  function loadPiCopilotSessions(limit, projectId) {
+  function loadPiCopilotSessions(limit, projectId, agentMode) {
     const n = Math.max(1, Math.min(100, Number(limit) || 30));
-    return getJSON('/api/copilot/pi/sessions?project_id=' + encodeURIComponent(projectId || '') + '&limit=' + encodeURIComponent(n));
+    const mode = agentMode === 'research' || agentMode === 'workspace' ? '&agent_mode=' + encodeURIComponent(agentMode) : '';
+    return getJSON('/api/copilot/pi/sessions?project_id=' + encodeURIComponent(projectId || '') + '&limit=' + encodeURIComponent(n) + mode);
   }
   function loadPiCopilotSession(sessionId, projectId, options) {
     const opts = options || {};

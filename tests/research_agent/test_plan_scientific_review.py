@@ -31,6 +31,9 @@ from easyicu.research_agent.planning.scientific_review import (
     render_agent_plan_revision_contract,
     render_plan_scientific_guardrails,
 )
+from easyicu.research_agent.reporting.article_contract import (
+    build_article_analysis_contract,
+)
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -1002,6 +1005,78 @@ def test_counts_only_authority_removes_all_uncertainty_before_review() -> None:
     assert repeated_unit_design_closed(context, bound) is True
 
 
+def test_counts_only_article_contract_does_not_require_forbidden_table_one() -> None:
+    ordinary = _context()
+    context = ordinary.model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "variance_estimator": "none_counts_only",
+                        }
+                    }
+                )
+            )
+        }
+    )
+
+    contract = build_article_analysis_contract(
+        context,
+        analysis_type="descriptive_epidemiology",
+    )
+    ordinary_contract = build_article_analysis_contract(
+        ordinary,
+        analysis_type="descriptive_epidemiology",
+    )
+
+    assert "baseline_context" not in contract.required_roles
+    assert all(item.role != "baseline_context" for item in contract.requirements)
+    assert all(
+        item.module_id != "distribution_prevalence"
+        for item in contract.requirements
+    )
+    expected_roles = {
+        item.role
+        for item in ordinary_contract.requirements
+        if item.required
+        and item.role != "baseline_context"
+        and item.module_id != "distribution_prevalence"
+    }
+    assert set(contract.required_roles) == expected_roles
+
+
+def test_counts_only_typed_primary_subsumes_generic_distribution_module() -> None:
+    context = _context().model_copy(
+        update={
+            "research_question": (
+                "Estimate exposure prevalence and observed outcome event rates "
+                "by exposure among ICU stays."
+            ),
+            "user_preferences": UserPreferences(
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "variance_estimator": "none_counts_only",
+                        }
+                    }
+                )
+            ),
+        }
+    )
+
+    contract = build_article_analysis_contract(
+        context,
+        analysis_type="descriptive_epidemiology",
+    )
+
+    assert "descriptive_result" in contract.required_roles
+    assert "distribution" not in contract.required_roles
+    assert "baseline_context" not in contract.required_roles
+
+
 def test_counts_only_authority_rejects_table_one_summaries() -> None:
     context = _context().model_copy(
         update={
@@ -1058,6 +1133,48 @@ def test_counts_only_authority_rejects_untyped_descriptive_summaries() -> None:
     )
 
     with pytest.raises(DependenceAuthorityError, match="permits only"):
+        bind_context_dependence_authority(plan=plan, context=context)
+
+
+def test_counts_only_audit_cannot_launder_a_prevalence_product() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "variance_estimator": "none_counts_only",
+                        }
+                    }
+                )
+            )
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_study",
+        steps=[
+            AnalysisStep(
+                step_id="laundered_prevalence",
+                planned_analysis_role="secondary",
+                intent="Mislabel a measurement-process audit as prevalence.",
+                method="measurement_audit",
+                inputs=["artifact:analysis_cohort", "exposure"],
+                expected_outputs=["table:distribution_prevalence"],
+                measurement_audit_spec={
+                    "products": [
+                        {
+                            "product_id": "distribution_prevalence",
+                            "audit": "measurement_process",
+                        }
+                    ]
+                },
+            )
+        ],
+    )
+
+    with pytest.raises(DependenceAuthorityError, match="audit product names"):
         bind_context_dependence_authority(plan=plan, context=context)
 
 

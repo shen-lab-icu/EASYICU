@@ -916,6 +916,18 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
             ]
           }} }} }},
       }});
+      const systemValidationDocuments = normalizePiEvent({{
+        type: 'tool_execution_end', toolCallId: 'call-validation',
+        toolName: 'easyicu_list_artifacts', result: {{ details: {{ status: 'ok',
+          code: 'easyicu_artifacts_projected', summary: 'Listed reports',
+          owner: 'easyicu.agent_runs', details: {{ resources: [
+            {{ kind: 'system_validation_document', run_id: 'e59d1a54feff',
+               artifact: 'system_validation_report.html', label: 'System validation dossier',
+               media_type: 'text/html', sha256: '{'a' * 64}' }},
+            {{ kind: 'system_validation_document', run_id: '../unsafe',
+               artifact: '../system_validation_report.html' }},
+          ] }} }} }},
+      }});
       const dataPackageReview = normalizePiEvent({{
         type: 'tool_execution_end', toolCallId: 'call-data-package',
         toolName: 'easyicu_inspect_data_package', result: {{ details: {{
@@ -956,7 +968,7 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         role: 'assistant', content: [], stopReason: 'error',
         errorMessage: 'pi_shell_token_budget_exhausted: bounded session budget reached'
       }});
-      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts, dataPackageReview, submittedRun, unsafeJob, providerErrorEvent, providerErrorTranscript, shellBudgetEvent, shellBudgetTranscript }}));
+      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts, systemValidationDocuments, dataPackageReview, submittedRun, unsafeJob, providerErrorEvent, providerErrorTranscript, shellBudgetEvent, shellBudgetTranscript }}));
     """
     completed = subprocess.run(
         [node, "--input-type=module", "--eval", script],
@@ -999,6 +1011,14 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         "artifact": "table1_summary.json",
         "label": "Table 1",
         "media_type": "application/json",
+    }]
+    assert payload["systemValidationDocuments"]["resources"] == [{
+        "kind": "system_validation_document",
+        "run_id": "e59d1a54feff",
+        "artifact": "system_validation_report.html",
+        "label": "System validation dossier",
+        "media_type": "text/html",
+        "sha256": "a" * 64,
     }]
     assert payload["dataPackageReview"]["resource"] == {
         "kind": "data_package_review",

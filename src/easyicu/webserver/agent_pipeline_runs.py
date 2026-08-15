@@ -14,6 +14,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 import re
 import stat
 import threading
@@ -45,6 +46,16 @@ from easyicu.research_agent.planning.scientific_review import (
 )
 from easyicu.research_agent.publication_skills import (
     publication_skill_flags_from_settings,
+)
+from easyicu.research_agent.reporting.system_validation_report import (
+    SystemValidationReport,
+    build_system_validation_receipt,
+    build_system_validation_report,
+    projection_payload_sha256,
+    render_system_validation_html,
+)
+from easyicu.research_agent.execution.runners.missingness_measurement_figure_executor import (
+    run_measurement_missingness_figure,
 )
 from easyicu.webserver import (
     agent_runs,
@@ -99,6 +110,14 @@ _MANUSCRIPT_DOCUMENT_SPECS = {
         "application/x-bibtex; charset=utf-8",
         2 * 1024 * 1024,
     ),
+}
+_SYSTEM_VALIDATION_DOCUMENT_SPECS = {
+    "system_validation_report.html": ("text/html; charset=utf-8", 8 * 1024 * 1024),
+    "system_validation_report.pdf": ("application/pdf", 16 * 1024 * 1024),
+}
+_RUN_DOCUMENT_SPECS = {
+    **_MANUSCRIPT_DOCUMENT_SPECS,
+    **_SYSTEM_VALIDATION_DOCUMENT_SPECS,
 }
 _MAX_PENDING = 16
 _PENDING_LOCK = threading.RLock()
@@ -275,6 +294,17 @@ def _read_json(path: Path, default: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
         return default
+
+
+def _read_json_with_digest(path: Path) -> Dict[str, Any]:
+    payload = _read_json(path, {})
+    if not isinstance(payload, Mapping):
+        return {}
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return dict(payload)
+    return {**dict(payload), "_source_sha256": digest}
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -1378,6 +1408,50 @@ def _identifier_column(name: Any) -> bool:
     }
 
 
+_TABLE_PREVIEW_PRIORITY_COLUMNS = (
+    "row_role",
+    "concept",
+    "variable",
+    "label",
+    "exposure_level",
+    "n_rows",
+    "n_total",
+    "n_before",
+    "n_excluded",
+    "n_remaining",
+    "exposure_denominator",
+    "exposure_pct",
+    "outcome_events",
+    "outcome_denominator",
+    "outcome_rate_pct",
+    "interval_method",
+    "eligible_n",
+    "not_applicable_n",
+    "value_missing_n",
+    "event_present_n",
+    "event_absent_n",
+    "before_origin_n",
+    "indicator_semantics",
+    "missingness_kind",
+)
+
+
+def _table_preview_indices(headers: List[str]) -> List[int]:
+    """Keep review-critical aggregate columns when a wide table is bounded."""
+
+    selected = [
+        headers.index(name)
+        for name in _TABLE_PREVIEW_PRIORITY_COLUMNS
+        if name in headers
+    ][:_MAX_TABLE_COLUMNS]
+    for index in range(len(headers)):
+        if len(selected) >= _MAX_TABLE_COLUMNS:
+            break
+        if index not in selected:
+            selected.append(index)
+    return selected
+
+
 def _table_projection(run_dir: Path) -> Dict[str, Any]:
     evidence = _read_json(run_dir / "evidence" / "evidence_index.json", [])
     tables: List[Dict[str, Any]] = []
@@ -1393,12 +1467,16 @@ def _table_projection(run_dir: Path) -> Dict[str, Any]:
                 continue
             with path.open("r", encoding="utf-8", newline="") as handle:
                 reader = csv.reader(handle)
-                headers = next(reader, [])[:_MAX_TABLE_COLUMNS]
-                if any(_identifier_column(value) for value in headers):
+                source_headers = next(reader, [])
+                # Scan the complete header before bounding the preview. An
+                # identifier beyond the visible column cap is still sensitive.
+                if any(_identifier_column(value) for value in source_headers):
                     skipped_sensitive += 1
                     continue
+                column_indices = _table_preview_indices(source_headers)
+                headers = [source_headers[index] for index in column_indices]
                 rows = [
-                    row[: len(headers)]
+                    [row[index] if index < len(row) else "" for index in column_indices]
                     for _, row in zip(range(_MAX_TABLE_ROWS), reader)
                 ]
         except (OSError, UnicodeDecodeError, csv.Error):
@@ -1411,6 +1489,7 @@ def _table_projection(run_dir: Path) -> Dict[str, Any]:
                 "headers": [_clean_text(value, 160) for value in headers],
                 "rows": [[_clean_text(value, 500) for value in row] for row in rows],
                 "preview_truncated": len(rows) >= _MAX_TABLE_ROWS,
+                "preview_columns_truncated": len(source_headers) > len(headers),
             }
         )
         if len(tables) >= 12:
@@ -1460,6 +1539,49 @@ def _readiness_axes(run_dir: Path) -> Dict[str, Any]:
             "analysis_errors",
         )
         if key in merged
+    }
+
+
+def _provider_usage_projection(wrapper_dir: Path) -> Optional[Dict[str, Any]]:
+    """Project aggregate Provider accounting without exposing request content."""
+
+    ledger_path = wrapper_dir / ".runtime" / "provider_hard_stop_ledger.json"
+    source = _read_json(ledger_path, {})
+    tasks = source.get("tasks") if isinstance(source, Mapping) else None
+    rows = [row for row in (tasks or []) if isinstance(row, Mapping)]
+    if not rows:
+        return None
+    try:
+        ledger_sha256 = hashlib.sha256(ledger_path.read_bytes()).hexdigest()
+    except OSError:
+        ledger_sha256 = None
+    calls = [
+        call
+        for row in rows
+        for call in list(row.get("calls") or [])
+        if isinstance(call, Mapping)
+    ]
+    statuses = {_clean_text(row.get("status"), 80) for row in rows}
+    return {
+        "status": (
+            "completed"
+            if statuses == {"completed"}
+            else sorted(statuses)[0]
+            if len(statuses) == 1
+            else "mixed"
+        ),
+        "calls": len(calls),
+        "accounted_tokens": sum(
+            max(0, int(call.get("accounted_tokens") or 0)) for call in calls
+        ),
+        "estimated_cost_usd": round(
+            sum(
+                max(0.0, float(call.get("accounted_estimated_cost_usd") or 0.0))
+                for call in calls
+            ),
+            8,
+        ),
+        "ledger_sha256": ledger_sha256,
     }
 
 
@@ -1516,7 +1638,7 @@ def _gate_from_axes(axes: Mapping[str, Any], *, pending: bool) -> Dict[str, Any]
 
 def _artifact_record(path: Path) -> Dict[str, Any]:
     raw = path.read_bytes()
-    document_spec = _MANUSCRIPT_DOCUMENT_SPECS.get(path.name)
+    document_spec = _RUN_DOCUMENT_SPECS.get(path.name)
     return {
         "name": path.name,
         "sha256": hashlib.sha256(raw).hexdigest(),
@@ -1615,6 +1737,267 @@ def _validated_manuscript_documents(
     return receipt, documents
 
 
+def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
+    """Bind an externally rendered PDF to an existing system report projection."""
+
+    root = wrapper_dir.resolve(strict=True)
+    paths = {
+        "report": root / "system_validation_report.json",
+        "receipt": root / "system_validation_report_receipt.json",
+        "html": root / "system_validation_report.html",
+        "pdf": root / "system_validation_report.pdf",
+    }
+    raw: Dict[str, bytes] = {}
+    limits = {
+        "report": _MAX_JSON_BYTES,
+        "receipt": _MAX_JSON_BYTES,
+        "html": _SYSTEM_VALIDATION_DOCUMENT_SPECS[
+            "system_validation_report.html"
+        ][1],
+        "pdf": _SYSTEM_VALIDATION_DOCUMENT_SPECS["system_validation_report.pdf"][1],
+    }
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        root_descriptor = os.open(root, directory_flags)
+    except OSError as exc:
+        raise ResearchPipelineRunError(
+            "system_validation_document_missing",
+            "The system validation document directory is unavailable.",
+        ) from exc
+    try:
+        file_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        for key, path in paths.items():
+            descriptor = -1
+            try:
+                descriptor = os.open(path.name, file_flags, dir_fd=root_descriptor)
+                metadata = os.fstat(descriptor)
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limits[key]:
+                    raise ResearchPipelineRunError(
+                        "system_validation_document_unsafe",
+                        f"The system validation {key} document failed its file boundary.",
+                    )
+                with os.fdopen(descriptor, "rb", closefd=True) as handle:
+                    descriptor = -1
+                    content = handle.read(limits[key] + 1)
+                if len(content) > limits[key]:
+                    raise ResearchPipelineRunError(
+                        "system_validation_document_unsafe",
+                        f"The system validation {key} document failed its file boundary.",
+                    )
+                raw[key] = content
+            except FileNotFoundError as exc:
+                raise ResearchPipelineRunError(
+                    "system_validation_document_missing",
+                    f"The system validation {key} document is unavailable.",
+                ) from exc
+            except OSError as exc:
+                raise ResearchPipelineRunError(
+                    "system_validation_document_unsafe",
+                    f"The system validation {key} document failed its file boundary.",
+                ) from exc
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+    finally:
+        os.close(root_descriptor)
+    if not raw["pdf"].startswith(b"%PDF"):
+        raise ResearchPipelineRunError(
+            "system_validation_pdf_signature_invalid",
+            "The system validation PDF has an invalid signature.",
+        )
+    try:
+        import fitz  # type: ignore
+
+        with fitz.open(stream=raw["pdf"], filetype="pdf") as document:
+            pdf_privacy_text = "\n".join(
+                [
+                    *(page.get_text() for page in document),
+                    *(
+                        value
+                        for value in document.metadata.values()
+                        if isinstance(value, str)
+                    ),
+                ]
+            )
+    except (ImportError, RuntimeError, ValueError, TypeError) as exc:
+        raise ResearchPipelineRunError(
+            "system_validation_pdf_parse_invalid",
+            "The system validation PDF could not be parsed for privacy review.",
+        ) from exc
+    try:
+        report_payload = json.loads(raw["report"].decode("utf-8"))
+        report = SystemValidationReport.model_validate(report_payload)
+        existing_receipt = json.loads(raw["receipt"].decode("utf-8"))
+        html_text = raw["html"].decode("utf-8")
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "system_validation_report_invalid",
+            "The system validation report does not match its typed schema.",
+        ) from exc
+    if report.authority_class != "engineering_validation_only":
+        raise ResearchPipelineRunError(
+            "system_validation_authority_invalid",
+            "The system validation report has an invalid authority class.",
+        )
+    report_payload_digest = projection_payload_sha256(report_payload)
+    html_binding = (
+        f'<meta name="easyicu-report-payload-sha256" '
+        f'content="{report_payload_digest}">'
+    )
+    compact_pdf_text = re.sub(r"\s+", "", pdf_privacy_text)
+    normalized_pdf_text = re.sub(r"\s+", " ", pdf_privacy_text).strip()
+    status_label = (
+        "REVIEWER DEMONSTRATION COMPLETE"
+        if report.status == "engineering_validation_complete"
+        else "ENGINEERING VALIDATION INCOMPLETE"
+    )
+    required_pdf_text = (
+        report.title,
+        report.subtitle,
+        report.executive_summary,
+        report.thesis,
+        f"Run {report.run_id}",
+        "authority=engineering_validation_only",
+        "publication_authorized=false",
+        status_label,
+        "ENGINEERING VALIDATION ONLY · NOT A CLINICAL MANUSCRIPT",
+    )
+    if (
+        html_binding not in html_text
+        or report_payload_digest not in compact_pdf_text
+        or any(
+            re.sub(r"\s+", " ", value).strip() not in normalized_pdf_text
+            for value in required_pdf_text
+        )
+    ):
+        raise ResearchPipelineRunError(
+            "system_validation_pdf_content_binding_mismatch",
+            "The system validation PDF does not bind the registered report content.",
+        )
+    if (
+        not isinstance(existing_receipt, Mapping)
+        or existing_receipt.get("schema_version")
+        != "easyicu.system-validation-report-receipt/1"
+    ):
+        raise ResearchPipelineRunError(
+            "system_validation_receipt_invalid",
+            "The existing system validation receipt is unavailable or invalid.",
+        )
+    for key in ("report", "html"):
+        binding = existing_receipt.get(key)
+        expected_sha256 = (
+            str(binding.get("sha256") or "").lower()
+            if isinstance(binding, Mapping)
+            else ""
+        )
+        expected_bytes = binding.get("bytes") if isinstance(binding, Mapping) else None
+        if (
+            not re.fullmatch(r"[a-f0-9]{64}", expected_sha256)
+            or expected_sha256 != hashlib.sha256(raw[key]).hexdigest()
+            or expected_bytes != len(raw[key])
+        ):
+            raise ResearchPipelineRunError(
+                "system_validation_receipt_digest_mismatch",
+                f"The existing system validation {key} bytes do not match their receipt.",
+            )
+    ledger_path = root / "evidence_ledger.json"
+    ledger = _read_json(ledger_path, {})
+    if (
+        not isinstance(ledger, dict)
+        or ledger.get("schema_version") != "easyicu.web-research-pipeline-ledger/1"
+        or not isinstance(ledger.get("artifacts"), list)
+    ):
+        raise ResearchPipelineRunError(
+            "system_validation_ledger_invalid",
+            "The run evidence ledger cannot register the system validation PDF.",
+        )
+    ledger_by_name = {
+        str(row.get("name") or ""): row
+        for row in ledger["artifacts"]
+        if isinstance(row, Mapping)
+    }
+    for key, name in (
+        ("report", "system_validation_report.json"),
+        ("receipt", "system_validation_report_receipt.json"),
+        ("html", "system_validation_report.html"),
+    ):
+        binding = ledger_by_name.get(name)
+        expected_sha256 = (
+            str(binding.get("sha256") or "").lower()
+            if isinstance(binding, Mapping)
+            else ""
+        )
+        if key == "receipt" and (
+            not re.fullmatch(r"[a-f0-9]{64}", expected_sha256)
+            or expected_sha256 != hashlib.sha256(raw[key]).hexdigest()
+        ):
+            # A crash after the receipt replacement but before the ledger
+            # replacement is recoverable because the receipt's report/HTML
+            # bindings were independently verified above.
+            continue
+        if (
+            not re.fullmatch(r"[a-f0-9]{64}", expected_sha256)
+            or expected_sha256 != hashlib.sha256(raw[key]).hexdigest()
+        ):
+            raise ResearchPipelineRunError(
+                "system_validation_ledger_digest_mismatch",
+                f"The existing {name} bytes do not match the run evidence ledger.",
+            )
+    privacy = _projection_privacy_scan(
+        {
+            "system_validation_report.json": report_payload,
+            "system_validation_report.html": html_text,
+            "system_validation_report.pdf": pdf_privacy_text,
+        }
+    )
+    if not privacy["passed"]:
+        raise ResearchPipelineRunError(
+            "system_validation_projection_privacy_blocked",
+            "The system validation document failed the browser privacy boundary.",
+        )
+    receipt = build_system_validation_receipt(
+        report_payload=report_payload,
+        html_bytes=raw["html"],
+        pdf_bytes=raw["pdf"],
+        report_bytes=raw["report"],
+    )
+    receipt_path = root / "system_validation_report_receipt.json"
+    _write_json(receipt_path, receipt)
+    names = {
+        "system_validation_report.json",
+        "system_validation_report_receipt.json",
+        "system_validation_report.html",
+        "system_validation_report.pdf",
+    }
+    artifacts = [
+        row
+        for row in ledger["artifacts"]
+        if isinstance(row, Mapping) and row.get("name") not in names
+    ]
+    registered = [
+        _artifact_record(root / name)
+        for name in (
+            "system_validation_report.json",
+            "system_validation_report_receipt.json",
+            "system_validation_report.html",
+            "system_validation_report.pdf",
+        )
+    ]
+    ledger["artifacts"] = [*artifacts, *registered]
+    _write_json(ledger_path, ledger)
+    return {
+        "ok": True,
+        "authority_class": report.authority_class,
+        "claim_ceiling": report.claim_ceiling,
+        "publication_authorized": False,
+        "artifacts": registered,
+    }
+
+
 def _projection_privacy_scan(payloads: Mapping[str, Any]) -> Dict[str, Any]:
     """Reject host paths, credentials, and row identifiers in Web artefacts.
 
@@ -1647,6 +2030,117 @@ def _projection_privacy_scan(payloads: Mapping[str, Any]) -> Dict[str, Any]:
         "scanned_artifacts": len(payloads),
         "unsafe_value_count": len(hits),
         "hits": hits[:40],
+    }
+
+
+def _system_validation_figure_gallery(
+    *,
+    wrapper_dir: Path,
+    run_dir: Path,
+    plan: Mapping[str, Any],
+    figure_gallery: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Reproject legacy data-quality figures with explicit applicability.
+
+    Finalized pipeline outputs remain immutable. This report-only projection
+    reuses the exact resolved audit-table binding and current deterministic
+    renderer so conditional event prevalence cannot appear as a measurement
+    rate. New runs already emit the corrected source figure.
+    """
+
+    source_rows = [
+        dict(row)
+        for row in list(figure_gallery.get("figures") or [])
+        if isinstance(row, Mapping)
+    ]
+    target_index = next(
+        (
+            index
+            for index, row in enumerate(source_rows)
+            if row.get("name") == "data_quality.png"
+        ),
+        None,
+    )
+    if target_index is None:
+        return None
+    figure_step = next(
+        (
+            row
+            for row in list(plan.get("steps") or [])
+            if isinstance(row, Mapping)
+            and "figure:data_quality" in set(row.get("expected_outputs") or [])
+        ),
+        None,
+    )
+    if not isinstance(figure_step, Mapping):
+        return None
+    step_id = str(figure_step.get("step_id") or "").strip()
+    table_inputs = [
+        str(value).strip()
+        for value in list(figure_step.get("inputs") or [])
+        if str(value).strip().startswith("table:")
+    ]
+    if not step_id or len(table_inputs) != 1:
+        return None
+    resolved_inputs = run_dir / "resolved_inputs" / f"{step_id}.json"
+    correction = {
+        "code": "CONDITIONAL_EVENT_TIME_APPLICABILITY_SEPARATED",
+        "source_figure": "data_quality.png",
+        "renderer": "deterministic_measurement_missingness_figure",
+    }
+    try:
+        out_dir = wrapper_dir / ".runtime" / "system_validation_figures"
+        summary = run_measurement_missingness_figure(
+            out_dir=out_dir,
+            run_dir=run_dir,
+            resolved_inputs=resolved_inputs,
+            step_id=step_id,
+            figure_product="data_quality",
+            input_key=table_inputs[0],
+        )
+        image_bytes = (out_dir / "data_quality.png").read_bytes()
+        source_sha256 = str(
+            (summary.get("source_sha256") or {}).get(table_inputs[0]) or ""
+        )
+        source_rows[target_index].update(
+            {
+                "data_url": "data:image/png;base64,"
+                + base64.b64encode(image_bytes).decode("ascii"),
+                "label": (
+                    "figure:data quality · applicability-aware semantic correction"
+                ),
+                "status": "supporting_corrected_projection",
+                "projection_note": (
+                    "Conditional event times separate applicable events, true "
+                    "missingness within applicable stays, and non-applicable stays."
+                ),
+                "source_input": table_inputs[0],
+                "source_sha256": source_sha256,
+            }
+        )
+        correction.update(
+            {
+                "status": "corrected",
+                "source_input": table_inputs[0],
+                "source_sha256": source_sha256,
+            }
+        )
+    except Exception as exc:  # fail closed by withholding the ambiguous figure
+        source_rows.pop(target_index)
+        correction.update(
+            {
+                "status": "withheld",
+                "reason_code": "semantic_correction_render_failed",
+                "error_type": type(exc).__name__,
+            }
+        )
+    return {
+        **dict(figure_gallery),
+        "schema_version": "easyicu.system-validation-figure-gallery/1",
+        "figures": source_rows,
+        "embedded_count": len(source_rows),
+        "source_gallery_sha256": projection_payload_sha256(figure_gallery),
+        "projection_corrections": [correction],
     }
 
 
@@ -1884,6 +2378,12 @@ def _write_projection(
             row.get("name") == "manuscript_scaffold.pdf"
             for row in manuscript_documents
         ),
+        "system_validation_report_available": bool(
+            run_dir is not None and axes.get("execution_complete")
+        ),
+        "system_validation_document_count": (
+            1 if run_dir is not None and axes.get("execution_complete") else 0
+        ),
         "provider": {
             key: provider.get(key)
             for key in (
@@ -1922,9 +2422,50 @@ def _write_projection(
         "result_tables.json": result_tables,
         "source_run_manifest.json": source_manifest,
     }
+    system_figure_gallery = None
+    if run_dir is not None and axes.get("execution_complete"):
+        system_figure_gallery = _system_validation_figure_gallery(
+            wrapper_dir=wrapper_dir,
+            run_dir=run_dir,
+            plan=plan if isinstance(plan, Mapping) else {},
+            figure_gallery=figure_gallery,
+        )
+        if system_figure_gallery is not None:
+            payloads["system_validation_figure_gallery.json"] = system_figure_gallery
     if pdf_receipt is not None:
         payloads["manuscript_pdf_receipt.json"] = pdf_receipt
+    system_validation_html: Optional[str] = None
     privacy_scan = _projection_privacy_scan(payloads)
+    if privacy_scan["passed"] and run_dir is not None and axes.get("execution_complete"):
+        system_report = build_system_validation_report(
+            run_id=run_id,
+            projections=payloads,
+            run_status=_read_json(run_dir / "run_status.json", {}),
+            review_checkpoint=_read_json_with_digest(
+                run_dir / "human_review_checkpoint.json"
+            ),
+            provider_usage=_provider_usage_projection(wrapper_dir),
+            projection_privacy_passed=True,
+        )
+        system_report_payload = system_report.model_dump(mode="json")
+        system_validation_html = render_system_validation_html(
+            system_report,
+            figure_gallery=system_figure_gallery or figure_gallery,
+        )
+        system_validation_receipt = build_system_validation_receipt(
+            report_payload=system_report_payload,
+            html_bytes=system_validation_html.encode("utf-8"),
+        )
+        payloads["system_validation_report.json"] = system_report_payload
+        payloads["system_validation_report_receipt.json"] = (
+            system_validation_receipt
+        )
+        privacy_scan = _projection_privacy_scan(
+            {
+                **payloads,
+                "system_validation_report.html": system_validation_html,
+            }
+        )
     if not privacy_scan["passed"]:
         payloads = _privacy_blocked_payloads(
             run_context=run_context,
@@ -1941,12 +2482,13 @@ def _write_projection(
             "projection_withheld": True,
         }
         payloads["source_run_manifest.json"] = source_manifest
+        system_validation_html = None
     for name, payload in payloads.items():
         _write_json(wrapper_dir / name, payload)
     # A resumed/reprojected wrapper may predate this pass.  Fixed document names
     # are removed before the newly validated set is copied so a missing, stale,
     # or privacy-withheld receipt can never leave an older PDF reachable.
-    for document_name in _MANUSCRIPT_DOCUMENT_SPECS:
+    for document_name in _RUN_DOCUMENT_SPECS:
         stale = wrapper_dir / document_name
         if stale.exists() or stale.is_symlink():
             stale.unlink()
@@ -1955,6 +2497,10 @@ def _write_projection(
         for document in manuscript_documents:
             target = wrapper_dir / str(document["name"])
             target.write_bytes(bytes(document["content"]))
+            document_rows.append(_artifact_record(target))
+        if system_validation_html is not None:
+            target = wrapper_dir / "system_validation_report.html"
+            target.write_text(system_validation_html, encoding="utf-8")
             document_rows.append(_artifact_record(target))
     artifact_rows = [
         *[_artifact_record(wrapper_dir / name) for name in payloads],
@@ -2150,6 +2696,7 @@ def _recover_pending_run(
     run_id: str,
     *,
     provider_environment: Optional[Mapping[str, str]],
+    rejection_only: bool = False,
 ) -> Optional[_PendingRun]:
     """Reconstruct one paused Web run from private, digest-bound coordinates."""
 
@@ -2186,50 +2733,56 @@ def _recover_pending_run(
         ) from exc
     if Path(config.workdir).resolve() != (wrapper_dir / "pipeline").resolve():
         raise WebReviewRecoveryError("Web review pipeline workdir drifted")
-    source = record.study.get("data_source")
-    source = source if isinstance(source, Mapping) else {}
     if not record.prepared_package_binding:
         raise WebReviewRecoveryError("Web review recovery lacks a package binding")
-    try:
-        dataio.validate_research_pipeline_source(
-            str(source.get("path") or ""),
-            database=source.get("database"),
-            expected_binding=record.prepared_package_binding,
-        )
-    except dataio.ExportCohortError as exc:
-        raise WebReviewRecoveryError(
-            "Web review prepared package changed after the pause"
-        ) from exc
-    client, provider_public = provider_adapter.build_research_agent_provider_client(
-        dict(record.provider_meta),
-        environ=provider_environment,
-    )
-    for key in (
-        "provider",
-        "model",
-        "credential_fingerprint",
-        "endpoint_fingerprint",
-        "credential_header",
-        "base_url_endpoint",
-    ):
-        if provider_public.get(key) != record.provider_public.get(key):
-            raise WebReviewRecoveryError(
-                "Web review provider identity changed after the pause"
+    if not rejection_only:
+        source = record.study.get("data_source")
+        source = source if isinstance(source, Mapping) else {}
+        try:
+            dataio.validate_research_pipeline_source(
+                str(source.get("path") or ""),
+                database=source.get("database"),
+                expected_binding=record.prepared_package_binding,
             )
-    task_id = record.hard_stop_task_id
-    ledger = ProviderHardStopLedger(
-        path=Path(record.hard_stop_ledger_path).resolve(),
-        task_ids=(task_id,),
-        limits=provider_adapter.web_research_agent_hard_stop_limits(
-            record.budget_mode
-        ),
-        batch_id=task_id,
-        declaration_sha256=record.hard_stop_declaration_sha256,
-        resume_existing=True,
-    )
-    # Provider pause/reconcile state belongs to Pipeline.resume_human_review,
-    # which performs it while holding the cross-process run execution lock.
-    task = ledger.start_task(task_id)
+        except dataio.ExportCohortError as exc:
+            raise WebReviewRecoveryError(
+                "Web review prepared package changed after the pause"
+            ) from exc
+    client = None
+    provider_public = dict(record.provider_public)
+    if not rejection_only:
+        client, provider_public = provider_adapter.build_research_agent_provider_client(
+            dict(record.provider_meta),
+            environ=provider_environment,
+        )
+        for key in (
+            "provider",
+            "model",
+            "credential_fingerprint",
+            "endpoint_fingerprint",
+            "credential_header",
+            "base_url_endpoint",
+        ):
+            if provider_public.get(key) != record.provider_public.get(key):
+                raise WebReviewRecoveryError(
+                    "Web review provider identity changed after the pause"
+                )
+    task = None
+    if not rejection_only:
+        task_id = record.hard_stop_task_id
+        ledger = ProviderHardStopLedger(
+            path=Path(record.hard_stop_ledger_path).resolve(),
+            task_ids=(task_id,),
+            limits=provider_adapter.web_research_agent_hard_stop_limits(
+                record.budget_mode
+            ),
+            batch_id=task_id,
+            declaration_sha256=record.hard_stop_declaration_sha256,
+            resume_existing=True,
+        )
+        # Provider pause/reconcile state belongs to Pipeline.resume_human_review,
+        # which performs it while holding the cross-process run execution lock.
+        task = ledger.start_task(task_id)
     pipeline = ResearchAgentPipeline.from_config(
         config,
         services=PipelineServices(
@@ -2329,6 +2882,7 @@ def make_research_pipeline_run_runner(
     literature_search_authorized: bool = False,
     plan_revision_source_run_id: str = "",
     budget_mode: str = "planner_canary",
+    runner_image: Optional[str] = None,
 ) -> Any:
     """Build the JobManager runner for a real, evidence-bound pipeline run."""
 
@@ -2434,6 +2988,12 @@ def make_research_pipeline_run_runner(
         raise ResearchPipelineRunError(exc.code, exc.message, details=exc.details) from exc
     research_provider_environment = dict(provider_environment)
     source_run_id = _clean_text(plan_revision_source_run_id, 160)
+    selected_runner_image = str(runner_image or "").strip()
+    if runner_image is not None and not selected_runner_image:
+        raise ResearchPipelineRunError(
+            "research_pipeline_runner_image_invalid",
+            "The server-owned runner image cannot be empty.",
+        )
 
     def runner(job: Any) -> Dict[str, Any]:
         try:
@@ -2583,9 +3143,12 @@ def make_research_pipeline_run_runner(
                     )
                 except literature_authority.LiteratureAuthorityError as exc:
                     raise ResearchPipelineRunError(exc.code, exc.message) from exc
-            submission_profile = get_submission_profile(
-                "npj_dm_e1_canary_dev/20260814"
+            submission_profile_ref = (
+                "npj_dm_e1_demo_dev/20260815"
+                if selected_budget_mode == "full_reviewed"
+                else "npj_dm_e1_canary_dev/20260814"
             )
+            submission_profile = get_submission_profile(submission_profile_ref)
             profile_options = submission_profile.pipeline_options()
             profile_options.update(
                 {
@@ -2630,7 +3193,7 @@ def make_research_pipeline_run_runner(
                     and bound_preplan_literature is None
                 ),
                 runner_kind=submission_profile.requires_runner,
-                runner_image=DockerRunner.DEFAULT_IMAGE,
+                runner_image=(selected_runner_image or DockerRunner.DEFAULT_IMAGE),
                 runner_network="none",
                 max_provider_attempts_per_run=(
                     hard_stop_limits.max_provider_attempts_per_run
@@ -2858,6 +3421,12 @@ def resume_research_pipeline(
     """Resume one digest-bound plan review, including after host restart."""
 
     key = _clean_text(run_id, 160)
+    resolved = str(decision or "").strip().lower()
+    if resolved not in {"approved", "rejected"}:
+        raise ResearchPipelineRunError(
+            "research_pipeline_review_decision_invalid",
+            "Choose approved or rejected for the pending plan review.",
+        )
     with _PENDING_LOCK:
         entry = _PENDING.get(key)
     if entry is None:
@@ -2865,6 +3434,7 @@ def resume_research_pipeline(
             entry = _recover_pending_run(
                 key,
                 provider_environment=provider_environment,
+                rejection_only=resolved == "rejected",
             )
         except Exception as exc:
             raise ResearchPipelineRunError(
@@ -2885,7 +3455,7 @@ def resume_research_pipeline(
             "research_pipeline_review_study_mismatch",
             "The pending review belongs to a different research project.",
         )
-    if current_study_context is not None:
+    if resolved == "approved" and current_study_context is not None:
         planned_digest = study_context_owner.scientific_configuration_sha256(
             entry.study
         )
@@ -2909,12 +3479,6 @@ def resume_research_pipeline(
                     "current_scientific_configuration_sha256": current_digest,
                 },
             )
-    resolved = str(decision or "").strip().lower()
-    if resolved not in {"approved", "rejected"}:
-        raise ResearchPipelineRunError(
-            "research_pipeline_review_decision_invalid",
-            "Choose approved or rejected for the pending plan review.",
-        )
     if resolved == "approved" and entry.budget_mode == "planner_canary":
         raise ResearchPipelineRunError(
             "research_pipeline_planner_canary_execution_blocked",

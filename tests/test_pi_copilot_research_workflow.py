@@ -2337,7 +2337,7 @@ def _write_real_pipeline_fixture(run_dir: Path, *, manuscript: str) -> None:
         "analysis_validated": True,
         "evidence_complete": True,
         "numeric_verified": True,
-        "manuscript_ready": True,
+        "manuscript_ready": False,
     }
     (run_dir / "run_status.json").write_text("{}", encoding="utf-8")
     plan_payload = {
@@ -2400,11 +2400,13 @@ def _write_real_pipeline_fixture(run_dir: Path, *, manuscript: str) -> None:
         encoding="utf-8",
     )
     (run_dir / "results" / "aggregate.csv").write_text(
-        "metric,estimate,lower,upper\nassociation,1.2,1.1,1.3\n",
+        "row_role,exposure_level_index,exposure_level,n_rows,exposure_denominator,exposure_pct,exposure_ci_low_pct,exposure_ci_high_pct,exposure_standard_error_pct,exposure_interval_covariance,exposure_interval_cluster_count,outcome_observed_n,outcome_missing_n,outcome_events,outcome_denominator,outcome_rate_pct,interval_method\n"
+        "exposure_level,0,0,60,100,60.0,,,,none_counts_only,,60,0,5,60,8.3,none_counts_only\n",
         encoding="utf-8",
     )
     (run_dir / "results" / "identifier_rows.csv").write_text(
-        "stay_id,value\n123,8\n",
+        "metric,a,b,c,d,e,f,g,h,i,j,k,stay_id\n"
+        "sensitive,1,2,3,4,5,6,7,8,9,10,11,123\n",
         encoding="utf-8",
     )
     (run_dir / "evidence" / "evidence_index.json").write_text(
@@ -2476,6 +2478,11 @@ def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
     tables = json.loads((wrapper / "result_tables.json").read_text(encoding="utf-8"))
     assert tables["table_count"] == 1
     assert tables["tables"][0]["evidence_id"] == "ev-table"
+    assert "outcome_events" in tables["tables"][0]["headers"]
+    assert "outcome_rate_pct" in tables["tables"][0]["headers"]
+    event_index = tables["tables"][0]["headers"].index("outcome_events")
+    assert tables["tables"][0]["rows"][0][event_index] == "5"
+    assert tables["tables"][0]["preview_columns_truncated"] is True
     assert tables["skipped_identifier_tables"] == 1
     manuscript = json.loads(
         (wrapper / "manuscript_draft.json").read_text(encoding="utf-8")
@@ -2488,9 +2495,19 @@ def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
     assert literature["mapping_status"] == "complete"
     assert literature["step_citation_map"][0]["citation_keys"] == ["method_paper"]
     ledger = json.loads((wrapper / "evidence_ledger.json").read_text(encoding="utf-8"))
-    assert "literature_evidence.json" in {row["name"] for row in ledger["artifacts"]}
+    artifact_names = {row["name"] for row in ledger["artifacts"]}
+    assert "literature_evidence.json" in artifact_names
+    assert "system_validation_report.json" in artifact_names
+    assert "system_validation_report_receipt.json" in artifact_names
+    assert "system_validation_report.html" in artifact_names
     assert ledger["privacy"]["projection_scan_passed"] is True
     assert ledger["privacy"]["path_values_returned"] is False
+    report = json.loads(
+        (wrapper / "system_validation_report.json").read_text(encoding="utf-8")
+    )
+    assert report["authority_class"] == "engineering_validation_only"
+    assert report["publication_authorized"] is False
+    assert (wrapper / "system_validation_report.html").is_file()
 
 
 def test_pending_plan_reason_survives_projection_and_run_history(
@@ -2599,6 +2616,80 @@ def test_pending_plan_cannot_resume_after_scientific_setup_changes(
         exc.value.details["planned_scientific_configuration_sha256"]
         != exc.value.details["current_scientific_configuration_sha256"]
     )
+
+
+def test_superseded_plan_can_still_be_rejected_without_execution_revalidation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.orchestration.workflow import HumanReviewRejected
+
+    run_dir = tmp_path / "superseded-rejection"
+    run_dir.mkdir()
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Review the digest-bound plan before analysis.",
+        authority_sha256="a" * 64,
+        payload={"reason": "operator_plan_approval_required"},
+    )
+    pending = HumanReviewPending(
+        run_id="run-superseded-rejection",
+        thread_id="thread-superseded-rejection",
+        run_dir=str(run_dir),
+        requests=(request,),
+    )
+    original = _complete_study()
+
+    class RejectingPipeline:
+        def resume_human_review(self, decisions, **_kwargs):
+            assert {row["decision"] for row in decisions} == {"rejected"}
+            raise HumanReviewRejected([request.review_id])
+
+    entry = agent_pipeline_runs._PendingRun(
+        pipeline=RejectingPipeline(),
+        pending=pending,
+        wrapper_dir=tmp_path / "wrapper-rejection",
+        study=original,
+        provider={},
+        acquisition=SimpleNamespace(),
+        created_at=1.0,
+    )
+    monkeypatch.setitem(
+        agent_pipeline_runs._PENDING,
+        "run-superseded-rejection",
+        entry,
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_write_projection",
+        lambda **_kwargs: {"gate": {"status": "blocked"}},
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs, "remove_review_recovery_record", lambda _run_id: None
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs, "_remove_local_recovery", lambda _wrapper: None
+    )
+
+    changed = {
+        **original,
+        "analysis_design": {
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "hospital_admission",
+        },
+    }
+    result = agent_pipeline_runs.resume_research_pipeline(
+        run_id="run-superseded-rejection",
+        study_context_id="study-workflow",
+        decision="rejected",
+        reviewer="local reviewer",
+        note="Superseded by a revised setup.",
+        job=SimpleNamespace(emit=lambda _event: None, cancel_requested=False),
+        current_study_context=changed,
+    )
+
+    assert result["gate"]["status"] == "blocked"
 
 
 def test_pending_review_projects_from_the_typed_pause_run_directory(
@@ -3219,9 +3310,30 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
     assert stale.value.code == "pi_session_authority_stale"
 
 
+@pytest.mark.parametrize(
+    (
+        "budget_mode",
+        "runner_image",
+        "expected_profile_name",
+        "expected_profile_version",
+    ),
+    [
+        (None, None, "npj_dm_e1_canary_dev", "20260814"),
+        (
+            "full_reviewed",
+            "easyicu-research-agent:e1-demo-local",
+            "npj_dm_e1_demo_dev",
+            "20260815",
+        ),
+    ],
+)
 def test_web_runner_delegates_to_research_agent_pipeline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    budget_mode: str | None,
+    runner_image: str | None,
+    expected_profile_name: str,
+    expected_profile_version: str,
 ) -> None:
     actual_run = tmp_path / "actual-pipeline-run"
     _write_real_pipeline_fixture(
@@ -3287,12 +3399,18 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     )
 
     export_path = _write_pipeline_export(tmp_path / "export")
+    runner_kwargs: dict[str, Any] = {}
+    if budget_mode is not None:
+        runner_kwargs["budget_mode"] = budget_mode
+    if runner_image is not None:
+        runner_kwargs["runner_image"] = runner_image
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export_path),
         study_context=_complete_study(),
         project_root=str(tmp_path / "projects"),
         provider={"provider": "openai", "external": True},
         provider_environment=_PI_PROVIDER_ENVIRONMENT,
+        **runner_kwargs,
     )
 
     class Job:
@@ -3334,20 +3452,34 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["config"].require_reportable_scientific_capability is True
     assert calls["config"].required_primary_cohort_selection_mode == "all_input_rows"
     assert calls["config"].enable_pubmed is False
-    assert calls["config"].max_provider_attempts_per_run == 6
-    assert calls["config"].max_total_tokens_per_run == 1_200_000
-    assert calls["config"].max_estimated_cost_usd_per_batch == 30.0
+    expected_limits = provider_adapter.web_research_agent_hard_stop_limits(
+        budget_mode or "planner_canary"
+    )
+    assert (
+        calls["config"].max_provider_attempts_per_run
+        == expected_limits.max_provider_attempts_per_run
+    )
+    assert (
+        calls["config"].max_total_tokens_per_run
+        == expected_limits.max_total_tokens_per_run
+    )
+    assert (
+        calls["config"].max_estimated_cost_usd_per_batch
+        == expected_limits.max_estimated_cost_usd_per_batch
+    )
     assert calls["config"].runner_kind == "docker"
     assert calls["config"].runner_network == "none"
-    assert calls["config"].runner_image == "easyicu-research-agent:1.0.0"
-    assert calls["config"].submission_profile_name == "npj_dm_e1_canary_dev"
-    assert calls["config"].submission_profile_version == "20260814"
+    assert calls["config"].runner_image == (
+        runner_image or "easyicu-research-agent:1.0.0"
+    )
+    assert calls["config"].submission_profile_name == expected_profile_name
+    assert calls["config"].submission_profile_version == expected_profile_version
     assert calls["config"].enable_memory is False
     assert calls["config"].enable_experience_bank is False
     assert calls["config"].enable_reviewed_memory is False
     assert (
         calls["services"].provider_hard_stop.ledger.limits
-        == provider_adapter.web_research_agent_hard_stop_limits("planner_canary")
+        == expected_limits
     )
     ledger = json.loads(
         (

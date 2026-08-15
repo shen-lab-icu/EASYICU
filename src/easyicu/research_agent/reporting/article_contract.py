@@ -233,6 +233,20 @@ def build_article_analysis_contract(
         display_modules = [
             module for module in display_modules if module.role == "data_quality"
         ]
+    from ..planning.dependence_authority import context_counts_only_authority
+
+    if context_counts_only_authority(context):
+        # The only typed baseline-context owner is Table One, which this
+        # authority forbids. The generic distribution module is also redundant:
+        # the required typed exposure/outcome product owns those counts and its
+        # downstream figure owns the display. Retaining either module encourages
+        # a second, untyped or mislabeled result product.
+        display_modules = [
+            module
+            for module in display_modules
+            if module.role != "baseline_context"
+            and module.module_id != "distribution_prevalence"
+        ]
     for module in display_modules:
         if module.tier == "supplementary":
             continue

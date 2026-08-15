@@ -41,17 +41,23 @@ def _step() -> AnalysisStep:
 def _binding(run_dir: Path) -> tuple[dict, pd.DataFrame]:
     frame = pd.DataFrame(
         {
-            "concept": ["exposure", "outcome", "age"],
-            "variable": ["exposure", "outcome", "age"],
-            "label": ["Exposure", "Outcome", "Age"],
-            "value_column": ["exposure_max", "outcome", "age"],
-            "n_total": [140, 140, 140],
-            "measured_one_n": [112, 140, 133],
-            "measured_one_pct": [80.0, 100.0, 95.0],
-            "value_missing_n": [28, 0, 7],
-            "value_missing_pct": [20.0, 0.0, 5.0],
-            "eligible_n": [140, 140, 140],
-            "not_applicable_n": [0, 0, 0],
+            "concept": ["exposure", "outcome", "age", "death_time"],
+            "variable": ["exposure", "outcome", "age", "death_time"],
+            "label": ["Exposure", "Outcome", "Age", "Death time"],
+            "value_column": ["exposure_max", "outcome", "age", "death_time"],
+            "n_total": [140, 140, 140, 140],
+            "measured_one_n": [112, 140, 133, 14],
+            "measured_one_pct": [80.0, 100.0, 95.0, 10.0],
+            "value_missing_n": [28, 0, 7, 0],
+            "value_missing_pct": [20.0, 0.0, 5.0, 0.0],
+            "eligible_n": [140, 140, 140, 14],
+            "not_applicable_n": [0, 0, 0, 126],
+            "indicator_semantics": [
+                "measurement_availability",
+                "measurement_availability",
+                "measurement_availability",
+                "conditional_event_time",
+            ],
         }
     )
     evidence_dir = run_dir / "evidence"
@@ -180,6 +186,13 @@ def test_single_typed_measurement_audit_preserves_physical_parent_lineage(
     }
     assert (out_dir / "data_quality.figure_contract.json").is_file()
     assert (out_dir / "data_quality.png").is_file()
+    svg = (out_dir / "data_quality.svg").read_text(encoding="utf-8")
+    assert "Death time (conditional)" in svg
+    assert "14 applicable; 0/14 missing" in svg
+    contract = json.loads(
+        (out_dir / "data_quality.figure_contract.json").read_text(encoding="utf-8")
+    )
+    assert contract["panels"][0]["title"] == "Data availability and applicability"
 
 
 def test_single_renderer_declines_unreadable_or_widened_binding(tmp_path: Path):

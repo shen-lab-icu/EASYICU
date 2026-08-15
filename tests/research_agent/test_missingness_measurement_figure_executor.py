@@ -151,8 +151,8 @@ def _audit_row(
         100.0 * missing / _N,
         eligible,
         not_applicable,
-        "measurement",
-        "measurement_missing",
+        "conditional_event_time" if not_applicable else "measurement_availability",
+        "conditional_event_time" if not_applicable else "measurement_missing",
     ]
 
 

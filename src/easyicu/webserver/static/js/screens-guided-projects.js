@@ -35,6 +35,28 @@
     return [status, mode].filter(Boolean).join(' · ');
   }
 
+  function renderShellRail(ctx) {
+    const { t, icon } = helpers(ctx);
+    return `
+      <aside class="gd-rail">
+        <div class="gd-rail-top">
+          <button class="gd-rail-brand" type="button" data-open="entry" aria-label="${t('Back to EasyICU home', '返回 EasyICU 首页')}" title="${t('Back to EasyICU home', '返回 EasyICU 首页')}"><span class="brand-mark">${icon('spark', 15)}</span><span class="gd-name">${t('Guided Copilot', '研究引导')}</span></button>
+          <div class="gd-folder-controls" id="gdFolderControls"></div>
+        </div>
+        <div class="gd-rail-list" id="gdSessions"></div>
+        <div class="gd-rail-foot">
+          <div class="gd-rail-utils" aria-label="${t('Guided Copilot utilities', '研究引导工具')}">
+            <button class="gd-utilbtn" type="button" data-open="entry" title="${t('Home', '主页')}" aria-label="${t('Home', '主页')}">${icon('back', 14)}</button>
+            <button class="gd-utilbtn" type="button" data-open="settings" title="${t('Settings', '设置')}" aria-label="${t('Settings', '设置')}">${icon('gear', 14)}</button>
+            <button class="gd-utilbtn lang" type="button" data-lang-toggle title="${t('Switch language', '切换语言')}" aria-label="${t('Switch language', '切换语言')}">
+              ${icon('globe', 14)} <span>${window.EU_LANG === 'zh' ? 'EN' : '中'}</span>
+            </button>
+          </div>
+          <button class="btn sm block gd-data-workspace" data-open="extraction">${icon('grid', 13)} ${t('Data workspace', '数据工作台')}</button>
+        </div>
+      </aside>`;
+  }
+
   function renderProjectRail(ctx) {
     const { t, icon, esc, fmtRunTime } = helpers(ctx);
     const host = document.getElementById('gdSessions');
@@ -88,7 +110,7 @@
     host.innerHTML = `
       <div class="gd-folder-picker ${ctx.guidedFolderMenuOpen ? 'open' : ''}">
         <button class="gd-newbtn" type="button" data-newstudy data-folder-menu-toggle aria-haspopup="menu" aria-expanded="${ctx.guidedFolderMenuOpen ? 'true' : 'false'}" title="${t('Choose or create a local study folder', '选择或创建本地研究文件夹')}">
-          ${icon('plus', 14)} ${t('New / open research project', '新建/打开研究项目')}
+          ${icon('plus', 14)} <span>${t('New / open research folder', '新建/打开研究目录')}</span>
         </button>
         ${ctx.guidedFolderMenuOpen ? `
           <div class="gd-folder-menu" role="menu" aria-label="${t('Study folder actions', '研究文件夹操作')}">
@@ -242,6 +264,7 @@
   }
 
   window.EU_GUIDED_PROJECTS = {
+    renderShellRail,
     renderProjectRail,
     renderFolderControls,
     renderKnownProjectPicker,

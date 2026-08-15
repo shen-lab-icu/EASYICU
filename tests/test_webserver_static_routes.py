@@ -127,7 +127,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260812-extension-manager1" in index_html
+    assert "js/api.js?v=20260815-mode-history1" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -343,13 +343,13 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20260812-project-lifecycle1" in index_html
+        "js/screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260808-workspace-agent1" in index_html
+    assert "js/screens-guided.js?v=20260815-compact-rail2" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -391,7 +391,7 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260812-extension-manager1" in index_html
+    assert "js/api.js?v=20260815-mode-history1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -540,12 +540,12 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260808-project-rail1" in index_html
-    assert "css/guided-projects.css?v=20260808-workspace-agent1" in index_html
+    assert "css/guided.css?v=20260815-compact-rail2" in index_html
+    assert "css/guided-projects.css?v=20260815-mobile-rail1" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260812-extension-manager1" in index_html
+    assert "js/api.js?v=20260815-mode-history1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20260812-project-lifecycle1" in index_html
+        "js/screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -639,7 +639,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260808-workspace-agent1" in index_html
+    assert "js/screens-guided.js?v=20260815-compact-rail2" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -851,7 +851,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260812-data-package1" in index_html
+    assert "js/screens-agent-render.js?v=20260815-system-validation1" in index_html
 
 
 def test_native_agent_overview_renders_object_idea_plan_steps() -> None:
@@ -2260,7 +2260,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260812-extension-manager1" in index_html
+    assert "api.js?v=20260815-mode-history1" in index_html
     assert "screens-dict.js?v=20260712-ux-fixes" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -2388,8 +2388,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Seeded examples" not in guided_js
     assert "data-sess" not in guided_js
     assert "That is a seeded example" not in guided_js
-    assert "New / open research project" in projects_js
-    assert "gdFolderControls" in guided_js
+    assert "New / open research folder" in projects_js
+    assert "gdFolderControls" in projects_js
+    assert "gdFolderControls" not in guided_js
     assert "gdFolderDialogHost" in guided_js
     assert "data-folder-menu-toggle" in projects_js
     assert "data-folder-choice" in projects_js
@@ -2473,25 +2474,31 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Studies · local folders" not in guided_project_surface
     assert "Creates a new local project folder" not in guided_project_surface
     assert "Created a new project folder" not in guided_project_surface
-    assert 'class="gd-home-link"' in guided_js
-    assert 'data-open="entry"' in guided_js
-    assert "Back to EasyICU home" in guided_js
-    assert 'class="gd-rail-utils"' in guided_js
-    assert 'data-open="settings"' in guided_js
-    assert "data-lang-toggle" in guided_js
-    assert "Switch language" in guided_js
-    assert "${t('Data workspace', '数据工作台')}" in guided_js
+    assert 'class="gd-top"' not in guided_js
+    assert 'class="gd-home-link"' not in guided_js
+    assert '<button class="gd-rail-brand" type="button" data-open="entry"' in projects_js
+    assert 'data-open="entry"' in projects_js
+    assert "Back to EasyICU home" in projects_js
+    assert "${t('Exit', '退出')}" not in guided_js
+    assert 'class="gd-rail-utils"' in projects_js
+    assert 'data-open="settings"' in projects_js
+    assert "data-lang-toggle" in projects_js
+    assert "Switch language" in projects_js
+    assert "${t('Data workspace', '数据工作台')}" in projects_js
     assert ".gd-empty-local" in projects_css
     assert ".gd-sessline" in projects_css
     assert ".gd-sess-action" in projects_css
     assert ".gd-sess.active" in projects_css
-    assert ".gd-home-link" in guided_css
+    assert ".gd-home-link" not in guided_css
+    assert ".gd-top" not in guided_css
+    assert ".gd-rail-brand" in projects_css
     assert ".gd-rail-utils" in projects_css
     assert ".gd-utilbtn.lang" in projects_css
     assert ".gd-data-workspace" in projects_css
     assert ".gd-draft-setup" in guided_css
     assert ".gd-folder-picker" in projects_css
     assert ".gd-folder-menu" in projects_css
+    assert "right:0;left:auto;width:min(270px" in projects_css
     assert ".gd-folder-dialog" in guided_css
     assert ".gd-folder-tabs" in guided_css
     assert ".gds-known" in guided_css
@@ -2523,16 +2530,17 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260812-extension-manager1" in index_html
-    assert "screens-guided-projects.js?v=20260812-project-lifecycle1" in index_html
+    assert "api.js?v=20260815-mode-history1" in index_html
+    assert "screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260808-workspace-agent1" in index_html
-    assert "guided.css?v=20260808-project-rail1" in index_html
-    assert "guided-projects.css?v=20260808-workspace-agent1" in index_html
-    assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in guided_js
+    assert "screens-guided.js?v=20260815-compact-rail2" in index_html
+    assert "guided.css?v=20260815-compact-rail2" in index_html
+    assert "guided-projects.css?v=20260815-mobile-rail1" in index_html
+    assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in projects_js
+    assert "${t('New / open research folder', '新建/打开研究目录')}" in projects_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
 
