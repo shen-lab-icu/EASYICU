@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -227,6 +228,19 @@ def test_reconciliation_rejects_a_tampered_local_seed(tmp_path) -> None:
     payload = json.loads(seed_path.read_text(encoding="utf-8"))
     payload["study"]["question"] = "tampered"
     seed_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert reconcile_records(path=index) == 0
+    assert get_record(run_id, path=index) is None
+
+
+def test_reconciliation_ignores_seed_after_pipeline_directory_is_removed(
+    tmp_path,
+) -> None:
+    index = tmp_path / "review-index.json"
+    root = tmp_path / "projects"
+    wrapper, run_id = _durable_seed(root)
+    register_pipeline_work_root(root, path=index)
+    shutil.rmtree(wrapper / "pipeline")
 
     assert reconcile_records(path=index) == 0
     assert get_record(run_id, path=index) is None
