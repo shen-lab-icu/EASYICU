@@ -50,7 +50,9 @@ from easyicu.research_agent.schema import (
     COHORT_DEFINITION_FLOW_OUTPUT,
     CohortDefinitionSpec,
     CohortDescriptor,
+    ExposureOutcomeDistributionSpec,
     ResearchContext,
+    TableOneSpec,
 )
 
 
@@ -262,6 +264,19 @@ def test_the_retry_reminder_closes_common_representation_seams():
     assert "exact exposure and outcome" in reminder
     assert "JSON numbers remain numbers" in reminder
     assert "required `robustness_specs`" in reminder
+    assert "`standardized_difference_mode`" in reminder
+    assert "do not add a second reporting switch" in reminder
+    assert "`report_standardized_mean_differences`" not in reminder
+    assert '["__easyicu_level_1__","__easyicu_level_2__"]' in reminder
+
+
+def test_the_retry_reminder_derives_closed_scientific_keys_from_schema():
+    reminder = planner_science_retry_guide()
+
+    for field in TableOneSpec.model_fields:
+        assert f"`{field}`" in reminder
+    for field in ExposureOutcomeDistributionSpec.model_fields:
+        assert f"`{field}`" in reminder
 
 
 def test_the_retry_reminder_publishes_table_one_inputs_and_descriptive_ceiling():
