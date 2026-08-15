@@ -5520,7 +5520,7 @@ class ResearchAgentPipeline:
         )
         from .authority.provider_hard_stop import ProviderHardStopExceeded
 
-        planner_only_rejection = bool(decisions) and all(
+        all_rejected = bool(decisions) and all(
             str(
                 item.get("decision")
                 if isinstance(item, Mapping)
@@ -5529,7 +5529,7 @@ class ResearchAgentPipeline:
             == "rejected"
             for item in decisions
         )
-        if self._config.planner_only and not planner_only_rejection:
+        if self._config.planner_only and not all_rejected:
             raise RuntimeError(
                 "this pipeline authority is planner-only and cannot resume into Execute"
             )
@@ -5598,7 +5598,7 @@ class ResearchAgentPipeline:
             with acquire_run_execution_lock(
                 workdir=Path(self.workdir), run_id=pending.run_id
             ):
-                if self._provider_hard_stop is not None:
+                if self._provider_hard_stop is not None and not all_rejected:
                     # A process may die after reopening the Provider clock but
                     # before the decision commit changes a still-pending review
                     # checkpoint. Converge that exact window back to the durable

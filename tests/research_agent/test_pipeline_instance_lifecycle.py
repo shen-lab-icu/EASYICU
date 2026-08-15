@@ -309,6 +309,18 @@ def test_planner_only_pipeline_allows_rejection_to_terminalize(
         "runtime_bundle": None,
     }
 
+    class _ProviderStop:
+        def reconcile_review_pause(self, **_kwargs) -> None:
+            raise AssertionError("rejection must not reconcile Provider state")
+
+        def resume(self) -> None:
+            raise AssertionError("rejection must not resume Provider state")
+
+        def pause(self) -> None:
+            raise AssertionError("rejection must not pause Provider state")
+
+    pipeline._provider_hard_stop = _ProviderStop()
+
     with pytest.raises(HumanReviewRejected):
         pipeline.resume_human_review([{"decision": "rejected"}])
 
