@@ -347,16 +347,20 @@ def load_provider_hard_stop_ledger(path: Path) -> Dict[str, object]:
     return payload
 
 
-def _prompt_payload_bytes(messages: Sequence[Any]) -> int:
+def _prompt_payload_bytes(
+    messages: Sequence[Any], *, additional_payload_bytes: int = 0
+) -> int:
     """The caller-visible prompt bytes this attempt is about to transmit."""
 
-    return sum(
+    return max(0, int(additional_payload_bytes)) + sum(
         len(str(getattr(message, "content", "") or "").encode("utf-8"))
         for message in messages
     )
 
 
-def _prompt_token_reservation(messages: Sequence[Any]) -> int:
+def _prompt_token_reservation(
+    messages: Sequence[Any], *, additional_payload_bytes: int = 0
+) -> int:
     """Conservative bound including provider-side prompt framing.
 
     Message bytes alone bound tokens produced from caller-visible content, but
@@ -368,7 +372,7 @@ def _prompt_token_reservation(messages: Sequence[Any]) -> int:
     reservation back to their provider-reported usage.
     """
 
-    prompt_bytes = sum(
+    prompt_bytes = max(0, int(additional_payload_bytes)) + sum(
         len(str(getattr(message, "content", "") or "").encode("utf-8"))
         for message in messages
     )
@@ -967,6 +971,7 @@ class ProviderHardStopLedger:
         messages: Sequence[Any],
         max_tokens: int,
         prior_attempt_id: Optional[str],
+        additional_prompt_payload_bytes: int = 0,
     ) -> str:
         """Reserve one maximum-cost transport attempt before network delivery."""
 
@@ -982,8 +987,14 @@ class ProviderHardStopLedger:
                 usage=None,
                 error_type="TransportRetry",
             )
-        prompt_reserve = _prompt_token_reservation(messages)
-        prompt_payload_bytes = _prompt_payload_bytes(messages)
+        prompt_reserve = _prompt_token_reservation(
+            messages,
+            additional_payload_bytes=additional_prompt_payload_bytes,
+        )
+        prompt_payload_bytes = _prompt_payload_bytes(
+            messages,
+            additional_payload_bytes=additional_prompt_payload_bytes,
+        )
         requested_completion = max(1, int(max_tokens))
         completion_reserve = max(
             requested_completion,
@@ -1395,12 +1406,16 @@ class _ActiveHardStopCall:
         model: str,
         messages: Sequence[Any],
         max_tokens: int,
+        additional_prompt_payload_bytes: int = 0,
     ) -> None:
         self.task = task
         self.role = role
         self.model = str(model)
         self.messages = tuple(messages)
         self.max_tokens = int(max_tokens)
+        self.additional_prompt_payload_bytes = max(
+            0, int(additional_prompt_payload_bytes)
+        )
         self.attempt_ids: list[str] = []
         self._active_attempt_id: Optional[str] = None
 
@@ -1416,6 +1431,7 @@ class _ActiveHardStopCall:
             model=self.model,
             messages=self.messages,
             max_tokens=self.max_tokens,
+            additional_prompt_payload_bytes=self.additional_prompt_payload_bytes,
             prior_attempt_id=prior,
         )
         self.attempt_ids.append(attempt_id)
@@ -1461,6 +1477,7 @@ def provider_hard_stop_call_scope(
     model: str,
     messages: Sequence[Any],
     max_tokens: int,
+    additional_prompt_payload_bytes: int = 0,
 ) -> Iterator[_ActiveHardStopCall]:
     """Activate task/batch accounting around one logical Provider call."""
 
@@ -1471,6 +1488,7 @@ def provider_hard_stop_call_scope(
         model=model,
         messages=messages,
         max_tokens=max_tokens,
+        additional_prompt_payload_bytes=additional_prompt_payload_bytes,
     )
     token = _ACTIVE_HARD_STOP_CALL.set(state)
     try:

@@ -341,6 +341,7 @@ def test_benchmark_adaptive_reasoning_is_explicit_and_role_scoped(ra, monkeypatc
         model="gpt-5.6-luna",
         request_timeout=17.0,
         reasoning_effort_profile="adaptive_v1",
+        planner_strict_json_schema=True,
     )
 
     assert router.for_role("planner") is router.for_role("coder")
@@ -360,9 +361,13 @@ def test_benchmark_adaptive_reasoning_is_explicit_and_role_scoped(ra, monkeypatc
         reasoning_effort_profile="adaptive_v1",
         request_timeout=17.0,
         transport_max_attempts=1,
+        planner_strict_json_schema=True,
     )
     actual_identity = benchmark._benchmark_execution_identity({}, router)
     assert actual_identity.identity_sha256 == expected_identity.identity_sha256
+    assert actual_identity.provider_authorization["clients"][0][
+        "transport_policy"
+    ]["strict_json_schema_enabled"] is True
     assert len(constructed) == 3
 
 
@@ -587,12 +592,13 @@ def test_factory_authorization_records_exact_nonsecret_endpoint():
             "authorization_mode": "operator_env",
             "authorization_sha256": payload["clients"][0]["authorization_sha256"],
             "transport_policy": {
-                "schema_version": "easyicu.provider_transport_policy/1",
+                "schema_version": "easyicu.provider_transport_policy/2",
                 "transport": "openai_compatible",
                 "request_timeout_seconds": 120.0,
                 "transport_max_attempts": 9,
                 "retryable_http_status_codes": None,
                 "stream_enabled": False,
+                "strict_json_schema_enabled": False,
             },
         }
     ]
@@ -659,12 +665,13 @@ def test_unknown_provider_is_unmanaged_external_and_never_local_exempt():
                 "authorization_mode": "unmanaged",
                 "authorization_sha256": "",
                 "transport_policy": {
-                    "schema_version": "easyicu.provider_transport_policy/1",
+                    "schema_version": "easyicu.provider_transport_policy/2",
                     "transport": "unmanaged",
                     "request_timeout_seconds": None,
                     "transport_max_attempts": None,
                     "retryable_http_status_codes": None,
                     "stream_enabled": None,
+                    "strict_json_schema_enabled": None,
                 },
             }
         ],

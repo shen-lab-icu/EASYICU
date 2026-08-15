@@ -193,6 +193,7 @@ def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
             str(instance_vars.get("_completion_token_parameter", "")),
             float(instance_vars.get("_request_timeout", 0.0)),
             bool(instance_vars.get("_stream_enabled", False)),
+            bool(instance_vars.get("supports_strict_json_schema", False)),
             int(instance_vars.get("_max_retries", 0)),
             (
                 None
@@ -988,6 +989,7 @@ def _configured_transport_policy(
     transport_max_attempts: int,
     retryable_http_status_codes: Optional[Sequence[int]],
     stream_enabled: bool,
+    supports_strict_json_schema: bool,
 ) -> dict[str, Any]:
     timeout = float(request_timeout)
     if not math.isfinite(timeout) or timeout <= 0:
@@ -1011,12 +1013,13 @@ def _configured_transport_policy(
             statuses.append(status)
         statuses = sorted(set(statuses))
     return {
-        "schema_version": "easyicu.provider_transport_policy/1",
+        "schema_version": "easyicu.provider_transport_policy/2",
         "transport": "openai_compatible",
         "request_timeout_seconds": timeout,
         "transport_max_attempts": total_attempts,
         "retryable_http_status_codes": statuses,
         "stream_enabled": bool(stream_enabled),
+        "strict_json_schema_enabled": bool(supports_strict_json_schema),
     }
 
 
@@ -1027,12 +1030,13 @@ def _provider_transport_policy(
 ) -> dict[str, Any]:
     if record is not None and record.kind == "offline":
         return {
-            "schema_version": "easyicu.provider_transport_policy/1",
+            "schema_version": "easyicu.provider_transport_policy/2",
             "transport": "offline",
             "request_timeout_seconds": None,
             "transport_max_attempts": 0,
             "retryable_http_status_codes": None,
             "stream_enabled": False,
+            "strict_json_schema_enabled": False,
         }
     if _is_reviewed_client_type(client, "OpenAIClient"):
         instance_vars = _safe_instance_vars(client)
@@ -1045,14 +1049,18 @@ def _provider_transport_policy(
                 "_retryable_http_status_codes"
             ),
             stream_enabled=bool(instance_vars.get("_stream_enabled", False)),
+            supports_strict_json_schema=bool(
+                instance_vars.get("supports_strict_json_schema", False)
+            ),
         )
     return {
-        "schema_version": "easyicu.provider_transport_policy/1",
+        "schema_version": "easyicu.provider_transport_policy/2",
         "transport": "unmanaged",
         "request_timeout_seconds": None,
         "transport_max_attempts": None,
         "retryable_http_status_codes": None,
         "stream_enabled": None,
+        "strict_json_schema_enabled": None,
     }
 
 
@@ -1141,6 +1149,7 @@ def provider_authorization_for_configuration(
     transport_max_attempts: int = 9,
     retryable_http_status_codes: Optional[Sequence[int]] = None,
     stream_enabled: bool = False,
+    supports_strict_json_schema: bool = False,
 ) -> dict[str, Any]:
     """Mint non-secret identity coordinates without constructing a client."""
 
@@ -1154,6 +1163,7 @@ def provider_authorization_for_configuration(
         transport_max_attempts=transport_max_attempts,
         retryable_http_status_codes=retryable_http_status_codes,
         stream_enabled=stream_enabled,
+        supports_strict_json_schema=supports_strict_json_schema,
     )
     if normalized == "mock":
         return {
@@ -1168,12 +1178,13 @@ def provider_authorization_for_configuration(
                     "authorization_mode": "mock_exempt",
                     "authorization_sha256": "",
                     "transport_policy": {
-                        "schema_version": "easyicu.provider_transport_policy/1",
+                        "schema_version": "easyicu.provider_transport_policy/2",
                         "transport": "offline",
                         "request_timeout_seconds": None,
                         "transport_max_attempts": 0,
                         "retryable_http_status_codes": None,
                         "stream_enabled": False,
+                        "strict_json_schema_enabled": False,
                     },
                 }
             ],
@@ -1315,6 +1326,7 @@ def build_provider_client(
     max_retries: int = 8,
     retryable_http_status_codes: Optional[Sequence[int]] = None,
     stream_enabled: Optional[bool] = None,
+    supports_strict_json_schema: bool = False,
     allow_environment_overrides: bool = True,
 ) -> Any:
     """Build an OpenAI-compatible client under the canonical key policy.
@@ -1356,6 +1368,7 @@ def build_provider_client(
             "request_timeout": float(request_timeout),
             "max_retries": int(max_retries),
             "stream_enabled": stream_enabled,
+            "supports_strict_json_schema": bool(supports_strict_json_schema),
             "allow_environment_overrides": bool(allow_environment_overrides),
             "extra_headers": {
                 "HTTP-Referer": EASYICU_HTTP_REFERER,
@@ -1440,6 +1453,7 @@ def build_provider_client(
             "api_key": loopback_key,
             "max_retries": int(max_retries),
             "stream_enabled": stream_enabled,
+            "supports_strict_json_schema": bool(supports_strict_json_schema),
             "allow_environment_overrides": bool(allow_environment_overrides),
         }
         if retryable_http_status_codes is not None:

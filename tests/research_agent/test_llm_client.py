@@ -15,6 +15,7 @@ def _mock_transport_client(
     max_retries=0,
     retryable_http_status_codes=None,
     allow_environment_overrides=True,
+    supports_strict_json_schema=False,
 ):
     # These tests exercise the concrete adapter against an in-memory fake SDK,
     # but the adapter itself must go through its real constructor so provider
@@ -40,8 +41,88 @@ def _mock_transport_client(
         client_cls=client_type,
         max_retries=max_retries,
         retryable_http_status_codes=retryable_http_status_codes,
+        supports_strict_json_schema=supports_strict_json_schema,
         allow_environment_overrides=allow_environment_overrides,
     )
+
+
+def test_openai_client_sends_typed_schema_as_top_level_response_format(
+    monkeypatch, ra
+):
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.protocol import StructuredOutputRequest
+
+    captured = {}
+
+    class _Completions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            message = SimpleNamespace(content='{"ok":true}')
+            choice = SimpleNamespace(message=message, finish_reason="stop")
+            return SimpleNamespace(choices=[choice], usage=None)
+
+    request = StructuredOutputRequest.from_schema(
+        name="probe",
+        schema={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        },
+    )
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-test",
+        completions=_Completions(),
+        supports_strict_json_schema=True,
+    )
+
+    assert client.complete(
+        [LLMMessage(role="user", content="return json")],
+        structured_output=request,
+    ) == '{"ok":true}'
+    assert captured["response_format"] == request.to_openai_response_format()
+    assert "response_format" not in captured.get("extra_body", {})
+
+
+def test_openai_client_rejects_unadvertised_schema_before_transport(monkeypatch, ra):
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.protocol import (
+        StructuredOutputCapabilityError,
+        StructuredOutputRequest,
+    )
+
+    calls = 0
+
+    class _Completions:
+        def create(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise AssertionError("unadvertised schema must not reach transport")
+
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-test",
+        completions=_Completions(),
+    )
+    request = StructuredOutputRequest.from_schema(
+        name="probe",
+        schema={
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    )
+
+    with pytest.raises(StructuredOutputCapabilityError, match="not configured"):
+        client.complete(
+            [LLMMessage(role="user", content="return json")],
+            structured_output=request,
+        )
+    assert calls == 0
 
 
 def _retry_test_client(monkeypatch, failures):

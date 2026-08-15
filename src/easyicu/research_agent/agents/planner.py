@@ -31,6 +31,7 @@ from ..icu_rules import (
     GENERAL_ICU_ANALYSIS_PRINCIPLES,
 )
 from ..providers.protocol import LLMClient, LLMMessage
+from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.llm import llm_is_mockish
 from ..providers.prompt_budget import (
     CONSERVATIVE_BYTES_PER_TOKEN,
@@ -1299,10 +1300,41 @@ class PlannerAgent:
             know_how_context=know_how_context,
             planning_contract_context=resolved_planning_contract_context,
         )
+        structured_output = None
+        if llm_supports_strict_json_schema(self.llm):
+            structured_output = _payload.planner_structured_output_request()
+            authority_note = (
+                "\n\nHOST STRUCTURED OUTPUT AUTHORITY: "
+                f"name={structured_output.name}; "
+                f"sha256={structured_output.authority_sha256}; strict=true. "
+                "The transport enforces this schema before host validation."
+            )
+            messages[0] = LLMMessage(
+                role=messages[0].role,
+                content=messages[0].content + authority_note,
+            )
         self.last_prompt_metrics = self.request_metrics(
             context,
             know_how_context=know_how_context,
             planning_contract_context=resolved_planning_contract_context,
+        )
+        message_payload_bytes = sum(
+            len(message.content.encode("utf-8")) for message in messages
+        )
+        structured_output_bytes = (
+            structured_output.payload_bytes if structured_output is not None else 0
+        )
+        self.last_prompt_metrics["message_payload_bytes"] = message_payload_bytes
+        self.last_prompt_metrics["structured_output_payload_bytes"] = (
+            structured_output_bytes
+        )
+        self.last_prompt_metrics["structured_output_authority_sha256"] = (
+            structured_output.authority_sha256
+            if structured_output is not None
+            else None
+        )
+        self.last_prompt_metrics["total_bytes"] = (
+            message_payload_bytes + structured_output_bytes
         )
         if self.last_prompt_metrics["total_bytes"] > _PLANNER_PROMPT_BYTE_LIMIT:
             raise PlannerPromptBudgetError(
@@ -1333,6 +1365,7 @@ class PlannerAgent:
             temperature=0.2,
             failed_response_transform=_planner_retry_response_projection,
             progress_callback=progress_callback,
+            structured_output=structured_output,
             format_reminder=(
                 "The JSON must be a single object with keys: "
                 "research_question (string), optional analysis_type (string), "
@@ -1419,6 +1452,7 @@ class PlannerAgent:
             data = json.loads(match)
         if not isinstance(data, dict):
             raise ValueError("Planner JSON root must be an object")
+        data = _payload.decode_planner_transport_payload(data)
         for index, raw_step in enumerate(data.get("steps", []) or []):
             if not isinstance(raw_step, dict):
                 continue

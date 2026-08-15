@@ -47,5 +47,57 @@ contract projection, not an E1 numeric or clinical exception.
 
 ## Next
 
-Commit the repair, build a new exact-source runner image, and start E1 in a new
-`dev05` root. Never resume or reuse `dev04`.
+The first repair was committed as `8ca246b`, built as
+`easyicu-research-agent:8ca246b-dev`, and rerun from a fresh `dev05` root.
+Never resume or reuse `dev04`.
+
+## Dev05 result
+
+- Run root: `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260815_8ca246b_e1_dev05`
+- Provider attempts: 5 Planner calls; 156,288 accounted tokens; estimated cost
+  USD 2.12344.
+- Execution boundary: no generated analysis code executed; all five failures
+  remained inside Planner validation.
+- The remaining defects varied across attempts (invalid distribution interval,
+  invalid Table 1 adjustment/mode, counts-only fields that declared inference,
+  a cross-family action, and a non-enum literature design element). This showed
+  that another prose-only retry patch would continue paying to discover the
+  schema one field at a time.
+
+## Strict transport-schema repair
+
+- Owner: `agents/plan_payload.py` derives a closed transport projection from
+  `AnalysisPlan`; host Pydantic and scientific validators remain authoritative.
+- Representation-only adaptations are limited to `display_labels` key/value
+  rows and nullable fixed-key robustness overrides, decoded before validation.
+- Provider capability is explicit and fail-closed. It is not inferred from a
+  model name or an HTTP 200 response.
+- The exact Schema is immutable, counted in Planner prompt and hard-stop
+  reservations, forwarded through the reproducibility/hard-stop/meter wrapper
+  chain, and bound into provider transport policy v2 and ExecutionIdentity.
+- Benchmark exceptions now persist safe structured-attempt metadata (stage,
+  issue location/type, digest, finish reason, and usage) without raw response or
+  parser text.
+- CLI ownership is separated: `--planner-strict-json-schema` configures the
+  provider transport and is recorded under `provider_transport_options`; it is
+  never passed into `PipelineConfig`.
+
+## Strict-schema evidence
+
+- Schema name: `easyicu_analysis_plan_v1`
+- Schema authority SHA-256:
+  `609e9d662c9776b2399c55cce23c700ce1621b3583bc5b5038da3d3076042d6e`
+- Wire payload: 25,701 bytes; 28 definitions; every object property required;
+  every object closed with `additionalProperties=false`.
+- Live exact-schema probe: provider accepted the code-generated schema and
+  returned `finish_reason=stop`; 5,161 prompt + 113 completion = 5,274 tokens.
+- Focused verification to this point: 249-test wrapper/provider/retry suite had
+  no cached failures; an additional 92 provider/identity/schema tests passed,
+  including the composed production wrapper chain. Ruff, compileall, and
+  `git diff --check` passed.
+
+## Next
+
+Commit the strict transport repair, build an exact-source image for that commit,
+validate source/image/runtime identity, and start E1 from a fresh `dev06` root
+with `--planner-strict-json-schema`. Never resume or reuse `dev05`.
