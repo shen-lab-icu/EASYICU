@@ -170,7 +170,7 @@ def create_mcp_server(
                 state=dispatch_state,
                 queue_timeout_seconds=tool_timeout_seconds,
             )
-        except TimeoutError:
+        except asyncio.TimeoutError:
             result = {
                 "error": (
                     f"tool {name!r} exceeded the configured MCP queue timeout"
