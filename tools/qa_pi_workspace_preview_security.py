@@ -71,7 +71,7 @@ def run() -> dict[str, object]:
     project_id = "pi-preview-security"
     relative_file = "security/hostile.html"
     base_url = f"http://127.0.0.1:{args.port}/"
-    preview_url = (
+    preview_path = (
         f"{base_url}api/copilot/pi/projects/{project_id}/workspace/preview"
         f"?file=security%2Fhostile.html"
     )
@@ -82,6 +82,8 @@ def run() -> dict[str, object]:
             home / ".easyicu" / "pi-agent" / "workspace"
         )
         workspace.write_file(project_id, relative_file, HOSTILE_HTML)
+        checked = workspace.check_file(project_id, relative_file)
+        preview_url = f"{preview_path}&checked_sha256={checked['checked_sha256']}"
         server = start_server(args.port, home)
         try:
             wait_ready(base_url, server)
