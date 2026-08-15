@@ -64,5 +64,5 @@ def test_default_idea_quality_fixture_path_is_independent_of_module_depth() -> N
     )
     package_root = Path(importlib.import_module("easyicu").__file__).resolve().parents[2]
     assert module.default_idea_quality_eval_path() == (
-        package_root / "benchmark" / "idea_mining_quality_eval_set.json"
+        package_root / "benchmarks" / "idea_mining" / "quality_eval_set.json"
     )

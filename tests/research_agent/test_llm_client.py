@@ -13,6 +13,8 @@ def _mock_transport_client(
     model: str,
     completions=None,
     max_retries=0,
+    retryable_http_status_codes=None,
+    allow_environment_overrides=True,
 ):
     # These tests exercise the concrete adapter against an in-memory fake SDK,
     # but the adapter itself must go through its real constructor so provider
@@ -36,6 +38,9 @@ def _mock_transport_client(
         request_timeout=1.0,
         title="EasyICU provider adapter test",
         client_cls=client_type,
+        max_retries=max_retries,
+        retryable_http_status_codes=retryable_http_status_codes,
+        allow_environment_overrides=allow_environment_overrides,
     )
 
 
@@ -464,6 +469,251 @@ def test_openai_client_zero_manual_retry_budget_makes_one_attempt(monkeypatch, r
 
     assert completions.calls == 1
     assert sleeps == []
+
+
+def test_web_transport_policy_retries_500_once_then_succeeds(monkeypatch, ra):
+    """One retry means two physical attempts, not one total attempt."""
+
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+
+    first = RuntimeError("provider internal failure")
+    first.status_code = 500
+
+    class _Completions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise first
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="OK"),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=4,
+                    completion_tokens=1,
+                    total_tokens=5,
+                ),
+            )
+
+    completions = _Completions()
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-5.6-luna",
+        completions=completions,
+        max_retries=1,
+        retryable_http_status_codes=(500, 502, 503, 504),
+        allow_environment_overrides=False,
+    )
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+    assert client.complete([LLMMessage(role="user", content="return OK")]) == "OK"
+    assert completions.calls == 2
+    assert client.last_transport_attempts == 2
+
+
+def test_web_transport_policy_two_500s_fail_closed_after_two_attempts(monkeypatch, ra):
+    """A second transient 500 exhausts the one-retry Web transport bound."""
+
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+
+    failures = []
+    for _index in range(2):
+        failure = RuntimeError("provider internal failure")
+        failure.status_code = 500
+        failures.append(failure)
+
+    class _Completions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **_kwargs):
+            failure = failures[self.calls]
+            self.calls += 1
+            raise failure
+
+    completions = _Completions()
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-5.6-luna",
+        completions=completions,
+        max_retries=1,
+        retryable_http_status_codes=(500, 502, 503, 504),
+        allow_environment_overrides=False,
+    )
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="provider internal failure") as raised:
+        client.complete([LLMMessage(role="user", content="return OK")])
+
+    assert completions.calls == 2
+    assert client.last_transport_attempts == 2
+    assert getattr(raised.value, "easyicu_transport_attempts") == 2
+
+
+def test_web_transport_policy_does_not_retry_non_allowlisted_status(monkeypatch, ra):
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+
+    failure = RuntimeError("request rejected")
+    failure.status_code = 429
+
+    class _Completions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **_kwargs):
+            self.calls += 1
+            raise failure
+
+    completions = _Completions()
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-5.6-luna",
+        completions=completions,
+        max_retries=1,
+        retryable_http_status_codes=(500, 502, 503, 504),
+        allow_environment_overrides=False,
+    )
+
+    with pytest.raises(RuntimeError, match="request rejected"):
+        client.complete([LLMMessage(role="user", content="return OK")])
+
+    assert completions.calls == 1
+
+
+def test_web_transport_policy_does_not_infer_status_from_exception_text(
+    monkeypatch, ra
+):
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+
+    failure = RuntimeError(
+        "validator rejected a field whose text happened to say status code 500"
+    )
+
+    class _Completions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **_kwargs):
+            self.calls += 1
+            raise failure
+
+    completions = _Completions()
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-5.6-luna",
+        completions=completions,
+        max_retries=1,
+        retryable_http_status_codes=(500, 502, 503, 504),
+        allow_environment_overrides=False,
+    )
+
+    with pytest.raises(RuntimeError, match="status code 500"):
+        client.complete([LLMMessage(role="user", content="return OK")])
+
+    assert completions.calls == 1
+
+
+def test_web_transport_policy_requires_integer_status_attribute(monkeypatch, ra):
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+
+    failure = RuntimeError("request failed")
+    failure.status_code = "500"
+
+    class _Completions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **_kwargs):
+            self.calls += 1
+            raise failure
+
+    completions = _Completions()
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-5.6-luna",
+        completions=completions,
+        max_retries=1,
+        retryable_http_status_codes=(500, 502, 503, 504),
+        allow_environment_overrides=False,
+    )
+
+    with pytest.raises(RuntimeError, match="request failed"):
+        client.complete([LLMMessage(role="user", content="return OK")])
+
+    assert completions.calls == 1
+
+
+def test_provider_call_receipt_is_context_scoped_not_shared_last_state(
+    monkeypatch, ra
+):
+    from contextvars import Context
+
+    from easyicu.research_agent.providers.llm import (
+        LLMMessage,
+        OpenAIClient,
+        current_provider_call_receipt,
+    )
+
+    responses = [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="FIRST"), finish_reason="stop"
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=10, completion_tokens=1, total_tokens=11
+            ),
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="SECOND"), finish_reason="length"
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=20, completion_tokens=2, total_tokens=22
+            ),
+        ),
+    ]
+
+    class _Completions:
+        def create(self, **_kwargs):
+            return responses.pop(0)
+
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-5.6-luna",
+        completions=_Completions(),
+        max_retries=0,
+        allow_environment_overrides=False,
+    )
+    first_context = Context()
+    second_context = Context()
+    messages = [LLMMessage(role="user", content="return a label")]
+
+    assert first_context.run(client.complete, messages) == "FIRST"
+    assert second_context.run(client.complete, messages) == "SECOND"
+
+    first = first_context.run(current_provider_call_receipt)
+    second = second_context.run(current_provider_call_receipt)
+    assert first is not None and dict(first.usage_summary)["total_tokens"] == 11
+    assert first.finish_reason == "stop"
+    assert second is not None and dict(second.usage_summary)["total_tokens"] == 22
+    assert second.finish_reason == "length"
+    assert client.last_usage["total_tokens"] == 22
 
 
 @pytest.mark.parametrize("status_code", [408, 409, 429, 500, 502, 503, 504])

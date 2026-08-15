@@ -105,6 +105,18 @@ def _allow_reportable_capability_for_readiness_unit(
         "assess_scientific_capability",
         lambda **_kwargs: assessment,
     )
+    monkeypatch.setattr(
+        readiness_module,
+        "scientific_maturity_readiness_gates",
+        lambda _audit: {
+            "scientific_maturity_article_grade": True,
+            "scientific_maturity_status": "article_grade",
+            "scientific_maturity_score": 100,
+            "scientific_maturity_dimension_scores": {},
+            "scientific_maturity_findings": [],
+            "scientific_maturity_facts": {},
+        },
+    )
 
 
 def _stable_plan_rules(plan: str):
@@ -412,6 +424,7 @@ def test_pipeline_falls_back_when_planner_returns_empty(
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=router,
+        enable_literature=False,
         enable_deterministic_planner_fallback=True,
         max_code_repair_attempts=0,
     )
@@ -464,6 +477,7 @@ def test_pipeline_recovers_when_planner_parses_to_zero_steps(
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=router,
+        enable_literature=False,
         enable_deterministic_planner_fallback=True,
         max_code_repair_attempts=0,
     )
@@ -1011,6 +1025,7 @@ def test_method_substitution_contract_repair_is_blocked_when_budget_is_zero(
                     # overadjustment auditor never runs -- so the step would fail
                     # the product contract instead of the rule under test.
                     "method": "logistic_regression",
+                    "scientific_capability": "association_freeform_v1",
                     "icu_rule_refs": ["no_overadjustment_for_exposure_constituents"],
                 }
             ],
@@ -1147,6 +1162,7 @@ def test_generic_association_figure_coder_failure_fails_closed(
                     "inputs": ["sepsis3", "death"],
                     "expected_outputs": ["statistic:primary_or"],
                     "method": "logistic_regression",
+                    "scientific_capability": "association_freeform_v1",
                     "icu_rule_refs": [],
                 },
                 {
@@ -2016,7 +2032,11 @@ def test_correlation_heatmap_gets_base_alias(ra):
 
 def test_pipeline_can_pause_after_analysis_phase(ra, synthetic_cohort, tmp_path: Path):
     events = []
-    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+        enable_probe_step=False,
+    )
     result = pipeline.run(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
@@ -4895,6 +4915,152 @@ def test_split_rehomes_figure_to_sole_exact_typed_source_producer(ra):
     )
 
 
+def test_split_preserves_dedicated_renderer_bound_to_exact_source(ra):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Audit missingness and render its planned figure.",
+        steps=[
+            AnalysisStep(
+                step_id="04_missingness_profile",
+                intent="Compute the missingness profile.",
+                expected_outputs=["table:missingness_profile"],
+                method="measurement_missingness_audit",
+            ),
+            AnalysisStep(
+                step_id="10_figure_missingness",
+                intent="Render the missingness profile.",
+                inputs=["table:missingness_profile"],
+                expected_outputs=["figure:missingness_profile"],
+                method="visualization",
+            ),
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert [step.step_id for step in revised.steps] == [
+        "04_missingness_profile",
+        "10_figure_missingness",
+    ]
+    assert revised.steps[0].expected_outputs == ["table:missingness_profile"]
+    assert revised.steps[1].expected_outputs == ["figure:missingness_profile"]
+    assert revised.steps[1].inputs == ["table:missingness_profile"]
+    assert any(
+        finding.detail.get("reason")
+        == "visualization_all_rows_consumption_default"
+        for finding in findings
+    )
+
+
+def test_split_deduplicates_mixed_figure_in_favor_of_dedicated_renderer(ra):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Audit missingness and render one figure.",
+        steps=[
+            AnalysisStep(
+                step_id="04_missingness_profile",
+                intent="Compute and display the missingness profile.",
+                expected_outputs=[
+                    "table:missingness_profile",
+                    "figure:missingness_profile",
+                ],
+                method="measurement_missingness_audit",
+            ),
+            AnalysisStep(
+                step_id="10_figure_missingness",
+                intent="Render the missingness profile.",
+                inputs=["table:missingness_profile"],
+                expected_outputs=["figure:missingness_profile"],
+                method="visualization",
+            ),
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert [step.step_id for step in revised.steps] == [
+        "04_missingness_profile",
+        "10_figure_missingness",
+    ]
+    assert revised.steps[0].expected_outputs == ["table:missingness_profile"]
+    assert revised.steps[1].expected_outputs == ["figure:missingness_profile"]
+    assert any(
+        finding.detail.get("reason")
+        == "figure_duplicate_owned_by_dedicated_renderer"
+        for finding in findings
+    )
+
+
+def test_final_plan_shape_rejects_empty_visualization_step(ra):
+    from easyicu.research_agent.planning.final_plan_shape import (
+        PlanShapeValidationError,
+        validate_final_plan_shape,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Render the already computed table.",
+        steps=[
+            AnalysisStep(
+                step_id="10_empty_renderer",
+                intent="Render a figure.",
+                inputs=["table:missingness_profile"],
+                expected_outputs=[],
+                method="visualization",
+            )
+        ],
+    )
+
+    with pytest.raises(PlanShapeValidationError) as exc_info:
+        validate_final_plan_shape(plan)
+
+    assert exc_info.value.reason == "visualization_without_typed_figure_output"
+    assert exc_info.value.step_ids == ("10_empty_renderer",)
+
+
+def test_final_plan_shape_rejects_duplicate_figure_owners(ra):
+    from easyicu.research_agent.planning.final_plan_shape import (
+        PlanShapeValidationError,
+        validate_final_plan_shape,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Render exactly one missingness figure.",
+        steps=[
+            AnalysisStep(
+                step_id="04_missingness_figure",
+                intent="Render the missingness figure.",
+                expected_outputs=["figure:missingness_profile"],
+                method="visualization",
+            ),
+            AnalysisStep(
+                step_id="10_duplicate_missingness_figure",
+                intent="Render the same missingness figure again.",
+                expected_outputs=["figure:missingness_profile"],
+                method="visualization",
+            ),
+        ],
+    )
+
+    with pytest.raises(PlanShapeValidationError) as exc_info:
+        validate_final_plan_shape(plan)
+
+    assert exc_info.value.reason == "duplicate_typed_figure_output"
+    assert exc_info.value.step_ids == (
+        "04_missingness_figure",
+        "10_duplicate_missingness_figure",
+    )
+
+
 def test_split_table_and_figure_outputs_in_plan_no_op_when_pure_steps(ra):
     """Steps that are figure-only or table-only are left untouched."""
     from easyicu.research_agent.pipeline import (
@@ -5213,6 +5379,8 @@ def test_split_table_and_figure_does_not_create_duplicate_child_id(ra):
         for finding in findings
     )
     assert [step.step_id for step in revised.steps].count("01_primary_figure") == 1
+    assert revised.steps[0].expected_outputs == ["table:summary"]
+    assert revised.steps[1].expected_outputs == ["figure:summary"]
     assert revised.steps[1].input_consumption_contracts[0].mode == "all_rows"
 
 
@@ -6274,6 +6442,88 @@ def test_apply_writer_evidence_repair_decisions_cites_or_drops_without_rewriting
     assert [item["action"] for item in applied] == ["cite", "drop"]
 
 
+def test_apply_writer_evidence_repair_replaces_prose_with_exact_host_claim(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    sentence = "The exposed group had higher observed mortality."
+    claim_ref = "03_primary.observed_risk_difference"
+    scaffold = f"## Results\n\n{sentence}\n"
+
+    repaired, applied = _apply_writer_evidence_repair_decisions(
+        scaffold,
+        missing_sentences=[sentence],
+        decisions=[
+            {
+                "index": 0,
+                "action": "claim",
+                "evidence_ids": [],
+                "claim_ref": claim_ref,
+            }
+        ],
+        allowed_claim_refs=[claim_ref],
+    )
+
+    assert sentence not in repaired
+    assert f"{{claim:{claim_ref}}}" in repaired
+    assert applied[0]["claim_ref"] == claim_ref
+
+
+def test_apply_writer_evidence_repair_never_puts_claim_in_title(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    title = "Higher mortality in the exposed group"
+    claim_ref = "03_primary.observed_risk_difference"
+    repaired, applied = _apply_writer_evidence_repair_decisions(
+        f"# {title}\n",
+        missing_sentences=[title],
+        decisions=[
+            {
+                "index": 0,
+                "action": "claim",
+                "evidence_ids": [],
+                "claim_ref": claim_ref,
+            }
+        ],
+        allowed_claim_refs=[claim_ref],
+    )
+
+    assert f"{{claim:{claim_ref}}}" not in repaired
+    assert applied[0]["action"] == "drop"
+
+
+def test_apply_writer_evidence_repair_handles_each_repeated_occurrence(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    sentence = "The exposed group had higher observed mortality."
+    claim_ref = "03_primary.observed_risk_difference"
+    scaffold = f"## Abstract\n\n{sentence}\n\n## Results\n\n{sentence}\n"
+
+    repaired, applied = _apply_writer_evidence_repair_decisions(
+        scaffold,
+        missing_sentences=[sentence, sentence],
+        decisions=[
+            {
+                "index": index,
+                "action": "claim",
+                "evidence_ids": [],
+                "claim_ref": claim_ref,
+            }
+            for index in range(2)
+        ],
+        allowed_claim_refs=[claim_ref],
+    )
+
+    assert sentence not in repaired
+    assert repaired.count(f"{{claim:{claim_ref}}}") == 2
+    assert [item["index"] for item in applied] == [0, 1]
+
+
 def test_execution_gate_and_parent_figure_dependency_helpers(ra):
     from easyicu.research_agent.pipeline import (
         _execution_gate_status,
@@ -6586,6 +6836,8 @@ def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(
 
     assert gates["manuscript_ready"] is True
     assert gates["publication_ready"] is False
+    assert gates["administrative_metadata_verified"] is False
+    assert gates["submission_ready"] is False
     assert artifact_paths["manuscript_ready"] == "manuscript_ready.md"
     assert (tmp_path / "manuscript_ready.md").read_text(
         encoding="utf-8"
@@ -6971,6 +7223,24 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
     _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
+    from easyicu.research_agent.reporting import readiness as readiness_module
+    from easyicu.research_agent.reporting.scientific_maturity import (
+        ScientificMaturityAudit,
+    )
+
+    # This test isolates the display-suite gate.  The independent scientific
+    # maturity contract has its own focused tests and must be explicitly passed
+    # rather than accidentally depending on an incomplete synthetic run.
+    monkeypatch.setattr(
+        readiness_module,
+        "build_scientific_maturity_audit",
+        lambda **_: ScientificMaturityAudit(
+            status="article_grade",
+            article_grade=True,
+            score=100,
+            dimension_scores={},
+        ),
+    )
 
     context = ra.ResearchContext(
         research_question="Estimate whether Sepsis-3 is associated with mortality.",
@@ -9035,10 +9305,18 @@ def test_critic_ignores_manuscript_metadata_sections(ra):
 def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
     ra, synthetic_cohort, tmp_path: Path, monkeypatch
 ):
-    def fake_manuscript_run(self, *, context, evidence_ids, evidence_digest=None):
+    def fake_manuscript_run(
+        self,
+        *,
+        context,
+        evidence_ids,
+        evidence_digest=None,
+        **_kwargs,
+    ):
         return (
             "The model's performance was consistent across folds, indicating robustness.\n\n"
-            "Baseline characteristics are summarised in Table 1 {evidence:research_context}.\n"
+            "The analysis materials are available in the run evidence record "
+            "{evidence:table_one}.\n"
         )
 
     monkeypatch.setattr(ra.ManuscriptAgent, "run", fake_manuscript_run)
@@ -11238,6 +11516,121 @@ def test_advanced_plan_contract_preserves_article_level_robustness_suite(ra):
     assert robustness_step.expected_outputs == ["figure:robustness_grid"]
     assert revised == plan
     assert findings[0].detail.get("missing_structured_owner") is True
+
+
+def test_advanced_plan_contract_does_not_duplicate_dedicated_robustness_renderer(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        CohortDescriptor,
+        ResearchContext,
+        UserPreferences,
+    )
+
+    plan = AnalysisPlan(
+        research_question="Estimate an association with a complete-case sensitivity.",
+        steps=[
+            AnalysisStep(
+                step_id="01_cohort",
+                intent="Define and account for the analysis cohort.",
+                method="cohort_definition_and_attrition",
+                expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+            ),
+            AnalysisStep(
+                step_id="02_table_one",
+                intent="Describe baseline characteristics.",
+                method="descriptive",
+                expected_outputs=["table:table_one"],
+            ),
+            AnalysisStep(
+                step_id="03_measurement_audit",
+                intent="Audit measurement availability.",
+                method="missingness_measurement_audit",
+                expected_outputs=["table:missingness_measurement_audit"],
+            ),
+            AnalysisStep(
+                step_id="04_primary_model",
+                planned_analysis_role="primary",
+                intent="Estimate the prespecified association.",
+                method="adjusted_association_models",
+                expected_outputs=["table:adjusted_association_estimates"],
+                model_requirements=[
+                    {
+                        "requirement_id": "primary_model",
+                        "outcome": "death",
+                        "outcome_type": "binary",
+                        "method_family": "statsmodels_logit_mle",
+                        "exposure_source": "exposure",
+                        "analysis_role": "primary",
+                        "analysis_set": "source_aware",
+                        "required_for_step_success": True,
+                        "covariates": [],
+                        "model_terms": [
+                            {
+                                "name": "exposure",
+                                "role": "exposure",
+                                "coding": "binary",
+                                "levels": ["0", "1"],
+                                "reference_level": "0",
+                                "transform": "treatment_contrast",
+                            }
+                        ],
+                        "exposure_levels": ["0", "1"],
+                        "exposure_reference_level": "0",
+                        "primary_contrast_level": "1",
+                    }
+                ],
+            ),
+            AnalysisStep(
+                step_id="05_robustness",
+                planned_analysis_role="sensitivity",
+                intent="Replay the primary model in the complete-case set.",
+                method="robustness_sensitivity",
+                expected_outputs=[
+                    "statistic:primary_or",
+                    "statistic:complete_case_n",
+                    "table:robustness_summary",
+                    "table:robustness_matrix",
+                    "statistic:robustness_summary",
+                    "log:missingness_strategy_notes",
+                ],
+            ),
+            AnalysisStep(
+                step_id="06_robustness_figure",
+                planned_analysis_role="auxiliary",
+                intent="Render the verified robustness matrix.",
+                method="visualization",
+                inputs=["table:robustness_matrix"],
+                expected_outputs=["figure:robustness"],
+            ),
+        ],
+    )
+    context = ResearchContext(
+        research_question=plan.research_question,
+        cohort=CohortDescriptor(
+            cohort_name="cohort",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+        target_outcome="death",
+        primary_exposure="exposure",
+        user_preferences=UserPreferences(inferred_analysis_family="robustness"),
+    )
+
+    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
+
+    assert revised == plan
+    assert findings == []
+    figure_outputs = [
+        output
+        for step in revised.steps
+        for output in step.expected_outputs
+        if output.startswith("figure:")
+    ]
+    assert figure_outputs == ["figure:robustness"]
 
 
 def test_advanced_plan_contract_normalizes_bias_audit_steps(ra):

@@ -108,6 +108,21 @@ class AnalysisMethod:
     reporting_items: Tuple[str, ...] = ()  # checklist items it helps satisfy
     notes: str = ""
     figure_source_contracts: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
+    # Exact reviewed execution resources associated with this method. These are
+    # coordinates only: the runtime still verifies that a package is installed,
+    # and a Coder-reachable kernel does not become a deterministic host owner.
+    # Keeping the binding beside the method prevents Planner and Coder catalogs
+    # from maintaining two prose-derived maps of the same scientific capability.
+    kernel_modules: Tuple[str, ...] = ()
+    software_packages: Tuple[str, ...] = ()
+    # Exact, reviewable expansion metadata.  It gives the action owner enough
+    # information to explain a gap without guessing from method prose.  A
+    # decomposition is scientifically equivalent only when declared here;
+    # alternatives always require user confirmation and are never substituted.
+    required_inputs: Tuple[str, ...] = ()
+    composition_action_ids: Tuple[str, ...] = ()
+    alternative_action_ids: Tuple[str, ...] = ()
+    primary_for_analysis_types: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -186,6 +201,7 @@ _PREDICTION = MethodSuite(
                 "re-deriving the DeLong variance. A deterministic host runner "
                 "that OWNS the step is still planned."
             ),
+            kernel_modules=("delong_auc",),
         ),
         AnalysisMethod(
             key="decision_curve",
@@ -205,6 +221,7 @@ _PREDICTION = MethodSuite(
             figure_source_contracts=(
                 ("figure:decision_curve", ("prediction:decision",)),
             ),
+            kernel_modules=("decision_curve",),
         ),
         AnalysisMethod(
             key="threshold_metrics",
@@ -226,6 +243,7 @@ _PREDICTION = MethodSuite(
             runner=None,
             reporting_items=("TRIPOD+AI 10a",),
             notes="`shap` is a curated importable package with a permutation-importance fallback (contracts/method_packages.py). A deterministic SHAP-summary panel is PLANNED (WS5).",
+            software_packages=("shap",),
         ),
         AnalysisMethod(
             key="subgroup_fairness",
@@ -261,6 +279,7 @@ _PREDICTION = MethodSuite(
                 "'the module is importable' as proof of production. It is now a "
                 "reviewed kernel offered to the Coder via CURATED_METHOD_KERNELS."
             ),
+            kernel_modules=("conformal",),
         ),
         AnalysisMethod(
             key="external_validation",
@@ -271,6 +290,7 @@ _PREDICTION = MethodSuite(
             produces="external-cohort performance + recalibration",
             runner=None,
             reporting_items=("TRIPOD+AI 16",),
+            alternative_action_ids=("prediction.internal_validation",),
         ),
         AnalysisMethod(
             key="reclassification",
@@ -280,15 +300,38 @@ _PREDICTION = MethodSuite(
             implementation="planned",
             produces="NRI / IDI table",
             runner=None,
+            alternative_action_ids=("prediction.decision_curve",),
         ),
         AnalysisMethod(
             key="dynamic_prediction",
             name="Dynamic / landmark prediction (time-updated risk)",
             purpose="Re-estimated risk from time-updated features (landmarking).",
-            tier="planned",
-            implementation="planned",
+            tier="primary",
+            implementation="llm_coded",
             produces="landmark performance over time",
             runner=None,
+            notes=(
+                "The host compiles leakage-safe landmark rows and evaluates "
+                "predictions with reviewed primitives; the Coder fits an exact "
+                "Planner-declared sklearn Pipeline. Patient-level splitting, "
+                "landmarks and horizons are mandatory. The capability remains "
+                "analysis-only until a typed host model-fit/result validator exists."
+            ),
+            kernel_modules=("dynamic_prediction", "temporal_features"),
+            software_packages=("sklearn",),
+            required_inputs=(
+                "longitudinal rows with patient/stay identity and measurement time",
+                "prespecified prediction landmarks, lookback windows and target horizons",
+                "event time plus follow-up/censoring time",
+                "patient-level development/validation split",
+            ),
+            composition_action_ids=(
+                "prediction.discrimination_calibration",
+                "prediction.calibration_metrics",
+                "prediction.internal_validation",
+            ),
+            alternative_action_ids=("prediction.discrimination_calibration",),
+            primary_for_analysis_types=("dynamic_prediction",),
             figure_source_contracts=(
                 (
                     "figure:time_varying_discrimination",
@@ -313,6 +356,7 @@ _SURVIVAL = MethodSuite(
             runner="survival_primary_cox",
             reporting_items=("STROBE 16",),
             notes="The Planner fixes time zero, censoring, exposure, adjustment and horizon; the sealed host owner fits and receipts that exact contract.",
+            software_packages=("lifelines",),
         ),
         AnalysisMethod(
             key="km_logrank",
@@ -323,6 +367,7 @@ _SURVIVAL = MethodSuite(
             produces="kaplan_meier curve data + log-rank; KM panel",
             runner="time_to_event",  # deterministic figure renderer
             reporting_items=("STROBE 15",),
+            software_packages=("lifelines",),
         ),
         AnalysisMethod(
             key="ph_check",
@@ -339,6 +384,8 @@ _SURVIVAL = MethodSuite(
                 "tested kernel executed by the sealed primary Cox owner. The "
                 "diagnostic table and its SHA are bound into the host receipt."
             ),
+            kernel_modules=("ph_schoenfeld",),
+            software_packages=("lifelines",),
         ),
         AnalysisMethod(
             key="subgroup_hr",
@@ -366,6 +413,7 @@ _SURVIVAL = MethodSuite(
                 "returns the population variance, which inflates the CI by "
                 "~sqrt(n). A deterministic host runner is still planned."
             ),
+            kernel_modules=("rmst",),
         ),
         AnalysisMethod(
             key="competing_risks_cif",
@@ -896,7 +944,28 @@ def render_method_suite_markdown() -> str:
         "A `planned` method carries no runner. It must fail closed if requested as a "
         "primary estimand — e.g. competing-risks CIF is never answered with a Cox HR.",
         "",
+        "## Reviewed Planner → Coder resource bindings",
+        "",
+        "These exact coordinates are published to Planner through the scientific-action "
+        "catalog and selected into Coder authority when that action is chosen. A reviewed "
+        "kernel remains Coder-generated unless a deterministic runner is named above; "
+        "the binding does not upgrade its claim ceiling.",
+        "",
+        "| Scientific action | Reviewed kernels | Runtime packages |",
+        "| --- | --- | --- |",
     ]
+    for suite in METHOD_SUITE_REGISTRY:
+        for method in suite.methods:
+            if not method.kernel_modules and not method.software_packages:
+                continue
+            kernels = ", ".join(f"`{value}`" for value in method.kernel_modules) or "—"
+            packages = (
+                ", ".join(f"`{value}`" for value in method.software_packages) or "—"
+            )
+            lines.append(
+                f"| `{suite.family}.{method.key}` | {kernels} | {packages} |"
+            )
+    lines.append("")
     for suite in METHOD_SUITE_REGISTRY:
         lines.append(f"## {suite.label}")
         lines.append("")

@@ -14,14 +14,18 @@ import json
 import re
 import shutil
 import sys
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
 from ..audits.validators import FigureContractQualityValidator
 from ..authority.evidence_store import EvidenceStore
+from ..authority.source_fingerprints import (
+    registered_source_fingerprints_match as _source_fingerprints_match,
+)
 from ..contracts.declared_product import typed_product
 from .publication import (
     PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
@@ -31,11 +35,23 @@ from .publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from .base import (
+    first_exact_column as _first_col,
+    first_normalisable_record as _first_normalisable_record,
+    verified_record_path as _verified_record_path,
+)
+from .display_labels import display_label as _display_label
+from .exposure_outcome_distribution import (
+    normalise_distribution_risk_difference,
+)
+from .strata import (
+    normalise_strata_frame as _normalise_strata_frame,
+    strata_score_label as _strata_score_label,
+)
 from . import RenderedFigure, render_family_figure
 from ..robustness.panel import RobustnessPanel, load_robustness_panel
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
 from ..planning.study_design import infer_study_design_family
-
 
 class _PrimaryLineageEvidenceView:
     """Read-only evidence view limited to Planner-primary descendants."""
@@ -246,7 +262,13 @@ class PublicationFigureSkill:
                 "robustness_panel.json",
                 kind="statistic",
             )
-            robustness_panel = load_robustness_panel(run_dir / "robustness_panel.json")
+            robustness_panel = (
+                load_robustness_panel(
+                    _verified_record_path(run_dir, robustness_record)
+                )
+                if robustness_record is not None
+                else None
+            )
             if robustness_record is not None and robustness_panel is not None:
                 try:
                     return self._render_robustness_panel(
@@ -304,7 +326,7 @@ class PublicationFigureSkill:
             )
         if primary is not None:
             try:
-                frame = _read_table(run_dir / primary.relative_path)
+                frame = _read_table(_verified_record_path(run_dir, primary))
                 strata = _first_normalisable_record(
                     # Absolute-risk context is deliberately an auxiliary result
                     # upstream of the adjusted primary model. Restricting this
@@ -322,6 +344,12 @@ class PublicationFigureSkill:
                         "outcome_by_group",
                         "outcome_by_sepsis3",
                         "outcome_incidence",
+                        # The deterministic distribution owner uses this exact
+                        # product name and exposes ``exposure_level`` plus
+                        # ``outcome_rate_pct``.  It is the strongest absolute-
+                        # risk context for an association figure and must not be
+                        # hidden merely because it is not named "incidence".
+                        "exposure_outcome_distribution",
                         # Association steps commonly export the absolute
                         # outcome risk by exposure group as
                         # absolute_risk_by_<exposure>.csv; the prefix token
@@ -379,7 +407,13 @@ class PublicationFigureSkill:
             "robustness_panel.json",
             kind="statistic",
         )
-        robustness_panel = load_robustness_panel(run_dir / "robustness_panel.json")
+        robustness_panel = (
+            load_robustness_panel(
+                _verified_record_path(run_dir, robustness_record)
+            )
+            if robustness_record is not None
+            else None
+        )
         if robustness_record is not None and robustness_panel is not None:
             try:
                 return self._render_robustness_panel(
@@ -565,10 +599,40 @@ class PublicationFigureSkill:
         if plot_df.empty:
             raise ValueError("primary association table has no plottable rows")
         axis_meta = _association_axis_metadata(plot_df)
+        typed_distribution = (
+            plot_df.attrs.get("source_contract")
+            == "exposure_outcome_distribution"
+        )
         plot_df = plot_df.reset_index(drop=True)
         plot_df["is_primary"] = False
         if not plot_df.empty:
             plot_df.loc[0, "is_primary"] = True
+        primary_step = next(
+            (
+                step
+                for step in plan.steps
+                if step.planned_analysis_role == "primary"
+                and source_record.produced_by_step == step.step_id
+            ),
+            None,
+        )
+        if primary_step is None:
+            primary_step = next(
+                (
+                    step
+                    for step in plan.steps
+                    if step.planned_analysis_role == "primary"
+                ),
+                None,
+            )
+        primary_requirements = list(
+            getattr(primary_step, "model_requirements", ()) or ()
+        )
+        adjusted = any(
+            bool(getattr(requirement, "covariates", ()) or ())
+            for requirement in primary_requirements
+        )
+        estimate_label = "Adjusted" if adjusted else "Unadjusted"
 
         palette = apply_publication_style()
         out_dir = run_dir / "publication_figures"
@@ -581,11 +645,12 @@ class PublicationFigureSkill:
         if strata_record is not None:
             try:
                 strata_df = _normalise_strata_frame(
-                    _read_table(run_dir / strata_record.relative_path),
+                    _read_table(_verified_record_path(run_dir, strata_record)),
                     display_labels=plan.display_labels,
                 )
                 if not strata_df.empty:
-                    source_records.append(strata_record)
+                    if strata_record.evidence_id != source_record.evidence_id:
+                        source_records.append(strata_record)
                     strata_df.to_csv(
                         out_dir / "publication_figure_source_stratified_outcome.csv",
                         index=False,
@@ -595,7 +660,7 @@ class PublicationFigureSkill:
         if missingness_record is not None:
             try:
                 missingness_df = _normalise_missingness_frame(
-                    _read_table(run_dir / missingness_record.relative_path),
+                    _read_table(_verified_record_path(run_dir, missingness_record)),
                     display_labels=plan.display_labels,
                 )
                 if not missingness_df.empty:
@@ -692,7 +757,21 @@ class PublicationFigureSkill:
                 linestyle="--",
                 linewidth=0.8,
             )
-        ax.set_yticks(y, plot_df["label"].astype(str).tolist())
+        y_labels = plot_df["label"].astype(str).tolist()
+        if typed_distribution:
+            # This typed row combines an exposure label with both contrast
+            # levels.  Preserve every word, but wrap the presentation label so
+            # multilingual Planner labels do not consume or leave the canvas.
+            y_labels = [
+                textwrap.fill(
+                    label,
+                    width=32,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+                for label in y_labels
+            ]
+        ax.set_yticks(y, y_labels)
         ax.invert_yaxis()
         ax.set_xlabel(str(axis_meta["xlabel"]))
         ax.set_ylabel("")
@@ -719,20 +798,6 @@ class PublicationFigureSkill:
             left_pad = max(span * 0.12, 0.05)
             ax.set_xlim(left_anchor - left_pad, right_anchor + right_pad)
         text_x = right_anchor + right_pad * 0.12
-        # The annotation-column header lives in the title band as a
-        # right-anchored title. Earlier placements collided in the SVG QA:
-        # inside the axes at y=0.96 it overlapped the row-0 annotation
-        # (inverted y-axis puts row 0 on top), and free-floating above the
-        # axes at y=1.02 it overlapped long left titles on short axes.
-        # Left/right titles share one band with opposite anchors, so they
-        # stay apart for realistic title lengths.
-        ax.set_title(
-            str(axis_meta["header"]),
-            loc="right",
-            pad=4,
-            fontsize=6.8,
-            color=palette.get("baseline", "#272727"),
-        )
         for idx, (center, lo, hi) in enumerate(zip(estimate, lower, upper)):
             ax.text(
                 text_x,
@@ -743,10 +808,17 @@ class PublicationFigureSkill:
                 fontsize=6.5,
                 color=palette.get("baseline", "#272727"),
             )
-        outcome_label = _display_label(
-            context.target_outcome or "target outcome", plan.display_labels
+        # Do not add a second, right-aligned interval header to this compact
+        # title band.  The x-axis already names the measure and unit, while the
+        # point labels show estimate (lower-upper) and the FigureContract names
+        # the interval.  Repeating all of that as a second title is redundant
+        # and can overlap the scientific title in a legitimate narrow panel.
+        primary_panel_title = (
+            f"{estimate_label} risk difference"
+            if typed_distribution
+            else f"{estimate_label} association"
         )
-        ax.set_title(f"Adjusted estimate for {outcome_label}", loc="left", pad=4)
+        ax.set_title(primary_panel_title, loc="left", pad=4)
         add_panel_label(ax, "A", x=-0.08)
         ax.margins(x=0.08)
         ax.grid(
@@ -777,16 +849,36 @@ class PublicationFigureSkill:
         predictor = str(plot_df["label"].iloc[0])
         outcome = context.target_outcome or "the target outcome"
         core_claim = (
-            f"The primary EasyICU association estimate for {predictor} and "
-            f"{outcome} is rendered from registered analysis evidence."
+            (
+                f"The prespecified unadjusted risk difference for {predictor} "
+                f"and {outcome} is rendered with absolute outcome risks from "
+                "registered analysis evidence."
+            )
+            if typed_distribution
+            else (
+                f"The primary EasyICU association estimate for {predictor} and "
+                f"{outcome} is rendered from registered analysis evidence."
+            )
         )
         panels = [
             {
                 "panel_id": "A",
-                "title": "Adjusted association",
+                "title": primary_panel_title,
                 "role": "primary_estimand",
                 "chart_type": "dot_interval",
-                "claim": "The association estimate and interval are drawn from the registered primary association table.",
+                "claim": (
+                    (
+                        "The prespecified unadjusted risk difference in percentage "
+                        "points and its 95% confidence interval are drawn from the "
+                        "typed distribution table."
+                    )
+                    if typed_distribution
+                    else (
+                        f"The {estimate_label.lower()} association estimate and "
+                        "interval are drawn from the registered primary association "
+                        "table."
+                    )
+                ),
                 "evidence_ids": [source_record.evidence_id],
                 "review_risk": "Interpretability depends on the upstream model specification and validator findings.",
             }
@@ -799,7 +891,18 @@ class PublicationFigureSkill:
                     "title": f"Outcome by {score_label}",
                     "role": "descriptive_result",
                     "chart_type": "event_rate_panel",
-                    "claim": f"Observed outcome risk by {score_label} is shown before adjusted relative estimates.",
+                    "claim": (
+                        (
+                            f"Observed outcome risk by {score_label} is shown with "
+                            "95% confidence intervals and analysed denominators to "
+                            "contextualize the unadjusted risk difference."
+                        )
+                        if typed_distribution
+                        else (
+                            f"Observed outcome risk by {score_label} is shown before "
+                            f"the {estimate_label.lower()} relative estimate."
+                        )
+                    ),
                     "evidence_ids": [strata_record.evidence_id],
                     "review_risk": "Sparse high-score strata should be interpreted with their denominators.",
                 }
@@ -822,9 +925,18 @@ class PublicationFigureSkill:
             panels=panels,
             source_data=[record.evidence_id for record in source_records],
             statistics_note=(
-                "The panel is generated after analysis validation from an "
-                "EvidenceStore-registered source table; it is not drawn from "
-                "writer prose."
+                (
+                    "Panel A uses the prespecified comparison-minus-reference risk "
+                    "difference in percentage points and its 95% confidence interval; "
+                    "Panel B uses level-specific outcome rates, 95% confidence "
+                    "intervals, and analysed denominators from the same typed table."
+                )
+                if typed_distribution
+                else (
+                    "The panel is generated after analysis validation from an "
+                    "EvidenceStore-registered source table; it is not drawn from "
+                    "writer prose."
+                )
             ),
         )
         paths = save_publication_figure(
@@ -1396,7 +1508,7 @@ class PublicationFigureSkill:
         for suffix, target in targets.items():
             source = figure_records.get(suffix)
             if source is not None:
-                shutil.copy2(run_dir / source.relative_path, target)
+                shutil.copy2(_verified_record_path(run_dir, source), target)
         if not targets["pdf"].exists() or not targets["tiff"].exists():
             image = Image.open(targets["png"]).convert("RGB")
             if not targets["pdf"].exists():
@@ -1413,7 +1525,7 @@ class PublicationFigureSkill:
             ]
         )
         contract = _contract_promoted_from_source(
-            run_dir / contract_source.relative_path,
+            _verified_record_path(run_dir, contract_source),
             source_ids=source_ids,
         )
         contract_path = out_dir / "easyicu_publication_figure.figure_contract.json"
@@ -1514,8 +1626,8 @@ class PublicationFigureSkill:
         pdf_target = out_dir / "easyicu_publication_figure.pdf"
         tiff_target = out_dir / "easyicu_publication_figure.tiff"
 
-        shutil.copy2(run_dir / svg_record.relative_path, svg_target)
-        shutil.copy2(run_dir / png_record.relative_path, png_target)
+        shutil.copy2(_verified_record_path(run_dir, svg_record), svg_target)
+        shutil.copy2(_verified_record_path(run_dir, png_record), png_target)
 
         image = Image.open(png_target).convert("RGB")
         image.save(pdf_target, "PDF", resolution=300.0)
@@ -2403,30 +2515,6 @@ def _bundle_source_ids(bundle: Dict[str, Any]) -> List[str]:
     )
 
 
-def _source_fingerprints_match(
-    evidence: EvidenceStore,
-    metadata: Dict[str, Any],
-) -> bool:
-    source_ids = metadata.get("source_evidence_ids")
-    if isinstance(source_ids, str):
-        ids = [source_ids]
-    elif isinstance(source_ids, (list, tuple, set)):
-        ids = [str(eid) for eid in source_ids if str(eid)]
-    else:
-        ids = []
-    single = metadata.get("source_evidence_id")
-    if single and str(single) not in ids:
-        ids.append(str(single))
-    fingerprints = metadata.get("source_evidence_sha256")
-    if not ids or not isinstance(fingerprints, dict) or not fingerprints:
-        return False
-    for evidence_id in ids:
-        record = evidence.get(evidence_id)
-        if record is None or fingerprints.get(evidence_id) != record.sha256:
-            return False
-    return True
-
-
 def _figure_skill_policy_matches(metadata: Dict[str, Any]) -> bool:
     return (
         metadata.get("figure_skill_policy_version")
@@ -2553,12 +2641,21 @@ def _has_curated_publication_figure_bundle(
         if preferred_step_bundle is not None
         else set()
     )
-    fresh_bundle = False
+    contract_record = evidence.get("publication_figure_contract")
+    if contract_record is None:
+        return False
+    try:
+        contract_path = _verified_record_path(run_dir, contract_record)
+    except ValueError:
+        return False
+
+    generation_groups: Dict[Tuple[str, str, str, str, str], List[EvidenceRecord]] = {}
     for record in evidence.records():
         metadata = record.metadata or {}
         if (
             record.kind == "figure"
             and _is_run_level_publication_figure(record)
+            and metadata.get("contract_evidence_id") == contract_record.evidence_id
             and _source_fingerprints_match(evidence, metadata)
             and _figure_skill_policy_matches(metadata)
         ):
@@ -2573,46 +2670,60 @@ def _has_curated_publication_figure_bundle(
                 metadata.get("source_evidence_ids") or []
             ):
                 continue
-            fresh_bundle = True
-            break
-    if not fresh_bundle:
+            generation_key = (
+                str(metadata.get("contract_evidence_id") or ""),
+                str(metadata.get("figure_id") or ""),
+                json.dumps(
+                    metadata.get("source_evidence_sha256") or {},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                str(record.script_evidence_id or ""),
+                str(metadata.get("figure_privacy_audit_evidence_id") or ""),
+            )
+            generation_groups.setdefault(generation_key, []).append(record)
+    if not generation_groups:
         return False
-
-    contract_candidates: List[Path] = []
-    contract_record = evidence.get("publication_figure_contract")
-    if contract_record is not None:
-        contract_candidates.append(run_dir / contract_record.relative_path)
-    contract_candidates.append(
-        run_dir
-        / "publication_figures"
-        / "easyicu_publication_figure.figure_contract.json"
+    complete_generation = False
+    for records in generation_groups.values():
+        verified_suffixes: set[str] = set()
+        try:
+            for record in records:
+                verified_figure = _verified_record_path(run_dir, record)
+                verified_suffixes.add(verified_figure.suffix.lower())
+                source_ids = (record.metadata or {}).get("source_evidence_ids") or []
+                for source_id in source_ids:
+                    source_record = evidence.get(str(source_id))
+                    if source_record is None:
+                        raise ValueError("publication figure source is unregistered")
+                    _verified_record_path(run_dir, source_record)
+        except ValueError:
+            continue
+        if {".svg", ".png"} <= verified_suffixes:
+            complete_generation = True
+            break
+    if not complete_generation:
+        return False
+    findings = FigureContractQualityValidator().audit_contract_file(
+        contract_path,
+        manuscript_facing=True,
     )
-    for contract_path in contract_candidates:
-        if not contract_path.exists():
-            continue
-        findings = FigureContractQualityValidator().audit_contract_file(
-            contract_path,
-            manuscript_facing=True,
-        )
-        if any(finding.severity == "error" for finding in findings):
-            continue
-        if context is not None:
-            try:
-                payload = json.loads(contract_path.read_text(encoding="utf-8"))
-            except Exception:
-                payload = {}
-            if isinstance(payload, dict) and not _contract_primary_strategy_ready(
-                context,
-                payload,
-            ):
-                continue
-        if not _promoted_contract_preserves_preferred_chart_types(
-            contract_path,
-            preferred_step_bundle,
+    if any(finding.severity == "error" for finding in findings):
+        return False
+    if context is not None:
+        try:
+            payload = json.loads(contract_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and not _contract_primary_strategy_ready(
+            context,
+            payload,
         ):
-            continue
-        return True
-    return False
+            return False
+    return _promoted_contract_preserves_preferred_chart_types(
+        contract_path,
+        preferred_step_bundle,
+    )
 
 
 def _plan_requests_figures(plan: AnalysisPlan) -> bool:
@@ -2636,53 +2747,6 @@ def _first_existing_record(
             continue
         basename = Path(record.relative_path).stem.lower()
         if any(token in basename for token in name_set):
-            return record
-    return None
-
-
-def _first_normalisable_record(
-    evidence: EvidenceStore,
-    names: Sequence[str],
-    *,
-    run_dir: Path,
-    normalise: Callable[[pd.DataFrame], pd.DataFrame],
-) -> Optional[EvidenceRecord]:
-    """First matching table record whose normalized frame is non-empty.
-
-    ``_first_existing_record`` returns the first *name* match, but an
-    alias can resolve to a semantically different table whose columns the
-    panel normalizer rejects (e.g. ``missingness_summary`` binding to a
-    numeric-coercion audit with ``original_missing_*`` columns). Stopping
-    there silently drops the side panel even when a perfectly renderable
-    sibling table is registered, so this variant keeps scanning until a
-    candidate actually normalizes.
-    """
-
-    name_set = {str(name).lower() for name in names}
-    candidates: List[EvidenceRecord] = []
-    seen: set[str] = set()
-    for name in names:
-        record = evidence.get(name)
-        if (
-            record is not None
-            and record.kind == "table"
-            and record.evidence_id not in seen
-        ):
-            candidates.append(record)
-            seen.add(record.evidence_id)
-    for record in evidence.records():
-        if record.kind != "table" or record.evidence_id in seen:
-            continue
-        basename = Path(record.relative_path).stem.lower()
-        if any(token in basename for token in name_set):
-            candidates.append(record)
-            seen.add(record.evidence_id)
-    for record in candidates:
-        try:
-            frame = normalise(_read_table(run_dir / record.relative_path))
-        except Exception:
-            continue
-        if not frame.empty:
             return record
     return None
 
@@ -2719,7 +2783,7 @@ def _select_primary_association_record(
         if record.evidence_id.lower() in name_set:
             score += 4.0
         try:
-            frame = _read_table(run_dir / record.relative_path)
+            frame = _read_table(_verified_record_path(run_dir, record))
             cols = {str(c).lower(): c for c in frame.columns}
             if "point_estimate" in cols:
                 score += 18.0
@@ -2810,6 +2874,13 @@ def _normalise_association_frame(
 ) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=["label", "estimate", "lower", "upper"])
+    typed_distribution = normalise_distribution_risk_difference(
+        frame,
+        primary_exposure=primary_exposure,
+        display_labels=display_labels,
+    )
+    if typed_distribution is not None:
+        return typed_distribution
     cols = {str(c).lower(): c for c in frame.columns}
     primary_token = _match_token(primary_exposure)
     if primary_token:
@@ -2841,6 +2912,7 @@ def _normalise_association_frame(
         cols,
         [
             "exposure",
+            "exposure_level",
             "primary_exposure",
             "reader_label",
             "label",
@@ -2917,11 +2989,6 @@ def _normalise_association_frame(
             "estimate_ci_high",
         ],
     )
-    if estimate_col is None:
-        numeric_cols = [
-            c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c])
-        ]
-        estimate_col = numeric_cols[0] if numeric_cols else None
     if label_col is None:
         label_col = estimate_col
     if estimate_col is None or label_col is None:
@@ -3064,179 +3131,6 @@ def _association_axis_metadata(frame: pd.DataFrame) -> Dict[str, Any]:
     return _association_axis_from_token("")
 
 
-def _normalise_strata_frame(
-    frame: pd.DataFrame,
-    *,
-    display_labels: Optional[Mapping[str, str]] = None,
-) -> pd.DataFrame:
-    if frame.empty:
-        return pd.DataFrame(columns=["score", "rate"])
-    cols = {str(c).lower(): c for c in frame.columns}
-    score_col = _first_col(
-        cols,
-        [
-            "score",
-            "stratum",
-            "severity_score",
-            "risk_score",
-            "sofa2",
-            "sofa_2",
-            "gcs",
-            "gcs_score",
-            "kdigo",
-            "kdigo_stage",
-            "exposure",
-            "exposure_label",
-            "exposure_group",
-            "group",
-            "group_label",
-            "status",
-            "category",
-            "level",
-            "sepsis3",
-            "sepsis_3",
-            "exposure_status",
-        ],
-    )
-    rate_col = _first_col(
-        cols,
-        [
-            "death_rate",
-            "mortality_rate",
-            "outcome_rate",
-            "outcome_risk",
-            "event_rate",
-            "death_pct",
-            "mortality_pct",
-            "event_pct",
-            "outcome_pct",
-            "incidence_proportion",
-            "incidence_pct",
-            "risk",
-            "rate",
-            "death_risk",
-            "mortality_risk",
-        ],
-    )
-    if score_col is None:
-        # Exposure/severity strata are often named after the predictor
-        # (``lactate_group``, ``sofa2_stratum``, ``lactate_quartile``),
-        # so an exact-name list can never enumerate them. Fall back to the
-        # first column whose name ends in a grouping suffix, preferring a
-        # sibling ``*_order`` column's source when present. General on
-        # purpose — do NOT add case-specific names like ``lactate_group``.
-        _GROUP_SUFFIXES = (
-            "_group",
-            "_stratum",
-            "_strata",
-            "_bin",
-            "_band",
-            "_category",
-            "_class",
-            "_quartile",
-            "_quintile",
-            "_decile",
-            "_tertile",
-            "_level",
-        )
-        for name, col in cols.items():
-            if name.endswith(_GROUP_SUFFIXES) and not name.endswith("_order"):
-                score_col = col
-                break
-    n_col = _first_col(cols, ["n", "count", "n_total"])
-    if score_col is None or rate_col is None:
-        return pd.DataFrame(columns=["score", "rate"])
-    raw_score = frame[score_col]
-    numeric_score = pd.to_numeric(raw_score, errors="coerce")
-    semantic_category = _score_column_is_semantic_category(score_col)
-    score_is_numeric = bool(numeric_score.notna().all()) and not semantic_category
-    score_values = (
-        numeric_score
-        if score_is_numeric
-        else raw_score.map(
-            lambda value: _score_category_label(
-                score_col, value, display_labels=display_labels
-            )
-        )
-    )
-    score_order = (
-        numeric_score
-        if numeric_score.notna().any()
-        else pd.Series(range(len(frame)), index=frame.index)
-    )
-    out = pd.DataFrame(
-        {
-            "score": score_values,
-            "rate": pd.to_numeric(frame[rate_col], errors="coerce"),
-            "_score_order": score_order,
-        }
-    ).dropna(subset=["score", "rate"])
-    if n_col is not None:
-        out["n"] = pd.to_numeric(frame.loc[out.index, n_col], errors="coerce")
-    if not out.empty and out["rate"].max() > 1.0:
-        out["rate"] = out["rate"] / 100.0
-    result = (
-        out.sort_values("score").drop(columns=["_score_order"]).reset_index(drop=True)
-        if score_is_numeric
-        else out.sort_values("_score_order")
-        .drop(columns=["_score_order"])
-        .reset_index(drop=True)
-    )
-    result.attrs["score_label"] = _score_axis_label(
-        score_col, display_labels=display_labels
-    )
-    result.attrs["score_is_numeric"] = score_is_numeric
-    return result
-
-
-def _score_column_is_semantic_category(column: Any) -> bool:
-    normalized = str(column or "").strip().lower().replace("-", "_").replace(" ", "_")
-    return normalized in {
-        "exposure",
-        "exposure_label",
-        "group",
-        "group_label",
-        "status",
-        "category",
-        "level",
-        "sepsis3",
-        "sepsis_3",
-        "exposure_status",
-    }
-
-
-def _score_category_label(
-    column: Any,
-    value: Any,
-    *,
-    display_labels: Optional[Mapping[str, str]] = None,
-) -> str:
-    normalized_col = (
-        str(column or "").strip().lower().replace("-", "_").replace(" ", "_")
-    )
-    state = _binary_state_label(value)
-    column_label = _display_label(column, display_labels)
-    value_label = _display_label(value, display_labels)
-    if state is not None and _label_lookup(column, display_labels) is not None:
-        return f"{column_label} {state}"
-    if normalized_col in {"exposure", "exposure_status"} and state is not None:
-        return "Exposed" if state == "positive" else "Unexposed"
-    if normalized_col == "status" and state is not None:
-        return state.capitalize()
-    if normalized_col in {"group", "group_label"}:
-        return f"Group {value_label}"
-    return value_label
-
-
-def _binary_state_label(value: Any) -> Optional[str]:
-    token = str(value).strip().lower()
-    if token in {"1", "1.0", "true", "yes", "y", "positive", "present"}:
-        return "positive"
-    if token in {"0", "0.0", "false", "no", "n", "negative", "absent"}:
-        return "negative"
-    return None
-
-
 def _normalise_missingness_frame(
     frame: pd.DataFrame,
     *,
@@ -3343,6 +3237,21 @@ def _draw_strata_panel(
     import numpy as np
 
     y_values = frame["rate"].astype(float)
+    has_intervals = {"lower", "upper"} <= set(frame.columns) and bool(
+        frame[["lower", "upper"]].notna().all().all()
+    )
+    lower_values = (
+        frame["lower"].astype(float) if has_intervals else y_values.copy()
+    )
+    upper_values = (
+        frame["upper"].astype(float) if has_intervals else y_values.copy()
+    )
+    interval_errors = np.vstack(
+        [
+            (y_values - lower_values).clip(lower=0).to_numpy(),
+            (upper_values - y_values).clip(lower=0).to_numpy(),
+        ]
+    )
     score_label = _strata_score_label(frame)
     if bool(frame.attrs.get("score_is_numeric", True)):
         x = frame["score"].astype(float)
@@ -3354,10 +3263,36 @@ def _draw_strata_panel(
             marker="o",
             markersize=3.4,
         )
+        if has_intervals:
+            ax.errorbar(
+                x,
+                y_values,
+                yerr=interval_errors,
+                fmt="none",
+                ecolor=palette.get("blue", "#0F4D92"),
+                elinewidth=0.9,
+                capsize=2.0,
+                zorder=3,
+            )
+        if "n" in frame.columns:
+            for x_value, rate, denominator in zip(x, y_values, frame["n"]):
+                if pd.notna(denominator) and float(denominator) > 0:
+                    ax.annotate(
+                        f"n={int(denominator):,}",
+                        (float(x_value), float(rate)),
+                        xytext=(4, 4),
+                        textcoords="offset points",
+                        fontsize=5.8,
+                        color=palette.get("neutral", "#8F8F8F"),
+                    )
         ax.set_xlabel(score_label)
         ax.set_ylabel(f"{outcome_label} rate")
         ymax = max(
-            0.05, min(1.0, float(y_values.max()) * 1.25 if len(y_values) else 0.05)
+            0.05,
+            min(
+                1.0,
+                float(upper_values.max()) * 1.25 if len(upper_values) else 0.05,
+            ),
         )
         ax.set_ylim(0, ymax)
         ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0, decimals=0))
@@ -3376,18 +3311,36 @@ def _draw_strata_panel(
             color=palette.get("neutral_light", "#D8D8D8"),
             linewidth=1.2,
         )
-        ax.plot(
+        ax.errorbar(
             y_values,
             y,
-            "o",
+            xerr=interval_errors if has_intervals else None,
+            fmt="o",
             color=palette.get("blue", "#0F4D92"),
+            ecolor=palette.get("blue", "#0F4D92"),
+            elinewidth=0.9,
+            capsize=2.0 if has_intervals else 0,
             markersize=3.8,
         )
-        ax.set_yticks(y, frame["score"].astype(str).tolist())
+        labels = frame["score"].astype(str).tolist()
+        if "n" in frame.columns:
+            labels = [
+                (
+                    f"{label} (n={int(denominator):,})"
+                    if pd.notna(denominator) and float(denominator) > 0
+                    else label
+                )
+                for label, denominator in zip(labels, frame["n"])
+            ]
+        ax.set_yticks(y, labels)
         ax.invert_yaxis()
         ax.set_xlabel(f"{outcome_label} rate")
         xmax = max(
-            0.05, min(1.0, float(y_values.max()) * 1.35 if len(y_values) else 0.05)
+            0.05,
+            min(
+                1.0,
+                float(upper_values.max()) * 1.35 if len(upper_values) else 0.05,
+            ),
         )
         ax.set_xlim(0, xmax)
         ax.xaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0, decimals=0))
@@ -3398,51 +3351,6 @@ def _draw_strata_panel(
             alpha=0.7,
         )
     ax.set_title(f"Observed outcome by {score_label}", loc="left", pad=3)
-
-
-def _strata_score_label(frame: pd.DataFrame) -> str:
-    label = frame.attrs.get("score_label")
-    if label:
-        return str(label)
-    return "Score"
-
-
-def _score_axis_label(
-    column: Any, *, display_labels: Optional[Mapping[str, str]] = None
-) -> str:
-    raw = str(column or "").strip()
-    normalized = raw.lower().replace("-", "_").replace(" ", "_")
-    declared = _label_lookup(raw, display_labels)
-    if declared is not None:
-        if _score_column_is_semantic_category(column) and not any(
-            word in declared.casefold()
-            for word in ("status", "category", "group", "stratum")
-        ):
-            return f"{declared} status"
-        return declared
-    mapping = {
-        "score": "Score",
-        "stratum": "Stratum",
-        "severity_score": "Severity score",
-        "risk_score": "Risk score",
-        "exposure": "Exposure group",
-        "exposure_label": "Exposure group",
-        "group": "Group",
-        "group_label": "Group",
-        "status": "Status",
-        "category": "Category",
-        "level": "Level",
-        "exposure_status": "Exposure status",
-    }
-    if normalized in mapping:
-        return mapping[normalized]
-    pretty = _display_label(raw)
-    if any(
-        word in pretty.lower()
-        for word in ("score", "stratum", "stage", "group", "status", "category")
-    ):
-        return pretty
-    return f"{pretty} score"
 
 
 def _draw_missingness_panel(
@@ -3529,60 +3437,6 @@ def _robustness_axis_label(axis: Any) -> str:
         "unspecified": "Unspecified",
     }
     return mapping.get(str(axis or "").strip().lower(), _display_label(axis))
-
-
-def _normalise_display_key(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(value or "").casefold()).strip("_")
-
-
-def _label_lookup(
-    value: Any, display_labels: Optional[Mapping[str, str]] = None
-) -> Optional[str]:
-    """Return the Planner-owned label for an exact/normalized identifier.
-
-    ``AnalysisPlan`` rejects conflicting normalized keys.  This renderer may
-    therefore accept punctuation/case variants without inventing endpoint or
-    measurement semantics of its own.
-    """
-
-    if not display_labels:
-        return None
-    raw = str(value or "").strip()
-    exact = display_labels.get(raw)
-    if exact is not None and str(exact).strip():
-        return str(exact).strip()
-    normalized = _normalise_display_key(raw)
-    if not normalized:
-        return None
-    for key, label in display_labels.items():
-        if _normalise_display_key(key) == normalized and str(label).strip():
-            return str(label).strip()
-    return None
-
-
-def _display_label(
-    value: Any, display_labels: Optional[Mapping[str, str]] = None
-) -> str:
-    """Render a declared label, otherwise apply case-neutral title casing.
-
-    The fallback is deliberately mechanical: a name such as ``death`` must not
-    be silently reinterpreted as ICU, hospital, or fixed-day mortality.
-    """
-
-    declared = _label_lookup(value, display_labels)
-    if declared is not None:
-        return declared
-    token = str(value or "").strip()
-    if not token:
-        return "Value"
-    return re.sub(r"[_-]+", " ", token).strip().title()
-
-
-def _first_col(cols: Dict[str, str], candidates: Sequence[str]) -> Optional[str]:
-    for candidate in candidates:
-        if candidate in cols:
-            return cols[candidate]
-    return None
 
 
 __all__ = ["PublicationFigureSkill", "PublicationFigureSkillResult"]

@@ -38,12 +38,65 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Sequence, TypeVar
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    TypeVar,
+)
 
 from .protocol import LLMMessage
 from .factory import authorized_complete
+from .llm import (
+    clear_provider_call_receipt,
+    current_provider_call_receipt,
+    safe_provider_finish_reason,
+)
+from .structured_diagnostics import (
+    infer_validation_stage,
+    safe_projected_validation_issues,
+    safe_validation_issues,
+    safe_validation_stage,
+    violation_sha256,
+)
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class StructuredRetryProgress:
+    """Safe lifecycle projection for one structured model attempt.
+
+    The projection deliberately excludes the model response and validator
+    message.  Product surfaces may show that a role is generating, retrying,
+    accepted, or exhausted without exposing private reasoning or unbounded
+    scientific payloads.
+    """
+
+    role: str
+    phase: Literal["started", "rejected", "accepted"]
+    attempt: int
+    total_attempts: int
+    error_class: Optional[str] = None
+
+
+def _notify_progress(
+    callback: Optional[Callable[[StructuredRetryProgress], None]],
+    event: StructuredRetryProgress,
+) -> None:
+    """Treat UI progress as advisory; it must never change model execution."""
+
+    if callback is None:
+        return
+    try:
+        callback(event)
+    except Exception:  # noqa: BLE001 - observers cannot own retry authority
+        return
 
 
 _DEFAULT_FEEDBACK_PREAMBLE = (
@@ -204,6 +257,159 @@ class StructuredAttempt:
     raw_chars: int
     error_class: Optional[str]  # None when the attempt succeeded
     error_message: Optional[str]
+    finish_reason: Optional[str] = None
+    usage_summary: Optional[Dict[str, int]] = None
+    transport_attempts: int = 1
+    validation_stage: Optional[str] = None
+    validation_issues: Optional[List[Dict[str, Any]]] = None
+    violation_sha256: Optional[str] = None
+
+
+def safe_provider_error_category(value: Any) -> Optional[str]:
+    """Map an exception/type label onto a closed, non-secret category set."""
+
+    if value is None:
+        return None
+    name = type(value).__name__ if isinstance(value, BaseException) else str(value)
+    folded = name.strip().casefold()
+    if not folded:
+        return "error"
+    if "providerhardstop" in folded or "budget" in folded:
+        return "provider_budget"
+    if "structuredresponse" in folded:
+        return "structured_response"
+    if "validation" in folded or folded in {"valueerror", "assertionerror"}:
+        return "validation"
+    if "json" in folded or "decode" in folded or "parse" in folded:
+        return "parse"
+    if "timeout" in folded:
+        return "timeout"
+    if "ratelimit" in folded or "rate_limit" in folded:
+        return "rate_limit"
+    if any(token in folded for token in ("connection", "connect", "protocol")):
+        return "connection"
+    if any(token in folded for token in ("permission", "authorization", "configuration")):
+        return "authorization"
+    if any(token in folded for token in ("http", "apierror", "status")):
+        return "provider_http"
+    return "error"
+
+
+def _bounded_int(value: Any, *, minimum: int, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(minimum, parsed)
+
+
+def _safe_provider_call_metadata(
+    llm: Any,
+) -> tuple[Optional[str], Dict[str, int], int]:
+    """Project bounded response metadata without prompt or response content."""
+
+    receipt = current_provider_call_receipt()
+    if receipt is not None:
+        return (
+            receipt.finish_reason,
+            dict(receipt.usage_summary),
+            receipt.transport_attempts,
+        )
+
+    try:
+        raw_finish_reason = getattr(llm, "last_finish_reason", None)
+    except Exception:
+        raw_finish_reason = None
+    finish_reason = safe_provider_finish_reason(raw_finish_reason)
+
+    try:
+        raw_usage = getattr(llm, "last_usage", None)
+    except Exception:
+        raw_usage = None
+    usage_summary: Dict[str, int] = {}
+    if isinstance(raw_usage, Mapping):
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = raw_usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                usage_summary[key] = int(value)
+
+    try:
+        raw_transport_attempts = getattr(llm, "last_transport_attempts", 1)
+        transport_attempts = max(1, int(raw_transport_attempts))
+    except (TypeError, ValueError):
+        transport_attempts = 1
+    return finish_reason, usage_summary, transport_attempts
+
+
+def safe_structured_attempt_metadata(
+    attempts: Sequence[Any],
+) -> List[Dict[str, Any]]:
+    """Return the only structured-attempt shape permitted in artifacts.
+
+    ``raw_head`` and ``error_message`` intentionally never cross this boundary:
+    both can contain response text, patient free text, a prompt fragment, or a
+    provider echo of a credential.  Operators still get the response length,
+    failure class, finish reason, token counts, and physical transport count.
+    """
+
+    projected: List[Dict[str, Any]] = []
+    for item in list(attempts)[:16]:
+        if isinstance(item, Mapping):
+            source = item
+            attempt_index = _bounded_int(
+                source.get("attempt"), minimum=1, default=1
+            )
+            raw_chars = source.get("raw_chars")
+            raw_error = source.get("error_class")
+            raw_finish = source.get("finish_reason")
+            raw_usage = source.get("usage")
+            raw_transport_attempts = source.get("transport_attempts")
+            raw_validation_stage = source.get("validation_stage")
+            raw_validation_issues = source.get("validation_issues")
+            raw_violation_sha256 = source.get("violation_sha256")
+        else:
+            attempt_index = _bounded_int(item.attempt, minimum=0, default=0) + 1
+            raw_chars = item.raw_chars
+            raw_error = item.error_class
+            raw_finish = item.finish_reason
+            raw_usage = item.usage_summary
+            raw_transport_attempts = item.transport_attempts
+            raw_validation_stage = item.validation_stage
+            raw_validation_issues = item.validation_issues
+            raw_violation_sha256 = item.violation_sha256
+        error_class = safe_provider_error_category(raw_error)
+        finish_reason = safe_provider_finish_reason(raw_finish)
+        usage = {
+            key: int(value)
+            for key, value in dict(raw_usage or {}).items()
+            if key in {"prompt_tokens", "completion_tokens", "total_tokens"}
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= 0
+        }
+        row: Dict[str, Any] = {
+            "attempt": attempt_index,
+            "raw_chars": _bounded_int(raw_chars, minimum=0, default=0),
+            "error_class": error_class,
+            "finish_reason": finish_reason,
+            "usage": usage,
+            "transport_attempts": _bounded_int(
+                raw_transport_attempts, minimum=1, default=1
+            ),
+        }
+        validation_stage = safe_validation_stage(raw_validation_stage)
+        if validation_stage is not None:
+            row["validation_stage"] = validation_stage
+        validation_issues = safe_projected_validation_issues(raw_validation_issues)
+        if validation_issues:
+            row["validation_issues"] = validation_issues
+        violation_sha256 = str(raw_violation_sha256 or "").strip().lower()
+        if len(violation_sha256) == 64 and all(
+            char in "0123456789abcdef" for char in violation_sha256
+        ):
+            row["violation_sha256"] = violation_sha256
+        projected.append(row)
+    return projected
 
 
 def distinct_failures(
@@ -325,6 +531,18 @@ def annotate_with_attempt_history(
 
     if not attempts:
         return
+    # This machine-readable attachment is deliberately a safe projection, not
+    # the ``StructuredAttempt`` objects themselves.  A Web failure serializer
+    # can therefore preserve useful per-attempt diagnostics without ever
+    # touching raw model text or parser messages.
+    try:
+        setattr(
+            exc,
+            "easyicu_structured_attempt_metadata",
+            safe_structured_attempt_metadata(attempts),
+        )
+    except Exception:
+        pass
     note = (
         "structured-retry history before this failure: "
         + summarise_attempt_history(attempts, role=role)
@@ -378,6 +596,7 @@ def call_llm_with_structured_retry(
     failed_response_transform: Optional[Callable[[str], str]] = None,
     feedback_preamble: str = _DEFAULT_FEEDBACK_PREAMBLE,
     feedback_instructions: str = _DEFAULT_FEEDBACK_INSTRUCTIONS,
+    progress_callback: Optional[Callable[[StructuredRetryProgress], None]] = None,
 ) -> T:
     """Call ``llm.complete`` and parse the result; retry with feedback on parse failure.
 
@@ -437,7 +656,18 @@ def call_llm_with_structured_retry(
     current: List[LLMMessage] = list(base_messages)
     last_exc: Optional[BaseException] = None
     for i in range(max_retries + 1):
+        total_attempts = max_retries + 1
+        _notify_progress(
+            progress_callback,
+            StructuredRetryProgress(
+                role=role,
+                phase="started",
+                attempt=i + 1,
+                total_attempts=total_attempts,
+            ),
+        )
         try:
+            clear_provider_call_receipt()
             raw = authorized_complete(
                 llm, current, max_tokens=max_tokens, temperature=temperature
             )
@@ -445,9 +675,42 @@ def call_llm_with_structured_retry(
             # Transport failures abort the loop here, outside the parser
             # guard below. Carry the attempts recorded so far out with the
             # exception rather than letting them die with the frame.
-            annotate_with_attempt_history(exc, attempts, role=role)
+            try:
+                transport_attempts = max(
+                    1, int(getattr(exc, "easyicu_transport_attempts", 1))
+                )
+            except (TypeError, ValueError):
+                transport_attempts = 1
+            terminal_attempt = StructuredAttempt(
+                attempt=i,
+                raw_head="",
+                raw_chars=0,
+                error_class=type(exc).__name__,
+                error_message="transport failed before a structured response",
+                finish_reason=None,
+                usage_summary={},
+                transport_attempts=transport_attempts,
+            )
+            all_attempts = [*attempts, terminal_attempt]
+            # Keep the human note's established meaning: when parser failures
+            # preceded the transport abort, summarize those responses rather
+            # than counting a no-response event as another parser rejection.
+            # The machine-readable projection still includes the terminal
+            # transport failure so the Web artifact has the complete sequence.
+            annotate_with_attempt_history(exc, attempts or [terminal_attempt], role=role)
+            try:
+                setattr(
+                    exc,
+                    "easyicu_structured_attempt_metadata",
+                    safe_structured_attempt_metadata(all_attempts),
+                )
+            except Exception:
+                pass
             raise
         head = (raw or "").strip().replace("\n", " ⏎ ")[:400]
+        finish_reason, usage_summary, transport_attempts = _safe_provider_call_metadata(
+            llm
+        )
         try:
             value = parser(raw)
         except Exception as exc:  # noqa: BLE001 — parser may raise anything
@@ -456,6 +719,8 @@ def call_llm_with_structured_retry(
             # so the retry cannot be shown a different rejection from the one
             # that was recorded.
             rendered_failure = render_parse_failure(exc)
+            validation_stage = infer_validation_stage(exc)
+            validation_issues = safe_validation_issues(exc)
             attempts.append(
                 StructuredAttempt(
                     attempt=i,
@@ -463,7 +728,23 @@ def call_llm_with_structured_retry(
                     raw_chars=len(raw or ""),
                     error_class=exc.__class__.__name__,
                     error_message=rendered_failure,
+                    finish_reason=finish_reason,
+                    usage_summary=usage_summary,
+                    transport_attempts=transport_attempts,
+                    validation_stage=validation_stage,
+                    validation_issues=validation_issues,
+                    violation_sha256=violation_sha256(rendered_failure),
                 )
+            )
+            _notify_progress(
+                progress_callback,
+                StructuredRetryProgress(
+                    role=role,
+                    phase="rejected",
+                    attempt=i + 1,
+                    total_attempts=total_attempts,
+                    error_class=exc.__class__.__name__,
+                ),
             )
             last_exc = exc
             if i >= max_retries:
@@ -554,7 +835,19 @@ def call_llm_with_structured_retry(
                     raw_chars=len(raw or ""),
                     error_class=None,
                     error_message=None,
+                    finish_reason=finish_reason,
+                    usage_summary=usage_summary,
+                    transport_attempts=transport_attempts,
                 )
+            )
+            _notify_progress(
+                progress_callback,
+                StructuredRetryProgress(
+                    role=role,
+                    phase="accepted",
+                    attempt=i + 1,
+                    total_attempts=total_attempts,
+                ),
             )
             return value
     # All attempts exhausted.
@@ -566,6 +859,7 @@ def call_llm_with_structured_retry(
 
 __all__ = [
     "StructuredAttempt",
+    "StructuredRetryProgress",
     "StructuredResponseFailure",
     "annotate_with_attempt_history",
     "call_llm_with_structured_retry",
@@ -573,4 +867,6 @@ __all__ = [
     "distinct_failures",
     "render_parse_failure",
     "summarise_attempt_history",
+    "safe_structured_attempt_metadata",
+    "safe_provider_error_category",
 ]

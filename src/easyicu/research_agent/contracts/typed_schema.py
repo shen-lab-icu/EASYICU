@@ -8,6 +8,8 @@ re-exported by ``declared_product``.
 
 from __future__ import annotations
 
+from ..canonical_json import sha256_file as _sha256_file
+
 import csv
 import hashlib
 import io
@@ -37,14 +39,6 @@ _MAX_TYPED_JSON_KEY_CHARS = 256
 _JSON_VALUE_TYPES = frozenset(
     {"array", "boolean", "null", "number", "object", "string"}
 )
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _tabular_artifact_columns(

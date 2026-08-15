@@ -34,9 +34,9 @@ def test_no_duplicate_dataclass_shells_in_contracts():
     """Contracts must not define shadow copies of evidence/schema classes."""
 
     import easyicu.research_agent.contracts.runtime as c
-    import easyicu.research_agent.authority.evidence_store as e
+    import easyicu.research_agent.authority.numeric_claim_identity as n
     import easyicu.research_agent.schema as s
 
-    assert c.NumericClaim.__module__ == e.__name__
+    assert c.NumericClaim.__module__ == n.__name__
     assert c.ValidationFinding.__module__ == s.__name__
     assert c.EvidenceArtifact.__module__ == s.__name__

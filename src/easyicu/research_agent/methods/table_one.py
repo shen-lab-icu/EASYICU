@@ -419,7 +419,10 @@ def build_grouped_table_one(
 
     rows: list[dict[str, Any]] = []
     for variable_order, variable in enumerate(contract.variables, start=1):
-        p_value, test_name = _p_value(frame, group_masks, variable)
+        if contract.p_values_required:
+            p_value, test_name = _p_value(frame, group_masks, variable)
+        else:
+            p_value, test_name = None, "not_reported_repeated_units"
         series = frame[variable.name]
         if variable.summary != "count_percent" and variable.levels:
             # An ordinal row summarised numerically may still declare its

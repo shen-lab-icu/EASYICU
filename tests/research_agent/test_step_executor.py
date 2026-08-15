@@ -159,9 +159,9 @@ def test_step_executor_is_a_mechanical_single_call_boundary() -> None:
 
 
 def test_pipeline_routes_only_fresh_sandbox_calls_through_step_executor() -> None:
-    import easyicu.research_agent.execution.phase as pipeline_execute
+    import easyicu.research_agent.execution.candidate_loop as candidate_loop
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    source = inspect.getsource(candidate_loop._candidate_execute_transition)
     assert "execution_runner.run(" not in source
     assert source.count("step_executor.execute(") == 1
     assert source.index("if replay_execution is None:") < source.index(

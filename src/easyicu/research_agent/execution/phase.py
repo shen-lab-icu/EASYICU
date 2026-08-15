@@ -42,7 +42,7 @@ import tempfile
 import threading
 import traceback
 from contextvars import copy_context
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -69,11 +69,6 @@ from ..agents.core import (
     StatisticalAnalysisAgent,
     VisualizationAgent,
 )
-from ..reporting.article_contract import (
-    article_contract_audit_payload,
-    summarize_article_contract_coverage,
-    validate_run_against_article_contract,
-)
 from ..audits.validators import (
     ClinicalConstraintValidator,
     ConceptUsageAuditor,
@@ -96,18 +91,15 @@ from ..repairs.source import (
     _deterministic_summary_repair,
     deterministic_contract_repair,
 )
-from ..repairs.semantic_boundary import SemanticRepairRecorder
 from ..repairs.attempt_record import record_deterministic_runner_repair_attempt
 from .code_hygiene import reorder_forward_references
+from .article_audit import RunArticleAuditResult, collect_run_article_audits
 from ..repairs.coordination import (
-    RepairAuthorityBinding,
-    StepRepairBudget,
     authorized_deterministic_concept_repair,
     resume_deterministic_repair_candidate,
 )
 from .concept_audit_cache import LLMConceptAuditCache
 from .development_sample import (
-    DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE,
     materialize_development_execution_sample,
     record_development_sample_authority,
 )
@@ -122,14 +114,35 @@ from .failure_classification import classify_runtime_failure
 from .cohort_routing import (
     bind_step_execution_cohort as _bind_step_execution_cohort,
     bound_step_execution_cohort_path as _bound_step_execution_cohort_path,
-    step_execution_cohort_path as _step_execution_cohort_path,
 )
+from . import replan_review
 from .concept_audit import (
     ConceptAuditAuthority,
     ConceptAuditCoordinator,
     ConceptAuditRuntime,
     ConceptQuarantineState,
     verified_capsule_concept_audit_replay as _verified_capsule_concept_audit_replay,
+)
+from .concept_repair import (
+    MAX_DETERMINISTIC_CONCEPT_REPAIRS,
+    ConceptRepairRequest,
+    ConceptRepairServices,
+    run_concept_repair_loop,
+)
+from .candidate_loop import (
+    _CandidateLoopAction,
+    _CandidateLoopAttempt,
+    _CandidateLoopHost,
+    _CandidateLoopState,
+    _candidate_concept_audit_transition,
+    _candidate_contract_repair_transition,
+    _candidate_contract_setup_transition,
+    _candidate_execute_transition,
+    _candidate_failure_transition,
+    _candidate_success_prepare_transition,
+    _candidate_summary_transition,
+    _candidate_visual_transition,
+    _run_candidate_loop,
 )
 from .concept_reaudit import (
     deterministic_concept_reaudit_authority,
@@ -202,6 +215,7 @@ from .runners.deterministic_missingness import (
     missingness_measurement_audit_code,
 )
 from .runners.deterministic_robustness import (
+    robustness_replay_spec_has_kind_mismatch,
     robustness_replay_spec_is_emittable,
     robustness_sensitivity_preflight_code,
 )
@@ -209,14 +223,14 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     authorize_declared_figure_product_slots,
-    primary_analysis_cohort_plan_findings,
-    primary_analysis_cohort_producer_uses_universe,
-    read_digest_bound_artifact_snapshot,
     typed_product_binding_contract,
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
 )
-from ..robustness.estimators import fit_robustness_rows_from_records
+from ..contracts.primary_cohort import (
+    primary_analysis_cohort_plan_findings,
+    primary_analysis_cohort_producer_uses_universe,
+)
 from ..authority.evidence_store import (
     EvidenceAuthorityIntegrityError,
     sha256_of_bytes,
@@ -317,6 +331,8 @@ from .publication_figure import (
     _sealed_renderer_implementation_digest,
     _sealed_renderer_source_digests,
     _sealed_typed_figure_products,
+    sealed_renderer_code_seal_required,
+    validate_and_record_sealed_renderer_receipt,
 )
 from .host_services import ExecutePhaseHost
 from .output_files import (
@@ -403,12 +419,10 @@ from ..contracts.robustness_execution import (
 from ..robustness.panel import (
     RobustnessSpec,
     assert_robustness_specs_locked,
-    build_robustness_panel_from_records,
     robustness_specs_for_execution,
     robustness_specs_sha,
-    unexecuted_locked_spec_ids,
-    write_robustness_panel,
 )
+from ..robustness.runtime_panel import finalize_run_robustness_panel
 from ..trajectory.bundle import trajectory_bundle_findings
 from ..trajectory.plan_contract import (
     augment_trajectory_plan_products,
@@ -435,6 +449,35 @@ from ..authority.provider_budget import (
     complete_with_provider_budget,
     load_provider_call_budget_state,
     provider_call_budget_receipt_path,
+)
+from .provider_budget_runtime import (
+    monotonic_step_llm_repair_history as _monotonic_step_llm_repair_history,
+    step_snapshot_requires_provider_receipt as _step_snapshot_requires_provider_receipt,
+)
+from .repair_reservation import StepRepairReservation
+from .step_attempt_bootstrap import (
+    RAW_UNIVERSE_EXECUTION_ROLE,
+    prepare_step_attempt_bootstrap,
+)
+from .step_authority_resume import (
+    StepAuthorityResumeRequest,
+    prepare_step_authority_resume,
+)
+from .step_candidate_recovery import (
+    StepCandidateRecovery,
+    StepCandidateRecoveryRequest,
+)
+from .resume_revalidation import (
+    ResumeDeterministicRevalidationResult as _ResumeDeterministicRevalidationResult,
+    ResumeRevalidationServices,
+    _discard_stale_resolved_input_receipts,
+    _materialize_verified_step_output_view,
+    _project_verified_replay_output_paths,
+    _resume_success_dependencies,
+    _trusted_resume_success_records,
+    _verified_explicit_step_authority,
+    _verify_resume_step_script_lineage,
+    revalidate_resume_successes,
 )
 from ..authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
@@ -519,348 +562,187 @@ from ..gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 logger = logging.getLogger(__name__)
 
 
-def _repair_prompt_binding_sha256(
-    *,
-    untrusted_diagnostic: str,
-    repair_authority: RepairPromptAuthority,
-    current_repair_authority: RepairPromptAuthority | None = None,
-) -> str:
-    """Bind one provider reservation to diagnostics and typed host authority."""
-
-    return repair_prompt_binding_sha256(
-        untrusted_diagnostic=untrusted_diagnostic,
-        repair_authority=repair_authority,
-        current_repair_authority=current_repair_authority,
-    )
-
-
-def _untrusted_runtime_repair_allowed(*, repair_id: str, source: str) -> bool:
-    """Allow raw runtime diagnostics to authorize syntactic transforms only."""
-    if source == "case_plugin_repair":
-        return False
-    if source != "deterministic_runner_repair":
-        return True
-    metadata = repair_metadata_for(repair_id)
-    return (
-        repair_id
-        in {
-            "all_rows_outcome_coordinate_filter_v1",
-            "nonfinite_missing_mask_conflation_v1",
-            "non_tabular_companion_row_gate_v1",
-        }
-        or metadata.repair_class is RepairClass.SYNTACTIC
-    )
-
-
-_STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
-    {".cluster_stability_assignments.pending.csv"}
+from .phase_support import (  # noqa: F401 — owner module
+    _CAPSULE_TRANSIENT_STEP_STATUSES,
+    _COHORT_DEF_SENSITIVITY_METHODS,
+    _COHORT_DEF_SENSITIVITY_OUTPUT_TOKENS,
+    _COHORT_TRANSLATION_PROVIDER_CATEGORY,
+    _COMPACT_MISSINGNESS_METHODS,
+    _COMPACT_MISSINGNESS_SUPPORTED_OUTPUTS,
+    _EFFECT_ASSOCIATION_METHOD_TOKENS,
+    _EFFECT_OUTPUT_FRAGMENTS,
+    _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID,
+    _HOST_COHORT_TRANSLATION_BUDGET_STEP_ID,
+    _InertPythonNodeStripper,
+    _LOCKED_MEASUREMENT_DATA_QUALITY_ISSUES,
+    _MAX_DIRECTED_MODEL_REPLANS,
+    _ORDINAL_EXPLICIT_METHODS,
+    _ORDINAL_OUTPUT_PRODUCTS,
+    _ORDINAL_PRIMARY_METHODS,
+    _PRIMARY_COHORT_FLOW_METHODS,
+    _PRIMARY_COHORT_FLOW_OUTPUTS,
+    _RAW_UNIVERSE_EXECUTION_ROLE,
+    _RICH_EXPOSURE_AUDIT_OUTPUT_TOKENS,
+    _ROBUSTNESS_SENSITIVITY_METHODS,
+    _SEALED_AUTHORITY_SUMMARY_MARKERS,
+    _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS,
+    _SUCCESS_REPLAN_REQUEST_FIELDS,
+    _absolute_risk_context_runner_owns_step,
+    _actionable_validator_messages,
+    _append_terminal_step_record,
+    _coder_authority_with_locked_robustness_specs,
+    _cohort_definition_overlap_runner_owns_step,
+    _cohort_definition_sensitivity_runner_owns_step,
+    _cohort_translation_budget_owner_step_id,
+    _collect_and_persist_run_article_audits,
+    _contract_repair_log,
+    _declares_effect_output,
+    _detached_figure_repair_binding,
+    _extract_cohort_definition_with_provider_budget,
+    _failed_contract_code_can_be_reused_before_coder,
+    _fresh_plausibility_receipt_findings,
+    _is_cohort_definition_sensitivity_step,
+    _is_standard_executor_internal_artifact,
+    _is_terminal_publication_figure_repair_step,
+    _load_step_summary_from_outputs,
+    _locked_measurement_data_quality_issues,
+    _max_finding_severity,
+    _merge_monotonic_concept_constraints,
+    _method_has_ordinal_primary_token,
+    _method_is_effect_or_association,
+    _non_llm_interpretation_for_generation,
+    _ordinal_dose_response_step_matches,
+    _persist_run_article_audit_result,
+    _persisted_monotonic_concept_constraints,
+    _planner_locked_cohort_prompt_payload,
+    _primary_cohort_flow_runner_owns_step,
+    _publication_bundle_has_primary_result_roles,
+    _python_repair_is_materially_changed,
+    _python_semantic_sha256,
+    _remove_standard_executor_pending_artifacts,
+    _repair_prompt_binding_sha256,
+    _robustness_sensitivity_runner_owns_step,
+    _simple_missingness_audit_runner_owns_step,
+    _step_requires_publication_figure_exports,
+    _step_status_from_contract_findings,
+    _submit_in_current_context,
+    _successful_step_requests_replan,
+    _terminal_publication_repair_replan_skip_detail,
+    _trajectory_clustering_step_matches,
+    _unowned_sealed_authority_markers,
+    _untrusted_runtime_repair_allowed,
+    _upsert_current_capsule_checkpoint,
+    _verified_run_input_capsule_digest,
+    build_self_block_replan_directive,
+    scope_findings_to_records,
 )
-_FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
-_COHORT_TRANSLATION_PROVIDER_CATEGORY = "cohort_definition_translation"
-_HOST_COHORT_TRANSLATION_BUDGET_STEP_ID = "host_cohort_definition_translation"
-_RAW_UNIVERSE_EXECUTION_ROLE = "raw_universe_for_primary_analysis_cohort_producer"
 
 
-def _submit_in_current_context(executor: Any, callback: Any, *args: Any) -> Any:
-    """Submit one step with an independent copy of runner capability context."""
-
-    return executor.submit(copy_context().run, callback, *args)
-
-
-def _verified_run_input_capsule_digest(
+def _selectively_revalidate_resume_successes(
     *,
+    resume_state: Dict[str, Any],
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    evidence: Any,
     run_dir: Path,
-    evidence_store: Any,
-) -> str:
-    """Return the working capsule digest only when sealed evidence agrees."""
+    cohort_path: Path,
+    universe_path: Path,
+    resume_from_step_id: Optional[str],
+    development_sample: Optional[Any] = None,
+) -> _ResumeDeterministicRevalidationResult:
+    """Replay changed deterministic gates against sealed evidence only."""
 
-    record = evidence_store.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
-    if record is None:
-        raise RunInputIdentityError("run input capsule evidence is missing")
-    sealed_path = verified_run_evidence_path(run_dir, record)
-    working_path = run_dir / RUN_INPUT_CAPSULE_FILENAME
-    if sealed_path is None:
-        raise RunInputIdentityError("run input capsule evidence failed verification")
-    if not working_path.is_file() or working_path.is_symlink():
-        raise RunInputIdentityError("run input capsule working copy is missing")
-    # Read each copy exactly once and derive the digest, the record check, and
-    # the sealed byte-equality check from those same in-memory buffers. The
-    # earlier digest-then-reread form returned a digest computed on read #1
-    # while comparing read #2 against the sealed copy, so a swap between the two
-    # reads could return a digest that never matched the compared bytes; an
-    # OSError from the reread also escaped the RunInputIdentityError boundary.
+    return revalidate_resume_successes(
+        resume_state=resume_state,
+        plan=plan,
+        context=context,
+        evidence=evidence,
+        run_dir=run_dir,
+        cohort_path=cohort_path,
+        universe_path=universe_path,
+        resume_from_step_id=resume_from_step_id,
+        development_sample=development_sample,
+        services=ResumeRevalidationServices(
+            deterministic_gate_stamp=_deterministic_gate_stamp,
+            evaluate_final_deterministic_gates=(
+                lambda **kwargs: _evaluate_final_deterministic_gates(**kwargs)
+            ),
+            deterministic_code_gate_findings=(
+                lambda **kwargs: _deterministic_code_gate_findings(**kwargs)
+            ),
+            actionable_validator_messages=_actionable_validator_messages,
+            write_run_checkpoint=write_run_checkpoint,
+        ),
+    )
+
+def _execution_input_authority_integrity_finding(
+    *,
+    step_id: str,
+    universe_path: Path,
+    cohort_path: Path,
+    expected_universe_sha256: Optional[str],
+    expected_analysis_cohort_sha256: Optional[str],
+) -> Optional[ValidationFinding]:
+    """Return a blocking finding when execution mutated host-owned inputs."""
     try:
-        working_bytes = working_path.read_bytes()
-        sealed_bytes = sealed_path.read_bytes()
-    except OSError as exc:
-        raise RunInputIdentityError(
-            "run input capsule copies could not be read"
-        ) from exc
-    digest = hashlib.sha256(working_bytes).hexdigest()
-    if digest != str(record.sha256):
-        raise RunInputIdentityError("run input capsule working digest changed")
-    if working_bytes != sealed_bytes:
-        raise RunInputIdentityError(
-            "run input capsule working copy differs from sealed evidence"
-        )
-    return digest
-
-
-def _cohort_translation_budget_owner_step_id(plan: AnalysisPlan) -> str:
-    """Return one stable budget owner without making a cohort decision.
-
-    A single cohort-only product step is the natural owner because successful
-    host materialisation completes exactly that planned step.  Ambiguous or
-    mixed-product plans use a host pseudo-step instead of charging an arbitrary
-    analysis step.  This helper only assigns provider-call accounting; the
-    Planner's prose remains the sole source of inclusion/exclusion criteria.
-    """
-
-    cohort_only_step_ids = [
-        str(step.step_id)
-        for step in plan.steps
-        if _declares_host_cohort_only_product(step)
-    ]
-    if len(cohort_only_step_ids) == 1:
-        return cohort_only_step_ids[0]
-    return _HOST_COHORT_TRANSLATION_BUDGET_STEP_ID
-
-
-def _extract_cohort_definition_with_provider_budget(
-    *,
-    run_dir: Path,
-    budget_owner_step_id: str,
-    configured_limit: int,
-    cohort_prose: str,
-    universe_columns: Sequence[str],
-    llm: Any,
-    name: str,
-    reserved_final_category: Optional[str] = None,
-) -> Tuple[Optional[CohortDefinition], Dict[str, Any]]:
-    """Run cohort-prose translation under a crash-safe provider receipt.
-
-    This call happens before ``_execute_one_step`` creates its ordinary
-    per-step budget.  Reusing the same receipt namespace makes a cohort-only
-    planned step inherit this paid call if translation fails and the Coder must
-    later execute it.  Transport retries are charged by the active provider
-    scope just like coder/auditor retries.
-    """
-
-    receipt_path = provider_call_budget_receipt_path(
-        run_dir,
-        step_id=budget_owner_step_id,
-    )
-    effective_limit = max(0, int(configured_limit))
-    consumed_categories: Tuple[str, ...] = ()
-    logical_repair_entries: tuple[Dict[str, object], ...] = ()
-    initial_generation_entries: tuple[Dict[str, object], ...] = ()
-    required_reservation_token: Optional[str] = None
-    reservation_bound_provider_history_len: Optional[int] = None
-    completed_reservation_token: Optional[str] = None
-    reservation_released = False
-    reserved_category_extensions: tuple[Dict[str, object], ...] = ()
-    if receipt_path.exists():
-        receipt_state = load_provider_call_budget_state(
-            receipt_path,
-            step_id=budget_owner_step_id,
-            expected_reserved_final_category=reserved_final_category,
-        )
-        effective_limit = min(effective_limit, receipt_state.limit)
-        consumed_categories = receipt_state.categories
-        logical_repair_entries = receipt_state.logical_repairs
-        initial_generation_entries = receipt_state.initial_generations
-        required_reservation_token = receipt_state.required_reservation_token
-        reservation_bound_provider_history_len = (
-            receipt_state.reservation_bound_provider_history_len
-        )
-        completed_reservation_token = receipt_state.completed_reservation_token
-        reservation_released = receipt_state.reservation_released
-        reserved_category_extensions = receipt_state.reserved_category_extensions
-    budget = StepProviderCallBudget(
-        effective_limit,
-        step_id=budget_owner_step_id,
-        consumed_categories=consumed_categories,
-        logical_repair_entries=logical_repair_entries,
-        initial_generation_entries=initial_generation_entries,
-        receipt_path=receipt_path,
-        reserved_final_category=reserved_final_category,
-        required_reservation_token=required_reservation_token,
-        reservation_bound_provider_history_len=(reservation_bound_provider_history_len),
-        completed_reservation_token=completed_reservation_token,
-        reservation_released=reservation_released,
-        reserved_category_extensions=reserved_category_extensions,
-    )
-    definition = complete_with_provider_budget(
-        budget=budget,
-        category=_COHORT_TRANSLATION_PROVIDER_CATEGORY,
-        call=lambda: extract_cohort_definition_from_prose(
-            cohort_prose=cohort_prose,
-            universe_columns=universe_columns,
-            llm=llm,
-            name=name,
+        current_universe_sha256 = sha256_of_file(universe_path)
+        current_cohort_sha256 = sha256_of_file(cohort_path)
+    except Exception as exc:
+        current_universe_sha256 = None
+        current_cohort_sha256 = None
+        authority_error = f"{type(exc).__name__}: {exc}"[:300]
+    else:
+        authority_error = None
+    if (
+        current_universe_sha256 == expected_universe_sha256
+        and current_cohort_sha256 == expected_analysis_cohort_sha256
+    ):
+        return None
+    return ValidationFinding(
+        validator="execution_input_authority_integrity",
+        severity="error",
+        message=(
+            "The raw universe or authoritative analysis cohort changed while "
+            f"step {step_id} executed; all outputs from this attempt were rejected."
         ),
+        detail={
+            "step_id": step_id,
+            "expected_universe_sha256": expected_universe_sha256,
+            "observed_universe_sha256": current_universe_sha256,
+            "expected_analysis_cohort_sha256": expected_analysis_cohort_sha256,
+            "observed_analysis_cohort_sha256": current_cohort_sha256,
+            "error": authority_error,
+        },
     )
-    snapshot = budget.snapshot()
-    return definition, {
-        "budget_owner_step_id": budget_owner_step_id,
-        "step_provider_call_budget_scope": _COHORT_TRANSLATION_PROVIDER_CATEGORY,
-        "step_provider_call_budget": snapshot["limit"],
-        "step_provider_call_attempts": snapshot["used"],
-        "step_provider_call_remaining": snapshot["remaining"],
-        "step_provider_call_budget_exhausted": snapshot["exhausted"],
-        "step_provider_call_categories": snapshot["categories"],
-        "step_provider_call_receipt_version": (
-            PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
-        ),
-        "step_provider_call_receipt": str(receipt_path.relative_to(run_dir)),
-    }
 
+def _should_attempt_detached_figure_binding(
+    *, out_dir: Path, sealed_renderer_authorized_code_sha256: Optional[str]
+) -> bool:
+    """Detached rescue lineage must never rewrite an authorized sealed summary."""
 
-def _merge_monotonic_concept_constraints(
-    existing: Sequence[ValidationFinding],
-    candidates: Sequence[ValidationFinding],
-) -> List[ValidationFinding]:
-    """Merge binding concept errors without losing earlier repair constraints.
+    return sealed_renderer_authorized_code_sha256 is None and _has_figure_exports(
+        out_dir
+    )
 
-    A later repair may introduce a different error after an earlier error has
-    already been removed from the current script.  Quarantine checkpoints must
-    retain both constraints so a resumed repair cannot regress the earlier fix.
-    """
-
-    merged: List[ValidationFinding] = []
-    index_by_occurrence: Dict[str, int] = {}
-
-    def _latest_with_evidence(
-        prior: ValidationFinding,
-        latest: ValidationFinding,
-    ) -> ValidationFinding:
-        evidence_ids = list(
-            dict.fromkeys(
-                [
-                    *(str(item) for item in prior.evidence_ids or []),
-                    *(str(item) for item in latest.evidence_ids or []),
-                ]
-            )
-        )
-        return latest.model_copy(update={"evidence_ids": evidence_ids})
-
-    for finding in existing:
-        if finding.severity != "error":
-            # Preserve pre-existing nonblocking audit history exactly as the
-            # prior implementation did. New warnings are not monotonic repair
-            # constraints and therefore are not added below.
-            merged.append(finding)
-            continue
-        key = _finding_occurrence_identity(finding)
-        prior_index = index_by_occurrence.get(key)
-        if prior_index is None:
-            index_by_occurrence[key] = len(merged)
-            merged.append(finding)
-        else:
-            # Keep the latest wording and source coordinates for the same
-            # durable occurrence while preserving every distinct locator.
-            merged[prior_index] = _latest_with_evidence(merged[prior_index], finding)
-    for finding in candidates:
-        if finding.severity != "error":
-            continue
-        key = _finding_occurrence_identity(finding)
-        prior_index = index_by_occurrence.get(key)
-        if prior_index is None:
-            index_by_occurrence[key] = len(merged)
-            merged.append(finding)
-        else:
-            merged[prior_index] = _latest_with_evidence(merged[prior_index], finding)
-    return merged
-
-
-def _persisted_monotonic_concept_constraints(
-    record: Mapping[str, Any] | None,
-) -> List[ValidationFinding]:
-    """Load binding constraints from the latest unfinished step record."""
-
-    if not isinstance(record, Mapping) or str(record.get("status") or "") == "ok":
-        return []
-    raw_constraints = record.get("monotonic_concept_constraints")
-    if not isinstance(raw_constraints, list):
-        return []
-    parsed: List[ValidationFinding] = []
-    for payload in raw_constraints:
-        if not isinstance(payload, Mapping):
-            continue
-        try:
-            finding = ValidationFinding.model_validate(payload)
-        except (TypeError, ValueError):
-            continue
-        parsed = _merge_monotonic_concept_constraints(parsed, [finding])
-    return parsed
-
-
-def _monotonic_step_llm_repair_history(
-    records: Sequence[Mapping[str, Any]],
+def _planner_materialized_cohort_prompt_payload(
     *,
-    limit: int,
-) -> tuple[int, List[str], bool]:
-    """Recover the largest durable logical-repair counter for one step.
+    plan: AnalysisPlan,
+    universe_path: Path,
+    analysis_cohort_path: Path,
+) -> str:
+    """Serialize the verified cohort receipt for the Coder authority prompt."""
 
-    Step records are append-only attempts.  The latest attempt may terminate
-    before copying the logical counter (for example, on a damaged provider
-    receipt), so latest-record-only recovery can incorrectly buy a fresh
-    repair budget.  A malformed explicit counter is treated conservatively as
-    exhausted instead of being ignored.
-    """
-
-    attempts = 0
-    classes: List[str] = []
-    invalid_snapshot = False
-    for record in records:
-        if "step_llm_repair_attempts" in record:
-            raw_attempts = record.get("step_llm_repair_attempts")
-            if (
-                isinstance(raw_attempts, bool)
-                or not isinstance(raw_attempts, int)
-                or raw_attempts < 0
-            ):
-                invalid_snapshot = True
-            else:
-                attempts = max(attempts, raw_attempts)
-        raw_classes = record.get("step_llm_repair_classes")
-        if not isinstance(raw_classes, list):
-            continue
-        normalized = [str(item).strip() for item in raw_classes]
-        if any(not item for item in normalized):
-            invalid_snapshot = True
-            continue
-        if len(normalized) > len(classes):
-            classes = normalized
-    if invalid_snapshot:
-        attempts = max(attempts, max(0, int(limit)))
-    return attempts, classes, invalid_snapshot
-
-
-def _remove_standard_executor_pending_artifacts(out_dir: Path) -> None:
-    """Remove private partial files before failed-run evidence discovery."""
-
-    for name in _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS:
-        (out_dir / name).unlink(missing_ok=True)
-
-
-def _is_standard_executor_internal_artifact(path: Path) -> bool:
-    """Return whether *path* is a private, never-evidence work product."""
-
-    return path.name in _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS
-
-
-def _planner_locked_cohort_prompt_payload(plan: AnalysisPlan) -> str:
-    """Return only the exact Planner-owned cohort definition for Coder scope."""
-
-    cohort = plan.model_dump(mode="json", include={"cohort"}).get("cohort")
+    receipt = _planner_materialized_cohort_execution_receipt(
+        plan=plan,
+        universe_path=universe_path,
+        analysis_cohort_path=analysis_cohort_path,
+    )
     return json.dumps(
-        cohort,
+        receipt,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )
-
 
 def _planner_materialized_cohort_execution_receipt(
     *,
@@ -993,162 +875,6 @@ def _planner_materialized_cohort_execution_receipt(
         "ordered_predicate_flow": flow,
     }
 
-
-def _planner_materialized_cohort_prompt_payload(
-    *,
-    plan: AnalysisPlan,
-    universe_path: Path,
-    analysis_cohort_path: Path,
-) -> str:
-    """Serialize the verified cohort receipt for the Coder authority prompt."""
-
-    receipt = _planner_materialized_cohort_execution_receipt(
-        plan=plan,
-        universe_path=universe_path,
-        analysis_cohort_path=analysis_cohort_path,
-    )
-    return json.dumps(
-        receipt,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def _failed_contract_code_can_be_reused_before_coder(
-    *,
-    prior_step_record: Optional[Mapping[str, Any]],
-    resumed_code: Optional[Tuple[str, Mapping[str, Any]]],
-    step: AnalysisStep,
-    plan: AnalysisPlan,
-    resolved_inputs_sha256: Optional[str],
-    run_input_capsule_sha256: Optional[str],
-) -> bool:
-    """Allow a failed deterministic-contract attempt one exact-code replay.
-
-    An explicit step resume normally asks Coder for a fresh script.  That is
-    wasteful when the previous script executed successfully and only a
-    host-owned output contract failed (for example, after the contract parser
-    itself is fixed).  Reuse is safe only when the checkpoint binds the exact
-    code digest, step specification, and plan-wide scientific scope.  The code
-    still passes every current preflight, execution, contract, concept, and
-    Critic gate; this helper merely avoids paying for a replacement draft
-    before those gates are rerun.
-
-    Older or incomplete checkpoints deliberately fail closed to the normal
-    Coder path rather than gaining implicit reuse authority.
-    """
-
-    if not isinstance(prior_step_record, Mapping) or resumed_code is None:
-        return False
-    if str(prior_step_record.get("status") or "").lower() != "contract_failed":
-        return False
-    if (
-        prior_step_record.get("provider_call_budget_receipt_invalid") is True
-        or prior_step_record.get("quarantined_requires_repair") is True
-        or prior_step_record.get("resumed_failed_contract_code_preflight") is True
-        or prior_step_record.get("returncode") != 0
-        or prior_step_record.get("timed_out") is not False
-        or prior_step_record.get("outputs_safe_to_collect") is not True
-    ):
-        return False
-
-    code, evidence_record = resumed_code
-    if not isinstance(code, str) or not isinstance(evidence_record, Mapping):
-        return False
-    code_sha256 = hashlib.sha256(code.encode("utf-8")).hexdigest()
-    if str(prior_step_record.get("executed_code_sha256") or "") != code_sha256:
-        return False
-    if str(prior_step_record.get("concept_approved_code_sha256") or "") != code_sha256:
-        return False
-    if str(evidence_record.get("sha256") or "") != code_sha256:
-        return False
-    evidence_id = str(evidence_record.get("evidence_id") or "")
-    if (
-        not evidence_id
-        or str(prior_step_record.get("script_evidence_id") or "") != evidence_id
-    ):
-        return False
-
-    def _valid_sha256(value: Any) -> bool:
-        return (
-            isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
-        )
-
-    for field, current_digest in (
-        ("resolved_inputs_sha256", resolved_inputs_sha256),
-        ("run_input_capsule_sha256", run_input_capsule_sha256),
-    ):
-        recorded_digest = prior_step_record.get(field)
-        if (
-            not _valid_sha256(recorded_digest)
-            or not _valid_sha256(current_digest)
-            or recorded_digest != current_digest
-        ):
-            return False
-
-    recorded_scope = prior_step_record.get("plan_scientific_signature")
-    if not isinstance(recorded_scope, (list, tuple)) or list(recorded_scope) != (
-        _serializable_plan_scientific_scope_signature(plan)
-    ):
-        return False
-    analysis_request = prior_step_record.get("analysis_request")
-    executed_step_payload = (
-        analysis_request.get("step") if isinstance(analysis_request, Mapping) else None
-    )
-    if not isinstance(executed_step_payload, Mapping):
-        return False
-    try:
-        executed_step = AnalysisStep.model_validate(executed_step_payload)
-    except (TypeError, ValueError):
-        return False
-    return _step_scientific_signature(executed_step) == _step_scientific_signature(step)
-
-
-class _InertPythonNodeStripper(ast.NodeTransformer):
-    """Remove syntax that cannot repair analytical behavior."""
-
-    def visit_Pass(self, node: ast.Pass) -> None:
-        del node
-        return None
-
-    def visit_Expr(self, node: ast.Expr) -> Optional[ast.Expr]:
-        node = self.generic_visit(node)
-        if isinstance(node.value, ast.Constant):
-            return None
-        return node
-
-
-def _python_semantic_sha256(code: str) -> Optional[str]:
-    """Hash executable Python structure while ignoring comments/whitespace."""
-
-    try:
-        tree = _InertPythonNodeStripper().visit(ast.parse(code))
-        normalized = ast.dump(
-            tree,
-            annotate_fields=True,
-            include_attributes=False,
-        )
-    except (SyntaxError, TypeError, ValueError):
-        return None
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
-def _python_repair_is_materially_changed(before: str, after: str) -> bool:
-    """Reject exact and AST-equivalent repair responses."""
-
-    if (
-        hashlib.sha256(before.encode("utf-8")).digest()
-        == hashlib.sha256(after.encode("utf-8")).digest()
-    ):
-        return False
-    before_semantic = _python_semantic_sha256(before)
-    after_semantic = _python_semantic_sha256(after)
-    if before_semantic is not None and before_semantic == after_semantic:
-        return False
-    return True
-
-
 def _repair_publication_figure_in_staging(
     *,
     run_dir: Path,
@@ -1228,2317 +954,6 @@ def _repair_publication_figure_in_staging(
             except Exception:
                 continue
         return repair_id
-
-
-def _actionable_validator_messages(
-    *finding_groups: Sequence[ValidationFinding],
-) -> List[str]:
-    """Return only blocking validator messages that require Critic action.
-
-    Warning and informational audit records remain in the manifest and global
-    findings, but the untyped Critic input cannot preserve their severity. If
-    forwarded as bare strings they become ``needs_revision`` and incorrectly
-    fail an otherwise valid step. Only fail-closed errors are actionable here.
-    """
-
-    return [
-        finding.message
-        for finding in _blocking_validator_findings(*finding_groups)
-        if finding.message
-    ]
-
-
-_CAPSULE_TRANSIENT_STEP_STATUSES = {
-    "initial_generation_pending",
-    "repair_transport_pending",
-    "candidate_checkpointed",
-    "capsule_revalidation_pending",
-    "concept_audited_pending_review",
-    "executed_pending_review",
-}
-
-
-def _step_snapshot_requires_provider_receipt(
-    record: Mapping[str, Any],
-    *,
-    provider_attempts: int,
-    logical_repair_attempts: int,
-) -> bool:
-    """Whether a checkpoint proves a durable provider ledger must exist."""
-
-    if record.get("step_provider_call_receipt_version") not in {
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
-    }:
-        return False
-    return bool(
-        provider_attempts > 0
-        or logical_repair_attempts > 0
-        or record.get("capsule_pending_initial_transport_id")
-        or record.get("step_provider_call_receipt")
-    )
-
-
-def _append_terminal_step_record(
-    records: List[Dict[str, Any]],
-    record: Dict[str, Any],
-) -> None:
-    """Replace this attempt's capsule checkpoint instead of retaining both."""
-
-    step_id = record.get("step_id")
-    attempt_id = record.get("attempt_id")
-    records[:] = [
-        existing
-        for existing in records
-        if not (
-            existing.get("step_id") == step_id
-            and existing.get("attempt_id") == attempt_id
-            and existing.get("status") in _CAPSULE_TRANSIENT_STEP_STATUSES
-        )
-    ]
-    records.append(record)
-
-
-def _upsert_current_capsule_checkpoint(
-    records: List[Dict[str, Any]],
-    record: Dict[str, Any],
-) -> None:
-    """Append a new attempt, replacing only its own latest transient state."""
-
-    step_id = record.get("step_id")
-    attempt_id = record.get("attempt_id")
-    for index in range(len(records) - 1, -1, -1):
-        existing = records[index]
-        if existing.get("step_id") != step_id:
-            continue
-        if (
-            existing.get("attempt_id") == attempt_id
-            and existing.get("status") in _CAPSULE_TRANSIENT_STEP_STATUSES
-        ):
-            records[index] = record
-        else:
-            records.append(record)
-        return
-    records.append(record)
-
-
-_SUCCESS_REPLAN_REQUEST_FIELDS = (
-    "replan_requested",
-    "plan_revision_requested",
-)
-
-
-def _successful_step_requests_replan(record: Mapping[str, Any]) -> bool:
-    """Return whether a clean agent step explicitly requests plan adaptation.
-
-    The deterministic probe already receives one automatic replan and failed
-    model steps have their own bounded directed-replan path. Calling the LLM
-    replanner after every ordinary successful step adds latency and usually
-    produces a no-op. Preserve adaptive agent behavior through exact boolean
-    declarations in either the outer record or ``step_summary``; strings and
-    other truthy values are intentionally not accepted.
-    """
-
-    if str(record.get("status") or "") != "ok":
-        return False
-    containers: List[Mapping[str, Any]] = [record]
-    summary = record.get("step_summary")
-    if isinstance(summary, Mapping):
-        containers.append(summary)
-    return any(
-        container.get(field) is True
-        for container in containers
-        for field in _SUCCESS_REPLAN_REQUEST_FIELDS
-    )
-
-
-def _step_status_from_contract_findings(
-    *,
-    contract_findings: Sequence[ValidationFinding],
-    figure_source_findings: Sequence[ValidationFinding],
-    stat_findings: Sequence[ValidationFinding],
-    critique_status: Optional[str] = None,
-) -> str:
-    """Map deterministic review failures to the outer step status.
-
-    A Critic ``needs_revision`` decision is not a successful scientific step.
-    Contract validation normally catches objective defects early enough for an
-    in-run coder repair, but the Critic is the final independent review layer;
-    its negative decision must therefore remain fail-closed rather than being
-    stored as a warning on an otherwise ``ok`` record.
-    """
-
-    has_contract_error = any(
-        finding.severity == "error"
-        for finding in (
-            list(contract_findings) + list(figure_source_findings) + list(stat_findings)
-        )
-    )
-    if has_contract_error:
-        return "contract_failed"
-    if str(critique_status or "").strip().lower() in {
-        "needs_revision",
-        "blocked",
-    }:
-        return "critic_failed"
-    return "ok"
-
-
-_LOCKED_MEASUREMENT_DATA_QUALITY_ISSUES = frozenset(
-    {
-        "measurement_provenance_count_column_ambiguous",
-        "measurement_provenance_count_flag_discordance",
-        "measurement_provenance_host_replay_failed",
-        "measurement_provenance_host_source_missing",
-        "measurement_provenance_host_source_unreadable",
-        "measurement_provenance_invalid_measured_values",
-        "measurement_provenance_invalid_pairs",
-        "measurement_provenance_measured_column_missing",
-    }
-)
-
-
-def _locked_measurement_data_quality_issues(
-    contract_findings: Sequence[ValidationFinding],
-) -> List[str]:
-    """Identify locked-cohort facts that generated code cannot repair."""
-
-    return sorted(
-        {
-            str(finding.detail.get("issue"))
-            for finding in contract_findings
-            if finding.severity == "error"
-            and finding.validator == StepSummaryIntegrityValidator.name
-            and finding.detail.get("issue") in _LOCKED_MEASUREMENT_DATA_QUALITY_ISSUES
-        }
-    )
-
-
-def _step_requires_publication_figure_exports(step: AnalysisStep) -> bool:
-    """Return whether ``step`` structurally owns a figure export contract.
-
-    Step ids and intents are narrative metadata and may mention a downstream
-    publication figure without declaring one as this step's product.  The
-    mandatory export gate therefore accepts only an exact publication-renderer
-    method or the closed method/output evidence recognised by
-    :func:`_step_expects_figure`.
-    """
-
-    method = str(step.method or "").strip().lower()
-    return method == "publication_figure_generation" or _step_expects_figure(step)
-
-
-def _coder_authority_with_locked_robustness_specs(
-    *,
-    authority: HostCoderAuthority,
-    context: ResearchContext,
-    step: AnalysisStep,
-    run_dir: Path,
-) -> HostCoderAuthority:
-    """Attach the planner-locked variant contract out of band."""
-
-    if not _is_cohort_definition_sensitivity_result_step(step):
-        return authority
-    try:
-        specs = _read_locked_robustness_spec_dicts(run_dir)
-    except Exception:
-        return authority
-    if not specs:
-        return authority
-    fields = (
-        "spec_id",
-        "axis",
-        "description",
-        "cohort_override",
-        "missing_override",
-        "outcome_override",
-    )
-    locked_contract = [{field: spec.get(field) for field in fields} for spec in specs]
-    primary_contract: Optional[Dict[str, Any]] = None
-    for manifest_name in ("manifest_partial.json", "manifest.json"):
-        manifest_path = Path(run_dir) / manifest_name
-        if not manifest_path.is_file():
-            continue
-        try:
-            manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        raw_records = (
-            manifest_payload.get("per_step_records")
-            if isinstance(manifest_payload, Mapping)
-            else None
-        )
-        if not isinstance(raw_records, list):
-            continue
-        primary_contract = _authoritative_primary_robustness_contract(
-            completed_step_records=raw_records,
-            context=context,
-        )
-        if primary_contract is not None:
-            break
-    attachment = (
-        "LOCKED ROBUSTNESS SPECIFICATIONS (binding plan-time state):\n"
-        + json.dumps(locked_contract, ensure_ascii=False, separators=(",", ":"))
-        + "\nExecute every spec_id exactly as declared; do not rename, replace, "
-        "or invent specifications. Cohort-axis definitions that can recover "
-        "rows outside the locked analysis cohort must be materialised from "
-        "os.environ['EASYICU_UNIVERSE_PARQUET']; COHORT_PARQUET is the locked "
-        "analysis cohort."
-        "\n\n" + ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE
-    )
-    if primary_contract is not None:
-        attachment += (
-            "\n\nAUTHORITATIVE PRIMARY MODEL CONTRACT (binding; variants must "
-            "re-estimate this model rather than substitute descriptive risks):\n"
-            + json.dumps(
-                primary_contract,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        )
-    return authority.append(attachment)
-
-
-# Max directed full-replans fired when a model/estimation step self-blocks on a
-# task-viable cohort. Two attempts give the replanner a fair chance to honour
-# the override directive; beyond that the run falls back to an honest
-# diagnostic_only rather than burning the replanner on a stuck plan.
-_MAX_DIRECTED_MODEL_REPLANS = 2
-
-
-def _contract_repair_log(
-    findings: Sequence[ValidationFinding],
-) -> str:
-    """Serialize an untrusted diagnostic mirror of contract failures."""
-
-    return json.dumps(
-        [
-            {
-                "validator": finding.validator,
-                "severity": finding.severity,
-                "message": finding.message,
-                "detail": finding.detail,
-            }
-            for finding in findings
-        ],
-        ensure_ascii=False,
-        default=str,
-        separators=(",", ":"),
-    )
-
-
-def _is_terminal_publication_figure_repair_step(step: Any) -> bool:
-    """Return true for rendering-only terminal publication figure repair steps."""
-
-    expected_outputs = getattr(step, "expected_outputs", None) or []
-    method = re.sub(
-        r"[^a-z0-9]+",
-        "_",
-        str(getattr(step, "method", "") or "").strip().lower(),
-    ).strip("_")
-    rendering_methods = {
-        "publication_figure_generation",
-        "publication_figure_repair",
-        "rendering_only_repair_from_primary_results",
-    }
-    if method not in rendering_methods or not expected_outputs:
-        return False
-    return all(_output_declares_figure(str(output)) for output in expected_outputs)
-
-
-def _publication_bundle_has_primary_result_roles(outputs_dir: Path) -> bool:
-    """Check whether an output directory already has a primary-result figure bundle."""
-
-    contract_path = outputs_dir / "publication_figure.figure_contract.json"
-    if not contract_path.exists():
-        return False
-    try:
-        contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    panels = contract.get("panels") if isinstance(contract, Mapping) else None
-    if not isinstance(panels, list):
-        return False
-    roles = {
-        str(panel.get("role") or "").strip()
-        for panel in panels
-        if isinstance(panel, Mapping)
-    }
-    if not {"descriptive_result", "primary_estimand"}.issubset(roles):
-        return False
-
-    export_formats = contract.get("export_formats")
-    if not isinstance(export_formats, list) or not export_formats:
-        export_formats = ["svg", "png", "pdf", "tiff"]
-    if not any(
-        (outputs_dir / f"publication_figure.{str(ext).lstrip('.')}").exists()
-        for ext in export_formats
-    ):
-        return False
-
-    source_data = contract.get("source_data")
-    if isinstance(source_data, list):
-        source_paths = [
-            outputs_dir / str(name)
-            for name in source_data
-            if isinstance(name, str) and Path(name).suffix
-        ]
-        if source_paths and not all(path.exists() for path in source_paths):
-            return False
-    return True
-
-
-def _terminal_publication_repair_replan_skip_detail(
-    *,
-    plan: Any,
-    completed_records: Optional[Sequence[Dict[str, Any]]],
-    run_dir: Path,
-) -> Optional[Dict[str, Any]]:
-    """Return a skip reason when replanning would only delay deterministic repairs."""
-
-    current_records = current_step_records(completed_records or [])
-    completed_ok = {
-        str(record.get("step_id") or "")
-        for record in current_records
-        if record.get("status") == "ok" and record.get("step_id")
-    }
-    remaining_steps = [
-        step
-        for step in getattr(plan, "steps", []) or []
-        if str(getattr(step, "step_id", "") or "") not in completed_ok
-    ]
-    if not remaining_steps:
-        return None
-    if not all(
-        _is_terminal_publication_figure_repair_step(step) for step in remaining_steps
-    ):
-        return None
-
-    for record in reversed(current_records):
-        if record.get("status") != "ok" or not record.get("step_id"):
-            continue
-        step_id = str(record["step_id"])
-        outputs_dir = run_dir / "steps" / step_id / "outputs"
-        if _publication_bundle_has_primary_result_roles(outputs_dir):
-            return {
-                "remaining_step_ids": [
-                    str(getattr(step, "step_id", "") or "") for step in remaining_steps
-                ],
-                "satisfied_by_step_id": step_id,
-                "satisfied_by_outputs_dir": str(outputs_dir),
-            }
-    return None
-
-
-def _detached_figure_repair_binding(
-    *,
-    step: AnalysisStep,
-    plan: AnalysisPlan,
-    completed_records: Sequence[Mapping[str, Any]],
-) -> Optional[Tuple[str, str, List[str]]]:
-    """Bind a detached rendering-only repair to one failed figure target.
-
-    The binding is orchestrator-owned: it comes from the current plan and
-    latest outer step ledger, never from the renderer's self-reported
-    ``parent_step`` text. Ambiguous repairs remain unbound and therefore cannot
-    receive execution credit.
-    """
-
-    if not _is_terminal_publication_figure_repair_step(step):
-        return None
-    latest = {
-        str(record.get("step_id") or ""): record
-        for record in current_step_records(completed_records)
-    }
-    plan_steps = {
-        str(candidate.step_id or ""): candidate for candidate in plan.steps or []
-    }
-    declared_step_inputs = {
-        str(value or "").strip()
-        for value in (step.inputs or [])
-        if str(value or "").strip() in plan_steps
-    }
-    candidates: List[Tuple[str, str, List[str]]] = []
-    for target_step_id, target_step in plan_steps.items():
-        if target_step_id == str(step.step_id or ""):
-            continue
-        target_record = latest.get(target_step_id)
-        target_status = str((target_record or {}).get("status") or "").strip().lower()
-        if target_record is None or target_status not in {
-            "execution_failed",
-            "contract_failed",
-            "repair_failed",
-        }:
-            continue
-        if not _step_has_figure_only_output_contract(target_step):
-            continue
-        source_step_id = _parent_step_id_for_figure_step(target_step)
-        if source_step_id is None:
-            continue
-        source_record = latest.get(source_step_id)
-        if (
-            source_record is None
-            or str(source_record.get("status") or "").strip().lower() != "ok"
-        ):
-            continue
-        if declared_step_inputs and not (
-            {target_step_id, source_step_id} & declared_step_inputs
-        ):
-            continue
-        source_evidence_ids = [
-            str(evidence_id)
-            for evidence_id in (source_record.get("evidence_ids") or [])
-            if str(evidence_id).strip()
-        ]
-        if not source_evidence_ids:
-            continue
-        candidates.append((target_step_id, source_step_id, source_evidence_ids))
-    if len(candidates) != 1:
-        return None
-    return candidates[0]
-
-
-def _should_attempt_detached_figure_binding(
-    *, out_dir: Path, sealed_renderer_authorized_code_sha256: Optional[str]
-) -> bool:
-    """Detached rescue lineage must never rewrite an authorized sealed summary."""
-
-    return sealed_renderer_authorized_code_sha256 is None and _has_figure_exports(
-        out_dir
-    )
-
-
-_SEALED_AUTHORITY_SUMMARY_MARKERS = (
-    "sealed_renderer_repair",
-    "sealed_renderer_implementation_sha256",
-    "sealed_renderer_parent_digests",
-    "planner_bound_figure_products",
-    "planner_product_slot_bindings",
-    "planner_product_binding",
-)
-
-
-def _unowned_sealed_authority_markers(
-    step_summary: Mapping[str, Any],
-    *,
-    authorized_code_sha256: Optional[str],
-) -> List[str]:
-    """Reject sealed provenance unless the host authorized it pre-execution."""
-
-    if authorized_code_sha256 is not None:
-        return []
-    return [
-        marker for marker in _SEALED_AUTHORITY_SUMMARY_MARKERS if marker in step_summary
-    ]
-
-
-def _max_finding_severity(
-    findings_for_step: Sequence[ValidationFinding],
-) -> Optional[str]:
-    """Return the strongest severity across findings (error > warning > info)."""
-    if any(f.severity == "error" for f in findings_for_step):
-        return "error"
-    if any(f.severity == "warning" for f in findings_for_step):
-        return "warning"
-    if any(f.severity == "info" for f in findings_for_step):
-        return "info"
-    return None
-
-
-def scope_findings_to_records(
-    evidence_ids: Sequence[str],
-    findings_for_step: Sequence[ValidationFinding],
-) -> Dict[str, tuple[Optional[str], List[str]]]:
-    """Map each step output record to the caveat that actually concerns it.
-
-    A finding that names specific records (``finding.evidence_ids``) taints
-    ONLY those records. A step-global finding — no evidence_ids, e.g. an
-    "immortal-time-bias risk" or "cohort is keyed at the stay level"
-    advisory — describes the ANALYSIS DESIGN, not any one artifact.
-    Blanket-tainting every output record with a step-global WARNING made the
-    primary result table uncitable and the manuscript unwinnable: one design
-    advisory flags ``table_one`` / ``adjusted_association``, and the
-    manifest-caveat gate then blocks any draft that cites them (which every
-    real Results section must). Those advisories still live in the manifest
-    findings list and reach the writer as limitations — they simply no longer
-    masquerade as per-artifact taint.
-
-    Step-global ERRORS keep the blanket behaviour (fail-closed: a step-level
-    error means the step's outputs are not to be trusted).
-
-    Returns ``{evidence_id: (severity_or_None, messages)}``.
-    """
-    targeted: Dict[str, List[ValidationFinding]] = {}
-    for finding in findings_for_step:
-        for eid in finding.evidence_ids or []:
-            targeted.setdefault(str(eid), []).append(finding)
-
-    global_error_findings = [
-        f for f in findings_for_step if f.severity == "error" and not f.evidence_ids
-    ]
-    global_error_messages = [f.message for f in global_error_findings]
-
-    scoped: Dict[str, tuple[Optional[str], List[str]]] = {}
-    for evidence_id in evidence_ids:
-        eid = str(evidence_id)
-        relevant = targeted.get(eid, [])
-        severity = _max_finding_severity(list(relevant) + global_error_findings)
-        messages = [
-            f.message for f in relevant if f.severity in {"warning", "error"}
-        ] + global_error_messages
-        scoped[eid] = (severity, messages)
-    return scoped
-
-
-def _load_step_summary_from_outputs(out_dir: Path) -> Dict[str, Any]:
-    """Load the current staged summary without granting it evidence authority."""
-
-    summary_path = out_dir / "step_summary.json"
-    if not summary_path.exists():
-        return {}
-    try:
-        loaded = json.loads(summary_path.read_text(encoding="utf-8"))
-    except Exception:
-        loaded = None
-    return bind_primary_output(loaded, out_dir)
-
-
-def build_self_block_replan_directive(
-    *,
-    failed_step: AnalysisStep,
-    failed_record: Mapping[str, Any],
-    completed_records: Sequence[Mapping[str, Any]],
-    viability: "CohortViability",
-) -> Optional[str]:
-    """Return a viability-conditioned override directive when a model/estimation
-    step self-blocked on a task-viable cohort, else ``None``.
-
-    Pure and deterministic so the trigger logic is unit-testable without a run.
-    Fires only when ALL hold: the failed step's contract requires model
-    performance statistics (``statistic:auroc`` / ``statistic:brier_score``); the
-    cohort cleared the viability floor; and a deliberate block signal is present
-    on the failed step or an upstream completed step (e.g. a
-    ``modeling_block_registration`` step). Stays silent otherwise — a genuinely
-    non-viable cohort or a hard crash leaves blocking legitimate.
-
-    Impartiality: the directive is conditioned on viability twice over — the
-    trigger requires ``viability.viable`` and the directive text itself reaffirms
-    that blocking stays legitimate on genuinely non-viable data. It never
-    dictates which model to fit, only that a model must actually be fit.
-    """
-    if not step_requires_model_performance(failed_step.expected_outputs):
-        return None
-    if not viability.viable:
-        return None
-    block_reason = step_summary_block_signal(failed_record.get("step_summary") or {})
-    if not block_reason:
-        for rec in completed_records:
-            if not isinstance(rec, Mapping):
-                continue
-            block_reason = step_summary_block_signal(rec.get("step_summary") or {})
-            if block_reason:
-                break
-    if not block_reason:
-        return None
-    return (
-        "The locked analysis cohort is task-viable (" + viability.note + "), yet "
-        "the modeling step recorded a non-execution/blocked status "
-        f'("{block_reason}") and produced no model and no required performance '
-        "statistics (AUROC / Brier). On a cohort this populated, declaring the "
-        "repaired artifacts unusable, registering a modeling block, or emitting a "
-        "non-execution model stub is NOT an acceptable outcome for this task. "
-        "Revise the remaining plan so the primary modeling step actually fits a "
-        "model on the available predictors and emits the required performance "
-        "statistics. Do NOT re-insert any step whose purpose is to gate, block, "
-        "or declare the modeling unexecutable on this cohort. (Blocking would be "
-        "legitimate only if "
-        "the data were genuinely non-viable — too few rows, no outcome variation, "
-        "or no usable predictors — which is not the case here.)"
-    )
-
-
-# Method names the planner uses for a PRIMARY estimation step (not a
-# prep/audit/figure step). A dose-response is routed to the ordinal runner only
-# when a dose-response signal is ALSO present, so listing broad association
-# methods here does not hijack a plain association step.
-_ORDINAL_PRIMARY_METHODS = frozenset(
-    {
-        "dose_response",
-        "dose_response_analysis",
-        "ordinal_regression",
-        "ordinal_logistic_regression",
-        "trend_analysis",
-        "association",
-        "association_analysis",
-        "stratified_analysis",
-        "subgroup_analysis",
-        "regression",
-        "logistic_regression",
-        "glm",
-        "modeling",
-        "model",
-        "estimation",
-        "ordinal",
-    }
-)
-# Methods that are UNAMBIGUOUSLY a dose-response primary on their own.
-_ORDINAL_EXPLICIT_METHODS = frozenset(
-    {
-        "dose_response",
-        "dose_response_analysis",
-    }
-)
-# General dose-response / graded-exposure vocabulary (case-neutral: never a
-# specific score name). Present in the question, intent, or declared outputs.
-_ORDINAL_OUTPUT_PRODUCTS = frozenset(
-    {
-        "dose_response",
-        "per_stage",
-        "per_stage_odds",
-        "per_stage_odds_ratio",
-        "per_stage_odds_ratios",
-        "trend_or",
-        "ordinal_trend",
-        "ordinal_trend_model",
-    }
-)
-
-# --- Cohort-definition-sensitivity routing (precise, not blunt keyword) -------
-# A cohort-definition-sensitivity step VARIES the cohort/eligibility definition
-# and compares the result across alternative definitions. The authoritative
-# signal is the planner's own ``method`` key; the historical blunt test --
-# ``"sensitivity" in blob and ("cohort"|"definition" in blob)`` -- false-positives
-# on a primary estimand step that merely mentions a pre-specified within-cohort
-# sensitivity sub-analysis. Require an alternative-definition signal instead.
-_COHORT_DEF_SENSITIVITY_METHODS = frozenset(
-    {
-        "cohort_definition_sensitivity",
-        "cohort_sensitivity",
-        "definition_sensitivity",
-    }
-)
-_COHORT_DEF_SENSITIVITY_OUTPUT_TOKENS = (
-    "alternative_cohort_attrition",
-    "cohort_overlap",
-    "overlap_and_movement_across_cohorts",
-    "sensitivity_grid",
-    # Not "sensitivity_comparison": it substring-matches within-cohort comparison
-    # outputs. Each kept token uniquely signals an across-definition comparison.
-    "definition_sensitivity",
-    "sensitivity_definition_summary",
-    "outcome_by_definition",
-    "adjustment_denominator_sensitivity",
-)
-
-_PRIMARY_COHORT_FLOW_METHODS = frozenset(
-    {
-        "cohort_construction",
-        "cohort_definition",
-        "eligibility_definition",
-    }
-)
-_PRIMARY_COHORT_FLOW_OUTPUTS = frozenset(
-    {
-        "cohort_attrition",
-        "cohort_denominator",
-        "cohort_denominators",
-        "cohort_flow",
-        "attrition_by_rule",
-        "eligibility_flow",
-    }
-)
-
-_EFFECT_ASSOCIATION_METHOD_TOKENS = frozenset(
-    {
-        "association",
-        "causal",
-        "cox",
-        "effect",
-        "estimand",
-        "hazard",
-        "logistic",
-        "logit",
-        "mixed",
-        "model",
-        "prediction",
-        "regression",
-        "survival",
-    }
-)
-_EFFECT_OUTPUT_FRAGMENTS = (
-    "adjusted_effect",
-    "association_estimate",
-    "coefficient",
-    "odds_ratio",
-    "hazard_ratio",
-    "risk_ratio",
-    "risk_difference",
-    "primary_estimate",
-    "primary_or",
-    "primary_hr",
-    "c_statistic",
-    "c_index",
-    "auroc",
-    "cox_summary",
-)
-
-
-def _method_is_effect_or_association(method: str) -> bool:
-    head = _method_head(method)
-    tokens = set(filter(None, re.split(r"[_\-\s]+", head)))
-    return bool(tokens & _EFFECT_ASSOCIATION_METHOD_TOKENS)
-
-
-def _declares_effect_output(expected_outputs: Sequence[str]) -> bool:
-    """True for structured primary-effect/model outputs, including OR/HR."""
-
-    for output in expected_outputs or []:
-        value = str(output or "").strip().lower()
-        if any(fragment in value for fragment in _EFFECT_OUTPUT_FRAGMENTS):
-            return True
-        tokens = set(re.findall(r"[a-z0-9]+", value))
-        if tokens & {"or", "hr", "auc"}:
-            return True
-    return False
-
-
-def _primary_cohort_flow_runner_owns_step(
-    method: str,
-    step_id: str,
-    intent: str,
-    expected_outputs: Sequence[str],
-) -> bool:
-    """True for the owner that defines the single locked primary cohort.
-
-    Alternative-definition/overlap/sensitivity steps are deliberately excluded;
-    those have separate deterministic runners.  The owner must declare an
-    attrition/denominator output, so a generic preparation step is not hijacked.
-    """
-
-    del step_id, intent
-    method_normalized = str(method or "").lower()
-    expected_names = _closed_auxiliary_output_products(
-        expected_outputs,
-        supported_products=_PRIMARY_COHORT_FLOW_OUTPUTS,
-    )
-    if expected_names is None:
-        return False
-    method_head = _method_head(method_normalized)
-    if _method_is_effect_or_association(method_head) or _declares_effect_output(
-        expected_outputs
-    ):
-        return False
-    return method_head in _PRIMARY_COHORT_FLOW_METHODS
-
-
-# The compact missingness runner owns per-concept measurement counts only.  A
-# richer exposure/source repair must retain the coder path until a runner that
-# actually owns all of these contracts exists.
-_RICH_EXPOSURE_AUDIT_OUTPUT_TOKENS = (
-    "exposure_distribution",
-    "joint_availability",
-    "complete_case_attrition",
-    "score_level_distribution",
-    "score_completeness",
-    "invalid_range",
-    "model_availability",
-    "source_reconciliation",
-)
-
-_COMPACT_MISSINGNESS_SUPPORTED_OUTPUTS = frozenset(
-    {
-        "missingness_audit",
-        "missingness_measurement_audit",
-        "measurement_audit",
-        "measurement_source_audit",
-        "measurement_process_audit",
-        "data_quality_audit",
-        "source_coverage",
-        "cohort_flow",
-        "analytic_denominator",
-        "analytic_denominators",
-    }
-)
-_COMPACT_MISSINGNESS_METHODS = frozenset(
-    {
-        "missingness_audit",
-        "missingness",
-        "measurement_audit",
-        MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
-        "measurement_process_audit",
-        "data_quality_audit",
-        "data_quality",
-    }
-)
-_ROBUSTNESS_SENSITIVITY_METHODS = frozenset(
-    {
-        "prespecified_robustness",
-        "robustness_sensitivity",
-        "sensitivity_comparison",
-    }
-)
-
-
-# An ordinal *trend test* can be a purely descriptive result.  The primary
-# dose-response runner fits an adjusted model, so it may only claim a broadly
-# named ordinal/association step when the declared contract or intent actually
-# asks for a model/effect estimate.  This keeps exposure derivation/QC and
-# stage-stratified descriptive steps with their own owners.
-def _is_cohort_definition_sensitivity_step(
-    method: str,
-    step_id: str,
-    intent: str,
-    expected_outputs: Sequence[str],
-) -> bool:
-    """Pure routing test: is this an ACTUAL cohort-definition-sensitivity step?
-
-    Require an exact method head plus a closed comparison product, or a pair of
-    closed across-definition products. Step ids and prose never establish the
-    role. This keeps ordinary within-cohort sensitivity language from vetoing a
-    legitimate primary estimand step.
-    """
-    del step_id, intent
-    head = _method_head(str(method or "").lower())
-    expected_names = _normalised_expected_output_names(expected_outputs)
-    matched_outputs = expected_names & set(_COHORT_DEF_SENSITIVITY_OUTPUT_TOKENS)
-    return head in _COHORT_DEF_SENSITIVITY_METHODS and bool(matched_outputs)
-
-
-def _cohort_definition_sensitivity_runner_owns_step(
-    method: str,
-    step_id: str,
-    intent: str,
-    expected_outputs: Sequence[str],
-) -> bool:
-    """Legacy comparator code is explicit-only and never a preflight owner.
-
-    The historical script reconstructed cohorts, chose covariates, and refit a
-    GLM.  Those are scientific decisions, so no method/output combination may
-    automatically replace the coder with that script.
-    """
-
-    del method, step_id, intent, expected_outputs
-    return False
-
-
-def _cohort_definition_overlap_runner_owns_step(
-    method: str,
-    expected_outputs: Sequence[str],
-) -> bool:
-    """Legacy cohort-construction code is explicit-only, never automatic."""
-
-    del method, expected_outputs
-    return False
-
-
-def _simple_missingness_audit_runner_owns_step(
-    method: str,
-    step_id: str,
-    intent: str,
-    expected_outputs: Sequence[str],
-) -> bool:
-    """True when the compact per-concept missingness runner owns the contract."""
-
-    if _normalised_expected_output_names(expected_outputs) & set(
-        _RICH_EXPOSURE_AUDIT_OUTPUT_TOKENS
-    ):
-        return False
-    declared_names = _closed_auxiliary_output_products(
-        expected_outputs,
-        supported_products=_COMPACT_MISSINGNESS_SUPPORTED_OUTPUTS,
-    )
-    if declared_names is None:
-        # A method label such as ``data_quality_audit`` is not sufficient
-        # ownership.  If even one declared artefact belongs to a different
-        # contract (e.g. representation reconciliation), leave the step to its
-        # coder instead of returning a successful but irrelevant compact audit.
-        return False
-
-    method_head = _method_head(method)
-    if method_head not in _COMPACT_MISSINGNESS_METHODS:
-        return False
-    if _declares_effect_output(expected_outputs):
-        return False
-    return True
-
-
-def _absolute_risk_context_runner_owns_step(
-    method: str,
-    step_id: str,
-    expected_outputs: Sequence[str],
-) -> bool:
-    """True for a descriptive exposure-prevalence / absolute-risk owner."""
-
-    del step_id
-    # No figure clause. MEASURED over 1,965 recorded plan steps: 597 declare a
-    # figure and the closed-product clause below refuses every one of them on
-    # its own -- ``figure:absolute_risk_context`` is not a supported PRODUCT, so
-    # the set never closes. A guard that has never decided a case reads as
-    # protection while protecting nothing; the property it stood for is pinned
-    # by a test instead, so a change to the product reader fails loudly rather
-    # than being silently absorbed here.
-    supported_products = {
-        "exposure_outcome_summary",
-        "exposure_prevalence_and_absolute_risk",
-        "absolute_risk",
-        "absolute_risk_context",
-    }
-    # No method allowlist. It had three spellings -- ``absolute_risk_context``,
-    # ``descriptive_context``, ``exposure_outcome_summary`` -- and MEASURED over
-    # 89 recorded steps promising ``table:absolute_risk_context``, the Planner
-    # wrote none of them: 52 said ``descriptive``, 7
-    # ``descriptive_binary_outcome_summary``, 5
-    # ``prevalence_and_absolute_risk_summary``, and so on down a tail of
-    # synonyms. So this owner -- registered in the capability registry,
-    # advertised to the Planner, and wired into the dispatcher -- claimed 0 of
-    # 89, the Coder wrote the table every time, and the figures drawn over it
-    # died 46 times out of 47. The sibling table written by a real owner ran the
-    # other way: 40 of 51 figures over it passed.
-    #
-    # The promised product IS the claim, and the clauses below already do every
-    # bit of the discrimination: a figure output, an effect method or an effect
-    # output, and a product set outside this owner's four are each refused.
-    # Re-measured over all 1,965 recorded plan steps, dropping the allowlist
-    # claims 77 of the 89 and adds exactly ZERO steps that do not promise the
-    # product -- so the allowlist only ever subtracted correct claims. This is
-    # the same conclusion the exposure/outcome distribution owner reached about
-    # its own two-string allowlist.
-    if _method_is_effect_or_association(method) or _declares_effect_output(
-        expected_outputs
-    ):
-        return False
-    structured_products = _closed_auxiliary_output_products(
-        expected_outputs,
-        supported_products=supported_products,
-    )
-    if structured_products is not None:
-        return True
-    # A reconciliation/audit step may mention absolute-risk context while
-    # owning different artefacts (representation reconciliation, gap notes,
-    # etc.).  The compact runner must not claim such a step merely because its
-    # id contains ``absolute_risk_context``; it only owns the closed output
-    # contract above.
-    return False
-
-
-def _robustness_sensitivity_runner_owns_step(
-    method: str,
-    step_id: str,
-    expected_outputs: Sequence[str],
-    *,
-    step: Optional[AnalysisStep] = None,
-) -> bool:
-    """True for a separate prespecified robustness-comparison owner.
-
-    A step carrying an EMITTABLE ``robustness_replay_spec`` has stated outright
-    that it is the locked-grid replay, so neither the method label below nor the
-    product names need decide anything for it.  Both were string sets, and over
-    the recorded corpus the method set is the one that bled: 182 robustness
-    steps that were neither figures nor claimed by the agent-owned validation
-    gate were turned away by it.
-
-    AN INCOMPLETE DECLARATION MUST NOT COST THE STEP ITS OWNER.  Until
-    2026-07-31 the spec branch *returned* rather than fell through, so declaring
-    a spec replaced the label path outright -- and a spec that did not yet back
-    every promised product answered ``False``, permanently.  Measured over the
-    recorded plans: 10 steps that declare NO spec are claimed by the label path,
-    and 8 that declare a PARTIAL one are refused -- every one of which the label
-    path would have claimed had the field simply been left empty.  The host was
-    punishing the Planner for answering half its question, which teaches exactly
-    the wrong lesson and is invisible from the plan.
-
-    So an unemittable spec now falls through to the same path an absent one
-    takes: no better off, and no worse.  The gap is still reported --
-    ``robustness_replay_declaration_verdict`` names the unbacked products for
-    the plan-time gate -- so the Planner is still asked to close it, but the
-    step is not left to the Coder in the meantime for having tried.
-    """
-
-    del step_id
-    # A promised figure is refused structurally by both paths below, so the
-    # explicit `figure:` guard that used to stand here was unreachable and was
-    # deleted (verified 2026-07-31): `figure` is not one of the three
-    # `_AUXILIARY_OUTPUT_KINDS`, so `_closed_auxiliary_output_products` returns
-    # None for any step promising one, and no replay `output` names a figure,
-    # so `robustness_replay_spec_is_emittable` is False for one too. The
-    # property is locked by a test rather than by a guard that never fires.
-    if (
-        step is not None
-        and step.robustness_replay_spec is not None
-        and robustness_replay_spec_is_emittable(step)
-    ):
-        return True
-    method_head = _method_head(method)
-    if method_head not in _ROBUSTNESS_SENSITIVITY_METHODS:
-        return False
-    supported_products = {
-        "robustness_matrix",
-        "robustness_summary",
-        "complete_case_n",
-        "primary_or",
-        "missingness_strategy_notes",
-    }
-    structured_products = _closed_auxiliary_output_products(
-        expected_outputs,
-        supported_products=supported_products,
-    )
-    if structured_products is None:
-        return False
-    has_matrix = "robustness_matrix" in structured_products
-    has_summary_contract = {
-        "robustness_summary",
-        "complete_case_n",
-    }.issubset(structured_products)
-    return has_matrix or has_summary_contract
-
-
-def _method_has_ordinal_primary_token(method: str) -> bool:
-    """True if ``method`` IS, or is a compound built from, a primary-estimation
-    method token (e.g. ``multivariable_association`` -> ``association``,
-    ``adjusted_logistic_regression`` -> ``regression``).
-
-    Word-boundary token match (split on ``_`` / ``-``), NOT substring, so
-    ``remodeling`` never matches ``model``. This is only ever reached after the
-    closed ordinal-product gate in :func:`_ordinal_dose_response_step_matches`;
-    a plain association label cannot establish ownership on its own.
-    """
-    if method in _ORDINAL_PRIMARY_METHODS:
-        return True
-    tokens = method.replace("-", "_").split("_")
-    return any(tok in _ORDINAL_PRIMARY_METHODS for tok in tokens)
-
-
-def _ordinal_dose_response_step_matches(
-    method: str, blob: str, expected_blob: str
-) -> bool:
-    """Pure routing test: is this the PRIMARY dose-response estimation step?
-
-    This legacy compatibility predicate is unit-testable without a full run. The
-    caller supplies lowercased strings and has already excluded figure and
-    cohort-definition-sensitivity steps.
-
-    ``blob`` = step_id + intent + research_question + expected_outputs;
-    ``expected_blob`` = expected_outputs only.
-    """
-    del blob
-    head = _method_head(method)
-    products = _normalised_structured_output_names(expected_blob)
-    if not products.intersection(_ORDINAL_OUTPUT_PRODUCTS):
-        return False
-    return head in _ORDINAL_EXPLICIT_METHODS or _method_has_ordinal_primary_token(head)
-
-
-# --- Trajectory-clustering compatibility audit ------------------------------
-# Kept as a tested contract helper for legacy/resume inspection. Production has
-# no clustering preflight or coder-failure runner: the agent owns feature/method/k
-# and deterministic code only renders registered clustering products.
-def _trajectory_clustering_step_matches(
-    method: str,
-    blob: str,
-    expected_blob: str = "",
-) -> bool:
-    """Whether a legacy KMeans artifact contract is phenotype-compatible.
-
-    The caller supplies lowercased strings and has already excluded figure steps.
-    Compatibility requires an explicit KMeans method head plus at least two
-    standard clustering products.  A primary EFFECT step (OR/HR/AUROC) is always
-    excluded, and latent-class/GMM/unspecified phenotyping remains agent-owned so
-    the auxiliary cannot silently replace the planned scientific method.
-    """
-    expected_outputs = re.split(r"[\s,]+", str(expected_blob or ""))
-    if _declares_effect_output(expected_outputs):
-        return False
-    return _clustering_contract_applies(
-        method=str(method or ""),
-        intent=str(blob or ""),
-        expected_outputs=str(expected_blob or ""),
-        auxiliary_kmeans_only=True,
-        minimum_output_signals=2,
-    )
-
-
-@dataclass(frozen=True)
-class _ResumeDeterministicRevalidationResult:
-    """Append-only resume ledger after selective deterministic replay."""
-
-    resume_state: Dict[str, Any]
-    revalidated_step_ids: Tuple[str, ...]
-    invalidated_step_ids: Tuple[str, ...]
-
-
-def _verified_explicit_step_authority(
-    *,
-    record: Mapping[str, Any],
-    field: str,
-    expected_kind: str,
-    expected_source_name: Optional[str],
-    evidence_by_id: Mapping[str, Any],
-    run_dir: Path,
-) -> Tuple[Any, Path]:
-    """Resolve one exact checkpoint authority through owner/path/SHA checks."""
-
-    step_id = str(record.get("step_id") or "").strip()
-    evidence_id = str(record.get(field) or "").strip()
-    listed = {
-        str(value).strip()
-        for value in (record.get("evidence_ids") or [])
-        if str(value).strip()
-    }
-    if not evidence_id:
-        raise ValueError(f"successful checkpoint is missing required {field}")
-    if evidence_id not in listed:
-        raise ValueError(f"{field} {evidence_id} is absent from evidence_ids")
-    authority = evidence_by_id.get(evidence_id)
-    if authority is None:
-        raise ValueError(f"{field} references missing evidence {evidence_id}")
-    if str(_evidence_record_field(authority, "produced_by_step") or "") != step_id:
-        raise ValueError(f"{field} is not owned by step {step_id}")
-    actual_kind = str(_evidence_record_field(authority, "kind") or "").lower()
-    if actual_kind != expected_kind:
-        raise ValueError(
-            f"{field} has kind {actual_kind or '<missing>'}, expected {expected_kind}"
-        )
-    verified_path = verified_run_evidence_path(run_dir, authority)
-    if verified_path is None:
-        raise ValueError(f"{field} failed path/digest verification")
-    source_name = _registered_source_name(authority, verified_path)
-    if expected_source_name is not None and source_name != expected_source_name:
-        raise ValueError(f"{field} does not name {expected_source_name}")
-    return authority, verified_path
-
-
-def _verified_resume_step_summary(
-    *,
-    record: Mapping[str, Any],
-    evidence_by_id: Mapping[str, Any],
-    run_dir: Path,
-) -> Dict[str, Any]:
-    """Load a summary only from the record's explicit digest-bound evidence."""
-
-    field = (
-        "probe_summary_evidence_id"
-        if str(record.get("step_id") or "") == "00_probe"
-        else "step_summary_evidence_id"
-    )
-    _, summary_path = _verified_explicit_step_authority(
-        record=record,
-        field=field,
-        expected_kind="statistic",
-        expected_source_name=(
-            "probe_summary.json"
-            if field == "probe_summary_evidence_id"
-            else "step_summary.json"
-        ),
-        evidence_by_id=evidence_by_id,
-        run_dir=run_dir,
-    )
-    try:
-        payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError) as exc:
-        raise ValueError(f"{field} is not readable JSON") from exc
-    if not isinstance(payload, dict):
-        raise ValueError(f"{field} payload is not an object")
-    return payload
-
-
-def _verify_resume_step_script_lineage(
-    *,
-    record: Mapping[str, Any],
-    evidence_by_id: Mapping[str, Any],
-) -> None:
-    """Require every sealed non-code output to bind the reviewed script.
-
-    Owner and digest checks alone are insufficient: a mutable checkpoint could
-    list a second benign script from the same step and point
-    ``script_evidence_id`` at it while retaining outputs produced by the real
-    script.  Exact lineage closes that decoy-code path before preflight.
-    """
-
-    step_id = str(record.get("step_id") or "").strip()
-    script_evidence_id = str(record.get("script_evidence_id") or "").strip()
-    if not script_evidence_id:
-        raise ValueError("successful checkpoint is missing script_evidence_id")
-    for raw_id in record.get("evidence_ids") or []:
-        evidence_id = str(raw_id).strip()
-        authority = evidence_by_id.get(evidence_id)
-        if authority is None:
-            raise ValueError(f"listed evidence {evidence_id} is missing")
-        owner = str(_evidence_record_field(authority, "produced_by_step") or "")
-        if owner != step_id:
-            raise ValueError(
-                f"listed evidence {evidence_id} belongs to {owner or '<run-level>'}"
-            )
-        if evidence_id == script_evidence_id:
-            if str(_evidence_record_field(authority, "kind") or "").lower() != "code":
-                raise ValueError("script_evidence_id does not reference code evidence")
-            continue
-        bound_script_id = str(
-            _evidence_record_field(authority, "script_evidence_id") or ""
-        ).strip()
-        if bound_script_id != script_evidence_id:
-            raise ValueError(
-                f"listed evidence {evidence_id} is bound to script "
-                f"{bound_script_id or '<missing>'}, not {script_evidence_id}"
-            )
-
-
-_STALE_RESOLVED_INPUT_RECEIPT_FIELDS = (
-    "resolved_inputs",
-    "resolved_input_bindings",
-    "resolved_inputs_path",
-    "resolved_inputs_sha256",
-    "revalidated_input_bindings_fingerprint",
-    "flag_only_plausibility_scope",
-)
-
-
-def _discard_stale_resolved_input_receipts(record: Dict[str, Any]) -> None:
-    """Remove mutable or superseded resolved-input receipts in place."""
-
-    for field in _STALE_RESOLVED_INPUT_RECEIPT_FIELDS:
-        record.pop(field, None)
-
-
-def _trusted_resume_success_records(
-    *,
-    records: Sequence[Mapping[str, Any]],
-    evidence_by_id: Mapping[str, Any],
-    run_dir: Path,
-) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-    """Replace mutable checkpoint summaries with explicit evidence payloads."""
-
-    trusted: List[Dict[str, Any]] = []
-    errors: Dict[str, str] = {}
-    for record in records:
-        if str(record.get("status") or "").lower() != "ok":
-            continue
-        step_id = str(record.get("step_id") or "").strip()
-        if (
-            str(record.get("generation_mode") or "").strip().lower()
-            == _HOST_COHORT_MATERIALIZER_GENERATION_MODE
-            and record.get("step_authority_kind")
-            == _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
-        ):
-            copy = dict(record)
-            _discard_stale_resolved_input_receipts(copy)
-            trusted.append(copy)
-            continue
-        try:
-            summary = _verified_resume_step_summary(
-                record=record,
-                evidence_by_id=evidence_by_id,
-                run_dir=run_dir,
-            )
-        except ValueError as exc:
-            errors[step_id] = str(exc)
-            continue
-        copy = dict(record)
-        copy["step_summary"] = summary
-        # These mutable convenience receipts are never replay authority.
-        _discard_stale_resolved_input_receipts(copy)
-        trusted.append(copy)
-    return trusted, errors
-
-
-def _materialize_verified_step_output_view(
-    *,
-    record: Mapping[str, Any],
-    evidence_by_id: Mapping[str, Any],
-    run_dir: Path,
-    destination: Path,
-) -> Dict[str, str]:
-    """Copy only listed, verified same-step evidence under source filenames."""
-
-    step_id = str(record.get("step_id") or "").strip()
-    listed = [
-        str(value).strip()
-        for value in (record.get("evidence_ids") or [])
-        if str(value).strip()
-    ]
-    if not listed:
-        raise ValueError("successful checkpoint has no evidence_ids")
-    destination.mkdir(parents=True, exist_ok=False)
-    copied: Dict[str, str] = {}
-    for evidence_id in listed:
-        authority = evidence_by_id.get(evidence_id)
-        if authority is None:
-            raise ValueError(f"listed evidence {evidence_id} is missing")
-        owner = str(_evidence_record_field(authority, "produced_by_step") or "")
-        if owner != step_id:
-            raise ValueError(
-                f"listed evidence {evidence_id} belongs to {owner or '<run-level>'}"
-            )
-        verified_path = verified_run_evidence_path(run_dir, authority)
-        if verified_path is None:
-            raise ValueError(
-                f"listed evidence {evidence_id} failed digest verification"
-            )
-        source_name = _registered_source_name(authority, verified_path)
-        if (
-            not source_name
-            or Path(source_name).name != source_name
-            or "/" in source_name
-            or "\\" in source_name
-        ):
-            raise ValueError(
-                f"listed evidence {evidence_id} has no safe source filename"
-            )
-        prior_id = copied.get(source_name)
-        if prior_id is not None and prior_id != evidence_id:
-            raise ValueError(f"multiple listed evidence records claim {source_name}")
-        target = destination / source_name
-        shutil.copyfile(verified_path, target)
-        target.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
-        copied[source_name] = evidence_id
-    return copied
-
-
-_REPLAY_SUMMARY_OUTPUT_CONTAINER_KEYS = frozenset(
-    {"output_files", "output_artifacts", "outputs", "figure_files"}
-)
-_REPLAY_SUMMARY_DESCRIPTOR_PATH_KEYS = frozenset({"path", "relative_path", "filename"})
-_REPLAY_SUMMARY_DIRECT_FIGURE_KEYS = frozenset({"figure_file", "figure_path"})
-
-
-def _project_verified_replay_output_paths(
-    summary: Mapping[str, Any],
-    *,
-    materialized_evidence_by_source_name: Mapping[str, str],
-) -> Dict[str, Any]:
-    """Point one in-memory replay summary at its verified temporary view.
-
-    Historical summaries may contain absolute paths into the original step
-    output directory.  Resume revalidation deliberately does not trust those
-    mutable files: it copies the checkpoint's digest-verified evidence into a
-    temporary output view instead.  Project only path values whose basename
-    is backed by exactly one materialized, same-step evidence record.  An
-    unmatched absolute path is left intact so containment gates continue to
-    fail closed.
-
-    The sealed summary bytes and checkpoint record are never modified; this
-    projection exists only for deterministic replay against the temporary
-    evidence view.
-    """
-
-    source_names = {
-        str(name)
-        for name in materialized_evidence_by_source_name
-        if str(name) and Path(str(name)).name == str(name)
-    }
-
-    def project_path(value: str) -> str:
-        raw = str(value).strip()
-        source_name = Path(raw).name
-        return source_name if source_name in source_names else value
-
-    def visit(value: Any, *, output_container: bool = False) -> Any:
-        if isinstance(value, Mapping):
-            projected: Dict[Any, Any] = {}
-            for raw_key, child in value.items():
-                key = re.sub(r"[^a-z0-9]+", "_", str(raw_key).strip().lower()).strip(
-                    "_"
-                )
-                starts_output_container = key in _REPLAY_SUMMARY_OUTPUT_CONTAINER_KEYS
-                child_is_output = output_container or starts_output_container
-                if isinstance(child, str) and (
-                    key in _REPLAY_SUMMARY_DIRECT_FIGURE_KEYS
-                    or (
-                        output_container and key in _REPLAY_SUMMARY_DESCRIPTOR_PATH_KEYS
-                    )
-                    or starts_output_container
-                ):
-                    projected[raw_key] = project_path(child)
-                elif isinstance(child, str):
-                    projected[raw_key] = child
-                else:
-                    projected[raw_key] = visit(
-                        child,
-                        output_container=child_is_output,
-                    )
-            return projected
-        if isinstance(value, list):
-            return [visit(item, output_container=output_container) for item in value]
-        if isinstance(value, tuple):
-            return tuple(
-                visit(item, output_container=output_container) for item in value
-            )
-        if isinstance(value, str) and output_container:
-            return project_path(value)
-        return copy.deepcopy(value)
-
-    return visit(summary)
-
-
-def _resume_success_dependencies(
-    *,
-    plan: AnalysisPlan,
-    current_records: Sequence[Mapping[str, Any]],
-    evidence_by_id: Mapping[str, Any],
-) -> Dict[str, Set[str]]:
-    """Derive immutable plan/evidence producer edges for invalidation."""
-
-    product_producers: Dict[Tuple[str, str], Set[str]] = {}
-    for step in plan.steps:
-        for raw_output in step.expected_outputs or []:
-            product = _typed_input_product(raw_output)
-            if product is not None:
-                product_producers.setdefault(product, set()).add(step.step_id)
-    dependencies: Dict[str, Set[str]] = {}
-    steps_by_id = {step.step_id: step for step in plan.steps}
-    for record in current_records:
-        step_id = str(record.get("step_id") or "").strip()
-        deps = dependencies.setdefault(step_id, set())
-        step = steps_by_id.get(step_id)
-        if step is not None:
-            for raw_input in step.inputs or []:
-                product = _typed_input_product(raw_input)
-                producers = product_producers.get(product or ("", ""), set())
-                if len(producers) == 1:
-                    deps.update(producers - {step_id})
-        pending = [
-            str(value).strip()
-            for evidence_id in (record.get("evidence_ids") or [])
-            if (authority := evidence_by_id.get(str(evidence_id).strip())) is not None
-            for value in (_evidence_record_field(authority, "inputs") or [])
-            if str(value).strip()
-        ]
-        seen: Set[str] = set()
-        while pending:
-            evidence_id = pending.pop()
-            if evidence_id in seen:
-                continue
-            seen.add(evidence_id)
-            authority = evidence_by_id.get(evidence_id)
-            if authority is None:
-                continue
-            owner = str(_evidence_record_field(authority, "produced_by_step") or "")
-            if owner and owner != step_id:
-                deps.add(owner)
-                continue
-            pending.extend(
-                str(value).strip()
-                for value in (_evidence_record_field(authority, "inputs") or [])
-                if str(value).strip()
-            )
-    return dependencies
-
-
-def _fresh_plausibility_receipt_findings(
-    step_summary: Mapping[str, Any],
-    step: AnalysisStep,
-    script_text: str,
-    authority: StepPlausibilityAuthority,
-) -> List[ValidationFinding]:
-    return plausibility_audit_receipt_findings(
-        step_summary=step_summary,
-        step=step,
-        script_text=script_text,
-        scope=authority.scope,
-    )
-
-
-def _selectively_revalidate_resume_successes(
-    *,
-    resume_state: Dict[str, Any],
-    plan: AnalysisPlan,
-    context: ResearchContext,
-    evidence: Any,
-    run_dir: Path,
-    cohort_path: Path,
-    universe_path: Path,
-    resume_from_step_id: Optional[str],
-    development_sample: Optional[Any] = None,
-) -> _ResumeDeterministicRevalidationResult:
-    """Replay changed deterministic gates against sealed evidence only.
-
-    The function runs before :class:`ResumeController` applies skip decisions.
-    It never invokes the coder, runner, analyzer, or LLM concept auditor.
-    Successful replay appends a new ``ok`` authority checkpoint; any error
-    appends ``resume_validator_invalid`` and makes the step executable again.
-    """
-
-    state = dict(resume_state)
-    authority_history = [
-        dict(record)
-        for record in (resume_state.get("per_step_records") or [])
-        if isinstance(record, Mapping)
-    ]
-    saved_attempt_history = [
-        dict(record)
-        for record in (resume_state.get("step_attempt_history") or [])
-        if isinstance(record, Mapping)
-    ]
-    history = saved_attempt_history or list(authority_history)
-    for authority_record in authority_history:
-        if authority_record not in history:
-            history.append(authority_record)
-    # Resume audit history is append-only and may contain a newer invalidation
-    # than the compact outer authority view (for example after an interrupted
-    # execution attempt rewrote only the latter).  Resolve latest-per-step from
-    # the merged monotonic history so validator-invalid checkpoints cannot
-    # disappear and fall through to a second initial-generation purchase.
-    current_records = [dict(record) for record in current_step_records(history)]
-    current_successes = [
-        record
-        for record in current_records
-        if str(record.get("status") or "").strip().lower() == "ok"
-    ]
-    steps_by_id = {step.step_id: step for step in plan.steps}
-    step_order = {"00_probe": -1, **{s.step_id: i for i, s in enumerate(plan.steps)}}
-    seeded_invalidated = {
-        str(record.get("step_id") or "").strip(): (
-            "prior checkpoint already lacks current resume authority "
-            f"(status={str(record.get('status') or '').strip().lower()})"
-        )
-        for record in current_records
-        if str(record.get("status") or "").strip().lower()
-        in {"resume_evidence_invalid", "resume_validator_invalid"}
-    }
-    if resume_from_step_id and seeded_invalidated:
-        cut = step_order.get(resume_from_step_id)
-        earlier_invalid = sorted(
-            step_id
-            for step_id in seeded_invalidated
-            if cut is not None and step_order.get(step_id, cut) < cut
-        )
-        if earlier_invalid:
-            raise RunInputIdentityError(
-                "Cannot start resume after an already-invalid upstream "
-                "authority; resume at or before: " + ", ".join(earlier_invalid)
-            )
-    stamp = _deterministic_gate_stamp()
-    stale_successes = [
-        record
-        for record in current_successes
-        if record.get("deterministic_gate_fingerprint")
-        != stamp["deterministic_gate_fingerprint"]
-    ]
-    if not stale_successes and not seeded_invalidated:
-        return _ResumeDeterministicRevalidationResult(state, (), ())
-
-    evidence_records = list(evidence.records())
-    evidence_by_id = {
-        str(_evidence_record_field(record, "evidence_id") or ""): record
-        for record in evidence_records
-    }
-    trusted_records, trusted_summary_errors = _trusted_resume_success_records(
-        records=current_successes,
-        evidence_by_id=evidence_by_id,
-        run_dir=run_dir,
-    )
-    trusted_by_step = {
-        str(record.get("step_id") or ""): record for record in trusted_records
-    }
-    current_by_step = {
-        str(record.get("step_id") or ""): record for record in current_successes
-    }
-    dependencies = _resume_success_dependencies(
-        plan=plan,
-        current_records=current_records,
-        evidence_by_id=evidence_by_id,
-    )
-    invalidated: Dict[str, str] = dict(seeded_invalidated)
-    revalidated: List[str] = []
-    invalid_payloads: Dict[str, Dict[str, Any]] = {}
-    retirement_records: Dict[str, Mapping[str, Any]] = {}
-
-    def attempt_identity(step_id: str) -> Tuple[str, str]:
-        sequence = 1 + sum(
-            1
-            for record in history
-            if str(record.get("step_id") or "") == step_id
-            and record.get("revalidated_without_execution") is True
-        )
-        attempt_id = f"{step_id}:resume_revalidation:{sequence}"
-        return attempt_id, f"{attempt_id}:deterministic_review"
-
-    def indexed_alias_evidence_ids(prior_record: Mapping[str, Any]) -> List[str]:
-        step_id = str(prior_record.get("step_id") or "").strip()
-        indexed_ids: List[str] = []
-        for raw_id in prior_record.get("evidence_ids") or []:
-            evidence_id = str(raw_id).strip()
-            authority = evidence_by_id.get(evidence_id)
-            if (
-                authority is not None
-                and str(_evidence_record_field(authority, "produced_by_step") or "")
-                == step_id
-            ):
-                indexed_ids.append(evidence_id)
-        return list(dict.fromkeys(indexed_ids))
-
-    for invalid_step_id in seeded_invalidated:
-        prior_success = next(
-            (
-                record
-                for record in reversed(history)
-                if str(record.get("step_id") or "").strip() == invalid_step_id
-                and str(record.get("status") or "").strip().lower() == "ok"
-            ),
-            None,
-        )
-        if prior_success is not None:
-            retirement_records[invalid_step_id] = prior_success
-            current_invalid = next(
-                (
-                    record
-                    for record in reversed(history)
-                    if str(record.get("step_id") or "").strip() == invalid_step_id
-                    and str(record.get("status") or "").strip().lower()
-                    in {"resume_evidence_invalid", "resume_validator_invalid"}
-                ),
-                None,
-            )
-            raw_capsule_ref = prior_success.get("step_authority_capsule_ref")
-            prior_code_sha256 = str(
-                prior_success.get("executed_code_sha256")
-                or prior_success.get("concept_approved_code_sha256")
-                or ""
-            )
-            if (
-                isinstance(current_invalid, Mapping)
-                and "resume_revalidation_candidate_capsule_ref" not in current_invalid
-                and isinstance(raw_capsule_ref, Mapping)
-                and re.fullmatch(r"[0-9a-f]{64}", prior_code_sha256)
-            ):
-                # Append a monotonic continuation for invalid checkpoints
-                # written before recovery coordinates existed. Never mutate
-                # the historical checkpoint or reset its provider receipt.
-                history.append(
-                    {
-                        **dict(current_invalid),
-                        "attempt_id": (
-                            f"{str(current_invalid.get('attempt_id') or invalid_step_id)}"
-                            ":candidate_recovery"
-                        ),
-                        "resume_revalidation_candidate_capsule_ref": dict(
-                            raw_capsule_ref
-                        ),
-                        "resume_revalidation_candidate_code_sha256": (
-                            prior_code_sha256
-                        ),
-                        "resume_revalidation_candidate_attempt_id": str(
-                            prior_success.get("attempt_id") or ""
-                        ),
-                    }
-                )
-
-    def append_invalid(
-        *,
-        prior_record: Mapping[str, Any],
-        reason: str,
-        code_findings: Sequence[ValidationFinding] = (),
-        gate_findings: Optional[_FinalDeterministicGateFindings] = None,
-    ) -> None:
-        step_id = str(prior_record.get("step_id") or "").strip()
-        if step_id in invalidated:
-            return
-        attempt_id, checkpoint_id = attempt_identity(step_id)
-        if not code_findings and gate_findings is None:
-            code_findings = _bind_findings_to_step_attempt(
-                [
-                    ValidationFinding(
-                        validator="resume_deterministic_revalidation",
-                        severity="error",
-                        message=(
-                            f"Prior success for step {step_id} failed current "
-                            "deterministic replay."
-                        ),
-                        detail={"reason": reason},
-                    )
-                ],
-                step_id=step_id,
-                attempt_id=attempt_id,
-                checkpoint_id=checkpoint_id,
-            )
-        payload: Dict[str, Any] = {
-            "step_id": step_id,
-            "status": "resume_validator_invalid",
-            "revalidated_without_execution": True,
-            "attempt_id": attempt_id,
-            "review_checkpoint_id": checkpoint_id,
-            "resume_invalidation_reason": reason,
-            "invalidated_evidence_ids": list(prior_record.get("evidence_ids") or []),
-            "evidence_ids": [],
-            "deterministic_code_findings": [
-                finding.model_dump(mode="json") for finding in code_findings
-            ],
-            "retired_current_aliases": {},
-            **stamp,
-        }
-        raw_capsule_ref = prior_record.get("step_authority_capsule_ref")
-        prior_code_sha256 = str(
-            prior_record.get("executed_code_sha256")
-            or prior_record.get("concept_approved_code_sha256")
-            or ""
-        )
-        if isinstance(raw_capsule_ref, Mapping) and re.fullmatch(
-            r"[0-9a-f]{64}", prior_code_sha256
-        ):
-            # Invalid status retires current authority, but this explicit
-            # immutable coordinate lets the next attempt revalidate the exact
-            # candidate without purchasing a second initial generation.
-            payload.update(
-                {
-                    "resume_revalidation_candidate_capsule_ref": dict(raw_capsule_ref),
-                    "resume_revalidation_candidate_code_sha256": (prior_code_sha256),
-                    "resume_revalidation_candidate_attempt_id": str(
-                        prior_record.get("attempt_id") or ""
-                    ),
-                }
-            )
-        for key, value in prior_record.items():
-            if key.startswith("step_provider_call_") or key.startswith(
-                "step_llm_repair_"
-            ):
-                payload[key] = value
-        if gate_findings is not None:
-            payload.update(
-                {
-                    "stat_findings": [
-                        finding.model_dump(mode="json")
-                        for finding in gate_findings.stat_findings
-                    ],
-                    "clinical_findings": [
-                        finding.model_dump(mode="json")
-                        for finding in gate_findings.clinical_findings
-                    ],
-                    "guard_findings": [
-                        finding.model_dump(mode="json")
-                        for finding in gate_findings.guard_findings
-                    ],
-                    "contract_findings": [
-                        finding.model_dump(mode="json")
-                        for finding in gate_findings.contract_findings
-                    ],
-                    "figure_source_findings": [
-                        finding.model_dump(mode="json")
-                        for finding in gate_findings.figure_source_findings
-                    ],
-                }
-            )
-        invalidated[step_id] = reason
-        invalid_payloads[step_id] = payload
-        retirement_records[step_id] = prior_record
-        history.append(payload)
-
-    stale_successes.sort(
-        key=lambda record: step_order.get(
-            str(record.get("step_id") or ""), len(step_order)
-        )
-    )
-    for prior_record in stale_successes:
-        prior_record = restore_revalidated_resolved_inputs_sha256(
-            prior_record=prior_record,
-            checkpoint_history=history,
-            run_dir=run_dir,
-        )
-        step_id = str(prior_record.get("step_id") or "").strip()
-        invalid_upstream = sorted(
-            dependencies.get(step_id, set()).intersection(invalidated)
-        )
-        if invalid_upstream:
-            append_invalid(
-                prior_record=prior_record,
-                reason=(
-                    "current success depends on invalidated upstream step(s): "
-                    + ", ".join(invalid_upstream)
-                ),
-            )
-            continue
-        if step_id == "00_probe":
-            summary_error = trusted_summary_errors.get(step_id)
-            if summary_error is not None or step_id not in trusted_by_step:
-                append_invalid(
-                    prior_record=prior_record,
-                    reason=(summary_error or "probe summary authority is unavailable"),
-                )
-                continue
-            evidence_payloads = {
-                evidence_id: (
-                    record.model_dump(mode="json")
-                    if hasattr(record, "model_dump")
-                    else dict(record)
-                )
-                for evidence_id, record in evidence_by_id.items()
-            }
-            error = _host_probe_authority_error(
-                record=prior_record,
-                evidence_ids=list(prior_record.get("evidence_ids") or []),
-                step_id=step_id,
-                run_dir=run_dir,
-                records=evidence_payloads,
-            )
-            if error is not None:
-                append_invalid(prior_record=prior_record, reason=error)
-                continue
-            attempt_id, checkpoint_id = attempt_identity(step_id)
-            summary = trusted_by_step[step_id]["step_summary"]
-            replayed = {
-                **prior_record,
-                "status": "ok",
-                "step_summary": dict(summary),
-                "revalidated_without_execution": True,
-                "attempt_id": attempt_id,
-                "review_checkpoint_id": checkpoint_id,
-                **stamp,
-            }
-            _discard_stale_resolved_input_receipts(replayed)
-            history.append(replayed)
-            trusted_by_step[step_id] = replayed
-            revalidated.append(step_id)
-            continue
-
-        is_host_cohort_materializer = (
-            str(prior_record.get("generation_mode") or "").strip().lower()
-            == _HOST_COHORT_MATERIALIZER_GENERATION_MODE
-            or prior_record.get("step_authority_kind")
-            == _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
-        )
-        if is_host_cohort_materializer:
-            evidence_payloads = {
-                evidence_id: (
-                    record.model_dump(mode="json")
-                    if hasattr(record, "model_dump")
-                    else dict(record)
-                )
-                for evidence_id, record in evidence_by_id.items()
-            }
-            error = _host_cohort_materializer_authority_error(
-                record=prior_record,
-                evidence_ids=list(prior_record.get("evidence_ids") or []),
-                step_id=step_id,
-                run_dir=run_dir,
-                records=evidence_payloads,
-            )
-            if error is not None:
-                append_invalid(prior_record=prior_record, reason=error)
-                continue
-            attempt_id, checkpoint_id = attempt_identity(step_id)
-            replayed = {
-                **prior_record,
-                "status": "ok",
-                "step_summary": dict(prior_record["step_summary"]),
-                "plan_scientific_signature": (
-                    _serializable_plan_scientific_scope_signature(plan)
-                ),
-                "revalidated_without_execution": True,
-                "attempt_id": attempt_id,
-                "review_checkpoint_id": checkpoint_id,
-                **stamp,
-            }
-            _discard_stale_resolved_input_receipts(replayed)
-            history.append(replayed)
-            trusted_by_step[step_id] = replayed
-            revalidated.append(step_id)
-            continue
-
-        step = steps_by_id.get(step_id)
-        summary_error = trusted_summary_errors.get(step_id)
-        if step is None or summary_error is not None:
-            append_invalid(
-                prior_record=prior_record,
-                reason=(summary_error or "successful step is absent from active plan"),
-            )
-            continue
-        trusted_record = trusted_by_step[step_id]
-        attempt_id, checkpoint_id = attempt_identity(step_id)
-        try:
-            _verify_resume_step_script_lineage(
-                record=prior_record,
-                evidence_by_id=evidence_by_id,
-            )
-            _, script_path = _verified_explicit_step_authority(
-                record=prior_record,
-                field="script_evidence_id",
-                expected_kind="code",
-                expected_source_name=None,
-                evidence_by_id=evidence_by_id,
-                run_dir=run_dir,
-            )
-            script_text = script_path.read_text(encoding="utf-8")
-            plausibility_scope = compile_resumed_flag_only_plausibility_scope(
-                prior_record=prior_record,
-                run_dir=run_dir,
-                context=context,
-                step=step,
-            )
-            code_findings = _bind_findings_to_step_attempt(
-                _deterministic_code_gate_findings(
-                    context=context,
-                    step=step,
-                    script_text=script_text,
-                    plausibility_scope=plausibility_scope,
-                ),
-                step_id=step_id,
-                attempt_id=attempt_id,
-                checkpoint_id=checkpoint_id,
-            )
-            if any(finding.severity == "error" for finding in code_findings):
-                append_invalid(
-                    prior_record=prior_record,
-                    reason="current deterministic code preflight failed",
-                    code_findings=code_findings,
-                )
-                continue
-            trusted_current_records = [
-                record
-                for record in trusted_by_step.values()
-                if str(record.get("status") or "").lower() == "ok"
-                and str(record.get("step_id") or "") not in invalidated
-            ]
-            resolved_bindings, resolved_input_evidence_ids = (
-                _resume_typed_input_bindings(
-                    step=step,
-                    plan=plan,
-                    evidence_records=evidence_records,
-                    trusted_step_records=trusted_current_records,
-                    run_dir=run_dir,
-                    cohort_path=cohort_path,
-                    development_sample=development_sample,
-                )
-            )
-            with tempfile.TemporaryDirectory(
-                prefix=f".resume_gate_{step_id}_",
-                dir=run_dir,
-            ) as temporary_root:
-                replay_out_dir = Path(temporary_root) / "outputs"
-                materialized_outputs = _materialize_verified_step_output_view(
-                    record=prior_record,
-                    evidence_by_id=evidence_by_id,
-                    run_dir=run_dir,
-                    destination=replay_out_dir,
-                )
-                replay_step_summary = _project_verified_replay_output_paths(
-                    trusted_record["step_summary"],
-                    materialized_evidence_by_source_name=materialized_outputs,
-                )
-                completed_records = [
-                    record
-                    for record in trusted_current_records
-                    if str(record.get("step_id") or "") != step_id
-                    and step_order.get(str(record.get("step_id") or ""), -1)
-                    < step_order.get(step_id, len(step_order))
-                ]
-                gate_findings = _evaluate_final_deterministic_gates(
-                    context=context,
-                    plan=plan,
-                    cohort_path=cohort_path,
-                    universe_path=universe_path,
-                    run_dir=run_dir,
-                    out_dir=replay_out_dir,
-                    step=step,
-                    step_summary=replay_step_summary,
-                    step_record=prior_record,
-                    completed_step_records=completed_records,
-                    resolved_input_bindings=resolved_bindings,
-                    plausibility_scope=plausibility_scope,
-                    script_text=script_text,
-                    attempt_id=attempt_id,
-                    checkpoint_id=checkpoint_id,
-                    stat_validator=StatisticalValidator(),
-                    clinical_validator=ClinicalConstraintValidator(),
-                    statistical_guard=StatisticalGuard(),
-                    cross_step_cohort_lock_validator=CrossStepCohortLockValidator(),
-                    cross_step_registered_output_validator=(
-                        CrossStepRegisteredOutputValidator()
-                    ),
-                    cross_step_reconciliation_trace_validator=(
-                        CrossStepReconciliationTraceValidator()
-                    ),
-                    step_summary_integrity_validator=StepSummaryIntegrityValidator(),
-                    step_summary_fraction_validator=StepSummaryFractionValidator(),
-                    cross_step_source_status_validator=CrossStepSourceStatusValidator(),
-                    primary_model_contract_validator=PrimaryModelContractValidator(),
-                    figure_contract_validator=FigureContractQualityValidator(),
-                    figure_source_validator=FigureSourceDataValidator(),
-                )
-            if any(
-                finding.severity == "error" for finding in gate_findings.all_findings()
-            ):
-                append_invalid(
-                    prior_record=prior_record,
-                    reason="current deterministic artifact gates failed",
-                    code_findings=code_findings,
-                    gate_findings=gate_findings,
-                )
-                continue
-            prior_critique = prior_record.get("critique_report")
-            prior_critique_status = (
-                str(prior_critique.get("status") or "").strip().lower()
-                if isinstance(prior_critique, Mapping)
-                else ""
-            )
-            if prior_critique_status in {"blocked", "needs_revision"}:
-                append_invalid(
-                    prior_record=prior_record,
-                    reason=(
-                        "prior deterministic Critic status remains "
-                        f"{prior_critique_status}"
-                    ),
-                    code_findings=code_findings,
-                    gate_findings=gate_findings,
-                )
-                continue
-            evidence_refs = [
-                EvidenceRef(
-                    evidence_id=str(_evidence_record_field(authority, "evidence_id")),
-                    kind=_evidence_record_field(authority, "kind"),
-                    description=str(
-                        _evidence_record_field(authority, "description") or ""
-                    ),
-                    relative_path=str(
-                        _evidence_record_field(authority, "relative_path") or ""
-                    ),
-                )
-                for evidence_id in (prior_record.get("evidence_ids") or [])
-                if (authority := evidence_by_id.get(str(evidence_id))) is not None
-                and verified_run_evidence_path(run_dir, authority) is not None
-            ]
-            critique = CriticAgent().review_step(
-                step=step,
-                step_summary=dict(trusted_record["step_summary"]),
-                evidence_refs=evidence_refs,
-                findings=_actionable_validator_messages(
-                    code_findings,
-                    gate_findings.all_findings(),
-                ),
-            )
-            if critique.status != "pass":
-                append_invalid(
-                    prior_record=prior_record,
-                    reason=f"current deterministic Critic status={critique.status}",
-                    code_findings=code_findings,
-                    gate_findings=gate_findings,
-                )
-                continue
-        except (OSError, TypeError, UnicodeError, ValueError) as exc:
-            append_invalid(
-                prior_record=prior_record,
-                reason=f"{type(exc).__name__}: {exc}",
-            )
-            continue
-
-        replayed = {
-            **prior_record,
-            "status": "ok",
-            "step_summary": dict(trusted_record["step_summary"]),
-            "resolved_input_evidence_ids": resolved_input_evidence_ids,
-            "deterministic_code_findings": [
-                finding.model_dump(mode="json") for finding in code_findings
-            ],
-            "stat_findings": [
-                finding.model_dump(mode="json")
-                for finding in gate_findings.stat_findings
-            ],
-            "clinical_findings": [
-                finding.model_dump(mode="json")
-                for finding in gate_findings.clinical_findings
-            ],
-            "guard_findings": [
-                finding.model_dump(mode="json")
-                for finding in gate_findings.guard_findings
-            ],
-            "contract_findings": [
-                finding.model_dump(mode="json")
-                for finding in gate_findings.contract_findings
-            ],
-            "figure_source_findings": [
-                finding.model_dump(mode="json")
-                for finding in gate_findings.figure_source_findings
-            ],
-            "critique_report": critique.model_dump(mode="json"),
-            "revalidated_without_execution": True,
-            "attempt_id": attempt_id,
-            "review_checkpoint_id": checkpoint_id,
-            **stamp,
-        }
-        _discard_stale_resolved_input_receipts(replayed)
-        replayed["resolved_inputs_sha256"] = prior_record["resolved_inputs_sha256"]
-        replayed["flag_only_plausibility_scope"] = plausibility_scope.to_dict()
-        replayed["revalidated_input_bindings_fingerprint"] = (
-            _resume_typed_input_bindings_fingerprint(resolved_bindings)
-        )
-        history.append(replayed)
-        trusted_by_step[step_id] = replayed
-        revalidated.append(step_id)
-
-    # Propagate invalid authority through immutable plan/evidence edges, even
-    # when a downstream success already carries the current fingerprint.
-    while True:
-        changed = False
-        for step_id, prior_record in current_by_step.items():
-            if step_id in invalidated:
-                continue
-            failed_dependencies = sorted(
-                dependencies.get(step_id, set()).intersection(invalidated)
-            )
-            if not failed_dependencies:
-                continue
-            append_invalid(
-                prior_record=prior_record,
-                reason=(
-                    "current success depends on invalidated upstream step(s): "
-                    + ", ".join(failed_dependencies)
-                ),
-            )
-            changed = True
-        if not changed:
-            break
-
-    # An explicit cut after a newly detected invalid authority must fail
-    # before any alias or manifest mutation.  The caller can restart at or
-    # before the earliest invalid upstream step.
-    if resume_from_step_id and invalidated:
-        cut = step_order.get(resume_from_step_id)
-        earlier_invalid = sorted(
-            step_id
-            for step_id in invalidated
-            if cut is not None and step_order.get(step_id, cut) < cut
-        )
-        if earlier_invalid:
-            raise RunInputIdentityError(
-                "Cannot start resume after deterministic-validator-invalid "
-                "upstream evidence; resume at or before: " + ", ".join(earlier_invalid)
-            )
-
-    if invalid_payloads:
-        state_findings = list(resume_state.get("findings") or [])
-        for step_id, payload in invalid_payloads.items():
-            reason = str(payload.get("resume_invalidation_reason") or "")
-            state_findings.append(
-                ValidationFinding(
-                    validator="resume_deterministic_revalidation",
-                    severity="warning",
-                    message=(
-                        f"Prior success for step {step_id} was invalidated by "
-                        "current deterministic gates and requires re-execution."
-                    ),
-                    detail={
-                        "step_id": step_id,
-                        "reason": reason,
-                        "requires_reexecution": True,
-                    },
-                ).model_dump(mode="json")
-            )
-        state["findings"] = state_findings
-    state["step_attempt_history"] = history
-    state["per_step_records"] = [
-        dict(record) for record in current_step_records(history)
-    ]
-
-    retirement_batch = {
-        step_id: evidence_ids
-        for step_id, prior_record in retirement_records.items()
-        if (evidence_ids := indexed_alias_evidence_ids(prior_record))
-    }
-    current_aliases = evidence.aliases() if retirement_batch else {}
-    for step_id, evidence_ids in retirement_batch.items():
-        payload = invalid_payloads.get(step_id)
-        if payload is not None:
-            payload["retired_current_aliases"] = {
-                alias: evidence_id
-                for alias, evidence_id in current_aliases.items()
-                if evidence_id in set(evidence_ids)
-            }
-
-    # Persist the append-only checkpoint before revoking aliases.  A failed
-    # checkpoint write leaves aliases untouched; the batch retirement itself
-    # is atomic across every invalid step.  If retirement fails, restore the
-    # prior manifest so the two authority ledgers cannot disagree.
-    checkpoint_path = run_dir / "manifest_partial.json"
-    write_run_checkpoint(checkpoint_path, state)
-    if retirement_batch:
-        try:
-            evidence.retire_steps_current_aliases(retirement_batch)
-        except (KeyError, OSError, TypeError, ValueError) as exc:
-            try:
-                write_run_checkpoint(checkpoint_path, resume_state)
-            except (OSError, TypeError, ValueError) as rollback_exc:
-                raise RuntimeError(
-                    "resume revalidation alias retirement and manifest rollback "
-                    "both failed"
-                ) from rollback_exc
-            raise RuntimeError(
-                "resume revalidation alias retirement failed; manifest was rolled back"
-            ) from exc
-
-    return _ResumeDeterministicRevalidationResult(
-        resume_state=state,
-        revalidated_step_ids=tuple(revalidated),
-        invalidated_step_ids=tuple(sorted(invalidated)),
-    )
-
-
-def _execution_input_authority_integrity_finding(
-    *,
-    step_id: str,
-    universe_path: Path,
-    cohort_path: Path,
-    expected_universe_sha256: Optional[str],
-    expected_analysis_cohort_sha256: Optional[str],
-) -> Optional[ValidationFinding]:
-    """Return a blocking finding when execution mutated host-owned inputs."""
-    try:
-        current_universe_sha256 = sha256_of_file(universe_path)
-        current_cohort_sha256 = sha256_of_file(cohort_path)
-    except Exception as exc:
-        current_universe_sha256 = None
-        current_cohort_sha256 = None
-        authority_error = f"{type(exc).__name__}: {exc}"[:300]
-    else:
-        authority_error = None
-    if (
-        current_universe_sha256 == expected_universe_sha256
-        and current_cohort_sha256 == expected_analysis_cohort_sha256
-    ):
-        return None
-    return ValidationFinding(
-        validator="execution_input_authority_integrity",
-        severity="error",
-        message=(
-            "The raw universe or authoritative analysis cohort changed while "
-            f"step {step_id} executed; all outputs from this attempt were rejected."
-        ),
-        detail={
-            "step_id": step_id,
-            "expected_universe_sha256": expected_universe_sha256,
-            "observed_universe_sha256": current_universe_sha256,
-            "expected_analysis_cohort_sha256": expected_analysis_cohort_sha256,
-            "observed_analysis_cohort_sha256": current_cohort_sha256,
-            "error": authority_error,
-        },
-    )
-
-
-def _non_llm_interpretation_for_generation(
-    *, step_id: str, generation_mode: str
-) -> Optional[Tuple[str, str]]:
-    mode_labels = {
-        "resumed_code_reuse": "resumed agent-generated code",
-        "fallback": "deterministic fallback code",
-        "deterministic_standard": "host-owned deterministic standard code",
-    }
-    mode_label = mode_labels.get(generation_mode)
-    if mode_label is None:
-        return None
-    interpretation_mode = {
-        "resumed_code_reuse": "resumed_code_reuse",
-        "fallback": "deterministic_fallback",
-        "deterministic_standard": "deterministic_standard",
-    }[generation_mode]
-    return (
-        f"Step `{step_id}` was executed from {mode_label}. "
-        "Review the registered step summary and artefacts for numeric "
-        "interpretation; no new LLM interpretation was requested.",
-        interpretation_mode,
-    )
-
 
 def run_execute_phase(
     pipeline: ExecutePhaseHost,
@@ -3667,8 +1082,8 @@ def run_execute_phase(
     # (probe, statistical validators, robustness fitter, and the step runner)
     # reads THAT — so the declared inclusion/exclusion is enforced once,
     # consistently, instead of being silently re-implemented (or skipped) by
-    # each generated step. The full universe stays reachable via the runner's
-    # EASYICU_UNIVERSE_PARQUET env for explicit robustness steps.
+    # each generated step. The full universe is injected only into runners for
+    # typed steps whose cohort/robustness contract explicitly authorizes it.
     universe_path = cohort_path
     run_input_authority_state = ExecutionInputAuthorityState.bind(
         universe_path=universe_path,
@@ -4234,8 +1649,8 @@ def run_execute_phase(
                     "predicates and applied them: analysis cohort "
                     f"n={result['n_cohort']} of universe n={result['n_universe']}. "
                     "Downstream steps now read the filtered cohort "
-                    "(COHORT_PARQUET); the full universe stays available as "
-                    "EASYICU_UNIVERSE_PARQUET."
+                    "(COHORT_PARQUET); the full universe is exposed only to "
+                    "explicitly authorized typed steps."
                 ),
                 detail={
                     "stage": "execute_repair",
@@ -4379,6 +1794,12 @@ def run_execute_phase(
                 probe_summary=probe_summary_payload,
                 completed_step_records=completed_records,
                 directive=directive,
+                allowed_literature_citation_keys=(
+                    plan_result.allowed_literature_citation_keys
+                ),
+                direct_comparator_literature_keys=(
+                    plan_result.direct_comparator_literature_keys
+                ),
             )
         except Exception as exc:
             findings.append(
@@ -4407,6 +1828,13 @@ def run_execute_phase(
         candidate_contract_findings = replan_candidate_contract_findings(
             plan=revised,
             context=context,
+            allowed_literature_citation_keys=(
+                plan_result.allowed_literature_citation_keys
+            ),
+            direct_comparator_literature_keys=(
+                plan_result.direct_comparator_literature_keys
+            ),
+            owner_declaration_findings=owner_declaration_plan_findings(plan=revised),
         )
         active_candidate_findings, candidate_contract_errors = (
             partition_replan_candidate_findings(
@@ -4443,6 +1871,13 @@ def run_execute_phase(
                         detail={"reason": reason},
                     )
                 )
+            return current_plan
+
+        if replan_review.record_runtime_replan_review_pause(
+            bool(pipeline._config.require_human_plan_review),
+            current_plan, revised, reason,
+            _replan_state, findings, _flush_partial_manifest,
+        ):
             return current_plan
 
         # Substantive revision: reset the no-op streak and register it.
@@ -4509,6 +1944,7 @@ def run_execute_phase(
 
     trajectory_plan_blocked = False
     typed_plan_dag_blocked = False
+    product_promise_blocked = False
     endpoint_contract_blocked = False
     probe_step_id = "00_probe"
     # The plan-time gates below validate the PLAN, not the probe, so they
@@ -4588,7 +2024,9 @@ def run_execute_phase(
     )
     owner_declaration_preflight = owner_declaration_plan_findings(plan=plan)
     product_promise_preflight = product_promise_plan_findings(plan=plan)
-    endpoint_preflight = endpoint_contract_findings(plan, context=context, severity="error")
+    endpoint_preflight = endpoint_contract_findings(
+        plan, context=context, severity="error"
+    )
     trajectory_directive = None
     typed_plan_directive = None
     declared_input_directive = None
@@ -4685,7 +2123,11 @@ def run_execute_phase(
         product_promise_preflight
     )
     endpoint_directive = None
-    if endpoint_preflight and (endpoint_preflight[0].detail or {}).get("reason") == "endpoint_projection_mismatch":
+    if (
+        endpoint_preflight
+        and (endpoint_preflight[0].detail or {}).get("reason")
+        == "endpoint_projection_mismatch"
+    ):
         endpoint_directive = (
             "Repair or remove the plan's stale endpoint projection without "
             "changing the sealed ResearchContext endpoint or any other science. "
@@ -4764,6 +2206,12 @@ def run_execute_phase(
         # here with a named, repairable finding.
         *declared_raw_input_plan_findings(plan=plan, context=context),
     ]
+    # The first pass feeds a repair directive to the Planner.  A repaired plan
+    # is still model output, so verify the same product contract again before
+    # any executor is selected.  The E1 run that motivated this check removed
+    # the duplicate promise but kept the *wrong* kind; without this second pass
+    # the replay tried to parse its CSV summary as a JSON statistic.
+    final_product_promise_findings = product_promise_plan_findings(plan=plan)
     final_endpoint_findings = [
         finding.model_copy(
             update={
@@ -4774,7 +2222,9 @@ def run_execute_phase(
                 }
             }
         )
-        for finding in endpoint_contract_findings(plan, context=context, severity="error")
+        for finding in endpoint_contract_findings(
+            plan, context=context, severity="error"
+        )
     ]
     if final_endpoint_findings:
         endpoint_contract_blocked = True
@@ -4792,6 +2242,15 @@ def run_execute_phase(
             {
                 "typed_plan_dag_blocked": True,
                 "typed_plan_dag_error_count": len(final_typed_plan_findings),
+            }
+        )
+    if final_product_promise_findings:
+        product_promise_blocked = True
+        findings.extend(final_product_promise_findings)
+        _flush_partial_manifest(
+            {
+                "product_promise_blocked": True,
+                "product_promise_error_count": len(final_product_promise_findings),
             }
         )
 
@@ -5025,298 +2484,45 @@ def run_execute_phase(
 
     def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
         nonlocal runtime_state
-        with shared_lock:
-            resume_history = (
-                list(
-                    plan_result.resume_state.get("step_attempt_history")
-                    or plan_result.resume_state.get("per_step_records")
-                    or []
-                )
+        attempt_bootstrap = prepare_step_attempt_bootstrap(
+            resume_state=(
+                plan_result.resume_state
                 if isinstance(plan_result.resume_state, Mapping)
-                else []
-            )
-            candidate_history = resume_history + list(per_step_records)
-            prior_attempt_records = [
-                record
-                for record in candidate_history
-                if isinstance(record, Mapping)
-                and str(record.get("step_id") or "") == step.step_id
-            ]
-            prior_step_record = next(
-                (
-                    record
-                    for record in current_step_records(prior_attempt_records)
-                    if str(record.get("step_id") or "") == step.step_id
-                ),
-                None,
-            )
-        prior_attempt_sequences = [
-            int(record.get("attempt_sequence"))
-            for record in prior_attempt_records
-            if isinstance(record.get("attempt_sequence"), int)
-            and int(record.get("attempt_sequence")) >= 1
-        ]
-        attempt_sequence = (
-            max(prior_attempt_sequences, default=len(prior_attempt_records)) + 1
-        )
-        attempt_id = f"{run_id}:{step.step_id}:{attempt_sequence}"
-        review_checkpoint_id = f"{attempt_id}:deterministic_review"
-        step_record: Dict[str, Any] = {
-            "step_id": step.step_id,
-            "intent": step.intent,
-            "planned_analysis_role": step.planned_analysis_role,
-            "attempt_id": attempt_id,
-            "attempt_sequence": attempt_sequence,
-            "review_checkpoint_id": review_checkpoint_id,
-            "plan_scientific_signature": (
-                _serializable_plan_scientific_scope_signature(plan)
+                else None
             ),
-        }
-
-        step_execution_cohort_path = _step_execution_cohort_path(
+            per_step_records=per_step_records,
+            shared_lock=shared_lock,
             step=step,
             plan=plan,
+            run_id=run_id,
             run_dir=run_dir,
             universe_path=universe_path,
             cohort_path=cohort_path,
-        )
-        if step_execution_cohort_path == universe_path:
-            step_record.update(
-                {
-                    "execution_cohort_role": _RAW_UNIVERSE_EXECUTION_ROLE,
-                    "execution_cohort_sha256": sha256_of_file(universe_path),
-                    "authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path),
-                }
-            )
-        elif primary_analysis_cohort_producer_uses_universe(step=step, plan=plan):
-            step_record.update(
-                {
-                    "execution_cohort_role": (
-                        DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE
-                    ),
-                    "execution_cohort_sha256": sha256_of_file(cohort_path),
-                    "authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path),
-                    "paper_authority": False,
-                }
-            )
-        (
-            step_llm_repair_attempts,
-            prior_repair_classes,
-            repair_history_invalid,
-        ) = _monotonic_step_llm_repair_history(
-            prior_attempt_records,
-            limit=pipeline._max_step_llm_repair_attempts,
-        )
-        if step_llm_repair_attempts:
-            step_record["step_llm_repair_attempts"] = step_llm_repair_attempts
-            step_record["step_llm_repair_budget"] = (
-                pipeline._max_step_llm_repair_attempts
-            )
-        if prior_repair_classes:
-            step_record["step_llm_repair_classes"] = list(prior_repair_classes)
-        if repair_history_invalid:
-            step_record["step_llm_repair_history_invalid"] = True
-            step_record["step_llm_repair_budget_exhausted"] = True
-        configured_provider_limit = pipeline._max_step_provider_calls
-        effective_provider_limit = configured_provider_limit
-        reserved_final_category = (
-            "concept_audit" if pipeline._enable_llm_concept_audit else None
-        )
-        provider_receipt_path = provider_call_budget_receipt_path(
-            run_dir,
-            step_id=step.step_id,
-        )
-        provider_receipt_relative_path = str(provider_receipt_path.relative_to(run_dir))
-        prior_provider_categories: tuple[str, ...] = ()
-        prior_logical_repair_entries: tuple[Dict[str, object], ...] = ()
-        prior_initial_generation_entries: tuple[Dict[str, object], ...] = ()
-        prior_required_reservation_token: Optional[str] = None
-        prior_reservation_bound_provider_history_len: Optional[int] = None
-        prior_completed_reservation_token: Optional[str] = None
-        prior_reservation_released = False
-        prior_reserved_category_extensions: tuple[Dict[str, object], ...] = ()
-        prior_provider_attempts = 0
-        provider_receipt_integrity_error: Optional[str] = None
-        prior_snapshot_present = False
-        if isinstance(prior_step_record, Mapping):
-            snapshot_keys = {
-                "step_provider_call_budget",
-                "step_provider_call_attempts",
-                "step_provider_call_categories",
-            }
-            prior_snapshot_present = any(
-                key in prior_step_record for key in snapshot_keys
-            )
-            if prior_snapshot_present:
-                prior_limit = prior_step_record.get("step_provider_call_budget")
-                prior_attempts_raw = prior_step_record.get(
-                    "step_provider_call_attempts"
-                )
-                prior_categories_raw = prior_step_record.get(
-                    "step_provider_call_categories"
-                )
-                if (
-                    isinstance(prior_limit, bool)
-                    or not isinstance(prior_limit, int)
-                    or prior_limit < 0
-                    or isinstance(prior_attempts_raw, bool)
-                    or not isinstance(prior_attempts_raw, int)
-                    or prior_attempts_raw < 0
-                    or not isinstance(prior_categories_raw, list)
-                ):
-                    provider_receipt_integrity_error = (
-                        "Prior provider-call budget snapshot is incomplete or invalid."
-                    )
-                else:
-                    normalized_categories = tuple(
-                        str(item).strip() for item in prior_categories_raw
-                    )
-                    if any(
-                        not item for item in normalized_categories
-                    ) or prior_attempts_raw != len(normalized_categories):
-                        provider_receipt_integrity_error = "Prior provider-call attempts and category history disagree."
-                    else:
-                        prior_provider_attempts = prior_attempts_raw
-                        prior_provider_categories = normalized_categories
-                        effective_provider_limit = min(
-                            effective_provider_limit,
-                            prior_limit,
-                        )
-
-        if provider_receipt_integrity_error is None and provider_receipt_path.exists():
-            try:
-                receipt_state = load_provider_call_budget_state(
-                    provider_receipt_path,
-                    step_id=step.step_id,
-                    expected_reserved_final_category=reserved_final_category,
-                )
-                receipt_limit = receipt_state.limit
-                receipt_categories = receipt_state.categories
-                prior_logical_repair_entries = receipt_state.logical_repairs
-                prior_initial_generation_entries = receipt_state.initial_generations
-                prior_required_reservation_token = (
-                    receipt_state.required_reservation_token
-                )
-                prior_reservation_bound_provider_history_len = (
-                    receipt_state.reservation_bound_provider_history_len
-                )
-                prior_completed_reservation_token = (
-                    receipt_state.completed_reservation_token
-                )
-                prior_reservation_released = receipt_state.reservation_released
-                prior_reserved_category_extensions = (
-                    receipt_state.reserved_category_extensions
-                )
-                effective_provider_limit = min(
-                    effective_provider_limit,
-                    receipt_limit,
-                )
-                if prior_snapshot_present and (
-                    len(receipt_categories) < len(prior_provider_categories)
-                    or receipt_categories[: len(prior_provider_categories)]
-                    != prior_provider_categories
-                ):
-                    raise ProviderCallBudgetReceiptError(
-                        "Durable provider-call receipt conflicts with the latest "
-                        "step snapshot."
-                    )
-                prior_provider_categories = receipt_categories
-                prior_provider_attempts = len(receipt_categories)
-            except ProviderCallBudgetReceiptError as exc:
-                provider_receipt_integrity_error = str(exc)
-        elif (
-            provider_receipt_integrity_error is None
-            and isinstance(prior_step_record, Mapping)
-            and _step_snapshot_requires_provider_receipt(
-                prior_step_record,
-                provider_attempts=prior_provider_attempts,
-                logical_repair_attempts=step_llm_repair_attempts,
-            )
-        ):
-            provider_receipt_integrity_error = (
-                "Durable provider/repair receipt is missing for a prior reservation."
-            )
-
-        provider_budget = StepProviderCallBudget(
-            effective_provider_limit,
-            step_id=step.step_id,
-            consumed_categories=prior_provider_categories,
-            logical_repair_entries=prior_logical_repair_entries,
-            initial_generation_entries=prior_initial_generation_entries,
+            plan_scientific_signature=(
+                _serializable_plan_scientific_scope_signature(plan)
+            ),
+            findings=findings,
+            max_provider_calls=pipeline._max_step_provider_calls,
+            max_llm_repairs=pipeline._max_step_llm_repair_attempts,
+            reserve_concept_audit=pipeline._enable_llm_concept_audit,
             allow_terminal_initial_generation_restart=(
                 resume_controller.explicitly_reruns_step(step.step_id)
             ),
-            receipt_path=provider_receipt_path,
-            reserved_final_category=reserved_final_category,
-            required_reservation_token=prior_required_reservation_token,
-            reservation_bound_provider_history_len=(
-                prior_reservation_bound_provider_history_len
-            ),
-            completed_reservation_token=prior_completed_reservation_token,
-            reservation_released=prior_reservation_released,
-            reserved_category_extensions=prior_reserved_category_extensions,
         )
-
-        if provider_receipt_integrity_error is None:
-            try:
-                # A crash before the first provider call leaves an exact unpaid
-                # reservation that can be resumed. A crash after any paid call
-                # but before the result digest was sealed is unknowable and must
-                # block the step before any other route can ignore or replace it.
-                provider_budget.next_logical_repair_attempt_id()
-                initial_resume_status = (
-                    provider_budget.initial_generation_resume_status()
-                )
-                if initial_resume_status == "paid_pending":
-                    raise ProviderCallBudgetReceiptError(
-                        "Initial generation has paid provider calls but no durable "
-                        "transport result."
-                    )
-                if (
-                    initial_resume_status == "failed"
-                    and not provider_budget.terminal_initial_generation_restart_allowed
-                ):
-                    raise ProviderCallBudgetReceiptError(
-                        "Initial generation previously reached a terminal provider "
-                        "failure."
-                    )
-            except ProviderCallBudgetReceiptError as exc:
-                provider_receipt_integrity_error = str(exc)
-
-        try:
-            step_repair_budget = StepRepairBudget(
-                provider_budget=provider_budget,
-                step_record=step_record,
-                max_llm_repairs=pipeline._max_step_llm_repair_attempts,
-                initial_llm_repair_attempts=step_llm_repair_attempts,
-                initial_repair_classes=(
-                    prior_repair_classes
-                    if provider_receipt_integrity_error is None
-                    else ()
-                ),
-                provider_receipt_relative_path=provider_receipt_relative_path,
-            )
-        except (ProviderCallBudgetReceiptError, ValueError) as exc:
-            provider_receipt_integrity_error = str(exc)
-            step_repair_budget = StepRepairBudget(
-                provider_budget=provider_budget,
-                step_record=step_record,
-                max_llm_repairs=pipeline._max_step_llm_repair_attempts,
-                initial_llm_repair_attempts=step_llm_repair_attempts,
-                provider_receipt_relative_path=provider_receipt_relative_path,
-            )
-        step_repair_budget.bind_semantic_escalation_recorder(
-            SemanticRepairRecorder(
-                step_record=step_record,
-                findings=findings,
-                lock=shared_lock,
-                step_id=step.step_id,
-                attempt_id=attempt_id,
-            )
-        )
+        prior_attempt_records = attempt_bootstrap.prior_attempt_records
+        prior_step_record = attempt_bootstrap.prior_step_record
+        attempt_id = attempt_bootstrap.attempt_id
+        review_checkpoint_id = attempt_bootstrap.review_checkpoint_id
+        step_record = attempt_bootstrap.step_record
+        step_execution_cohort_path = attempt_bootstrap.execution_cohort_path
+        budget_runtime = attempt_bootstrap.budget_runtime
+        provider_budget = budget_runtime.provider_budget
+        step_repair_budget = budget_runtime.repair_budget
+        provider_receipt_path = budget_runtime.receipt_path
+        provider_receipt_relative_path = budget_runtime.receipt_relative_path
+        reserved_final_category = budget_runtime.reserved_final_category
+        provider_receipt_integrity_error = budget_runtime.integrity_error
         _sync_provider_budget = step_repair_budget.sync_provider
-
-        _sync_provider_budget()
         if provider_receipt_integrity_error is not None:
             step_record.update(
                 {
@@ -5433,82 +2639,6 @@ def run_execute_phase(
         _logical_llm_repair_budget_available = step_repair_budget.logical_available
         _provider_repair_call_available = step_repair_budget.provider_available
         _llm_repair_budget_available = step_repair_budget.available
-
-        def _consume_llm_repair_budget(
-            repair_class: str,
-            *,
-            before_code: str,
-            repair_ticket: str,
-            repair_authority: RepairPromptAuthority,
-            current_repair_authority: Optional[RepairPromptAuthority] = None,
-            provider_category: str,
-            failure_status: str,
-        ) -> bool:
-            """Reserve one repair bound to its exact host-owned authority."""
-
-            checkpoint_authority.ensure_candidate(
-                before_code,
-                reason="pre_repair_authority_binding",
-            )
-            binding = RepairAuthorityBinding(
-                step_id=step.step_id,
-                attempt_id=step_repair_budget.next_attempt_id,
-                repair_class=str(repair_class),
-                provider_category=provider_category,
-                before_code_sha256=sha256_of_bytes(before_code.encode("utf-8")),
-                step_spec_sha256=canonical_sha256(step.model_dump(mode="json")),
-                resolved_inputs_sha256=resolved_inputs_sha256,
-                coder_context_sha256=(
-                    step_attempt_state.coordinates.scoped_coder_context.sha256
-                    if step_attempt_state.coordinates is not None
-                    else canonical_sha256(
-                        {
-                            "research_context": coder_context.model_dump(mode="json"),
-                            "host_coder_authority": coder_authority.payload(),
-                        }
-                    )
-                ),
-                repair_ticket_sha256=_repair_prompt_binding_sha256(
-                    untrusted_diagnostic=repair_ticket,
-                    repair_authority=repair_authority,
-                    current_repair_authority=current_repair_authority,
-                ),
-                engine_validator_sha256=(
-                    step_attempt_state.coordinates.deterministic_gate_fingerprint
-                    if step_attempt_state.coordinates is not None
-                    else canonical_sha256(
-                        {
-                            "schema": "easyicu.step_control_plane_fingerprint/1",
-                            "deterministic_gate_fingerprint": (
-                                _deterministic_gate_stamp()[
-                                    "deterministic_gate_fingerprint"
-                                ]
-                            ),
-                            "coder_provider_identity_sha256": (
-                                coder_provider_identity_sha256
-                            ),
-                        }
-                    )
-                ),
-                prompt_pack_version=prompt_version,
-                run_input_capsule_sha256=run_input_capsule_sha256,
-            )
-            consumed = step_repair_budget.consume(
-                repair_class,
-                authority_binding=binding,
-            )
-            if consumed:
-                checkpoint_authority.checkpoint_state(
-                    "repair_transport_pending",
-                    extra={
-                        "capsule_pending_repair_attempt_id": (
-                            step_repair_budget.llm_repair_attempts
-                        ),
-                        "capsule_pending_repair_binding_sha256": binding.sha256,
-                        "capsule_pending_repair_failure_status": failure_status,
-                    },
-                )
-            return consumed
 
         monotonic_concept_constraints = _persisted_monotonic_concept_constraints(
             prior_step_record
@@ -5711,9 +2841,7 @@ def run_execute_phase(
                 )
             ),
             # From the sealed context, the study's unique endpoint authority.
-            study_endpoint=study_endpoint_declaration_entry(
-                context.endpoint
-            ),
+            study_endpoint=study_endpoint_declaration_entry(context.endpoint),
             # Which of this step's bound columns are ranks rather than interval
             # measurements. From the unscoped context: the roles are a property
             # of the columns, and the step-scoped projection would drop the ones
@@ -5727,6 +2855,7 @@ def run_execute_phase(
             profile_ref=pipeline._submission_profile_ref,
             context=coder_context,
             step=step,
+            analysis_type=plan.analysis_type,
             resolved_input_bindings=resolved_input_bindings,
             plausibility_scope=plausibility_authority.scope,
             runtime_import_names=pipeline._validated_runtime_capabilities or (),
@@ -5769,339 +2898,51 @@ def run_execute_phase(
         step_record["run_input_capsule_sha256"] = run_input_capsule_sha256
         step_record["resolved_input_evidence_ids"] = list(resolved_input_evidence_ids)
         if run_input_capsule_sha256 is not None:
-            gate_stamp = _deterministic_gate_stamp()
-            step_control_plane_fingerprint = canonical_sha256(
-                {
-                    "schema": "easyicu.step_control_plane_fingerprint/1",
-                    "deterministic_gate_fingerprint": gate_stamp[
-                        "deterministic_gate_fingerprint"
-                    ],
-                    "coder_provider_identity_sha256": (coder_provider_identity_sha256),
-                }
-            )
-            step_attempt_state.coordinates = prepare_step_authority_coordinates(
-                run_dir=run_dir,
-                step_id=step.step_id,
-                run_input_capsule_sha256=run_input_capsule_sha256,
-                planner_scope=step.model_dump(mode="json"),
-                scoped_coder_context={
-                    "research_context": coder_context.model_dump(mode="json"),
-                    "host_coder_authority": coder_authority.payload(),
-                },
-                resolved_inputs_path=resolved_inputs_path,
-                typed_bindings=resolved_input_bindings,
-                upstream_authority={
-                    "resolved_input_evidence_ids": list(resolved_input_evidence_ids),
-                    "resolved_input_bindings": resolved_input_bindings,
-                    "cohort_sha256": sha256_of_file(cohort_path),
-                    "universe_sha256": sha256_of_file(universe_path),
-                },
-                deterministic_gate_fingerprint=step_control_plane_fingerprint,
-                engine_code_sha256=engine_code_sha256(),
-                validator_code_sha256=validator_code_sha256(),
-                prompt_pack_version=prompt_version,
-                prompt_pack=prompt_files,
-            )
             try:
-                step_attempt_state.selected_resume_capsule = (
-                    load_checkpoint_selected_step_capsule(
-                        run_dir,
-                        step_id=step.step_id,
-                        checkpoint=(
+                coder_context = prepare_step_authority_resume(
+                    StepAuthorityResumeRequest(
+                        run_dir=run_dir,
+                        step=step,
+                        run_input_capsule_sha256=run_input_capsule_sha256,
+                        deterministic_gate_stamp=_deterministic_gate_stamp(),
+                        engine_code_sha256=engine_code_sha256(),
+                        validator_code_sha256=validator_code_sha256(),
+                        seal_repair_candidate=seal_repair_candidate_from_receipt,
+                        coder_context=coder_context,
+                        coder_authority=coder_authority,
+                        coder_provider_identity_sha256=(coder_provider_identity_sha256),
+                        resolved_inputs_path=resolved_inputs_path,
+                        resolved_input_bindings=resolved_input_bindings,
+                        resolved_input_evidence_ids=resolved_input_evidence_ids,
+                        cohort_path=cohort_path,
+                        universe_path=universe_path,
+                        resume_state=(
                             plan_result.resume_state
                             if isinstance(plan_result.resume_state, Mapping)
                             else None
                         ),
+                        requested_resume_from_step_id=requested_resume_from_step_id,
+                        prior_step_record=prior_step_record,
+                        prior_attempt_records=prior_attempt_records,
+                        prompt_version=prompt_version,
+                        prompt_files=prompt_files,
+                        provider_budget=provider_budget,
+                        provider_receipt_path=provider_receipt_path,
+                        reserved_final_category=reserved_final_category,
+                        llm_concept_auditor_identity_sha256=(
+                            llm_concept_auditor_identity_sha256
+                        ),
+                        llm_concept_auditor_implementation_sha256=(
+                            llm_concept_auditor_implementation_sha256
+                        ),
+                        concept_audit_environment_sha256=(
+                            concept_audit_environment_sha256
+                        ),
+                        step_attempt_state=step_attempt_state,
+                        checkpoint_authority=checkpoint_authority,
+                        step_record=step_record,
                     )
                 )
-                if (
-                    step_attempt_state.selected_resume_capsule is None
-                    and requested_resume_from_step_id == step.step_id
-                    and isinstance(prior_step_record, Mapping)
-                ):
-                    explicit_selection = (
-                        select_explicit_step_capsule_for_targeted_resume(
-                            run_dir,
-                            step_id=step.step_id,
-                            current_record=prior_step_record,
-                            records=prior_attempt_records,
-                            deterministic_gate_fingerprint=gate_stamp[
-                                "deterministic_gate_fingerprint"
-                            ],
-                        )
-                    )
-                    if explicit_selection is not None:
-                        (
-                            step_attempt_state.selected_resume_capsule,
-                            explicit_metadata,
-                        ) = explicit_selection
-                        step_record.update(explicit_metadata)
-                if (
-                    step_attempt_state.selected_resume_capsule is None
-                    and isinstance(prior_step_record, Mapping)
-                    and str(prior_step_record.get("status") or "").strip().lower()
-                    == "resume_validator_invalid"
-                    and isinstance(
-                        prior_step_record.get(
-                            "resume_revalidation_candidate_capsule_ref"
-                        ),
-                        Mapping,
-                    )
-                ):
-                    try:
-                        recovery_ref = StepAuthorityCapsuleRef.model_validate(
-                            prior_step_record[
-                                "resume_revalidation_candidate_capsule_ref"
-                            ]
-                        )
-                        recovery_capsule = load_verified_step_authority_capsule(
-                            run_dir,
-                            ref=recovery_ref,
-                            expected_step_id=step.step_id,
-                        )
-                    except (ValueError, StepAuthorityCapsuleError) as exc:
-                        raise StepAuthorityRuntimeError(
-                            "resume revalidation candidate is invalid"
-                        ) from exc
-                    expected_recovery_sha256 = str(
-                        prior_step_record.get(
-                            "resume_revalidation_candidate_code_sha256"
-                        )
-                        or ""
-                    )
-                    if (
-                        not re.fullmatch(r"[0-9a-f]{64}", expected_recovery_sha256)
-                        or recovery_capsule.capsule.candidate_code.sha256
-                        != expected_recovery_sha256
-                    ):
-                        raise StepAuthorityRuntimeError(
-                            "resume revalidation candidate digest is inconsistent"
-                        )
-                    step_attempt_state.selected_resume_capsule = recovery_capsule
-                    step_record["resume_validator_invalid_candidate_reused"] = True
-                # A paid repair result belongs to the historical parent and
-                # coordinates recorded before a crash. Recover that exact
-                # candidate first; only then may current engine/validator drift
-                # adopt its bytes for revalidation. Reversing this order makes
-                # the receipt's before-code and authority binding impossible to
-                # satisfy after a control-plane update.
-                if (
-                    step_attempt_state.selected_resume_capsule is not None
-                    and isinstance(prior_step_record, Mapping)
-                    and prior_step_record.get("capsule_pending_repair_attempt_id")
-                    is not None
-                ):
-                    step_attempt_state.current_capsule_ref = (
-                        step_attempt_state.selected_resume_capsule.ref
-                    )
-                    pending_attempt = prior_step_record.get(
-                        "capsule_pending_repair_attempt_id"
-                    )
-                    pending_binding = str(
-                        prior_step_record.get("capsule_pending_repair_binding_sha256")
-                        or ""
-                    )
-                    pending_failure_status = str(
-                        prior_step_record.get("capsule_pending_repair_failure_status")
-                        or ""
-                    )
-                    receipt_state = load_provider_call_budget_state(
-                        provider_receipt_path,
-                        step_id=step.step_id,
-                        expected_reserved_final_category=reserved_final_category,
-                    )
-                    if (
-                        isinstance(pending_attempt, bool)
-                        or not isinstance(pending_attempt, int)
-                        or not 1
-                        <= pending_attempt
-                        <= len(receipt_state.logical_repairs)
-                        or str(
-                            receipt_state.logical_repairs[pending_attempt - 1].get(
-                                "binding_sha256"
-                            )
-                            or ""
-                        )
-                        != pending_binding
-                        or not pending_failure_status
-                    ):
-                        raise StepAuthorityRuntimeError(
-                            "completed repair lacks its exact pending checkpoint"
-                        )
-                    historical_coordinates = coordinates_from_verified_capsule(
-                        run_dir,
-                        step_attempt_state.selected_resume_capsule,
-                    )
-                    recovered_code_ref = repair_code_ref(
-                        receipt_state,
-                        attempt_id=pending_attempt,
-                    )
-                    recovered_ref = seal_repair_candidate_from_receipt(
-                        historical_coordinates,
-                        parent_ref=step_attempt_state.current_capsule_ref,
-                        checkpoint_parent_ref=step_attempt_state.current_capsule_ref,
-                        code_ref=recovered_code_ref,
-                        receipt_state=receipt_state,
-                        attempt_id=pending_attempt,
-                        failure_status=pending_failure_status,
-                    )
-                    checkpoint_authority.checkpoint_capsule(
-                        recovered_ref,
-                        status="candidate_checkpointed",
-                    )
-                    step_attempt_state.selected_resume_capsule = (
-                        load_verified_step_authority_capsule(
-                            run_dir,
-                            ref=recovered_ref,
-                            expected_step_id=step.step_id,
-                        )
-                    )
-                current_validator_identity = (
-                    llm_concept_auditor_implementation_sha256
-                    or canonical_sha256("llm_concept_auditor_unavailable")
-                )
-                if step_attempt_state.selected_resume_capsule is not None:
-                    source_audit_replay = _verified_capsule_concept_audit_replay(
-                        step_attempt_state.selected_resume_capsule,
-                        run_dir=run_dir,
-                        auditor_identity_sha256=(llm_concept_auditor_identity_sha256),
-                        environment_sha256=concept_audit_environment_sha256,
-                        validator_implementation_sha256=(current_validator_identity),
-                    )
-                    if source_audit_replay is not None:
-                        step_attempt_state.capsule_audit_findings_by_digest[
-                            step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
-                        ] = source_audit_replay
-                if step_attempt_state.selected_resume_capsule is not None and not (
-                    capsule_matches_coordinates(
-                        step_attempt_state.selected_resume_capsule,
-                        step_attempt_state.coordinates,
-                    )
-                ):
-                    frozen_context = adopt_frozen_scoped_coder_context(
-                        step_attempt_state.selected_resume_capsule,
-                        step_attempt_state.coordinates,
-                    )
-                    if frozen_context is None:
-                        adopted_candidate = (
-                            adopt_candidate_for_control_plane_revalidation(
-                                step_attempt_state.selected_resume_capsule,
-                                step_attempt_state.coordinates,
-                            )
-                        )
-                        if adopted_candidate is None:
-                            step_record["step_authority_capsule_cache_miss"] = (
-                                "authority_drift"
-                            )
-                            step_attempt_state.selected_resume_capsule = None
-                        else:
-                            (
-                                coder_context,
-                                step_attempt_state.coordinates,
-                                adopted_ref,
-                            ) = adopted_candidate
-                            step_attempt_state.current_capsule_ref = adopted_ref
-                            step_attempt_state.selected_resume_capsule = (
-                                load_verified_step_authority_capsule(
-                                    run_dir,
-                                    ref=adopted_ref,
-                                    expected_step_id=step.step_id,
-                                )
-                            )
-                            step_record["step_authority_capsule_cache_miss"] = (
-                                "control_plane_drift_revalidation"
-                            )
-                    else:
-                        coder_context, step_attempt_state.coordinates = frozen_context
-                        step_record["step_authority_frozen_context_reused"] = True
-                if (
-                    step_attempt_state.selected_resume_capsule is not None
-                    and isinstance(prior_step_record, Mapping)
-                    and prior_step_record.get("quarantined_requires_repair") is True
-                ):
-                    step_record["step_authority_capsule_cache_miss"] = (
-                        "quarantine_not_migrated"
-                    )
-                    step_attempt_state.selected_resume_capsule = None
-                if step_attempt_state.selected_resume_capsule is not None:
-                    step_attempt_state.current_capsule_ref = (
-                        step_attempt_state.selected_resume_capsule.ref
-                    )
-                    step_record["step_authority_capsule_ref"] = (
-                        step_attempt_state.selected_resume_capsule.ref.model_dump(
-                            mode="json"
-                        )
-                    )
-                    step_record["step_authority_capsule_stage"] = (
-                        step_attempt_state.selected_resume_capsule.capsule.stage
-                    )
-                    selected_digest = step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
-                    if (
-                        step_attempt_state.selected_resume_capsule.capsule.concept_audit
-                        is not None
-                        and selected_digest
-                        not in step_attempt_state.capsule_audit_findings_by_digest
-                    ):
-                        step_record["step_authority_audit_cache_miss"] = (
-                            "audit_identity_drift"
-                        )
-                    checkpoint_authority.checkpoint_state(
-                        "capsule_revalidation_pending"
-                    )
-                elif (
-                    provider_budget.initial_generation_resume_status() == "completed"
-                    and isinstance(prior_step_record, Mapping)
-                    and str(prior_step_record.get("status") or "")
-                    == "initial_generation_pending"
-                ):
-                    initial_entry = provider_budget.initial_generation_entry
-                    pending_binding = str(
-                        prior_step_record.get("capsule_pending_initial_binding_sha256")
-                        or ""
-                    )
-                    pending_transport = str(
-                        prior_step_record.get("capsule_pending_initial_transport_id")
-                        or ""
-                    )
-                    if (
-                        initial_entry is None
-                        or pending_binding
-                        != str(initial_entry.get("binding_sha256") or "")
-                        or pending_transport
-                        != str(initial_entry.get("provider_transport_id") or "")
-                    ):
-                        raise StepAuthorityRuntimeError(
-                            "completed initial generation lacks its exact pending "
-                            "checkpoint"
-                        )
-                    recovered_code_ref = initial_generation_code_ref(
-                        step_attempt_state.coordinates,
-                        load_provider_call_budget_state(
-                            provider_receipt_path,
-                            step_id=step.step_id,
-                            expected_reserved_final_category=reserved_final_category,
-                        ),
-                    )
-                    recovered_ref = seal_initial_generation_candidate(
-                        step_attempt_state.coordinates,
-                        code_ref=recovered_code_ref,
-                        receipt_state=load_provider_call_budget_state(
-                            provider_receipt_path,
-                            step_id=step.step_id,
-                            expected_reserved_final_category=reserved_final_category,
-                        ),
-                    )
-                    checkpoint_authority.checkpoint_capsule(
-                        recovered_ref,
-                        status="candidate_checkpointed",
-                    )
-                    step_attempt_state.selected_resume_capsule = (
-                        load_verified_step_authority_capsule(
-                            run_dir,
-                            ref=recovered_ref,
-                            expected_step_id=step.step_id,
-                        )
-                    )
             except StepAuthorityRuntimeError as exc:
                 capsule_finding = ValidationFinding(
                     validator="step_authority_capsule",
@@ -6130,6 +2971,20 @@ def run_execute_phase(
                 if run_input_capsule_sha256 is None
                 else "agentic_cli_transport_untracked"
             )
+        repair_reservation = StepRepairReservation(
+            step=step,
+            repair_budget=step_repair_budget,
+            checkpoint_authority=checkpoint_authority,
+            attempt_state=step_attempt_state,
+            coder_context=coder_context,
+            coder_authority=coder_authority,
+            resolved_inputs_sha256=resolved_inputs_sha256,
+            coder_provider_identity_sha256=coder_provider_identity_sha256,
+            prompt_version=prompt_version,
+            run_input_capsule_sha256=run_input_capsule_sha256,
+            deterministic_gate_stamp=_deterministic_gate_stamp(),
+        )
+        _consume_llm_repair_budget = repair_reservation.consume
         local_runtime_state = supervisor.prepare_step_state(
             state=runtime_state,
             context=context,
@@ -6215,136 +3070,51 @@ def run_execute_phase(
                 + json.dumps(payload, indent=2, ensure_ascii=False, default=str)
             )
 
-        def _use_quarantined_draft(draft: QuarantinedConceptDraft) -> str:
-            quarantine_state.resumed_draft_used = True
-            quarantine_state.draft_active = True
-            quarantine_state.repair_succeeded = False
-            budget_snapshot = provider_budget.snapshot()
-            historical_repair_names = deterministic_concept_reaudit_authority(
-                code_sha256=draft.sha256,
-                current_repair_count=0,
-                current_repair_names=(),
-                prior_step_record=prior_step_record,
-                prior_step_records=prior_attempt_records,
-                provider_used=budget_snapshot["used"],
-                provider_limit=budget_snapshot["limit"],
-            )
-            reaudit_errors = deterministic_concept_reaudit_pending_errors(
-                draft.findings,
-                provider_used=budget_snapshot["used"],
-                provider_limit=budget_snapshot["limit"],
-            )
-            active_findings = (
-                reaudit_errors
-                if historical_repair_names and reaudit_errors
-                else draft.findings
-            )
-            quarantine_state.pending_errors = [
-                ValidationFinding.model_validate(payload) for payload in active_findings
-            ]
-            # Historical errors remain binding regression constraints, but
-            # their old source coordinates are not findings on the current
-            # digest and must never enter an exact minimal-patch ticket.
-            _remember_concept_constraints(
-                [
-                    ValidationFinding.model_validate(payload)
-                    for payload in draft.findings
-                ]
-            )
-            if historical_repair_names and reaudit_errors:
-                # The append-only checkpoint proves this exact draft was
-                # materially changed by the named deterministic repair in the
-                # prior attempt.  Preserve that lifecycle state so a passing
-                # digest-bound re-audit can retire the quarantine normally.
-                quarantine_state.repair_materially_changed = True
-                step_record["resumed_deterministic_concept_reaudit"] = {
-                    "code_sha256": draft.sha256,
-                    "repair_names": list(historical_repair_names),
-                    "diagnostic_code": (
-                        "deterministic_repair_budget_only_quarantine_v1"
-                    ),
-                }
-            step_record["resumed_quarantined_draft"] = True
-            step_record["quarantined_draft_sha256"] = draft.sha256
-            step_record["quarantined_draft_relative_path"] = draft.relative_path
-            step_record["quarantined_requires_repair"] = True
-            step_record["quarantined_repair_succeeded"] = False
-            emit_progress(
-                "coder",
-                f"Resuming rejected draft for mandatory repair: {step.step_id}.",
-                status="warning",
+        candidate_recovery = StepCandidateRecovery(
+            StepCandidateRecoveryRequest(
+                step=step,
+                run_dir=run_dir,
                 run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
+                step_current=step_current,
                 total_steps=total_steps,
+                requested_resume_from_step_id=requested_resume_from_step_id,
+                prior_step_record=prior_step_record,
+                prior_attempt_records=prior_attempt_records,
+                provider_budget=provider_budget,
+                step_repair_budget=step_repair_budget,
+                step_record=step_record,
+                findings=findings,
+                shared_lock=shared_lock,
+                worker_progress=worker_progress,
+                quarantine_state=quarantine_state,
+                resume_controller=resume_controller,
+                analysis_family=local_runtime_state.analysis_family,
+                coder=coder,
+                coder_context=coder_context,
+                coder_authority=coder_authority,
+                step_attempt_state=step_attempt_state,
+                checkpoint_authority=checkpoint_authority,
+                deterministic_runner_repair_enabled=(
+                    pipeline._enable_deterministic_runner_repair
+                ),
+                emit_progress=emit_progress,
+                remember_concept_constraints=_remember_concept_constraints,
+                consume_llm_repair_budget=_consume_llm_repair_budget,
+                sync_provider_budget=_sync_provider_budget,
+                authorize_automatic_repair=_authorize_automatic_repair,
+                record_repair=_record_repair,
             )
-            return draft.code
+        )
+
+        def _use_quarantined_draft(draft: QuarantinedConceptDraft) -> str:
+            return candidate_recovery.use_quarantined_draft(draft)
 
         def _use_resumed_code(
             resumed_code: Tuple[str, Dict[str, Any]],
             *,
             error: Optional[BaseException] = None,
         ) -> str:
-            worker_progress.resumed_code_reuse_used = True
-            prior_code, resumed_record = resumed_code
-            step_record["generation_mode"] = "resumed_code_reuse"
-            step_record["resumed_code_evidence_id"] = resumed_record.get("evidence_id")
-            step_record["resumed_code_relative_path"] = resumed_record.get(
-                "relative_path"
-            )
-            resumed_evidence_generation_mode = str(
-                resumed_record.get("generation_mode") or ""
-            )
-            resumed_from_generation_mode = resumed_evidence_generation_mode
-            if resumed_evidence_generation_mode == "resumed_code_reuse":
-                resumed_metadata = resumed_record.get("metadata")
-                if isinstance(resumed_metadata, dict):
-                    resumed_from_generation_mode = str(
-                        resumed_metadata.get("resumed_from_generation_mode") or ""
-                    )
-            step_record["resumed_code_evidence_generation_mode"] = (
-                resumed_evidence_generation_mode
-            )
-            step_record["resumed_from_generation_mode"] = resumed_from_generation_mode
-            detail = {
-                "step_id": step.step_id,
-                "resume_from_step_id": requested_resume_from_step_id,
-                "evidence_id": resumed_record.get("evidence_id"),
-                "relative_path": resumed_record.get("relative_path"),
-                "resumed_from_generation_mode": resumed_from_generation_mode,
-            }
-            if error is None:
-                message = (
-                    "Explicit resume reused prior agent-generated code "
-                    f"(source mode: {resumed_from_generation_mode}) for step "
-                    f"{step.step_id} before requesting a new coder script."
-                )
-            else:
-                detail["error"] = str(error)
-                message = (
-                    f"Coder agent failed for step {step.step_id}; reused prior "
-                    "agent-generated code from resume evidence "
-                    f"(source mode: {resumed_from_generation_mode})."
-                )
-            with shared_lock:
-                findings.append(
-                    ValidationFinding(
-                        validator="coder",
-                        severity="warning",
-                        message=message,
-                        detail=detail,
-                    )
-                )
-            emit_progress(
-                "coder",
-                f"Reused prior generated analysis script for {step.step_id}.",
-                status="warning",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-            )
-            return prior_code
+            return candidate_recovery.use_resumed_code(resumed_code, error=error)
 
         def _repair_with_capsule(
             *,
@@ -6360,228 +3130,36 @@ def run_execute_phase(
             provider_category: str,
             logical_repair_attempt_id: int,
         ) -> str:
-            coordinates = step_attempt_state.coordinates
-            try:
-                return coder.repair(
-                    context=context,
-                    step=step,
-                    host_authority=coder_authority,
-                    code=code,
-                    run_log=run_log,
-                    repair_authority=repair_authority,
-                    current_repair_authority=current_repair_authority,
-                    attempt=attempt,
-                    provider_budget=provider_budget,
-                    provider_category=provider_category,
-                    logical_repair_attempt_id=logical_repair_attempt_id,
-                    persist_candidate=(
-                        (
-                            lambda candidate: persist_candidate_code(
-                                coordinates, candidate
-                            )
-                        )
-                        if coordinates is not None
-                        else None
-                    ),
-                    on_candidate_completed=(
-                        lambda ref, _mode, logical_id: (
-                            (
-                                checkpoint_authority.seal_completed_repair_candidate(
-                                    ref,
-                                    logical_id,
-                                    failure_status=failure_status,
-                                )
-                            )
-                            if coordinates is not None
-                            else None
-                        )
-                    ),
-                )
-            except Exception:
-                checkpoint_authority.clear_failed_repair_transport(
-                    logical_repair_attempt_id
-                )
-                raise
+            return candidate_recovery.repair_with_capsule(
+                failure_status=failure_status,
+                context=context,
+                step=step,
+                code=code,
+                run_log=run_log,
+                repair_authority=repair_authority,
+                current_repair_authority=current_repair_authority,
+                attempt=attempt,
+                provider_budget=provider_budget,
+                provider_category=provider_category,
+                logical_repair_attempt_id=logical_repair_attempt_id,
+            )
 
         def _reserve_compatibility_repair(
             before_code: str,
             repair_ticket: str,
             repair_authority: RepairPromptAuthority,
         ) -> Optional[int]:
-            if not _consume_llm_repair_budget(
-                "compatibility",
-                before_code=before_code,
-                repair_ticket=repair_ticket,
-                repair_authority=repair_authority,
-                provider_category="compatibility_repair",
-                failure_status="concept_failed",
-            ):
-                return None
-            return step_repair_budget.llm_repair_attempts
+            return candidate_recovery.reserve_compatibility_repair(
+                before_code,
+                repair_ticket,
+                repair_authority,
+            )
 
         def _resume_deterministic_repair_code() -> Optional[str]:
-            if (
-                requested_resume_from_step_id != step.step_id
-                or not pipeline._enable_deterministic_runner_repair
-            ):
-                return None
-            resumed_code = resume_controller.prior_code_for_step(step.step_id)
-            if resumed_code is None:
-                return None
-            prior_code, _resumed_record = resumed_code
-            candidate = resume_deterministic_repair_candidate(
-                code=prior_code,
-                step_dir=run_dir / "steps" / step.step_id,
-                analysis_family=local_runtime_state.analysis_family,
-            )
-            if candidate is None:
-                return None
-            repair, source, trigger = candidate
-            repair = _authorize_automatic_repair(
-                repair,
-                step=step,
-                source=source,
-                before_code=prior_code,
-            )
-            if repair is None:
-                return None
-            repair_name, repaired_code = repair
-            _use_resumed_code(resumed_code)
-            worker_progress.preexecution_runner_repair_name = repair_name
-            step_record["runner_repair"] = repair_name
-            step_record["resume_deterministic_repair"] = repair_name
-            _record_repair(
-                repair_id=repair_name,
-                step_id=step.step_id,
-                trigger=trigger,
-                transformation=(
-                    "Reused the explicitly resumed step's prior generated code "
-                    "after deterministic runtime/summary repair, before requesting a "
-                    "new coder script."
-                ),
-                before_code=prior_code,
-                after_code=repaired_code,
-                selection_rule=(
-                    "only when the prior step_summary triggers a case-neutral "
-                    "deterministic summary repair"
-                ),
-            )
-            with shared_lock:
-                findings.append(
-                    ValidationFinding(
-                        validator="coder",
-                        severity="info",
-                        message=(
-                            f"Applied deterministic resume repair for "
-                            f"step {step.step_id}: {repair_name}."
-                        ),
-                        detail={
-                            "step_id": step.step_id,
-                            "repair_id": repair_name,
-                            "source": source,
-                        },
-                    )
-                )
-            emit_progress(
-                "runner_repair",
-                (
-                    f"Applied deterministic resume repair for "
-                    f"{step.step_id}: {repair_name}."
-                ),
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-            )
-            return repaired_code
+            return candidate_recovery.resume_deterministic_repair_code()
 
         def _resume_critic_repair_code() -> Optional[str]:
-            """Repair the selected prior script from structured Critic feedback."""
-
-            report = resume_controller.prior_negative_critic_report_for_step(
-                step.step_id
-            )
-            if report is None:
-                return None
-            resumed_code = resume_controller.prior_code_for_step(step.step_id)
-            if resumed_code is None:
-                return None
-            prior_code = resumed_code[0]
-            critique_log = (
-                "PRIOR CRITIC REVIEW (binding repair requirements):\n"
-                + json.dumps(report, indent=2, ensure_ascii=False, default=str)
-            )
-            critic_repair_authority = RepairPromptAuthority.create(
-                typed_ticket=[
-                    {
-                        "reason": "OUTPUT_CONTRACT_INVALID",
-                        "validator": "critic_resume",
-                        "detail": {"critic_report": report},
-                    }
-                ]
-            )
-            if not _consume_llm_repair_budget(
-                "critic_resume",
-                before_code=prior_code,
-                repair_ticket=critique_log,
-                repair_authority=critic_repair_authority,
-                provider_category="critic_resume_repair",
-                failure_status="critic_failed",
-            ):
-                return None
-            prior_code = _use_resumed_code(resumed_code)
-            emit_progress(
-                "coder",
-                f"Repairing prior Critic findings for {step.step_id}.",
-                status="warning",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-            )
-            try:
-                repaired = _repair_with_capsule(
-                    failure_status="critic_failed",
-                    context=coder_context,
-                    step=step,
-                    code=prior_code,
-                    run_log=critique_log,
-                    repair_authority=critic_repair_authority,
-                    attempt=1,
-                    provider_budget=provider_budget,
-                    provider_category="critic_resume_repair",
-                    logical_repair_attempt_id=(step_repair_budget.llm_repair_attempts),
-                )
-                _sync_provider_budget()
-            except (
-                ProviderCallBudgetReceiptError,
-                StepAuthorityRuntimeError,
-                StepAuthorityCapsuleError,
-            ):
-                raise
-            except Exception as exc:
-                _sync_provider_budget()
-                with shared_lock:
-                    findings.append(
-                        ValidationFinding(
-                            validator="critic_resume_repair",
-                            severity="warning",
-                            message=(
-                                "Prior Critic-guided repair was unavailable; "
-                                "falling back to ordinary code generation."
-                            ),
-                            detail={
-                                "step_id": step.step_id,
-                                "error_type": type(exc).__name__,
-                                "error": str(exc)[:300],
-                            },
-                        )
-                    )
-                return None
-            worker_progress.critic_resume_repair_used = True
-            step_record["critic_resume_repair"] = True
-            step_record["critic_resume_repair_status"] = report.get("status")
-            return repaired
+            return candidate_recovery.resume_critic_repair_code()
 
         def _publication_figure_preflight_supported() -> bool:
             # Preflight may replace the coder, so names/prose are insufficient.
@@ -6735,6 +3313,11 @@ def run_execute_phase(
             plan=plan,
             plausibility_scope=plausibility_authority.scope,
             resolved_bindings=resolved_input_bindings,
+            trajectory_scientific_runtime_authority=pipeline._scientific_runtime_authorities.trajectory,
+            current_case_scientific_runtime_authority=pipeline._scientific_runtime_authorities.current_case,
+            scientific_runtime_projection_sha256=getattr(
+                pipeline, "_scientific_runtime_projection_sha256", None
+            ),
             trace=standard_executor_trace,
         )
         preflight_standard_code = None
@@ -7305,9 +3888,7 @@ def run_execute_phase(
                     lambda: pipeline._llm_signature(llm_concept_audit_client)
                 ),
                 enable_llm_audit=pipeline._enable_llm_concept_audit,
-                study_endpoint=study_endpoint_declaration_entry(
-                    context.endpoint
-                ),
+                study_endpoint=study_endpoint_declaration_entry(context.endpoint),
                 # Every step of the locked plan, so a requirement the plan
                 # assigned to another step stops looking like this script's
                 # omission. Id/role/method only: the other steps' rule prose
@@ -7369,646 +3950,49 @@ def run_execute_phase(
                 on_semantic_escalation=step_repair_budget.record_semantic_escalation,
             )
 
-        worker_progress.concept_repair_attempts = 0
-        worker_progress.llm_repair_used = worker_progress.critic_resume_repair_used
-        worker_progress.concept_audit_error_count = 0
-        worker_progress.deterministic_concept_repairs = 0
-        _MAX_DETERMINISTIC_CONCEPT_REPAIRS = 3
-        worker_progress.applied_concept_repair_names = []
-        concept_approved_code_digest: Optional[str] = None
-        while True:
-            # A quarantined checkpoint is digest-bound authority.  Do not
-            # normalize it before testing deterministic policy supersession;
-            # even a semantics-preserving rewrite would break the exact SHA
-            # proof and force an otherwise unnecessary LLM repair.
-            if not quarantine_state.draft_active:
-                code = reorder_forward_references(code)
-                # The receipt belongs HERE, before the gate that reads it.
-                #
-                # It was first placed at the post-execution loop, then moved to
-                # that loop's head so a repaired rewrite could not drop it. Both
-                # were the wrong loop: `flag_only_plausibility_obligation` is a
-                # PRE-execution gate, run by `findings_for_code` two lines down,
-                # so a step refused here never reached the later loop at all.
-                # verify37's h3 step 02 is the proof -- scope of 7 columns,
-                # reason `plausibility_check_not_attributable`, and zero trace of
-                # the receipt in its quarantined draft; replayed offline that
-                # draft goes 1 finding -> 0 once injected.
-                #
-                # Guarded by the same condition as the normalization above, and
-                # for the same reason stated in its comment: a quarantined draft
-                # is digest-bound authority, and editing it would break the exact
-                # SHA proof and force an otherwise unnecessary repair.
-                code = _host_plausibility_receipt_injected(
-                    code,
-                    scope=plausibility_authority.scope,
-                    already_satisfied=not _flag_only_plausibility_obligation_findings(
-                        None,
-                        script_text=code,
-                        step=step,
-                        scope=plausibility_authority.scope,
+        concept_repair_result = run_concept_repair_loop(
+            ConceptRepairRequest(
+                initial_code=code,
+                concept_audit=concept_audit,
+                step_repair_budget=step_repair_budget,
+                checkpoint_authority=checkpoint_authority,
+                sealed_renderer_state=sealed_renderer_state,
+                standard_executor=standard_executor,
+                coder_context=coder_context,
+                findings=findings,
+                per_step_records=per_step_records,
+                shared_lock=shared_lock,
+                max_code_repair_attempts=pipeline._max_code_repair_attempts,
+                max_step_llm_repair_attempts=(pipeline._max_step_llm_repair_attempts),
+                services=ConceptRepairServices(
+                    authorized_deterministic_repair=(
+                        _authorized_deterministic_concept_repair
                     ),
-                )
-            usage_findings = concept_audit.findings_for_code(
-                code,
-                include_llm=False,
-            )
-            step_record["usage_findings"] = [f.model_dump() for f in usage_findings]
-            worker_progress.concept_audit_error_count += sum(
-                1
-                for f in usage_findings
-                if f.validator == usage_auditor.name and f.severity == "error"
-            )
-            step_record["concept_audit_error_count"] = (
-                worker_progress.concept_audit_error_count
-            )
-            step_record["concept_repair_attempts"] = (
-                worker_progress.concept_repair_attempts
-            )
-            if not any(f.severity == "error" for f in usage_findings):
-                concept_approved_code_digest = sha256_of_bytes(code.encode("utf-8"))
-                step_record["concept_approved_code_sha256"] = (
-                    concept_approved_code_digest
-                )
-                if sealed_renderer_state.repair_id is not None:
-                    sealed_renderer_authorized_code_sha256 = (
-                        concept_approved_code_digest
-                    )
-                    step_record["sealed_renderer_authorized_code_sha256"] = (
-                        sealed_renderer_authorized_code_sha256
-                    )
-                if (
-                    quarantine_state.resumed_draft_used
-                    and quarantine_state.repair_materially_changed
-                    and not quarantine_state.superseded_by_fallback
-                ):
-                    quarantine_state.repair_succeeded = True
-                    step_record["quarantined_repair_succeeded"] = True
-                with shared_lock:
-                    findings.extend(usage_findings)
-                break
-
-            if sealed_renderer_state.repair_id is not None:
-                terminal_finding = ValidationFinding(
-                    validator="sealed_renderer_authority",
-                    severity="error",
-                    message=(
-                        "The authorized rendering-only adapter failed the "
-                        "pre-execution deterministic concept gate; execution was "
-                        "blocked without coder repair."
+                    record_repair=_record_repair,
+                    deterministic_fallback_code=_deterministic_fallback_code,
+                    logical_budget_available=(_logical_llm_repair_budget_available),
+                    repair_budget_available=_llm_repair_budget_available,
+                    consume_llm_repair_budget=_consume_llm_repair_budget,
+                    remember_concept_constraints=_remember_concept_constraints,
+                    monotonic_constraint_ticket=(_monotonic_concept_constraint_ticket),
+                    repair_with_capsule=_repair_with_capsule,
+                    python_repair_is_materially_changed=(
+                        _python_repair_is_materially_changed
                     ),
-                    detail={
-                        "step_id": step.step_id,
-                        "repair_id": sealed_renderer_state.repair_id,
-                        "reason": "preexecution_concept_gate_failed",
-                    },
-                )
-                terminal_findings = [terminal_finding, *usage_findings]
-                step_record.update(
-                    {
-                        "status": "blocked_by_concept_audit",
-                        "diagnostic_only": True,
-                        "sealed_renderer_terminal_reason": (
-                            "preexecution_concept_gate_failed"
-                        ),
-                        "contract_findings": [
-                            finding.model_dump() for finding in terminal_findings
-                        ],
-                        "llm_repair_used": False,
-                        "generation_mode": "fallback",
-                    }
-                )
-                with shared_lock:
-                    findings.extend(terminal_findings)
-                    _append_terminal_step_record(per_step_records, step_record)
-                    _flush_partial_manifest()
-                emit_progress(
-                    "audit",
-                    f"Sealed renderer blocked for {step.step_id}.",
-                    status="error",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                )
-                return step_record
-
-            if worker_progress.deterministic_standard_executor_used:
-                terminal_finding = standard_executor_failure_finding(
-                    step_record=step_record,
-                    step_id=step.step_id,
-                    reason="preexecution_concept_gate_failed",
-                    failure_phase="preexecution_concept_gate",
-                )
-                terminal_findings = [terminal_finding, *usage_findings]
-                step_record.update(
-                    {
-                        "status": "deterministic_standard_blocked",
-                        "diagnostic_only": True,
-                        "standard_executor_terminal_reason": (
-                            "preexecution_concept_gate_failed"
-                        ),
-                        "contract_findings": [
-                            finding.model_dump() for finding in terminal_findings
-                        ],
-                        "llm_repair_used": False,
-                        "generation_mode": "deterministic_standard",
-                    }
-                )
-                with shared_lock:
-                    findings.extend(terminal_findings)
-                    _append_terminal_step_record(per_step_records, step_record)
-                    _flush_partial_manifest()
-                emit_progress(
-                    "audit",
-                    f"Trusted standard adapter blocked for {step.step_id}.",
-                    status="error",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                )
-                return step_record
-
-            # Tier A — deterministic mechanical repair. For a closed set of
-            # objectively-flagged ICU anti-patterns (e.g. silent fillna(0) on
-            # a lab) there is a single neutral fix, so we apply it without a
-            # model round-trip and re-audit. This does NOT consume the LLM
-            # repair budget, and is bounded because each repair removes its
-            # own pattern (a re-audit then finds nothing left to change).
-            if (
-                worker_progress.deterministic_concept_repairs
-                < _MAX_DETERMINISTIC_CONCEPT_REPAIRS
-            ):
-                _audit_error_msgs = [
-                    value
-                    for finding in usage_findings
-                    if finding.severity == "error"
-                    for value in (
-                        finding.message,
-                        str((finding.detail or {}).get("reason") or ""),
-                    )
-                    if value
-                ]
-                _audit_repair_reasons = [
-                    repair_reason_for_finding(finding)
-                    for finding in usage_findings
-                    if finding.severity == "error"
-                ]
-                _det_code, _det_names = _authorized_deterministic_concept_repair(
-                    script_text=code,
-                    error_messages=_audit_error_msgs,
-                    repair_reasons=_audit_repair_reasons,
-                    repair_findings=usage_findings,
-                    source="deterministic_concept_audit_repair",
-                )
-                if _det_names and _det_code != code:
-                    _det_before_code = code
-                    worker_progress.deterministic_concept_repairs += 1
-                    worker_progress.applied_concept_repair_names.extend(_det_names)
-                    step_record["deterministic_concept_repairs"] = (
-                        worker_progress.deterministic_concept_repairs
-                    )
-                    step_record["applied_concept_repair_names"] = list(
-                        worker_progress.applied_concept_repair_names
-                    )
-                    step_record["deterministic_concept_repair_code_sha256"] = (
-                        sha256_of_bytes(_det_code.encode("utf-8"))
-                    )
-                    for _name in _det_names:
-                        _record_repair(
-                            repair_id=_name,
-                            step_id=step.step_id,
-                            trigger={
-                                "gate": "concept_audit",
-                                "audit_errors": _audit_error_msgs,
-                            },
-                            transformation=(
-                                "deterministic_concept_audit_repair: rewrote a "
-                                "mechanical ICU anti-pattern flagged as an error "
-                                "by the static concept-audit gate"
-                            ),
-                            before_code=code,
-                            after_code=_det_code,
-                            selection_rule=(
-                                "applied only because an error finding "
-                                "objectively named the anti-pattern"
-                            ),
-                        )
-                    emit_progress(
-                        "coder",
-                        f"Auto-repaired concept-audit anti-pattern "
-                        f"({', '.join(_det_names)}) for {step.step_id}.",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
-                    )
-                    code = _det_code
-                    if (
-                        quarantine_state.draft_active
-                        and _python_repair_is_materially_changed(
-                            _det_before_code,
-                            code,
-                        )
-                    ):
-                        # The stored errors remain useful regression constraints,
-                        # but they are not findings on a new, materially repaired
-                        # digest.  Re-audit that digest from scratch just as the
-                        # LLM-repair path below does.
-                        quarantine_state.draft_active = False
-                        quarantine_state.repair_materially_changed = True
-                        quarantine_state.pending_errors = []
-                        step_record["quarantined_repair_materially_changed"] = True
-                    continue
-
-            if (
-                worker_progress.concept_repair_attempts
-                >= pipeline._max_code_repair_attempts
-                or not _llm_repair_budget_available("concept")
-                or provider_budget.exhausted
-            ):
-                if not _logical_llm_repair_budget_available("concept"):
-                    step_record["step_llm_repair_budget_exhausted"] = True
-                    step_record["step_llm_repair_budget"] = (
-                        pipeline._max_step_llm_repair_attempts
-                    )
-                _sync_provider_budget()
-                fallback_code = _deterministic_fallback_code("concept_audit")
-                if fallback_code is not None:
-                    fallback_checkpoint_error: Optional[Exception] = None
-                    if quarantine_state.resumed_draft_used:
-                        try:
-                            checkpoint = store_quarantined_concept_draft(
-                                run_dir=run_dir,
-                                step_id=step.step_id,
-                                code=code,
-                                findings=_quarantine_error_payloads(usage_findings),
-                            )
-                            step_record["quarantined_draft_sha256"] = checkpoint.sha256
-                            step_record["quarantined_draft_relative_path"] = (
-                                checkpoint.relative_path
-                            )
-                            step_record["quarantine_checkpoint_is_latest_candidate"] = (
-                                True
-                            )
-                        except Exception as checkpoint_exc:
-                            fallback_checkpoint_error = checkpoint_exc
-                    # Surface the pattern/concept findings that
-                    # forced the fallback; otherwise the manifest
-                    # silently drops the original ICU rule
-                    # violations that the LLM emitted. We dedupe by
-                    # message so repeated retries don't spam.
-                    with shared_lock:
-                        if fallback_checkpoint_error is not None:
-                            findings.append(
-                                ValidationFinding(
-                                    validator="resume",
-                                    severity="warning",
-                                    message=(
-                                        "Could not update the concept-draft "
-                                        "checkpoint before deterministic fallback "
-                                        f"for step {step.step_id}: "
-                                        f"{fallback_checkpoint_error}"
-                                    ),
-                                    detail={"step_id": step.step_id},
-                                )
-                            )
-                        seen_occurrences = {
-                            _finding_occurrence_identity(f) for f in findings
-                        }
-                        for f in usage_findings:
-                            if _finding_occurrence_identity(f) in seen_occurrences:
-                                continue
-                            # Demote ``error`` severity to
-                            # ``warning`` because the run is
-                            # continuing on the deterministic
-                            # fallback; reviewer still sees the
-                            # original violation in the manifest.
-                            if f.severity == "error":
-                                f = f.model_copy(
-                                    update={
-                                        "severity": "warning",
-                                        "message": (
-                                            "[surfaced after fallback] " + f.message
-                                        ),
-                                    }
-                                )
-                            findings.append(f)
-                    if quarantine_state.resumed_draft_used:
-                        quarantine_state.draft_active = False
-                        quarantine_state.pending_errors = []
-                        quarantine_state.repair_succeeded = False
-                        quarantine_state.superseded_by_fallback = True
-                        step_record["quarantined_repair_succeeded"] = False
-                        step_record["quarantine_superseded_by_fallback"] = True
-                    code = fallback_code
-                    continue
-                step_record["status"] = "blocked_by_concept_audit"
-                checkpoint_error: Optional[Exception] = None
-                if not quarantine_state.superseded_by_fallback:
-                    try:
-                        checkpoint = store_quarantined_concept_draft(
-                            run_dir=run_dir,
-                            step_id=step.step_id,
-                            code=code,
-                            findings=_quarantine_error_payloads(usage_findings),
-                        )
-                        step_record["quarantined_draft_sha256"] = checkpoint.sha256
-                        step_record["quarantined_draft_relative_path"] = (
-                            checkpoint.relative_path
-                        )
-                        step_record["quarantined_requires_repair"] = True
-                        step_record["quarantine_checkpoint_is_latest_candidate"] = True
-                    except Exception as checkpoint_exc:
-                        checkpoint_error = checkpoint_exc
-                # Tier C — when auto-repair (deterministic + LLM) could not
-                # clear the violation, do NOT just stop with a status code.
-                # Emit an actionable repair ticket so a human can either add a
-                # constraint and re-run, or knowingly accept the withheld
-                # (diagnostic_only) result. We name candidate remedies without
-                # mandating one — the analytical choice stays with the user.
-                _block_errors = [
-                    {"validator": f.validator, "message": f.message}
-                    for f in usage_findings
-                    if f.severity == "error"
-                ]
-                _offending_lines = [
-                    ln.strip()
-                    for ln in code.splitlines()
-                    if any(
-                        tok in ln
-                        for tok in ("fillna(0)", "fillna(0.0)", ".mean()", "dropna(")
-                    )
-                ][:12]
-                _remedies = [
-                    "Add the violated ICU rule as an explicit coder/planner "
-                    "constraint and re-run this question (e.g. 'do not impute a "
-                    "lab with 0; handle missingness with complete-case or a "
-                    "declared imputation + missingness indicator').",
-                    "Use a stronger model for this question — the block was "
-                    "triggered by generated code, not by the cohort or the "
-                    "question itself.",
-                    "Accept the withheld result: diagnostic_only is a valid "
-                    "outcome. The fail-closed gate declined to report an "
-                    "analysis it judged unsafe; nothing wrong was published.",
-                ]
-                step_record["concept_audit_block"] = {
-                    "step_id": step.step_id,
-                    "errors": _block_errors,
-                    "deterministic_repairs_applied": list(
-                        worker_progress.applied_concept_repair_names
-                    ),
-                    "llm_repair_attempts": worker_progress.concept_repair_attempts,
-                    "offending_code_lines": _offending_lines,
-                    "candidate_remedies": _remedies,
-                }
-                try:
-                    _ticket = [
-                        f"# Concept-audit block — step `{step.step_id}`",
-                        "",
-                        "The static ICU concept-audit gate blocked this step "
-                        "before execution and auto-repair could not clear it, "
-                        "so the run withheld this analysis (`diagnostic_only`). "
-                        "This is the fail-closed safety system working — but "
-                        "here is how to move it forward.",
-                        "",
-                        "## What was flagged (objective errors)",
-                        *[
-                            f"- **{e['validator']}**: {e['message']}"
-                            for e in _block_errors
-                        ],
-                        "",
-                        "## Repair already attempted",
-                        f"- deterministic: "
-                        f"{worker_progress.applied_concept_repair_names or 'none matched'}",
-                        f"- LLM coder repair attempts: {worker_progress.concept_repair_attempts}",
-                        "",
-                        "## Offending code lines",
-                        "```python",
-                        *(_offending_lines or ["(no obvious anti-pattern line)"]),
-                        "```",
-                        "",
-                        "## How to resolve (pick one — your analytical choice)",
-                        *[f"{i + 1}. {r}" for i, r in enumerate(_remedies)],
-                        "",
-                    ]
-                    (run_dir / f"concept_audit_block_{step.step_id}.md").write_text(
-                        "\n".join(_ticket), encoding="utf-8"
-                    )
-                except Exception:  # ticket is best-effort, never fatal
-                    pass
-                with shared_lock:
-                    findings.extend(usage_findings)
-                    if checkpoint_error is not None:
-                        findings.append(
-                            ValidationFinding(
-                                validator="resume",
-                                severity="warning",
-                                message=(
-                                    "Could not update the blocked concept-draft "
-                                    f"checkpoint for step {step.step_id}: "
-                                    f"{checkpoint_error}"
-                                ),
-                                detail={"step_id": step.step_id},
-                            )
-                        )
-                    _append_terminal_step_record(per_step_records, step_record)
-                    _flush_partial_manifest()
-                emit_progress(
-                    "audit",
-                    f"Concept audit blocked {step.step_id}; repair ticket written.",
-                    status="error",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                )
-                return step_record
-
-            blocking_usage_findings = _blocking_validator_findings(usage_findings)
-            audit_log = "\n".join(
-                (
-                    f"{f.severity.upper()}: {f.message}"
-                    + (
-                        "\nDETAIL (diagnostic mirror only): "
-                        + json.dumps(f.detail, ensure_ascii=False, sort_keys=True)
-                        if f.detail
-                        else ""
-                    )
-                )
-                for f in blocking_usage_findings
+                    append_terminal_record=_append_terminal_step_record,
+                    flush_partial_manifest=_flush_partial_manifest,
+                ),
             )
-            structured_repair_ticket = typed_repair_ticket(blocking_usage_findings)
-            current_concept_repair_authority = RepairPromptAuthority.create(
-                typed_ticket=structured_repair_ticket,
-            )
-            concept_repair_authority = RepairPromptAuthority.create(
-                typed_ticket=[
-                    *structured_repair_ticket,
-                    *_monotonic_concept_constraint_ticket(),
-                ],
-            )
-            concept_repair_log = (
-                "Static concept audit blocked this script before "
-                "execution. Fix all ICU-rule violations.\n\n"
-                "HUMAN-READABLE FINDINGS (diagnostic mirror only):\n" + audit_log
-            )
-            worker_progress.concept_repair_attempts += 1
-            if not _consume_llm_repair_budget(
-                "concept",
-                before_code=code,
-                repair_ticket=concept_repair_log,
-                repair_authority=concept_repair_authority,
-                current_repair_authority=current_concept_repair_authority,
-                provider_category="concept_repair",
-                failure_status="concept_failed",
-            ):
-                raise AssertionError("LLM repair budget changed without mutation")
-            step_record["concept_repair_attempts"] = (
-                worker_progress.concept_repair_attempts
-            )
-            emit_progress(
-                "coder",
-                f"Repairing concept-audit violation for {step.step_id}.",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-                repair_attempts=worker_progress.concept_repair_attempts,
-            )
-            _remember_concept_constraints(blocking_usage_findings)
-            try:
-                repaired_code = _repair_with_capsule(
-                    failure_status="concept_failed",
-                    context=coder_context,
-                    step=step,
-                    code=code,
-                    run_log=concept_repair_log,
-                    repair_authority=concept_repair_authority,
-                    current_repair_authority=current_concept_repair_authority,
-                    attempt=worker_progress.concept_repair_attempts,
-                    provider_budget=provider_budget,
-                    provider_category="concept_repair",
-                    logical_repair_attempt_id=(step_repair_budget.llm_repair_attempts),
-                )
-                _sync_provider_budget()
-                if (
-                    quarantine_state.draft_active
-                    and not _python_repair_is_materially_changed(code, repaired_code)
-                ):
-                    checkpoint_authority.reject_completed_repair_candidate(
-                        repaired_code,
-                        reason="quarantined_repair_semantic_noop",
-                    )
-                    no_op_finding = ValidationFinding(
-                        validator="resume",
-                        severity="error",
-                        message=(
-                            "Quarantined concept-draft repair returned no material "
-                            f"Python change for step {step.step_id}; the pending "
-                            "concept errors remain binding."
-                        ),
-                        detail={
-                            "step_id": step.step_id,
-                            "quarantined_draft_sha256": step_record.get(
-                                "quarantined_draft_sha256"
-                            ),
-                            "repair_attempt": worker_progress.concept_repair_attempts,
-                            "semantic_noop": True,
-                        },
-                    )
-                    if not any(
-                        finding.message == no_op_finding.message
-                        for finding in quarantine_state.pending_errors
-                    ):
-                        quarantine_state.pending_errors.append(no_op_finding)
-                    step_record["quarantined_repair_noop_count"] = (
-                        int(step_record.get("quarantined_repair_noop_count") or 0) + 1
-                    )
-                    quarantine_state.repair_succeeded = False
-                    step_record["quarantined_repair_succeeded"] = False
-                    continue
-                code = repaired_code
-                worker_progress.llm_repair_used = True
-                if quarantine_state.draft_active:
-                    quarantine_state.draft_active = False
-                    quarantine_state.repair_materially_changed = True
-                    quarantine_state.pending_errors = []
-                    step_record["quarantined_repair_materially_changed"] = True
-            except (
-                ProviderCallBudgetReceiptError,
-                StepAuthorityRuntimeError,
-                StepAuthorityCapsuleError,
-            ):
-                raise
-            except BaseException as exc:
-                _sync_provider_budget()
-                checkpoint_error: Optional[Exception] = None
-                try:
-                    checkpoint = store_quarantined_concept_draft(
-                        run_dir=run_dir,
-                        step_id=step.step_id,
-                        code=code,
-                        findings=_quarantine_error_payloads(usage_findings),
-                    )
-                    step_record["quarantined_draft_sha256"] = checkpoint.sha256
-                    step_record["quarantined_draft_relative_path"] = (
-                        checkpoint.relative_path
-                    )
-                    step_record["quarantined_requires_repair"] = True
-                except Exception as checkpoint_exc:
-                    checkpoint_error = checkpoint_exc
-                if not isinstance(exc, Exception):
-                    raise
-                fallback_code = _deterministic_fallback_code("concept_repair_failed")
-                if fallback_code is not None:
-                    quarantine_state.draft_active = False
-                    quarantine_state.pending_errors = []
-                    quarantine_state.repair_succeeded = False
-                    if quarantine_state.resumed_draft_used:
-                        quarantine_state.superseded_by_fallback = True
-                        step_record["quarantined_repair_succeeded"] = False
-                        step_record["quarantine_superseded_by_fallback"] = True
-                    code = fallback_code
-                    continue
-                with shared_lock:
-                    findings.extend(usage_findings)
-                    if checkpoint_error is not None:
-                        findings.append(
-                            ValidationFinding(
-                                validator="resume",
-                                severity="warning",
-                                message=(
-                                    "Could not preserve the rejected concept-audit "
-                                    f"draft for step {step.step_id}: {checkpoint_error}"
-                                ),
-                                detail={"step_id": step.step_id},
-                            )
-                        )
-                    findings.append(
-                        ValidationFinding(
-                            validator="coder",
-                            severity="error",
-                            message=(
-                                f"Coder repair failed after concept audit for "
-                                f"step {step.step_id}: {exc}"
-                            ),
-                        )
-                    )
-                    step_record["status"] = "repair_failed"
-                    _append_terminal_step_record(per_step_records, step_record)
-                    _flush_partial_manifest()
-                emit_progress(
-                    "coder",
-                    f"Concept-audit repair failed for {step.step_id}.",
-                    status="error",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                )
-                return step_record
+        )
+        if concept_repair_result.terminal_record is not None:
+            return concept_repair_result.terminal_record
+        code = concept_repair_result.code
+        concept_approved_code_digest = (
+            concept_repair_result.concept_approved_code_sha256
+        )
+        sealed_renderer_authorized_code_sha256 = (
+            concept_repair_result.sealed_renderer_authorized_code_sha256
+        )
 
         provider_failure_deferred = bool(
             step_record.get("concept_audit_provider_failure_deferred")
@@ -8107,2501 +4091,154 @@ def run_execute_phase(
         standard_executor_terminal_findings: List[ValidationFinding] = []
         deterministic_contract_approved_code_digest: Optional[str] = None
         final_concept_gate_approved_code_digest: Optional[str] = None
-        while True:
-            code = reorder_forward_references(code)
-            # The flag-only plausibility receipt is mechanical and host-owned,
-            # and it is the largest pre-execution blocker on record: 37 findings
-            # over 32 steps in 8 of the 9 tasks. It is re-established HERE, at
-            # the loop head, because every candidate the audit will judge --
-            # the first one AND every repaired rewrite -- passes through this
-            # point.
-            #
-            # It used to be injected once, where `code` was first settled.
-            # MEASURED on a live run (verify30, m2 05_fit_prediction_model):
-            # that worked for the initial script -- concept-approved, executed,
-            # and it clears the gate offline with 0 findings -- and then TWO
-            # `post_mutation_concept` full rewrites regenerated the script from
-            # the prompt, dropping the appended host block. The step was
-            # blocked citing a quarantined draft carrying no receipt, while the
-            # code that actually ran carried one. The agent was being asked to
-            # hand-write something the host had already written and the repair
-            # had thrown away.
-            #
-            # Re-applying is safe by construction: a script that already
-            # satisfies the gate reports `already_satisfied` and comes back
-            # byte-identical, so a repaired script gets the receipt once and an
-            # untouched one is not double-rendered. Placing it before
-            # `ensure_candidate` and `candidate_code_digest` keeps the
-            # checkpoint and both digests covering the assembled script.
-            code = _host_plausibility_receipt_injected(
-                code,
-                scope=plausibility_authority.scope,
-                already_satisfied=not _flag_only_plausibility_obligation_findings(
-                    None,
-                    script_text=code,
-                    step=step,
-                    scope=plausibility_authority.scope,
+        candidate_loop_state = _CandidateLoopState(
+            code=code,
+            concept_approved_code_digest=concept_approved_code_digest,
+            deterministic_contract_approved_code_digest=(
+                deterministic_contract_approved_code_digest
+            ),
+            final_concept_gate_approved_code_digest=(
+                final_concept_gate_approved_code_digest
+            ),
+            standard_executor_terminal_block=standard_executor_terminal_block,
+            standard_executor_terminal_reason=standard_executor_terminal_reason,
+            standard_executor_terminal_summary=standard_executor_terminal_summary,
+            standard_executor_terminal_findings=standard_executor_terminal_findings,
+        )
+        candidate_loop_terminal = _run_candidate_loop(
+            host=_CandidateLoopHost(
+                _authorize_automatic_repair=_authorize_automatic_repair,
+                _append_terminal_step_record=_append_terminal_step_record,
+                _automatic_repair_authorized=_automatic_repair_authorized,
+                _contract_repair_log=_contract_repair_log,
+                _execution_input_authority_integrity_finding=(
+                    _execution_input_authority_integrity_finding
                 ),
-            )
-            checkpoint_authority.ensure_candidate(
-                code,
-                reason="host_code_normalization_or_deterministic_mutation",
-            )
-            candidate_code_digest = sha256_of_bytes(code.encode("utf-8"))
-            if (
-                sealed_renderer_authorized_code_sha256 is not None
-                and candidate_code_digest != sealed_renderer_authorized_code_sha256
-            ):
-                authority_finding = ValidationFinding(
-                    validator="sealed_renderer_authority",
-                    severity="error",
-                    message=(
-                        "The active rendering-only adapter no longer matches its "
-                        "authorized code digest; execution was blocked without "
-                        "running or repairing the mutated code."
-                    ),
-                    detail={
-                        "step_id": step.step_id,
-                        "repair_id": sealed_renderer_state.repair_id,
-                        "authorized_code_sha256": (
-                            sealed_renderer_authorized_code_sha256
-                        ),
-                        "candidate_code_sha256": candidate_code_digest,
-                    },
-                )
-                step_record.update(
-                    {
-                        "status": "execution_failed",
-                        "diagnostic_only": True,
-                        "sealed_renderer_terminal_reason": "code_digest_changed",
-                        "llm_repair_used": False,
-                        "generation_mode": "fallback",
-                    }
-                )
-                with shared_lock:
-                    findings.append(authority_finding)
-                    _append_terminal_step_record(per_step_records, step_record)
-                    _flush_partial_manifest()
-                return step_record
-            final_llm_audit_due = bool(
-                candidate_code_digest == deterministic_contract_approved_code_digest
-                and candidate_code_digest != final_concept_gate_approved_code_digest
-            )
-            if (
-                candidate_code_digest != concept_approved_code_digest
-                or final_llm_audit_due
-            ):
-                # Every mutation still returns through deterministic semantic and
-                # mechanical gates before execution.  The LLM concept auditor is
-                # invoked only for the exact digest whose local run and early
-                # deterministic contracts already passed, preventing runtime- or
-                # contract-broken drafts from consuming repeated audit calls.
-                usage_findings = concept_audit.findings_for_code(
-                    code,
-                    include_llm=final_llm_audit_due,
-                )
-                step_record["usage_findings"] = [
-                    finding.model_dump() for finding in usage_findings
-                ]
-                post_mutation_errors = [
-                    finding for finding in usage_findings if finding.severity == "error"
-                ]
-                if post_mutation_errors:
-                    if (
-                        final_llm_audit_due
-                        and step_attempt_state.coordinates is not None
-                        and step_attempt_state.current_capsule_ref is not None
-                        and not any(
-                            str((finding.detail or {}).get("issue_code") or "")
-                            in {
-                                "llm_concept_audit_provider_failure",
-                                "llm_concept_audit_response_invalid",
-                            }
-                            for finding in usage_findings
-                        )
-                    ):
-                        current_authority = load_verified_step_authority_capsule(
-                            run_dir,
-                            ref=step_attempt_state.current_capsule_ref,
-                            expected_step_id=step.step_id,
-                        )
-                        if (
-                            current_authority.capsule.concept_audit is None
-                            or step_record.get("step_authority_audit_cache_miss")
-                            == "audit_identity_drift"
-                        ):
-                            blocked_audit_key = concept_audit.tokens_by_digest.get(
-                                candidate_code_digest
-                            ) or canonical_sha256(
-                                {
-                                    "schema": (
-                                        "easyicu.capsule_blocked_concept_audit/1"
-                                    ),
-                                    "step_id": step.step_id,
-                                    "code_sha256": candidate_code_digest,
-                                    "findings": [
-                                        finding.model_dump(mode="json")
-                                        for finding in usage_findings
-                                    ],
-                                }
-                            )
-                            blocked_ref = seal_concept_audit_capsule(
-                                step_attempt_state.coordinates,
-                                parent_ref=step_attempt_state.current_capsule_ref,
-                                findings=usage_findings,
-                                audit_key=blocked_audit_key,
-                                auditor_identity_sha256=(
-                                    llm_concept_auditor_identity_sha256
-                                ),
-                                environment_sha256=(concept_audit_environment_sha256),
-                                validator_implementation_sha256=(
-                                    llm_concept_auditor_implementation_sha256
-                                    or canonical_sha256(
-                                        "llm_concept_auditor_unavailable"
-                                    )
-                                ),
-                            )
-                            checkpoint_authority.checkpoint_capsule(
-                                blocked_ref,
-                                status="concept_audited_pending_review",
-                            )
-                    if final_llm_audit_due:
-                        # These outputs came from a digest rejected by the final
-                        # semantic audit.  They are never eligible for later
-                        # sealing/current authority, and a repaired digest must
-                        # execute afresh before it can regain contract approval.
-                        deterministic_contract_approved_code_digest = None
-                        _clear_output_dir(run_dir / "steps" / step.step_id / "outputs")
-                    post_mutation_messages = [
-                        value
-                        for finding in post_mutation_errors
-                        for value in (
-                            finding.message,
-                            str((finding.detail or {}).get("reason") or ""),
-                        )
-                        if value
-                    ]
-                    post_mutation_reasons = [
-                        repair_reason_for_finding(finding)
-                        for finding in post_mutation_errors
-                    ]
-                    if (
-                        worker_progress.deterministic_concept_repairs
-                        < _MAX_DETERMINISTIC_CONCEPT_REPAIRS
-                    ):
-                        deterministic_code, deterministic_names = (
-                            _authorized_deterministic_concept_repair(
-                                script_text=code,
-                                error_messages=post_mutation_messages,
-                                repair_reasons=post_mutation_reasons,
-                                repair_findings=post_mutation_errors,
-                                source=("post_mutation_deterministic_concept_repair"),
-                            )
-                        )
-                        if deterministic_names and deterministic_code != code:
-                            before_code = code
-                            code = deterministic_code
-                            worker_progress.deterministic_concept_repairs += 1
-                            worker_progress.applied_concept_repair_names.extend(
-                                deterministic_names
-                            )
-                            step_record["deterministic_concept_repairs"] = (
-                                worker_progress.deterministic_concept_repairs
-                            )
-                            step_record["applied_concept_repair_names"] = list(
-                                worker_progress.applied_concept_repair_names
-                            )
-                            step_record["deterministic_concept_repair_code_sha256"] = (
-                                sha256_of_bytes(code.encode("utf-8"))
-                            )
-                            for repair_name in deterministic_names:
-                                _record_repair(
-                                    repair_id=repair_name,
-                                    step_id=step.step_id,
-                                    trigger={
-                                        "gate": "post_mutation_concept_audit",
-                                        "audit_errors": post_mutation_messages,
-                                    },
-                                    transformation=(
-                                        "deterministic concept repair after a "
-                                        "contract/runtime mutation"
-                                    ),
-                                    before_code=before_code,
-                                    after_code=code,
-                                    selection_rule=(
-                                        "applied only because a typed mechanical "
-                                        "error named the anti-pattern"
-                                    ),
-                                )
-                            continue
-
-                    if _llm_repair_budget_available("post_mutation_concept"):
-                        post_mutation_ticket = typed_repair_ticket(post_mutation_errors)
-                        current_post_mutation_repair_authority = (
-                            RepairPromptAuthority.create(
-                                typed_ticket=post_mutation_ticket,
-                            )
-                        )
-                        post_mutation_repair_authority = RepairPromptAuthority.create(
-                            typed_ticket=[
-                                *post_mutation_ticket,
-                                *_monotonic_concept_constraint_ticket(),
-                            ],
-                        )
-                        post_mutation_log = "\n".join(
-                            (
-                                f"{finding.severity.upper()}: {finding.message}"
-                                + (
-                                    "\nDETAIL (diagnostic mirror only): "
-                                    + json.dumps(
-                                        finding.detail,
-                                        ensure_ascii=False,
-                                        sort_keys=True,
-                                    )
-                                    if finding.detail
-                                    else ""
-                                )
-                            )
-                            for finding in post_mutation_errors
-                        )
-                        post_mutation_repair_log = (
-                            "A contract or runtime repair produced a new "
-                            "code digest that failed pre-execution audit. "
-                            "Fix every typed error with the smallest change; "
-                            "preserve the earlier contract repair and all "
-                            "Planner-owned science.\n\n"
-                            "FINDINGS (diagnostic mirror only):\n" + post_mutation_log
-                        )
-                        worker_progress.concept_repair_attempts += 1
-                        if not _consume_llm_repair_budget(
-                            "post_mutation_concept",
-                            before_code=code,
-                            repair_ticket=post_mutation_repair_log,
-                            repair_authority=post_mutation_repair_authority,
-                            current_repair_authority=(
-                                current_post_mutation_repair_authority
-                            ),
-                            provider_category="post_mutation_concept_repair",
-                            failure_status="concept_failed",
-                        ):
-                            raise AssertionError(
-                                "LLM repair budget changed without mutation"
-                            )
-                        step_record["concept_repair_attempts"] = (
-                            worker_progress.concept_repair_attempts
-                        )
-                        emit_progress(
-                            "coder",
-                            (
-                                "Repairing post-mutation concept violation for "
-                                f"{step.step_id}."
-                            ),
-                            run_id=run_id,
-                            step_id=step.step_id,
-                            current_step=step_current,
-                            total_steps=total_steps,
-                            repair_attempts=step_repair_budget.llm_repair_attempts,
-                        )
-                        _remember_concept_constraints(post_mutation_errors)
-                        try:
-                            code = _repair_with_capsule(
-                                failure_status="concept_failed",
-                                context=coder_context,
-                                step=step,
-                                code=code,
-                                run_log=post_mutation_repair_log,
-                                repair_authority=post_mutation_repair_authority,
-                                current_repair_authority=(
-                                    current_post_mutation_repair_authority
-                                ),
-                                attempt=worker_progress.concept_repair_attempts,
-                                provider_budget=provider_budget,
-                                provider_category="post_mutation_concept_repair",
-                                logical_repair_attempt_id=(
-                                    step_repair_budget.llm_repair_attempts
-                                ),
-                            )
-                            _sync_provider_budget()
-                            worker_progress.llm_repair_used = True
-                            continue
-                        except (
-                            ProviderCallBudgetReceiptError,
-                            StepAuthorityRuntimeError,
-                            StepAuthorityCapsuleError,
-                        ):
-                            raise
-                        except Exception as exc:
-                            _sync_provider_budget()
-                            checkpoint_error: Optional[Exception] = None
-                            try:
-                                checkpoint = store_quarantined_concept_draft(
-                                    run_dir=run_dir,
-                                    step_id=step.step_id,
-                                    code=code,
-                                    findings=_quarantine_error_payloads(
-                                        post_mutation_errors
-                                    ),
-                                )
-                                step_record["quarantined_draft_sha256"] = (
-                                    checkpoint.sha256
-                                )
-                                step_record["quarantined_draft_relative_path"] = (
-                                    checkpoint.relative_path
-                                )
-                                step_record["quarantined_requires_repair"] = True
-                            except Exception as checkpoint_exc:
-                                checkpoint_error = checkpoint_exc
-                            fallback_code = _deterministic_fallback_code(
-                                "concept_repair_failed"
-                            )
-                            if fallback_code is not None:
-                                code = fallback_code
-                                continue
-                            with shared_lock:
-                                findings.extend(usage_findings)
-                                if checkpoint_error is not None:
-                                    findings.append(
-                                        ValidationFinding(
-                                            validator="resume",
-                                            severity="warning",
-                                            message=(
-                                                "Could not preserve the rejected final "
-                                                "concept-audit draft for step "
-                                                f"{step.step_id}: {checkpoint_error}"
-                                            ),
-                                            detail={"step_id": step.step_id},
-                                        )
-                                    )
-                                findings.append(
-                                    ValidationFinding(
-                                        validator="coder",
-                                        severity="error",
-                                        message=(
-                                            "Coder repair failed after post-mutation "
-                                            "concept audit for step "
-                                            f"{step.step_id}: {exc}"
-                                        ),
-                                        detail={"step_id": step.step_id},
-                                    )
-                                )
-                                step_record["status"] = "repair_failed"
-                                _append_terminal_step_record(
-                                    per_step_records, step_record
-                                )
-                                _flush_partial_manifest()
-                            emit_progress(
-                                "coder",
-                                f"Concept-audit repair failed for {step.step_id}.",
-                                status="error",
-                                run_id=run_id,
-                                step_id=step.step_id,
-                                current_step=step_current,
-                                total_steps=total_steps,
-                            )
-                            return step_record
-
-                    if not _logical_llm_repair_budget_available(
-                        "post_mutation_concept"
-                    ):
-                        step_record["step_llm_repair_budget_exhausted"] = True
-                        step_record["step_llm_repair_budget"] = (
-                            pipeline._max_step_llm_repair_attempts
-                        )
-                    checkpoint_error: Optional[Exception] = None
-                    try:
-                        checkpoint = store_quarantined_concept_draft(
-                            run_dir=run_dir,
-                            step_id=step.step_id,
-                            code=code,
-                            findings=_quarantine_error_payloads(post_mutation_errors),
-                        )
-                        step_record["quarantined_draft_sha256"] = checkpoint.sha256
-                        step_record["quarantined_draft_relative_path"] = (
-                            checkpoint.relative_path
-                        )
-                        step_record["quarantined_requires_repair"] = True
-                    except Exception as checkpoint_exc:
-                        checkpoint_error = checkpoint_exc
-                    step_record["status"] = "blocked_by_concept_audit"
-                    step_record["post_repair_concept_audit_block"] = {
-                        "code_sha256": candidate_code_digest,
-                        "errors": [
-                            finding.model_dump(mode="json")
-                            for finding in post_mutation_errors
-                        ],
-                    }
-                    with shared_lock:
-                        findings.extend(usage_findings)
-                        if checkpoint_error is not None:
-                            findings.append(
-                                ValidationFinding(
-                                    validator="resume",
-                                    severity="warning",
-                                    message=(
-                                        "Could not preserve post-repair code rejected "
-                                        f"by concept audit for step {step.step_id}: "
-                                        f"{checkpoint_error}"
-                                    ),
-                                    detail={"step_id": step.step_id},
-                                )
-                            )
-                        _append_terminal_step_record(per_step_records, step_record)
-                        _flush_partial_manifest()
-                    emit_progress(
-                        "audit",
-                        f"Concept audit blocked mutated code for {step.step_id}.",
-                        status="error",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
-                    )
-                    return step_record
-                with shared_lock:
-                    findings.extend(usage_findings)
-                concept_approved_code_digest = candidate_code_digest
-                step_record["concept_approved_code_sha256"] = (
-                    concept_approved_code_digest
-                )
-                step_record["deterministic_preflight_approved_code_sha256"] = (
-                    concept_approved_code_digest
-                )
-                if final_llm_audit_due:
-                    final_concept_gate_approved_code_digest = candidate_code_digest
-                    step_record["final_concept_gate_approved_code_sha256"] = (
-                        final_concept_gate_approved_code_digest
-                    )
-                    if candidate_code_digest in concept_audit.completed_digests:
-                        final_audit_token = concept_audit.tokens_by_digest.get(
-                            candidate_code_digest
-                        )
-                        if final_audit_token is not None:
-                            provider_budget.complete_reserved_category(
-                                "concept_audit",
-                                token=final_audit_token,
-                            )
-                        step_record["llm_concept_audit_status"] = "completed"
-                        step_record["llm_concept_approved_code_sha256"] = (
-                            candidate_code_digest
-                        )
-                    elif not pipeline._enable_llm_concept_audit:
-                        step_record["llm_concept_audit_status"] = "disabled"
-                    elif (
-                        worker_progress.deterministic_fallback_used
-                        or worker_progress.deterministic_standard_executor_used
-                    ):
-                        step_record["llm_concept_audit_status"] = (
-                            "skipped_trusted_deterministic_code"
-                        )
-                    else:
-                        step_record["llm_concept_audit_status"] = (
-                            "skipped_no_auditor_client"
-                        )
-                    audit_authority_complete = bool(
-                        candidate_code_digest in concept_audit.completed_digests
-                        or not pipeline._enable_llm_concept_audit
-                        or worker_progress.deterministic_fallback_used
-                        or worker_progress.deterministic_standard_executor_used
-                    )
-                    if (
-                        audit_authority_complete
-                        and step_attempt_state.coordinates is not None
-                        and step_attempt_state.current_capsule_ref is not None
-                    ):
-                        current_authority = load_verified_step_authority_capsule(
-                            run_dir,
-                            ref=step_attempt_state.current_capsule_ref,
-                            expected_step_id=step.step_id,
-                        )
-                        if (
-                            current_authority.capsule.concept_audit is None
-                            or step_record.get("step_authority_audit_cache_miss")
-                            == "audit_identity_drift"
-                        ):
-                            audit_key = concept_audit.tokens_by_digest.get(
-                                candidate_code_digest
-                            ) or canonical_sha256(
-                                {
-                                    "schema": (
-                                        "easyicu.capsule_deterministic_concept_audit/1"
-                                    ),
-                                    "step_id": step.step_id,
-                                    "code_sha256": candidate_code_digest,
-                                    "findings": [
-                                        finding.model_dump(mode="json")
-                                        for finding in usage_findings
-                                    ],
-                                }
-                            )
-                            audited_ref = seal_concept_audit_capsule(
-                                step_attempt_state.coordinates,
-                                parent_ref=step_attempt_state.current_capsule_ref,
-                                findings=usage_findings,
-                                audit_key=audit_key,
-                                auditor_identity_sha256=(
-                                    llm_concept_auditor_identity_sha256
-                                ),
-                                environment_sha256=(concept_audit_environment_sha256),
-                                validator_implementation_sha256=(
-                                    llm_concept_auditor_implementation_sha256
-                                    or canonical_sha256(
-                                        "llm_concept_auditor_unavailable"
-                                    )
-                                ),
-                            )
-                            checkpoint_authority.checkpoint_capsule(
-                                audited_ref,
-                                status="concept_audited_pending_review",
-                            )
-                    # Reuse the already validated outputs.  No second execution
-                    # of unchanged code is needed after the digest-bound audit.
-                    break
-
-            current_generation_mode = worker_progress.generation_mode()
-            run_label = {
-                "llm": "generated script",
-                "resumed_code_reuse": "resumed script",
-                "fallback": "fallback script",
-                "deterministic_standard": "standard executor script",
-            }.get(current_generation_mode, "repaired script")
-            execution_runner = runner
-            execution_timeout_seconds = pipeline._timeout_seconds
-            if worker_progress.deterministic_standard_executor_used:
-                # Give a registered standard's exact typed workload its dedicated
-                # timeout even with a staged primary-cohort universe.
-                execution_timeout_seconds = pipeline._standard_executor_timeout_seconds
-            if step_execution_cohort_path != cohort_path or (
-                worker_progress.deterministic_standard_executor_used
-            ):
-                execution_runner = pipeline._build_runner(
-                    run_dir=run_dir,
-                    cohort_path=step_execution_cohort_path,
-                    target_outcome=context.target_outcome,
-                    universe_path=universe_path,
-                    **run_input_authority_state.runner_bindings(),
-                    timeout_seconds=execution_timeout_seconds,
-                )
-            execution_timeout_seconds = step_executor.runner_timeout(
-                execution_runner, execution_timeout_seconds
-            )
-            emit_progress(
-                "runner",
-                f"Running {run_label} for {step.step_id}.",
+                _flush_partial_manifest=_flush_partial_manifest,
+                _fresh_plausibility_receipt_findings=(
+                    _fresh_plausibility_receipt_findings
+                ),
+                _locked_measurement_data_quality_issues=(
+                    _locked_measurement_data_quality_issues
+                ),
+                _python_repair_is_materially_changed=(
+                    _python_repair_is_materially_changed
+                ),
+                _record_repair=_record_repair,
+                _remove_standard_executor_pending_artifacts=(
+                    _remove_standard_executor_pending_artifacts
+                ),
+                _unowned_sealed_authority_markers=(_unowned_sealed_authority_markers),
+                cohort_path=cohort_path,
+                concept_audit_environment_sha256=concept_audit_environment_sha256,
+                context=context,
+                cross_step_cohort_lock_validator=cross_step_cohort_lock_validator,
+                cross_step_reconciliation_trace_validator=(
+                    cross_step_reconciliation_trace_validator
+                ),
+                cross_step_registered_output_validator=(
+                    cross_step_registered_output_validator
+                ),
+                cross_step_source_status_validator=cross_step_source_status_validator,
+                emit_progress=emit_progress,
+                evidence=evidence,
+                figure_contract_validator=figure_contract_validator,
+                figure_source_validator=figure_source_validator,
+                findings=findings,
+                llm_concept_auditor_identity_sha256=(
+                    llm_concept_auditor_identity_sha256
+                ),
+                llm_concept_auditor_implementation_sha256=(
+                    llm_concept_auditor_implementation_sha256
+                ),
+                llm_signature=llm_signature,
+                per_step_records=per_step_records,
+                pipeline=pipeline,
+                plan=plan,
+                primary_model_contract_validator=primary_model_contract_validator,
+                prompt_version=prompt_version,
+                run_dir=run_dir,
                 run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
+                run_input_authority_state=run_input_authority_state,
+                runner=runner,
+                shared_lock=shared_lock,
+                step_executor=step_executor,
+                step_summary_fraction_validator=step_summary_fraction_validator,
+                step_summary_integrity_validator=step_summary_integrity_validator,
                 total_steps=total_steps,
-                repair_attempts=worker_progress.repair_attempts,
-                phase_timeout_seconds=execution_timeout_seconds,
-            )
-            run_input_authority_state.require_trajectory_integrity(
-                step_id=step.step_id,
-            )
-            runner_identity = (
-                f"{type(execution_runner).__module__}."
-                f"{type(execution_runner).__qualname__}"
-            )
-            runner_network_identity = str(
-                getattr(
-                    execution_runner,
-                    "network_policy",
-                    getattr(execution_runner, "network", "none"),
-                )
-            )
-            runner_authority_identity = getattr(
-                execution_runner,
-                "authority_identity_sha256",
-                None,
-            )
-            custom_runner_replay_allowed = not (
-                pipeline._runner_kind == "custom"
-                and not (
-                    isinstance(runner_authority_identity, str)
-                    and re.fullmatch(r"[0-9a-f]{64}", runner_authority_identity)
-                    is not None
-                )
-            )
-            execution_context_digest = execution_context_sha256(
-                code_sha256=candidate_code_digest,
+                universe_path=universe_path,
+            ),
+            attempt=_CandidateLoopAttempt(
+                _authorized_deterministic_concept_repair=(
+                    _authorized_deterministic_concept_repair
+                ),
+                _consume_llm_repair_budget=_consume_llm_repair_budget,
+                _deterministic_fallback_code=_deterministic_fallback_code,
+                _llm_repair_budget_available=_llm_repair_budget_available,
+                _logical_llm_repair_budget_available=(
+                    _logical_llm_repair_budget_available
+                ),
+                _monotonic_concept_constraint_log=_monotonic_concept_constraint_log,
+                _monotonic_concept_constraint_ticket=(
+                    _monotonic_concept_constraint_ticket
+                ),
+                _quarantine_error_payloads=_quarantine_error_payloads,
+                _remember_concept_constraints=_remember_concept_constraints,
+                _repair_with_capsule=_repair_with_capsule,
+                _sync_provider_budget=_sync_provider_budget,
+                checkpoint_authority=checkpoint_authority,
+                coder_context=coder_context,
+                concept_audit=concept_audit,
+                is_trajectory_stability_standard=is_trajectory_stability_standard,
+                local_runtime_state=local_runtime_state,
+                plausibility_authority=plausibility_authority,
+                provider_budget=provider_budget,
+                quarantine_state=quarantine_state,
+                resolved_input_bindings=resolved_input_bindings,
+                resolved_input_evidence_ids=resolved_input_evidence_ids,
+                resolved_inputs_path=resolved_inputs_path,
                 resolved_inputs_sha256=resolved_inputs_sha256,
-                cohort_sha256=sha256_of_file(step_execution_cohort_path),
-                universe_sha256=sha256_of_file(universe_path),
-                runner_identity=runner_identity,
-                timeout_seconds=execution_timeout_seconds,
-                requested_network_policy=runner_network_identity,
-                runtime_environment_sha256=(current_execution_runtime_sha256()),
-                runner_configuration_sha256=canonical_sha256(
-                    {
-                        "schema": "easyicu.runner_configuration/1",
-                        "runner_identity": runner_identity,
-                        "configured_kind": str(pipeline._runner_kind),
-                        "configured_image": str(pipeline._runner_image or ""),
-                        "configured_network": str(pipeline._runner_network),
-                        "effective_network": runner_network_identity,
-                        "runner_authority_identity_sha256": (
-                            runner_authority_identity
-                            if isinstance(runner_authority_identity, str)
-                            else None
-                        ),
-                        "manages_output_cleanup": bool(
-                            getattr(
-                                execution_runner,
-                                "manages_output_cleanup",
-                                False,
-                            )
-                        ),
-                    }
+                sealed_renderer_authorized_code_sha256=(
+                    sealed_renderer_authorized_code_sha256
                 ),
-                trajectory_sha256=run_input_authority_state.trajectory_sha256,
-                trajectory_authority_sha256=(
-                    run_input_authority_state.trajectory_authority_sha256
-                ),
-            )
-            replay_execution = (
-                step_attempt_state.selected_resume_capsule
-                if (
-                    custom_runner_replay_allowed
-                    and not step_attempt_state.capsule_execution_replay_consumed
-                    and step_attempt_state.selected_resume_capsule is not None
-                    and step_attempt_state.selected_resume_capsule.capsule.execution
-                    is not None
-                    and step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
-                    == candidate_code_digest
-                )
-                else None
-            )
-            if not custom_runner_replay_allowed:
-                step_record["step_authority_execution_cache_miss"] = (
-                    "custom_runner_authority_unbound"
-                )
-            # DockerRunner must first prove any previous timed-out container
-            # is quiescent before its bind-mounted output directory is reused;
-            # it therefore owns cleanup inside ``run``. Other backends retain
-            # the pipeline's established pre-execution clearing behaviour.
-            step_record["execution_timeout_seconds"] = execution_timeout_seconds
-            if replay_execution is not None:
-                if (
-                    replay_execution.capsule.execution.execution_context_sha256
-                    != execution_context_digest
-                ):
-                    step_record["step_authority_execution_cache_miss"] = (
-                        "execution_context_drift"
-                    )
-                    replay_execution = None
-                else:
-                    try:
-                        run_result = materialize_sealed_run_result(
-                            run_dir,
-                            replay_execution,
-                            expected_execution_context_sha256=(
-                                execution_context_digest
-                            ),
-                        )
-                    except StepAuthorityRuntimeError as exc:
-                        replay_finding = ValidationFinding(
-                            validator="step_authority_capsule",
-                            severity="error",
-                            message=(
-                                "Checkpoint-selected execution could not be "
-                                f"replayed safely for step {step.step_id}."
-                            ),
-                            detail={"step_id": step.step_id, "reason": str(exc)},
-                        )
-                        step_record["status"] = "contract_failed"
-                        with shared_lock:
-                            findings.append(replay_finding)
-                            _append_terminal_step_record(per_step_records, step_record)
-                            _flush_partial_manifest()
-                        return step_record
-                    step_attempt_state.capsule_execution_replay_consumed = True
-                    step_record["capsule_execution_replayed"] = True
-            if replay_execution is None:
-                if (
-                    step_attempt_state.coordinates is not None
-                    and step_attempt_state.current_capsule_ref is not None
-                ):
-                    current_before_execution = load_verified_step_authority_capsule(
-                        run_dir,
-                        ref=step_attempt_state.current_capsule_ref,
-                        expected_step_id=step.step_id,
-                    )
-                    if current_before_execution.capsule.stage not in {
-                        "candidate",
-                        "concept_audited",
-                    }:
-                        ref = seal_deterministic_candidate(
-                            step_attempt_state.coordinates,
-                            parent_ref=step_attempt_state.current_capsule_ref,
-                            code_ref=persist_candidate_code(
-                                step_attempt_state.coordinates, code
-                            ),
-                            reason="execution_context_changed_or_retry_requested",
-                        )
-                        checkpoint_authority.checkpoint_capsule(
-                            ref,
-                            status="candidate_checkpointed",
-                        )
-                run_result = step_executor.execute(
-                    runner=execution_runner,
-                    request=LockedStepExecutionRequest(
-                        step_id=step.step_id,
-                        code=code,
-                        resolved_inputs_path=resolved_inputs_path,
-                        output_dir=(run_dir / "steps" / step.step_id / "outputs"),
-                    ),
-                )
-
-            def _seal_actual_execution_result() -> None:
-                if (
-                    replay_execution is not None
-                    or step_attempt_state.coordinates is None
-                    or step_attempt_state.current_capsule_ref is None
-                ):
-                    return
-                executed_ref = seal_execution_capsule(
-                    step_attempt_state.coordinates,
-                    parent_ref=step_attempt_state.current_capsule_ref,
-                    run_result=run_result,
-                    execution_context_digest=execution_context_digest,
-                )
-                checkpoint_authority.checkpoint_capsule(
-                    executed_ref,
-                    status="executed_pending_review",
-                )
-
-            step_record["outputs_safe_to_collect"] = bool(
-                run_result.outputs_safe_to_collect
-            )
-            authority_findings: List[ValidationFinding] = []
-            if step_record.get("execution_cohort_role") == _RAW_UNIVERSE_EXECUTION_ROLE:
-                cohort_authority_finding = _execution_input_authority_integrity_finding(
-                    step_id=step.step_id,
-                    universe_path=universe_path,
-                    cohort_path=cohort_path,
-                    expected_universe_sha256=step_record.get("execution_cohort_sha256"),
-                    expected_analysis_cohort_sha256=step_record.get(
-                        "authoritative_analysis_cohort_sha256"
-                    ),
-                )
-                if cohort_authority_finding is not None:
-                    authority_findings.append(cohort_authority_finding)
-            trajectory_authority_finding = (
-                run_input_authority_state.trajectory_integrity_finding(
-                    step_id=step.step_id
-                )
-            )
-            if trajectory_authority_finding is not None:
-                authority_findings.append(trajectory_authority_finding)
-            if authority_findings:
-                if run_result.outputs_safe_to_collect:
-                    _clear_output_dir(run_result.out_dir)
-                step_record.update(
-                    {
-                        "status": "blocked_input_authority_mutation",
-                        "input_authority_findings": [
-                            item.model_dump() for item in authority_findings
-                        ],
-                    }
-                )
-                with shared_lock:
-                    run_input_authority_state.mark_corrupted(step_id=step.step_id)
-                    findings.extend(authority_findings)
-                    _append_terminal_step_record(per_step_records, step_record)
-                    _flush_partial_manifest()
-                emit_progress(
-                    "audit",
-                    f"Rejected mutated execution authority for {step.step_id}.",
-                    status="error",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                )
-                return step_record
-            if not run_result.outputs_safe_to_collect:
-                # The backend could not prove that a process/container with a
-                # writable output mount was stopped.  Those outputs remain
-                # mutable and are therefore ineligible for inspection,
-                # hashing, repair, cleanup, or evidence registration. Docker
-                # keeps host-owned script/log control copies, but this step is
-                # still terminal until a later explicit retry resolves the
-                # teardown sentinel first.
-                unsafe_reason = "runner_output_teardown_unconfirmed"
-                step_record.update(
-                    {
-                        "status": (
-                            "deterministic_standard_blocked"
-                            if is_trajectory_stability_standard
-                            else "execution_failed"
-                        ),
-                        "diagnostic_only": True,
-                        "runner_output_safety_reason": unsafe_reason,
-                    }
-                )
-                if is_trajectory_stability_standard:
-                    step_record["standard_executor_terminal_reason"] = (
-                        "executor_runtime_failure"
-                    )
-                elif sealed_renderer_authorized_code_sha256 is not None:
-                    step_record.update(
-                        {
-                            "sealed_renderer_runtime_repair_suppressed": True,
-                            "sealed_renderer_terminal_reason": unsafe_reason,
-                            "llm_repair_used": False,
-                            "generation_mode": "fallback",
-                        }
-                    )
-                unsafe_finding = ValidationFinding(
-                    validator="runner_output_safety",
-                    severity="error",
-                    message=(
-                        f"Step {step.step_id} was stopped because the execution "
-                        "backend could not confirm teardown of its writable "
-                        "mount; no files from that mount were inspected or "
-                        "registered."
-                    ),
-                    detail={
-                        "step_id": step.step_id,
-                        "reason": unsafe_reason,
-                        "timed_out": bool(run_result.timed_out),
-                        "returncode": int(run_result.returncode),
-                    },
-                )
-                _seal_actual_execution_result()
-                with shared_lock:
-                    findings.append(unsafe_finding)
-                    _append_terminal_step_record(per_step_records, step_record)
-                    _flush_partial_manifest()
-                emit_progress(
-                    "runner",
-                    f"Execution mount teardown was not confirmed for {step.step_id}.",
-                    status="error",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                )
-                return step_record
-            executed_code_digest = sha256_of_file(run_result.script_path)
-            step_record["executed_code_sha256"] = executed_code_digest
-            if sealed_renderer_authorized_code_sha256 is not None:
-                step_record["sealed_renderer_executed_code_matches_authority"] = (
-                    executed_code_digest == sealed_renderer_authorized_code_sha256
-                )
-            if (
-                concept_approved_code_digest is None
-                or executed_code_digest != concept_approved_code_digest
-            ):
-                integrity_finding = ValidationFinding(
-                    validator="post_repair_concept_gate",
-                    severity="error",
-                    message=(
-                        "The executed analysis script did not match the exact "
-                        f"concept-approved code digest for step {step.step_id}; "
-                        "outputs were rejected before evidence registration."
-                    ),
-                    detail={
-                        "step_id": step.step_id,
-                        "concept_approved_code_sha256": concept_approved_code_digest,
-                        "executed_code_sha256": executed_code_digest,
-                        "script_path": str(run_result.script_path),
-                    },
-                )
-                _clear_output_dir(run_result.out_dir)
-                step_record["status"] = "blocked_script_integrity"
-                step_record["script_integrity_findings"] = [
-                    integrity_finding.model_dump()
-                ]
-                if sealed_renderer_authorized_code_sha256 is not None:
-                    step_record.update(
-                        {
-                            "sealed_renderer_terminal_reason": (
-                                "executed_code_digest_mismatch"
-                            ),
-                            "llm_repair_used": False,
-                            "generation_mode": "fallback",
-                        }
-                    )
-                with shared_lock:
-                    findings.append(integrity_finding)
-                    _append_terminal_step_record(per_step_records, step_record)
-                    _flush_partial_manifest()
-                emit_progress(
-                    "audit",
-                    f"Rejected script-integrity mismatch for {step.step_id}.",
-                    status="error",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                )
-                return step_record
-            _seal_actual_execution_result()
-            step_record["returncode"] = run_result.returncode
-            step_record["timed_out"] = run_result.timed_out
-            step_record["requested_network_policy"] = (
-                run_result.requested_network_policy
-            )
-            step_record["effective_isolation"] = run_result.effective_isolation
-            step_record["isolation_degraded"] = run_result.isolation_degraded
-            if run_result.isolation_degradation_reason:
-                step_record["isolation_degradation_reason"] = (
-                    run_result.isolation_degradation_reason
-                )
-            step_record["code_repair_attempts"] = worker_progress.repair_attempts
-
-            if current_generation_mode == "llm":
-                script_description = (
-                    f"Generated analysis script for step {step.step_id}."
-                )
-            elif current_generation_mode == "resumed_code_reuse":
-                script_description = (
-                    f"Reused prior agent-generated analysis script for step "
-                    f"{step.step_id}."
-                )
-            elif current_generation_mode == "fallback":
-                script_description = (
-                    f"Deterministic fallback analysis script for step {step.step_id}."
-                )
-            elif current_generation_mode == "deterministic_standard":
-                script_description = (
-                    "Planner-selected deterministic standard executor adapter for "
-                    f"step {step.step_id}."
-                )
-            else:
-                total_repair_attempts = (
-                    worker_progress.repair_attempts
-                    + worker_progress.concept_repair_attempts
-                )
-                script_description = (
-                    f"Repaired analysis script for step {step.step_id} "
-                    f"(attempt {total_repair_attempts})."
-                )
-            script_digest = sha256_of_file(run_result.script_path)
-            script_authority = "\0".join(
-                (step.step_id, script_digest, current_generation_mode)
-            )
-            script_evidence_id = (
-                "code_analysis_"
-                + hashlib.sha256(script_authority.encode("utf-8")).hexdigest()[:16]
-            )
-            script_record = evidence.register_file(
-                kind="code",
-                description=script_description,
-                source_path=run_result.script_path,
-                produced_by_step=step.step_id,
-                inputs=resolved_input_evidence_ids or None,
-                evidence_id=script_evidence_id,
-                producer=(
-                    "standard_executor"
-                    if current_generation_mode == "deterministic_standard"
-                    else "coder"
-                ),
-                generation_mode=current_generation_mode,
-                prompt_pack_version=prompt_version,
-                metadata={
-                    "repair_attempts": worker_progress.repair_attempts,
-                    "concept_repair_attempts": worker_progress.concept_repair_attempts,
-                    "deterministic_concept_repairs": worker_progress.deterministic_concept_repairs,
-                    "llm_repair_used": worker_progress.llm_repair_used,
-                    "fallback_reason": step_record.get("deterministic_code_fallback"),
-                    "runner_repair": worker_progress.runner_repair_name,
-                    "resumed_code_evidence_id": step_record.get(
-                        "resumed_code_evidence_id"
-                    ),
-                    "resumed_code_relative_path": step_record.get(
-                        "resumed_code_relative_path"
-                    ),
-                    "resumed_from_generation_mode": step_record.get(
-                        "resumed_from_generation_mode"
-                    ),
-                    "resumed_code_evidence_generation_mode": step_record.get(
-                        "resumed_code_evidence_generation_mode"
-                    ),
-                    "resumed_quarantined_draft": quarantine_state.resumed_draft_used,
-                    "quarantined_draft_sha256": step_record.get(
-                        "quarantined_draft_sha256"
-                    ),
-                    "quarantined_repair_succeeded": quarantine_state.repair_succeeded,
-                    "quarantine_policy_superseded": quarantine_state.policy_superseded,
-                    "quarantine_policy_superseded_findings": step_record.get(
-                        "quarantine_policy_superseded_findings"
-                    ),
-                    "llm_signature": llm_signature,
-                },
-            )
-            step_record["script_evidence_id"] = script_record.evidence_id
-            log_path = run_result.runner_log_path or (run_result.cwd / "run.log")
-            if log_path.exists():
-                evidence.register_file(
-                    kind="log",
-                    description=f"stdout/stderr log for step {step.step_id}.",
-                    source_path=log_path,
-                    produced_by_step=step.step_id,
-                    script_evidence_id=script_record.evidence_id,
-                    producer="runner",
-                    generation_mode=current_generation_mode,
-                    metadata={
-                        "repair_attempts": worker_progress.repair_attempts,
-                        "concept_repair_attempts": worker_progress.concept_repair_attempts,
-                        "deterministic_concept_repairs": (
-                            worker_progress.deterministic_concept_repairs
-                        ),
-                        "llm_repair_used": worker_progress.llm_repair_used,
-                        "fallback_reason": step_record.get(
-                            "deterministic_code_fallback"
-                        ),
-                        "runner_repair": worker_progress.runner_repair_name,
-                        "resumed_from_generation_mode": step_record.get(
-                            "resumed_from_generation_mode"
-                        ),
-                    },
-                )
-
-            if run_result.succeeded:
-                # Step-summary salvage reshapes the source from which numbers are
-                # registered, so each salvage is recorded in the repair ledger
-                # (ENG-REPAIR1 P1.5). The salvage decision lives in
-                # salvage_step_summary() so it is unit-testable end-to-end; here
-                # we only record what it did.
-                salvage_outcome = salvage_step_summary(run_result, step=step)
-                if salvage_outcome is not None:
-                    if salvage_outcome.reset_artefacts:
-                        run_result.artefacts = sorted(
-                            p for p in run_result.out_dir.iterdir() if p.is_file()
-                        )
-                    _record_repair(
-                        repair_id=salvage_outcome.repair_id,
-                        step_id=step.step_id,
-                        trigger={
-                            "source": "summary_salvage",
-                            "reason": salvage_outcome.trigger_reason,
-                        },
-                        transformation=salvage_outcome.transformation,
-                        selection_rule=salvage_outcome.selection_rule,
-                    )
-                if not run_result.artefacts:
-                    if is_trajectory_stability_standard:
-                        standard_executor_terminal_block = True
-                        standard_executor_terminal_reason = "missing_executor_outputs"
-                        break
-                    fallback_code = _deterministic_fallback_code("no_artefacts")
-                    if fallback_code is not None:
-                        code = fallback_code
-                        continue
-                visual_step_summary: Dict[str, Any] = {}
-                visual_summary_path = run_result.out_dir / "step_summary.json"
-                if visual_summary_path.exists():
-                    try:
-                        vloaded = json.loads(
-                            visual_summary_path.read_text(encoding="utf-8")
-                        )
-                    except Exception:
-                        vloaded = None
-                    if isinstance(vloaded, dict):
-                        visual_step_summary = vloaded
-                    else:
-                        visual_step_summary = {"raw": vloaded}
-                # The early repair gate must evaluate the same host-bound
-                # canonical scalars as the final gate.  Otherwise a valid,
-                # Planner-declared statistic sidecar is invisible here and
-                # triggers pointless LLM repairs before evidence registration.
-                normalized_statistic_outputs = normalize_typed_statistic_sidecars(
-                    visual_step_summary,
-                    run_result.out_dir,
-                )
-                if normalized_statistic_outputs:
-                    _record_repair(
-                        repair_id="typed_output_normalization_v1",
-                        step_id=step.step_id,
-                        trigger={
-                            "source": "host_output_normalizer",
-                            "normalized_outputs": normalized_statistic_outputs,
-                        },
-                        transformation=(
-                            "Added the exact Planner-declared statistic product "
-                            "identity to host-bound JSON sidecars without changing "
-                            "their numeric values."
-                        ),
-                    )
-                visual_step_summary = bind_primary_output(
-                    visual_step_summary,
-                    run_result.out_dir,
-                )
-                # Same rule as the post-execution site below, from the single
-                # owner -- this one runs BEFORE the contract gate, so a producer
-                # missing here is refused for a receipt the host never wrote.
-                if host_owns_input_binding_receipts(
-                    deterministic_standard_executor_used=(
-                        worker_progress.deterministic_standard_executor_used
-                    ),
-                    deterministic_fallback_used=(
-                        worker_progress.deterministic_fallback_used
-                    ),
-                    sealed_renderer_repair=bool(
-                        worker_progress.runner_repair_name
-                        and is_sealed_renderer_repair(
-                            worker_progress.runner_repair_name
-                        )
-                    ),
-                ):
-                    visual_step_summary = _write_host_input_binding_receipts(
-                        out_dir=run_result.out_dir,
-                        step_summary=visual_step_summary,
-                        resolved_input_bindings=resolved_input_bindings,
-                        consumed_input_keys=(
-                            standard_executor.consumed_input_keys
-                            if worker_progress.deterministic_standard_executor_used
-                            and standard_executor is not None
-                            else tuple(resolved_input_bindings)
-                        ),
-                    )
-                if is_trajectory_stability_standard:
-                    terminal_status = (
-                        str(visual_step_summary.get("status") or "").strip().lower()
-                    )
-                    if terminal_status != "ok":
-                        standard_executor_terminal_block = True
-                        standard_executor_terminal_reason = "executor_reported_" + (
-                            terminal_status or "missing_status"
-                        )
-                        standard_executor_terminal_summary = dict(visual_step_summary)
-                        break
-                step_figures = [
-                    art
-                    for art in run_result.artefacts
-                    if art.suffix.lower() in {".png", ".svg", ".tiff", ".tif"}
-                ]
-                visual_gate = collect_visual_gate_result(
-                    enabled=pipeline._enable_visual_qa,
-                    step_figures=step_figures,
-                    step=step,
-                    step_summary=visual_step_summary,
-                )
-                if visual_gate.ran:
-                    visual_findings = list(visual_gate.findings)
-                    step_record["visual_findings"] = [
-                        f.model_dump() for f in visual_findings
-                    ]
-                    if visual_gate.has_errors:
-                        visual_repair_decision = decide_visual_repair(
-                            visual_gate,
-                            sealed=sealed_renderer_authorized_code_sha256 is not None,
-                            attempts_exhausted=(
-                                worker_progress.visual_repair_attempts
-                                >= pipeline._max_code_repair_attempts
-                            ),
-                            budget_available=_llm_repair_budget_available(),
-                        )
-                        if (
-                            visual_repair_decision.action
-                            is VisualRepairAction.SEALED_SUPPRESS
-                        ):
-                            demoted_findings = list(visual_gate.demoted_findings)
-                            blocking_visual_errors = list(visual_gate.blocking_errors)
-                            step_record["visual_findings"] = [
-                                finding.model_dump() for finding in demoted_findings
-                            ]
-                            step_record["sealed_renderer_visual_repair_suppressed"] = (
-                                True
-                            )
-                            step_record["visual_qa_demoted"] = visual_gate.was_demoted
-                            with shared_lock:
-                                findings.extend(demoted_findings)
-                            if blocking_visual_errors:
-                                step_record.update(
-                                    {
-                                        "status": "execution_failed",
-                                        "diagnostic_only": True,
-                                        "sealed_renderer_terminal_reason": (
-                                            "visual_qa_failed"
-                                        ),
-                                        "llm_repair_used": False,
-                                        "generation_mode": "fallback",
-                                    }
-                                )
-                                with shared_lock:
-                                    _append_terminal_step_record(
-                                        per_step_records, step_record
-                                    )
-                                    _flush_partial_manifest()
-                                emit_progress(
-                                    "visual_qa",
-                                    (
-                                        "Visual QA blocked sealed renderer "
-                                        f"{step.step_id}; coder repair was not "
-                                        "authorized."
-                                    ),
-                                    status="error",
-                                    run_id=run_id,
-                                    step_id=step.step_id,
-                                    current_step=step_current,
-                                    total_steps=total_steps,
-                                )
-                                return step_record
-                            emit_progress(
-                                "visual_qa",
-                                (
-                                    "Cosmetic visual QA findings were retained as "
-                                    "warnings for sealed renderer "
-                                    f"{step.step_id}; its verified code and outputs "
-                                    "were not rewritten."
-                                ),
-                                status="warning",
-                                run_id=run_id,
-                                step_id=step.step_id,
-                                current_step=step_current,
-                                total_steps=total_steps,
-                            )
-                        elif (
-                            visual_repair_decision.action
-                            is VisualRepairAction.EXHAUSTED
-                        ):
-                            fallback_code = _deterministic_fallback_code("visual_qa")
-                            if fallback_code is not None:
-                                code = fallback_code
-                                continue
-                            demoted_findings = list(visual_gate.demoted_findings)
-                            blocking_visual_errors = list(visual_gate.blocking_errors)
-                            step_record["visual_findings"] = [
-                                finding.model_dump() for finding in demoted_findings
-                            ]
-                            with shared_lock:
-                                findings.extend(demoted_findings)
-                            step_record["visual_qa_demoted"] = visual_gate.was_demoted
-                            if blocking_visual_errors:
-                                step_record["status"] = "execution_failed"
-                                with shared_lock:
-                                    _append_terminal_step_record(
-                                        per_step_records, step_record
-                                    )
-                                    _flush_partial_manifest()
-                                emit_progress(
-                                    "visual_qa",
-                                    (
-                                        f"Visual QA blocked {step.step_id} after "
-                                        f"{worker_progress.visual_repair_attempts} layout repair "
-                                        "attempts."
-                                    ),
-                                    status="error",
-                                    run_id=run_id,
-                                    step_id=step.step_id,
-                                    current_step=step_current,
-                                    total_steps=total_steps,
-                                )
-                                return step_record
-                            emit_progress(
-                                "visual_qa",
-                                (
-                                    f"Cosmetic visual QA findings demoted to warning "
-                                    f"for {step.step_id} after "
-                                    f"{worker_progress.visual_repair_attempts} layout repair attempts."
-                                ),
-                                status="warning",
-                                run_id=run_id,
-                                step_id=step.step_id,
-                                current_step=step_current,
-                                total_steps=total_steps,
-                            )
-                            # Fall through to contract checks and evidence
-                            # registration only when every remaining visual
-                            # error was a deterministic layout/cosmetic issue.
-                        else:
-                            worker_progress.visual_repair_attempts += 1
-                            visual_host_guidance = visual_repair_decision.host_guidance
-                            current_visual_repair_authority = (
-                                RepairPromptAuthority.create(
-                                    typed_ticket=list(
-                                        visual_repair_decision.repair_ticket
-                                    ),
-                                    host_guidance=visual_host_guidance,
-                                )
-                            )
-                            visual_repair_authority = RepairPromptAuthority.create(
-                                typed_ticket=[
-                                    *visual_repair_decision.repair_ticket,
-                                    *_monotonic_concept_constraint_ticket(),
-                                ],
-                                host_guidance=visual_host_guidance,
-                            )
-                            visual_repair_log = visual_repair_decision.repair_log
-                            if not _consume_llm_repair_budget(
-                                "visual",
-                                before_code=code,
-                                repair_ticket=visual_repair_log,
-                                repair_authority=visual_repair_authority,
-                                current_repair_authority=(
-                                    current_visual_repair_authority
-                                ),
-                                provider_category="visual_repair",
-                                failure_status="visual_failed",
-                            ):
-                                raise AssertionError(
-                                    "LLM repair budget changed without mutation"
-                                )
-                            worker_progress.repair_attempts += 1
-                            step_record["code_repair_attempts"] = (
-                                worker_progress.repair_attempts
-                            )
-                            step_record["visual_repair_attempts"] = (
-                                worker_progress.visual_repair_attempts
-                            )
-                            emit_progress(
-                                "visual_qa",
-                                f"Repairing figure layout for {step.step_id}.",
-                                run_id=run_id,
-                                step_id=step.step_id,
-                                current_step=step_current,
-                                total_steps=total_steps,
-                                repair_attempts=worker_progress.repair_attempts,
-                                visual_repair_attempts=worker_progress.visual_repair_attempts,
-                            )
-                            try:
-                                code = _repair_with_capsule(
-                                    failure_status="visual_failed",
-                                    context=coder_context,
-                                    step=step,
-                                    code=code,
-                                    run_log=visual_repair_log,
-                                    repair_authority=visual_repair_authority,
-                                    current_repair_authority=(
-                                        current_visual_repair_authority
-                                    ),
-                                    attempt=worker_progress.visual_repair_attempts,
-                                    provider_budget=provider_budget,
-                                    provider_category="visual_repair",
-                                    logical_repair_attempt_id=(
-                                        step_repair_budget.llm_repair_attempts
-                                    ),
-                                )
-                                _sync_provider_budget()
-                                worker_progress.llm_repair_used = True
-                                continue
-                            except (
-                                ProviderCallBudgetReceiptError,
-                                StepAuthorityRuntimeError,
-                                StepAuthorityCapsuleError,
-                            ):
-                                raise
-                            except Exception as exc:
-                                _sync_provider_budget()
-                                demoted_findings = list(visual_gate.demoted_findings)
-                                blocking_visual_errors = list(
-                                    visual_gate.blocking_errors
-                                )
-                                if not blocking_visual_errors:
-                                    provider_finding = ValidationFinding(
-                                        validator="coder",
-                                        severity="warning",
-                                        message=(
-                                            "Cosmetic visual-layout repair was "
-                                            f"unavailable for step {step.step_id}; "
-                                            "the current data-valid artifacts were "
-                                            f"retained: {exc}"
-                                        ),
-                                        detail={
-                                            "step_id": step.step_id,
-                                            "error_type": type(exc).__name__,
-                                            "visual_repair_attempts": (
-                                                worker_progress.visual_repair_attempts
-                                            ),
-                                        },
-                                    )
-                                    step_record["visual_findings"] = [
-                                        finding.model_dump()
-                                        for finding in demoted_findings
-                                    ]
-                                    step_record["visual_qa_demoted"] = True
-                                    step_record["visual_repair_provider_failed"] = True
-                                    with shared_lock:
-                                        findings.extend(demoted_findings)
-                                        findings.append(provider_finding)
-                                    emit_progress(
-                                        "visual_qa",
-                                        (
-                                            "Cosmetic visual repair unavailable; "
-                                            f"retained current artifacts for {step.step_id}."
-                                        ),
-                                        status="warning",
-                                        run_id=run_id,
-                                        step_id=step.step_id,
-                                        current_step=step_current,
-                                        total_steps=total_steps,
-                                    )
-                                else:
-                                    fallback_code = _deterministic_fallback_code(
-                                        "visual_qa_repair_failed"
-                                    )
-                                    if fallback_code is not None:
-                                        code = fallback_code
-                                        continue
-                                    with shared_lock:
-                                        findings.extend(visual_findings)
-                                        findings.append(
-                                            ValidationFinding(
-                                                validator="coder",
-                                                severity="error",
-                                                message=(
-                                                    "Coder repair failed after visual QA "
-                                                    f"for step {step.step_id}: {exc}"
-                                                ),
-                                            )
-                                        )
-                                        step_record["status"] = "repair_failed"
-                                        _append_terminal_step_record(
-                                            per_step_records, step_record
-                                        )
-                                        _flush_partial_manifest()
-                                    emit_progress(
-                                        "visual_qa",
-                                        f"Visual QA repair failed for {step.step_id}.",
-                                        status="error",
-                                        run_id=run_id,
-                                        step_id=step.step_id,
-                                        current_step=step_current,
-                                        total_steps=total_steps,
-                                    )
-                                    return step_record
-                with shared_lock:
-                    completed_records_snapshot = list(per_step_records)
-                # Early pre-registration deterministic contract gate: the SAME
-                # 15-validator sequence the final gate runs
-                # (_evaluate_final_deterministic_gates), evaluated here before
-                # evidence registration so contract errors enter the in-run repair
-                # loop instead of becoming a terminal record. The figure-contract
-                # canonicalization repair and the figure-contract / figure-source /
-                # ordered-stratified validators stay below because the early gate
-                # interleaves the canonicalization repair between them.
-                early_contract_findings = _step_deterministic_contract_findings(
-                    step=step,
-                    plan=plan,
-                    context=context,
-                    step_summary=visual_step_summary,
-                    completed_step_records=completed_records_snapshot,
-                    resolved_input_bindings=resolved_input_bindings,
-                    out_dir=run_result.out_dir,
-                    run_dir=run_dir,
-                    universe_path=universe_path,
-                    cohort_path=cohort_path,
-                    execution_cohort_path=step_execution_cohort_path,
-                    cross_step_cohort_lock_validator=cross_step_cohort_lock_validator,
-                    cross_step_registered_output_validator=(
-                        cross_step_registered_output_validator
-                    ),
-                    cross_step_reconciliation_trace_validator=(
-                        cross_step_reconciliation_trace_validator
-                    ),
-                    step_summary_integrity_validator=step_summary_integrity_validator,
-                    step_summary_fraction_validator=step_summary_fraction_validator,
-                    cross_step_source_status_validator=(
-                        cross_step_source_status_validator
-                    ),
-                    primary_model_contract_validator=primary_model_contract_validator,
-                )
-                # Figure quality and source-data errors must enter the same
-                # in-run repair loop as table/model contract errors. Checking
-                # them only after evidence registration produces a terminal
-                # contract_failed record with no opportunity to repair the
-                # generated rendering script.
-                for contract_path in sorted(
-                    run_result.out_dir.glob("*.figure_contract.json")
-                ):
-                    schema_candidate = (
-                        _figure_contract_source_data_canonicalization_candidate(
-                            contract_path=contract_path,
-                            out_dir=run_result.out_dir,
-                        )
-                    )
-                    if schema_candidate is None:
-                        continue
-                    before_contract, after_contract, source_names = schema_candidate
-                    repair_id = _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID
-                    if not _automatic_repair_authorized(
-                        repair_id,
-                        step=step,
-                        source="figure_contract_schema_canonicalization",
-                        before_code=before_contract,
-                        after_code=after_contract,
-                    ):
-                        continue
-                    _install_figure_contract_source_data_canonicalization(
-                        contract_path=contract_path,
-                        expected_before=before_contract,
-                        canonical_text=after_contract,
-                    )
-                    step_record.setdefault(
-                        "figure_contract_schema_canonicalizations", []
-                    ).append(
-                        {
-                            "contract": contract_path.name,
-                            "source_data": list(source_names),
-                            "repair_id": repair_id,
-                        }
-                    )
-                    _record_repair(
-                        repair_id=repair_id,
-                        step_id=str(step.step_id),
-                        trigger={
-                            "source": "figure_contract_schema_canonicalization",
-                            "contract": contract_path.name,
-                        },
-                        transformation=(
-                            "Canonicalized an exact local source-data descriptor "
-                            "to the persistent flat FigureContract basename schema."
-                        ),
-                        before_code=before_contract,
-                        after_code=after_contract,
-                    )
-                # Figure-contract canonicalization repair (above) must run before
-                # these figure audits; keep the ordering by calling the post-canon
-                # figure findings helper here, after the repair.
-                early_contract_findings += _post_canonicalization_figure_findings(
-                    step=step,
-                    out_dir=run_result.out_dir,
-                    run_dir=run_dir,
-                    step_summary=visual_step_summary,
-                    completed_step_records=completed_records_snapshot,
-                    resolved_input_bindings=resolved_input_bindings,
-                    execution_cohort_path=step_execution_cohort_path,
-                    figure_contract_validator=figure_contract_validator,
-                    figure_source_validator=figure_source_validator,
-                )
-                unowned_sealed_markers = _unowned_sealed_authority_markers(
-                    visual_step_summary,
-                    authorized_code_sha256=(sealed_renderer_authorized_code_sha256),
-                )
-                if unowned_sealed_markers:
-                    early_contract_findings.append(
-                        ValidationFinding(
-                            validator="sealed_renderer_authority",
-                            severity="error",
-                            message=(
-                                "Generated code reported sealed-renderer authority "
-                                "that the host did not authorize before execution."
-                            ),
-                            detail={
-                                "step_id": step.step_id,
-                                "unowned_authority_markers": unowned_sealed_markers,
-                            },
-                        )
-                    )
-                if (
-                    sealed_renderer_authorized_code_sha256 is not None
-                    and visual_step_summary.get("rendering_only") is not True
-                ):
-                    early_contract_findings.append(
-                        ValidationFinding(
-                            validator="sealed_renderer_authority",
-                            severity="error",
-                            message=(
-                                "The authorized figure adapter did not report its "
-                                "required rendering-only execution scope."
-                            ),
-                            detail={
-                                "step_id": step.step_id,
-                                "repair_id": sealed_renderer_state.repair_id,
-                                "reported_rendering_only": visual_step_summary.get(
-                                    "rendering_only"
-                                ),
-                            },
-                        )
-                    )
-                reported_slot_bindings = visual_step_summary.get(
-                    "planner_product_slot_bindings"
-                )
-                reported_product_slots = (
-                    {
-                        str(product): str(binding.get("slot") or "")
-                        for product, binding in reported_slot_bindings.items()
-                        if isinstance(binding, Mapping)
-                    }
-                    if isinstance(reported_slot_bindings, Mapping)
-                    else {}
-                )
-                if sealed_renderer_authorized_code_sha256 is not None:
-                    parent_step_id = str(step.step_id or "").removesuffix("_figure")
-                    parent_out = run_dir / "steps" / parent_step_id / "outputs"
-                    try:
-                        read_digest_bound_artifact_snapshot(
-                            parent_out=parent_out,
-                            artifact_digests=sealed_renderer_state.parent_digests,
-                        )
-                        step_record["sealed_renderer_parent_receipt_verified"] = True
-                    except ValueError:
-                        step_record["sealed_renderer_parent_receipt_verified"] = False
-                        early_contract_findings.append(
-                            ValidationFinding(
-                                validator="sealed_renderer_authority",
-                                severity="error",
-                                message=(
-                                    "The sealed renderer's direct-parent inputs "
-                                    "changed before host receipt."
-                                ),
-                                detail={
-                                    "step_id": step.step_id,
-                                    "repair_id": sealed_renderer_state.repair_id,
-                                },
-                            )
-                        )
-                if sealed_renderer_authorized_code_sha256 is not None and (
-                    visual_step_summary.get("sealed_renderer_repair")
-                    != sealed_renderer_state.repair_id
-                    or visual_step_summary.get("sealed_renderer_implementation_sha256")
-                    != sealed_renderer_state.implementation_sha256
-                    or visual_step_summary.get("sealed_renderer_parent_digests")
-                    != sealed_renderer_state.parent_digests
-                    or reported_product_slots
-                    != sealed_renderer_state.authorized_product_slots
-                ):
-                    early_contract_findings.append(
-                        ValidationFinding(
-                            validator="sealed_renderer_authority",
-                            severity="error",
-                            message=(
-                                "The rendered summary did not preserve the exact "
-                                "sealed renderer identity and implementation digest."
-                            ),
-                            detail={
-                                "step_id": step.step_id,
-                                "expected_repair_id": sealed_renderer_state.repair_id,
-                                "reported_repair_id": visual_step_summary.get(
-                                    "sealed_renderer_repair"
-                                ),
-                                "expected_implementation_sha256": (
-                                    sealed_renderer_state.implementation_sha256
-                                ),
-                                "reported_implementation_sha256": (
-                                    visual_step_summary.get(
-                                        "sealed_renderer_implementation_sha256"
-                                    )
-                                ),
-                                "expected_parent_digests": (
-                                    sealed_renderer_state.parent_digests
-                                ),
-                                "reported_parent_digests": visual_step_summary.get(
-                                    "sealed_renderer_parent_digests"
-                                ),
-                                "expected_product_slots": (
-                                    sealed_renderer_state.authorized_product_slots
-                                ),
-                                "reported_product_slots": reported_product_slots,
-                            },
-                        )
-                    )
-                # PRIMARY runners keep their trustworthy core estimate.
-                early_contract_findings = _demote_step_contract_for_primary_runner(
-                    step_record, visual_step_summary, early_contract_findings
-                )
-                early_contract_findings += _fresh_plausibility_receipt_findings(
-                    visual_step_summary, step, code, plausibility_authority
-                )
-                early_contract_errors = [
-                    f for f in early_contract_findings if f.severity == "error"
-                ]
-                if early_contract_errors:
-                    # Record the reason here, where the host decides the
-                    # contract failed -- not on whichever terminal branch
-                    # happens to fire later.  A repaired draft can be
-                    # quarantined before it ever executes, and that branch
-                    # writes its own status; without this the only surviving
-                    # trace is a bare ``contract_repair_attempts`` counter and
-                    # the record reads as if the quarantine were the cause.
-                    step_record.setdefault("contract_repair_triggers", []).append(
-                        [finding.model_dump() for finding in early_contract_errors]
-                    )
-                    locked_data_quality_issues = (
-                        _locked_measurement_data_quality_issues(early_contract_errors)
-                    )
-                    if locked_data_quality_issues:
-                        step_record.update(
-                            {
-                                "status": "contract_failed",
-                                "diagnostic_only": True,
-                                "measurement_provenance_repair_suppressed": True,
-                                "measurement_provenance_terminal_reason": (
-                                    "locked_cohort_data_quality_failed"
-                                ),
-                                "measurement_provenance_terminal_issues": (
-                                    locked_data_quality_issues
-                                ),
-                                "contract_findings": [
-                                    finding.model_dump()
-                                    for finding in early_contract_findings
-                                ],
-                                "step_summary": visual_step_summary,
-                                "llm_repair_used": worker_progress.llm_repair_used,
-                                "generation_mode": current_generation_mode,
-                                "code_repair_attempts": worker_progress.repair_attempts,
-                                "contract_repair_attempts": (
-                                    worker_progress.contract_repair_attempts
-                                ),
-                            }
-                        )
-                        with shared_lock:
-                            findings.extend(early_contract_findings)
-                            _append_terminal_step_record(per_step_records, step_record)
-                            _flush_partial_manifest()
-                        emit_progress(
-                            "contract",
-                            (
-                                "Locked-cohort measurement provenance failed for "
-                                f"{step.step_id}; retained diagnostics without "
-                                "attempting a code repair."
-                            ),
-                            status="error",
-                            run_id=run_id,
-                            step_id=step.step_id,
-                            current_step=step_current,
-                            total_steps=total_steps,
-                        )
-                        return step_record
-                    if sealed_renderer_authorized_code_sha256 is not None:
-                        step_record.update(
-                            {
-                                "status": "contract_failed",
-                                "diagnostic_only": True,
-                                "sealed_renderer_contract_repair_suppressed": True,
-                                "sealed_renderer_terminal_reason": (
-                                    "output_contract_failed"
-                                ),
-                                "contract_findings": [
-                                    finding.model_dump()
-                                    for finding in early_contract_findings
-                                ],
-                                "step_summary": visual_step_summary,
-                                "llm_repair_used": False,
-                                "generation_mode": "fallback",
-                            }
-                        )
-                        with shared_lock:
-                            findings.extend(early_contract_findings)
-                            _append_terminal_step_record(per_step_records, step_record)
-                            _flush_partial_manifest()
-                        emit_progress(
-                            "contract",
-                            (
-                                "Contract validation blocked sealed renderer "
-                                f"{step.step_id}; its code and outputs were retained "
-                                "without coder repair."
-                            ),
-                            status="error",
-                            run_id=run_id,
-                            step_id=step.step_id,
-                            current_step=step_current,
-                            total_steps=total_steps,
-                        )
-                        return step_record
-                    if is_trajectory_stability_standard:
-                        standard_executor_terminal_block = True
-                        standard_executor_terminal_reason = (
-                            "executor_output_contract_failed"
-                        )
-                        standard_executor_terminal_summary = dict(visual_step_summary)
-                        standard_executor_terminal_findings = list(
-                            early_contract_findings
-                        )
-                        break
-                    if pipeline._enable_deterministic_runner_repair:
-                        before_repair_code = code
-                        summary_repair = _deterministic_summary_repair(
-                            code=code,
-                            step_summary=visual_step_summary,
-                            previous_repair=worker_progress.runner_repair_name,
-                            analysis_family=local_runtime_state.analysis_family,
-                            on_semantic_escalation=(
-                                step_repair_budget.record_semantic_escalation
-                            ),
-                        )
-                        summary_repair = _authorize_automatic_repair(
-                            summary_repair,
-                            step=step,
-                            source="deterministic_summary_repair_before_contract",
-                            before_code=before_repair_code,
-                        )
-                    else:
-                        summary_repair = None
-                    if summary_repair is not None:
-                        worker_progress.contract_repair_attempts += 1
-                        worker_progress.repair_attempts += 1
-                        worker_progress.runner_repair_name, code = summary_repair
-                        step_record["runner_repair"] = (
-                            worker_progress.runner_repair_name
-                        )
-                        step_record["code_repair_attempts"] = (
-                            worker_progress.repair_attempts
-                        )
-                        step_record["contract_repair_attempts"] = (
-                            worker_progress.contract_repair_attempts
-                        )
-                        _record_repair(
-                            repair_id=worker_progress.runner_repair_name,
-                            step_id=step.step_id,
-                            trigger={
-                                "source": "deterministic_summary_repair",
-                                "step_summary_keys": sorted(
-                                    str(key) for key in visual_step_summary.keys()
-                                ),
-                                "contract_findings": [
-                                    f.message for f in early_contract_errors
-                                ],
-                            },
-                            transformation=(
-                                "Deterministic repair before LLM contract repair."
-                            ),
-                            before_code=before_repair_code,
-                            after_code=code,
-                        )
-                        emit_progress(
-                            "runner_repair",
-                            (
-                                f"Applied deterministic summary repair for "
-                                f"{step.step_id}: {worker_progress.runner_repair_name}."
-                            ),
-                            run_id=run_id,
-                            step_id=step.step_id,
-                            current_step=step_current,
-                            total_steps=total_steps,
-                        )
-                        continue
-                    if pipeline._enable_deterministic_runner_repair:
-                        before_repair_code = code
-                        contract_repair = deterministic_contract_repair(
-                            code=code,
-                            findings=early_contract_errors,
-                            previous_repair=worker_progress.runner_repair_name,
-                            on_semantic_escalation=(
-                                step_repair_budget.record_semantic_escalation
-                            ),
-                        )
-                        contract_repair = _authorize_automatic_repair(
-                            contract_repair,
-                            step=step,
-                            source="deterministic_contract_repair",
-                            before_code=before_repair_code,
-                        )
-                    else:
-                        contract_repair = None
-                    if contract_repair is not None:
-                        worker_progress.contract_repair_attempts += 1
-                        worker_progress.repair_attempts += 1
-                        worker_progress.runner_repair_name, code = contract_repair
-                        step_record["runner_repair"] = (
-                            worker_progress.runner_repair_name
-                        )
-                        step_record["code_repair_attempts"] = (
-                            worker_progress.repair_attempts
-                        )
-                        step_record["contract_repair_attempts"] = (
-                            worker_progress.contract_repair_attempts
-                        )
-                        _record_repair(
-                            repair_id=worker_progress.runner_repair_name,
-                            step_id=step.step_id,
-                            trigger={
-                                "source": "deterministic_contract_repair",
-                                "contract_findings": [
-                                    f.message for f in early_contract_errors
-                                ],
-                            },
-                            transformation=(
-                                "Applied a centrally authorized deterministic source "
-                                "transformation for objective contract findings."
-                            ),
-                            before_code=before_repair_code,
-                            after_code=code,
-                        )
-                        emit_progress(
-                            "runner_repair",
-                            (
-                                f"Applied deterministic contract repair for "
-                                f"{step.step_id}: {worker_progress.runner_repair_name}."
-                            ),
-                            run_id=run_id,
-                            step_id=step.step_id,
-                            current_step=step_current,
-                            total_steps=total_steps,
-                        )
-                        continue
-                    if (
-                        worker_progress.llm_contract_repair_attempts
-                        >= pipeline._max_code_repair_attempts
-                        or not _llm_repair_budget_available()
-                    ):
-                        with shared_lock:
-                            findings.extend(early_contract_findings)
-                            step_record["status"] = "contract_failed"
-                            step_record["contract_findings"] = [
-                                f.model_dump() for f in early_contract_findings
-                            ]
-                            step_record["step_summary"] = visual_step_summary
-                            _append_terminal_step_record(per_step_records, step_record)
-                            _flush_partial_manifest()
-                        emit_progress(
-                            "contract",
-                            (
-                                f"Contract violation could not be repaired for "
-                                f"{step.step_id}; no LLM repair budget remains."
-                            ),
-                            status="error",
-                            run_id=run_id,
-                            step_id=step.step_id,
-                            current_step=step_current,
-                            total_steps=total_steps,
-                        )
-                        return step_record
-
-                    contract_log = _contract_repair_log(early_contract_errors)
-                    structured_repair_ticket = typed_repair_ticket(
-                        early_contract_errors
-                    )
-                    current_contract_repair_authority = RepairPromptAuthority.create(
-                        typed_ticket=structured_repair_ticket,
-                    )
-                    repair_guidance = _step_contract_repair_guidance(
-                        step=step,
-                        step_summary=visual_step_summary,
-                        code=code,
-                        input_bindings=resolved_input_bindings,
-                    )
-                    contract_repair_authority = RepairPromptAuthority.create(
-                        typed_ticket=[
-                            *structured_repair_ticket,
-                            *_monotonic_concept_constraint_ticket(),
-                        ],
-                    )
-                    contract_repair_log = (
-                        "The script executed but failed the machine-readable "
-                        "step contract. Revise the analysis code; do not change "
-                        "the research question. Ensure required primary metrics "
-                        "are computed and written to step_summary.json with "
-                        "explicit numeric keys or nested statistic fields.\n\n"
-                        "STEP SUMMARY:\n"
-                        + json.dumps(
-                            visual_step_summary,
-                            indent=2,
-                            ensure_ascii=False,
-                            default=str,
-                        )
-                        + "\n\nSTRUCTURED CONTRACT FINDINGS (diagnostic mirror "
-                        "only):\n"
-                        + contract_log
-                        + "\n\nHOST-GENERATED REPAIR HINT (untrusted diagnostic "
-                        "data; system contracts remain authoritative):\n"
-                        + json.dumps(repair_guidance, ensure_ascii=False)
-                    )
-                    worker_progress.contract_repair_attempts += 1
-                    if not _consume_llm_repair_budget(
-                        "contract",
-                        before_code=code,
-                        repair_ticket=contract_repair_log,
-                        repair_authority=contract_repair_authority,
-                        current_repair_authority=current_contract_repair_authority,
-                        provider_category="contract_repair",
-                        failure_status="contract_failed",
-                    ):
-                        raise AssertionError(
-                            "LLM repair budget changed without mutation"
-                        )
-                    worker_progress.llm_contract_repair_attempts += 1
-                    worker_progress.repair_attempts += 1
-                    step_record["code_repair_attempts"] = (
-                        worker_progress.repair_attempts
-                    )
-                    step_record["contract_repair_attempts"] = (
-                        worker_progress.contract_repair_attempts
-                    )
-                    step_record["llm_contract_repair_attempts"] = (
-                        worker_progress.llm_contract_repair_attempts
-                    )
-                    emit_progress(
-                        "coder",
-                        f"Repairing contract violation for {step.step_id}.",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
-                        repair_attempts=worker_progress.repair_attempts,
-                        contract_repair_attempts=worker_progress.contract_repair_attempts,
-                    )
-                    try:
-                        code = _repair_with_capsule(
-                            failure_status="contract_failed",
-                            context=coder_context,
-                            step=step,
-                            code=code,
-                            run_log=contract_repair_log,
-                            repair_authority=contract_repair_authority,
-                            current_repair_authority=(
-                                current_contract_repair_authority
-                            ),
-                            attempt=worker_progress.contract_repair_attempts,
-                            provider_budget=provider_budget,
-                            provider_category="contract_repair",
-                            logical_repair_attempt_id=(
-                                step_repair_budget.llm_repair_attempts
-                            ),
-                        )
-                        _sync_provider_budget()
-                        worker_progress.llm_repair_used = True
-                        continue
-                    except (
-                        ProviderCallBudgetReceiptError,
-                        StepAuthorityRuntimeError,
-                        StepAuthorityCapsuleError,
-                    ):
-                        raise
-                    except Exception as exc:
-                        _sync_provider_budget()
-                        fallback_code = _deterministic_fallback_code(
-                            "contract_repair_failed"
-                        )
-                        if fallback_code is not None:
-                            code = fallback_code
-                            continue
-                        with shared_lock:
-                            findings.extend(early_contract_findings)
-                            findings.append(
-                                ValidationFinding(
-                                    validator="coder",
-                                    severity="error",
-                                    message=(
-                                        f"Coder repair failed after contract check "
-                                        f"for step {step.step_id}: {exc}"
-                                    ),
-                                )
-                            )
-                            step_record["status"] = "repair_failed"
-                            step_record["contract_findings"] = [
-                                f.model_dump() for f in early_contract_findings
-                            ]
-                            step_record["step_summary"] = visual_step_summary
-                            _append_terminal_step_record(per_step_records, step_record)
-                            _flush_partial_manifest()
-                        emit_progress(
-                            "coder",
-                            f"Contract repair failed for {step.step_id}.",
-                            status="error",
-                            run_id=run_id,
-                            step_id=step.step_id,
-                            current_step=step_current,
-                            total_steps=total_steps,
-                        )
-                        return step_record
-                if (
-                    pipeline._enable_deterministic_runner_repair
-                    and sealed_renderer_authorized_code_sha256 is None
-                ):
-                    before_repair_code = code
-                    summary_repair = _deterministic_summary_repair(
-                        code=code,
-                        step_summary=visual_step_summary,
-                        previous_repair=worker_progress.runner_repair_name,
-                        analysis_family=local_runtime_state.analysis_family,
-                        on_semantic_escalation=(
-                            step_repair_budget.record_semantic_escalation
-                        ),
-                    )
-                    summary_repair = _authorize_automatic_repair(
-                        summary_repair,
-                        step=step,
-                        source="deterministic_summary_repair_after_contract",
-                        before_code=before_repair_code,
-                    )
-                else:
-                    summary_repair = None
-                if summary_repair is not None:
-                    worker_progress.runner_repair_name, code = summary_repair
-                    step_record["runner_repair"] = worker_progress.runner_repair_name
-                    _record_repair(
-                        repair_id=worker_progress.runner_repair_name,
-                        step_id=step.step_id,
-                        trigger={
-                            "source": "deterministic_summary_repair",
-                            "step_summary_keys": sorted(
-                                str(key) for key in visual_step_summary.keys()
-                            ),
-                        },
-                        transformation="Deterministic repair after step_summary contract inspection.",
-                        before_code=before_repair_code,
-                        after_code=code,
-                    )
-                    emit_progress(
-                        "runner_repair",
-                        f"Applied deterministic summary repair for {step.step_id}: {worker_progress.runner_repair_name}.",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
-                    )
-                    continue
-                deterministic_contract_approved_code_digest = candidate_code_digest
-                step_record["deterministic_contract_approved_code_sha256"] = (
-                    deterministic_contract_approved_code_digest
-                )
-                # Return once through the digest gate for the single final LLM
-                # concept audit.  The output directory is intentionally retained;
-                # on approval it proceeds without re-executing unchanged code.
-                continue
-
-            if log_path.exists():
-                run_log = log_path.read_text(encoding="utf-8", errors="replace")
-            else:
-                run_log = (run_result.stdout or "") + "\n" + (run_result.stderr or "")
-            if is_trajectory_stability_standard:
-                # A timeout can interrupt the standard executor between its
-                # private streaming write and atomic rename.  That file is an
-                # implementation detail, not a diagnostic product, and must
-                # be gone before the generic output-directory scan below can
-                # register it as evidence.
-                _remove_standard_executor_pending_artifacts(run_result.out_dir)
-                standard_executor_terminal_block = True
-                standard_executor_terminal_reason = "executor_runtime_failure"
-                # This branch is already terminal and already spends no repair,
-                # so it is safe. It is not diagnosable: the executor with the
-                # largest wall clock in the pipeline reports the same generic
-                # reason whether it raised in its first second or was killed an
-                # hour in. Name the timeout in the vocabulary generated code
-                # already uses, and leave the terminal decision above untouched.
-                #
-                # Only the timeout class is adopted. The classifier also reads a
-                # plan/data contract failure out of the log text, and this
-                # executor's log is not the log that vocabulary was written for.
-                timeout_decision = (
-                    classify_runtime_failure(
-                        run_log=run_log,
-                        timed_out=True,
-                        step_id=step.step_id,
-                        returncode=run_result.returncode,
-                        timeout_seconds=execution_timeout_seconds,
-                        deterministic_executor_used=True,
-                    )
-                    if run_result.timed_out
-                    else None
-                )
-                if timeout_decision is not None:
-                    step_record["runtime_failure_class"] = (
-                        timeout_decision.step_updates["runtime_failure_class"]
-                    )
-                    with shared_lock:
-                        findings.append(timeout_decision.finding)
-                break
-            runtime_failure = classify_runtime_failure(
-                run_log=run_log,
-                timed_out=bool(run_result.timed_out),
-                step_id=step.step_id,
-                returncode=run_result.returncode,
-                timeout_seconds=execution_timeout_seconds,
-                deterministic_executor_used=bool(
-                    worker_progress.deterministic_standard_executor_used
-                ),
-            )
-            if runtime_failure is not None:
-                step_record.update(runtime_failure.step_updates)
-                with shared_lock:
-                    findings.append(runtime_failure.finding)
-                    _append_terminal_step_record(per_step_records, step_record)
-                    _flush_partial_manifest()
-                emit_progress(
-                    "runner",
-                    runtime_failure.progress_message,
-                    status="error",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                )
-                return step_record
-            if sealed_renderer_authorized_code_sha256 is not None:
-                runtime_finding = ValidationFinding(
-                    validator="sealed_renderer_authority",
-                    severity="error",
-                    message=(
-                        "The authorized rendering-only adapter failed at runtime; "
-                        "its diagnostics were retained and no deterministic or LLM "
-                        "code repair was allowed."
-                    ),
-                    detail={
-                        "step_id": step.step_id,
-                        "repair_id": sealed_renderer_state.repair_id,
-                        "returncode": run_result.returncode,
-                        "timed_out": run_result.timed_out,
-                    },
-                )
-                step_record.update(
-                    {
-                        "status": "execution_failed",
-                        "diagnostic_only": True,
-                        "sealed_renderer_runtime_repair_suppressed": True,
-                        "sealed_renderer_terminal_reason": "runtime_failure",
-                        "llm_repair_used": False,
-                        "generation_mode": "fallback",
-                    }
-                )
-                with shared_lock:
-                    findings.append(runtime_finding)
-                    _append_terminal_step_record(per_step_records, step_record)
-                    _flush_partial_manifest()
-                emit_progress(
-                    "runner",
-                    (
-                        f"Sealed renderer failed for {step.step_id}; coder repair "
-                        "was not authorized."
-                    ),
-                    status="error",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                )
-                return step_record
-            if pipeline._enable_deterministic_runner_repair:
-                before_repair_code = code
-                plugin_repair = pipeline._case_plugin_registry.repair_code(
-                    context=context,
-                    step=step,
-                    code=code,
-                    run_log=(run_log + _monotonic_concept_constraint_log()),
-                )
-                if (
-                    plugin_repair is not None
-                    and plugin_repair[0] != worker_progress.runner_repair_name
-                ):
-                    runner_repair = plugin_repair
-                else:
-                    runner_repair = _deterministic_runner_repair(
-                        code=code,
-                        run_log=run_log,
-                        previous_repair=worker_progress.runner_repair_name,
-                        analysis_family=local_runtime_state.analysis_family,
-                        resolved_input_bindings=resolved_input_bindings,
-                        on_semantic_escalation=(
-                            step_repair_budget.record_semantic_escalation
-                        ),
-                    )
-                runner_repair = _authorize_automatic_repair(
-                    runner_repair,
-                    step=step,
-                    source=(
-                        "case_plugin_repair"
-                        if plugin_repair is not None and runner_repair is plugin_repair
-                        else "deterministic_runner_repair"
-                    ),
-                    before_code=before_repair_code,
-                )
-                record_deterministic_runner_repair_attempt(
-                    step_record,
-                    code=before_repair_code,
-                    run_log=run_log,
-                    previous_repair=worker_progress.runner_repair_name,
-                    outcome=("applied" if runner_repair is not None else "declined"),
-                    repair_id=(runner_repair[0] if runner_repair is not None else None),
-                )
-            else:
-                runner_repair = None
-                record_deterministic_runner_repair_attempt(
-                    step_record,
-                    code=code,
-                    run_log=run_log,
-                    previous_repair=worker_progress.runner_repair_name,
-                    outcome="disabled",
-                    repair_id=None,
-                )
-            if runner_repair is not None:
-                worker_progress.runner_repair_name, code = runner_repair
-                step_record["runner_repair"] = worker_progress.runner_repair_name
-                _record_repair(
-                    repair_id=worker_progress.runner_repair_name,
-                    step_id=step.step_id,
-                    trigger={
-                        "source": "deterministic_runner_repair",
-                        "run_log_tail": run_log[-1200:],
-                    },
-                    transformation="Deterministic repair after runner failure.",
-                    before_code=before_repair_code,
-                    after_code=code,
-                )
-                emit_progress(
-                    "runner_repair",
-                    f"Applied deterministic runner repair for {step.step_id}: {worker_progress.runner_repair_name}.",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                )
-                continue
-            if (
-                worker_progress.runtime_repair_attempts
-                >= pipeline._max_code_repair_attempts
-                or not _llm_repair_budget_available("runtime")
-            ):
-                fallback_code = _deterministic_fallback_code("execution_failure")
-                if fallback_code is not None:
-                    code = fallback_code
-                    continue
-                with shared_lock:
-                    findings.append(
-                        ValidationFinding(
-                            validator="runner",
-                            severity="error",
-                            message=(
-                                f"Step {step.step_id} "
-                                f"{'timed out' if run_result.timed_out else 'failed'} "
-                                f"with returncode {run_result.returncode}."
-                            ),
-                        )
-                    )
-                    step_record["status"] = "execution_failed"
-                    _append_terminal_step_record(per_step_records, step_record)
-                    _flush_partial_manifest()
-                emit_progress(
-                    "runner",
-                    f"Execution failed for {step.step_id}.",
-                    status="error",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                )
-                return step_record
-            runtime_repair_applied = False
-            runtime_repair_fallback_applied = False
-            runtime_repair_authority = RepairPromptAuthority()
-            while (
-                worker_progress.runtime_repair_attempts
-                < pipeline._max_code_repair_attempts
-                and _llm_repair_budget_available("runtime")
-            ):
-                worker_progress.repair_attempts += 1
-                worker_progress.runtime_repair_attempts += 1
-                if not _consume_llm_repair_budget(
-                    "runtime",
-                    before_code=code,
-                    repair_ticket=run_log,
-                    repair_authority=runtime_repair_authority,
-                    provider_category="runtime_repair",
-                    failure_status="runtime_failed",
-                ):
-                    raise AssertionError("LLM repair budget changed without mutation")
-                step_record["code_repair_attempts"] = worker_progress.repair_attempts
-                step_record["runtime_repair_attempts"] = (
-                    worker_progress.runtime_repair_attempts
-                )
-                emit_progress(
-                    "coder",
-                    f"Repairing failed script for {step.step_id}.",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
-                    repair_attempts=worker_progress.repair_attempts,
-                )
-                try:
-                    repaired_code = _repair_with_capsule(
-                        failure_status="runtime_failed",
-                        context=coder_context,
-                        step=step,
-                        code=code,
-                        run_log=run_log,
-                        repair_authority=runtime_repair_authority,
-                        attempt=worker_progress.repair_attempts,
-                        provider_budget=provider_budget,
-                        provider_category="runtime_repair",
-                        logical_repair_attempt_id=(
-                            step_repair_budget.llm_repair_attempts
-                        ),
-                    )
-                    _sync_provider_budget()
-                    if not _python_repair_is_materially_changed(code, repaired_code):
-                        checkpoint_authority.reject_completed_repair_candidate(
-                            repaired_code,
-                            reason="runtime_repair_semantic_noop",
-                        )
-                        raise RuntimeError(
-                            "Runtime repair returned no material Python change."
-                        )
-                    code = repaired_code
-                    worker_progress.llm_repair_used = True
-                    runtime_repair_applied = True
-                    _clear_output_dir(run_result.out_dir)
-                    break
-                except (
-                    ProviderCallBudgetReceiptError,
-                    StepAuthorityRuntimeError,
-                    StepAuthorityCapsuleError,
-                ):
-                    raise
-                except Exception as exc:
-                    _sync_provider_budget()
-                    # Transport/parse failure did not change the candidate. Retry
-                    # the repair request itself with the same code and traceback;
-                    # never pay to execute a digest whose failure is already known.
-                    message = str(exc).lower()
-                    is_noop_repair = "no material python change" in message
-                    is_transient = (
-                        isinstance(exc, json.JSONDecodeError)
-                        or "expecting value" in message
-                        or ("json" in message and "decode" in message)
-                        or "503" in message
-                        or "rate" in message
-                    )
-                    can_retry_repair = bool(
-                        (is_transient or is_noop_repair)
-                        and worker_progress.runtime_repair_attempts
-                        < pipeline._max_code_repair_attempts
-                        and _llm_repair_budget_available("runtime")
-                        and not provider_budget.exhausted
-                    )
-                    if can_retry_repair:
-                        emit_progress(
-                            "coder",
-                            (
-                                f"Repair attempt did not yield usable code for "
-                                f"{step.step_id} "
-                                f"(attempt {worker_progress.repair_attempts}): {type(exc).__name__}; "
-                                "retrying the repair without re-executing unchanged code."
-                            ),
-                            run_id=run_id,
-                            step_id=step.step_id,
-                            current_step=step_current,
-                            total_steps=total_steps,
-                            repair_attempts=worker_progress.repair_attempts,
-                        )
-                        continue
-
-                    # The causal failure is the unavailable repair, not a new
-                    # runner failure. Preserve that reason even when the logical
-                    # or provider-call budget became exhausted on this attempt.
-                    fallback_code = _deterministic_fallback_code("repair_failed")
-                    if fallback_code is not None:
-                        code = fallback_code
-                        runtime_repair_fallback_applied = True
-                        _clear_output_dir(run_result.out_dir)
-                        break
-                    with shared_lock:
-                        findings.append(
-                            ValidationFinding(
-                                validator="coder",
-                                severity="error",
-                                message=(
-                                    f"Coder repair failed for step {step.step_id}: {exc}"
-                                ),
-                            )
-                        )
-                        step_record["status"] = "repair_failed"
-                        _append_terminal_step_record(per_step_records, step_record)
-                        _flush_partial_manifest()
-                    emit_progress(
-                        "coder",
-                        f"Repair failed for {step.step_id}.",
-                        status="error",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
-                    )
-                    return step_record
-            if runtime_repair_applied or runtime_repair_fallback_applied:
-                continue
+                sealed_renderer_state=sealed_renderer_state,
+                standard_executor=standard_executor,
+                step=step,
+                step_attempt_state=step_attempt_state,
+                step_current=step_current,
+                step_execution_cohort_path=step_execution_cohort_path,
+                step_record=step_record,
+                step_repair_budget=step_repair_budget,
+                worker_progress=worker_progress,
+            ),
+            state=candidate_loop_state,
+        )
+        if candidate_loop_terminal:
+            return step_record
+        code = candidate_loop_state.code
+        concept_approved_code_digest = candidate_loop_state.concept_approved_code_digest
+        deterministic_contract_approved_code_digest = (
+            candidate_loop_state.deterministic_contract_approved_code_digest
+        )
+        final_concept_gate_approved_code_digest = (
+            candidate_loop_state.final_concept_gate_approved_code_digest
+        )
+        usage_findings = candidate_loop_state.usage_findings
+        run_result = candidate_loop_state.run_result
+        executed_code_digest = candidate_loop_state.executed_code_digest
+        script_record = candidate_loop_state.script_record
+        standard_executor_terminal_block = (
+            candidate_loop_state.standard_executor_terminal_block
+        )
+        standard_executor_terminal_reason = (
+            candidate_loop_state.standard_executor_terminal_reason
+        )
+        standard_executor_terminal_summary = (
+            candidate_loop_state.standard_executor_terminal_summary
+        )
+        standard_executor_terminal_findings = (
+            candidate_loop_state.standard_executor_terminal_findings
+        )
         publication_step = _step_requires_publication_figure_exports(
             step
         ) and not step_record.get("deterministic_standard_analysis")
@@ -11319,8 +4956,8 @@ def run_execute_phase(
             resolved_input_bindings=resolved_input_bindings,
             plausibility_scope=plausibility_authority.scope,
             script_text=code,
-            attempt_id=attempt_id,
-            checkpoint_id=review_checkpoint_id,
+            attempt_id=attempt_id, checkpoint_id=review_checkpoint_id,
+            evidence_store=evidence,
             stat_validator=stat_validator,
             clinical_validator=clinical_validator,
             statistical_guard=statistical_guard,
@@ -11603,8 +5240,8 @@ def run_execute_phase(
             # alias is added to pending_success_aliases so the SAME success
             # transaction below promotes it; a rolled-back commit therefore
             # leaves an unpublished record that the loader can never recover as
-            # current authority.  Shadow-only: paper_authorized stays false and
-            # no downstream consumer reads it yet.
+            # current authority. The final validator and writer consume the
+            # verified sidecar through RegisteredOutputEnvelopeConsumer.
             sidecar_snapshot = (
                 final_gate_findings.result_envelope_snapshot.envelope
                 if final_gate_findings.result_envelope_snapshot is not None
@@ -11794,21 +5431,14 @@ def run_execute_phase(
         pipeline._development_sample_size is not None
         and run_input_authority_state.development_sample is None
     )
-    plan_block_reason = (
-        "endpoint_contract_blocked"
-        if endpoint_contract_blocked
-        else (
-            "trajectory_plan_contract_blocked"
-            if trajectory_plan_blocked
-            else (
-                "typed_plan_dag_blocked"
-                if typed_plan_dag_blocked
-                else (
-                    "development_sample_unauthorized"
-                    if development_sample_blocked
-                    else None
-                )
-            )
+    plan_block_reason = replan_review.first_plan_block_reason(
+        (
+            (_replan_state.get("human_review_pause") is not None, "runtime_replan_human_review_required"),
+            (endpoint_contract_blocked, "endpoint_contract_blocked"),
+            (trajectory_plan_blocked, "trajectory_plan_contract_blocked"),
+            (typed_plan_dag_blocked, "typed_plan_dag_blocked"),
+            (product_promise_blocked, "product_promise_blocked"),
+            (development_sample_blocked, "development_sample_unauthorized"),
         )
     )
     steps_to_run = (
@@ -12013,6 +5643,8 @@ def run_execute_phase(
             directed_plan = _maybe_directed_model_replan(
                 failed_step=step, failed_record=record
             )
+            if pause_transition := replan_review.runtime_replan_pause_transition(_replan_state):
+                return pause_transition
             if directed_plan is not None:
                 return RunTransition.replan(
                     directed_plan,
@@ -12024,14 +5656,15 @@ def run_execute_phase(
                 and _successful_step_requests_replan(record)
                 and has_remaining
             ):
-                return RunTransition.replan(
-                    _maybe_replan(
-                        current_plan=plan,
-                        reason=step.step_id,
-                        probe_summary_payload=probe_summary,
-                        completed_records=per_step_records,
-                    )
+                revised_plan = _maybe_replan(
+                    current_plan=plan,
+                    reason=step.step_id,
+                    probe_summary_payload=probe_summary,
+                    completed_records=per_step_records,
                 )
+                if pause_transition := replan_review.runtime_replan_pause_transition(_replan_state):
+                    return pause_transition
+                return RunTransition.replan(revised_plan)
             return RunTransition.continue_run()
 
         def _apply_revised_plan(
@@ -12221,6 +5854,7 @@ def run_execute_phase(
         not endpoint_contract_blocked
         and not trajectory_plan_blocked
         and not typed_plan_dag_blocked
+        and not product_promise_blocked
         and trajectory_plan_contract_applies(
             plan=plan,
             context=context,
@@ -12246,95 +5880,19 @@ def run_execute_phase(
             }
         )
 
-    try:
-        robustness_specs = robustness_specs_for_execution(run_dir=run_dir, plan=plan)
-        if robustness_specs and not list(getattr(plan, "robustness_specs", []) or []):
-            findings.append(
-                ValidationFinding(
-                    validator="robustness_panel",
-                    severity="warning",
-                    message=(
-                        "Recovered robustness_specs from the plan-time lock because "
-                        "the active replanned AnalysisPlan no longer carried them."
-                    ),
-                )
-            )
-        adapter_rows, adapter_warnings = fit_robustness_rows_from_records(
-            specs=robustness_specs,
-            per_step_records=per_step_records,
-            primary_cohort=getattr(plan, "cohort", None),
-            cohort_path=cohort_path,
-            context=context,
-            run_dir=run_dir,
-            allow_implicit_cohort_refit=False,
-        )
-        for warning in adapter_warnings:
-            findings.append(
-                ValidationFinding(
-                    validator="robustness_estimator",
-                    severity="warning",
-                    message=warning,
-                )
-            )
-        robustness_panel = build_robustness_panel_from_records(
-            specs=robustness_specs,
-            per_step_records=per_step_records,
-            adapter_rows=adapter_rows,
-        )
-        write_robustness_panel(
-            run_dir=run_dir,
-            panel=robustness_panel,
-            evidence=evidence,
-            prompt_pack_version=prompt_version,
-        )
-        # A specification the run LOCKED and then never estimated is a hole in
-        # the protocol, not a blank cell.  The panel already records it as
-        # ``converged: false`` with an explanatory note, and a real E1 run
-        # finished with exactly that -- the pre-specified complete-case variant
-        # unexecuted -- while every error the run reported was about something
-        # else, so the sensitivity analysis read as done.  Keyed on the locked
-        # spec ids themselves, so no method or product allowlist decides
-        # whether the hole is noticed.
-        unexecuted_locked_specs = unexecuted_locked_spec_ids(robustness_panel)
-        if unexecuted_locked_specs:
-            findings.append(
-                ValidationFinding(
-                    validator="robustness_panel",
-                    severity="error",
-                    message=(
-                        "The run locked robustness specifications that no step "
-                        "estimated, so the panel carries them as blank rows: "
-                        + ", ".join(unexecuted_locked_specs)
-                        + ". A step re-estimating the locked grid must declare "
-                        "robustness_replay_spec to reach the deterministic "
-                        "replay owner; generic refitting stays disabled here "
-                        "because it would choose an exposure, outcome or "
-                        "method on the plan's behalf."
-                    ),
-                    detail={
-                        "unexecuted_spec_ids": unexecuted_locked_specs,
-                        "primary_spec_id": robustness_panel.primary_spec_id,
-                        "locked_spec_count": len(robustness_specs),
-                        "panel_path": "robustness_panel.json",
-                    },
-                )
-            )
-        _flush_partial_manifest(
-            {
-                "robustness_panel_path": "robustness_panel.json",
-                "robustness_n_variants": robustness_panel.n_variants,
-                "robustness_range_low": robustness_panel.range_low,
-                "robustness_range_high": robustness_panel.range_high,
-            }
-        )
-    except Exception as exc:
-        findings.append(
-            ValidationFinding(
-                validator="robustness_panel",
-                severity="warning",
-                message=f"Robustness panel artifact could not be built: {exc}",
-            )
-        )
+    robustness_result = finalize_run_robustness_panel(
+        run_dir=run_dir,
+        plan=plan,
+        per_step_records=per_step_records,
+        cohort_path=cohort_path,
+        context=context,
+        evidence=evidence,
+        prompt_pack_version=prompt_version,
+    )
+    findings.extend(robustness_result.findings)
+    robustness_manifest_update = robustness_result.manifest_update()
+    if robustness_manifest_update:
+        _flush_partial_manifest(robustness_manifest_update)
 
     if pipeline._enable_visual_qa and requested_stop_after_step_id is None:
         emit_progress(
@@ -12363,59 +5921,16 @@ def run_execute_phase(
         )
         findings += demoted_final_findings
 
-    try:
-        article_contract_status = summarize_article_contract_coverage(
+    findings.extend(
+        _collect_and_persist_run_article_audits(
             context=context,
             plan=plan,
-            evidence_records=evidence.records(),
+            evidence_store=evidence,
             per_step_records=per_step_records,
             run_dir=run_dir,
+            flush_partial_manifest=_flush_partial_manifest,
         )
-        article_contract_path = run_dir / "article_contract_audit.json"
-        article_contract_path.write_text(
-            json.dumps(
-                article_contract_audit_payload(article_contract_status),
-                indent=2,
-                ensure_ascii=False,
-                default=str,
-            ),
-            encoding="utf-8",
-        )
-        if evidence.get("article_contract_audit") is None:
-            evidence.register_file(
-                kind="log",
-                description=(
-                    "Run-level article analysis contract audit: compares "
-                    "registered artifacts against required article display roles."
-                ),
-                source_path=article_contract_path,
-                evidence_id="article_contract_audit",
-                producer="article_contract",
-                generation_mode="system",
-            )
-        findings.extend(
-            validate_run_against_article_contract(
-                context=context,
-                plan=plan,
-                evidence_records=evidence.records(),
-                per_step_records=per_step_records,
-                run_dir=run_dir,
-            )
-        )
-        _flush_partial_manifest(
-            {"article_contract_audit": str(article_contract_path.relative_to(run_dir))}
-        )
-    except Exception as exc:
-        findings.append(
-            ValidationFinding(
-                validator="article_analysis_contract",
-                severity="warning",
-                message=(
-                    "Run-level article analysis contract audit failed: "
-                    f"{type(exc).__name__}: {exc}"
-                ),
-            )
-        )
+    )
 
     plan_result.plan = plan
     plan_result.plan_path = plan_path

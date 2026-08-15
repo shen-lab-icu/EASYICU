@@ -1,0 +1,5 @@
+{
+  "source": "SOFA-2 Table 2 bilirubin thresholds, DOI:10.1001/jama.2025.20516",
+  "inputs": {"bili": [1.2, 1.21, 3.01, 6.01, 12.01]},
+  "expected": [0, 1, 2, 3, 4]
+}

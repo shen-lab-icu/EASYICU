@@ -132,17 +132,33 @@ class ResourceScheduler:
         query: ResourceSelectionQuery,
         policy: ResourceSelectionPolicy,
         kind: str,
+        required_resource_ids: tuple[str, ...] = (),
     ) -> ResourceSelection:
         """Rank action/software/data resources inside an exact host allowlist."""
 
         if kind == "protocol":
             raise ValueError("protocol resources require the Know-How scheduler")
         allowlist = catalog.allowlist(query=query, policy=policy, kind=kind)
+        required = tuple(dict.fromkeys(str(value) for value in required_resource_ids))
+        if len(required) > policy.limit_for(kind):
+            raise ValueError(
+                f"required {kind} resources exceed the bounded selection limit: "
+                f"{len(required)}>{policy.limit_for(kind)}"
+            )
+        allowed_by_id = {resource.resource_id: resource for resource in allowlist}
+        missing_required = sorted(set(required) - set(allowed_by_id))
+        if missing_required:
+            raise ValueError(
+                f"required {kind} resources are unavailable in the verified "
+                f"catalog: {missing_required!r}"
+            )
         query_tokens = _tokens(
             " ".join((query.query, query.analysis_family, query.step_role or ""))
         )
         ranked: list[tuple[float, object, tuple[str, ...]]] = []
         for resource in allowlist:
+            if resource.resource_id in required:
+                continue
             resource_tokens = _tokens(" ".join(resource.search_terms))
             overlap = len(query_tokens & resource_tokens)
             family_match = query.analysis_family in resource.analysis_families
@@ -158,7 +174,11 @@ class ResourceScheduler:
             ranked.append((score, resource, tuple(reasons)))
         ranked.sort(key=lambda item: (-item[0], item[1].resource_id))
         limit = policy.limit_for(kind)
-        selected_rows = ranked[:limit]
+        selected_rows = [
+            (1.0, allowed_by_id[resource_id], ("host_required",))
+            for resource_id in required
+        ]
+        selected_rows.extend(ranked[: limit - len(selected_rows)])
         selected_resources = tuple(item[1] for item in selected_rows)
         selected = tuple(
             SelectedResource(

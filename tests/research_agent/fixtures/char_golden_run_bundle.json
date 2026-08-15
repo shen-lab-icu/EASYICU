@@ -2,7 +2,7 @@
   "audit_log_authority_events": [],
   "authoritative_numeric_claims": {
     "count": 28,
-    "set_sha256": "eab0c07e90e69d634fe6257590e2017b4602dd5b1c13b69535843ae13a078fb4"
+    "set_sha256": "02f8b3fa02ad084ffe650123f90794246ca8a3effd3bef16f80f56ae8218345d"
   },
   "authority_transition_order": {
     "01_representation": [
@@ -159,7 +159,7 @@
         "event": "early_validate"
       },
       {
-        "count": 10,
+        "count": 11,
         "event": "seal_hash"
       },
       {
@@ -232,6 +232,14 @@
       },
       {
         "count": 1,
+        "event": "seal_hash"
+      },
+      {
+        "count": 1,
+        "event": "deferred_history_registration"
+      },
+      {
+        "count": 1,
         "event": "final_gate"
       },
       {
@@ -239,7 +247,7 @@
         "event": "early_validate"
       },
       {
-        "count": 9,
+        "count": 10,
         "event": "seal_hash"
       },
       {
@@ -319,15 +327,15 @@
     ]
   },
   "current_aliases": {
-    "count": 40,
-    "mapping_sha256": "3c4aad5e8267797c6a772d61cbd9b193849cc62b158c38a8cac4f37cc537414c"
+    "count": 41,
+    "mapping_sha256": "8caf5f79cfe5c964b250a14d0165116bbf0c267c56a5458e2705ed5dd57bf1a8"
   },
   "current_evidence": {
-    "count": 38,
-    "mapping_sha256": "2646da7c5f1c0f5fe795b012c0ab3f11c6c4e1e2f460642912185d47101a65c1"
+    "count": 39,
+    "mapping_sha256": "bea8aee92e0fc3a158ff3a160a6be29e03b6f2d344f6e6dcd6900d5f9016ac4c"
   },
   "current_self_aliases": {
-    "count": 38
+    "count": 39
   },
   "dependency_edges": [
     [
@@ -453,7 +461,7 @@
     "03_stability:artifact:cluster_assignments": "5e59102f7dbce5517c41479d99ba2ff3452119fe18eec3284fe86d6fd96a4063",
     "03_stability:table:cluster_assignment_provenance": "194aa3ad03504dab3b685c7280b6424bf6978f40f00e7eacc265bc879f8395ec",
     "03_stability:table:cluster_assignments": "5e59102f7dbce5517c41479d99ba2ff3452119fe18eec3284fe86d6fd96a4063",
-    "03_stability:table:cluster_stability": "8a9522223edb2f0f57cd0e438dedf5e665eaa6c50179dc4081e97badaa509ea4",
+    "03_stability:table:cluster_stability": "c1f436993321d5ab7864e916fc1b5e8027e866ca371f60e85334ae98df0b04b3",
     "03_stability:table:cluster_stability_assignments": "202bcda9c8d326935003ac77e180673f121ba4b4effb89772e80312274a67974",
     "04_characterization:table:cluster_sizes": "76311fdf7f5a745abddbffb14e17d4a18743a10168d1ee8a09f5a9404e38cc4c",
     "04_characterization:table:descriptive_result": "11882573403f0d33c001bc128b2adfa6dc9388f778cf3e89398e8e9049163192",
@@ -467,9 +475,10 @@
   },
   "readiness": {
     "gates": {
-      "analysis_error_count": 1,
+      "analysis_error_count": 2,
       "analysis_errors": [
-        "The run locked robustness specifications that no step estimated, so the panel carries them as blank rows: complete_case_trajectory_inputs. A step re-estimating the locked grid must declare robustness_replay_spec to reach the deterministic replay owner; generic refitting stays disabled here because it would choose an exposure, outcome or method on the plan's behalf."
+        "The run locked robustness specifications that no step estimated, so the panel carries them as blank rows: complete_case_trajectory_inputs. A step re-estimating the locked grid must declare robustness_replay_spec to reach the deterministic replay owner; generic refitting stays disabled here because it would choose an exposure, outcome or method on the plan's behalf.",
+        "scientific_validator_unavailable: The analysis can execute, but no registered deterministic validator establishes its identification claim."
       ],
       "analysis_validated": false,
       "blocked_outcome_not_leaked": true,
@@ -484,13 +493,12 @@
       "missing_evidence_count": 0,
       "missing_steps": [
         "05_robustness",
-        "06_publication_figure_fallback",
-        "07_audit_panel"
+        "06_publication_figure_fallback"
       ],
       "numeric_error_count": 0,
       "numeric_verified": false,
       "publication_ready": false,
-      "required_step_count": 7
+      "required_step_count": 6
     },
     "status": "diagnostic_only",
     "strict_fail_closed": true
@@ -528,10 +536,10 @@
         "sha256": "91024f30535fbf636fe7453e7e4af85d0645261a146e69f9a92617735376107c"
       },
       "manifest:trajectory_representation_schema": {
-        "evidence_id": "log_step_artifact_0f4f445ed6fa6b09",
-        "identity_row_sha256": "f7f556a2f6e5139c4e1ec952a62b19132361f57b3125f740969a289a8311d246",
-        "product_contract_sha256": "47ec5d9d8a88aa288ed407437483bb96b9e698cdeaaac7ba4474c92de5309292",
-        "sha256": "55313bb645ab98774ade76d1d308b70544d99b202aaf6bdef98675c4d974ce53"
+        "evidence_id": "log_step_artifact_0ad3f4d60f7bf435",
+        "identity_row_sha256": "e7ee7249d601f21342726dc39cf1210cd43928a117ae3cccfee6c267573e9e99",
+        "product_contract_sha256": "99b167717ef11b038f922e2f5d8e2ad61c65df836f85300d815dd1f23d69f53d",
+        "sha256": "ba1c476eb3c9d8f766ab2930d613fba4c04bfb43bc7c561a3832ebb2d034230e"
       }
     },
     "03_stability": {
@@ -548,10 +556,10 @@
         "sha256": "91024f30535fbf636fe7453e7e4af85d0645261a146e69f9a92617735376107c"
       },
       "manifest:candidate_cluster_solution_schema": {
-        "evidence_id": "log_step_artifact_d9d678b90a6e7e4a",
-        "identity_row_sha256": "1fb4c40ec38f9753cf5f720c00dbe16a4b326ea02d081cf65ac75c01d29dbe19",
-        "product_contract_sha256": "0adc888c658ee815f724cdaad001f4a608b63290c620030f9e642be7d32cd877",
-        "sha256": "77da73008f17a4d7ec8dbc95e8e9aeab31cbb09444e971a48fd7ceb471d4f3cd"
+        "evidence_id": "log_step_artifact_5c69db7613823fa9",
+        "identity_row_sha256": "1487396290a2f7d988fbb0005bb6638589ff278198b3cd284c181a50894bde49",
+        "product_contract_sha256": "2158271bd4e862f919c9de711ee14a836cb0841b16517f491cd5b6d92c27b8ac",
+        "sha256": "b87c8b5f0df142969a614fb6a6453a9408fe41eb9fe3a3db39e03bfcff8ae750"
       },
       "manifest:cluster_selection": {
         "evidence_id": "log_step_artifact_d3e2b37dc6ffc275",
@@ -560,17 +568,17 @@
         "sha256": "cb3568dafd78603deceadb4d496326f2a40848cc74d6eec551227f7bbfb1e953"
       },
       "manifest:trajectory_representation_schema": {
-        "evidence_id": "log_step_artifact_0f4f445ed6fa6b09",
-        "identity_row_sha256": "f7f556a2f6e5139c4e1ec952a62b19132361f57b3125f740969a289a8311d246",
-        "product_contract_sha256": "47ec5d9d8a88aa288ed407437483bb96b9e698cdeaaac7ba4474c92de5309292",
-        "sha256": "55313bb645ab98774ade76d1d308b70544d99b202aaf6bdef98675c4d974ce53"
+        "evidence_id": "log_step_artifact_0ad3f4d60f7bf435",
+        "identity_row_sha256": "e7ee7249d601f21342726dc39cf1210cd43928a117ae3cccfee6c267573e9e99",
+        "product_contract_sha256": "99b167717ef11b038f922e2f5d8e2ad61c65df836f85300d815dd1f23d69f53d",
+        "sha256": "ba1c476eb3c9d8f766ab2930d613fba4c04bfb43bc7c561a3832ebb2d034230e"
       }
     },
     "04_characterization": {
       "artifact:cluster_assignments": {
-        "evidence_id": "table_step_artifact_b50c9b24510b60cc",
-        "identity_row_sha256": "a59e9ed27128c40c19e051df0a12f3158c648e2d65f8d822be8ce50b058d2dac",
-        "product_contract_sha256": "ad2b97a6397e36dbc59cc77ce8313c177b354db6c67f8132081d77aa048afce3",
+        "evidence_id": "table_step_artifact_eba5798c3c72e5ec",
+        "identity_row_sha256": "6540093bbe208c73c36fbf78c9302e6f289e1b8f9270c26a0d3ec106a740a06a",
+        "product_contract_sha256": "1b59dcb31347e93535c26f56ab6ad00b3c2b5a41c67b2c2870867e58ef931a6a",
         "sha256": "b3626090b553c9fadc160e7de410a2804c752995f4d611095af81b5645d0404c"
       }
     }
@@ -579,10 +587,102 @@
     "by_severity": {
       "error": 1,
       "info": 3,
-      "warning": 9
+      "warning": 11
     },
-    "count": 13,
-    "set_sha256": "b8b6f1e00889b5ee5be221666779d75cf8319bcaab79bd0d57af91f93d119424"
+    "count": 15,
+    "identities": [
+      {
+        "reason": "Using the deterministic calculator for the complete Planner-owned standard-executor specification in step 03_stability.",
+        "severity": "info",
+        "step_id": "03_stability",
+        "validator": "coder"
+      },
+      {
+        "reason": "Analysis plan does not cover all article-level roles in the phenotyping blueprint.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "analysis_blueprint"
+      },
+      {
+        "reason": "Analysis plan does not cover all required visual roles in the phenotyping blueprint.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "analysis_blueprint"
+      },
+      {
+        "reason": "Run artifacts do not yet satisfy the article-level analysis contract for phenotyping studies.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "article_analysis_contract"
+      },
+      {
+        "reason": "Run figures do not yet satisfy the article-level figure strategy for phenotyping studies.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "article_figure_strategy"
+      },
+      {
+        "reason": "Cohort is keyed at the ICU-stay level with no patient identifier; within-patient non-independence and first-stay selection cannot be assessed from this export. Re-extract with a patient identifier (e.g. subject_id) if repeat ICU stays could affect the outcome model.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "cohort_auditor"
+      },
+      {
+        "reason": "A source-bound data-quality figure was not appended because its audit-table ownership is incomplete or ambiguous.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "data_quality_figure_contract"
+      },
+      {
+        "reason": "Manuscript generation skipped after a planned analysis pause before the execution gate completed.",
+        "severity": "info",
+        "step_id": null,
+        "validator": "manuscript_gate"
+      },
+      {
+        "reason": "Multiple-testing audit completed, but no raw p-values with a defensible declared or source-local hypothesis family were found; no adjustment was computed.",
+        "severity": "info",
+        "step_id": null,
+        "validator": "multiple_testing"
+      },
+      {
+        "reason": "Plan did not declare a figure step even though the research question asked for a publication-ready figure; appended a fallback figure step '06_publication_figure_fallback' to preserve the task contract.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "plan_contract"
+      },
+      {
+        "reason": "generic deterministic robustness refitting is disabled; only a validated step-owned primary estimate is retained, and variants require exact registered primary-script replay",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "robustness_estimator"
+      },
+      {
+        "reason": "The run locked robustness specifications that no step estimated, so the panel carries them as blank rows: complete_case_trajectory_inputs. A step re-estimating the locked grid must declare robustness_replay_spec to reach the deterministic replay owner; generic refitting stays disabled here because it would choose an exposure, outcome or method on the plan's behalf.",
+        "severity": "error",
+        "step_id": null,
+        "validator": "robustness_panel"
+      },
+      {
+        "reason": "Analysis plan does not declare all main-text displays expected for phenotyping studies.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "study_design_brief"
+      },
+      {
+        "reason": "Analysis plan may be missing expected method components for phenotyping studies.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "study_design_brief"
+      },
+      {
+        "reason": "Analysis plan may be missing expected sensitivity requirements for phenotyping studies.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "study_design_brief"
+      }
+    ],
+    "set_sha256": "39b76f4f5736468df2bad010faa6cd1416b43f0208a8eb33cf6355be69e2de49"
   },
   "volatile_field_allowlist": [
     "absolute_path",

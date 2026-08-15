@@ -336,14 +336,21 @@ def test_curated_publication_bundle_requires_current_policy_version(ra, tmp_path
                         "role": "primary_estimand",
                         "claim": "Primary estimate is shown.",
                         "evidence_ids": [source_record.evidence_id],
-                    }
+                    },
+                    {
+                        "panel_id": "B",
+                        "title": "Sensitivity context",
+                        "role": "sensitivity",
+                        "claim": "Sensitivity context is shown.",
+                        "evidence_ids": [source_record.evidence_id],
+                    },
                 ],
                 "source_data": [source_record.evidence_id],
             }
         ),
         encoding="utf-8",
     )
-    evidence.register_file(
+    contract_record = evidence.register_file(
         kind="log",
         description="Publication figure contract.",
         source_path=contract_path,
@@ -362,8 +369,126 @@ def test_curated_publication_bundle_requires_current_policy_version(ra, tmp_path
             evidence_id=f"publication_figure_{suffix}",
             producer="publication_figure_skill",
             generation_mode="deterministic_figure_skill",
-            metadata={"figure_role": "publication_figure", **stale_metadata},
+            metadata={
+                "figure_role": "publication_figure",
+                "contract_evidence_id": contract_record.evidence_id,
+                **stale_metadata,
+            },
         )
+
+    assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
+
+
+def test_curated_publication_bundle_rejects_digest_stale_figure_bytes(
+    ra, tmp_path: Path
+):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.figures.skill import (
+        _has_curated_publication_figure_bundle,
+        _source_fingerprint_metadata,
+    )
+
+    evidence = EvidenceStore(tmp_path)
+    source_path = tmp_path / "publication_figure_source_data.csv"
+    source_path.write_text("term,estimate\nsepsis3,1.05\n", encoding="utf-8")
+    source_record = evidence.register_file(
+        kind="table",
+        description="Publication source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_data",
+    )
+    metadata = _source_fingerprint_metadata(evidence, [source_record.evidence_id])
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "figure_id": "easyicu_publication_figure",
+                "core_claim": "Current figure contract.",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Primary estimate",
+                        "role": "primary_estimand",
+                        "claim": "Primary estimate is shown.",
+                        "evidence_ids": [source_record.evidence_id],
+                    },
+                    {
+                        "panel_id": "B",
+                        "title": "Sensitivity context",
+                        "role": "sensitivity",
+                        "claim": "Sensitivity context is shown.",
+                        "evidence_ids": [source_record.evidence_id],
+                    },
+                ],
+                "source_data": [source_record.evidence_id],
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract_record = evidence.register_file(
+        kind="log",
+        description="Publication figure contract.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata=metadata,
+    )
+    figure_path = tmp_path / "easyicu_publication_figure.svg"
+    figure_path.write_text("<svg></svg>", encoding="utf-8")
+    figure_record = evidence.register_file(
+        kind="figure",
+        description="Publication figure export.",
+        source_path=figure_path,
+        evidence_id="publication_figure_svg",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={
+            "figure_role": "publication_figure",
+            "figure_id": "easyicu_publication_figure",
+            "contract_evidence_id": contract_record.evidence_id,
+            "figure_privacy_audit_evidence_id": "privacy-a",
+            **metadata,
+        },
+    )
+    assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
+    png_path = tmp_path / "easyicu_publication_figure.png"
+    png_path.write_bytes(b"png")
+    evidence.register_file(
+        kind="figure",
+        description="Publication figure export.",
+        source_path=png_path,
+        evidence_id="publication_figure_png",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={
+            "figure_role": "publication_figure",
+            "figure_id": "easyicu_publication_figure",
+            "contract_evidence_id": contract_record.evidence_id,
+            "figure_privacy_audit_evidence_id": "privacy-b",
+            **metadata,
+        },
+    )
+    assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
+    evidence.register_file(
+        kind="figure",
+        description="Publication figure export.",
+        source_path=png_path,
+        evidence_id="publication_figure_png_current",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={
+            "figure_role": "publication_figure",
+            "figure_id": "easyicu_publication_figure",
+            "contract_evidence_id": contract_record.evidence_id,
+            "figure_privacy_audit_evidence_id": "privacy-a",
+            **metadata,
+        },
+    )
+    assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is True
+    (tmp_path / figure_record.relative_path).write_text(
+        "<svg>tampered</svg>", encoding="utf-8"
+    )
 
     assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
 
@@ -1071,6 +1196,332 @@ def test_publication_figure_skill_uses_auxiliary_outcome_incidence_for_main_figu
     assert descriptive["evidence_ids"] == ["outcome_incidence"]
 
 
+def test_publication_figure_skill_uses_distribution_and_labels_unadjusted_model(
+    ra,
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    primary_table = tmp_path / "adjusted_association_estimates.csv"
+    primary_table.write_text(
+        "exposure,estimate,ci_low,ci_high,effect_scale\n"
+        "exposure,1.70,1.50,1.92,odds_ratio\n",
+        encoding="utf-8",
+    )
+    distribution = tmp_path / "exposure_outcome_distribution.csv"
+    distribution.write_text(
+        "row_role,exposure_level,n_rows,outcome_rate_pct\n"
+        "exposure_level,0,700,8.0\n"
+        "exposure_level,1,300,14.0\n"
+        "overall,,1000,9.8\n",
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Primary unadjusted association table.",
+        source_path=primary_table,
+        evidence_id="adjusted_association_estimates",
+        produced_by_step="primary",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Observed outcome distribution by exposure.",
+        source_path=distribution,
+        evidence_id="exposure_outcome_distribution",
+        produced_by_step="distribution",
+    )
+    context = ra.ResearchContext(
+        research_question="Estimate an unadjusted association.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=1000,
+            n_stays=1000,
+        ),
+        variables=[],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="distribution",
+                intent="Report absolute outcome risk by exposure.",
+                expected_outputs=["table:exposure_outcome_distribution"],
+                planned_analysis_role="auxiliary",
+            ),
+            ra.AnalysisStep(
+                step_id="primary",
+                intent="Estimate the primary unadjusted association.",
+                expected_outputs=["table:adjusted_association_estimates"],
+                planned_analysis_role="primary",
+            ),
+            ra.AnalysisStep(
+                step_id="figure",
+                intent="Render the primary figure.",
+                inputs=["table:adjusted_association_estimates"],
+                expected_outputs=["figure:publication_figure"],
+                planned_analysis_role="auxiliary",
+            ),
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    contract = json.loads(
+        (
+            run_dir
+            / "publication_figures"
+            / "easyicu_publication_figure.figure_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert contract["panels"][0]["title"] == "Unadjusted association"
+    assert contract["panels"][1]["role"] == "descriptive_result"
+    assert contract["panels"][1]["evidence_ids"] == [
+        "exposure_outcome_distribution"
+    ]
+
+
+def test_distribution_overall_audit_row_is_not_drawn_as_a_third_exposure_group():
+    from easyicu.research_agent.figures.skill import _normalise_strata_frame
+
+    frame = pd.DataFrame(
+        {
+            "row_role": ["exposure_level", "exposure_level", "overall"],
+            "exposure_level": [0, 1, None],
+            "n_rows": [700, 300, 1000],
+            "outcome_rate_pct": [8.0, 14.0, 9.8],
+        }
+    )
+
+    normalized = _normalise_strata_frame(frame)
+
+    assert normalized["score"].tolist() == ["Unexposed", "Exposed"]
+    assert normalized["n"].tolist() == [700, 300]
+
+
+def _e1_typed_distribution_frame(*, include_risk_difference: bool) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        {
+            "row_role": ["exposure_level", "exposure_level", "overall"],
+            "exposure_level_index": [0, 1, None],
+            "exposure_level": [0, 1, None],
+            "n_rows": [62_900, 31_600, 94_500],
+            # Deliberately differ from n_rows: Panel B must use the analysed
+            # outcome denominator, not whichever structural count comes first.
+            "outcome_denominator": [62_862, 31_596, 94_458],
+            "outcome_rate_pct": [8.210047, 13.625142, 10.021385],
+            "ci_low_pct": [7.995860, 13.245177, 9.830581],
+            "ci_high_pct": [8.424235, 14.005108, 10.212189],
+            "exposure_column": ["sep3_sofa1_max"] * 3,
+        }
+    )
+    if include_risk_difference:
+        frame = frame.assign(
+            risk_difference_pct=5.415095,
+            risk_difference_ci_low_pct=4.977273,
+            risk_difference_ci_high_pct=5.852917,
+            risk_difference_reference_index=0,
+            risk_difference_comparison_index=1,
+            risk_difference_effect_measure="risk_difference",
+        )
+    return frame
+
+
+def test_e1_typed_distribution_uses_authorized_risk_difference_not_level_codes(ra):
+    from easyicu.research_agent.figures.skill import (
+        _association_axis_metadata,
+        _normalise_association_frame,
+    )
+
+    normalized = _normalise_association_frame(
+        _e1_typed_distribution_frame(include_risk_difference=True),
+        primary_exposure="sep3_sofa1_max",
+        display_labels={"sep3_sofa1_max": "Sepsis-3"},
+    )
+
+    assert normalized["estimate"].tolist() == pytest.approx([5.415095])
+    assert normalized["lower"].tolist() == pytest.approx([4.977273])
+    assert normalized["upper"].tolist() == pytest.approx([5.852917])
+    assert normalized["label"].tolist() == ["Sepsis-3: Exposed vs Unexposed"]
+    assert not set(normalized["estimate"]) & {0.0, 1.0}
+    axis = _association_axis_metadata(normalized)
+    assert axis["null_value"] == 0.0
+    assert axis["ratio_scale"] is False
+    assert axis["xlabel"] == "Risk difference (percentage points)"
+
+
+def test_e1_typed_distribution_without_authorized_contrast_fails_closed(ra):
+    from easyicu.research_agent.figures.skill import _normalise_association_frame
+
+    incomplete_typed = _normalise_association_frame(
+        _e1_typed_distribution_frame(include_risk_difference=False),
+        primary_exposure="sep3_sofa1_max",
+    )
+    arbitrary_numeric = _normalise_association_frame(
+        pd.DataFrame(
+            {
+                "exposure_level": [0, 1],
+                "n_rows": [700, 300],
+                "outcome_rate_pct": [8.0, 14.0],
+            }
+        )
+    )
+
+    assert incomplete_typed.empty
+    assert arbitrary_numeric.empty
+
+
+def test_e1_typed_distribution_panel_b_uses_rate_ci_and_outcome_denominator(ra):
+    from easyicu.research_agent.figures.skill import _draw_strata_panel
+    from easyicu.research_agent.figures.strata import normalise_strata_frame
+
+    normalized = normalise_strata_frame(
+        _e1_typed_distribution_frame(include_risk_difference=True)
+    )
+
+    assert normalized["score"].tolist() == ["Unexposed", "Exposed"]
+    assert normalized["rate"].tolist() == pytest.approx([0.08210047, 0.13625142])
+    assert normalized["lower"].tolist() == pytest.approx([0.07995860, 0.13245177])
+    assert normalized["upper"].tolist() == pytest.approx([0.08424235, 0.14005108])
+    assert normalized["n"].tolist() == [62_862, 31_596]
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    _draw_strata_panel(
+        ax,
+        normalized,
+        palette={"blue": "#0F4D92", "neutral_light": "#D8D8D8"},
+        outcome_label="In-hospital mortality",
+    )
+    labels = [label.get_text() for label in ax.get_yticklabels()]
+    assert labels == ["Unexposed (n=62,862)", "Exposed (n=31,596)"]
+    # One collection comes from the lollipop stems and another from the
+    # horizontal confidence intervals.  A point-only panel has only the former.
+    assert len(ax.collections) >= 2
+    plt.close(fig)
+
+
+def test_publication_figure_skill_e1_typed_distribution_projects_both_panels(
+    ra,
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    distribution = tmp_path / "exposure_outcome_distribution.csv"
+    _e1_typed_distribution_frame(include_risk_difference=True).to_csv(
+        distribution,
+        index=False,
+    )
+    evidence.register_file(
+        kind="table",
+        description="E1 typed exposure/outcome distribution.",
+        source_path=distribution,
+        evidence_id="exposure_outcome_distribution",
+        produced_by_step="03_distribution",
+    )
+    missingness = tmp_path / "measurement_missingness.csv"
+    missingness.write_text(
+        "variable,missing_fraction\nage,0.0\ndeath,0.0\n",
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="table",
+        description="E1 measurement missingness.",
+        source_path=missingness,
+        evidence_id="measurement_missingness",
+        produced_by_step="02_table_one",
+    )
+    context = ra.ResearchContext(
+        research_question="Describe Sepsis-3 and in-hospital mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="MIMIC-IV ICU stays",
+            database="mimiciv",
+            n_patients=65_366,
+            n_stays=94_458,
+        ),
+        variables=[],
+        primary_exposure="sep3_sofa1_max",
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        display_labels={
+            "sep3_sofa1_max": "标准 Sepsis-3 状态（0–24小时）",
+            "age": "ICU入科时年龄（岁）",
+            "death": "院内死亡",
+        },
+        steps=[
+            ra.AnalysisStep(
+                step_id="03_distribution",
+                intent="Estimate the prespecified descriptive contrast.",
+                expected_outputs=["table:exposure_outcome_distribution"],
+                planned_analysis_role="primary",
+            ),
+            ra.AnalysisStep(
+                step_id="04_figure",
+                intent="Render the publication figure.",
+                inputs=["table:exposure_outcome_distribution"],
+                expected_outputs=["figure:publication_figure"],
+                planned_analysis_role="auxiliary",
+            ),
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    assert result.findings == []
+    primary_source = pd.read_csv(
+        run_dir
+        / "publication_figures"
+        / "publication_figure_source_primary_association.csv"
+    )
+    strata_source = pd.read_csv(
+        run_dir
+        / "publication_figures"
+        / "publication_figure_source_stratified_outcome.csv"
+    )
+    assert primary_source["estimate"].tolist() == pytest.approx([5.415095])
+    assert not set(primary_source["estimate"]) & {0.0, 1.0}
+    assert strata_source["rate"].tolist() == pytest.approx([0.08210047, 0.13625142])
+    assert strata_source["n"].tolist() == [62_862, 31_596]
+    contract = json.loads(
+        (
+            run_dir
+            / "publication_figures"
+            / "easyicu_publication_figure.figure_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert contract["panels"][0]["title"] == "Unadjusted risk difference"
+    assert "percentage points" in contract["panels"][0]["claim"]
+    assert "analysed denominators" in contract["panels"][1]["claim"]
+    assert "relative estimate" not in json.dumps(contract)
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "primary_estimand",
+        "descriptive_result",
+        "data_quality",
+    ]
+
+
 def test_figure_contract_enforces_unique_panel_ids():
     with pytest.raises(ValueError):
         make_figure_contract(
@@ -1647,6 +2098,77 @@ def test_publication_figure_skill_renders_from_registered_association_table(
     assert len(inventory) == 1
     assert inventory[0].contract_registered is True
     assert inventory[0].provenance_valid is True
+
+
+def test_publication_figure_refuses_digest_stale_association_table(
+    ra, tmp_path: Path
+):
+    run_dir = tmp_path / "run"
+    source = tmp_path / "primary_association.csv"
+    pd.DataFrame(
+        {
+            "variable": ["lactate"],
+            "odds_ratio": [1.35],
+            "or_lower": [1.10],
+            "or_upper": [1.66],
+        }
+    ).to_csv(source, index=False)
+    evidence = ra.EvidenceStore(run_dir)
+    record = evidence.register_file(
+        kind="table",
+        description="Primary association table.",
+        source_path=source,
+        evidence_id="primary_association",
+        produced_by_step="04_primary_association",
+    )
+    context = ra.ResearchContext(
+        research_question="Is lactate associated with mortality?",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=2,
+            n_stays=2,
+        ),
+        variables=[
+            ra.ConceptDescriptor(name="lactate", role="lab", dtype="float64"),
+            ra.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        ],
+        target_outcome="death",
+        primary_exposure="lactate",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="04_primary_association",
+                intent="Estimate the primary association.",
+                inputs=["lactate", "death"],
+                expected_outputs=[
+                    "table:primary_association",
+                    "figure:primary_association_curve",
+                ],
+                planned_analysis_role="primary",
+            )
+        ],
+    )
+    pd.DataFrame(
+        {
+            "variable": ["lactate"],
+            "odds_ratio": [9.99],
+            "or_lower": [8.0],
+            "or_upper": [12.0],
+        }
+    ).to_csv(run_dir / record.relative_path, index=False)
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+    )
+
+    assert result.generated is False
+    assert not any(record.kind == "figure" for record in evidence.records())
 
 
 def test_association_forest_axis_metadata_tracks_effect_measure(ra):

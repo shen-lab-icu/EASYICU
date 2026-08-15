@@ -1,0 +1,20 @@
+/* Owner: read-only complete research-demo entry, banner, and footer. */
+.gpi-demo-launch{display:inline-flex;align-items:center;gap:6px}
+.gpi-activate>.gpi-demo-launch{width:100%;justify-content:center;margin:0 0 10px}
+.gpi-demo-note{
+  flex:0 0 auto;display:flex;align-items:center;gap:9px;padding:8px 20px;
+  border-bottom:1px solid color-mix(in srgb,#b68538 28%,var(--line));
+  background:color-mix(in srgb,#b68538 7%,var(--paper));color:var(--ink-3);font-size:11px;line-height:1.45
+}
+.gpi-demo-note svg{flex:0 0 auto;color:#8a642a}
+.gpi-demo-note strong{color:var(--ink-2)}
+.gpi-demo-footer{
+  flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:11px clamp(20px,4vw,46px);border-top:1px solid var(--line);background:var(--paper)
+}
+.gpi-demo-footer span{color:var(--ink-4);font-size:11px;line-height:1.45}
+.gpi-demo-footer .btn{flex:0 0 auto}
+@media (max-width:720px){
+  .gpi-demo-footer{align-items:stretch;flex-direction:column}
+  .gpi-demo-footer .btn{justify-content:center}
+}

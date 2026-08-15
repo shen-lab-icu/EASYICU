@@ -155,13 +155,19 @@ def test_scaffold_to_latex_emits_bibliography_directives(ra):
                            venue="Intensive Care Medicine", pmid="8844239"),
         ],
     )
-    md = "# Methods\n\nCohort uses {evidence:table_one}.\n"
+    md = (
+        "# Evidence-bound ICU study\n\n"
+        "**Keywords:** ICU, evidence\n\n"
+        "## Methods\n\n"
+        "Cohort definition follows prior work [@vincent_sofa_1996].\n"
+    )
     tex = scaffold_to_latex(markdown=md, title="T", authors=["A"], bibliography=bundle)
     assert r"\bibliographystyle{plain}" in tex
     assert r"\bibliography{manuscript_scaffold}" in tex
-    # nocite line auto-includes every key so References are rendered
-    # even if the body has no \cite{} yet.
-    assert r"\nocite{vincent_sofa_1996}" in tex
+    assert r"\cite{vincent_sofa_1996}" in tex
+    assert r"\nocite{" not in tex
+    assert r"\title{Evidence-bound ICU study}" in tex
+    assert "Keywords" in tex
     # The old itemize-style references list must NOT be present.
     assert r"\section*{References}" not in tex or r"\bibliography{" in tex
 
@@ -214,6 +220,22 @@ def test_latex_template_preamble_supports_venues(ra):
 # ---------------------------------------------------------------------------
 
 
+def test_unknown_markdown_literature_key_fails_closed(ra):
+    from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
+    import pytest
+
+    bundle = LiteratureBundle(
+        research_question="x",
+        citations=[CitationRecord(key="known", title="Known.", year="2024")],
+    )
+    with pytest.raises(ValueError, match="absent from the run-bound bibliography"):
+        scaffold_to_latex(
+            markdown="# Methods\n\nClaim [@invented].\n",
+            bibliography=bundle,
+        )
+
+
 def test_pipeline_writes_bib_alongside_tex(ra, synthetic_cohort, tmp_path: Path):
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
     result = pipeline.run(
@@ -233,10 +255,8 @@ def test_pipeline_writes_bib_alongside_tex(ra, synthetic_cohort, tmp_path: Path)
     bib_text = bib.read_text(encoding="utf-8")
     assert r"\bibliography{manuscript_scaffold}" in tex_text
     assert bib_text.startswith("@") and "}\n" in bib_text
-    # The .tex's nocite keys must all be present in the .bib.
-    nocite = re.search(r"\\nocite\{([^}]+)\}", tex_text)
-    assert nocite is not None
-    cite_keys = [k.strip() for k in nocite.group(1).split(",") if k.strip()]
+    # Every exact manuscript citation must resolve to the run-bound .bib.
+    cite_keys = re.findall(r"\\cite\{([^}]+)\}", tex_text)
     bib_keys = set(re.findall(r"@\w+\{([^,]+),", bib_text))
     missing = [k for k in cite_keys if k not in bib_keys]
-    assert not missing, f"\\nocite keys absent from .bib: {missing}"
+    assert not missing, f"\\cite keys absent from .bib: {missing}"

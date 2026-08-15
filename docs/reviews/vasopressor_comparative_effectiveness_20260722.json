@@ -1,29 +1,33 @@
 {
   "schema_version": "easyicu.know_how_review_packet/1",
   "card_id": "vasopressor_comparative_effectiveness",
-  "card_version": "1.0.0",
-  "reviewed_content_sha256": "0b713b18424f7497dfef0d611673e3811b606966afaae5d3df8d2cc375001cbe",
-  "status": "methods_evidence_pre_review_complete_formal_attestation_pending",
+  "card_version": "2.0.0",
+  "reviewed_content_sha256": "5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f",
+  "case_protocol_path": "benchmarks/figure2_canonical9/protocols/h2_vasopressor_causal_20260809.json",
+  "case_protocol_content_sha256": "8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c",
+  "runtime_scientific_projection_sha256": "ac990d62490906436fd234eb6fc780def048bf8eb60aba8e7edb7599519752a2",
+  "deterministic_execution_contract_sha256": "28967edb8e689ff734aa8115471e75001bd12f18315849f3a6c6d39c370c7a0d",
+  "status": "unsigned_targeted_adjudication_repairs_complete",
   "authorization": false,
   "split_rationale": "H2 is a causal-emulation question, not a generic medication association. The protocol must establish a common treatment-decision landmark and distinguish verified non-use from missing medication capture before any effect estimate can be considered.",
   "evidence_groups": [
     {
       "claim_group": "target-trial coordinates and causal estimand",
-      "citation_ids": ["hernan_target_trial_2016"],
-      "pre_review_conclusion": "Supports explicit eligibility, time zero, treatment strategies, follow-up, estimand, and overlap diagnostics; it does not establish a cohort-specific causal effect."
+      "citation_ids": ["hernan_target_trial_2016", "target_statement_2025"],
+      "pre_review_conclusion": "Supports explicit eligibility, treatment strategies, time zero, grace-period handling, follow-up, estimand, assumptions, analysis plan, and observational-data mapping; it does not establish a cohort-specific causal effect."
     },
     {
       "claim_group": "vasopressor clinical context",
-      "citation_ids": ["ssc_vasopressor_2021"],
-      "pre_review_conclusion": "Supports clinical context for active-comparator interpretation, not an assumed treatment definition or absence-as-nonuse rule in any database."
+      "citation_ids": ["ssc_adult_2026"],
+      "pre_review_conclusion": "Provides current vasopressor clinical context, including norepinephrine as first-line in septic shock, but does not authorize an assumed treatment definition or absence-as-nonuse rule in a database."
     }
   ],
   "required_signoff": [
-    "The estimand, active comparator strategies, eligible population, treatment grace period, and common assignment time are specified before inspecting outcome contrasts.",
-    "Medication non-recording is treated as unknown unless source-specific, first-window capture and timing make verified non-use defensible; a source that cannot meet this condition is a feasibility failure, not a control group.",
-    "Baseline severity and treatment-history variables are measured before assignment, and time-varying confounding is handled or the question is narrowed accordingly.",
-    "Outcome horizon, competing events, censoring, positivity diagnostics, and the planned overlap response are prespecified.",
-    "The analysis is described as an observational target-trial emulation and does not claim a causal effect unless all protocol and diagnostic conditions are met."
+    "The reviewer accepts that the current selected MIMIC-IV inputevents-derived source proves recorded 0-24-hour administration but lacks sufficient pre-ICU treatment-history authority to distinguish true initiators, prevalent users, and verified non-users; H2 must return H2_VERIFIED_NON_USE_UNAVAILABLE and must not construct a control arm, PSM/IPTW, or any effect estimate.",
+    "This blocker is source-specific and may be reopened only by a per-stay source-coverage contract with prespecified pre-ICU lookback that distinguishes true initiator, prevalent user, and verified non-user, followed by new clinical and methods review.",
+    "Any future target-trial design is non-authorizing under the current materialization; mandatory future diagnostics include overall and arm-specific ESS, ESS/N, weight distribution, overlap, balance, and extreme weights, without inventing a universal numeric ESS reportability cutoff.",
+    "The current formal H2 result is non-identifiability from the available medication-capture contract, not an estimated causal effect.",
+    "The reviewer approves exact case protocol digest 8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c, runtime projection digest ac990d62490906436fd234eb6fc780def048bf8eb60aba8e7edb7599519752a2, and deterministic execution-contract digest 28967edb8e689ff734aa8115471e75001bd12f18315849f3a6c6d39c370c7a0d together with card digest 5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f."
   ],
   "attestation_fields_required_after_signoff": [
     "reviewer_owner",
@@ -31,6 +35,8 @@
     "review_scope",
     "literature_search_cutoff",
     "clinical_reviewed",
-    "methods_reviewed"
+    "methods_reviewed",
+    "protocol_content_sha256",
+    "runtime_projection_sha256"
   ]
 }

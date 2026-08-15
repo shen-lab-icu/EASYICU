@@ -1,0 +1,7 @@
+{
+  "source": "Experimental sensitivity adaptation; SOFA-2 Table 2 + Sepsis-3",
+  "suspected_infection_time": 0,
+  "sofa_times": [-1, 0],
+  "sofa_values": [0, 2],
+  "expected_event_time": 0
+}

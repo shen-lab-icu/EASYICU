@@ -15,6 +15,9 @@ This module exposes EasyICU research-agent tools at two granularities:
   ``audit_cohort`` / ``run_validator`` — atomic ICU extraction, concept and validator
   surfaces for external coding agents that do not want the whole
   end-to-end manuscript pipeline.
+* ``research_agent.list_export_concepts`` /
+  ``assess_export_coverage`` — path-free, read-only projections over an
+  EasyICU prepared export before a cohort is materialized.
 * ``research_agent.cross_database_concept_availability`` — standardized
   extraction support matrix across EasyICU's public ICU database layer.
 * ``research_agent.bind_evidence`` — register an external artefact in the
@@ -44,12 +47,22 @@ from .concept_availability import (
     concept_database_availability_from_load_record,
     cross_database_concept_availability,
 )
+from .acquisition.mcp_projection import (
+    MAX_MCP_COVERAGE_CONCEPTS,
+    MAX_MCP_EXPORT_CONCEPTS,
+    project_export_concepts,
+    project_export_coverage,
+)
 from .research_context.builder import build_research_context
 from .research_context.outbound import (
     outbound_safe_context_payload,
     project_outbound_records,
 )
 from .authority.evidence_store import EvidenceStore
+from .authority.provider_hard_stop import (
+    ProviderHardStopLedger,
+    ProviderHardStopLimits,
+)
 from .gates.figure_egress import (
     RESERVED_PRIVACY_METADATA_KEYS,
     TRUSTED_FIGURE_PRODUCERS,
@@ -57,6 +70,8 @@ from .gates.figure_egress import (
 from .providers.llm import OpenAIClient
 from .pipeline import ResearchAgentPipeline
 from .providers import ProviderConfigurationError, build_provider_client
+from .orchestration.config import PipelineConfig
+from .orchestration.services import PipelineServices
 from .skills import list_skills
 from .audits.validators import CohortAuditor, ConceptUsageAuditor
 from .mcp_policy import (
@@ -176,8 +191,90 @@ def _safe_run_id(value: Any) -> str:
     return run_id
 
 
+_RUN_TOOL_ARGUMENTS = frozenset(
+    {
+        "question",
+        "cohort_path",
+        "workdir",
+        "provider",
+        "model",
+        "base_url",
+        "request_timeout",
+        "cohort_name",
+        "database",
+        "target_outcome",
+        "cross_database_validation",
+        "inclusion_criteria",
+        "exclusion_criteria",
+    }
+)
+_RUN_PIPELINE_ARGUMENTS = _RUN_TOOL_ARGUMENTS - {
+    "cohort_path",
+    "workdir",
+    "provider",
+    "model",
+    "base_url",
+    "request_timeout",
+}
+
+_MCP_PROVIDER_HARD_STOP_LIMITS = ProviderHardStopLimits(
+    max_provider_attempts_per_run=96,
+    max_provider_attempts_per_batch=96,
+    max_total_tokens_per_run=1_000_000,
+    max_total_tokens_per_batch=1_000_000,
+    max_estimated_cost_usd_per_batch=100.0,
+    max_wall_clock_seconds_per_task=14_400.0,
+    input_cost_usd_per_million_tokens=20.0,
+    output_cost_usd_per_million_tokens=120.0,
+)
+
+
+def _mcp_provider_hard_stop(
+    *,
+    workdir: Path,
+    provider_identity: Mapping[str, Any],
+):
+    """Create the durable aggregate Provider boundary for one MCP run."""
+
+    task_id = "mcp-" + uuid.uuid4().hex
+    ledger_dir = workdir / ".mcp_provider_hard_stop"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    declaration = {
+        "schema_version": "easyicu.mcp_provider_hard_stop_declaration/1",
+        "provider": str(provider_identity.get("provider") or "openai"),
+        "model": str(provider_identity.get("model") or ""),
+        "base_url": str(provider_identity.get("base_url") or ""),
+        "limits": _MCP_PROVIDER_HARD_STOP_LIMITS.canonical_payload(),
+    }
+    declaration_sha256 = hashlib.sha256(
+        json.dumps(
+            declaration,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    ledger = ProviderHardStopLedger(
+        path=(ledger_dir / f"{task_id}.json").resolve(),
+        task_ids=(task_id,),
+        limits=_MCP_PROVIDER_HARD_STOP_LIMITS,
+        batch_id=task_id,
+        declaration_sha256=declaration_sha256,
+    )
+    return ledger.start_task(task_id)
+
+
 def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
     require_scope(SCOPE_RUN_PIPELINE, tool="research_agent.run")
+    unknown = sorted(set(args) - _RUN_TOOL_ARGUMENTS)
+    if unknown:
+        raise ValueError(
+            "research_agent.run does not accept additional properties: "
+            + ", ".join(unknown)
+        )
+    provider_identity = {
+        key: args.get(key) for key in ("provider", "model", "base_url")
+    }
     workdir = resolve_within_roots(
         args.pop("workdir", None) or "./research_output", field="workdir"
     )
@@ -197,9 +294,39 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
         }
     if config_error is not None:
         return config_error
+    run_args = {key: args[key] for key in _RUN_PIPELINE_ARGUMENTS if key in args}
+    provider_hard_stop = _mcp_provider_hard_stop(
+        workdir=workdir,
+        provider_identity=provider_identity,
+    )
+    limits = _MCP_PROVIDER_HARD_STOP_LIMITS
     try:
-        pipeline = ResearchAgentPipeline(workdir=workdir, llm=llm)
+        config = PipelineConfig(
+            workdir=workdir,
+            max_provider_attempts_per_run=limits.max_provider_attempts_per_run,
+            max_provider_attempts_per_batch=limits.max_provider_attempts_per_batch,
+            max_total_tokens_per_run=limits.max_total_tokens_per_run,
+            max_total_tokens_per_batch=limits.max_total_tokens_per_batch,
+            max_estimated_cost_usd_per_batch=(
+                limits.max_estimated_cost_usd_per_batch
+            ),
+            max_wall_clock_seconds_per_task=limits.max_wall_clock_seconds_per_task,
+            provider_input_cost_usd_per_million_tokens=(
+                limits.input_cost_usd_per_million_tokens
+            ),
+            provider_output_cost_usd_per_million_tokens=(
+                limits.output_cost_usd_per_million_tokens
+            ),
+        )
+        pipeline = ResearchAgentPipeline.from_config(
+            config,
+            services=PipelineServices(
+                llm=llm,
+                provider_hard_stop=provider_hard_stop,
+            ),
+        )
     except Exception as exc:
+        provider_hard_stop.finish(error="mcp_pipeline_initialization_error")
         return {
             "error": (
                 "configuration_error: could not initialise the requested LLM "
@@ -207,10 +334,15 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
             ),
             "error_code": "llm_configuration_invalid",
         }
-    result = pipeline.run(cohort=cohort, **args)
+    try:
+        result = pipeline.run(cohort=cohort, **run_args)
+    except BaseException as exc:
+        provider_hard_stop.finish(error=type(exc).__name__)
+        raise
     from .orchestration.workflow import HumanReviewPending
 
     if isinstance(result, HumanReviewPending):
+        provider_hard_stop.finish(error="mcp_external_resume_unsupported")
         payload = result.model_dump(mode="json")
         payload.update(
             {
@@ -226,6 +358,7 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
         return payload
+    provider_hard_stop.finish()
     return result.model_dump()
 
 
@@ -585,6 +718,39 @@ def _tool_describe_concept(args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _export_dir_from_args(args: Dict[str, Any]) -> Path:
+    export_dir = args.get("export_dir")
+    if export_dir is None:
+        raise ValueError("export_dir is required")
+    return resolve_within_roots(export_dir, field="export_dir")
+
+
+def _tool_list_export_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
+    export_dir = _export_dir_from_args(args)
+    raw_modules = args.get("modules") or []
+    if not isinstance(raw_modules, list):
+        raise ValueError("modules must be an array of module names")
+    return project_export_concepts(
+        export_dir=export_dir,
+        source_ref=_path_digest(export_dir),
+        query=str(args.get("query") or ""),
+        modules=[str(value) for value in raw_modules],
+        limit=args.get("limit", 200),
+    )
+
+
+def _tool_assess_export_coverage(args: Dict[str, Any]) -> Dict[str, Any]:
+    export_dir = _export_dir_from_args(args)
+    raw_concepts = args.get("concepts")
+    if not isinstance(raw_concepts, list):
+        raise ValueError("concepts must be an array of concept ids")
+    return project_export_coverage(
+        export_dir=export_dir,
+        source_ref=_path_digest(export_dir),
+        concepts=[str(value) for value in raw_concepts],
+    )
+
+
 def _tool_audit_cohort(args: Dict[str, Any]) -> Dict[str, Any]:
     ctx = _build_context_from_args(args)
     findings = CohortAuditor().audit(
@@ -652,6 +818,18 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(concepts, list) or not concepts:
         return {"error": "concepts must be a non-empty string or string array"}
 
+    should_write = bool(args.get("output_path") or args.get("register_evidence"))
+    if should_write:
+        require_scope(SCOPE_WRITE_ARTIFACTS, tool="research_agent.load_concepts")
+    if args.get("register_evidence"):
+        require_scope(SCOPE_BIND_EVIDENCE, tool="research_agent.load_concepts")
+    if args.get("output_path"):
+        resolve_within_roots(args["output_path"], field="output_path")
+    if args.get("register_evidence"):
+        resolve_within_roots(
+            args.get("workdir") or "./research_output", field="workdir"
+        )
+
     import easyicu as easyicu_pkg
 
     easyicu_load_concepts = getattr(easyicu_pkg, "load_concepts", None)
@@ -692,6 +870,19 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
         kwargs["data_path"] = str(
             resolve_within_roots(kwargs["data_path"], field="data_path")
         )
+    if "dict_path" in kwargs:
+        raw_dict_paths = kwargs["dict_path"]
+        if isinstance(raw_dict_paths, str):
+            kwargs["dict_path"] = str(
+                resolve_within_roots(raw_dict_paths, field="dict_path")
+            )
+        elif isinstance(raw_dict_paths, list):
+            kwargs["dict_path"] = [
+                str(resolve_within_roots(path, field="dict_path"))
+                for path in raw_dict_paths
+            ]
+        else:
+            raise ValueError("dict_path must be a path or an array of paths")
 
     # Patient rows are opt-in twice: the server must grant the scope and the
     # caller must request a positive preview. Merely holding the scope must not
@@ -1182,6 +1373,8 @@ TOOLS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
     "research_agent.build_context": _tool_build_context,
     "research_agent.list_concepts": _tool_list_concepts,
     "research_agent.describe_concept": _tool_describe_concept,
+    "research_agent.list_export_concepts": _tool_list_export_concepts,
+    "research_agent.assess_export_coverage": _tool_assess_export_coverage,
     "research_agent.audit_cohort": _tool_audit_cohort,
     "research_agent.run_validator": _tool_run_validator,
     "research_agent.load_concepts": _tool_load_concepts,
@@ -1192,6 +1385,10 @@ TOOLS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
     "research_agent.bind_evidence": _tool_bind_evidence,
 }
 
+MAX_MCP_EXTRACTION_WORKERS = 64
+MAX_MCP_EXTRACTION_CHUNK_SIZE = 10_000_000
+MAX_MCP_EXTRACTION_BATCH_SIZE = 1_000_000
+
 
 # Tool schemas — mirrored after MCP's tool descriptor format.
 TOOL_SCHEMAS: List[Dict[str, Any]] = [
@@ -1201,6 +1398,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "required": ["question", "cohort_path", "model"],
+            "additionalProperties": False,
             "properties": {
                 "question": {"type": "string"},
                 "cohort_path": {"type": "string"},
@@ -1210,6 +1408,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                     "enum": ["openai", "openrouter"],
                 },
                 "model": {"type": "string"},
+                "base_url": {"type": "string"},
                 "request_timeout": {"type": "number", "minimum": 1},
                 "cohort_name": {"type": "string"},
                 "database": {"type": "string"},
@@ -1301,6 +1500,56 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "research_agent.list_export_concepts",
+        "description": (
+            "List standardized concepts physically present in a prepared "
+            "EasyICU export. Returns a path-free metadata projection and no "
+            "patient rows."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["export_dir"],
+            "additionalProperties": False,
+            "properties": {
+                "export_dir": {"type": "string", "minLength": 1},
+                "query": {"type": "string"},
+                "modules": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "maxItems": 40,
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_MCP_EXPORT_CONCEPTS,
+                    "default": 200,
+                },
+            },
+        },
+    },
+    {
+        "name": "research_agent.assess_export_coverage",
+        "description": (
+            "Check whether an explicit concept set is physically available "
+            "in a prepared EasyICU export. Returns owner-computed resolution "
+            "and re-extraction advice without patient rows or host paths."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["export_dir", "concepts"],
+            "additionalProperties": False,
+            "properties": {
+                "export_dir": {"type": "string", "minLength": 1},
+                "concepts": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1,
+                    "maxItems": MAX_MCP_COVERAGE_CONCEPTS,
+                },
+            },
+        },
+    },
+    {
         "name": "research_agent.audit_cohort",
         "description": (
             "Run the cohort auditor only, returning validation findings "
@@ -1382,15 +1631,31 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                         {"type": "array", "items": {"type": "string"}},
                     ]
                 },
-                "chunk_size": {"type": "integer"},
+                "chunk_size": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_MCP_EXTRACTION_CHUNK_SIZE,
+                },
                 "progress": {"type": "boolean"},
-                "parallel_workers": {"type": "integer"},
-                "concept_workers": {"type": "integer"},
+                "parallel_workers": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_MCP_EXTRACTION_WORKERS,
+                },
+                "concept_workers": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_MCP_EXTRACTION_WORKERS,
+                },
                 "parallel_backend": {"type": "string"},
                 "max_patients": {"type": "integer"},
                 "limit": {"type": "integer"},
                 "sample_strategy": {"type": "string"},
-                "batch_size": {"type": "integer"},
+                "batch_size": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_MCP_EXTRACTION_BATCH_SIZE,
+                },
                 "memory_efficient": {"type": "boolean"},
                 "preview_rows": {
                     "type": "integer",
@@ -1515,11 +1780,41 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     },
 ]
 
+# The official SDK validates these schemas for protocol calls. Direct Python
+# dispatch uses the same declarations below, so no tool has a looser second
+# entry point merely because it was called in-process.
+for _tool_schema in TOOL_SCHEMAS:
+    _tool_schema["inputSchema"]["additionalProperties"] = False
 
-#: Minimum scope each tool needs before it may run at all. Patient-level
-#: disclosure is deliberately *not* listed here: extraction still runs without
-#: it (the parquet stays server-side and the evidence record is still written);
-#: what the missing scope removes is the row preview in the response.
+_TOOL_INPUT_SCHEMAS = {
+    str(tool["name"]): tool["inputSchema"] for tool in TOOL_SCHEMAS
+}
+
+
+def _validate_dispatch_arguments(tool_name: str, arguments: Mapping[str, Any]) -> None:
+    schema = _TOOL_INPUT_SCHEMAS[tool_name]
+    properties = schema.get("properties") or {}
+    unknown = sorted(set(arguments) - set(properties))
+    if unknown:
+        raise ValueError(
+            f"{tool_name} does not accept additional properties: "
+            + ", ".join(unknown)
+        )
+    for name, value in arguments.items():
+        declaration = properties.get(name)
+        if not isinstance(declaration, Mapping) or declaration.get("type") != "integer":
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be an integer")
+        minimum = declaration.get("minimum")
+        maximum = declaration.get("maximum")
+        if minimum is not None and value < minimum:
+            raise ValueError(f"{name} must be at least {minimum}")
+        if maximum is not None and value > maximum:
+            raise ValueError(f"{name} must be at most {maximum}")
+
+
+#: Minimum scope each tool needs before it may run at all.
 TOOL_SCOPES: Dict[str, str] = {
     "research_agent.run": SCOPE_RUN_PIPELINE,
     "research_agent.list_skills": SCOPE_METADATA,
@@ -1527,10 +1822,12 @@ TOOL_SCOPES: Dict[str, str] = {
     "research_agent.build_context": SCOPE_METADATA,
     "research_agent.list_concepts": SCOPE_METADATA,
     "research_agent.describe_concept": SCOPE_METADATA,
+    "research_agent.list_export_concepts": SCOPE_METADATA,
+    "research_agent.assess_export_coverage": SCOPE_METADATA,
     "research_agent.audit_cohort": SCOPE_METADATA,
     "research_agent.run_validator": SCOPE_METADATA,
-    "research_agent.load_concepts": SCOPE_METADATA,
-    "research_agent.extract_concept": SCOPE_METADATA,
+    "research_agent.load_concepts": SCOPE_READ_PATIENT_DATA,
+    "research_agent.extract_concept": SCOPE_READ_PATIENT_DATA,
     "research_agent.cross_database_concept_availability": SCOPE_METADATA,
     "research_agent.bind_evidence": SCOPE_BIND_EVIDENCE,
 }
@@ -1556,6 +1853,7 @@ def dispatch(
             "known": list(TOOLS),
         }
     try:
+        _validate_dispatch_arguments(tool_name, arguments)
         required = TOOL_SCOPES.get(tool_name)
         if required is not None:
             require_scope(required, tool=tool_name)

@@ -20,6 +20,7 @@ from typing import Literal, Mapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..authority.coder_authority import HostCoderAuthority
+from ..authority.filesystem import publish_write_once_bytes
 from .store import MemoryAccessPolicy, MemoryObject, MemoryStore, select_memory
 
 REVIEWED_MEMORY_BUNDLE_SCHEMA = "easyicu.reviewed_memory_bundle/1"
@@ -193,31 +194,16 @@ def build_reviewed_memory_bundle(
 
 
 def _write_once(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.read_bytes() != payload:
-            raise ReviewedMemoryIntegrityError(
-                f"Reviewed-memory receipt changed at {path}"
-            )
-        return
-    fd, temp_name = tempfile.mkstemp(prefix=".reviewed-memory-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temp_name, path)
-        except FileExistsError:
-            if path.read_bytes() != payload:
-                raise ReviewedMemoryIntegrityError(
-                    f"Reviewed-memory receipt raced with different bytes at {path}"
-                ) from None
-    finally:
-        try:
-            os.unlink(temp_name)
-        except FileNotFoundError:
-            pass
+    publish_write_once_bytes(
+        path,
+        payload,
+        temp_prefix=".reviewed-memory-",
+        conflict_error=ReviewedMemoryIntegrityError,
+        conflict_message=f"Reviewed-memory receipt changed at {path}",
+        race_message=(
+            f"Reviewed-memory receipt raced with different bytes at {path}"
+        ),
+    )
 
 
 def attach_step_reviewed_memory(

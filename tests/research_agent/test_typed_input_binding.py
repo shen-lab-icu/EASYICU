@@ -13,6 +13,7 @@ code that silently changes meaning would break an audit that reads it.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
@@ -115,8 +116,13 @@ def test_every_refusal_carries_a_declared_reason_code(tmp_path: Path) -> None:
     produces exactly one code.
     """
 
+    # A per-call sequence, not ``id(mutate)``: each row builds a throwaway
+    # closure, and once one is collected CPython reuses its address, so two
+    # rows collide on the same capsule directory and the second _run fails.
+    case = itertools.count()
+
     def _break(mutate, **kwargs) -> str:
-        run_dir, manifest = _run(tmp_path / str(id(mutate)))
+        run_dir, manifest = _run(tmp_path / f"case-{next(case)}")
         mutate(manifest, run_dir)
         return _refusal(run_dir, manifest, **kwargs)
 

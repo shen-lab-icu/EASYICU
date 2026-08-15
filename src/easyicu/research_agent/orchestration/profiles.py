@@ -71,6 +71,10 @@ class SubmissionProfile:
     # off the profile rather than infer from a caller's kwargs. ``None``
     # preserves the existing profiles byte-for-byte.
     allow_external_figure_upload: Optional[bool] = None
+    # Diagnostic profiles may authorize a real Planner call while forbidding
+    # every transition into Execute, regardless of which entrypoint applies the
+    # profile. ``None`` preserves historical profile replay bytes.
+    planner_only: Optional[bool] = None
 
     @property
     def ref(self) -> str:
@@ -128,6 +132,8 @@ class SubmissionProfile:
             options["enable_capability_workflow"] = self.enable_capability_workflow
         if self.expected_runner_image_digest is not None:
             options["expected_runner_image_digest"] = self.expected_runner_image_digest
+        if self.planner_only is not None:
+            options["planner_only"] = self.planner_only
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -162,6 +168,7 @@ class SubmissionProfile:
             "enable_capability_workflow",
             "expected_runner_image_digest",
             "allow_external_figure_upload",
+            "planner_only",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -308,6 +315,49 @@ NPJ_DM_2026_07_19 = SubmissionProfile(
     requires_real_provider=True,
 )
 
+E1_PLANNER_CANARY_2026_08_14 = SubmissionProfile(
+    name="npj_dm_e1_canary_dev",
+    version="20260814",
+    locked_at="2026-08-14T15:15:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # This diagnostic profile can reach Planner but cannot be approved into
+    # Execute. Publication still requires a separately sealed profile and data.
+    expected_concept_dict_sha="22039e19c9b499d635dce956298550cecb1fdf55059304736cca73ee42bf129a",
+    expected_sofa2_dict_sha="998a14c70c8a983c71ce6af2da8408fe22063cc042e8cde69f572083880bdaf8",
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=True,
+)
+
+E1_REVIEWED_DEMO_2026_08_15 = SubmissionProfile(
+    name="npj_dm_e1_demo_dev",
+    version="20260815",
+    locked_at="2026-08-15T04:45:00Z",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Server-internal development execution only. This profile can consume an
+    # exact reviewed Plan, but its *_dev name keeps every paper-facing gate off
+    # and the public Web route has no selector for it.
+    expected_concept_dict_sha="22039e19c9b499d635dce956298550cecb1fdf55059304736cca73ee42bf129a",
+    expected_sofa2_dict_sha="998a14c70c8a983c71ce6af2da8408fe22063cc042e8cde69f572083880bdaf8",
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=False,
+)
+
 NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(
     name="npj_dm_know_how_dev",
     version="20260721",
@@ -407,6 +457,8 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_07_17.ref: NPJ_DM_2026_07_17,
     NPJ_DM_2026_07_18.ref: NPJ_DM_2026_07_18,
     NPJ_DM_2026_07_19.ref: NPJ_DM_2026_07_19,
+    E1_PLANNER_CANARY_2026_08_14.ref: E1_PLANNER_CANARY_2026_08_14,
+    E1_REVIEWED_DEMO_2026_08_15.ref: E1_REVIEWED_DEMO_2026_08_15,
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
     NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV.ref: (
@@ -547,6 +599,8 @@ __all__ = [
     "NPJ_DM_2026_07_17",
     "NPJ_DM_2026_07_18",
     "NPJ_DM_2026_07_19",
+    "E1_PLANNER_CANARY_2026_08_14",
+    "E1_REVIEWED_DEMO_2026_08_15",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",

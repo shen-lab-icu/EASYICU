@@ -30,6 +30,7 @@ from easyicu.research_agent.execution.runners.adjusted_association_figure_execut
 from easyicu.research_agent.execution.runners.effect_scale import (
     describe_effect_scale,
 )
+from easyicu.research_agent.gates.visual_qa import audit_svg_text_layout
 from easyicu.research_agent.schema import AnalysisStep
 
 #: One real host-produced row, copied from
@@ -156,6 +157,25 @@ def _write_bound_table(tmp_path: Path, rows, columns=None) -> tuple[Path, dict]:
 def test_it_claims_a_step_bound_to_the_hosts_own_estimates_table():
     assert adjusted_association_figure_executor_owns_step(
         _step(), resolved_bindings=_host_bindings()
+    )
+
+
+def test_it_claims_an_exact_one_per_role_primary_roster():
+    step = _step(
+        input_consumption_contracts=[
+            {
+                "schema_version": "easyicu.artifact_consumption/1",
+                "input_key": ADJUSTED_ASSOCIATION_FIGURE_INPUT,
+                "mode": "one_per_role",
+                "role_column": "analysis_role",
+                "expected_roles": ["primary"],
+            }
+        ]
+    )
+
+    assert adjusted_association_figure_executor_owns_step(
+        step,
+        resolved_bindings=_host_bindings(),
     )
 
 
@@ -360,6 +380,22 @@ def test_an_unadjusted_model_says_so_rather_than_going_quiet(tmp_path):
     assert summary["adjustment_note"] == (
         "Unadjusted: the model declared no covariates."
     )
+    contract = json.loads(
+        (tmp_path / "out" / "adjusted_effect.figure_contract.json").read_text()
+    )
+    assert contract["core_claim"].startswith("The unadjusted odds ratio")
+    assert contract["panels"][0]["title"] == "Unadjusted effect estimate"
+    assert (
+        contract["panels"][0]["metadata"]["chart_type"]
+        == "forest_interval_unadjusted_association"
+    )
+    assert not [
+        finding
+        for finding in audit_svg_text_layout(
+            tmp_path / "out" / "adjusted_effect.svg"
+        )
+        if finding.severity == "error"
+    ]
 
 
 def test_a_failed_fit_that_still_carries_numbers_is_not_drawn(tmp_path):

@@ -5,25 +5,37 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import re
 import secrets
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from easyicu.extensions import (
+    ExtensionActivationSnapshot,
+    ExtensionRegistry,
+    ExtensionRegistryError,
+)
+
 from easyicu.webserver import (
+    agent_pipeline_runs,
     agent_runs,
     guided_sessions,
     jobs,
     provider_gate,
     settings,
+    sources,
     study_contexts,
 )
+from easyicu.webserver.data_package_review import DataPackageReviewSnapshotStore
 
 from .contracts import (
     MAX_MESSAGE_CHARS,
     AuthorityBinding,
     PiCopilotError,
+    PiProjectBindingHandoffReceipt,
     PiSessionRecord,
     ToolExecutionContext,
     utc_now,
@@ -34,13 +46,36 @@ from .project_authority import (
     ProjectStudyContextMigrationReceipt,
 )
 from .provider_config import PiProviderConfigStore
-from .projections import reject_sensitive_message
+from .projections import project_job, project_pi_replay_event, reject_sensitive_message
+from .replay_store import PiConversationReplayStore
 from .workspace import ProjectWorkspace
+from .workflow import (
+    build_research_workflow_snapshot,
+    registered_export_matches_study,
+)
 
 MAX_SESSIONS = 100
 MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES = 2 * 1024 * 1024
 ALLOWED_TURN_ACTIONS = frozenset(
-    {"configure", "run", "cancel", "workspace_write"}
+    {
+        "configure",
+        "idea",
+        "literature",
+        "extract",
+        "run",
+        "provider_run",
+        "cancel",
+        "workspace_write",
+        "mcp_read",
+    }
+)
+_RETIRED_SESSION_METADATA_FIELDS = frozenset(
+    {
+        "canonical_task_id",
+        "canonical_input_sha256",
+        "canonical_job_id",
+        "last_turn_events",
+    }
 )
 
 
@@ -54,6 +89,9 @@ class PiCopilotService:
         gateway: Optional[PiGatewayClient] = None,
         provider_store: Optional[PiProviderConfigStore] = None,
         project_store: Optional[ProjectAuthorityStore] = None,
+        extension_registry: Optional[ExtensionRegistry] = None,
+        replay_store: Optional[PiConversationReplayStore] = None,
+        review_snapshot_store: Optional[DataPackageReviewSnapshotStore] = None,
     ) -> None:
         self.store_path = (
             Path(store_path)
@@ -71,19 +109,36 @@ class PiCopilotService:
             if store_path is None
             else self.store_path.with_name(f"{self.store_path.stem}.projects.json")
         )
+        self.extension_registry = extension_registry or ExtensionRegistry()
+        self.replay_store = replay_store or PiConversationReplayStore(
+            None
+            if store_path is None
+            else self.store_path.with_name(f"{self.store_path.stem}.replay")
+        )
+        self.review_snapshot_store = (
+            review_snapshot_store
+            or DataPackageReviewSnapshotStore(
+                None
+                if store_path is None
+                else self.store_path.with_name(
+                    f"{self.store_path.stem}.data-package-reviews"
+                )
+            )
+        )
         self._lock = threading.RLock()
         self._active_message_jobs: Dict[str, str] = {}
         self._busy_sessions: set[str] = set()
         self._pending_retirements: Dict[str, PiSessionRecord] = {}
+        self._replay_child_watchers: set[tuple[str, str]] = set()
         self._project_initialization_locks: Dict[str, threading.RLock] = {}
         workspace_base = Path(
             getattr(
                 self.gateway,
-                "cwd",
+                "declared_cwd",
                 self.store_path.parent / "pi_project_workspace",
             )
         )
-        self.workspace_root = workspace_base.resolve()
+        self.workspace_root = workspace_base.expanduser().absolute()
         self.workspace = ProjectWorkspace(self.workspace_root)
 
     def _project_initialization_lock(self, project_id: str) -> threading.RLock:
@@ -119,8 +174,22 @@ class PiCopilotService:
             )
         records = []
         for row in rows[:MAX_SESSIONS]:
+            if isinstance(row, Mapping) and row.get("canonical_task_id"):
+                # A short-lived development-only UI specialization wrote these
+                # records before being retired. They never represented ordinary
+                # user conversations, so do not surface them as such.
+                continue
             try:
-                records.append(PiSessionRecord.model_validate(row))
+                migrated = (
+                    {
+                        key: value
+                        for key, value in row.items()
+                        if key not in _RETIRED_SESSION_METADATA_FIELDS
+                    }
+                    if isinstance(row, Mapping)
+                    else row
+                )
+                records.append(PiSessionRecord.model_validate(migrated))
             except Exception as exc:
                 raise PiCopilotError(
                     "pi_session_store_invalid",
@@ -192,15 +261,18 @@ class PiCopilotService:
             evicted: list[PiSessionRecord] = []
             if overflow:
                 for candidate in reversed(rows):
-                    if candidate.session_id in self._busy_sessions:
+                    if (
+                        candidate.session_id in self._busy_sessions
+                        or candidate.pinned_for_presentation
+                    ):
                         continue
                     evicted.append(candidate)
                     if len(evicted) == overflow:
                         break
                 if len(evicted) != overflow:
                     raise PiCopilotError(
-                        "pi_session_retention_busy",
-                        "Pi session retention cannot evict an active conversation.",
+                        "pi_session_retention_protected",
+                        "Pi session retention cannot evict an active or presentation-pinned conversation.",
                         status_code=409,
                     )
                 evicted_ids = {row.session_id for row in evicted}
@@ -217,6 +289,7 @@ class PiCopilotService:
             if record.session_id in self._busy_sessions:
                 self._pending_retirements[record.session_id] = record
                 return
+        self.replay_store.retire(record.session_id)
         try:
             self.gateway.request(
                 "session.dispose",
@@ -419,6 +492,20 @@ class PiCopilotService:
             return str(rows[0].get("run_id") or "") or None
         return None
 
+    @staticmethod
+    def _explicit_context_binding_receipt(
+        study_context_id: str,
+    ) -> ProjectStudyContextMigrationReceipt:
+        requested_source = hashlib.sha256(
+            str(study_context_id).encode("utf-8")
+        ).hexdigest()
+        return ProjectStudyContextMigrationReceipt(
+            status="initialized",
+            source_schema="easyicu.explicit-studycontext-binding/1",
+            source_digest=requested_source,
+            migrated_fields=["study_context_id"],
+        )
+
     def _resolve_project_context(
         self,
         *,
@@ -426,6 +513,7 @@ class PiCopilotService:
         title: str,
         requested_study_context_id: Optional[str] = None,
         confirm_initialization: bool = False,
+        defer_requested_binding: bool = False,
     ) -> Dict[str, Any]:
         """Resolve only the Host-owned StudyContext for one research project."""
 
@@ -524,19 +612,14 @@ class PiCopilotService:
         if mapped_id:
             self.project_store.bind(project_id, str(context["id"]))
         elif requested_study_context_id:
-            requested_source = hashlib.sha256(
-                str(requested_study_context_id).encode("utf-8")
-            ).hexdigest()
-            self.project_store.bind(
-                project_id,
-                str(context["id"]),
-                migration_receipt=ProjectStudyContextMigrationReceipt(
-                    status="initialized",
-                    source_schema="easyicu.explicit-studycontext-binding/1",
-                    source_digest=requested_source,
-                    migrated_fields=["study_context_id"],
-                ),
-            )
+            if not defer_requested_binding:
+                self.project_store.bind(
+                    project_id,
+                    str(context["id"]),
+                    migration_receipt=self._explicit_context_binding_receipt(
+                        str(requested_study_context_id)
+                    ),
+                )
         else:
             self.project_store.bind(
                 project_id,
@@ -551,6 +634,7 @@ class PiCopilotService:
         project_id: str,
         title: str,
         confirm_initialization: bool = False,
+        binding_receipt: Optional[PiProjectBindingHandoffReceipt] = None,
     ) -> Dict[str, Any]:
         """Explicitly migrate/bind Guided metadata before any session GET."""
 
@@ -566,6 +650,7 @@ class PiCopilotService:
                 project_id=clean_project,
                 title=title,
                 confirm_initialization=confirm_initialization,
+                binding_receipt=binding_receipt,
             )
 
     def _initialize_project_locked(
@@ -574,6 +659,7 @@ class PiCopilotService:
         project_id: str,
         title: str,
         confirm_initialization: bool,
+        binding_receipt: Optional[PiProjectBindingHandoffReceipt] = None,
     ) -> Dict[str, Any]:
         """Run resolve/create/bind as one per-project initialization transaction."""
 
@@ -595,12 +681,101 @@ class PiCopilotService:
                 details={"project_id": clean_project},
             )
         requested_context_id = next(iter(legacy_context_ids), None)
+        if binding_receipt is not None:
+            if binding_receipt.project_id != clean_project:
+                raise PiCopilotError(
+                    "pi_project_handoff_mismatch",
+                    "The Agent handoff belongs to another research project.",
+                    status_code=409,
+                )
+            mapped_context_id = self.project_store.resolve(clean_project)
+            if (
+                mapped_context_id is not None
+                and mapped_context_id != binding_receipt.study_context_id
+            ):
+                raise PiCopilotError(
+                    "pi_project_study_context_mismatch",
+                    "The project is already bound to another StudyContext.",
+                    status_code=409,
+                    details={
+                        "project_id": clean_project,
+                        "mapped_study_context_id": mapped_context_id,
+                        "handoff_study_context_id": binding_receipt.study_context_id,
+                    },
+                )
+            if (
+                requested_context_id is not None
+                and requested_context_id != binding_receipt.study_context_id
+            ):
+                raise PiCopilotError(
+                    "pi_project_study_context_mismatch",
+                    "Saved Pi sessions disagree with the Agent handoff StudyContext.",
+                    status_code=409,
+                )
+            requested_context_id = binding_receipt.study_context_id
+            try:
+                handed_off_context = study_contexts.get_context(requested_context_id)
+            except study_contexts.StudyContextError as exc:
+                raise PiCopilotError(
+                    str(exc.detail.get("error") or "study_context_invalid"),
+                    "The Agent handoff StudyContext could not be loaded.",
+                    status_code=409,
+                    details=exc.detail,
+                ) from exc
+            if handed_off_context is None:
+                raise PiCopilotError(
+                    "pi_project_study_context_missing",
+                    "The Agent handoff StudyContext no longer exists.",
+                    status_code=409,
+                    details={"study_context_id": requested_context_id},
+                )
+            current_revision = int(handed_off_context.get("revision") or 0)
+            if current_revision != binding_receipt.study_context_revision:
+                raise PiCopilotError(
+                    "pi_project_handoff_revision_conflict",
+                    "The StudyContext changed after the Agent handoff was created.",
+                    status_code=409,
+                    details={
+                        "study_context_id": binding_receipt.study_context_id,
+                        "expected_revision": binding_receipt.study_context_revision,
+                        "current_revision": current_revision,
+                    },
+                )
         context = self._resolve_project_context(
             project_id=clean_project,
             title=title,
             requested_study_context_id=requested_context_id,
             confirm_initialization=confirm_initialization,
+            defer_requested_binding=binding_receipt is not None,
         )
+        if binding_receipt is not None and (
+            str(context.get("id") or "") != binding_receipt.study_context_id
+            or int(context.get("revision") or 0)
+            != binding_receipt.study_context_revision
+        ):
+            raise PiCopilotError(
+                "pi_project_handoff_revision_conflict",
+                "The StudyContext changed while the Agent handoff was being bound.",
+                status_code=409,
+                details={
+                    "study_context_id": binding_receipt.study_context_id,
+                    "expected_revision": binding_receipt.study_context_revision,
+                    "current_study_context_id": str(context.get("id") or ""),
+                    "current_revision": int(context.get("revision") or 0),
+                },
+            )
+        if binding_receipt is not None:
+            # The final revision check above must happen before the immutable
+            # project mapping is published. Otherwise a concurrent StudyContext
+            # update can reject the handoff while still leaving a new binding
+            # behind.
+            self.project_store.bind(
+                clean_project,
+                str(context["id"]),
+                migration_receipt=self._explicit_context_binding_receipt(
+                    binding_receipt.study_context_id
+                ),
+            )
         with self._lock:
             rows = self._read_records()
             migrated = 0
@@ -631,6 +806,12 @@ class PiCopilotService:
             "status": "ready",
             "project_id": clean_project,
             "study_context_id": str(context["id"]),
+            "study_context_revision": int(context.get("revision") or 0),
+            "binding_receipt": (
+                binding_receipt.model_dump(mode="json")
+                if binding_receipt is not None
+                else None
+            ),
             "migrated_sessions": migrated,
             "migration_receipt": (
                 binding.migration_receipt.model_dump(mode="json")
@@ -720,12 +901,28 @@ class PiCopilotService:
             context,
             run_id=self._latest_run_id(str(context.get("id")) if context else None),
         )
+        try:
+            extension_activation = self.extension_registry.snapshot()
+        except ExtensionRegistryError as exc:
+            raise PiCopilotError(
+                exc.code,
+                exc.message,
+                status_code=409,
+                details=exc.details,
+            ) from exc
+        if not bool(settings.load_settings().get("mcp_tools_enabled", False)):
+            extension_activation = ExtensionActivationSnapshot.build(
+                revision=extension_activation.revision,
+                skills=extension_activation.skills,
+                mcp_servers=(),
+            )
         state = self.gateway.request(
             "session.create",
             {
                 "session_id": session_id,
                 "thinking_level": resolved_thinking,
                 "agent_mode": resolved_mode,
+                "extension_snapshot": extension_activation.model_dump(mode="json"),
             },
             timeout=30,
         )
@@ -739,6 +936,7 @@ class PiCopilotService:
             language=resolved_language,
             thinking_level=resolved_thinking,
             external_llm_opt_in=True,
+            extension_activation=extension_activation,
             binding=binding,
         )
         self._save_record(record)
@@ -747,26 +945,44 @@ class PiCopilotService:
             "session": self._public_session(record, gateway_state=state),
         }
 
-    def _ensure_open(self, record: PiSessionRecord) -> Dict[str, Any]:
+    def _ensure_open(
+        self,
+        record: PiSessionRecord,
+        *,
+        transcript_cursor: Optional[str] = None,
+        transcript_limit: int = 100,
+    ) -> Dict[str, Any]:
+        state_params: Dict[str, Any] = {
+            "session_id": record.session_id,
+            "transcript_limit": max(1, min(200, int(transcript_limit))),
+        }
+        if transcript_cursor is not None:
+            state_params["transcript_cursor"] = str(transcript_cursor)
         try:
             return self.gateway.request(
                 "session.state",
-                {"session_id": record.session_id},
+                state_params,
                 timeout=5,
             )
         except PiCopilotError as exc:
             if exc.code != "pi_session_not_open":
                 raise
-        return self.gateway.request(
+        opened = self.gateway.request(
             "session.create",
             {
                 "session_id": record.session_id,
                 "session_file": record.pi_session_file,
                 "thinking_level": "off",
                 "agent_mode": record.agent_mode,
+                "extension_snapshot": record.extension_activation.model_dump(
+                    mode="json"
+                ),
             },
             timeout=30,
         )
+        if transcript_cursor is None and int(transcript_limit) == 100:
+            return opened
+        return self.gateway.request("session.state", state_params, timeout=5)
 
     def _binding_stale_details(
         self,
@@ -934,7 +1150,8 @@ class PiCopilotService:
                 binding,
                 project_id=record.project_id,
             ),
-            workspace_root=self.workspace_root,
+            workspace=self.workspace,
+            extension_registry=self.extension_registry,
         )
         with self._lock:
             if record.session_id in self._busy_sessions:
@@ -949,10 +1166,47 @@ class PiCopilotService:
             with self._lock:
                 self._active_message_jobs[record.session_id] = job.id
 
+            started = self._get_record(record.session_id)
+            started.active_message_job_id = job.id
+            started.last_turn_status = "running"
+            started.last_turn_allowed_actions = sorted(requested_actions)
+            self._save_record(started)
+            self.replay_store.start_turn(
+                session_id=record.session_id,
+                project_id=str(record.project_id),
+                job_id=job.id,
+                allowed_actions=sorted(requested_actions),
+            )
+
             def emit(event: Dict[str, Any]) -> None:
                 if job.cancel_requested:
                     return
                 job.emit({"type": "pi_event", "event": event})
+                projected = project_pi_replay_event(event)
+                if projected is None:
+                    return
+                self.replay_store.append_event(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job_id=job.id,
+                    event=projected,
+                )
+                child_job_id = str(projected.get("job_id") or "").strip()
+                if (
+                    projected.get("type") == "tool_end"
+                    and child_job_id
+                    and projected.get("code")
+                    in {
+                        "easyicu_extraction_submitted",
+                        "easyicu_run_submitted",
+                        "easyicu_full_run_submitted",
+                    }
+                ):
+                    self._watch_child_job_for_replay(
+                        session_id=record.session_id,
+                        project_id=str(record.project_id),
+                        job_id=child_job_id,
+                    )
 
             try:
                 job.emit(
@@ -976,12 +1230,61 @@ class PiCopilotService:
                     str(state.get("session_file") or "") or refreshed.pi_session_file
                 )
                 refreshed.last_message_job_id = job.id
+                refreshed.active_message_job_id = job.id
+                refreshed.last_turn_status = "running"
                 self._save_record(refreshed)
+                transcript = state.get("transcript")
+                if isinstance(transcript, list):
+                    terminal_assistant = next(
+                        (
+                            row
+                            for row in reversed(transcript)
+                            if isinstance(row, dict) and row.get("role") == "assistant"
+                        ),
+                        None,
+                    )
+                    if (
+                        isinstance(terminal_assistant, dict)
+                        and terminal_assistant.get("stop_reason") == "error"
+                    ):
+                        raise RuntimeError(
+                            str(
+                                terminal_assistant.get("error_code")
+                                or "pi_model_provider_error"
+                            )
+                        )
+                refreshed.active_message_job_id = None
+                refreshed.last_turn_status = (
+                    "cancelled" if job.cancel_requested else "done"
+                )
+                self._save_record(refreshed)
+                self.replay_store.finish_turn(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job_id=job.id,
+                    status="cancelled" if job.cancel_requested else "done",
+                )
                 return {
                     "session": self._public_session(refreshed, gateway_state=state),
                     "message_status": "aborted" if job.cancel_requested else "done",
                 }
             finally:
+                try:
+                    terminal = self._get_record(record.session_id)
+                    if terminal.active_message_job_id == job.id:
+                        terminal.active_message_job_id = None
+                        terminal.last_turn_status = (
+                            "cancelled" if job.cancel_requested else "failed"
+                        )
+                        self._save_record(terminal)
+                        self.replay_store.finish_turn(
+                            session_id=record.session_id,
+                            project_id=str(record.project_id),
+                            job_id=job.id,
+                            status=terminal.last_turn_status,
+                        )
+                except PiCopilotError:
+                    pass
                 pending_retirement = False
                 with self._lock:
                     if self._active_message_jobs.get(record.session_id) == job.id:
@@ -1017,6 +1320,104 @@ class PiCopilotService:
             "session_id": record.session_id,
         }
 
+    def _watch_child_job_for_replay(
+        self,
+        *,
+        session_id: str,
+        project_id: str,
+        job_id: str,
+    ) -> None:
+        """Archive one bounded child-job projection even if the tab closes."""
+
+        watcher_key = (session_id, job_id)
+        with self._lock:
+            if watcher_key in self._replay_child_watchers:
+                return
+            self._replay_child_watchers.add(watcher_key)
+
+        def watch() -> None:
+            missing_deadline = time.monotonic() + 5
+            try:
+                while True:
+                    child = jobs.MANAGER.get(job_id)
+                    if child is None:
+                        if time.monotonic() >= missing_deadline:
+                            return
+                        time.sleep(0.1)
+                        continue
+                    if child.status in {"done", "failed", "cancelled"}:
+                        self.replay_store.archive_child_job(
+                            session_id=session_id,
+                            project_id=project_id,
+                            job=project_job(child.snapshot()),
+                        )
+                        return
+                    time.sleep(0.2)
+            except PiCopilotError:
+                return
+            finally:
+                with self._lock:
+                    self._replay_child_watchers.discard(watcher_key)
+
+        threading.Thread(
+            target=watch,
+            name=f"pi-replay-{job_id[:24]}",
+            daemon=True,
+        ).start()
+
+    def archive_child_job(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        job_id: str,
+    ) -> Dict[str, Any]:
+        """Persist a safe job projection only for this conversation's child."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        replay = self.replay_store.snapshot(
+            session_id=record.session_id,
+            project_id=str(record.project_id),
+        )
+        archived = next(
+            (
+                row
+                for row in replay.get("child_jobs", [])
+                if isinstance(row, Mapping) and row.get("job_id") == job_id
+            ),
+            None,
+        )
+        child = jobs.MANAGER.get(str(job_id or "").strip())
+        if child is None:
+            if archived is not None:
+                return {"ok": True, "job": dict(archived), "already_archived": True}
+            raise PiCopilotError(
+                "pi_replay_child_job_unavailable",
+                "The child job is no longer available to archive.",
+                status_code=404,
+            )
+        projected = project_job(child.snapshot())
+        saved = self.replay_store.archive_child_job(
+            session_id=record.session_id,
+            project_id=str(record.project_id),
+            job=projected,
+        )
+        return {"ok": True, "job": saved, "already_archived": False}
+
+    def set_presentation_pin(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        pinned: bool,
+    ) -> Dict[str, Any]:
+        """Protect or release one conversation from ordinary retention eviction."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        record.pinned_for_presentation = bool(pinned)
+        self._save_record(record)
+        return {"ok": True, "session": self._public_session(record)}
+
     def abort_session(
         self,
         session_id: str,
@@ -1050,7 +1451,13 @@ class PiCopilotService:
             "pi_aborted": bool(state.get("aborted")),
         }
 
-    def list_sessions(self, *, project_id: str, limit: int = 30) -> Dict[str, Any]:
+    def list_sessions(
+        self,
+        *,
+        project_id: str,
+        limit: int = 30,
+        agent_mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
         clean_project_id = str(project_id or "").strip()
         if not clean_project_id:
             raise PiCopilotError(
@@ -1059,28 +1466,60 @@ class PiCopilotService:
                 status_code=409,
             )
         max_items = max(1, min(100, int(limit or 30)))
+        clean_agent_mode = str(agent_mode or "").strip()
+        if clean_agent_mode and clean_agent_mode not in {"research", "workspace"}:
+            raise PiCopilotError(
+                "pi_agent_mode_invalid",
+                "Pi conversation mode must be research or workspace.",
+                status_code=422,
+            )
         with self._lock:
             records = [
                 row
                 for row in self._read_records()
                 if row.project_id == clean_project_id
+                and (not clean_agent_mode or row.agent_mode == clean_agent_mode)
             ][:max_items]
         records = [
-            self._scoped_record(row.session_id, project_id=clean_project_id)
+            self._reconcile_replay_execution(
+                self._scoped_record(row.session_id, project_id=clean_project_id)
+            )
             for row in records
         ]
         return {
             "ok": True,
             "count": len(records),
-            "sessions": [self._public_session(row) for row in records],
+            "sessions": [
+                self._public_session(row, include_replay=False) for row in records
+            ],
         }
 
-    def get_session(self, session_id: str, *, project_id: str) -> Dict[str, Any]:
-        record = self._scoped_record(session_id, project_id=project_id)
-        state = self._ensure_open(record)
+    def get_session(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        transcript_cursor: Optional[str] = None,
+        transcript_limit: int = 100,
+        replay_cursor: Optional[str] = None,
+        replay_limit: int = 48,
+    ) -> Dict[str, Any]:
+        record = self._reconcile_replay_execution(
+            self._scoped_record(session_id, project_id=project_id)
+        )
+        state = self._ensure_open(
+            record,
+            transcript_cursor=transcript_cursor,
+            transcript_limit=transcript_limit,
+        )
         return {
             "ok": True,
-            "session": self._public_session(record, gateway_state=state),
+            "session": self._public_session(
+                record,
+                gateway_state=state,
+                replay_cursor=replay_cursor,
+                replay_limit=replay_limit,
+            ),
         }
 
     def _assert_project_initialized(self, project_id: str) -> str:
@@ -1105,35 +1544,191 @@ class PiCopilotService:
             "artifact": self.workspace.read_file(clean, relative_file),
         }
 
+    def get_project_workflow(self, *, project_id: str) -> Dict[str, Any]:
+        """Return the path-free project workflow compiled from owner receipts."""
+
+        clean = self._assert_project_initialized(project_id)
+        study_context_id = self.project_store.resolve(clean)
+        study = (
+            study_contexts.get_context(study_context_id) if study_context_id else None
+        )
+        registry = sources.load_registry()
+        active_job = None
+        if study and study.get("active_job_id"):
+            job = jobs.MANAGER.get(str(study["active_job_id"]))
+            active_job = job.snapshot() if job else None
+        history = agent_runs.list_run_history(
+            study_id=study_context_id,
+            limit=1,
+        )
+        rows = [row for row in (history.get("runs") or []) if isinstance(row, Mapping)]
+        latest_run = rows[0] if rows else None
+        plan_review_authority = (
+            agent_pipeline_runs.pending_review(latest_run.get("run_id"))
+            if latest_run
+            else None
+        )
+        snapshot = build_research_workflow_snapshot(
+            study=study,
+            active_export_present=registered_export_matches_study(study, registry),
+            active_job=active_job,
+            latest_run=latest_run,
+            plan_review_authority=plan_review_authority,
+        )
+        return {
+            "ok": True,
+            "project_id": clean,
+            "workflow": snapshot.model_dump(mode="json"),
+            "active_job": project_job(active_job),
+        }
+
     def get_workspace_preview(
         self,
         *,
         project_id: str,
         relative_file: str,
+        checked_sha256: str,
     ) -> Dict[str, Any]:
         clean = self._assert_project_initialized(project_id)
         return {
             "ok": True,
-            "artifact": self.workspace.preview_file(clean, relative_file),
+            "artifact": self.workspace.preview_file(
+                clean,
+                relative_file,
+                checked_sha256=checked_sha256,
+            ),
+        }
+
+    def get_data_package_review(
+        self,
+        *,
+        project_id: str,
+        study_revision: int,
+        review_sha256: str,
+    ) -> Dict[str, Any]:
+        """Open the exact immutable review, rebuilding only the current revision."""
+
+        clean = self._assert_project_initialized(project_id)
+        study_context_id = self.project_store.resolve(clean)
+        study = (
+            study_contexts.get_context(study_context_id) if study_context_id else None
+        )
+        if not study:
+            raise PiCopilotError(
+                "pi_data_package_study_not_found",
+                "The research project has no bound StudyContext.",
+                status_code=404,
+            )
+        expected_revision = int(study_revision)
+        current_revision = int(study.get("revision") or 0)
+        from easyicu.webserver.data_package_review import (
+            DataPackageReviewError,
+            build_registered_data_package_review,
+        )
+
+        expected_digest = str(review_sha256 or "").strip().lower()
+        try:
+            payload = self.review_snapshot_store.load(
+                study_id=str(study_context_id),
+                revision=expected_revision,
+                digest=expected_digest,
+            )
+        except DataPackageReviewError as exc:
+            if exc.code != "data_package_review_snapshot_not_found":
+                raise PiCopilotError(
+                    exc.code,
+                    exc.message,
+                    status_code=409,
+                    details=exc.details,
+                ) from exc
+            if expected_revision != current_revision:
+                raise PiCopilotError(
+                    "pi_data_package_review_snapshot_missing",
+                    "The historical data-package review snapshot is unavailable.",
+                    status_code=404,
+                    details={
+                        "expected_revision": expected_revision,
+                        "current_revision": current_revision,
+                        "review_sha256": expected_digest,
+                    },
+                ) from exc
+            try:
+                payload = build_registered_data_package_review(study)
+            except DataPackageReviewError as build_exc:
+                raise PiCopilotError(
+                    build_exc.code,
+                    build_exc.message,
+                    status_code=409,
+                    details=build_exc.details,
+                ) from build_exc
+            actual_digest = str(payload.get("review_sha256") or "")
+            if expected_digest != actual_digest:
+                raise PiCopilotError(
+                    "pi_data_package_review_digest_mismatch",
+                    "The requested data-package review no longer matches its owner digest.",
+                    status_code=409,
+                )
+            try:
+                self.review_snapshot_store.persist(payload)
+            except DataPackageReviewError as persist_exc:
+                raise PiCopilotError(
+                    persist_exc.code,
+                    persist_exc.message,
+                    status_code=409,
+                    details=persist_exc.details,
+                ) from persist_exc
+        except (ValueError, TypeError) as exc:
+            raise PiCopilotError(
+                "pi_data_package_review_snapshot_coordinates_invalid",
+                "The requested data-package review coordinates are invalid.",
+                status_code=409,
+            ) from exc
+        actual_digest = str(payload.get("review_sha256") or "")
+        if expected_digest != actual_digest:
+            raise PiCopilotError(
+                "pi_data_package_review_digest_mismatch",
+                "The requested data-package review no longer matches its owner digest.",
+                status_code=409,
+            )
+        return {
+            "ok": True,
+            "payload": self._browser_artifact_payload(payload),
+            "privacy": dict(payload.get("privacy") or {}),
+            "governance": {
+                "claim_ceiling": "pre_analysis_review",
+                "reportable": False,
+                "human_signoff": "not_applicable",
+                "analysis_results_withheld": True,
+            },
         }
 
     @staticmethod
     def _browser_artifact_payload(value: Any) -> Any:
-        """Remove host-only paths while retaining bounded structured results."""
+        """Remove host-only paths while retaining bounded structured results.
+
+        ``relative_path`` is the only path-shaped browser field. Future artifact
+        schemas therefore fail closed instead of relying on an ever-growing
+        blacklist of host path key names.
+        """
 
         if isinstance(value, Mapping):
             projected: Dict[str, Any] = {}
             for key, child in value.items():
                 normalized = str(key).strip().lower().replace("-", "_")
-                if normalized in {"project_dir", "source_path"}:
+                if normalized in {"project_dir", "source_path", "cwd"}:
                     continue
-                if normalized == "path" and isinstance(child, str):
-                    candidate = Path(child).expanduser()
-                    if candidate.is_absolute():
-                        continue
-                projected[str(key)] = PiCopilotService._browser_artifact_payload(
-                    child
+                path_shaped = normalized in {
+                    "path",
+                    "directory",
+                    "dir",
+                    "root",
+                    "file",
+                } or normalized.endswith(
+                    ("_path", "_directory", "_dir", "_root", "_file")
                 )
+                if path_shaped and normalized != "relative_path":
+                    continue
+                projected[str(key)] = PiCopilotService._browser_artifact_payload(child)
             return projected
         if isinstance(value, list):
             return [PiCopilotService._browser_artifact_payload(item) for item in value]
@@ -1204,6 +1799,29 @@ class PiCopilotService:
                     "max_bytes": MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES,
                 },
             )
+        review = agent_runs.read_run_review(str(row.get("project_dir") or ""))
+        if not review.get("ok"):
+            raise PiCopilotError(
+                str(
+                    review.get("error") or "pi_research_artifact_governance_unavailable"
+                ),
+                "The EasyICU run governance state is unavailable for this artefact.",
+                status_code=409,
+                details={"artifact": clean_artifact},
+            )
+        governance = agent_runs.project_artifact_governance(
+            review,
+            artifact=loaded.get("artifact") or {},
+        )
+        if not governance.get("ok"):
+            raise PiCopilotError(
+                str(
+                    governance.get("error") or "pi_research_artifact_governance_invalid"
+                ),
+                "The EasyICU run governance state is invalid for this artefact.",
+                status_code=409,
+                details={"artifact": clean_artifact},
+            )
         metadata = loaded.get("artifact") or {}
         return {
             "ok": True,
@@ -1217,6 +1835,120 @@ class PiCopilotService:
             },
             "payload": payload,
             "privacy": {"passed": True},
+            "governance": {
+                key: value for key, value in governance.items() if key != "ok"
+            },
+        }
+
+    def get_research_document(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        document_name: str,
+    ) -> Dict[str, Any]:
+        """Return one fixed, receipt-bound manuscript document for preview."""
+
+        clean_project = self._assert_project_initialized(project_id)
+        study_context_id = self.project_store.resolve(clean_project)
+        clean_run = str(run_id or "").strip()
+        clean_name = str(document_name or "").strip()
+        history = agent_runs.list_run_history(study_id=study_context_id, limit=200)
+        row = next(
+            (
+                item
+                for item in (history.get("runs") or [])
+                if isinstance(item, Mapping) and item.get("run_id") == clean_run
+            ),
+            None,
+        )
+        if row is None:
+            raise PiCopilotError(
+                "pi_research_run_not_found",
+                "The requested EasyICU run does not belong to this research project.",
+                status_code=404,
+                details={"run_id": clean_run},
+            )
+        project_dir = str(row.get("project_dir") or "")
+        loaded = agent_runs.read_run_artifact_bytes(project_dir, clean_name)
+        if not loaded.get("ok"):
+            code = str(loaded.get("error") or "pi_research_document_unavailable")
+            raise PiCopilotError(
+                code,
+                "The requested EasyICU manuscript document is unavailable.",
+                status_code=404 if code == "artifact_not_found" else 400,
+                details={"document": clean_name},
+            )
+        review = agent_runs.read_run_review(project_dir)
+        if not review.get("ok"):
+            raise PiCopilotError(
+                str(
+                    review.get("error") or "pi_research_document_governance_unavailable"
+                ),
+                "The EasyICU run governance state is unavailable for this document.",
+                status_code=409,
+                details={"document": clean_name},
+            )
+        artifact = next(
+            (
+                item
+                for item in (review.get("artifacts") or [])
+                if isinstance(item, Mapping) and item.get("name") == clean_name
+            ),
+            None,
+        )
+        if artifact is None:
+            raise PiCopilotError(
+                "pi_research_document_unregistered",
+                "The manuscript document is not registered in this run ledger.",
+                status_code=409,
+                details={"document": clean_name},
+            )
+        payloads = review.get("artifact_payloads")
+        payloads = payloads if isinstance(payloads, Mapping) else {}
+        ledger = payloads.get("evidence_ledger.json")
+        ledger = ledger if isinstance(ledger, Mapping) else {}
+        registered = next(
+            (
+                item
+                for item in (ledger.get("artifacts") or [])
+                if isinstance(item, Mapping) and item.get("name") == clean_name
+            ),
+            None,
+        )
+        expected_sha256 = (
+            str(registered.get("sha256") or "").lower()
+            if isinstance(registered, Mapping)
+            else ""
+        )
+        current_sha256 = hashlib.sha256(loaded["content"]).hexdigest()
+        if (
+            not re.fullmatch(r"[a-f0-9]{64}", expected_sha256)
+            or current_sha256 != expected_sha256
+        ):
+            raise PiCopilotError(
+                "pi_research_document_digest_mismatch",
+                "The requested EasyICU document does not match its run ledger binding.",
+                status_code=409,
+                details={"document": clean_name},
+            )
+        governance = agent_runs.project_artifact_governance(
+            review,
+            artifact={**artifact, "sha256": current_sha256},
+        )
+        if not governance.get("ok"):
+            raise PiCopilotError(
+                str(
+                    governance.get("error") or "pi_research_document_governance_invalid"
+                ),
+                "The EasyICU governance projection is invalid for this document.",
+                status_code=409,
+                details={"document": clean_name},
+            )
+        return {
+            "content": loaded["content"],
+            "media_type": loaded["media_type"],
+            "claim_ceiling": governance.get("claim_ceiling") or "unsupported",
         }
 
     def _public_session(
@@ -1224,8 +1956,27 @@ class PiCopilotService:
         record: PiSessionRecord,
         *,
         gateway_state: Optional[Mapping[str, Any]] = None,
+        include_replay: bool = True,
+        replay_cursor: Optional[str] = None,
+        replay_limit: int = 48,
     ) -> Dict[str, Any]:
         state = gateway_state or {}
+        replay = (
+            self.replay_store.snapshot(
+                session_id=record.session_id,
+                project_id=str(record.project_id),
+                cursor=replay_cursor,
+                limit=replay_limit,
+            )
+            if include_replay
+            else {"turns": [], "turn_page": {}, "child_jobs": []}
+        )
+        replay_turns = replay.get("turns") or []
+        latest_replay_turn = (
+            replay_turns[-1]
+            if replay_turns and isinstance(replay_turns[-1], Mapping)
+            else {}
+        )
         return {
             "session_id": record.session_id,
             "project_id": record.project_id,
@@ -1242,9 +1993,14 @@ class PiCopilotService:
                 else []
             ),
             "transcript": (
-                list(state.get("transcript") or [])[:100]
+                list(state.get("transcript") or [])[:200]
                 if isinstance(state.get("transcript"), list)
                 else []
+            ),
+            "transcript_page": (
+                dict(state.get("transcript_page") or {})
+                if isinstance(state.get("transcript_page"), Mapping)
+                else {}
             ),
             "shell_usage": (
                 dict(state.get("shell_usage") or {})
@@ -1256,8 +2012,37 @@ class PiCopilotService:
             "created_at": record.created_at,
             "updated_at": record.updated_at,
             "last_message_job_id": record.last_message_job_id,
+            "active_message_job_id": record.active_message_job_id,
+            "last_turn_status": record.last_turn_status,
+            "last_turn_allowed_actions": list(record.last_turn_allowed_actions),
+            "last_turn_events": list(latest_replay_turn.get("events") or []),
+            "conversation_replay": replay,
+            "archived_child_jobs": list(replay.get("child_jobs") or []),
+            "pinned_for_presentation": record.pinned_for_presentation,
             "session_storage": "private_local_jsonl",
             "scientific_authority": "EasyICU",
+            "extension_activation": {
+                "schema_version": record.extension_activation.schema_version,
+                "activation_sha256": record.extension_activation.activation_sha256,
+                "revision": record.extension_activation.revision,
+                "skills": [
+                    {
+                        "name": item.name,
+                        "description": item.description,
+                        "digest": item.digest,
+                        "stages": list(item.stages),
+                    }
+                    for item in record.extension_activation.skills
+                ],
+                "mcp_servers": [
+                    {
+                        "name": item.name,
+                        "transport": item.transport,
+                        "allowed_tools": list(item.allowed_tools),
+                    }
+                    for item in record.extension_activation.mcp_servers
+                ],
+            },
             "project_migration": (
                 binding.migration_receipt.model_dump(mode="json")
                 if (
@@ -1267,6 +2052,32 @@ class PiCopilotService:
                 else None
             ),
         }
+
+    def _reconcile_replay_execution(self, record: PiSessionRecord) -> PiSessionRecord:
+        """Reconcile persisted UX continuity with the process-local JobManager."""
+
+        active_job_id = str(record.active_message_job_id or "").strip()
+        if not active_job_id or record.last_turn_status != "running":
+            return record
+        job = jobs.MANAGER.get(active_job_id)
+        if job is not None and job.status == "running":
+            return record
+        record.active_message_job_id = None
+        if job is not None and job.status in {"done", "failed", "cancelled"}:
+            record.last_turn_status = job.status
+        else:
+            # The generic JobManager is intentionally process-local. A persisted
+            # running pointer with no matching job therefore means the Web
+            # process restarted; never leave the presentation showing "running".
+            record.last_turn_status = "interrupted"
+        saved = self._save_record(record)
+        self.replay_store.finish_turn(
+            session_id=record.session_id,
+            project_id=str(record.project_id),
+            job_id=active_job_id,
+            status=str(record.last_turn_status),
+        )
+        return saved
 
     def close(self) -> None:
         self.gateway.close()

@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.concept.export_metadata import build_export_file_metadata_binding
 from easyicu.concept.metadata_projection import (
     ColumnProjectionSpec,
     ConceptColumnRole,
@@ -26,6 +27,46 @@ from easyicu.concept.metadata_sidecar import (
 )
 from easyicu.resources import load_dictionary
 from easyicu.research_agent.intake import export_package as intake
+
+
+def test_native_metadata_authorizes_owner_observed_and_available_receipts() -> None:
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "charttime": [0.0, 12.0],
+            "sofa2_resp": [0.0, 2.0],
+            "sofa2_resp_observed": [0, 1],
+            "sofa2_resp_available": [0, 1],
+        }
+    )
+
+    binding = build_export_file_metadata_binding(
+        relative_path="scores.parquet",
+        module="scores",
+        frame=frame,
+        concept_ids=("sofa2_resp",),
+        database="miiv",
+        database_class_prefixes=(),
+        dictionary=load_dictionary(include_sofa2=True),
+    )
+
+    assert set(binding.columns) == {
+        "sofa2_resp",
+        "sofa2_resp_observed",
+        "sofa2_resp_available",
+    }
+    assert (
+        binding.columns["sofa2_resp_observed"].metadata.role
+        is ConceptColumnRole.MEASUREMENT_STATUS
+    )
+    assert (
+        binding.columns["sofa2_resp_observed"].representation_transform
+        == "owner_observed_status"
+    )
+    assert (
+        binding.columns["sofa2_resp_available"].representation_transform
+        == "owner_available_status"
+    )
 
 
 def _write_frame(path: Path, frame: pd.DataFrame, export_format: str) -> None:

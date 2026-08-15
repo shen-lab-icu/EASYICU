@@ -18,6 +18,7 @@ from easyicu.research_agent.providers.factory import (
     ProviderConfigurationError,
 )
 from easyicu.research_agent.providers.mocks import ExternalCaptureMockLLMClient
+from easyicu.research_agent.schema import MeasurementAuditSpec
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.repairs.reasons import (
     RepairPromptAuthority,
@@ -570,6 +571,16 @@ def test_replanner_probe_projection_rejects_all_identifier_suffixes(ra):
                 inputs=["exposure"],
                 expected_outputs=["table:missingness_table"],
                 method="data_quality_audit",
+                measurement_audit_spec=MeasurementAuditSpec.model_validate(
+                    {
+                        "products": [
+                            {
+                                "product_id": "missingness_table",
+                                "audit": "missingness_profile",
+                            }
+                        ]
+                    }
+                ),
             ),
         ],
     )

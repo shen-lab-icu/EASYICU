@@ -19,6 +19,7 @@ from typing import Any, Iterable, Literal, Mapping, MutableMapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..authority.coder_authority import HostCoderAuthority
+from ..authority.filesystem import publish_write_once_bytes
 from ..authority.plausibility import FlagOnlyPlausibilityScope
 from ..authority.typed_binding import (
     _coder_authority_with_typed_parent_schema_receipts,
@@ -33,7 +34,11 @@ from ..contracts.method_packages import (
     OPTIONAL_BASELINE_PACKAGES,
 )
 from ..learning.runtime import ReviewedMemoryRuntime
-from ..planning.analysis_types import infer_analysis_type
+from ..planning.analysis_types import canonical_analysis_family, infer_analysis_type
+from ..planning.scientific_action_catalog import (
+    ScientificAction,
+    scientific_action_for_id,
+)
 from ..research_context.prompt_scope import scoped_coder_context
 from ..research_context.typed import materialized_input_prompt_attachment
 from ..schema import AnalysisStep, ResearchContext
@@ -65,6 +70,10 @@ class CoderResourceBundle(BaseModel):
     step_id: str = Field(min_length=1, max_length=160)
     profile_ref: str = Field(min_length=3, max_length=200)
     analysis_family: str = Field(min_length=1, max_length=120)
+    scientific_action_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$",
+    )
     selections: tuple[ResourceSelectionReceipt, ...]
     prompt_projection: str
     prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -148,8 +157,45 @@ def _action_resources(
     available_input_roles: Sequence[str],
     expected_outputs: Sequence[str],
     has_table_one_spec: bool,
+    scientific_action: ScientificAction | None = None,
 ) -> list[ResourceDescriptor]:
     resources: list[ResourceDescriptor] = []
+    if scientific_action is not None:
+        resources.append(
+            _descriptor(
+                resource_id=(
+                    "action:scientific:" + _slug(scientific_action.action_id)
+                ),
+                kind="action",
+                projection={
+                    "scientific_action_id": scientific_action.action_id,
+                    "execution_mode": scientific_action.execution_mode,
+                    "method_key": scientific_action.method_key,
+                    "produces": scientific_action.produces,
+                    "runner": scientific_action.runner,
+                    "kernel_imports": list(scientific_action.kernel_imports),
+                    "software_packages": list(scientific_action.software_packages),
+                    "required_inputs": list(scientific_action.required_inputs),
+                    "composition_action_ids": list(
+                        scientific_action.composition_action_ids
+                    ),
+                    "alternative_action_ids": list(
+                        scientific_action.alternative_action_ids
+                    ),
+                    "authority": "host_compiled_scientific_action_catalog",
+                },
+                permissions=("coder_context",),
+                search_terms=(
+                    scientific_action.action_id,
+                    scientific_action.method_key,
+                    scientific_action.name,
+                    scientific_action.purpose,
+                    *scientific_action.kernel_imports,
+                    *scientific_action.software_packages,
+                    *scientific_action.required_inputs,
+                ),
+            )
+        )
     typed_roles = tuple(role for role in available_input_roles if ":" in role)
     if typed_roles:
         resources.append(
@@ -211,6 +257,7 @@ _BASELINE_FAMILIES: dict[str, tuple[str, ...]] = {
     "sklearn": (
         "prediction",
         "prediction_model",
+        "dynamic_prediction",
         "phenotyping",
         "trajectory_clustering",
     ),
@@ -408,10 +455,19 @@ def build_coder_resource_bundle(
     resolved_input_bindings: Mapping[str, Mapping[str, object]],
     runtime_import_names: Iterable[str],
     has_table_one_spec: bool = False,
+    scientific_action_id: str | None = None,
     approved_software_resources: Sequence[ResourceDescriptor] = (),
 ) -> CoderResourceBundle:
     """Select reviewed resources for one exact Coder step without an LLM."""
 
+    scientific_action = (
+        scientific_action_for_id(
+            analysis_type=analysis_family,
+            action_id=scientific_action_id,
+        )
+        if scientific_action_id is not None
+        else None
+    )
     available_roles = tuple(
         dict.fromkeys([*planner_inputs, *resolved_input_bindings.keys()])
     )
@@ -423,6 +479,17 @@ def build_coder_resource_bundle(
                 question,
                 intent,
                 method,
+                scientific_action_id,
+                *(
+                    scientific_action.kernel_imports
+                    if scientific_action is not None
+                    else ()
+                ),
+                *(
+                    scientific_action.software_packages
+                    if scientific_action is not None
+                    else ()
+                ),
                 " ".join(planner_inputs),
                 " ".join(expected_outputs),
             )
@@ -437,6 +504,7 @@ def build_coder_resource_bundle(
                 available_input_roles=available_roles,
                 expected_outputs=expected_outputs,
                 has_table_one_spec=has_table_one_spec,
+                scientific_action=scientific_action,
             ),
             *_software_resources(runtime_import_names),
             *approved_software_resources,
@@ -444,6 +512,28 @@ def build_coder_resource_bundle(
         )
     )
     selections = []
+    required_software_ids = tuple(
+        dict.fromkeys(
+            f"software:{_slug(value)}"
+            for value in (
+                *(
+                    scientific_action.kernel_imports
+                    if scientific_action is not None
+                    else ()
+                ),
+                *(
+                    scientific_action.software_packages
+                    if scientific_action is not None
+                    else ()
+                ),
+            )
+        )
+    )
+    if len(required_software_ids) > 8:
+        raise CoderResourceIntegrityError(
+            "scientific action requires more software resources than the "
+            "bounded Coder authority can carry"
+        )
     policies = {
         "action": ResourceSelectionPolicy(
             allowed_kinds=("action",),
@@ -455,7 +545,7 @@ def build_coder_resource_bundle(
             allowed_kinds=("software",),
             allowed_review_statuses=("validated", "approved"),
             allowed_permissions=("coder_context", "sandbox_import"),
-            max_software=3,
+            max_software=max(3, len(required_software_ids)),
         ),
         "data": ResourceSelectionPolicy(
             allowed_kinds=("data",),
@@ -471,6 +561,9 @@ def build_coder_resource_bundle(
             query=query,
             policy=policies[kind],
             kind=kind,
+            required_resource_ids=(
+                required_software_ids if kind == "software" else ()
+            ),
         )
         selections.append(selection.receipt)
         if selection.prompt:
@@ -496,6 +589,7 @@ def build_coder_resource_bundle(
         step_id=step_id,
         profile_ref=profile_ref,
         analysis_family=analysis_family,
+        scientific_action_id=scientific_action_id,
         selections=tuple(selections),
         prompt_projection=prompt,
         prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
@@ -504,31 +598,16 @@ def build_coder_resource_bundle(
 
 
 def _write_once(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.read_bytes() != payload:
-            raise CoderResourceIntegrityError(
-                f"Coder resource receipt changed at {path}"
-            )
-        return
-    fd, temp_name = tempfile.mkstemp(prefix=".coder-resource-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temp_name, path)
-        except FileExistsError:
-            if path.read_bytes() != payload:
-                raise CoderResourceIntegrityError(
-                    f"Coder resource receipt raced with different bytes at {path}"
-                ) from None
-    finally:
-        try:
-            os.unlink(temp_name)
-        except FileNotFoundError:
-            pass
+    publish_write_once_bytes(
+        path,
+        payload,
+        temp_prefix=".coder-resource-",
+        conflict_error=CoderResourceIntegrityError,
+        conflict_message=f"Coder resource receipt changed at {path}",
+        race_message=(
+            f"Coder resource receipt raced with different bytes at {path}"
+        ),
+    )
 
 
 def persist_coder_resource_bundle(
@@ -712,6 +791,7 @@ def attach_step_coder_input_authority(
     profile_ref: str,
     context: ResearchContext,
     step: AnalysisStep,
+    analysis_type: str | None = None,
     resolved_input_bindings: Mapping[str, Mapping[str, object]],
     plausibility_scope: FlagOnlyPlausibilityScope,
     runtime_import_names: Iterable[str],
@@ -730,7 +810,9 @@ def attach_step_coder_input_authority(
         authority=authority,
         bindings=resolved_input_bindings,
     )
-    analysis_family = infer_analysis_type(context).key
+    analysis_family = canonical_analysis_family(analysis_type)
+    if analysis_family is None:
+        analysis_family = infer_analysis_type(context).key
     if enabled:
         bundle = build_coder_resource_bundle(
             step_id=step.step_id,
@@ -745,6 +827,7 @@ def attach_step_coder_input_authority(
             resolved_input_bindings=resolved_input_bindings,
             runtime_import_names=runtime_import_names,
             has_table_one_spec=step.table_one_spec is not None,
+            scientific_action_id=step.scientific_action_id,
             approved_software_resources=approved_software_resources,
         )
         authority, path = attach_coder_resources(

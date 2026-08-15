@@ -28,10 +28,15 @@ from easyicu.research_agent.execution.runners.exposure_outcome_distribution_exec
     run_exposure_outcome_distribution_from_env,
 )
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_render import (
+    exposure_outcome_distribution_figure_declaration_verdict,
     exposure_outcome_distribution_figure_owns_step,
     run_exposure_outcome_distribution_figure,
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
+from easyicu.research_agent.figures.publication import audit_publication_exports
+from easyicu.research_agent.contracts.declared_product import (
+    declared_product_contract_findings,
+)
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -61,17 +66,25 @@ def _step(**updates) -> AnalysisStep:
     return AnalysisStep.model_validate(payload)
 
 
-def _produced_table(tmp_path: Path, monkeypatch) -> Path:
+def _produced_table(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    frame: pd.DataFrame | None = None,
+    spec_updates: dict | None = None,
+) -> Path:
     """Build the product with the real producer, not a hand-written fixture."""
 
-    frame = pd.DataFrame(
-        {
-            EXPOSURE: [1] * 10 + [0] * 10,
-            OUTCOME: (
-                [1, 1, 1, 0, 0, 0, 0, 0, 0, None] + [1, 0, 0, 0, 0, 0, 0, 0, 0, None]
-            ),
-        }
-    )
+    if frame is None:
+        frame = pd.DataFrame(
+            {
+                EXPOSURE: [1] * 10 + [0] * 10,
+                OUTCOME: (
+                    [1, 1, 1, 0, 0, 0, 0, 0, 0, None]
+                    + [1, 0, 0, 0, 0, 0, 0, 0, 0, None]
+                ),
+            }
+        )
     parent = tmp_path / "parent"
     parent_out = parent / "steps" / "03_parent" / "outputs"
     parent_out.mkdir(parents=True)
@@ -114,6 +127,7 @@ def _produced_table(tmp_path: Path, monkeypatch) -> Path:
             "denominator_policy": "all_declared_rows",
             "missing_outcome_policy": "structural_absence_is_non_event",
             "confidence_level": 0.95,
+            **(spec_updates or {}),
         },
         typed_cohort_input="artifact:analysis_cohort",
     )
@@ -181,6 +195,35 @@ def _tampered(tmp_path: Path, monkeypatch, mutate) -> tuple[Path, dict]:
     return _bound(tmp_path, table)
 
 
+def test_counts_only_table_renders_without_error_bars(
+    tmp_path: Path, monkeypatch
+) -> None:
+    table = _produced_table(
+        tmp_path,
+        monkeypatch,
+        spec_updates={
+            "schema_version": "easyicu.exposure_outcome_distribution/3",
+            "interval_method": "none_counts_only",
+            "repeated_unit_interval_method": None,
+            "confidence_level": None,
+        },
+    )
+    frame = pd.read_csv(table)
+    assert frame["ci_low_pct"].isna().all()
+    assert frame["ci_high_pct"].isna().all()
+    run_dir, manifest = _bound(tmp_path, table)
+
+    summary = _render(run_dir, manifest, tmp_path / "figure")
+    contract = json.loads(
+        (tmp_path / "figure" / summary["figure_contract"]).read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert contract["panels"][1]["metadata"]["chart_type"] == "point_absolute_risk"
+    assert "no uncertainty is computed" in contract["statistics_note"]
+
+
 # --------------------------------------------------------------------------
 # Ownership
 # --------------------------------------------------------------------------
@@ -224,6 +267,38 @@ def test_an_unsafe_label_or_a_widened_input_is_refused() -> None:
     )
 
 
+def test_distribution_renderer_reports_single_row_as_an_incomplete_declaration() -> (
+    None
+):
+    step = _step(
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=INPUT_KEY, mode="single_row")
+        ]
+    )
+
+    verdict = exposure_outcome_distribution_figure_declaration_verdict(step)
+    assert not verdict.claimed
+    assert verdict.missing_declarations == (
+        "input_consumption_contracts["
+        "table:exposure_outcome_distribution].mode=all_rows",
+    )
+    trace = []
+    assert (
+        select_standard_executor(
+            step,
+            plan=AnalysisPlan(research_question="Test", steps=[step]),
+            trace=trace,
+        )
+        is None
+    )
+    candidate = next(
+        item
+        for item in trace
+        if item.analysis_kind == "exposure_outcome_distribution_figure"
+    )
+    assert candidate.missing_declarations == verdict.missing_declarations
+
+
 # --------------------------------------------------------------------------
 # Rendering from the one table
 # --------------------------------------------------------------------------
@@ -243,6 +318,10 @@ def test_it_renders_from_the_one_table_alone(tmp_path: Path, monkeypatch) -> Non
 
     # Source data is emitted for every panel, and the denominators and the
     # unobserved count travel with it -- that is what removes the second table.
+    prevalence_source = pd.read_csv(out_dir / f"{PRODUCT}_prevalence_source_data.csv")
+    assert {"exposure_ci_low_pct", "exposure_ci_high_pct"} <= set(
+        prevalence_source.columns
+    )
     outcome_source = pd.read_csv(out_dir / f"{PRODUCT}_outcome_source_data.csv")
     assert {"outcome_denominator", "outcome_missing_n", "ci_low_pct"} <= set(
         outcome_source.columns
@@ -250,7 +329,10 @@ def test_it_renders_from_the_one_table_alone(tmp_path: Path, monkeypatch) -> Non
     assert int(outcome_source["outcome_missing_n"].sum()) == 2
 
     contract = json.loads((out_dir / f"{PRODUCT}.figure_contract.json").read_text())
-    assert [panel["panel_id"] for panel in contract["panels"]] == ["A", "B"]
+    assert [panel["panel_id"] for panel in contract["panels"]] == [
+        "exposure_prevalence",
+        "outcome_absolute_risk",
+    ]
 
 
 def test_the_summary_and_note_carry_the_declared_design(
@@ -276,6 +358,151 @@ def test_the_summary_and_note_carry_the_declared_design(
     note = contract["statistics_note"]
     assert "all_declared_rows" in note
     assert "wilson" in note
+    assert "structural 100% total" in note
+    assert "no inferential interval" in note
+
+
+def test_patient_cluster_intervals_and_risk_difference_render_from_one_product(
+    tmp_path: Path, monkeypatch
+) -> None:
+    frame = pd.DataFrame(
+        {
+            EXPOSURE: [0, 0, 1, 1, 0, 1, 0, 1],
+            OUTCOME: [0, 1, 0, 1, 0, 1, 1, 1],
+            "opaque_row_identity": [
+                "p01:s1",
+                "p01:s2",
+                "p02:s1",
+                "p02:s2",
+                "p03:s1",
+                "p03:s2",
+                "p04:s1",
+                "p04:s2",
+            ],
+        }
+    )
+    table = _produced_table(
+        tmp_path,
+        monkeypatch,
+        frame=frame,
+        spec_updates={
+            "risk_difference_contrast": {
+                "reference_exposure_level": 0,
+                "comparison_exposure_level": 1,
+            },
+            "dependence": {
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
+                "group_source": "opaque_row_identity",
+                "group_derivation": "prefix_before_delimiter",
+                "delimiter": ":s",
+            },
+        },
+    )
+    run_dir, manifest = _bound(tmp_path, table)
+    out = tmp_path / "out"
+    summary = _render(run_dir, manifest, out)
+
+    assert summary["declared_design"]["interval_method"] == (
+        "patient_cluster_robust_wald"
+    )
+    assert summary["interpretation_ceiling"] == ("descriptive_unadjusted_not_causal")
+    assert "descriptive_contrast" not in summary
+    assert not any(
+        key.startswith("risk_difference_")
+        for key in summary["declared_design"]
+    )
+    contrast_source = out / f"{PRODUCT}_risk_difference_source_data.csv"
+    assert contrast_source.is_file()
+    contrast = pd.read_csv(contrast_source).iloc[0]
+    assert int(contrast["source_row_index"]) == 2
+    assert contrast["risk_difference_covariance"] == "cluster_robust"
+    assert float(contrast["risk_difference_pct"]) == pytest.approx(25.0)
+    findings = declared_product_contract_findings(
+        step=_step(),
+        step_summary=summary,
+        effect_method_authorized=False,
+        effect_figure_source_authorized=True,
+        out_dir=out,
+    )
+    assert not [
+        finding
+        for finding in findings
+        if finding.detail.get("kind") == "unauthorized_effect_product"
+    ]
+    forged_summary = dict(summary)
+    forged_summary["descriptive_contrast"] = {
+        "risk_difference_pct": float(contrast["risk_difference_pct"])
+    }
+    forged = declared_product_contract_findings(
+        step=_step(),
+        step_summary=forged_summary,
+        effect_method_authorized=False,
+        effect_figure_source_authorized=True,
+        out_dir=out,
+    )
+    assert any(
+        finding.detail.get("kind") == "unauthorized_effect_product"
+        for finding in forged
+    )
+    contract = json.loads((out / f"{PRODUCT}.figure_contract.json").read_text())
+    assert (
+        "does not authorize association or causal interpretation"
+        in contract["statistics_note"]
+    )
+    assert not [
+        finding
+        for finding in audit_publication_exports([out / f"{PRODUCT}.svg"])
+        if "outside the canvas" in finding.message
+    ]
+
+
+def test_tampered_patient_cluster_uncertainty_is_refused(
+    tmp_path: Path, monkeypatch
+) -> None:
+    frame = pd.DataFrame(
+        {
+            EXPOSURE: [0, 0, 1, 1, 0, 1, 0, 1],
+            OUTCOME: [0, 1, 0, 1, 0, 1, 1, 1],
+            "patient_stay": [
+                "p01:s1",
+                "p01:s2",
+                "p02:s1",
+                "p02:s2",
+                "p03:s1",
+                "p03:s2",
+                "p04:s1",
+                "p04:s2",
+            ],
+        }
+    )
+    table = _produced_table(
+        tmp_path,
+        monkeypatch,
+        frame=frame,
+        spec_updates={
+            "risk_difference_contrast": {
+                "reference_exposure_level": 0,
+                "comparison_exposure_level": 1,
+            },
+            "dependence": {
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
+                "group_source": "patient_stay",
+                "group_derivation": "prefix_before_delimiter",
+                "delimiter": ":s",
+            },
+        },
+    )
+    produced = pd.read_csv(table)
+    produced["outcome_standard_error_pct"] = (
+        produced["outcome_standard_error_pct"] + 1.0
+    )
+    produced.to_csv(table, index=False)
+    run_dir, manifest = _bound(tmp_path, table)
+
+    with pytest.raises(ValueError, match="patient-cluster Wald arithmetic"):
+        _render(run_dir, manifest, tmp_path / "out")
 
 
 # --------------------------------------------------------------------------
@@ -394,6 +621,18 @@ def test_an_exposure_percentage_that_is_not_its_own_counts_is_refused(
 
     run_dir, manifest = _tampered(tmp_path, monkeypatch, mutate)
     with pytest.raises(ValueError, match="not its own counts"):
+        _render(run_dir, manifest, tmp_path / "out")
+
+
+def test_an_exposure_interval_that_is_not_the_declared_method_is_refused(
+    tmp_path: Path, monkeypatch
+) -> None:
+    def mutate(frame: pd.DataFrame) -> None:
+        frame["exposure_ci_low_pct"] = frame["exposure_pct"] * 0.99
+        frame["exposure_ci_high_pct"] = frame["exposure_pct"] * 1.01
+
+    run_dir, manifest = _tampered(tmp_path, monkeypatch, mutate)
+    with pytest.raises(ValueError, match="exposure prevalence interval"):
         _render(run_dir, manifest, tmp_path / "out")
 
 
@@ -527,12 +766,24 @@ def test_the_same_exposure_level_twice_is_refused(tmp_path: Path, monkeypatch) -
 
     def mutate(frame: pd.DataFrame) -> None:
         levels = frame.index[frame["row_role"] == "exposure_level"].tolist()
-        frame.loc[levels[0], "exposure_level"] = frame.loc[
-            levels[1], "exposure_level"
-        ]
+        frame.loc[levels[0], "exposure_level"] = frame.loc[levels[1], "exposure_level"]
 
     run_dir, manifest = _tampered(tmp_path, monkeypatch, mutate)
     with pytest.raises(ValueError, match="appears more than once"):
+        _render(run_dir, manifest, tmp_path / "out")
+
+
+def test_level_rows_must_bind_the_declared_typed_level_indices(
+    tmp_path: Path, monkeypatch
+) -> None:
+    def mutate(frame: pd.DataFrame) -> None:
+        levels = frame.index[frame["row_role"] == "exposure_level"].tolist()
+        frame.loc[levels[1], "exposure_level_index"] = frame.loc[
+            levels[0], "exposure_level_index"
+        ]
+
+    run_dir, manifest = _tampered(tmp_path, monkeypatch, mutate)
+    with pytest.raises(ValueError, match="typed-level indices"):
         _render(run_dir, manifest, tmp_path / "out")
 
 
@@ -561,6 +812,6 @@ def test_the_source_data_beside_the_figure_holds_every_row_it_drew(
     for panel in ("prevalence", "outcome"):
         panel_rows = pd.read_csv(out / f"{PRODUCT}_{panel}_source_data.csv")
         assert len(panel_rows) == len(levels), panel
-        assert set(panel_rows["exposure_level"].astype(str)) == set(
-            levels["exposure_level"].astype(str)
+        assert set(panel_rows["exposure_level_index"].astype(int)) == set(
+            levels["exposure_level_index"].astype(int)
         ), panel

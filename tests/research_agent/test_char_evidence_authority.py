@@ -178,7 +178,8 @@ def test_result_like_markdown_bullets_do_not_bypass_scaffold_guard(
     strict = ra.EvidenceStore(tmp_path / "strict", enforcement_mode="strict")
     with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
         strict.enforce_evidence_bound_scaffold(scaffold)
-    assert exc_info.value.detail["removed_sentences"] == removed
+    assert exc_info.value.detail["removed_sentences"] == []
+    assert exc_info.value.detail["unsupported_scientific_claim_sentences"] == removed
 
 
 def test_success_promotion_moves_current_alias_only_within_same_step(

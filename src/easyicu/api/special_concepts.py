@@ -98,6 +98,11 @@ def get_concept_info(concept_name: str) -> Dict:
         "callback": getattr(concept, "callback", None),
         "sub_concepts": list(getattr(concept, "sub_concepts", None) or []),
         "depends_on": list(getattr(concept, "depends_on", None) or []),
+        "clinical_status": getattr(concept, "clinical_status", None),
+        "canonical_definition": getattr(concept, "canonical_definition", None),
+        "definition_source": getattr(concept, "definition_source", None),
+        "definition_version": getattr(concept, "definition_version", None),
+        "clinical_contract_id": getattr(concept, "clinical_contract_id", None),
     }
 
     return info

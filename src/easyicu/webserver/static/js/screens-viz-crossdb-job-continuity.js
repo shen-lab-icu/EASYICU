@@ -1,13 +1,16 @@
-/* Cross-DB raw-distribution job continuity: bounded local metadata + reconnect. */
+/* Cross-DB registered/raw job continuity: bounded local metadata + reconnect. */
 (function () {
   'use strict';
 
-  const STORAGE_KEY = 'easyicu_crossdb_raw_job_v1';
-  const JOB_KIND = 'crossdb-raw-distribution';
+  const STORAGE_KEY = 'easyicu_crossdb_job_v2';
+  const RAW_JOB_KIND = 'crossdb-raw-distribution';
+  const SUMMARY_JOB_KIND = 'crossdb-summary';
+  const JOB_KINDS = new Set([RAW_JOB_KIND, SUMMARY_JOB_KIND]);
   const SAMPLE_MODES = new Set(['quick', 'standard', 'deeper']);
   const FEATURE_SCOPES = new Set(['curated_core', 'all_catalog']);
   const JOB_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
   const SOURCE_ID_RE = /^[a-z0-9_-]+(?:,[a-z0-9_-]+)*$/;
+  const DIGEST_RE = /^[a-f0-9]{64}$/;
   let stream = null;
   let activeJobId = '';
   let cancelFenceJobId = '';
@@ -30,22 +33,35 @@
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const jobId = String(value.job_id || '').trim();
     const kind = String(value.kind || '').trim();
-    const rawRoot = String(value.raw_root || '').trim();
     const sourceIdentity = String(value.source_identity || '').trim();
-    const sampleMode = String(value.sample_mode || '').trim();
-    const featureScope = String(value.feature_scope || 'curated_core').trim();
-    if (!JOB_ID_RE.test(jobId) || kind !== JOB_KIND) return null;
-    if (!rawRoot || rawRoot.length > 4096 || /[\u0000-\u001f]/.test(rawRoot)) return null;
+    if (!JOB_ID_RE.test(jobId) || !JOB_KINDS.has(kind)) return null;
     if (!sourceIdentity || sourceIdentity.length > 256 || !SOURCE_ID_RE.test(sourceIdentity)) return null;
-    if (!SAMPLE_MODES.has(sampleMode)) return null;
-    if (!FEATURE_SCOPES.has(featureScope)) return null;
+    if (kind === RAW_JOB_KIND) {
+      const rawRoot = String(value.raw_root || '').trim();
+      const sampleMode = String(value.sample_mode || '').trim();
+      const featureScope = String(value.feature_scope || 'curated_core').trim();
+      if (!rawRoot || rawRoot.length > 4096 || /[\u0000-\u001f]/.test(rawRoot)) return null;
+      if (!SAMPLE_MODES.has(sampleMode)) return null;
+      if (!FEATURE_SCOPES.has(featureScope)) return null;
+      return {
+        job_id: jobId,
+        kind: RAW_JOB_KIND,
+        raw_root: rawRoot,
+        source_identity: sourceIdentity,
+        sample_mode: sampleMode,
+        feature_scope: featureScope,
+      };
+    }
+    const selectionDigest = String(value.selection_digest || '').trim();
+    const deadlineAt = Number(value.deadline_at);
+    if (selectionDigest.length !== 64 || !DIGEST_RE.test(selectionDigest)) return null;
+    if (!Number.isFinite(deadlineAt) || deadlineAt <= 0 || deadlineAt > 10000000000000) return null;
     return {
       job_id: jobId,
-      kind: JOB_KIND,
-      raw_root: rawRoot,
+      kind: SUMMARY_JOB_KIND,
       source_identity: sourceIdentity,
-      sample_mode: sampleMode,
-      feature_scope: featureScope,
+      selection_digest: selectionDigest,
+      deadline_at: deadlineAt,
     };
   }
 
@@ -98,11 +114,15 @@
 
   function stillCurrent(meta) {
     const stored = readStored();
-    return !!(stored
-      && stored.job_id === meta.job_id
-      && stored.raw_root === meta.raw_root
-      && stored.source_identity === meta.source_identity
-      && stored.feature_scope === meta.feature_scope);
+    if (!stored || stored.job_id !== meta.job_id || stored.kind !== meta.kind
+        || stored.source_identity !== meta.source_identity) return false;
+    if (meta.kind === RAW_JOB_KIND) {
+      return stored.raw_root === meta.raw_root
+        && stored.sample_mode === meta.sample_mode
+        && stored.feature_scope === meta.feature_scope;
+    }
+    return stored.selection_digest === meta.selection_digest
+      && stored.deadline_at === meta.deadline_at;
   }
 
   function latestProgress(events) {
@@ -128,7 +148,7 @@
     activeJobId = '';
     if (cancelFenceJobId === meta.job_id) cancelFenceJobId = '';
     const applied = typeof target.onTerminal === 'function'
-      ? target.onTerminal(meta, { id: meta.job_id, kind: JOB_KIND, status, result: result || null, error: error || null })
+      ? target.onTerminal(meta, { id: meta.job_id, kind: meta.kind, status, result: result || null, error: error || null })
       : true;
     const callback = completion;
     completion = null;
@@ -237,7 +257,7 @@
       return false;
     }
     if (!stillCurrent(meta)) return false;
-    if (!snapshot || snapshot.id !== meta.job_id || snapshot.kind !== JOB_KIND) {
+    if (!snapshot || snapshot.id !== meta.job_id || snapshot.kind !== meta.kind) {
       disconnect({ forget: true });
       if (typeof target.onUnavailable === 'function') target.onUnavailable(meta);
       return false;
@@ -262,7 +282,7 @@
     if (restoreAttempted) return Promise.resolve(false);
     const meta = readStored();
     const target = host();
-    if (!meta || !target || (typeof target.canRestore === 'function' && !target.canRestore())) return Promise.resolve(false);
+    if (!meta || !target || (typeof target.canRestore === 'function' && !target.canRestore(meta))) return Promise.resolve(false);
     restoreAttempted = true;
     reconnectAttempt = 0;
     lastSeq = -1;
@@ -292,7 +312,7 @@
 
   function onSourceChanged(rawRoot, sourceIdentity, sampleMode, featureScope) {
     const meta = readStored();
-    if (!meta) return;
+    if (!meta || meta.kind !== RAW_JOB_KIND) return;
     const nextRoot = String(rawRoot || '').trim();
     const nextIdentity = String(sourceIdentity || '').trim();
     const nextSampleMode = String(sampleMode || '').trim();
@@ -301,6 +321,17 @@
         || (nextIdentity && nextIdentity !== meta.source_identity)
         || (nextSampleMode && nextSampleMode !== meta.sample_mode)
         || (nextFeatureScope && nextFeatureScope !== meta.feature_scope)) {
+      disconnect({ forget: true });
+    }
+  }
+
+  function onSelectionChanged(sourceIdentity, selectionDigest) {
+    const meta = readStored();
+    if (!meta || meta.kind !== SUMMARY_JOB_KIND) return;
+    const nextIdentity = String(sourceIdentity || '').trim();
+    const nextDigest = String(selectionDigest || '').trim();
+    if (nextIdentity !== meta.source_identity
+        || (nextDigest && nextDigest !== meta.selection_digest)) {
       disconnect({ forget: true });
     }
   }
@@ -319,6 +350,7 @@
 
   window.EU_CROSSDB_JOB_CONTINUITY = {
     disconnect,
+    onSelectionChanged,
     onSourceChanged,
     restoreIfNeeded,
     start,

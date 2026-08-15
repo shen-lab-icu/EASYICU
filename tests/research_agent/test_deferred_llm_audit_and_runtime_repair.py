@@ -250,7 +250,8 @@ def test_automatic_contract_repair_does_not_consume_llm_contract_allowance(
     _isolate_article_suite_contract(monkeypatch)
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
     from easyicu.research_agent.contracts.runtime import ValidationFinding
-    from easyicu.research_agent.execution import phase
+    from easyicu.research_agent.execution import candidate_loop
+    from easyicu.research_agent.execution import phase  # noqa: F401 — run target
 
     initial_code = _summary_script(phase="INITIAL_CONTRACT_ERROR")
     structural_code = _summary_script(phase="STRUCTURAL_CONTRACT_ERROR")
@@ -298,7 +299,11 @@ def test_automatic_contract_repair_does_not_consume_llm_contract_allowance(
         return None
 
     monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
-    monkeypatch.setattr(phase, "deterministic_contract_repair", one_structural_repair)
+    # The candidate loop moved out of execution.phase (1e5182a); the
+    # deterministic repair seam it consults is candidate_loop's binding now.
+    monkeypatch.setattr(
+        candidate_loop, "deterministic_contract_repair", one_structural_repair
+    )
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,

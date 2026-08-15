@@ -90,6 +90,10 @@ class EstimatorResult:
     #: and ``n_events`` positionally, so inserting a field ahead of them
     #: silently rebinds those arguments.
     separation_detected: Optional[bool] = None
+    #: Covariance estimator that produced ``se``/confidence intervals.
+    variance_estimator: Literal["model_based", "cluster_robust"] = "model_based"
+    #: Distinct groups among the exact complete rows used by a clustered fit.
+    cluster_count: Optional[int] = None
 
 
 class _UncodeableDesign(Exception):
@@ -285,6 +289,8 @@ def fit_estimator(
     kind: EstimatorKind | str,
     term: Optional[str] = None,
     source_by_design_column: Optional[Mapping[str, str]] = None,
+    variance_estimator: Literal["model_based", "cluster_robust"] = "model_based",
+    cluster_groups: Any = None,
 ) -> EstimatorResult:
     """Fit a supported estimator and capture failures as non-converged results.
 
@@ -323,6 +329,22 @@ def fit_estimator(
     if kind not in {"logistic", "linear"}:
         raise NotImplementedError(f"estimator kind {kind!r} is not implemented")
 
+    if variance_estimator not in {"model_based", "cluster_robust"}:
+        raise NotImplementedError(
+            f"variance estimator {variance_estimator!r} is not implemented"
+        )
+    if variance_estimator == "cluster_robust" and cluster_groups is None:
+        return EstimatorResult(
+            None,
+            None,
+            None,
+            None,
+            0,
+            False,
+            "cluster-robust covariance requires an exact group vector",
+            variance_estimator="cluster_robust",
+        )
+
     x_df = pd.DataFrame(X).copy()
     y_series = pd.Series(y).copy()
     if len(x_df) != len(y_series):
@@ -335,13 +357,25 @@ def fit_estimator(
             False,
             _join_notes("X/y length mismatch", cohort_note),
         )
-    combined = pd.concat(
-        [
-            x_df.reset_index(drop=True),
-            y_series.reset_index(drop=True).rename("__y__"),
-        ],
-        axis=1,
-    )
+    columns = [
+        x_df.reset_index(drop=True),
+        y_series.reset_index(drop=True).rename("__y__"),
+    ]
+    if variance_estimator == "cluster_robust":
+        groups = pd.Series(cluster_groups).reset_index(drop=True)
+        if len(groups) != len(x_df):
+            return EstimatorResult(
+                None,
+                None,
+                None,
+                None,
+                0,
+                False,
+                _join_notes("X/group length mismatch", cohort_note),
+                variance_estimator="cluster_robust",
+            )
+        columns.append(groups.rename("__cluster_group__"))
+    combined = pd.concat(columns, axis=1)
     combined = combined.dropna()
     n = int(len(combined))
     if n == 0:
@@ -353,6 +387,29 @@ def fit_estimator(
             0,
             False,
             _join_notes("no complete rows", cohort_note),
+        )
+    used_groups = (
+        combined.pop("__cluster_group__")
+        if variance_estimator == "cluster_robust"
+        else None
+    )
+    cluster_count = (
+        int(used_groups.nunique(dropna=False)) if used_groups is not None else None
+    )
+    if cluster_count is not None and cluster_count < 2:
+        return EstimatorResult(
+            None,
+            None,
+            None,
+            None,
+            n,
+            False,
+            _join_notes(
+                "cluster-robust covariance requires at least two complete-row groups",
+                cohort_note,
+            ),
+            variance_estimator="cluster_robust",
+            cluster_count=cluster_count,
         )
     x_df = combined.drop(columns=["__y__"])
     y_series = combined["__y__"]
@@ -468,8 +525,21 @@ def fit_estimator(
                 ),
             )
         fit_note = cohort_note
+        if cluster_count is not None:
+            fit_note = _join_notes(
+                fit_note,
+                f"cluster-robust covariance across {cluster_count} groups",
+            )
         if kind == "linear":
-            result = sm.OLS(y_series.astype(float), x_const).fit()
+            linear_fit = sm.OLS(y_series.astype(float), x_const)
+            result = (
+                linear_fit.fit(
+                    cov_type="cluster",
+                    cov_kwds={"groups": used_groups},
+                )
+                if variance_estimator == "cluster_robust"
+                else linear_fit.fit()
+            )
             coef = float(result.params[coefficient_name])
             ci_low, ci_high = _conf_interval_for(result, coefficient_name)
             se = _float_or_none(result.bse[coefficient_name])
@@ -489,6 +559,8 @@ def fit_estimator(
                     source_by_design_column=source_by_design_column,
                     exponentiate=False,
                 ),
+                variance_estimator=variance_estimator,
+                cluster_count=cluster_count,
             )
 
         if len(set(y_series.astype(int).tolist())) < 2:
@@ -501,7 +573,19 @@ def fit_estimator(
                 False,
                 _join_notes("binary outcome has fewer than two classes", cohort_note),
             )
-        result = sm.Logit(y_series.astype(float), x_const).fit(disp=False, maxiter=100)
+        logistic_fit = sm.Logit(y_series.astype(float), x_const)
+        result = logistic_fit.fit(
+            disp=False,
+            maxiter=100,
+            **(
+                {
+                    "cov_type": "cluster",
+                    "cov_kwds": {"groups": used_groups},
+                }
+                if variance_estimator == "cluster_robust"
+                else {}
+            ),
+        )
         separated, separation_note = _logistic_separation(result)
         coef = float(result.params[coefficient_name])
         ci_low, ci_high = _conf_interval_for(result, coefficient_name)
@@ -528,6 +612,8 @@ def fit_estimator(
                     separation_note,
                 ),
                 separation_detected=separated,
+                variance_estimator=variance_estimator,
+                cluster_count=cluster_count,
             )
         return EstimatorResult(
             point,
@@ -546,6 +632,8 @@ def fit_estimator(
             ),
             n_events=n_events,
             separation_detected=separated,
+            variance_estimator=variance_estimator,
+            cluster_count=cluster_count,
         )
     except Exception as exc:
         return EstimatorResult(
@@ -556,6 +644,8 @@ def fit_estimator(
             n,
             False,
             _join_notes(str(exc), cohort_note),
+            variance_estimator=variance_estimator,
+            cluster_count=cluster_count,
         )
 
 

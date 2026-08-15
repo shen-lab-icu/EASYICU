@@ -51,6 +51,35 @@ def test_bool_auto_aggregation_is_occurrence_not_count_or_majority() -> None:
     assert str(result["rrt"].dtype) == "bool"
 
 
+def test_r_style_merge_retains_owner_receipt_sidecars() -> None:
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 1.0],
+            "sofa2_resp": [0.0, 2.0],
+            "sofa2_resp_observed": [False, True],
+            "sofa2_resp_available": [False, True],
+            "callback_internal_helper": [10, 20],
+        }
+    )
+
+    merged = compat.merge_concepts_r_style(
+        {"sofa2_resp": frame},
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    assert list(merged.columns) == [
+        "stay_id",
+        "charttime",
+        "sofa2_resp",
+        "sofa2_resp_observed",
+        "sofa2_resp_available",
+    ]
+    assert merged["sofa2_resp_observed"].tolist() == [False, True]
+    assert merged["sofa2_resp_available"].tolist() == [False, True]
+
+
 def test_miiv_rrt_keeps_charted_points_and_expands_procedure_windows() -> None:
     """A mixed MIIV RRT source must not erase either source representation."""
 

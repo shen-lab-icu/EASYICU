@@ -19,7 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from ..audits.envelope_consumers import StepSummaryFractionEnvelopeDualReader
+from ..audits.envelope_consumers import (
+    RegisteredOutputEnvelopeConsumer,
+    StepSummaryFractionEnvelopeDualReader,
+)
 from ..audits.validators import (
     ClinicalConstraintValidator,
     CrossStepCohortLockValidator,
@@ -35,6 +38,10 @@ from ..audits.validators import (
 )
 from ..authority.plausibility import FlagOnlyPlausibilityScope
 from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND
+from ..contracts.descriptive_execution import (
+    EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+    exposure_outcome_distribution_result_receipt_valid,
+)
 from ..contracts.runtime import ValidationFinding
 from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
@@ -50,10 +57,12 @@ from .envelope_sealing import (
     compile_sealed_step_result_shadow,
 )
 from .figure_preparation import _family_has_deterministic_figure_renderer
+from .figure_plan_binding import validate_step_planned_figure_contract_binding
 
 
 _PRIMARY_DETERMINISTIC_RUNNERS: set[str] = {
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+    EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
     SURVIVAL_PRIMARY_ANALYSIS_KIND,
 }
 
@@ -103,6 +112,8 @@ def _primary_runner_core_estimate_present(
             and isinstance(contracts, list)
             and len(contracts) == 1
         )
+    if kind == EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND:
+        return exposure_outcome_distribution_result_receipt_valid(step_summary)
     if kind in ("causal_primary_iptw", "ordinal_dose_response"):
         return step_summary.get("adjusted_effect") is not None
     if step_summary.get("hazard_ratio") is not None:
@@ -214,6 +225,7 @@ def _evaluate_final_deterministic_gates(
     script_text: str,
     attempt_id: str,
     checkpoint_id: str,
+    evidence_store: Any,
     stat_validator: StatisticalValidator,
     clinical_validator: ClinicalConstraintValidator,
     statistical_guard: StatisticalGuard,
@@ -306,12 +318,23 @@ def _evaluate_final_deterministic_gates(
         final_fraction_envelope_validator=StepSummaryFractionEnvelopeDualReader(),
         final_fraction_envelope=result_envelope_snapshot.envelope,
         final_fraction_current_status=current_step_status,
+        final_registered_output_envelope_validator=(
+            RegisteredOutputEnvelopeConsumer()
+        ),
+        final_registered_output_evidence_store=evidence_store,
     )
     contract_findings.extend(
         figure_contract_validator.audit(
             step=step,
             out_dir=out_dir,
             run_dir=run_dir,
+            step_summary=step_summary,
+        )
+    )
+    contract_findings.extend(
+        validate_step_planned_figure_contract_binding(
+            step=step,
+            out_dir=out_dir,
             step_summary=step_summary,
         )
     )

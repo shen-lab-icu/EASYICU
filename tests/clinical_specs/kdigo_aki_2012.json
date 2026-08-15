@@ -1,0 +1,8 @@
+{
+  "source": "KDIGO 2012; MIT-LCP kdigo_stages.sql",
+  "creatinine_vectors": [
+    {"current": 4.5, "low_48h": 4.0, "low_7d": 4.0, "expected_stage": 3},
+    {"current": 4.0, "low_48h": 3.7, "low_7d": 3.0, "expected_stage": 3},
+    {"current": 4.0, "low_48h": 3.71, "low_7d": 3.0, "expected_stage": 0}
+  ]
+}

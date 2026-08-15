@@ -233,6 +233,20 @@ def build_article_analysis_contract(
         display_modules = [
             module for module in display_modules if module.role == "data_quality"
         ]
+    from ..planning.dependence_authority import context_counts_only_authority
+
+    if context_counts_only_authority(context):
+        # The only typed baseline-context owner is Table One, which this
+        # authority forbids. The generic distribution module is also redundant:
+        # the required typed exposure/outcome product owns those counts and its
+        # downstream figure owns the display. Retaining either module encourages
+        # a second, untyped or mislabeled result product.
+        display_modules = [
+            module
+            for module in display_modules
+            if module.role != "baseline_context"
+            and module.module_id != "distribution_prevalence"
+        ]
     for module in display_modules:
         if module.tier == "supplementary":
             continue
@@ -446,6 +460,17 @@ def _declared_primary_lineage_step_ids(plan: AnalysisPlan) -> Set[str]:
                     changed = True
                     break
     return allowed
+
+
+def declared_primary_lineage_step_ids(plan: AnalysisPlan) -> frozenset[str]:
+    """Expose the typed pre-execution primary lineage to adjacent owners.
+
+    Figure planning and article-content planning must use the same lineage
+    definition.  Returning an immutable projection keeps callers from
+    modifying the reporting owner's internal working set.
+    """
+
+    return frozenset(_declared_primary_lineage_step_ids(plan))
 
 
 #: Roles for which the SCHEMA, not this contract, fixes the product name.
@@ -1209,6 +1234,7 @@ __all__ = [
     "ArticleDisplayRequirement",
     "augment_plan_for_article_contract",
     "build_article_analysis_contract",
+    "declared_primary_lineage_step_ids",
     "empty_primary_lineage_reason",
     "render_article_analysis_contract_for_prompt",
     "roles_covered_by_artifacts",

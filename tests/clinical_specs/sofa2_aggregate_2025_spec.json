@@ -1,0 +1,7 @@
+{
+  "source": "SOFA-2 Table 2 aggregate and EasyICU completeness contract",
+  "components": {"sofa2_resp": 1, "sofa2_coag": 2, "sofa2_liver": 3, "sofa2_cardio": 4, "sofa2_cns": 1, "sofa2_renal": 2},
+  "expected_total": 13,
+  "expected_observed_components": 6,
+  "expected_available_components": 6
+}

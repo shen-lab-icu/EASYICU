@@ -59,7 +59,7 @@ from .runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
 )
-from ..schema import ResearchContext, TimeWindow
+from ..schema import EndpointSpec, ResearchContext, TimeWindow
 from ..research_context.typed import (
     MaterializedResearchInputs,
     ResearchContextV2,
@@ -471,6 +471,7 @@ def build_scientific_identity(
     cohort_name: str,
     database: str,
     target_outcome: Optional[str],
+    endpoint: Optional[EndpointSpec] = None,
     primary_exposure: Optional[str],
     cross_database_validation: Optional[Sequence[str]],
     inclusion_criteria: Optional[Sequence[str]],
@@ -524,6 +525,11 @@ def build_scientific_identity(
         "source_files": _source_file_identities(source_files),
         "disable_icu_context": bool(disable_icu_context),
     }
+    # Omit the coordinate for archived callers that predate endpoint authority;
+    # fresh declared endpoints are nevertheless part of the scientific input
+    # digest and therefore cannot drift across resume.
+    if endpoint is not None:
+        payload["endpoint"] = endpoint.model_dump(mode="json")
     if development_sampling is not None:
         payload["development_sampling"] = dict(development_sampling)
     if materialized_cohort_authority_ref is not None:
@@ -1516,6 +1522,39 @@ def _register_host_cohort_materialization(
             raise RunInputIdentityError(
                 "host cohort materializer did not publish its attrition ledger"
             )
+        # The host cohort materializer is a real planned producer even though
+        # it does not execute inside a step runner. Downstream typed-input
+        # validation resolves its sealed EvidenceStore copy, while figure
+        # lineage additionally requires the producing step's immutable output
+        # copy. Publish that standard step output here from the same canonical
+        # ledger; do not make the figure validator special-case a host producer
+        # or accept a weaker evidence path.
+        flow_step_output = (
+            run_dir
+            / "steps"
+            / cohort_product_step.step_id
+            / "outputs"
+            / _HOST_COHORT_FLOW_SOURCE_NAME
+        )
+        flow_step_output.parent.mkdir(parents=True, exist_ok=True)
+        flow_digest = sha256_of_file(flow_path)
+        if flow_step_output.exists():
+            if (
+                flow_step_output.is_symlink()
+                or not flow_step_output.is_file()
+                or sha256_of_file(flow_step_output) != flow_digest
+            ):
+                raise RunInputIdentityError(
+                    "host cohort materializer found a conflicting immutable "
+                    "cohort-flow step output"
+                )
+        else:
+            shutil.copyfile(flow_path, flow_step_output)
+            if sha256_of_file(flow_step_output) != flow_digest:
+                raise RunInputIdentityError(
+                    "host cohort materializer could not verify its cohort-flow "
+                    "step output"
+                )
         try:
             flow_record = evidence.register_file(
                 kind="table",

@@ -1,7 +1,9 @@
-"""Sepsis detection based on SOFA-2 (2025 consensus).
+"""Experimental Sepsis-3 sensitivity phenotype based on SOFA-2.
 
 This module mirrors sepsis.py but uses SOFA-2 scores instead of SOFA-1.
-It provides a sep3_sofa2() function for Sepsis-3 detection using SOFA-2 scoring.
+It provides ``sep3_sofa2()`` for explicitly requested sensitivity analyses.
+It is not the canonical 2016 Sepsis-3 definition and must not be selected as a
+primary phenotype from a generic "sepsis" request.
 
 The suspected infection (SI) detection logic is reused from easyicu.sepsis.susp_inf.
 
@@ -42,7 +44,7 @@ def sep3_sofa2(
     si_upr: pd.Timedelta = pd.Timedelta(hours=24),
     keep_components: bool = False,
 ) -> pd.DataFrame:
-    """Detect Sepsis-3 using SOFA-2 scores (ΔSOFA-2 ≥ threshold within SI window).
+    """Detect the experimental SOFA-2 Sepsis sensitivity phenotype.
 
     This function mirrors sep3() from sepsis.py but uses SOFA-2 scores instead of SOFA-1.
     The detection criteria remain the same: ≥2 point increase in score within the

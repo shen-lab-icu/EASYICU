@@ -45,7 +45,9 @@ def _without_base_score_caveats(values: Sequence[str]) -> list[str]:
     ]
 
 
-def _time_representation(descriptor: ConceptDescriptor) -> ConceptDescriptor:
+def _time_representation(
+    descriptor: ConceptDescriptor, *, transform: str
+) -> ConceptDescriptor:
     caveats = _without_base_score_caveats(descriptor.clinical_caveats)
     caveat = (
         "This column is a relative event/observation time, not the clinical "
@@ -53,6 +55,26 @@ def _time_representation(descriptor: ConceptDescriptor) -> ConceptDescriptor:
     )
     if caveat not in caveats:
         caveats.append(caveat)
+    forbidden = list(descriptor.forbidden_transformations)
+    if transform == "window_first_time":
+        first_observation_caveat = (
+            "This is the first non-null observation inside the materialization "
+            "window, not a certified clinical onset or treatment initiation."
+        )
+        absence_caveat = (
+            "A missing first-observation time means no qualifying observation "
+            "was recorded inside that window; it does not prove that the event "
+            "or treatment was absent."
+        )
+        restriction = (
+            "Do not interpret this first-observation time as clinical onset or "
+            "treatment initiation without typed state-transition authority."
+        )
+        for item in (first_observation_caveat, absence_caveat):
+            if item not in caveats:
+                caveats.append(item)
+        if restriction not in forbidden:
+            forbidden.append(restriction)
     return descriptor.model_copy(
         update={
             "role": VariableRole.TIME,
@@ -64,6 +86,7 @@ def _time_representation(descriptor: ConceptDescriptor) -> ConceptDescriptor:
             "ordinal_levels": None,
             "pitfalls": [],
             "clinical_caveats": caveats,
+            "forbidden_transformations": forbidden,
         }
     )
 
@@ -108,7 +131,7 @@ def compile_wide_representation_semantics(
     for descriptor in descriptors:
         transform = str(descriptor.unit_normalization or "").strip().lower()
         if transform in _RELATIVE_TIME_TRANSFORMS:
-            compiled.append(_time_representation(descriptor))
+            compiled.append(_time_representation(descriptor, transform=transform))
         elif transform in _MEAN_TRANSFORMS:
             compiled.append(_mean_representation(descriptor))
         else:

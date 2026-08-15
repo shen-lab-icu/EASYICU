@@ -67,6 +67,16 @@ def test_the_optional_framing_still_covers_the_other_uses():
     assert "MANDATORY when a timing/onset/incident question is being gated" in text
 
 
+def test_wide_first_time_is_never_presented_as_clinical_onset():
+    text = " ".join(_text().split())
+
+    assert "first non-null observation inside the materialization window" in text
+    assert "not a certified initiation/onset time" in text
+    assert "does not prove that the event or treatment never occurred" in text
+    assert "`<c>_first_time` is the initiation/onset time" not in text
+    assert "a state's `_first_time`" not in text
+
+
 def test_the_coder_is_given_the_exact_schema_key_names():
     """verify39: one key name cost the whole step, after it had already run.
 

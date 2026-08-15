@@ -16,7 +16,8 @@ bounded data sample.
 
 from __future__ import annotations
 
-import hashlib
+from ..canonical_json import sha256_file as _sha256_file
+
 import math
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -31,14 +32,6 @@ import pyarrow.parquet as pq
 from ..concept_availability import normalize_concept_name
 
 LONGITUDINAL_DISCOVERY_SCHEMA_VERSION = "easyicu.longitudinal_discovery/1"
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 @dataclass(frozen=True)

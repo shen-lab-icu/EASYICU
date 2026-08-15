@@ -26,7 +26,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from easyicu.concept.export_metadata import (
     ExportMetadataError,
@@ -38,6 +38,7 @@ from easyicu.concept_output_sources import (
     ConceptLoadPlanError,
     compile_concept_load_plan,
 )
+from easyicu.databases import normalize_database_key
 from easyicu.outcome_availability import structural_outcome_unavailability
 from easyicu.webserver.input_validation import parse_bool
 
@@ -226,68 +227,44 @@ def _has_glob(path: Path, pattern: str) -> bool:
 
 
 def _detect_database(path: Path) -> str:
-    """Light DB heuristic — mirrors DataConverter._detect_database without
-    constructing a converter (which would validate/scan the folder)."""
-    s = str(path).lower()
-    if "eicu" in s:
-        return "eicu"
-
-    # CONTENT BEATS NAME for the MIMIC pair. The two generations differ only in
-    # their stay-id column (stay_id vs icustay_id), and a path string is a weak
-    # signal: the token can come from an unrelated ancestor directory, and a
-    # prepared export is often filed under a name with no version at all.
-    # Read the schema first whenever the folder actually holds MIMIC tables.
-    by_schema = _detect_mimic_version_by_schema(path)
-    if by_schema:
-        return by_schema
-    if any(
-        token in s for token in ("mimiciii", "mimic-iii", "mimic_iii", "mimic3", "miii")
-    ):
-        return "miii"
-    if any(
-        token in s for token in ("mimiciv", "mimic-iv", "mimic_iv", "mimic4", "miiv")
-    ):
-        return "miiv"
-    if "aumc" in s:
-        return "aumc"
-    if "hirid" in s:
-        return "hirid"
-    if "sicdb" in s or "sic" in s:
-        return "sicdb"
-
-    names = []
-    try:
-        names = [
-            p.name.lower()
-            for p in list(path.glob("*.csv*")) + list(path.glob("*.parquet"))
-        ]
-        for sub in path.iterdir():
-            if sub.is_dir():
-                names.append(sub.name.lower() + "/")
-    except OSError:
-        pass
-    if any(n.startswith("patient.") or n == "patient/" for n in names):
-        return "eicu"
-    if any(n.startswith("general_table") or n.startswith("general/") for n in names):
-        return "hirid"
-    # An ambiguous "mimic" path is resolved by SCHEMA, not by table names.
-    # Both versions ship icustays/patients/admissions, so a converted MIMIC-IV
-    # in a flat parquet layout looks exactly like MIMIC-III by filename alone.
-    # The stay-id column is what actually differs, and it is what downstream
-    # extraction depends on.
-    has_admissions = any(
-        n.startswith("admissions.") or n == "admissions/" for n in names
+    """Map the canonical schema-first identity to Web surface aliases."""
+    from easyicu.databases.detection import (
+        DatabaseDetectionError,
+        detect_database_identity,
     )
-    if any(n in {"icu/", "hosp/"} for n in names):
-        return "miiv"
-    if has_admissions or any(n.startswith("icustays.") for n in names):
-        by_schema = _detect_mimic_version_by_schema(path)
-        if by_schema:
-            return by_schema
-        # Nothing on disk distinguishes the version — say so rather than
-        # guessing one whose ID column may be wrong.
-        return "unknown"
-    return "unknown"
+
+    detected = detect_database_identity(path, strict=False)
+    manifest_candidates: Set[str] = set()
+    for name in _MODULE_MANIFESTS:
+        manifest_path = path / name
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        declared = str(payload.get("database") or "").strip()
+        if not declared:
+            continue
+        try:
+            manifest_candidates.add(detect_database_identity(database=declared))
+        except ValueError as exc:
+            raise DatabaseDetectionError(
+                "database_detection_manifest_invalid",
+                f"Unsupported database identity {declared!r} in {manifest_path}.",
+                data_path=path,
+            ) from exc
+    candidates = set(manifest_candidates)
+    if detected != "unknown":
+        candidates.add(detected)
+    if len(candidates) > 1:
+        raise DatabaseDetectionError(
+            "database_detection_ambiguous",
+            f"Conflicting database evidence in {path}: {sorted(candidates)}.",
+            data_path=path,
+            candidates=candidates,
+        )
+    if candidates:
+        detected = next(iter(candidates))
+    return {"mimic": "miii", "sic": "sicdb"}.get(detected, detected)
 
 
 #: Columns that appear in exactly one MIMIC generation.
@@ -362,7 +339,22 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
 
-    db_key = _detect_database(path)
+    from easyicu.databases.detection import DatabaseDetectionError
+
+    try:
+        db_key = _detect_database(path)
+    except DatabaseDetectionError as exc:
+        return {
+            "ok": False,
+            "error": exc.code,
+            "path": str(path),
+            "candidates": list(exc.candidates),
+            "ready": False,
+            "privacy": {
+                "raw_rows_read": False,
+                "patient_identifiers_returned": False,
+            },
+        }
     db_label = _DB_LABELS.get(db_key, "Unknown")
 
     status = _check_data_status(path, db_key)
@@ -397,6 +389,25 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
             "layout": ["No recognized ICU tables", "未识别到 ICU 数据表"],
             "source": "unknown",
             "tables": 0,
+            "modules": 0,
+            "ready": False,
+            "missing_tables": missing_tables,
+            "privacy": {
+                "raw_rows_read": False,
+                "patient_identifiers_returned": False,
+            },
+        }
+
+    if db_key == "unknown":
+        return {
+            "ok": False,
+            "error": "database_detection_unavailable",
+            "path": str(path),
+            "db": db_label,
+            "db_key": db_key,
+            "layout": layout,
+            "source": source,
+            "tables": tables,
             "modules": 0,
             "ready": False,
             "missing_tables": missing_tables,
@@ -2701,6 +2712,129 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
         "modules": modules,
         "files": files,
         "summary": summary,
+    }
+
+
+def validate_research_pipeline_source(
+    raw_path: str,
+    *,
+    database: Any,
+    expected_binding: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Bind a pipeline launch to one prepared, manifest-backed data package."""
+
+    path = Path(raw_path).expanduser()
+    try:
+        path = path.resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise ExportCohortError("research_pipeline_source_not_found") from exc
+    if not path.is_dir():
+        raise ExportCohortError("research_pipeline_source_not_directory")
+
+    requested = str(database or "").strip()
+    if not requested:
+        raise ExportCohortError("research_pipeline_database_required")
+    try:
+        requested_database = normalize_database_key(requested)
+    except KeyError as exc:
+        raise ExportCohortError(
+            "research_pipeline_database_unknown",
+            {"database": requested},
+        ) from exc
+
+    candidates = (path / "_manifest.json", path / "easyicu_export_manifest.json")
+    if not any(item.exists() for item in candidates):
+        raw_files = sorted(
+            item.suffix.lower()
+            for item in path.iterdir()
+            if item.is_file()
+            and item.suffix.lower() in {".csv", ".xlsx", ".xls"}
+        )
+        raise ExportCohortError(
+            "research_pipeline_manifest_required",
+            {"raw_file_types": sorted(set(raw_files))},
+        )
+
+    from easyicu.research_agent.intake.export_package import (
+        ExportPackageError,
+        open_export_package,
+    )
+
+    try:
+        with open_export_package(path) as package:
+            try:
+                manifest_database = normalize_database_key(package.database)
+            except KeyError as exc:
+                raise ExportCohortError(
+                    "research_pipeline_manifest_database_unknown",
+                    {"database": package.database},
+                ) from exc
+            if manifest_database != requested_database:
+                raise ExportCohortError(
+                    "research_pipeline_database_mismatch",
+                    {
+                        "requested_database": requested_database,
+                        "manifest_database": manifest_database,
+                    },
+                )
+            binding = {
+                "schema_version": "easyicu.web-prepared-package-binding/1",
+                "database": requested_database,
+                "package_kind": package.manifest_kind,
+                "export_authority_sha256": package.authority_sha256,
+                "column_metadata_sha256": package.column_metadata_sha256,
+                "feature_definitions_sha256": package.feature_definitions_sha256,
+                "source_seal_kind": package.source_seal_kind,
+                "manifest": {
+                    "relative_path": package.manifest_path.name,
+                    "sha256": package.manifest_sha256,
+                    "size_bytes": package.manifest_path.stat().st_size,
+                },
+                "files": [
+                    {
+                        "relative_path": item.relative_path,
+                        "sha256": item.identity.sha256,
+                        "size_bytes": item.identity.size,
+                    }
+                    for item in sorted(package.files, key=lambda value: value.relative_path)
+                ],
+            }
+    except ExportCohortError:
+        raise
+    except (ExportPackageError, FileNotFoundError, OSError) as exc:
+        if expected_binding is not None:
+            raise ExportCohortError(
+                "research_pipeline_package_binding_changed",
+                {
+                    "expected_binding_sha256": expected_binding.get(
+                        "binding_sha256"
+                    ),
+                    "observed_binding_sha256": None,
+                },
+            ) from exc
+        raise ExportCohortError("research_pipeline_manifest_invalid") from exc
+
+    binding["binding_sha256"] = hashlib.sha256(
+        json.dumps(
+            binding,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if expected_binding is not None and dict(expected_binding) != binding:
+        raise ExportCohortError(
+            "research_pipeline_package_binding_changed",
+            {
+                "expected_binding_sha256": expected_binding.get("binding_sha256"),
+                "observed_binding_sha256": binding["binding_sha256"],
+            },
+        )
+
+    return {
+        "ok": True,
+        "path": str(path),
+        "binding": binding,
     }
 
 

@@ -66,6 +66,25 @@ def test_bare_word_model_does_not_force_prediction(ra):
     assert str(infer_study_design_family(ctx)) == "association"
 
 
+def test_prevalence_and_association_without_structured_exposure_routes_association(ra):
+    """An explicit association request must beat descriptive fallback ties."""
+
+    ctx = ra.ResearchContext(
+        research_question=(
+            "Estimate syndrome prevalence and its association with in-hospital "
+            "mortality, with a transparent reproducible cohort definition and "
+            "visible denominator."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+
+    assert ra.infer_analysis_type(ctx).key == "association_study"
+
+
 def test_primary_cohort_workflow_boilerplate_does_not_override_scientific_family(ra):
     """One required cohort definition plus data QC is workflow, not sensitivity."""
 
@@ -189,8 +208,11 @@ def test_contrastive_causal_disclaimers_do_not_select_the_causal_family(ra):
         "as observational rather than causal.",
         "Report an associational estimate instead of a causal one.",
         "Summarise the cohort with a non-causal descriptive audit.",
+        "Summarise the cohort with non_causal=true and descriptive outputs.",
         "Describe the exposure-outcome distribution. Do Not draw Causal "
         "conclusions from it.",
+        "只报告描述性、未调整、非因果的组别绝对风险和风险差。",
+        "不得生成因果结论，只汇总队列的观察分布。",
     )
     for text in disclaimed:
         assert ra.infer_analysis_type(_ctx(text)).key != "causal_inference", text
@@ -419,6 +441,59 @@ def test_infer_analysis_type_respects_user_preference_hint(ra):
     assert spec.key == "validation"
 
 
+def test_canonical_descriptive_preference_governs_all_preplan_contracts(ra):
+    """A canonical key must not be mistaken for an unsupported alias.
+
+    The Web StudyContext stores exact registry keys.  A live descriptive run
+    reached ResearchContext with ``descriptive_epidemiology`` intact, but the
+    preference resolver looked only in the alias table and discarded it.  The
+    downstream study/article contracts therefore re-inferred an association
+    solely because the context also contained an exposure and outcome.
+    """
+
+    from easyicu.research_agent.planning.study_design import (
+        build_study_design_brief,
+    )
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+    )
+
+    schema = ra.schema
+    ctx = ra.ResearchContext(
+        research_question=(
+            "Describe observed absolute mortality risks in exposed and "
+            "unexposed ICU stays; report an unadjusted, noncausal risk difference."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=10, n_stays=12
+        ),
+        variables=[
+            ra.ConceptDescriptor(
+                name="exposure", role=schema.VariableRole.OTHER, dtype="int64"
+            ),
+            ra.ConceptDescriptor(
+                name="death", role=schema.VariableRole.OUTCOME, dtype="int64"
+            ),
+        ],
+        primary_exposure="exposure",
+        target_outcome="death",
+        user_preferences=schema.UserPreferences(
+            inferred_analysis_family="descriptive_epidemiology",
+            must_have_outputs=(
+                "Observed absolute risks and an unadjusted, noncausal risk difference."
+            ),
+        ),
+    )
+
+    assert ra.infer_analysis_type(ctx).key == "descriptive_epidemiology"
+    brief = build_study_design_brief(ctx)
+    contract = build_article_analysis_contract(ctx, brief=brief)
+    assert brief.analysis_family == "descriptive"
+    assert contract.source_analysis_type == "descriptive_epidemiology"
+    assert contract.analysis_family == "descriptive"
+    assert "primary_estimand" not in contract.required_roles
+
+
 def test_infer_analysis_type_prefers_validation_over_prediction_keywords(ra):
     schema = ra.schema
     ctx = ra.ResearchContext(
@@ -595,8 +670,12 @@ def test_planner_prompt_suggests_inferred_family(ra):
             if "INFERRED ANALYSIS FAMILY SUGGESTION" in line
         )
         assert expected_family in suggested_line, (question, suggested_line)
-        # The full catalog still follows as reference.
-        assert "ANALYSIS-TYPE CATALOG" in prompt
+        # `2ef77e7` replaced the flat ANALYSIS-TYPE CATALOG with two targeted
+        # blocks: the inferred family's exact scientific actions, plus a switch
+        # menu keeping every other family selectable. Pin both so the Planner
+        # can never be left with a suggestion and no menu behind it.
+        assert "SCIENTIFIC ACTIONS (inferred family; exact ids):" in prompt
+        assert "ANALYSIS-TYPE SWITCH MENU (all families remain selectable):" in prompt
 
 
 def test_parse_fills_inferred_analysis_type_only_when_agent_omits_it(ra):
@@ -703,6 +782,48 @@ def test_parse_preserves_agent_selected_family_and_rationale(ra):
 
     assert plan.analysis_type == "association_study"
     assert "fixed binary endpoint" in plan.rationale
+
+
+def test_parse_rejects_switch_from_host_authorized_analysis_family(ra):
+    import importlib
+
+    agents = importlib.import_module("easyicu.research_agent.agents.core")
+    ctx = ra.ResearchContext(
+        research_question="Estimate the adjusted association with hospital death.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="miiv", n_patients=200, n_stays=200
+        ),
+        variables=[],
+        target_outcome="death",
+        primary_exposure="exposure",
+        user_preferences=ra.schema.UserPreferences(
+            inferred_analysis_family="association_study"
+        ),
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "analysis_type": "survival",
+            "steps": [
+                {
+                    "step_id": "01_model",
+                    "planned_analysis_role": "primary",
+                    "intent": "Fit a Cox model instead.",
+                    "method": "cox_proportional_hazards",
+                    "expected_outputs": ["table:hazard_ratio"],
+                }
+            ],
+        }
+    )
+    planner = agents.PlannerAgent.__new__(agents.PlannerAgent)
+    planner.last_dropped_plan_keys = {"top_level": [], "steps": []}
+
+    with pytest.raises(ValueError, match="host-authorized analysis family"):
+        agents.PlannerAgent._parse(planner, raw, ctx)
+
+    prompt = agents.PlannerAgent.request_messages(ctx)[1].content
+    assert "HOST-AUTHORIZED ANALYSIS FAMILY" in prompt
+    assert "do not switch families" in prompt
 
 
 def test_parse_rejects_unknown_analysis_type_instead_of_bypassing_contract(ra):

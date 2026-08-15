@@ -14,8 +14,11 @@ interactive explanation, or another browser-viewable artifact.
 3. Label simulated values and unvalidated formulas explicitly. Never invent a
    clinically validated model, treatment recommendation, effect estimate, or
    patient-specific claim.
-4. Write the artifact through the project workspace tool. Do not paste a full
+4. Use the write tool only to create a new artifact. Do not paste a full
    substitute code block into chat when the requested file can be created.
+   To change an existing file, read it first and use the exact-edit tool with
+   the returned `sha256` as `expected_sha256`, so unseen content or another
+   session's changes cannot be silently overwritten.
 5. Read the saved file back, run the bounded static check, then request the web
    preview tool.
 6. Summarize what was actually written and checked. If a tool was blocked, say
@@ -23,4 +26,6 @@ interactive explanation, or another browser-viewable artifact.
 
 Keep all files relative to the isolated EasyICU project workspace. Do not ask
 for or embed patient rows, identifiers, credentials, private source paths, or
-external tracking scripts.
+external tracking scripts. Workspace file contents read by Pi may be sent to the
+configured Pi model service, so never place PHI, patient rows, credentials, or
+private clinical data in this workspace.

@@ -1,0 +1,60 @@
+{
+  "schema_version": "easyicu.figure2_h2_scientific_protocol/2",
+  "task_id": "h2_vasopressor_causal",
+  "protocol_version": "h2_vasopressor_causal/20260810-v4",
+  "review_status": "human_attestation_pending",
+  "literature_search_cutoff": "2026-08-09",
+  "current_source_capture": {
+    "source": "mimic_iv_inputevents_derived_typed_vasopressor",
+    "audited_window_hours": [0, 24],
+    "positive_record_semantics": "A typed source record supports recorded administration during ICU hours 0-24.",
+    "absent_record_semantics": "no_recorded_administration_not_verified_non_use",
+    "pre_icu_treatment_history_authority": false,
+    "initiator_status_authorized": false,
+    "prevalent_user_status_authorized": false,
+    "verified_non_use_available": false,
+    "binary_control_arm_authorized": false,
+    "causal_contrast_authorized": false,
+    "decision": "fail_closed",
+    "reason_code": "H2_VERIFIED_NON_USE_UNAVAILABLE"
+  },
+  "current_formal_scope": "source_specific_fail_closed_feasibility_only_no_effect_estimation",
+  "future_unblock_contract": {
+    "status": "future_design_only_not_executable_under_current_materialization",
+    "required_source_coverage": [
+      "complete linked medication-administration capture across the prespecified pre-ICU lookback and ICU hours 0-24",
+      "per-stay coverage receipts for ED, operating-room, ward, and ICU medication sources",
+      "time-resolved evidence that distinguishes treatment initiation, prevalent use, and verified non-use"
+    ],
+    "coverage_unit": "per_icu_stay",
+    "pre_icu_lookback_must_be_prespecified": true,
+    "must_distinguish": ["true_initiator", "prevalent_user", "verified_non_user"],
+    "new_clinical_and_methods_review_required": true
+  },
+  "current_scientific_result": "treatment_contrast_not_identifiable_from_available_capture_contract",
+  "reportability_rule": "With the selected MIMIC-IV inputevents-derived ICU capture, report the structured H2_VERIFIED_NON_USE_UNAVAILABLE feasibility result and do not emit a control arm or treatment-effect estimate. A future causal contrast requires a separately reviewed per-stay source/coverage contract spanning prespecified pre-ICU and ICU medication history and distinguishing initiators, prevalent users, and verified non-users.",
+  "forbidden_actions": ["convert_missing_vasopressor_record_to_verified_non_use", "construct_binary_control_arm", "fit_psm_or_iptw_before_capture_authority", "interpret_recorded_administration_as_complete_treatment_history"],
+  "citations": [
+    {
+      "citation_id": "target_statement_2025",
+      "title": "The TARGET Statement: a guideline for reporting emulations of target trials",
+      "year": 2025,
+      "url": "https://www.bmj.com/content/390/bmj-2025-087179",
+      "doi": "10.1136/bmj-2025-087179"
+    },
+    {
+      "citation_id": "ssc_adult_2026",
+      "title": "Surviving Sepsis Campaign International Guidelines for Management of Sepsis and Septic Shock 2026",
+      "year": 2026,
+      "url": "https://www.sccm.org/clinical-resources/guidelines/guidelines/surviving-sepsis-campaign-international-guidelines-for-management-of-sepsis-and-septic-shock-2026",
+      "doi": "10.1097/CCM.0000000000007075"
+    },
+    {
+      "citation_id": "mimic_iv_inputevents",
+      "title": "MIMIC-IV ICU inputevents table documentation",
+      "year": 2026,
+      "url": "https://mimic.mit.edu/docs/IV/modules/icu/inputevents.html",
+      "doi": null
+    }
+  ]
+}

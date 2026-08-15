@@ -1241,7 +1241,11 @@ print(json.dumps(summary))
     )
 
     if sealed_case == "parent_receipt":
-        original_snapshot_reader = pipeline_execute.read_digest_bound_artifact_snapshot
+        from easyicu.research_agent.execution import publication_figure
+
+        original_snapshot_reader = (
+            publication_figure.read_digest_bound_artifact_snapshot
+        )
         host_snapshot_calls = 0
 
         def mutate_parent_at_host_receipt(**kwargs):
@@ -1256,7 +1260,7 @@ print(json.dumps(summary))
             return original_snapshot_reader(**kwargs)
 
         monkeypatch.setattr(
-            pipeline_execute,
+            publication_figure,
             "read_digest_bound_artifact_snapshot",
             mutate_parent_at_host_receipt,
         )

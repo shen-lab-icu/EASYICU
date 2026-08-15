@@ -6,6 +6,7 @@ integration on synthetic frames so the logic is covered in CI.
 """
 
 import hashlib
+import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -13,6 +14,7 @@ import pytest
 
 from easyicu.research_agent.cohort import materializer as M
 from easyicu.research_agent.cohort.schema import CohortDefinition, build_cohort
+from easyicu.research_agent.intake import export_package as intake
 
 
 def _sha256(path):
@@ -161,7 +163,12 @@ def test_load_concept_uses_public_easyicu_api_after_package_move(monkeypatch, tm
     assert calls == [
         (
             ["lact"],
-            {"database": "miiv", "data_path": str(tmp_path), "patient_ids": None},
+            {
+                "database": "miiv",
+                "data_path": str(tmp_path),
+                "patient_ids": None,
+                "keep_components": False,
+            },
         )
     ]
 
@@ -179,30 +186,28 @@ def test_summarize_timeseries_basic():
     assert r1.lact_measured == 1
 
 
-def test_summarize_timeseries_emits_first_and_last_event_time():
-    # The wide summary must carry the charttime of the first/last RECORDED
-    # value so exposure-timing (early-vs-delayed) is constructible. NaN rows
-    # (drug not running) must not count as the onset.
+def test_summarize_timeseries_emits_first_and_last_observation_time():
+    # These are observation coordinates, not treatment initiation. An explicit
+    # zero is a real observation and must remain the first_time even when a
+    # later positive dose is the first evidence of treatment in this window.
     df = pd.DataFrame(
         {
             "stay_id": [1, 1, 1, 1, 2],
             "charttime": [1, 2, 6, 9, 4],
-            # stay 1 starts the drug at hour 6; stay 2 at hour 4
-            "norepi_rate": [None, None, 0.04, 0.06, 0.10],
+            "norepi_rate": [None, 0.0, 0.04, 0.06, 0.10],
         }
     )
     out = M._summarize_timeseries(df, "norepi_rate", (0.0, 24.0))
     r1 = out[out.stay_id == 1].iloc[0]
-    assert r1.norepi_rate_first_time == 6.0  # onset, not the first NaN row
+    assert r1.norepi_rate_first_time == 2.0
     assert r1.norepi_rate_last_time == 9.0
     r2 = out[out.stay_id == 2].iloc[0]
     assert r2.norepi_rate_first_time == 4.0
 
 
-def test_first_time_uses_true_onset_for_categorical_event_concept():
-    # For a categorical/event concept the onset time must be the first RECORDED
-    # event, not the window start (regression: presence-coercion to 0/1 must not
-    # back-date the onset).
+def test_first_time_is_first_observation_for_categorical_concept():
+    # Presence encoding must not back-date the first observed categorical value
+    # to the window start. It still does not certify clinical onset/initiation.
     df = pd.DataFrame(
         {
             "stay_id": [1, 1, 1],
@@ -248,6 +253,9 @@ def test_build_trajectory_long_emits_per_timepoint_series(monkeypatch, tmp_path)
         "concept",
         "value_num",
         "value_str",
+        "evidence_state",
+        "owner_observed",
+        "owner_available",
     }
     # the None MAP row is dropped (not recorded); 3 map + 2 peep = 5 rows
     assert len(long_df) == 5
@@ -257,6 +265,122 @@ def test_build_trajectory_long_emits_per_timepoint_series(monkeypatch, tmp_path)
     s1_map = long_df[(long_df.stay_id == 1) & (long_df.concept == "map")]
     first_low = s1_map[s1_map.value_num < 65].sort_values("charttime").iloc[0]
     assert first_low.charttime == 2.0
+
+
+def test_trajectory_excludes_owner_unavailable_zero_and_preserves_locf_receipt(
+    monkeypatch, tmp_path
+):
+    synthetic = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 12.0, 24.0],
+            "sofa2_resp": [0.0, 0.0, 2.0],
+            "sofa2_resp_observed": [0, 1, 0],
+            "sofa2_resp_available": [0, 1, 1],
+        }
+    )
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+    monkeypatch.setattr(M, "_load_concept", lambda *args: synthetic.copy())
+
+    long_df, provenance = M.build_trajectory_long(
+        data_path=tmp_path,
+        concepts=["sofa2_resp"],
+        window=(0.0, 24.0),
+    )
+
+    assert long_df["charttime"].tolist() == [12.0, 24.0]
+    assert long_df["evidence_state"].tolist() == [
+        "direct_observed",
+        "owner_locf_available",
+    ]
+    assert long_df["owner_observed"].tolist() == [1, 0]
+    assert long_df["owner_available"].tolist() == [1, 1]
+    assert provenance["evidence_state_counts"] == {
+        "sofa2_resp": {
+            "unavailable": 1,
+            "direct_observed": 1,
+            "owner_locf_available": 1,
+        }
+    }
+    assert provenance["unavailable_value_rows_excluded"] == {"sofa2_resp": 1}
+    assert provenance["owner_receipt_concepts"] == ["sofa2_resp"]
+
+
+def _write_native_sofa2_package(tmp_path, *, include_available=True):
+    root = tmp_path / "native_sofa2"
+    root.mkdir()
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 12.0, 24.0],
+            "sofa2_resp": [0.0, 0.0, 2.0],
+            "sofa2_resp_observed": [0, 1, 0],
+            "sofa2_resp_available": [0, 1, 1],
+        }
+    )
+    if not include_available:
+        frame = frame.drop(columns=["sofa2_resp_available"])
+    frame.to_parquet(root / "scores.parquet", index=False)
+    concept_ids = [
+        "sofa2_resp",
+        "sofa2_resp_observed",
+        *(["sofa2_resp_available"] if include_available else []),
+    ]
+    manifest = {
+        "database": "miiv",
+        "format": "parquet",
+        "concept_selection": {
+            "mode": "explicit",
+            "modules": {"scores": concept_ids},
+        },
+        "files": [
+            {
+                "file": "scores.parquet",
+                "module": "scores",
+                "concepts": len(concept_ids),
+                "concept_ids": concept_ids,
+                "rows": len(frame),
+            }
+        ],
+        "feature_definitions": {"included": False},
+    }
+    (root / intake.NATIVE_MANIFEST).write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    return root
+
+
+def test_native_export_trajectory_preserves_owner_receipts(tmp_path):
+    root = _write_native_sofa2_package(tmp_path)
+
+    long_df, provenance = M.build_trajectory_long(
+        data_path=root,
+        database="miiv",
+        concepts=["sofa2_resp"],
+        window=(0.0, 24.0),
+    )
+
+    assert long_df["charttime"].tolist() == [12.0, 24.0]
+    assert long_df["evidence_state"].tolist() == [
+        "direct_observed",
+        "owner_locf_available",
+    ]
+    assert provenance["unavailable_value_rows_excluded"] == {"sofa2_resp": 1}
+    assert provenance["owner_receipt_concepts"] == ["sofa2_resp"]
+
+
+def test_native_export_trajectory_fails_closed_without_complete_owner_receipt(
+    tmp_path,
+):
+    root = _write_native_sofa2_package(tmp_path, include_available=False)
+
+    with pytest.raises(M.MaterializedMetadataError, match="owner.*receipt"):
+        M.build_trajectory_long(
+            data_path=root,
+            database="miiv",
+            concepts=["sofa2_resp"],
+            window=(0.0, 24.0),
+        )
 
 
 def test_build_trajectory_long_respects_window(monkeypatch, tmp_path):
@@ -308,8 +432,8 @@ def test_event_time_column_empty_without_time_index():
 
 
 def test_first_time_absent_when_concept_never_recorded():
-    # A stay with only NaN values for the concept gets no onset time (NaN after
-    # the left-merge in materialize_cohort), never a spurious 0.
+    # A stay with only NaN values gets no observed-time coordinate. This does
+    # not prove that the clinical state/event never occurred.
     df = pd.DataFrame(
         {"stay_id": [1, 1], "charttime": [1, 2], "norepi_rate": [None, None]}
     )
@@ -388,6 +512,24 @@ def test_declared_positive_only_event_decodes_structural_absence():
     assert wide["vaso_ind_max"].tolist() == [1.0, 0.0]
     assert wide["vaso_ind_mean"].tolist() == [0.5, 0.0]
     assert wide["vaso_ind_n"].tolist() == [3, 0]
+
+
+def test_declared_positive_only_event_decodes_nullable_boolean_summary():
+    wide = pd.DataFrame(
+        {
+            "sep3_sofa2_max": pd.Series([True, pd.NA], dtype="boolean"),
+            "sep3_sofa2_mean": pd.Series([True, pd.NA], dtype="boolean"),
+        }
+    )
+
+    normalized = M._normalize_declared_positive_only_event_concepts(
+        wide,
+        concepts=("sep3_sofa2",),
+    )
+
+    assert normalized == ["sep3_sofa2_max", "sep3_sofa2_mean"]
+    assert wide["sep3_sofa2_max"].tolist() == [1, 0]
+    assert wide["sep3_sofa2_mean"].tolist() == [1.0, 0.0]
 
 
 def test_declared_positive_only_event_rejects_nonbinary_values():

@@ -249,7 +249,7 @@
     ['demographics', 'Demographics', '人口统计', 6, true],
     ['vitals', 'Vital signs', '生命体征', 12, true],
     ['chemistry', 'Lab — Chemistry', '实验室-生化', 49, true],
-    ['sofa2_score', 'SOFA-2 scores', 'SOFA-2 评分', 7, true],
+    ['sofa2_score', 'SOFA-2 scores', 'SOFA-2 评分', 10, true],
     ['sepsis3_sofa2', 'Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true],
     ['outcome', 'Outcome', '结局', 10, true],
     ['sofa1_score', 'SOFA-1 scores', 'SOFA-1 评分', 7, false],
@@ -1262,7 +1262,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         `<button class="btn primary sm" data-go="toConcepts">Use <span id="gdDbN">3</span> databases ${icon('arrow', 13)}</button>`);
     },
     concepts() {
-      const ALL = [['Demographics', 6], ['Vital signs', 8], ['Lab — Chemistry', 22], ['SOFA-2 scores', 7], ['Sepsis-3 (SOFA-2)', 1], ['Outcome', 3], ['Respiratory', 14], ['Renal & urine output', 20]];
+      const ALL = [['Demographics', 6], ['Vital signs', 8], ['Lab — Chemistry', 22], ['SOFA-2 scores', 10], ['Sepsis-3 (SOFA-2)', 1], ['Outcome', 3], ['Respiratory', 14], ['Renal & urine output', 20]];
       return cardShell('concepts', 'layers', 'Feature modules', 'pre-selected from cohort', `
         <div class="gd-mods" id="gdMods">
           ${ALL.map(([n, c]) => { const on = mods.includes(n); return `<button class="gd-mod ${on ? 'on' : ''}" data-mod="${n}"><span class="mk">${on ? icon('check', 10, 3) : ''}</span>${n}<span class="mc">${c}</span></button>`; }).join('')}
@@ -3688,6 +3688,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedDrafts = { loading: false, error: null, data: data };
       renderSessions();
       if (guidedFolderDialogMode) renderGuidedFolderDialog();
+      const continuity = window.EU_GUIDED_PROJECT_CONTINUITY;
+      const rememberedId = !selectedGuidedDraft && continuity && continuity.remembered
+        ? continuity.remembered()
+        : '';
+      if (rememberedId) {
+        const rememberedRow = localDraftRows().find(row => row && row.id === rememberedId);
+        if (rememberedRow) {
+          selectedGuidedDraft = rememberedRow;
+          selectedGuidedRun = null;
+          openGuidedProjectMemory(rememberedRow, null, 'draft');
+        } else if (continuity.forget) {
+          continuity.forget(rememberedId);
+        }
+      }
     }).catch(err => {
       guidedDrafts = { loading: false, error: err.message || String(err), data: null };
       renderSessions();
@@ -3711,6 +3725,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         throw new Error((result && (result.reason || result.error)) || 'remove_failed');
       }
       if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) {
+        if (window.EU_GUIDED_PROJECT_CONTINUITY) {
+          window.EU_GUIDED_PROJECT_CONTINUITY.forget(row.id);
+        }
         selectedGuidedDraft = null;
         if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
           window.EU_GUIDED_PI.bindProject(null);
@@ -4055,6 +4072,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       projectId
     ).trim();
     if (projectId && window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
+      if (window.EU_GUIDED_PROJECT_CONTINUITY) {
+        window.EU_GUIDED_PROJECT_CONTINUITY.remember(projectId);
+      }
       window.EU_GUIDED_PI.bindProject({ id: projectId, title: projectTitle });
     }
     renderAside();
@@ -5074,30 +5094,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedInitialRender = initializeGuidedState();
       return `
       <div class="gd-shell">
-        <div class="gd-top">
-          <button class="gd-home-link" type="button" data-open="entry" aria-label="${t('Back to EasyICU home', '返回 EasyICU 首页')}" title="${t('Back to EasyICU home', '返回 EasyICU 首页')}">
-            <span class="brand-mark">${icon('spark', 16)}</span>
-            <span><span class="gd-name">${t('Guided Copilot', '研究引导')}</span><span class="gd-mode">${t('EasyICU · conversational study planning', 'EasyICU · 对话式研究规划')}</span></span>
-          </button>
-          <span class="grow"></span>
-          <button class="btn sm" data-open="entry">${icon('back', 13)} ${t('Exit', '退出')}</button>
-          <button class="btn sm" data-open="extraction">${icon('grid', 13)} ${t('Data workspace', '数据工作台')}</button>
-        </div>
+        <h1 class="shell-sr-only" tabindex="-1">${t('Guided Copilot', '研究引导')}</h1>
         <div class="gd-main threecol">
-          <aside class="gd-rail">
-            <div class="gd-rail-top" id="gdFolderControls"></div>
-            <div class="gd-rail-list" id="gdSessions"></div>
-            <div class="gd-rail-foot">
-              <div class="gd-rail-utils" aria-label="${t('Guided Copilot utilities', '研究引导工具')}">
-                <button class="gd-utilbtn" type="button" data-open="entry" title="${t('Home', '主页')}" aria-label="${t('Home', '主页')}">${icon('back', 14)}</button>
-                <button class="gd-utilbtn" type="button" data-open="settings" title="${t('Settings', '设置')}" aria-label="${t('Settings', '设置')}">${icon('gear', 14)}</button>
-                <button class="gd-utilbtn lang" type="button" data-lang-toggle title="${t('Switch language', '切换语言')}" aria-label="${t('Switch language', '切换语言')}">
-                  ${icon('globe', 14)} <span>${window.EU_LANG === 'zh' ? 'EN' : '中'}</span>
-                </button>
-              </div>
-              <button class="btn sm block gd-data-workspace" data-open="extraction">${icon('grid', 13)} ${t('Data workspace', '数据工作台')}</button>
-            </div>
-          </aside>
+          ${guidedProjectRenderer('renderShellRail')}
           <div class="gd-conv">
             <div class="gd-pi-shell" id="gdPiShell" aria-label="${t('Pi Copilot conversation', 'Pi Copilot 对话')}"></div>
             <div class="gd-legacy-shell" id="gdLegacyShell">
@@ -5127,6 +5126,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     afterRender(root) {
       const initialRender = guidedInitialRender;
       guidedInitialRender = false;
+      const guidedBinding = window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.takeGuidedHandoff
+        ? window.EU_AGENT_STUDY_CONTEXT.takeGuidedHandoff()
+        : null;
+      if (guidedBinding) {
+        selectedGuidedDraft = {
+          id: guidedBinding.project_id,
+          title: guidedBinding.project_title,
+          binding_receipt: guidedBinding.binding_receipt || null,
+          study_context_id: guidedBinding.binding_receipt && guidedBinding.binding_receipt.study_context_id,
+          study_context_revision: guidedBinding.binding_receipt && guidedBinding.binding_receipt.study_context_revision,
+        };
+      }
       renderGuidedFolderControls();
       renderGuidedFolderDialog();
       renderAside();
@@ -5138,10 +5149,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.mount) {
         window.EU_GUIDED_PI.mount(root.querySelector('#gdPiShell'));
         if (selectedGuidedDraft && window.EU_GUIDED_PI.bindProject) {
+          const bindingReceipt = selectedGuidedDraft.binding_receipt || null;
           window.EU_GUIDED_PI.bindProject({
             id: selectedGuidedDraft.id,
             title: selectedGuidedDraft.title || selectedGuidedDraft.id,
+            binding_receipt: bindingReceipt,
           });
+          if (bindingReceipt) delete selectedGuidedDraft.binding_receipt;
         }
       }
       // The global topbar Demo/Real toggle is the source of truth on entry:

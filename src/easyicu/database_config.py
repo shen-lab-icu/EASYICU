@@ -7,19 +7,15 @@ thresholds, and conversion factors to avoid hardcoding throughout the codebase.
 from typing import Dict, List
 import pandas as pd
 
+from .databases.profiles import DATABASE_LABELS, public_database_keys
+
 # ============================================================================
 # Database Metadata
 # ============================================================================
 
-SUPPORTED_DATABASES = ['miiv', 'eicu', 'aumc', 'hirid', 'sic']
+SUPPORTED_DATABASES = list(public_database_keys())
 
-DATABASE_FULL_NAMES = {
-    'miiv': 'MIMIC-IV',
-    'eicu': 'eICU Collaborative Research Database',
-    'aumc': 'AmsterdamUMCdb',
-    'hirid': 'HiRID (High Time Resolution ICU Dataset)',
-    'sic': 'SICdb (Surgical Intensive Care Database)',
-}
+DATABASE_FULL_NAMES = DATABASE_LABELS
 
 # ============================================================================
 # Column Names by Database
@@ -31,6 +27,7 @@ ID_COLUMNS: Dict[str, List[str]] = {
     'eicu': ['patientunitstayid', 'patienthealthsystemstayid', 'uniquepid'],
     'aumc': ['admissionid', 'patientid'],
     'hirid': ['patientid'],
+    'mimic': ['icustay_id', 'subject_id', 'hadm_id'],
     'sic': ['CaseID', 'PatientID'],
 }
 
@@ -40,6 +37,7 @@ TIME_COLUMNS: Dict[str, str] = {
     'eicu': 'observationoffset',
     'aumc': 'measuredat',
     'hirid': 'datetime',
+    'mimic': 'charttime',
     'sic': 'Offset',
 }
 
@@ -49,6 +47,7 @@ START_TIME_COLUMNS: Dict[str, str] = {
     'eicu': 'drugstartoffset',
     'aumc': 'start',
     'hirid': 'datetime',
+    'mimic': 'starttime',
     'sic': 'Offset',
 }
 
@@ -57,6 +56,7 @@ END_TIME_COLUMNS: Dict[str, str] = {
     'eicu': 'drugstopoffset',
     'aumc': 'stop',
     'hirid': 'datetime',
+    'mimic': 'endtime',
     'sic': 'OffsetDrugEnd',
 }
 
@@ -66,6 +66,7 @@ VALUE_COLUMNS: Dict[str, str] = {
     'eicu': 'value',
     'aumc': 'value',
     'hirid': 'value',
+    'mimic': 'valuenum',
     'sic': 'value',
 }
 
@@ -75,6 +76,7 @@ UNIT_COLUMNS: Dict[str, str] = {
     'eicu': 'unit',
     'aumc': 'unit',
     'hirid': 'unit',
+    'mimic': 'valueuom',
     'sic': 'unit',
 }
 
@@ -86,8 +88,9 @@ UNIT_COLUMNS: Dict[str, str] = {
 TIME_IS_OFFSET: Dict[str, bool] = {
     'miiv': False,  # Uses datetime
     'eicu': True,   # Uses minutes from admission
-    'aumc': False,  # Uses datetime
+    'aumc': True,   # Uses a database-wide millisecond offset clock
     'hirid': False, # Uses datetime
+    'mimic': False, # Uses datetime
     'sic': True,    # Uses numeric offsets from ICU admission
 }
 

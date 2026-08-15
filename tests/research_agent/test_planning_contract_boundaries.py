@@ -66,13 +66,16 @@ def test_the_planner_rule_still_runs_where_planner_output_is_accepted() -> None:
     Planner output is accepted and the Planner can still answer for it.
     """
 
-    core = importlib.import_module("easyicu.research_agent.agents.core")
+    # ``agents/core.py`` is now a compatibility facade; ``PlannerAgent`` and
+    # its ``_parse`` acceptance point live in the ``agents.planner`` owner
+    # module, so the rule is pinned where it actually runs.
+    planner = importlib.import_module("easyicu.research_agent.agents.planner")
     assert (
-        core.validate_planner_robustness_specs
+        planner.validate_planner_robustness_specs
         is robustness_contract.validate_planner_robustness_specs
     )
     # Imported is not called: pin the call site too.
-    tree = ast.parse(Path(inspect.getsourcefile(core)).read_text(encoding="utf-8"))
+    tree = ast.parse(Path(inspect.getsourcefile(planner)).read_text(encoding="utf-8"))
     parse_bodies = [
         node
         for node in ast.walk(tree)

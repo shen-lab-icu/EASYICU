@@ -9,19 +9,22 @@ behaviour is unchanged.
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import pandas as pd
 
 from ..schema import ResearchContext
 from ..authority.evidence_store import EvidenceStore
 from .readiness import _blocked_outcome_step_ids
-from ..robustness.panel import load_robustness_panel, worst_rows_by_axis
+from ..robustness.panel import RobustnessPanel, load_robustness_panel, worst_rows_by_axis
 from ..authority.runtime_artifacts import (
     current_step_records,
+    verified_run_evidence_path,
 )
 from ..scalar_utils import _first_present_scalar
 from .p_values import prepare_p_values_for_writer, render_claim_value_for_writer
@@ -42,9 +45,38 @@ def _resolve_writer_aux_path(
     run_dir: Path,
     step_id: str,
     candidate: Optional[Any],
+    artifact_binding: Mapping[str, Any] | None = None,
+    evidence: EvidenceStore | None = None,
 ) -> Optional[Path]:
     if not candidate:
         return None
+    if artifact_binding is not None:
+        if evidence is None:
+            raise RuntimeError("writer artifact binding requires an EvidenceStore")
+        product_id = str(artifact_binding.get("product_id") or "")
+        relative_path = str(artifact_binding.get("envelope_relative_path") or "")
+        if str(candidate) != relative_path:
+            raise RuntimeError(
+                f"writer auxiliary path disagrees with sealed product {product_id}"
+            )
+        evidence_id = str(artifact_binding.get("evidence_id") or "")
+        record = evidence.get(evidence_id)
+        if (
+            record is None
+            or record.evidence_id != evidence_id
+            or record.sha256 != artifact_binding.get("sha256")
+            or record.relative_path != artifact_binding.get("evidence_relative_path")
+            or record.produced_by_step != step_id
+        ):
+            raise RuntimeError(
+                f"writer auxiliary product {product_id} lost immutable evidence identity"
+            )
+        path = verified_run_evidence_path(evidence.root, record)
+        if path is None:
+            raise RuntimeError(
+                f"writer auxiliary product {product_id} failed evidence verification"
+            )
+        return path
     raw = Path(str(candidate))
     if raw.is_absolute() and raw.exists():
         return raw
@@ -89,11 +121,20 @@ def _summarise_table_one_rows(rows: Any) -> Dict[str, Any]:
     return summary
 
 
-def _summarise_primary_association_table(path: Optional[Path]) -> Dict[str, Any]:
+def _summarise_primary_association_table(
+    path: Optional[Path],
+    *,
+    expected_sha256: str | None = None,
+) -> Dict[str, Any]:
     if path is None or not path.exists():
         return {}
     try:
-        frame = pd.read_csv(path)
+        raw = path.read_bytes()
+        if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
+            raise RuntimeError("writer auxiliary artifact changed while being read")
+        frame = pd.read_csv(io.BytesIO(raw))
+    except RuntimeError:
+        raise
     except Exception:
         return {}
     if frame.empty:
@@ -329,6 +370,7 @@ def _render_writer_evidence_digest(
     context: ResearchContext | None = None,
     run_dir: Path | None = None,
     include_robustness_panel: bool = True,
+    evidence: EvidenceStore | None = None,
 ) -> str:
     lines: List[str] = []
     if context is not None:
@@ -350,7 +392,9 @@ def _render_writer_evidence_digest(
             )
         )
     run_dir = Path(run_dir or ".")
-    has_panel_primary = _robustness_panel_has_primary_effect(run_dir)
+    has_panel_primary = _robustness_panel_has_primary_effect(
+        run_dir, evidence=evidence
+    )
     preferred_keys = (
         "sample_size",
         "n_total",
@@ -481,23 +525,87 @@ def _render_writer_evidence_digest(
                 digest_row.setdefault("primary_ci_low", ci_values[0])
                 digest_row.setdefault("primary_ci_high", ci_values[1])
         digest_row.update(_summarise_table_one_rows(summary.get("table_one_rows")))
+        artifact_bindings = record.get("writer_artifact_bindings")
+        primary_candidate = summary.get("primary_association_path")
+        declared_primary_candidate = bool(primary_candidate)
+        primary_binding: Mapping[str, Any] | None = None
+        if artifact_bindings is not None:
+            if not isinstance(artifact_bindings, Mapping):
+                raise RuntimeError(f"writer artifact bindings for {step_id} are invalid")
+            if primary_candidate:
+                matching_products = [
+                    str(product_id)
+                    for product_id, binding in artifact_bindings.items()
+                    if isinstance(binding, Mapping)
+                    and str(binding.get("envelope_relative_path") or "")
+                    == str(primary_candidate)
+                ]
+            else:
+                matching_products = [
+                    product_id
+                    for product_id in (
+                        "table:primary_association",
+                        "table:adjusted_association_estimates",
+                    )
+                    if product_id in artifact_bindings
+                ]
+            if not matching_products:
+                if declared_primary_candidate:
+                    raise RuntimeError(
+                        f"writer auxiliary path for {step_id} has no sealed product identity"
+                    )
+                primary_candidate = None
+            elif len(matching_products) != 1:
+                raise RuntimeError(
+                    f"writer auxiliary path for {step_id} has no unique sealed product identity"
+                )
+            else:
+                raw_binding = artifact_bindings.get(matching_products[0])
+                if not isinstance(raw_binding, Mapping):
+                    raise RuntimeError(
+                        f"writer auxiliary product {matching_products[0]} is not immutable"
+                    )
+                primary_binding = raw_binding
+                primary_candidate = str(
+                    primary_binding.get("envelope_relative_path") or ""
+                )
         primary_path = _resolve_writer_aux_path(
             run_dir=run_dir,
             step_id=step_id,
-            candidate=summary.get("primary_association_path"),
+            candidate=primary_candidate,
+            artifact_binding=primary_binding,
+            evidence=evidence,
         )
         if not has_panel_primary:
-            digest_row.update(_summarise_primary_association_table(primary_path))
+            digest_row.update(
+                _summarise_primary_association_table(
+                    primary_path,
+                    expected_sha256=(
+                        str(primary_binding.get("sha256"))
+                        if primary_binding is not None
+                        else None
+                    ),
+                )
+            )
         digest_row = prepare_p_values_for_writer(digest_row)
         lines.append(
             "  "
             + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
         )
     primary = "\n".join(lines)
-    primary = _append_blocked_outcome_gate_block(primary, run_dir=run_dir)
+    primary = _append_blocked_outcome_gate_block(
+        primary,
+        run_dir=run_dir,
+        records=records if evidence is not None else None,
+    )
     if not include_robustness_panel:
         return primary
-    return _append_robustness_panel_block(primary, run_dir=run_dir)
+    return _append_robustness_panel_block(
+        primary,
+        run_dir=run_dir,
+        evidence=evidence,
+        records=records if evidence is not None else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -597,11 +705,17 @@ def _render_writer_evidence_digest_v2(
         context=context,
         run_dir=run_dir,
         include_robustness_panel=False,
+        evidence=evidence,
     )
     all_records = list(per_step_records or [])
     records = [dict(record) for record in current_step_records(all_records)]
     if not records:
-        return _append_robustness_panel_block(primary, run_dir=run_dir)
+        return _append_robustness_panel_block(
+            primary,
+            run_dir=run_dir,
+            evidence=evidence,
+            records=records if evidence is not None else None,
+        )
     primary_keys_lower = {k.lower() for k in WRITER_DIGEST_PREFERRED_KEYS}
 
     # Build the (step_id, source_field) coverage set that the primary
@@ -622,7 +736,22 @@ def _render_writer_evidence_digest_v2(
 
     secondary_lines: List[str] = []
     derived_lines: List[str] = []
+    scientific_claim_lines: List[str] = []
     if evidence is not None:
+        scientific_claims = evidence.authoritative_scientific_claims(all_records)
+        if scientific_claims:
+            scientific_claim_lines.extend(
+                [
+                    "Writer instruction: qualitative result assertions must use "
+                    "the exact placeholder as a complete sentence. Do not "
+                    "paraphrase it or attach it to other prose. The host will "
+                    "render and cite the claim.",
+                    *(
+                        f"- {claim.placeholder} -> {claim.render_text()}"
+                        for claim in scientific_claims
+                    ),
+                ]
+            )
         # Group claims by step_id, sorted for determinism.
         claims_by_step: Dict[str, List[Any]] = {}
         for claim in evidence.authoritative_numeric_claims(all_records):
@@ -740,7 +869,11 @@ def _render_writer_evidence_digest_v2(
                 )
 
     extra_blocks: List[str] = []
-    robustness_lines = _render_robustness_panel_block(run_dir=run_dir)
+    robustness_lines = _render_robustness_panel_block(
+        run_dir=run_dir,
+        evidence=evidence,
+        records=records if evidence is not None else None,
+    )
     if robustness_lines:
         extra_blocks.extend(["", "## robustness panel", *robustness_lines])
     if derived_lines:
@@ -749,6 +882,14 @@ def _render_writer_evidence_digest_v2(
                 "",
                 "## derived numbers (computed from registered claims; cite with explanation)",
                 *derived_lines,
+            ]
+        )
+    if scientific_claim_lines:
+        extra_blocks.extend(
+            [
+                "",
+                "## host-authorized scientific claims",
+                *scientific_claim_lines,
             ]
         )
     if secondary_lines:
@@ -769,25 +910,44 @@ def _render_writer_evidence_digest_v2(
     return "\n".join([primary, *extra_blocks])
 
 
-def _append_robustness_panel_block(text: str, *, run_dir: Path | None) -> str:
-    robustness_lines = _render_robustness_panel_block(run_dir=run_dir)
+def _append_robustness_panel_block(
+    text: str,
+    *,
+    run_dir: Path | None,
+    evidence: EvidenceStore | None = None,
+    records: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
+    robustness_lines = _render_robustness_panel_block(
+        run_dir=run_dir, evidence=evidence, records=records
+    )
     if not robustness_lines:
         return text
     return "\n".join([text, "", "## robustness panel", *robustness_lines])
 
 
-def _append_blocked_outcome_gate_block(text: str, *, run_dir: Path | None) -> str:
-    guard_lines = _render_blocked_outcome_gate_block(run_dir=run_dir)
+def _append_blocked_outcome_gate_block(
+    text: str,
+    *,
+    run_dir: Path | None,
+    records: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
+    guard_lines = _render_blocked_outcome_gate_block(
+        run_dir=run_dir, records=records
+    )
     if not guard_lines:
         return text
     return "\n".join([text, "", "## blocked outcome gate", *guard_lines])
 
 
-def _render_blocked_outcome_gate_block(*, run_dir: Path | None) -> List[str]:
+def _render_blocked_outcome_gate_block(
+    *,
+    run_dir: Path | None,
+    records: Sequence[Mapping[str, Any]] | None = None,
+) -> List[str]:
     if run_dir is None:
         return []
     root = Path(run_dir)
-    blocked_steps = _blocked_outcome_step_ids(root)
+    blocked_steps = _blocked_outcome_step_ids(root, records)
     if not blocked_steps:
         return []
     lines = [
@@ -802,13 +962,39 @@ def _render_blocked_outcome_gate_block(*, run_dir: Path | None) -> List[str]:
         "blocked_steps=" + ",".join(blocked_steps),
     ]
     for step_id in blocked_steps:
-        note = _blocked_outcome_step_note(root, step_id)
+        note = _blocked_outcome_step_note(root, step_id, records=records)
         if note:
             lines.append(f"{step_id}: {note}")
     return lines
 
 
-def _blocked_outcome_step_note(root: Path, step_id: str) -> str:
+def _blocked_outcome_step_note(
+    root: Path,
+    step_id: str,
+    *,
+    records: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
+    if records is not None:
+        for record in reversed(records):
+            if str(record.get("step_id") or "") != step_id:
+                continue
+            summary = record.get("step_summary")
+            if not isinstance(summary, Mapping):
+                return ""
+            decision = str(summary.get("blocking_decision") or "").strip()
+            rerun = str(summary.get("future_rerun_condition") or "").strip()
+            notes = [decision] if decision else []
+            if rerun:
+                notes.append("Rerun condition: " + rerun)
+            if notes:
+                return " ".join(notes)[:500]
+            policies = summary.get("named_blocking_policy")
+            if isinstance(policies, list) and policies:
+                return "Blocking policies: " + ", ".join(
+                    str(policy) for policy in policies[:6]
+                )
+            return ""
+        return ""
     step_out = root / "steps" / step_id / "outputs"
     notes: List[str] = []
     for path in sorted(step_out.glob("*gate*.csv")):
@@ -851,10 +1037,80 @@ def _is_hidden_robustness_row_claim(step_id: str, source_field: str) -> bool:
     return step_id == "robustness_panel" and source_field.startswith("row_")
 
 
+def _verified_evidence_json(
+    evidence: EvidenceStore,
+    evidence_id_or_alias: str,
+    *,
+    exact_evidence_id: bool = False,
+    expected_kind: str | None = None,
+    expected_producer: str | None = None,
+) -> Dict[str, Any]:
+    record = evidence.get(evidence_id_or_alias)
+    if (
+        record is None
+        or (exact_evidence_id and record.evidence_id != evidence_id_or_alias)
+        or (expected_kind is not None and record.kind != expected_kind)
+        or (expected_producer is not None and record.producer != expected_producer)
+    ):
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} lost its registered identity"
+        )
+    path = verified_run_evidence_path(evidence.root, record)
+    if path is None:
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} failed digest verification"
+        )
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} became unreadable"
+        ) from exc
+    if hashlib.sha256(raw).hexdigest() != record.sha256:
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} changed while being read"
+        )
+    try:
+        payload = json.loads(raw)
+    except (UnicodeError, ValueError, TypeError) as exc:
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} is not valid JSON"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} is not a JSON object"
+        )
+    return payload
+
+
+def _load_writer_robustness_panel(
+    *,
+    run_dir: Path | None,
+    evidence: EvidenceStore | None,
+) -> RobustnessPanel | None:
+    if run_dir is None:
+        return None
+    if evidence is None:
+        return load_robustness_panel(Path(run_dir) / "robustness_panel.json")
+    if evidence.get("robustness_panel") is None:
+        return None
+    payload = _verified_evidence_json(
+        evidence,
+        "robustness_panel",
+        expected_kind="statistic",
+        expected_producer="pipeline",
+    )
+    try:
+        return RobustnessPanel.from_dict(payload)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("registered robustness panel is invalid") from exc
+
+
 def _primary_effect_interpretation_lines(
     *,
     run_dir: Path,
     evidence_id: Any,
+    evidence: EvidenceStore | None = None,
 ) -> List[str]:
     """Say what the panel's primary number IS, not just how large it is.
 
@@ -897,11 +1153,19 @@ def _primary_effect_interpretation_lines(
             "names no source evidence, so the host cannot state the effect "
             "scale. Do not describe the estimate's units or contrast."
         ]
-    summary_path = run_dir / "evidence" / f"{evidence_id}__step_summary.json"
-    try:
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        summary = None
+    if evidence is not None:
+        summary = _verified_evidence_json(
+            evidence,
+            str(evidence_id),
+            exact_evidence_id=True,
+            expected_kind="statistic",
+        )
+    else:
+        summary_path = run_dir / "evidence" / f"{evidence_id}__step_summary.json"
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            summary = None
     if not isinstance(summary, dict):
         return [
             "primary interpretation: UNAVAILABLE -- the source evidence for "
@@ -949,12 +1213,19 @@ def _primary_effect_interpretation_lines(
     ]
 
 
-def _render_robustness_panel_block(*, run_dir: Path | None) -> List[str]:
+def _render_robustness_panel_block(
+    *,
+    run_dir: Path | None,
+    evidence: EvidenceStore | None = None,
+    records: Sequence[Mapping[str, Any]] | None = None,
+) -> List[str]:
     if run_dir is None:
         return []
-    if _blocked_outcome_step_ids(Path(run_dir)):
+    if _blocked_outcome_step_ids(
+        Path(run_dir), records if evidence is not None else None
+    ):
         return []
-    panel = load_robustness_panel(Path(run_dir) / "robustness_panel.json")
+    panel = _load_writer_robustness_panel(run_dir=run_dir, evidence=evidence)
     if panel is None:
         return []
     primary = next(
@@ -980,6 +1251,7 @@ def _render_robustness_panel_block(*, run_dir: Path | None) -> List[str]:
             _primary_effect_interpretation_lines(
                 run_dir=Path(run_dir),
                 evidence_id=getattr(primary, "evidence_id", None),
+                evidence=evidence,
             )
         )
     converged_variants = [
@@ -1010,10 +1282,14 @@ def _render_robustness_panel_block(*, run_dir: Path | None) -> List[str]:
     return lines
 
 
-def _robustness_panel_has_primary_effect(run_dir: Path | None) -> bool:
+def _robustness_panel_has_primary_effect(
+    run_dir: Path | None,
+    *,
+    evidence: EvidenceStore | None = None,
+) -> bool:
     if run_dir is None:
         return False
-    panel = load_robustness_panel(Path(run_dir) / "robustness_panel.json")
+    panel = _load_writer_robustness_panel(run_dir=run_dir, evidence=evidence)
     if panel is None:
         return False
     primary = next(

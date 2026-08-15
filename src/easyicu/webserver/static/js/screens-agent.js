@@ -31,6 +31,7 @@
   let agBlockFamily = 'all';
   let agBlockSelected = 'nature_writing';
   let agListMode = 'auto'; // auto, open, or focus
+  let agGuidedHandoffError = '';
   const AG_JOB_KEY = 'easyicu.agent.activeJob.v1';
   const AG_BLOCKS_VERSION = 'v1';
   let agResumeProbe = { loading: false, checkedJobId: null };
@@ -132,6 +133,10 @@
     const source = row.source || {};
     const seedRuns = Array.isArray(row.runs) ? row.runs : [];
     const reviewRun = seedRuns.find(r => r && r.project_dir) || null;
+    // Historical evaluation imports remain readable, but they are not a
+    // product-level project type.  Users see the same study/run/evidence
+    // workflow as every other completed research project; benchmark scoring
+    // stays in its artifact bundle and external experiment harness.
     const imported = row.seed_kind === 'canonical9_import' || !!row.benchmark;
     return {
       id: row.study_id || row.id || title,
@@ -142,8 +147,8 @@
       cohort: row.cohort || row.study_id || 'research_idea',
       source: imported
         ? [
-          `Fig 2 question · ${pre.status || 'imported'} · ${pre.feature_count || 0} evidence`,
-          `Fig 2 问题 · ${pre.status || '已导入'} · ${pre.feature_count || 0} 条证据`,
+          `completed run · ${pre.status || 'imported'} · ${pre.feature_count || 0} evidence`,
+          `已完成运行 · ${pre.status || '已导入'} · ${pre.feature_count || 0} 条证据`,
         ]
         : [
           `research idea · ${pre.status || 'feasibility'} · ${pre.feature_count || 0} features`,
@@ -159,7 +164,8 @@
       ]),
       signed: false,
       ideaSeed: row,
-      projectKind: imported ? 'canonical9' : 'idea',
+      projectKind: imported ? 'analysis' : 'idea',
+      readOnlyImport: imported,
       seedRuns: seedRuns,
       reviewProjectDir: reviewRun && reviewRun.project_dir,
       benchmark: row.benchmark || null,
@@ -266,7 +272,7 @@
       : t('Created when this study is first run', '首次运行时创建');
   }
   function studyBadgeLabel(s) {
-    if (s && s.projectKind === 'canonical9') return t('Completed analysis', '已完成分析');
+    if (s && s.readOnlyImport) return t('Read-only result', '只读结果');
     if (s && s.studyContext) return t('StudyContext', '研究上下文');
     if (s && s.ideaSeed) return t('Research idea', '研究想法');
     return t('Analysis', '分析');
@@ -352,7 +358,7 @@
     return window.EU_AGENT_LAST_RUN && window.EU_AGENT_LAST_RUN.study_id === s.id ? window.EU_AGENT_LAST_RUN : null;
   }
   function importedRunForStudy(s) {
-    if (!s || !s.reviewProjectDir) return null;
+    if (!s || !s.reviewProjectDir || !s.readOnlyImport) return null;
     const row = Array.isArray(s.seedRuns) ? s.seedRuns.find(r => r && r.project_dir === s.reviewProjectDir) : null;
     const b = s.benchmark || {};
     return {
@@ -360,7 +366,7 @@
       run_label: (row && row.label) || b.task_id || s.id,
       study_id: s.id,
       mode: s.mode || 'analysis',
-      run_type: 'canonical9_import',
+      run_type: 'imported_review',
       project_dir: s.reviewProjectDir,
       source: {},
       summary: {},
@@ -379,7 +385,7 @@
     return live || importedRunForStudy(study());
   }
   function isImportedRun(live, s) {
-    return !!(live && (live.imported || live.run_type === 'canonical9_import' || (s && s.projectKind === 'canonical9')));
+    return !!(live && (live.imported || (s && s.readOnlyImport)));
   }
   function questionText(s) {
     if (!s || !s.question) return '';
@@ -534,7 +540,11 @@
        artifacts declare the scope; when they do not, say so rather than
        infer it from prose. */
     const crossScope = s.id === 'crossdb' || !!s.planOnly;
+    const crossdbSelection = s.studyContext && s.studyContext.crossdb_selection || {};
+    const selectedSources = Array.isArray(crossdbSelection.sources) ? crossdbSelection.sources : [];
+    const selectedScope = selectedSources.map(row => row && (row.label || row.database)).filter(Boolean).join(' + ');
     const declaredScope = firstValue(
+      selectedScope,
       s.ideaSeed && s.ideaSeed.cohort,
       context.source && context.source.database,
       score.database_scope,
@@ -543,13 +553,14 @@
     const inferredScope = declaredScope
       || (crossScope ? t('Cross-DB comparison workspace', '跨库对比工作台') : t('Not declared by this run', '本次运行未声明'));
     const cohortSize = firstValue(score.cohort_size, context.summary && context.summary.stays, cohort.summary && cohort.summary.stays, cohort.cohort && cohort.cohort.entities, s.benchmark && s.benchmark.cohort_size);
-    const modules = firstValue(context.summary && context.summary.modules, cohort.summary && cohort.summary.modules);
-    let crossCount = null;
-    try {
-      crossCount = window.EU_SOURCES && window.EU_SOURCES.crossdbPaths ? window.EU_SOURCES.crossdbPaths().length : null;
-    } catch (_) {
-      crossCount = null;
-    }
+    const modules = firstValue(
+      context.summary && context.summary.modules,
+      cohort.summary && cohort.summary.modules,
+      crossScope && s.studyContext && Array.isArray(s.studyContext.modules) ? s.studyContext.modules.length : null,
+    );
+    const crossCount = crossScope && Number.isInteger(crossdbSelection.source_count)
+      ? crossdbSelection.source_count
+      : null;
     // Was: regex the scope LABEL for "cross|multi|six|database", which made any
     // single-database scope whose name contained the word "database" render as
     // a multi-database context. The study itself knows.
@@ -572,7 +583,7 @@
         </div>
         <div class="ag-cap-actions">
           <button class="btn sm" data-nav="crossdb">${icon('benchmark', 12)} ${t('Open Cross-DB workspace', '打开跨库工作台')}</button>
-          <span class="ag-cap-note">${isCross ? t('This project is already using a multi-database context.', '这个项目已经使用多数据库上下文。') : t('Current canonical9 package is scoped; use Cross-DB for six-database comparison.', '当前 canonical9 包是限定范围；六库比较请进入 Cross-DB。')}</span>
+          <span class="ag-cap-note">${isCross ? t('This project is already using a multi-database context.', '这个项目已经使用多数据库上下文。') : t('The current run has a declared data scope; use Cross-DB when the scientific question requires a multi-database comparison.', '当前运行已有明确的数据范围；科学问题需要多数据库比较时可进入跨库工作台。')}</span>
         </div>
       </div>`;
   }
@@ -821,13 +832,6 @@
       ['Dry-run', '试运行', t('feasibility · no claims', '可行性 · 不下结论'), 'play'],
       ['Recommend', '建议', t('suggested workflow', '建议的研究流程'), 'target'],
     ];
-    if (projectKind === 'canonical9') return [
-      ['Question', '问题', t('clinical benchmark task', '临床 benchmark 问题'), 'play'],
-      ['Build', '构建', t('cohort + variables', '队列 + 变量'), 'layers'],
-      ['Analyze', '分析', t('figures + checks', '图件 + 校验'), 'viz'],
-      ['Evidence check', '证据核验', t('claims tied to artifacts', '论断绑定产物'), 'shield'],
-      ['Review', '审阅', t('read-only package', '只读审阅包'), 'file'],
-    ];
     return [
       ['Plan', '计划', t('question → recipe', '问题 → 配方'), 'play'],
       ['Build', '构建', t('exports → 1 row / stay', '导出 → 每次住院一行'), 'layers'],
@@ -907,7 +911,7 @@
     const liveSigned = !!(review && review.signed);
     const compactHeader = agTab !== 'overview' && agTab !== 'workflow';
     const listCollapsed = agentListCollapsed();
-    const statusKey = s.projectKind === 'canonical9' ? 'imported' : (liveSigned ? 'reviewed' : (s.signed ? 'ready' : s.status));
+    const statusKey = s.readOnlyImport ? 'imported' : (liveSigned ? 'reviewed' : (s.signed ? 'ready' : s.status));
     const statusPill = {
       imported: `<span class="pill info"><span class="dot"></span>${t('Read-only review', '只读审阅')}</span>`,
       ready: `<span class="pill ok"><span class="dot"></span>${t('Ready to run', '可运行')}</span>`,
@@ -937,7 +941,7 @@
             ${icon(listCollapsed ? 'list' : 'close', 13)} ${listCollapsed ? t('Show projects', '显示项目') : t('Focus view', '专注视图')}
           </button>
           <button class="btn sm" data-ag-tab="workflow">${icon('layers', 13)} ${t('Planning Blocks', '规划块')}</button>
-          ${s.projectKind === 'canonical9' ? '' : `<button class="btn sm" data-nav="ideas">${icon('target', 13)} ${t('Open Idea Mining', '打开想法挖掘')}</button>`}
+          <button class="btn sm" data-nav="ideas">${icon('target', 13)} ${t('Open Idea Mining', '打开想法挖掘')}</button>
           <span class="pill ok"><span class="dot"></span>${t('Analysis workspace', '分析运行工作台')}</span>
         </div>
       </div>
@@ -967,7 +971,7 @@
       ['overview', t('Overview', '概览'), null],
       ['runs', t('Runs', '运行历史'), s.runs.length],
       ['outputs', t('Outputs', '产出'), outputCountForStudy()],
-      ['draft', s.projectKind === 'canonical9' ? t('Review', '审阅') : t('Draft', '草稿'), null],
+      ['draft', s.readOnlyImport ? t('Review', '审阅') : t('Draft', '草稿'), null],
       ['science', t('Evidence', '证据'), null],
       ['workflow', t('Planning Blocks', '规划块'), workflowBlocks(s).length],
     ];
@@ -1261,6 +1265,15 @@
     const src = exportSourceForStudy(s);
     const sum = (src && src.summary) || {};
     const b = s.benchmark || null;
+    const crossdbSelection = s.studyContext && s.studyContext.crossdb_selection || {};
+    const selectedSources = Array.isArray(crossdbSelection.sources) ? crossdbSelection.sources : [];
+    const crossScope = s.id === 'crossdb' || !!s.planOnly || selectedSources.length > 1;
+    const selectedCount = Number.isInteger(crossdbSelection.source_count)
+      ? crossdbSelection.source_count
+      : selectedSources.length;
+    const selectionDigest = typeof crossdbSelection.selection_digest === 'string'
+      ? crossdbSelection.selection_digest.slice(0, 12)
+      : '';
     // Real mode must never show invented clinical numbers: if no benchmark and
     // no attached export, fall to em-dashes + an "attach an export" hint rather
     // than the seeded demo figures (which are only honest as a demo preview).
@@ -1270,13 +1283,14 @@
       : src
       ? [['Stays', '住院数', sum.stays == null ? '—' : Number(sum.stays).toLocaleString()], ['Modules', '模块', sum.modules == null ? '—' : String(sum.modules)], ['Rows', '行数', sum.total_rows == null ? '—' : Number(sum.total_rows).toLocaleString()], ['Evidence check', '证据核验', 'strict']]
       : (noData && realMode())
-      ? (s.id === 'crossdb'
-        ? [['Databases', '数据库', '—'], ['Shared concepts', '共享概念', '—'], ['Mortality', '死亡率', '—'], ['Concordance', '一致性', '—']]
+      ? (crossScope
+        ? [['Selected exports', '选中导出', selectedCount || '—'], ['Modules', '模块', s.studyContext && Array.isArray(s.studyContext.modules) ? s.studyContext.modules.length : '—'], ['Selection digest', '选择摘要', selectionDigest || '—'], ['Execution', '执行', t('plan-only', '仅计划')]]
         : [['Mean age', '平均年龄', '—'], ['Mortality', '死亡率', '—'], ['Sepsis-3', 'Sepsis-3', '—'], ['Mech vent', '机械通气', '—']])
       : s.id === 'crossdb'
       ? [['Databases', '数据库', '3'], ['Shared concepts', '共享概念', '6'], ['Mortality', '死亡率', '20.0%'], ['Concordance', '一致性', 'high']]
       : [['Mean age', '平均年龄', '54.8 y'], ['Mortality', '死亡率', '20.0%'], ['Sepsis-3', 'Sepsis-3', '45.3%'], ['Mech vent', '机械通气', '52.1%']];
-    const noDataHint = noData && realMode();
+    const noDataHint = noData && realMode() && !crossScope;
+    const receiptOnly = noData && realMode() && crossScope && selectedSources.length > 1;
     const linked = src ? (src.label || src.database || 'local export') : t(s.source[0], s.source[1]);
     const linkedPath = src ? src.path : null;
     return `
@@ -1288,7 +1302,7 @@
       <div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${esc(linkedPath || linked)}</div>
       ${window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.bindingNote ? window.EU_AGENT_STUDY_CONTEXT.bindingNote(s) : ''}
       ${window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.warningNote ? window.EU_AGENT_STUDY_CONTEXT.warningNote(agRun.warning) : ''}
-      ${s.projectKind === 'canonical9' ? `<div class="note ok mt-12"><div class="ico">${icon('shield', 13)}</div><div class="body"><div class="t">${t('Imported completed analysis', '已导入完成分析')}</div><div class="d">${esc(s.sourceArticle || t('Figure 2 benchmark question package', 'Figure 2 基准问题审阅包'))}</div></div></div>` : (s.ideaSeed ? `<div class="note ok mt-12"><div class="ico">${icon('target', 13)}</div><div class="body"><div class="t">${t('Created from Idea Mining', '来自 Idea Mining 的研究想法')}</div><div class="d">${esc(s.sourceArticle || '')}</div></div></div>` : '')}
+      ${s.readOnlyImport ? `<div class="note ok mt-12"><div class="ico">${icon('shield', 13)}</div><div class="body"><div class="t">${t('Completed local result', '已完成的本地结果')}</div><div class="d">${esc(s.sourceArticle || t('Read-only research result with its original evidence bundle', '带原始证据包的只读研究结果'))}</div></div></div>` : (s.ideaSeed ? `<div class="note ok mt-12"><div class="ico">${icon('target', 13)}</div><div class="body"><div class="t">${t('Created from Idea Mining', '来自 Idea Mining 的研究想法')}</div><div class="d">${esc(s.sourceArticle || '')}</div></div></div>` : '')}
       <div class="cols-2 mt-12" style="gap:8px;">
         ${stats.map(([en, zh, v]) => `
           <div style="padding:8px 10px;background:var(--surface-2);border-radius:var(--r-2);">
@@ -1296,51 +1310,17 @@
             <div class="mono" style="font-size:13px;font-weight:500;color:var(--ink);margin-top:3px;">${v}</div>
           </div>`).join('')}
       </div>
-      ${noDataHint
+      ${receiptOnly
+        ? `<div class="note info mt-12"><div class="ico">${icon('shield', 13)}</div><div class="body"><div class="t">${t('Cross-DB selection receipt bound', '已绑定 Cross-DB 选择收据')}</div><div class="d">${t('No single export path or stay count is substituted for this multi-source plan.', '这个多来源计划不会再用单一导出路径或住院数代替研究范围。')}</div></div></div>`
+        : noDataHint
         ? `<div class="note info mt-12"><div class="ico">${icon('folder', 13)}</div><div class="body"><div class="t">${t('No export attached', '未关联导出')}</div><div class="d">${t('Attach a local EasyICU export to this project to populate real cohort figures.', '为此项目关联本地 EasyICU 导出后，这里会显示真实队列数据。')}</div></div></div>`
         : (noData ? `<div class="note warn mt-12" style="padding:8px 11px;"><div class="ico">${icon('beaker', 13)}</div><div class="body"><div class="d" style="margin:0;">${t('Illustrative demo figures — not a computed result.', '示例演示数据 —— 非计算结果。')}</div></div></div>` : '')}
-      <button class="btn sm block mt-16" data-nav="extraction">${icon('layers', 13)} ${t('Open in Data Extraction', '在数据抽取中打开')}</button>
+      <button class="btn sm block mt-16" data-nav="${crossScope ? 'crossdb' : 'extraction'}">${icon('layers', 13)} ${crossScope ? t('Open Cross-DB workspace', '打开跨库工作台') : t('Open in Data Extraction', '在数据抽取中打开')}</button>
     </div>`;
   }
 
-  function benchmarkPanel(s) {
-    const b = s && s.benchmark;
-    if (!b) return '';
-    const dims = Array.isArray(b.dimensions) ? b.dimensions : [];
-    return `
-      <div class="card pad ag-bench-card">
-        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:12px;">
-          <div>
-            <div class="eyebrow">${t('Figure 2 question package', 'Figure 2 问题包')}</div>
-            <div class="panel-title" style="font-size:15px;margin-top:4px;">${esc(b.task_id || s.id)} · ${esc(runStatusLabel(b.tristate || b.readiness_status || 'analysis_only'))}</div>
-            <div class="panel-sub">${t('Imported from the completed EasyICU aware workflow. The run stays read-only and analysis-only until the Fig 2 freeze decision.', '来自已完成的 EasyICU aware workflow。该运行保持只读和 analysis-only，直到 Fig 2 冻结策略拍板。')}</div>
-          </div>
-          <button class="btn sm primary" data-ag-open-seed-run="${esc(s.reviewProjectDir || '')}">${icon('eye', 12)} ${t('Open results', '查看结果')}</button>
-        </div>
-        <div class="ag-bench-metrics mt-12">
-          ${[
-            ['cohort', t('Cohort', '队列'), b.cohort_size == null ? '—' : Number(b.cohort_size).toLocaleString()],
-            ['evidence', t('Evidence', '证据'), b.evidence_count == null ? '—' : Number(b.evidence_count).toLocaleString()],
-            ['missing', t('Missing evidence', '缺失证据'), b.missing_evidence == null ? '—' : String(b.missing_evidence)],
-            ['errors', t('Errors', '错误'), b.errors == null ? '—' : String(b.errors)],
-          ].map(([key, label, value]) => `<div class="ag-bench-metric ${key}"><span>${label}</span><strong>${esc(value)}</strong></div>`).join('')}
-        </div>
-        <div class="ag-score-grid mt-12">
-          ${dims.map(row => {
-            const score = row.subscore == null ? null : Number(row.subscore);
-            const width = score == null || Number.isNaN(score) ? 0 : Math.max(0, Math.min(100, score * 100));
-            const level = row.level || (score == null ? 'Unscored' : score >= 0.8 ? 'Full' : score >= 0.5 ? 'Partial' : 'Fail');
-            return `<div class="ag-score-row">
-              <div class="ag-score-top"><span>${esc(row.label || row.id)}</span><span class="mono">${score == null || Number.isNaN(score) ? '—' : score.toFixed(2)} · ${esc(level)}</span></div>
-              <div class="ag-score-bar"><span style="width:${width}%"></span></div>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>`;
-  }
-
-  function presentationSummary(s) {
-    if (!s || s.projectKind !== 'canonical9') return '';
+  function importedResultSummary(s) {
+    if (!s || !s.readOnlyImport) return '';
     const b = s.benchmark || {};
     const artifactCount = outputCountForStudy();
     const status = runStatusLabel(b.tristate || b.readiness_status || 'analysis_only');
@@ -1349,7 +1329,7 @@
         <div class="ag-present-main">
           <div class="eyebrow">${t('Study brief', '汇报摘要')}</div>
           <div class="ag-present-title">${esc(t(s.name[0], s.name[1]))}</div>
-          <div class="ag-present-text">${t('A completed evidence-bound Agent analysis for Figure 2. One clinical question is organized into a plan, figures, scores, and an auditable evidence ledger.', '这是 Figure 2 的一个已完成证据绑定 Agent 分析。一个临床问题在这里被组织为计划、图件、评分和可审计证据账本。')}</div>
+          <div class="ag-present-text">${t('A completed evidence-bound research result. The scientific question, plan, outputs, and auditable evidence ledger remain together in this read-only project.', '这是一项已完成的证据绑定研究结果。科学问题、计划、产物和可审计证据账本在同一个只读项目中保留。')}</div>
         </div>
         <div class="ag-present-grid">
           <div><span>${t('Status', '状态')}</span><strong>${esc(status)}</strong></div>
@@ -1393,13 +1373,12 @@
     return `
       ${staleBanner}
       ${renderStructuredQuestion(s)}
-      ${presentationSummary(s)}
+      ${importedResultSummary(s)}
       ${capabilityHighlights(live, s)}
       ${nextBar()}
       ${s.mode === 'idea' ? `<div class="idea-band mt-16"><span class="ico">${icon('spark', 16)}</span><div><div style="font-weight:600;font-size:13px;">${t('Legacy feasibility idea', '旧可行性想法')}</div><div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${t('New discovery work starts in Idea Mining. Agent Projects only executes confirmed analysis runs.', '新的发现流程从 Idea 挖掘开始。研究项目只执行已确认的分析运行。')}</div></div></div>` : ''}
       <div class="split-320 mt-16" style="grid-template-columns:1fr 300px;">
         <div class="col gap-16">
-          ${benchmarkPanel(s)}
           ${planList()}
           ${providerRunPanel()}
         </div>
@@ -1408,8 +1387,9 @@
       <div class="handoff">
         <span class="ho-ico">${icon('spark', 17)}</span>
         <div class="ho-body"><b>${t('Rather drive this study by chat?', '想用对话来推进这项研究?')}</b> ${t('Guided Copilot walks the same plan → run → review → review-ready draft workflow conversationally, then hands the study back here.', '研究引导用对话走同一套 计划 → 运行 → 审阅 → 待核验草稿 的流程,完成后把研究交回这里。')}</div>
-        <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Continue in Guided Copilot', '在研究引导中继续')} ${icon('arrow', 13)}</button>
-      </div>`;
+        <button class="btn" data-ag-guided>${icon('spark', 13)} ${t('Continue in Guided Copilot', '在研究引导中继续')} ${icon('arrow', 13)}</button>
+      </div>
+      ${agGuidedHandoffError ? `<div class="note warn mt-8" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Guided Copilot handoff failed', '研究引导交接失败')}</div><div class="d">${esc(agGuidedHandoffError)}</div></div></div>` : ''}`;
   }
 
   function blockContract(block) {
@@ -1655,7 +1635,7 @@
       <div class="ag-output-brief">
         <div class="ag-output-brief-copy">
           <div class="ag-output-brief-title">${t('Primary review outputs', '主要审阅产出')}</div>
-          <div class="ag-output-brief-text">${t('Figures, the benchmark scorecard, and the evidence ledger are surfaced first. File names and hashes stay visible as provenance, not as the main story.', '图件、Benchmark 记分卡和证据账本被放在前面。文件名与哈希保留为溯源信息，不再作为主展示内容。')}</div>
+          <div class="ag-output-brief-text">${t('Figures, the evaluation scorecard, and the evidence ledger are surfaced first. File names and hashes stay visible as provenance, not as the main story.', '图件、评估记分卡和证据账本被放在前面。文件名与哈希保留为溯源信息，不再作为主展示内容。')}</div>
         </div>
         <div class="row gap-8 wrap">
           ${quick.map(([name, label, ic]) => `<button class="btn sm" data-ag-artifact-view="${esc(name)}">${icon(ic, 12)} ${label}</button>`).join('')}
@@ -1797,7 +1777,7 @@
         <div class="card pad ag-review-main">
           <div class="eyebrow">${t('Evidence check', '证据核验')}</div>
           <div class="panel-title" style="margin-top:4px;">${imported ? t('Read-only review · manuscript not unlocked', '只读审阅 · 不解锁论文草稿') : (signed ? t('Local sign-off recorded · draft locked', '本地签署已记录 · 草稿保持锁定') : t('Preflight complete · draft locked', '预检完成 · 草稿保持锁定'))}</div>
-          <div class="panel-sub">${imported ? t('This is a completed benchmark analysis package imported for presentation and evidence review. It is not a new Agent run, and it will not unlock a reportable manuscript draft.', '这是为展示和证据审阅导入的已完成 benchmark 分析包。它不是新的 Agent 运行，也不会解锁可报告论文草稿。') : t('This real run is analysis_only. It wrote bounded local evidence artifacts; human sign-off records review but does not make the draft reportable.', '这次真实运行是 analysis_only。它写入有界本地证据产物；人工签署只记录审阅,不会让草稿可报告。')}</div>
+          <div class="panel-sub">${imported ? t('This is a completed historical analysis opened for presentation and evidence review. It is not a new Agent run, and it will not unlock a reportable manuscript draft.', '这是为展示和证据审阅打开的历史分析结果。它不是新的 Agent 运行，也不会解锁可报告论文草稿。') : t('This real run is analysis_only. It wrote bounded local evidence artifacts; human sign-off records review but does not make the draft reportable.', '这次真实运行是 analysis_only。它写入有界本地证据产物；人工签署只记录审阅,不会让草稿可报告。')}</div>
           <div class="checks2 mt-16">
             ${checks.map((c, i) => `
               <div class="chk ${c.passed ? 'ok' : 'pending'}">
@@ -1820,7 +1800,7 @@
           ${readiness && failures.length ? `<div class="note warn mt-16"><div class="ico">${icon('alert', 16)}</div><div class="body"><span class="t">${t('Automated check failures', '自动核验失败项')}</span><span class="d">${esc(failures.join(', '))}</span></div></div>` : ''}
           ${imported ? `<div class="ev-detail mt-16">
             <div style="font-weight:600;font-size:12.25px;color:var(--ink);margin-bottom:3px;">${t('Review route', '审阅路径')}</div>
-            <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;">${t('The review package centers on output cards, the figure gallery, the benchmark scorecard, and provenance.', '审阅包围绕产出卡片、图件画廊、Benchmark 记分卡和溯源记录组织。')}</div>
+            <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;">${t('The review package centers on output cards, the figure gallery, the evaluation record, and provenance.', '审阅包围绕产出卡片、图件画廊、评估记录和溯源记录组织。')}</div>
             <div class="row gap-8 mt-12">
               <button class="btn primary sm" data-ag-tab="outputs">${icon('viz', 12)} ${t('Open outputs', '打开产出')}</button>
               <button class="btn sm" data-ag-tab="runs">${icon('history', 12)} ${t('Open provenance', '打开溯源')}</button>
@@ -2186,6 +2166,7 @@
       agResumeProbe = { loading: false, checkedJobId: null };
       window.EU_AGENT_RUN_REVIEW = null;
       agSel = b.dataset.agSel;
+      agGuidedHandoffError = '';
       if (window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.has(agSel)) {
         window.EU_AGENT_STUDY_CONTEXT.activate(agSel).catch(error => console.warn('[EasyICU] StudyContext activation failed:', error));
       }
@@ -2247,6 +2228,24 @@
     }
     host.querySelectorAll('[data-ev]').forEach(b => b.addEventListener('click', () => { const i = +b.dataset.ev; agEvOpen = (agEvOpen === i ? -1 : i); repaintBody(); }));
     host.querySelectorAll('[data-ag-runbtn]').forEach(b => b.addEventListener('click', startRun));
+    host.querySelectorAll('[data-ag-guided]').forEach(b => b.addEventListener('click', () => {
+      const adapter = window.EU_AGENT_STUDY_CONTEXT;
+      if (!adapter || !adapter.prepareGuidedHandoff) return;
+      const selected = study();
+      const selectedId = selected.id;
+      agGuidedHandoffError = '';
+      b.disabled = true;
+      adapter.prepareGuidedHandoff(selected).then(() => {
+        if (study().id === selectedId) location.hash = '#guided';
+      }).catch(error => {
+        if (study().id !== selectedId) return;
+        agGuidedHandoffError = t(
+          `Could not bind this project to Guided Copilot: ${error.message || error}`,
+          `无法将当前项目绑定到研究引导：${error.message || error}`,
+        );
+        repaintBody();
+      });
+    }));
     host.querySelectorAll('[data-ag-cancel-job]').forEach(b => b.addEventListener('click', () => {
       if (!agRun.jobId || !window.EU_API || !window.EU_API.cancelJob) return;
       b.setAttribute('disabled', 'true');

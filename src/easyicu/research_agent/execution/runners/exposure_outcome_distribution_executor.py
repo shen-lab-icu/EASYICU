@@ -3,17 +3,22 @@
 Every scientific choice is read from the Planner's
 ``exposure_outcome_distribution_spec``: which column is the exposure, which
 levels of it are reported, which column is the outcome, which observed value
-counts as the event, whose rows form each denominator, and how the interval is
-built. This module decides none of them. In particular it never infers the
+counts as the event, whose rows form each denominator, and whether/how
+uncertainty is built. This module decides none of them. In particular it never infers the
 exposure from column names, from the order of ``inputs``, or from the intent
 text -- a study's exposure and outcome are its design, and an engine that
 picks them has taken the investigator's decision.
 
 The product is deliberately **self-contained**: each row carries its own
-denominator, its missing count, its event count and its rate with an interval,
+denominator, its missing count, its event count and its rate, with uncertainty
+only when the typed design authorizes it,
 *and* the design that produced them -- the exposure and outcome columns, the
 closed level sets, the event value, the denominator, missing-data and matching
-policies, the interval method and its confidence level. A renderer can
+policies, the interval method and its confidence level.  When requested, it
+also carries one prespecified unadjusted absolute-risk difference and its
+uncertainty.  Repeated rows use only the host-bound patient grouping contract
+for cluster-robust covariance; neither a column name nor prose can create that
+authority. A renderer can
 therefore draw and re-derive the whole figure from this one table, with no
 second lookup into a cohort summary and no out-of-band knowledge of the spec.
 That is what makes a figure step's input contract closable before its parent
@@ -30,11 +35,28 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
+import statsmodels.api as sm
 
+from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...authority.declared_levels import execution_distribution_spec
+from ...contracts.dependence import (
+    PatientGroupResolutionError,
+    resolve_patient_groups,
+)
+from ...contracts.claim_ceiling import (
+    BOUND_TYPED_COHORT_ANALYSIS_SET,
+    EXPOSURE_OBSERVED_ANALYSIS_SET,
+)
+from ...contracts.descriptive_execution import (
+    EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+    EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT,
+    exposure_outcome_distribution_execution_verdict,
+)
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep, ExposureOutcomeDistributionSpec, _typed_level_key
+from .plausibility_receipt import host_plausibility_receipt_injected
 from .typed_input_binding import (
     load_typed_cohort,
     run_dir_from_env,
@@ -43,8 +65,11 @@ from .typed_input_binding import (
 
 __all__ = [
     "EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS",
+    "EXPOSURE_OUTCOME_DISTRIBUTION_CONTRAST_COLUMNS",
     "EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS",
     "EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT",
+    "COUNTS_ONLY_COVARIANCE",
+    "STRUCTURAL_TOTAL_COVARIANCE",
     "exposure_outcome_distribution_declaration_verdict",
     "exposure_outcome_distribution_executor_code",
     "exposure_outcome_distribution_executor_owns_step",
@@ -52,8 +77,6 @@ __all__ = [
     "run_exposure_outcome_distribution_from_env",
     "wilson_interval",
 ]
-
-EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT = "table:exposure_outcome_distribution"
 
 #: The design columns. Every row repeats them, which is the price of a product
 #: that a downstream consumer can check without being told anything else.
@@ -73,34 +96,73 @@ EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS = (
     "denominator_policy",
     "missing_exposure_policy",
     "missing_outcome_policy",
+    "independent_interval_method",
+    "repeated_unit_interval_method",
     "interval_method",
     "confidence_level",
+    "risk_difference_reference_index",
+    "risk_difference_comparison_index",
+    "risk_difference_effect_measure",
+    "risk_difference_interval_method",
+    "dependence_variance_estimator",
+    "dependence_cluster_unit",
+    "dependence_group_source",
+    "dependence_group_derivation",
+    "dependence_delimiter",
+)
+
+#: A single prespecified contrast is repeated on every row.  Repetition keeps
+#: the product self-contained without introducing a synthetic "level" row
+#: that would break the partition represented by the level rows.
+EXPOSURE_OUTCOME_DISTRIBUTION_CONTRAST_COLUMNS = (
+    "risk_difference_n",
+    "risk_difference_pct",
+    "risk_difference_standard_error_pct",
+    "risk_difference_ci_low_pct",
+    "risk_difference_ci_high_pct",
+    "risk_difference_covariance",
+    "risk_difference_cluster_count",
 )
 
 #: The closed product schema. A renderer binds on this, never on the table's
 #: name: two studies may call the product different things and still be the
 #: same shape, and the same name may be given to a different shape.
 EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS = (
-    "row_role",
-    "exposure_level",
-    "n_rows",
-    "exposure_denominator",
-    "exposure_pct",
-    "outcome_observed_n",
-    "outcome_missing_n",
-    "outcome_events",
-    "outcome_denominator",
-    "outcome_rate_pct",
-    "ci_low_pct",
-    "ci_high_pct",
-    # How many rows the exposure could not place. Repeated on every row, the
-    # way Table 1 carries ``group_missing_excluded_n``: a denominator that
-    # silently shrank is a denominator a reader cannot check.
-    "missing_exposure_excluded_n",
-) + EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS
+    (
+        "row_role",
+        "exposure_level_index",
+        "exposure_level",
+        "n_rows",
+        "exposure_denominator",
+        "exposure_pct",
+        "exposure_ci_low_pct",
+        "exposure_ci_high_pct",
+        "exposure_standard_error_pct",
+        "exposure_interval_covariance",
+        "exposure_interval_cluster_count",
+        "outcome_observed_n",
+        "outcome_missing_n",
+        "outcome_events",
+        "outcome_denominator",
+        "outcome_rate_pct",
+        "ci_low_pct",
+        "ci_high_pct",
+        "outcome_standard_error_pct",
+        "outcome_interval_covariance",
+        "outcome_interval_cluster_count",
+        # How many rows the exposure could not place. Repeated on every row, the
+        # way Table 1 carries ``group_missing_excluded_n``: a denominator that
+        # silently shrank is a denominator a reader cannot check.
+        "missing_exposure_excluded_n",
+    )
+    + EXPOSURE_OUTCOME_DISTRIBUTION_CONTRAST_COLUMNS
+    + EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS
+)
 
 _OVERALL_ROLE = "overall"
 _LEVEL_ROLE = "exposure_level"
+STRUCTURAL_TOTAL_COVARIANCE = "structural_identity_no_interval"
+COUNTS_ONLY_COVARIANCE = "none_counts_only"
 
 
 def _typed_cohort_input(step: AnalysisStep) -> str:
@@ -123,24 +185,10 @@ def _typed_cohort_input(step: AnalysisStep) -> str:
 def exposure_outcome_distribution_executor_owns_step(step: AnalysisStep) -> bool:
     """Own only a step whose distribution design is completely declared."""
 
-    spec = step.exposure_outcome_distribution_spec
-    if spec is None:
-        return False
-    return bool(
-        str(step.method or "").strip().casefold() in {"descriptive", "distribution"}
-        and str(step.planned_analysis_role or "").strip().casefold() == "auxiliary"
-        and list(step.expected_outputs or []) == [EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT]
-        and _typed_cohort_input(step)
-        and not step.model_requirements
-        and step.table_one_spec is None
-        and step.trajectory_stability_spec is None
-    )
+    return exposure_outcome_distribution_execution_verdict(step).claimed
 
 
 #: The analysis kind this owner reports, in selection and in its verdict.
-EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND = "exposure_outcome_distribution"
-
-
 def exposure_outcome_distribution_declaration_verdict(
     step: AnalysisStep,
 ) -> OwnershipVerdict:
@@ -245,8 +293,18 @@ def exposure_outcome_distribution_declaration_verdict(
     )
 
 
-def exposure_outcome_distribution_executor_code(step: AnalysisStep) -> str:
-    """Return the small sandbox entrypoint for the exact declared design."""
+def exposure_outcome_distribution_executor_code(
+    step: AnalysisStep,
+    *,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
+) -> str:
+    """Return the sandbox entrypoint for the exact declared design.
+
+    A flag-only plausibility obligation is mechanical host policy, not a
+    reason to hand this otherwise closed product to the stochastic Coder.  The
+    host-owned receipt is therefore appended to this owner's exact adapter and
+    covered by the same code digest as the distribution product itself.
+    """
 
     if not exposure_outcome_distribution_executor_owns_step(step):
         raise ValueError(
@@ -258,7 +316,16 @@ def exposure_outcome_distribution_executor_code(step: AnalysisStep) -> str:
     # rescued only by a replan that guessed ``[0, 1]``.
     spec = execution_distribution_spec(step)
     assert spec is not None  # narrowed by owns_step
-    return textwrap.dedent(
+    if plausibility_scope is not None:
+        plausibility_scope.require_step(step.step_id)
+    require_consumption_contract = bool(
+        [
+            contract
+            for contract in step.input_consumption_contracts
+            if contract.input_key == _typed_cohort_input(step)
+        ]
+    )
+    code = textwrap.dedent(
         f"""
         from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
             run_exposure_outcome_distribution_from_env,
@@ -267,18 +334,16 @@ def exposure_outcome_distribution_executor_code(step: AnalysisStep) -> str:
         run_exposure_outcome_distribution_from_env(
             spec_payload={spec.model_dump(mode="json")!r},
             typed_cohort_input={_typed_cohort_input(step)!r},
-            require_consumption_contract={
-                bool(
-                    [
-                        contract
-                        for contract in step.input_consumption_contracts
-                        if contract.input_key == _typed_cohort_input(step)
-                    ]
-                )
-            !r},
+            analysis_role={step.planned_analysis_role!r},
+            require_consumption_contract={require_consumption_contract!r},
         )
         """
     ).strip()
+    return host_plausibility_receipt_injected(
+        code,
+        scope=plausibility_scope,
+        already_satisfied=False,
+    )
 
 
 def _finite(value: Any) -> Optional[float]:
@@ -470,6 +535,9 @@ def _closed_level_masks(
 def _design_fields(spec: ExposureOutcomeDistributionSpec) -> Dict[str, Any]:
     """The declaration, in the form every product row carries."""
 
+    contrast = spec.risk_difference_contrast
+    dependence = spec.dependence
+    exposure_keys = [_typed_level_key(level) for level in spec.exposure_levels]
     return {
         "exposure_column": spec.exposure,
         "exposure_levels_declared": json.dumps(
@@ -484,8 +552,304 @@ def _design_fields(spec: ExposureOutcomeDistributionSpec) -> Dict[str, Any]:
         "denominator_policy": spec.denominator_policy,
         "missing_exposure_policy": spec.missing_exposure_policy,
         "missing_outcome_policy": spec.missing_outcome_policy,
-        "interval_method": spec.interval_method,
+        "independent_interval_method": spec.interval_method,
+        "repeated_unit_interval_method": spec.repeated_unit_interval_method,
+        # This is the EFFECTIVE method used in the published table.  The
+        # Planner's Wilson declaration is appropriate for independent rows;
+        # once the host binds repeated-patient authority, that authority
+        # deterministically upgrades every marginal interval to the same
+        # patient-cluster sandwich design as the contrast.
+        "interval_method": (
+            spec.repeated_unit_interval_method
+            if dependence is not None
+            else spec.interval_method
+        ),
         "confidence_level": spec.confidence_level,
+        "risk_difference_reference_index": (
+            exposure_keys.index(_typed_level_key(contrast.reference_exposure_level))
+            if contrast is not None
+            else None
+        ),
+        "risk_difference_comparison_index": (
+            exposure_keys.index(_typed_level_key(contrast.comparison_exposure_level))
+            if contrast is not None
+            else None
+        ),
+        "risk_difference_effect_measure": (
+            contrast.effect_measure if contrast is not None else None
+        ),
+        "risk_difference_interval_method": (
+            contrast.interval_method if contrast is not None else None
+        ),
+        "dependence_variance_estimator": (
+            dependence.variance_estimator if dependence is not None else None
+        ),
+        "dependence_cluster_unit": (
+            dependence.cluster_unit if dependence is not None else None
+        ),
+        "dependence_group_source": (
+            dependence.group_source if dependence is not None else None
+        ),
+        "dependence_group_derivation": (
+            dependence.group_derivation if dependence is not None else None
+        ),
+        "dependence_delimiter": (
+            dependence.delimiter if dependence is not None else None
+        ),
+    }
+
+
+def _dependence_groups(
+    frame: pd.DataFrame,
+    *,
+    spec: ExposureOutcomeDistributionSpec,
+    analysis_mask: pd.Series,
+) -> tuple[np.ndarray | None, int | None]:
+    """Resolve only the exact host-bound patient grouping declaration."""
+
+    dependence = spec.dependence
+    if dependence is None:
+        return None, None
+    source = dependence.group_source
+    if source not in frame.columns:
+        raise RuntimeError(
+            "The host-bound dependence group_source is absent from the bound "
+            "cohort; cluster-robust inference cannot fall back to independent rows"
+        )
+    raw = frame.loc[analysis_mask, source].astype("object")
+    missing = int(raw.isna().sum())
+    if missing:
+        raise RuntimeError(
+            f"{missing} analysed rows have no host-bound patient grouping value; "
+            "cluster-robust inference fails closed rather than treating each "
+            "missing value as an independent patient"
+        )
+
+    try:
+        resolved = resolve_patient_groups(
+            raw.tolist(),
+            requirement=dependence,
+        )
+    except PatientGroupResolutionError as exc:
+        raise RuntimeError(str(exc)) from exc
+    return np.asarray(resolved.groups, dtype=object), resolved.cluster_count
+
+
+def _proportion_interval(
+    frame: pd.DataFrame,
+    *,
+    spec: ExposureOutcomeDistributionSpec,
+    denominator_mask: pd.Series,
+    numerator_mask: pd.Series,
+    structural_total: bool = False,
+) -> Dict[str, Any]:
+    """One marginal proportion under the plan's effective dependence design."""
+
+    denominator = int(denominator_mask.sum())
+    numerator = int((denominator_mask & numerator_mask).sum())
+    if denominator <= 0:
+        raise RuntimeError(
+            "marginal proportion has no analysed rows in its declared denominator"
+        )
+    estimate_pct = percentage(numerator, denominator)
+    if spec.schema_version == "easyicu.exposure_outcome_distribution/3":
+        return {
+            "estimate_pct": estimate_pct,
+            "standard_error_pct": None,
+            "ci_low_pct": None,
+            "ci_high_pct": None,
+            "covariance": COUNTS_ONLY_COVARIANCE,
+            "cluster_count": None,
+        }
+    if structural_total:
+        if numerator != denominator:
+            raise RuntimeError(
+                "structural total must be the whole analysed denominator"
+            )
+        return {
+            "estimate_pct": estimate_pct,
+            "standard_error_pct": None,
+            "ci_low_pct": None,
+            "ci_high_pct": None,
+            "covariance": STRUCTURAL_TOTAL_COVARIANCE,
+            "cluster_count": None,
+        }
+    if spec.dependence is None:
+        assert spec.confidence_level is not None
+        low, high = wilson_interval(
+            numerator,
+            denominator,
+            confidence_level=spec.confidence_level,
+        )
+        proportion = numerator / denominator
+        return {
+            "estimate_pct": estimate_pct,
+            "standard_error_pct": round(
+                100.0 * math.sqrt(proportion * (1.0 - proportion) / denominator),
+                6,
+            ),
+            "ci_low_pct": low,
+            "ci_high_pct": high,
+            "covariance": "binomial_independent",
+            "cluster_count": None,
+        }
+    if denominator <= 2:
+        raise RuntimeError(
+            "patient-cluster marginal intervals require more than two analysed rows"
+        )
+    if numerator in {0, denominator}:
+        raise RuntimeError(
+            "patient-cluster Wald uncertainty is degenerate at an observed "
+            "proportion of zero or one; refusing a zero-width confidence interval"
+        )
+    y = numerator_mask.loc[denominator_mask].astype(float).to_numpy()
+    design = np.ones((len(y), 1), dtype=float)
+    groups, cluster_count = _dependence_groups(
+        frame,
+        spec=spec,
+        analysis_mask=denominator_mask,
+    )
+    assert groups is not None and cluster_count is not None
+    fitted = sm.OLS(y, design, missing="raise").fit(
+        cov_type="cluster",
+        cov_kwds={
+            "groups": groups,
+            "use_correction": True,
+            "df_correction": True,
+        },
+        use_t=False,
+    )
+    estimate = float(fitted.params[0])
+    standard_error = float(fitted.bse[0])
+    count_derived = numerator / denominator
+    if (
+        not math.isfinite(estimate)
+        or not math.isfinite(standard_error)
+        or standard_error <= 0.0
+    ):
+        raise RuntimeError(
+            "patient-cluster marginal interval produced non-finite uncertainty"
+        )
+    if abs(estimate - count_derived) > 1e-10:
+        raise RuntimeError(
+            "patient-cluster marginal point estimate is not its published count "
+            "over denominator"
+        )
+    assert spec.confidence_level is not None
+    critical = statistics.NormalDist().inv_cdf(
+        1.0 - (1.0 - spec.confidence_level) / 2.0
+    )
+    return {
+        "estimate_pct": estimate_pct,
+        "standard_error_pct": round(100.0 * standard_error, 6),
+        # The cluster sandwich supplies uncertainty; bounding its Wald
+        # projection keeps a proportion interval on the probability scale.
+        # Risk-difference intervals below remain unbounded, as they should.
+        "ci_low_pct": round(
+            max(0.0, 100.0 * (estimate - critical * standard_error)), 6
+        ),
+        "ci_high_pct": round(
+            min(100.0, 100.0 * (estimate + critical * standard_error)), 6
+        ),
+        "covariance": "cluster_robust",
+        "cluster_count": cluster_count,
+    }
+
+
+def _risk_difference_result(
+    frame: pd.DataFrame,
+    *,
+    spec: ExposureOutcomeDistributionSpec,
+    exposure_masks: Dict[Tuple[str, str], pd.Series],
+    event: pd.Series,
+    observed_outcome: pd.Series,
+) -> Dict[str, Any]:
+    """Fit the prespecified unadjusted identity-link contrast, if declared."""
+
+    contrast = spec.risk_difference_contrast
+    empty = {column: None for column in EXPOSURE_OUTCOME_DISTRIBUTION_CONTRAST_COLUMNS}
+    if contrast is None:
+        return empty
+
+    reference = exposure_masks[_typed_level_key(contrast.reference_exposure_level)]
+    comparison = exposure_masks[_typed_level_key(contrast.comparison_exposure_level)]
+    analysis_mask = reference | comparison
+    if spec.denominator_policy == "observed_outcome_rows":
+        analysis_mask &= observed_outcome
+
+    reference_mask = analysis_mask & reference
+    comparison_mask = analysis_mask & comparison
+    reference_n = int(reference_mask.sum())
+    comparison_n = int(comparison_mask.sum())
+    if reference_n <= 0 or comparison_n <= 0:
+        raise RuntimeError(
+            "risk_difference_contrast requires at least one analysed row in "
+            "both the declared reference and comparison levels"
+        )
+
+    x = comparison.loc[analysis_mask].astype(float).to_numpy()
+    y = event.loc[analysis_mask].astype(float).to_numpy()
+    if len(y) <= 2:
+        raise RuntimeError(
+            "risk_difference_contrast needs more than two analysed rows for "
+            "a finite uncertainty estimate"
+        )
+    design = sm.add_constant(x, has_constant="add")
+    model = sm.OLS(y, design, missing="raise")
+    groups, cluster_count = _dependence_groups(
+        frame,
+        spec=spec,
+        analysis_mask=analysis_mask,
+    )
+    if groups is None:
+        fitted = model.fit(cov_type="HC1", use_t=False)
+        covariance = "hc1"
+    else:
+        fitted = model.fit(
+            cov_type="cluster",
+            cov_kwds={
+                "groups": groups,
+                "use_correction": True,
+                "df_correction": True,
+            },
+            use_t=False,
+        )
+        covariance = "cluster_robust"
+
+    estimate = float(fitted.params[1])
+    standard_error = float(fitted.bse[1])
+    if (
+        not math.isfinite(estimate)
+        or not math.isfinite(standard_error)
+        or standard_error <= 0.0
+    ):
+        raise RuntimeError(
+            "risk_difference_contrast produced non-finite or zero-width uncertainty"
+        )
+    reference_risk = int(event.loc[reference_mask].sum()) / reference_n
+    comparison_risk = int(event.loc[comparison_mask].sum()) / comparison_n
+    count_derived = comparison_risk - reference_risk
+    if abs(estimate - count_derived) > 1e-10:
+        raise RuntimeError(
+            "identity-link risk-difference coefficient is not the difference "
+            "of the two published absolute risks"
+        )
+    assert spec.confidence_level is not None
+    critical = statistics.NormalDist().inv_cdf(
+        1.0 - (1.0 - spec.confidence_level) / 2.0
+    )
+    return {
+        "risk_difference_n": int(len(y)),
+        "risk_difference_pct": round(100.0 * count_derived, 6),
+        "risk_difference_standard_error_pct": round(100.0 * standard_error, 6),
+        "risk_difference_ci_low_pct": round(
+            100.0 * (estimate - critical * standard_error), 6
+        ),
+        "risk_difference_ci_high_pct": round(
+            100.0 * (estimate + critical * standard_error), 6
+        ),
+        "risk_difference_covariance": covariance,
+        "risk_difference_cluster_count": cluster_count,
     }
 
 
@@ -560,40 +924,72 @@ def _distribution_rows(
 
     total_rows = int(len(frame))
     exposure_denominator = total_rows
+    all_rows = pd.Series(True, index=frame.index, dtype=bool)
     # Carried beside the declaration on every row, not merged into it: the
     # policy is what the plan asked for, this is what the data cost.
     design = {
         **_design_fields(spec),
         "missing_exposure_excluded_n": missing_exposure_rows,
     }
+    contrast_result = _risk_difference_result(
+        frame,
+        spec=spec,
+        exposure_masks=exposure_masks,
+        event=event,
+        observed_outcome=observed_outcome,
+    )
 
     rows: List[Dict[str, Any]] = []
-    for level in spec.exposure_levels:
+    for level_index, level in enumerate(spec.exposure_levels):
         mask = exposure_masks[_typed_level_key(level)]
         n_rows = int(mask.sum())
+        exposure_interval = _proportion_interval(
+            frame,
+            spec=spec,
+            denominator_mask=all_rows,
+            numerator_mask=mask,
+        )
         observed_n = int((mask & observed_outcome).sum())
         missing_n = n_rows - observed_n
         events = int((mask & event).sum())
         outcome_denominator = (
             n_rows if spec.denominator_policy == "all_declared_rows" else observed_n
         )
-        low, high = wilson_interval(
-            events, outcome_denominator, confidence_level=spec.confidence_level
+        outcome_denominator_mask = (
+            mask
+            if spec.denominator_policy == "all_declared_rows"
+            else mask & observed_outcome
+        )
+        outcome_interval = _proportion_interval(
+            frame,
+            spec=spec,
+            denominator_mask=outcome_denominator_mask,
+            numerator_mask=event,
         )
         rows.append(
             {
                 "row_role": _LEVEL_ROLE,
+                "exposure_level_index": level_index,
                 "exposure_level": level,
                 "n_rows": n_rows,
                 "exposure_denominator": exposure_denominator,
-                "exposure_pct": percentage(n_rows, exposure_denominator),
+                "exposure_pct": exposure_interval["estimate_pct"],
+                "exposure_ci_low_pct": exposure_interval["ci_low_pct"],
+                "exposure_ci_high_pct": exposure_interval["ci_high_pct"],
+                "exposure_standard_error_pct": exposure_interval["standard_error_pct"],
+                "exposure_interval_covariance": exposure_interval["covariance"],
+                "exposure_interval_cluster_count": exposure_interval["cluster_count"],
                 "outcome_observed_n": observed_n,
                 "outcome_missing_n": missing_n,
                 "outcome_events": events,
                 "outcome_denominator": outcome_denominator,
-                "outcome_rate_pct": percentage(events, outcome_denominator),
-                "ci_low_pct": low,
-                "ci_high_pct": high,
+                "outcome_rate_pct": outcome_interval["estimate_pct"],
+                "ci_low_pct": outcome_interval["ci_low_pct"],
+                "ci_high_pct": outcome_interval["ci_high_pct"],
+                "outcome_standard_error_pct": outcome_interval["standard_error_pct"],
+                "outcome_interval_covariance": outcome_interval["covariance"],
+                "outcome_interval_cluster_count": outcome_interval["cluster_count"],
+                **contrast_result,
                 **design,
             }
         )
@@ -605,23 +1001,46 @@ def _distribution_rows(
         if spec.denominator_policy == "all_declared_rows"
         else overall_observed
     )
-    low, high = wilson_interval(
-        overall_events, overall_denominator, confidence_level=spec.confidence_level
+    overall_outcome_denominator_mask = (
+        all_rows if spec.denominator_policy == "all_declared_rows" else observed_outcome
+    )
+    outcome_interval = _proportion_interval(
+        frame,
+        spec=spec,
+        denominator_mask=overall_outcome_denominator_mask,
+        numerator_mask=event,
+    )
+    exposure_interval = _proportion_interval(
+        frame,
+        spec=spec,
+        denominator_mask=all_rows,
+        numerator_mask=all_rows,
+        structural_total=True,
     )
     rows.append(
         {
             "row_role": _OVERALL_ROLE,
+            "exposure_level_index": None,
             "exposure_level": None,
             "n_rows": total_rows,
             "exposure_denominator": exposure_denominator,
-            "exposure_pct": percentage(total_rows, exposure_denominator),
+            "exposure_pct": exposure_interval["estimate_pct"],
+            "exposure_ci_low_pct": exposure_interval["ci_low_pct"],
+            "exposure_ci_high_pct": exposure_interval["ci_high_pct"],
+            "exposure_standard_error_pct": exposure_interval["standard_error_pct"],
+            "exposure_interval_covariance": exposure_interval["covariance"],
+            "exposure_interval_cluster_count": exposure_interval["cluster_count"],
             "outcome_observed_n": overall_observed,
             "outcome_missing_n": total_rows - overall_observed,
             "outcome_events": overall_events,
             "outcome_denominator": overall_denominator,
-            "outcome_rate_pct": percentage(overall_events, overall_denominator),
-            "ci_low_pct": low,
-            "ci_high_pct": high,
+            "outcome_rate_pct": outcome_interval["estimate_pct"],
+            "ci_low_pct": outcome_interval["ci_low_pct"],
+            "ci_high_pct": outcome_interval["ci_high_pct"],
+            "outcome_standard_error_pct": outcome_interval["standard_error_pct"],
+            "outcome_interval_covariance": outcome_interval["covariance"],
+            "outcome_interval_cluster_count": outcome_interval["cluster_count"],
+            **contrast_result,
             **design,
         }
     )
@@ -647,6 +1066,111 @@ def _verify_product(
             "exposure_outcome_distribution needs exactly one overall row"
         )
     total = overall[0]
+    contrast = spec.risk_difference_contrast
+    critical = (
+        statistics.NormalDist().inv_cdf(
+            1.0 - (1.0 - spec.confidence_level) / 2.0
+        )
+        if spec.confidence_level is not None
+        else None
+    )
+
+    def verify_interval(
+        row: Dict[str, Any],
+        *,
+        numerator: int,
+        denominator: int,
+        estimate_key: str,
+        low_key: str,
+        high_key: str,
+        standard_error_key: str,
+        covariance_key: str,
+        cluster_count_key: str,
+        label: str,
+        structural_total: bool = False,
+    ) -> None:
+        estimate = percentage(numerator, denominator)
+        if row[estimate_key] != estimate:
+            raise RuntimeError(f"{label} percentage is not its own counts")
+        if spec.schema_version == "easyicu.exposure_outcome_distribution/3":
+            if (
+                row[standard_error_key] is not None
+                or row[low_key] is not None
+                or row[high_key] is not None
+                or row[covariance_key] != COUNTS_ONLY_COVARIANCE
+                or row[cluster_count_key] is not None
+            ):
+                raise RuntimeError(
+                    f"{label} counts-only result carries inferential uncertainty"
+                )
+            return
+        if structural_total:
+            if (
+                denominator <= 0
+                or numerator != denominator
+                or row[standard_error_key] is not None
+                or row[low_key] is not None
+                or row[high_key] is not None
+                or row[covariance_key] != STRUCTURAL_TOTAL_COVARIANCE
+                or row[cluster_count_key] is not None
+            ):
+                raise RuntimeError(
+                    f"{label} structural total carries inferential uncertainty"
+                )
+            return
+        if spec.dependence is None:
+            assert spec.confidence_level is not None
+            proportion = numerator / denominator
+            expected_standard_error = round(
+                100.0 * math.sqrt(proportion * (1.0 - proportion) / denominator),
+                6,
+            )
+            if (
+                row[low_key],
+                row[high_key],
+            ) != wilson_interval(
+                numerator,
+                denominator,
+                confidence_level=spec.confidence_level,
+            ):
+                raise RuntimeError(
+                    f"{label} interval is not Wilson at the declared confidence"
+                )
+            if (
+                row[standard_error_key] != expected_standard_error
+                or row[covariance_key] != "binomial_independent"
+                or row[cluster_count_key] is not None
+            ):
+                raise RuntimeError(
+                    f"{label} Wilson interval carries contradictory independent "
+                    "uncertainty"
+                )
+            return
+        standard_error = _finite(row[standard_error_key])
+        if standard_error is None or standard_error <= 0.0:
+            raise RuntimeError(f"{label} patient-cluster standard error is invalid")
+        assert critical is not None
+        expected_low = round(max(0.0, float(estimate) - critical * standard_error), 6)
+        expected_high = round(
+            min(100.0, float(estimate) + critical * standard_error), 6
+        )
+        if (
+            abs(float(row[low_key]) - expected_low) > 2e-6
+            or abs(float(row[high_key]) - expected_high) > 2e-6
+        ):
+            raise RuntimeError(
+                f"{label} interval is not its patient-cluster Wald arithmetic"
+            )
+        cluster_count = row[cluster_count_key]
+        if (
+            row[covariance_key] != "cluster_robust"
+            or cluster_count is None
+            or int(cluster_count) < 2
+        ):
+            raise RuntimeError(
+                f"{label} interval lacks its patient-cluster covariance receipt"
+            )
+
     if sum(row["n_rows"] for row in level_rows) != total["n_rows"]:
         raise RuntimeError("declared exposure levels do not partition the cohort")
     if sum(row["outcome_events"] for row in level_rows) != total["outcome_events"]:
@@ -676,37 +1200,128 @@ def _verify_product(
                 "the outcome denominator does not follow the declared "
                 f"denominator_policy={spec.denominator_policy!r}"
             )
-        if row["exposure_pct"] != percentage(
-            row["n_rows"], row["exposure_denominator"]
-        ):
-            raise RuntimeError("an exposure percentage is not its own counts")
-        if row["outcome_rate_pct"] != percentage(
-            row["outcome_events"], row["outcome_denominator"]
-        ):
-            raise RuntimeError("an outcome rate is not its own events over denominator")
-        if (row["ci_low_pct"], row["ci_high_pct"]) != wilson_interval(
-            row["outcome_events"],
-            row["outcome_denominator"],
-            confidence_level=spec.confidence_level,
-        ):
-            raise RuntimeError("an interval is not the declared method at that level")
+        verify_interval(
+            row,
+            numerator=row["n_rows"],
+            denominator=row["exposure_denominator"],
+            estimate_key="exposure_pct",
+            low_key="exposure_ci_low_pct",
+            high_key="exposure_ci_high_pct",
+            standard_error_key="exposure_standard_error_pct",
+            covariance_key="exposure_interval_covariance",
+            cluster_count_key="exposure_interval_cluster_count",
+            label="exposure prevalence",
+            structural_total=row["row_role"] == _OVERALL_ROLE,
+        )
+        verify_interval(
+            row,
+            numerator=row["outcome_events"],
+            denominator=row["outcome_denominator"],
+            estimate_key="outcome_rate_pct",
+            low_key="ci_low_pct",
+            high_key="ci_high_pct",
+            standard_error_key="outcome_standard_error_pct",
+            covariance_key="outcome_interval_covariance",
+            cluster_count_key="outcome_interval_cluster_count",
+            label="outcome absolute risk",
+        )
         rate = _finite(row["outcome_rate_pct"])
         low = _finite(row["ci_low_pct"])
         high = _finite(row["ci_high_pct"])
         if rate is not None and low is not None and high is not None:
             if not (low - 1e-6 <= rate <= high + 1e-6):
                 raise RuntimeError("the reported rate falls outside its own interval")
+    for column in EXPOSURE_OUTCOME_DISTRIBUTION_CONTRAST_COLUMNS:
+        if len({repr(row[column]) for row in rows}) != 1:
+            raise RuntimeError(
+                f"risk-difference result column {column!r} differs across rows"
+            )
+    if contrast is None:
+        if any(
+            row[column] is not None
+            for row in rows
+            for column in EXPOSURE_OUTCOME_DISTRIBUTION_CONTRAST_COLUMNS
+        ):
+            raise RuntimeError(
+                "risk-difference results were emitted without a declared contrast"
+            )
+        return
+
+    exposure_keys = [_typed_level_key(level) for level in spec.exposure_levels]
+    reference_index = exposure_keys.index(
+        _typed_level_key(contrast.reference_exposure_level)
+    )
+    comparison_index = exposure_keys.index(
+        _typed_level_key(contrast.comparison_exposure_level)
+    )
+    reference_row = level_rows[reference_index]
+    comparison_row = level_rows[comparison_index]
+    expected_difference = round(
+        float(comparison_row["outcome_rate_pct"])
+        - float(reference_row["outcome_rate_pct"]),
+        6,
+    )
+    if rows[0]["risk_difference_pct"] != expected_difference:
+        raise RuntimeError(
+            "risk difference is not comparison absolute risk minus reference "
+            "absolute risk"
+        )
+    expected_n = int(reference_row["outcome_denominator"]) + int(
+        comparison_row["outcome_denominator"]
+    )
+    if int(rows[0]["risk_difference_n"]) != expected_n:
+        raise RuntimeError(
+            "risk-difference analysis count is not the sum of the declared "
+            "reference and comparison outcome denominators"
+        )
+    standard_error = _finite(rows[0]["risk_difference_standard_error_pct"])
+    if standard_error is None or standard_error <= 0.0:
+        raise RuntimeError("risk difference has invalid standard error")
+    assert critical is not None
+    expected_low = round(expected_difference - critical * standard_error, 6)
+    expected_high = round(expected_difference + critical * standard_error, 6)
+    if (
+        abs(float(rows[0]["risk_difference_ci_low_pct"]) - expected_low) > 2e-6
+        or abs(float(rows[0]["risk_difference_ci_high_pct"]) - expected_high) > 2e-6
+    ):
+        raise RuntimeError(
+            "risk-difference interval is not its point estimate plus/minus the "
+            "declared Wald-normal uncertainty"
+        )
+    expected_covariance = "cluster_robust" if spec.dependence is not None else "hc1"
+    if rows[0]["risk_difference_covariance"] != expected_covariance:
+        raise RuntimeError(
+            "risk-difference covariance does not match the bound dependence contract"
+        )
+    cluster_count = rows[0]["risk_difference_cluster_count"]
+    if spec.dependence is None and cluster_count is not None:
+        raise RuntimeError(
+            "independent-row risk-difference inference cannot report patient clusters"
+        )
+    if spec.dependence is not None and (
+        cluster_count is None or int(cluster_count) < 2
+    ):
+        raise RuntimeError(
+            "cluster-robust risk-difference inference must report at least two "
+            "patient clusters"
+        )
 
 
 def run_exposure_outcome_distribution_from_env(
     *,
     spec_payload: Dict[str, Any],
     typed_cohort_input: str,
+    analysis_role: str = "auxiliary",
     require_consumption_contract: bool = False,
 ) -> Dict[str, Any]:
     """Execute the declared distribution from the standard runner environment."""
 
     spec = ExposureOutcomeDistributionSpec.model_validate(spec_payload)
+    analysis_role = str(analysis_role or "").strip().casefold()
+    if analysis_role not in {"primary", "secondary", "sensitivity", "auxiliary"}:
+        raise RuntimeError(
+            "exposure_outcome_distribution requires a closed analysis_role"
+        )
     if not str(typed_cohort_input or "").strip():
         raise RuntimeError(
             "exposure_outcome_distribution requires an exact typed cohort "
@@ -741,26 +1356,135 @@ def run_exposure_outcome_distribution_from_env(
     table_path = out_dir / "exposure_outcome_distribution.csv"
     table.to_csv(table_path, index=False)
 
+    level_rows = [row for row in rows if row["row_role"] == _LEVEL_ROLE]
+    effective_interval_method = str(rows[0]["interval_method"])
+    exposure_prevalence = []
+    outcome_absolute_risks = []
+    for index, (level, row) in enumerate(zip(spec.exposure_levels, level_rows)):
+        exposure_prevalence.append(
+            {
+                "level_index": index,
+                "level": level,
+                "n": int(row["n_rows"]),
+                "denominator": int(row["exposure_denominator"]),
+                "estimate_pct": row["exposure_pct"],
+                "standard_error_pct": row["exposure_standard_error_pct"],
+                "ci_low_pct": row["exposure_ci_low_pct"],
+                "ci_high_pct": row["exposure_ci_high_pct"],
+                "confidence_level": spec.confidence_level,
+                "interval_method": effective_interval_method,
+                "covariance": row["exposure_interval_covariance"],
+                "cluster_count": row["exposure_interval_cluster_count"],
+            }
+        )
+        outcome_absolute_risks.append(
+            {
+                "level_index": index,
+                "level": level,
+                "events": int(row["outcome_events"]),
+                "denominator": int(row["outcome_denominator"]),
+                "estimate_pct": row["outcome_rate_pct"],
+                "standard_error_pct": row["outcome_standard_error_pct"],
+                "ci_low_pct": row["ci_low_pct"],
+                "ci_high_pct": row["ci_high_pct"],
+                "confidence_level": spec.confidence_level,
+                "interval_method": effective_interval_method,
+                "covariance": row["outcome_interval_covariance"],
+                "cluster_count": row["outcome_interval_cluster_count"],
+            }
+        )
+    contrast = spec.risk_difference_contrast
+    excluded_exposure_n = int(rows[0]["missing_exposure_excluded_n"])
+    analysed_n = int(
+        next(row for row in rows if row["row_role"] == _OVERALL_ROLE)["n_rows"]
+    )
+    analysis_set = (
+        EXPOSURE_OBSERVED_ANALYSIS_SET
+        if excluded_exposure_n
+        else BOUND_TYPED_COHORT_ANALYSIS_SET
+    )
+    risk_difference = None
+    if contrast is not None:
+        reference_index = int(rows[0]["risk_difference_reference_index"])
+        comparison_index = int(rows[0]["risk_difference_comparison_index"])
+        risk_difference = {
+            "reference_level_index": reference_index,
+            "reference_level": spec.exposure_levels[reference_index],
+            "comparison_level_index": comparison_index,
+            "comparison_level": spec.exposure_levels[comparison_index],
+            "direction": "comparison_minus_reference",
+            "n": int(rows[0]["risk_difference_n"]),
+            "estimate_pct": rows[0]["risk_difference_pct"],
+            "standard_error_pct": rows[0]["risk_difference_standard_error_pct"],
+            "ci_low_pct": rows[0]["risk_difference_ci_low_pct"],
+            "ci_high_pct": rows[0]["risk_difference_ci_high_pct"],
+            "confidence_level": spec.confidence_level,
+            "interval_method": rows[0]["risk_difference_interval_method"],
+            "covariance": rows[0]["risk_difference_covariance"],
+            "cluster_count": rows[0]["risk_difference_cluster_count"],
+            "interpretation_ceiling": "descriptive_unadjusted_not_causal",
+        }
+    descriptive_estimates = {
+        "schema_version": "easyicu.exposure_outcome_descriptive_estimates/1",
+        "analysis_role": analysis_role,
+        "analysis_set": analysis_set,
+        "interpretation_ceiling": "descriptive_unadjusted_not_causal",
+        # One typed authority governs every covariance-bearing estimate in this
+        # envelope.  Counts can legitimately differ after exposure stratification,
+        # but consumers must never infer a different grouping rule per estimate.
+        "dependence": (
+            spec.dependence.model_dump(mode="json")
+            if spec.dependence is not None
+            else None
+        ),
+        "exposure_prevalence": exposure_prevalence,
+        "outcome_absolute_risks": outcome_absolute_risks,
+        "risk_difference": risk_difference,
+    }
+
     summary = {
         "status": "ok",
         "analysis_family": "descriptive",
         "interpretation_class": "exposure_outcome_distribution",
-        "cohort_n": int(len(frame)),
+        "interpretation_ceiling": "descriptive_unadjusted_not_causal",
+        "analysis_role": analysis_role,
+        "analysis_set": analysis_set,
+        "cohort_n": analysed_n,
         "exposure": spec.exposure,
         "outcome": spec.outcome,
         "denominator_policy": spec.denominator_policy,
         "missing_outcome_policy": spec.missing_outcome_policy,
         "level_match_policy": spec.level_match_policy,
-        "interval_method": spec.interval_method,
+        "interval_method": effective_interval_method,
+        "independent_interval_method": spec.interval_method,
+        "repeated_unit_interval_method": spec.repeated_unit_interval_method,
         "confidence_level": spec.confidence_level,
+        "effective_interval_method": effective_interval_method,
         "typed_cohort_input": typed_cohort_input,
         "source_cohort": cohort_path.name,
         "source_row_count_reconciliation": {
             "source_rows": int(len(frame)),
-            "analyzed_rows": int(len(frame)),
-            "filtering_performed": False,
+            "analyzed_rows": analysed_n,
+            "excluded_missing_exposure_rows": excluded_exposure_n,
+            "filtering_performed": bool(excluded_exposure_n),
         },
         "adjusted_effect": None,
+        "descriptive_estimates": descriptive_estimates,
+        "descriptive_contrast": (
+            {
+                "effect_measure": "risk_difference",
+                "estimate_pct": rows[0]["risk_difference_pct"],
+                "ci_low_pct": rows[0]["risk_difference_ci_low_pct"],
+                "ci_high_pct": rows[0]["risk_difference_ci_high_pct"],
+                "confidence_level": spec.confidence_level,
+                "interval_method": rows[0]["risk_difference_interval_method"],
+                "covariance": rows[0]["risk_difference_covariance"],
+                "cluster_count": rows[0]["risk_difference_cluster_count"],
+                "interpretation_ceiling": "descriptive_unadjusted_not_causal",
+            }
+            if spec.risk_difference_contrast is not None
+            else None
+        ),
         "output_files": {EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT: table_path.name},
     }
     (out_dir / "step_summary.json").write_text(

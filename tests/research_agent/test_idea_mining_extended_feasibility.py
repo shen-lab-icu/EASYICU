@@ -1,7 +1,7 @@
 """Tests for extended idea-mining feasibility (ICD cohort + cross-DB dict).
 
 The ICD-cohort assertions depend on the frozen MIMIC-IV ICD catalog
-(``benchmark/icd_cohort_catalog_miiv.json``); they skip if it is absent.
+(``benchmarks/catalogs/icd_cohort_catalog_miiv.json``); they skip if it is absent.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from easyicu.research_agent.discovery.idea_mining_extended_feasibility import (
 )
 
 REPO = Path(__file__).resolve().parents[2]
-ICD_CATALOG = REPO / "benchmark" / "icd_cohort_catalog_miiv.json"
+ICD_CATALOG = REPO / "benchmarks" / "catalogs" / "icd_cohort_catalog_miiv.json"
 _HAS_ICD = ICD_CATALOG.exists()
 
 

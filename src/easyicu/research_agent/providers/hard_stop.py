@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
 from ..authority.provider_hard_stop import (
@@ -9,7 +10,12 @@ from ..authority.provider_hard_stop import (
     consume_active_provider_hard_stop_attempt,
     provider_hard_stop_call_scope,
 )
-from .llm import client_counts_transport_attempts
+from .llm import (
+    clear_provider_call_receipt,
+    client_counts_transport_attempts,
+    current_provider_call_receipt,
+)
+from .protocol import LLMMessage
 
 
 def _model_identity(client: Any) -> str:
@@ -38,6 +44,14 @@ class HardStopClient:
         from .factory import _register_provider_wrapper
 
         _register_provider_wrapper(self, children_getter=lambda: (self._inner,))
+
+    @property
+    def supports_vision(self) -> bool:
+        """Preserve the wrapped client's capability instead of widening it."""
+
+        from .capabilities import llm_supports_vision
+
+        return llm_supports_vision(self._inner)
 
     def complete(
         self,
@@ -102,6 +116,42 @@ class HardStopClient:
                 raise
             hard_stop.complete(usage)
             return response, usage
+
+    def complete_with_images(
+        self,
+        *,
+        prompt: str,
+        image_paths: Sequence[Path],
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+    ) -> str:
+        """Account an authorized multimodal request before image transport."""
+
+        messages = (LLMMessage(role="user", content=str(prompt)),)
+        with provider_hard_stop_call_scope(
+            task=self._task,
+            role=self._role,
+            model=_model_identity(self._inner),
+            messages=messages,
+            max_tokens=max_tokens,
+        ) as hard_stop:
+            clear_provider_call_receipt()
+            try:
+                if not client_counts_transport_attempts(self._inner):
+                    consume_active_provider_hard_stop_attempt()
+                response = self._inner.complete_with_images(
+                    prompt=prompt,
+                    image_paths=image_paths,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+                receipt = current_provider_call_receipt()
+                usage = dict(receipt.usage_summary) if receipt is not None else None
+            except BaseException as exc:
+                hard_stop.fail(type(exc).__name__)
+                raise
+            hard_stop.complete(usage)
+            return response
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)

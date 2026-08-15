@@ -164,9 +164,9 @@ def test_the_recorder_is_actually_wired_into_the_execute_phase() -> None:
     the run could not report.
     """
 
-    source = Path("src/easyicu/research_agent/execution/phase.py").read_text(
-        encoding="utf-8"
-    )
+    source = Path(
+        "src/easyicu/research_agent/execution/candidate_loop.py"
+    ).read_text(encoding="utf-8")
     tree = ast.parse(source)
     calls = [
         node

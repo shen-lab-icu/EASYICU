@@ -1,9 +1,11 @@
 """Private, verified model-service configuration for Pi Copilot.
 
 This owner is deliberately separate from the scientific-run provider adapter.
-Pi credentials unlock only the conversational shell.  Secret values may cross
-the local browser-to-FastAPI setup request once, but are never returned to the
-browser, copied into session metadata, or exposed to a Pi tool result.
+Pi credentials unlock only the conversational shell by default.  A separately
+authorized full scientific run may request a verified in-memory projection for
+the Research Agent provider; that projection is never persisted to the project,
+returned to the browser, copied into session metadata, or exposed to a Pi tool
+result.
 """
 
 from __future__ import annotations
@@ -18,6 +20,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
+from easyicu.provider_auth import (
+    OPENAI_AUTH_HEADER_ENV,
+    OpenAIAuthHeader,
+    credential_headers,
+    pi_openai_auth_header,
+)
 from easyicu.webserver.provider_url_security import (
     ProviderUrlSecurityError,
     validate_credential_endpoint,
@@ -38,9 +46,7 @@ SUPPORTED_API_TRANSPORTS = frozenset(
     }
 )
 _DEFAULT_CONFIG_PATH = Path.home() / ".easyicu" / "pi-provider.env"
-_DEFAULT_RECEIPT_PATH = (
-    Path.home() / ".easyicu" / "pi-provider-verification.json"
-)
+_DEFAULT_RECEIPT_PATH = Path.home() / ".easyicu" / "pi-provider-verification.json"
 _CONFIG_KEYS = frozenset(
     {
         "EASYICU_PI_API_KEY",
@@ -50,9 +56,12 @@ _CONFIG_KEYS = frozenset(
         "EASYICU_PI_API",
     }
 )
-_MAX_MODELS_RESPONSE_BYTES = 1024 * 1024
+_MAX_VERIFICATION_RESPONSE_BYTES = 1024 * 1024
 
-Verifier = Callable[[str, Mapping[str, str], float], tuple[int, Any]]
+Verifier = Callable[
+    [str, str, Mapping[str, str], Optional[Mapping[str, Any]], float],
+    tuple[int, Any],
+]
 
 
 @dataclass(frozen=True)
@@ -65,6 +74,15 @@ class PiProviderConfig:
     model: str
     api_transport: str
 
+    @property
+    def openai_auth_header(self) -> OpenAIAuthHeader:
+        """Return the non-secret wire-auth mode compiled from this preset."""
+
+        return pi_openai_auth_header(
+            provider=self.provider,
+            api_transport=self.api_transport,
+        )
+
     def as_environment(self) -> Dict[str, str]:
         return {
             "EASYICU_PI_PROVIDER": self.provider,
@@ -76,7 +94,12 @@ class PiProviderConfig:
 
     def fingerprint(self) -> str:
         canonical = json.dumps(
-            self.as_environment(),
+            {
+                "schema": "easyicu.pi-provider-config-fingerprint/2",
+                "environment": self.as_environment(),
+                "openai_auth_header": self.openai_auth_header.value,
+                "verification_contract": "model-catalog+inference-probe/1",
+            },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -142,9 +165,7 @@ class PiProviderConfigStore:
             raise PiCopilotError(
                 "pi_provider_base_url_rejected",
                 "The model-service address is not allowed by the local security policy.",
-                details={
-                    "reason": exc.reason
-                },
+                details={"reason": exc.reason},
             ) from exc
         return PiProviderConfig(
             provider=provider_text,
@@ -212,13 +233,9 @@ class PiProviderConfigStore:
             return None
         try:
             return self.make_config(
-                provider=str(
-                    values.get("EASYICU_PI_PROVIDER") or DEFAULT_PROVIDER
-                ),
+                provider=str(values.get("EASYICU_PI_PROVIDER") or DEFAULT_PROVIDER),
                 api_key=api_key,
-                base_url=str(
-                    values.get("EASYICU_PI_BASE_URL") or DEFAULT_BASE_URL
-                ),
+                base_url=str(values.get("EASYICU_PI_BASE_URL") or DEFAULT_BASE_URL),
                 model=str(values.get("EASYICU_PI_MODEL") or DEFAULT_MODEL),
                 api_transport=str(
                     values.get("EASYICU_PI_API") or DEFAULT_API_TRANSPORT
@@ -226,6 +243,61 @@ class PiProviderConfigStore:
             )
         except PiCopilotError:
             return None
+
+    def research_agent_environment(
+        self,
+        *,
+        external_llm_opt_in: bool,
+        environ: Optional[Mapping[str, str]] = None,
+        include_file: bool = True,
+    ) -> Dict[str, str]:
+        """Project one verified OpenAI-compatible config into run memory.
+
+        This method does not itself authorize a scientific run.  The caller
+        must already hold the distinct, one-turn full-analysis grant and pass
+        its explicit external-model opt-in.  The returned mapping is consumed
+        only by the provider factory and disables the separate legacy provider
+        env file so one run cannot silently mix two credential authorities.
+        """
+
+        if not external_llm_opt_in:
+            raise PiCopilotError(
+                "pi_provider_research_opt_in_required",
+                "A full Research Agent run requires explicit external-model authorization.",
+            )
+        config = self.resolved_config(
+            environ=environ,
+            include_file=include_file,
+        )
+        status = self.public_status(
+            environ=environ,
+            include_file=include_file,
+        )
+        if config is None or not (
+            status.get("connection_verified") and status.get("model_available")
+        ):
+            raise PiCopilotError(
+                "pi_provider_research_configuration_unverified",
+                "Verify the Pi model service before using it for a full Research Agent run.",
+            )
+        if config.api_transport != "openai-completions":
+            raise PiCopilotError(
+                "pi_provider_research_transport_unsupported",
+                "The Research Agent currently requires an OpenAI Chat Completions compatible Pi provider.",
+                details={"api_transport": config.api_transport},
+            )
+        if not status.get("inference_verified"):
+            raise PiCopilotError(
+                "pi_provider_research_inference_unverified",
+                "Verify one bounded model response before using this service for a full Research Agent run.",
+            )
+        return {
+            "OPENAI_API_KEY": config.api_key,
+            "OPENAI_BASE_URL": config.base_url,
+            "OPENAI_MODEL": config.model,
+            OPENAI_AUTH_HEADER_ENV: config.openai_auth_header.value,
+            "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
+        }
 
     def public_status(
         self,
@@ -246,26 +318,21 @@ class PiProviderConfigStore:
         )
         receipt = self._read_receipt()
         verified = bool(
-            config
-            and receipt
-            and receipt.get("fingerprint") == config.fingerprint()
+            config and receipt and receipt.get("fingerprint") == config.fingerprint()
         )
         return {
-            "provider": str(
-                values.get("EASYICU_PI_PROVIDER") or DEFAULT_PROVIDER
-            ),
-            "base_url": str(
-                values.get("EASYICU_PI_BASE_URL") or DEFAULT_BASE_URL
-            ),
+            "provider": str(values.get("EASYICU_PI_PROVIDER") or DEFAULT_PROVIDER),
+            "base_url": str(values.get("EASYICU_PI_BASE_URL") or DEFAULT_BASE_URL),
             "model": str(values.get("EASYICU_PI_MODEL") or DEFAULT_MODEL),
-            "api_transport": str(
-                values.get("EASYICU_PI_API") or DEFAULT_API_TRANSPORT
-            ),
+            "api_transport": str(values.get("EASYICU_PI_API") or DEFAULT_API_TRANSPORT),
             "credential_present": bool(config),
             "connection_verified": verified,
             "verified_at": receipt.get("verified_at") if verified else None,
             "model_available": bool(
                 verified and receipt.get("model_available") is True
+            ),
+            "inference_verified": bool(
+                verified and receipt.get("inference_verified") is True
             ),
             "config_file_status": file_status,
             "credential_storage": "private_local_file_0600",
@@ -314,7 +381,7 @@ class PiProviderConfigStore:
             return {}
         if not isinstance(payload, dict):
             return {}
-        if payload.get("schema_version") != "easyicu.pi-provider-verification/1":
+        if payload.get("schema_version") != "easyicu.pi-provider-verification/2":
             return {}
         return payload
 
@@ -336,10 +403,12 @@ class PiProviderConfigStore:
         verification: Mapping[str, Any],
     ) -> None:
         payload = {
-            "schema_version": "easyicu.pi-provider-verification/1",
+            "schema_version": "easyicu.pi-provider-verification/2",
             "fingerprint": config.fingerprint(),
             "verified_at": utc_now(),
             "model_available": bool(verification.get("model_available")),
+            "inference_verified": bool(verification.get("inference_verified")),
+            "verification_contract": "model-catalog+inference-probe/1",
         }
         self._atomic_private_write(
             self.receipt_path,
@@ -373,17 +442,21 @@ class PiProviderConfigStore:
                 pass
 
 
-def _default_models_transport(
+def _default_verification_transport(
+    method: str,
     url: str,
     headers: Mapping[str, str],
+    body: Optional[Mapping[str, Any]],
     timeout: float,
 ) -> tuple[int, Any]:
     import requests
 
     try:
-        response = requests.get(
+        response = requests.request(
+            method,
             url,
             headers=dict(headers),
+            json=dict(body) if body is not None else None,
             timeout=timeout,
             allow_redirects=False,
             stream=True,
@@ -395,7 +468,7 @@ def _default_models_transport(
             total = 0
             for chunk in response.iter_content(chunk_size=32 * 1024):
                 total += len(chunk)
-                if total > _MAX_MODELS_RESPONSE_BYTES:
+                if total > _MAX_VERIFICATION_RESPONSE_BYTES:
                     raise PiCopilotError(
                         "pi_provider_response_too_large",
                         "The model-service verification response was too large.",
@@ -424,7 +497,7 @@ def verify_provider_connection(
     transport: Optional[Verifier] = None,
     timeout: float = 10.0,
 ) -> Dict[str, Any]:
-    """Verify authentication and exact model availability via ``/models``.
+    """Verify model discovery and one bounded inference on the selected wire.
 
     Pi supports many provider brands, but custom providers converge on four
     wire protocols.  Keep discovery protocol-aware here so a native Anthropic
@@ -439,6 +512,7 @@ def verify_provider_connection(
             "pi_provider_base_url_rejected",
             "The model-service address is not allowed by the local security policy.",
         ) from exc
+    verifier = transport or _default_verification_transport
     url = f"{config.base_url.rstrip('/')}/models"
     headers = {"Accept": "application/json"}
     if config.api_transport == "anthropic-messages":
@@ -451,10 +525,17 @@ def verify_provider_connection(
     elif config.api_transport == "google-generative-ai":
         headers["x-goog-api-key"] = config.api_key
     else:
-        headers["Authorization"] = f"Bearer {config.api_key}"
-    status_code, payload = (transport or _default_models_transport)(
+        headers.update(
+            credential_headers(
+                config.api_key,
+                mode=config.openai_auth_header,
+            )
+        )
+    status_code, payload = verifier(
+        "GET",
         url,
         headers,
+        None,
         timeout,
     )
     if status_code in {401, 403}:
@@ -491,9 +572,7 @@ def verify_provider_connection(
         and config.api_key not in identifier
     }
     if config.api_transport == "google-generative-ai":
-        identifiers = {
-            identifier.removeprefix("models/") for identifier in identifiers
-        }
+        identifiers = {identifier.removeprefix("models/") for identifier in identifiers}
     if config.model not in identifiers:
         raise PiCopilotError(
             "pi_provider_model_unavailable",
@@ -503,9 +582,60 @@ def verify_provider_connection(
                 "models_reported": len(identifiers),
             },
         )
+    inference_verified = False
+    if config.api_transport == "openai-completions":
+        inference_url = f"{config.base_url.rstrip('/')}/chat/completions"
+        inference_headers = {
+            **headers,
+            "Content-Type": "application/json",
+        }
+        inference_status, inference_payload = verifier(
+            "POST",
+            inference_url,
+            inference_headers,
+            {
+                "model": config.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Reply with READY.",
+                    }
+                ],
+                "max_tokens": 8,
+                "stream": False,
+            },
+            timeout,
+        )
+        if inference_status in {401, 403}:
+            raise PiCopilotError(
+                "pi_provider_auth_failed",
+                "The model service rejected this API credential for inference.",
+            )
+        if inference_status < 200 or inference_status >= 300:
+            raise PiCopilotError(
+                "pi_provider_inference_verification_failed",
+                "The selected model did not accept a bounded verification request.",
+                details={"status_code": int(inference_status)},
+            )
+        choices = (
+            inference_payload.get("choices")
+            if isinstance(inference_payload, Mapping)
+            else None
+        )
+        if (
+            not isinstance(choices, list)
+            or not choices
+            or not isinstance(choices[0], Mapping)
+        ):
+            raise PiCopilotError(
+                "pi_provider_inference_response_invalid",
+                "The model service returned an invalid Chat Completions response.",
+            )
+        inference_verified = True
     return {
         "connection_verified": True,
         "model_available": True,
+        "inference_verified": inference_verified,
         "models_reported": len(identifiers),
         "secrets_returned": False,
     }

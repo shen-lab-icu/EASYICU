@@ -173,6 +173,7 @@ def test_p0_1_load_concepts_response_carries_no_rows_and_no_raw_data_path(
     from easyicu.research_agent.mcp_server import dispatch
 
     monkeypatch.delenv(MCP_ALLOW_PATIENT_DATA_ENV, raising=False)
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"{SCOPE_METADATA},{SCOPE_READ_PATIENT_DATA}")
     monkeypatch.setattr(
         easyicu, "load_concepts", lambda **kw: _cohort_frame(), raising=False
     )
@@ -184,7 +185,6 @@ def test_p0_1_load_concepts_response_carries_no_rows_and_no_raw_data_path(
             "concepts": ["sofa2"],
             "database": "miiv",
             "data_path": str(data_path),
-            "preview_rows": 500,
             "workdir": str(roots / "run"),
         },
     )
@@ -233,10 +233,9 @@ def test_p0_1_patient_selector_requires_scope_before_any_data_read(
         for record in store.records()
         if "patient_access_denied" in str(record.relative_path)
     ]
-    assert len(denied) == 1
-    assert denied[0]["event"] == "patient_access_denied"
-    assert denied[0]["patient_selector_present"] is True
-    assert denied[0]["requested_patient_ids"] == 0
+    # The whole extraction tool is now patient-scoped, so authorization fails
+    # before its handler or patient-access audit writer can dispatch.
+    assert denied == []
 
 
 def test_p0_1_patient_data_access_is_recorded_as_evidence(roots, monkeypatch):
@@ -1049,6 +1048,7 @@ def test_p2_2_dispatch_does_not_echo_internal_exception_text(roots, monkeypatch)
         )
 
     monkeypatch.setattr(easyicu, "load_concepts", _boom, raising=False)
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"{SCOPE_METADATA},{SCOPE_READ_PATIENT_DATA}")
 
     result = mcp_server.dispatch(
         "research_agent.load_concepts",

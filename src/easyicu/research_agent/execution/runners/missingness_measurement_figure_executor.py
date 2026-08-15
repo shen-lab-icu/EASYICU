@@ -34,28 +34,42 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...contracts.figure_plan import (
+    DATA_QUALITY_FIGURE_PANELS,
+    MEASUREMENT_PROCESS_AUDIT_INPUT,
+    MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+    measurement_availability_figure_panels,
+)
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep
+from .deterministic_missingness import measurement_audit_product_filename
 from .figure_input_capability import TypedInputCapability
 
 __all__ = [
     "MEASUREMENT_PROCESS_AUDIT_INPUT",
+    "MEASUREMENT_MISSINGNESS_FIGURE_INPUT",
     "MISSINGNESS_MEASUREMENT_AUDIT_INPUT",
     "MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND",
     "MISSINGNESS_MEASUREMENT_FIGURE_INPUTS",
     "missingness_measurement_figure_declaration_verdict",
     "missingness_measurement_figure_executor_code",
     "missingness_measurement_figure_executor_owns_step",
+    "measurement_missingness_figure_executor_code",
+    "measurement_missingness_figure_executor_owns_step",
+    "run_measurement_missingness_figure",
     "run_missingness_measurement_figure",
 ]
 
 
-MISSINGNESS_MEASUREMENT_AUDIT_INPUT = "table:missingness_measurement_audit"
-MEASUREMENT_PROCESS_AUDIT_INPUT = "table:measurement_process_audit"
-MISSINGNESS_MEASUREMENT_FIGURE_INPUTS = (
+DATA_QUALITY_FIGURE_REQUIRED_INPUTS = (
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     MEASUREMENT_PROCESS_AUDIT_INPUT,
 )
+# The one-panel renderer consumes the same typed audit product as panel A of
+# the two-panel renderer.  Keep a role-specific alias for call-site clarity,
+# but never invent a second Planner input key for the same product.
+MEASUREMENT_MISSINGNESS_FIGURE_INPUT = MISSINGNESS_MEASUREMENT_AUDIT_INPUT
+MISSINGNESS_MEASUREMENT_FIGURE_INPUTS = DATA_QUALITY_FIGURE_REQUIRED_INPUTS
 #: One stable name for this owner across the claim, the decline and the trace.
 MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND = "missingness_measurement_figure"
 #: A figure product id is a Planner-owned *label*, not a capability claim.  What
@@ -97,12 +111,14 @@ def _is_safe_figure_product_id(value: Any) -> bool:
 # re-derived rather than trusted.
 _AUDIT_COLUMNS = (
     "variable",
+    "label",
     "n_total",
     "eligible_n",
     "not_applicable_n",
     "measured_one_n",
     "value_missing_n",
     "value_missing_pct",
+    "indicator_semantics",
 )
 _PROCESS_COLUMNS = (
     "variable",
@@ -133,6 +149,46 @@ _COLUMNS_BY_INPUT = {
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT: _AUDIT_COLUMNS,
     MEASUREMENT_PROCESS_AUDIT_INPUT: _PROCESS_COLUMNS,
 }
+
+
+def _measurement_missingness_input(
+    step: AnalysisStep,
+    *,
+    plan: Any | None = None,
+) -> str | None:
+    """Return the sole typed product backed by the measurement audit owner."""
+
+    if len(step.inputs or ()) != 1:
+        return None
+    input_key = str(step.inputs[0] or "").strip()
+    kind, separator, product = input_key.partition(":")
+    if kind != "table" or not separator:
+        return None
+    if (
+        measurement_audit_product_filename(product)
+        == "missingness_measurement_audit.csv"
+    ):
+        return input_key
+    producers = [
+        candidate
+        for candidate in getattr(plan, "steps", ()) or ()
+        if input_key in {str(value) for value in candidate.expected_outputs}
+        and candidate.measurement_audit_spec is not None
+        and candidate.measurement_audit_spec.audit_for(product)
+        == "measurement_missingness"
+    ]
+    if len(producers) != 1:
+        return None
+    return input_key
+
+
+def _columns_read(input_key: str) -> tuple[str, ...]:
+    if input_key == MEASUREMENT_PROCESS_AUDIT_INPUT:
+        return _PROCESS_COLUMNS
+    kind, separator, _product = str(input_key or "").partition(":")
+    if kind == "table" and separator:
+        return _AUDIT_COLUMNS
+    raise ValueError(f"{input_key} is not a supported measurement-audit product")
 
 
 def _method_head(value: Any) -> str:
@@ -183,7 +239,7 @@ def _binding_carries_the_columns_read(binding: Any, input_key: str) -> bool:
         isinstance(value, str) for value in columns
     ):
         return False
-    return set(_COLUMNS_BY_INPUT[input_key]).issubset(set(columns))
+    return set(_columns_read(input_key)).issubset(set(columns))
 
 
 def missingness_measurement_figure_executor_owns_step(
@@ -213,6 +269,37 @@ def missingness_measurement_figure_executor_owns_step(
     return all(
         _binding_carries_the_columns_read(resolved_bindings.get(key), key)
         for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
+    )
+
+
+def measurement_missingness_figure_executor_owns_step(
+    step: AnalysisStep,
+    *,
+    plan: Any | None = None,
+    resolved_bindings: Mapping[str, Any] | None = None,
+) -> bool:
+    """Own a one-panel figure whose only authority is one full audit table."""
+
+    products = [_figure_product(value) for value in step.expected_outputs]
+    input_key = _measurement_missingness_input(step, plan=plan)
+    contracts = list(step.input_consumption_contracts or ())
+    if not (
+        step.planned_analysis_role == "auxiliary"
+        and _method_head(step.method) == "visualization"
+        and input_key is not None
+        and len(contracts) == 1
+        and contracts[0].input_key == input_key
+        and contracts[0].mode == "all_rows"
+        and len(products) == 1
+        and products[0] is not None
+        and step.trajectory_stability_spec is None
+    ):
+        return False
+    if not isinstance(resolved_bindings, Mapping):
+        return False
+    return _binding_carries_the_columns_read(
+        resolved_bindings.get(input_key),
+        input_key,
     )
 
 
@@ -361,6 +448,42 @@ def missingness_measurement_figure_executor_code(step: AnalysisStep) -> str:
     ).strip()
 
 
+def measurement_missingness_figure_executor_code(
+    step: AnalysisStep,
+    *,
+    plan: Any | None = None,
+) -> str:
+    """Return the sandbox entrypoint for one digest-bound audit figure."""
+
+    product = (
+        _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    )
+    if product is None:
+        raise ValueError("The step is not owned by the measurement-missingness renderer")
+    input_key = _measurement_missingness_input(step, plan=plan)
+    if input_key is None:
+        raise ValueError("The step has no supported measurement-audit input")
+    return textwrap.dedent(
+        f"""
+        import os
+        from pathlib import Path
+
+        from easyicu.research_agent.execution.runners.missingness_measurement_figure_executor import (
+            run_measurement_missingness_figure,
+        )
+
+        run_measurement_missingness_figure(
+            out_dir=Path(os.environ["STEP_OUT_DIR"]),
+            run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
+            resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
+            step_id={step.step_id!r},
+            figure_product={product!r},
+            input_key={input_key!r},
+        )
+        """
+    ).strip()
+
+
 def _canonical_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -378,8 +501,8 @@ def _load_one_binding(
     binding = inputs.get(input_key)
     if not isinstance(binding, dict):
         raise ValueError(f"{input_key} binding is absent")
-    product = _PRODUCT_BY_INPUT[input_key]
-    expected_columns = list(_COLUMNS_BY_INPUT[input_key])
+    _kind, _separator, product = input_key.partition(":")
+    expected_columns = list(_columns_read(input_key))
     expected_sha256 = str(binding.get("sha256") or "")
     relative_path = binding.get("relative_path")
     product_contract = binding.get("product_contract")
@@ -435,7 +558,12 @@ def _load_one_binding(
         raise ValueError(f"{input_key} bytes disagree with its product contract")
     if _canonical_sha256(path) != expected_sha256:
         raise ValueError(f"{input_key} changed while it was being read")
-    return frame, binding, f"{product}.csv"
+    # The digest-verified EvidenceStore copy preserves the producer basename as
+    # ``<evidence_id>__<basename>``.  Use that bound basename rather than a
+    # second alias table: typed MeasurementAuditSpec may authorize a valid
+    # product id the legacy filename shim has never seen.
+    source_filename = path.name.split("__", 1)[1] if "__" in path.name else path.name
+    return frame, binding, source_filename
 
 
 def _load_bindings(
@@ -463,6 +591,29 @@ def _load_bindings(
         )
         for input_key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
     }
+
+
+def _load_single_measurement_binding(
+    *,
+    run_dir: Path,
+    resolved_inputs: Path | Mapping[str, Any],
+    step_id: str,
+    input_key: str,
+) -> tuple[pd.DataFrame, Mapping[str, Any], str]:
+    if isinstance(resolved_inputs, Mapping):
+        payload = dict(resolved_inputs)
+    else:
+        payload = json.loads(Path(resolved_inputs).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("step_id") != step_id:
+        raise ValueError("resolved-input manifest does not belong to this step")
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, dict) or set(inputs) != {input_key}:
+        raise ValueError("exact measurement-missingness binding is absent or widened")
+    return _load_one_binding(
+        run_dir=run_dir,
+        inputs=inputs,
+        input_key=input_key,
+    )
 
 
 def _finite(value: Any) -> float | None:
@@ -515,10 +666,10 @@ def _validate_audit_rows(frame: pd.DataFrame) -> dict[str, dict[str, Any]]:
     silently picked one would mislabel the other: ``eligible_n`` and
     ``not_applicable_n`` partition the cohort, and within the eligible stays
     ``measured_one_n`` and ``value_missing_n`` partition again.  The published
-    ``value_missing_pct`` is stated against the *cohort*, so a variable that
-    applies to only part of the cohort can report a small missing share while
-    being unobservable for most stays; that is preserved and reported rather
-    than rescaled here, and the panel marks it.
+    ``value_missing_pct`` is stated against the *cohort*, while reader-facing
+    missingness must use the eligible denominator.  Conditional fields are
+    therefore rendered as available, eligible-but-missing, and not applicable
+    rather than allowing event prevalence to masquerade as measurement rate.
     """
 
     per_variable: dict[str, dict[str, Any]] = {}
@@ -562,15 +713,27 @@ def _validate_audit_rows(frame: pd.DataFrame) -> dict[str, dict[str, Any]]:
                 f"variable {variable!r} missing percentage does not reconcile "
                 "against the cohort it is stated over"
             )
+        semantics = _text(row["indicator_semantics"])
+        if counts["not_applicable_n"] and semantics != "conditional_event_time":
+            raise ValueError(
+                f"variable {variable!r} has not-applicable stays without "
+                "conditional event-time semantics"
+            )
+        eligible = counts["eligible_n"]
         per_variable[variable] = {
             "denominator": cohort,
-            "eligible": counts["eligible_n"],
+            "eligible": eligible,
             "not_applicable": counts["not_applicable_n"],
             "missing": counts["value_missing_n"],
             "missing_pct": 100.0 * counts["value_missing_n"] / cohort,
+            "missing_within_applicable_pct": (
+                100.0 * counts["value_missing_n"] / eligible if eligible else 0.0
+            ),
             "available": counts["measured_one_n"],
             "available_pct": 100.0 * counts["measured_one_n"] / cohort,
-            "conditional": counts["not_applicable_n"] > 0,
+            "not_applicable_pct": 100.0 * counts["not_applicable_n"] / cohort,
+            "conditional": semantics == "conditional_event_time",
+            "indicator_semantics": semantics,
         }
     if not per_variable:
         raise ValueError("the missingness audit table audits no variable")
@@ -656,6 +819,214 @@ def _write_source_projection(
     export.to_csv(path, index=False)
 
 
+def run_measurement_missingness_figure(
+    *,
+    out_dir: Path,
+    run_dir: Path,
+    resolved_inputs: Path | Mapping[str, Any],
+    step_id: str,
+    figure_product: str,
+    input_key: str = MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
+) -> Mapping[str, Any]:
+    """Render one complete typed missingness audit without model-authored lineage."""
+
+    if not _is_safe_figure_product_id(figure_product):
+        raise ValueError("unsafe or malformed figure product id")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    audit_frame, audit_binding, audit_table = _load_single_measurement_binding(
+        run_dir=Path(run_dir),
+        resolved_inputs=resolved_inputs,
+        step_id=step_id,
+        input_key=input_key,
+    )
+    per_variable = _validate_audit_rows(audit_frame)
+
+    source_path = out_dir / f"{figure_product}_source_data.csv"
+    _write_source_projection(
+        audit_frame,
+        path=source_path,
+        source_table=audit_table,
+    )
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    palette = apply_publication_style(font_size=7.0)
+    display = audit_frame.copy()
+    display["_missing_pct"] = [
+        per_variable[_text(value)]["missing_within_applicable_pct"]
+        for value in display["variable"]
+    ]
+    display = display.sort_values("_missing_pct", ascending=True)
+    variables = [_text(value) for value in display["variable"]]
+    labels = [
+        _reader_label(_text(label) or variable)
+        + (" (conditional)" if per_variable[variable]["conditional"] else "")
+        for variable, label in zip(variables, display["label"])
+    ]
+    missing_pct = [per_variable[name]["missing_pct"] for name in variables]
+    available_pct = [per_variable[name]["available_pct"] for name in variables]
+    not_applicable_pct = [
+        per_variable[name]["not_applicable_pct"] for name in variables
+    ]
+    height_mm = max(82.0, 31.0 + 7.0 * len(variables))
+    panel_template = measurement_availability_figure_panels(input_key)[0]
+    fig, ax = plt.subplots(figsize=(183 / 25.4, height_mm / 25.4))
+    positions = list(range(len(variables)))
+    ax.barh(
+        positions,
+        available_pct,
+        color=palette["blue_soft"],
+        label="Value available",
+        height=0.62,
+    )
+    ax.barh(
+        positions,
+        missing_pct,
+        left=available_pct,
+        color=palette["orange"],
+        label="Missing among applicable stays",
+        height=0.62,
+    )
+    ax.barh(
+        positions,
+        not_applicable_pct,
+        left=[available + missing for available, missing in zip(available_pct, missing_pct)],
+        color=palette["neutral_light"],
+        label="Not applicable",
+        height=0.62,
+    )
+    ax.set_yticks(positions)
+    ax.set_yticklabels(labels)
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Share of the declared cohort (%)")
+    ax.set_title("Data availability and applicability", loc="left", pad=4)
+    ax.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
+    ax.legend(
+        frameon=False,
+        loc="lower center",
+        bbox_to_anchor=(0.58, 1.10),
+        ncol=3,
+        fontsize=6.2,
+        columnspacing=1.2,
+    )
+    for y, name in zip(positions, variables):
+        entry = per_variable[name]
+        if entry["conditional"]:
+            annotation = (
+                f"{entry['eligible']:,} applicable; "
+                f"{entry['missing']:,}/{entry['eligible']:,} missing"
+            )
+        else:
+            annotation = f"{entry['missing']:,}/{entry['eligible']:,} missing"
+        ax.text(
+            98.0,
+            y,
+            annotation,
+            va="center",
+            ha="right",
+            fontsize=5.9,
+            color=palette["blue"],
+        )
+    if any(entry["conditional"] for entry in per_variable.values()):
+        ax.set_xlabel(
+            "Share of the declared cohort (%)\n"
+            "Conditional event times are applicable only when the event occurs"
+        )
+    add_panel_label(ax, "A", x=-0.20, y=1.02)
+    fig.subplots_adjust(left=0.24, right=0.96, bottom=0.20, top=0.76)
+
+    contract = make_figure_contract(
+        figure_id=f"figure:{figure_product}",
+        core_claim=(
+            "Availability, eligible-stay missingness, and non-applicability are "
+            "rendered separately from every row of one digest-verified audit table."
+        ),
+        archetype="quantitative_grid",
+        width_mm=183.0,
+        height_mm=height_mm,
+        panels=[
+            {
+                "panel_id": panel_template.panel_id,
+                "title": "Data availability and applicability",
+                "role": "data_quality",
+                "claim": (
+                    "For every audited variable, available and missing stays "
+                    "partition the applicable denominator; non-applicable stays "
+                    "remain a separate cohort partition."
+                ),
+                "evidence_ids": [source_path.name],
+                "metadata": {
+                    "article_role": panel_template.article_role,
+                    "chart_type": panel_template.chart_type,
+                    "source_products": [input_key],
+                    "source_data": [source_path.name],
+                },
+            }
+        ],
+        source_data=[source_path.name],
+        statistics_note=(
+            "The executor consumes every row under the all_rows contract and "
+            "re-derives both cohort and eligible-stay count partitions. It "
+            "introduces no variable selection, imputation, denominator, or "
+            "modeling decision."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig,
+        out_dir / figure_product,
+        contract=contract,
+        formats=("png", "svg", "pdf", "tiff"),
+        dpi=300,
+    )
+    plt.close(fig)
+    figure_files = [path.name for key, path in outputs.items() if key != "contract"]
+    summary = {
+        "step_id": step_id,
+        "status": "ok",
+        "analysis_status": "ok",
+        "method": "deterministic_measurement_missingness_figure",
+        "analysis_family": "data_quality",
+        "deterministic_standard_analysis": "measurement_missingness_figure",
+        "rendering_only": True,
+        "source_inputs": [input_key],
+        "source_evidence_ids": {
+            input_key: audit_binding.get("evidence_id")
+        },
+        "source_sha256": {
+            input_key: audit_binding.get("sha256")
+        },
+        "source_rows_consumed": {
+            input_key: int(len(audit_frame))
+        },
+        "audited_variable_count": int(len(per_variable)),
+        "source_data_files": [source_path.name],
+        "figure_files": figure_files,
+        "figure_path": f"{figure_product}.png",
+        "figure_contract": f"{figure_product}.figure_contract.json",
+        "contract_files": [f"{figure_product}.figure_contract.json"],
+        "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
+        "input_bindings": [
+            {
+                "input_key": input_key,
+                "evidence_id": audit_binding.get("evidence_id"),
+                "sha256": audit_binding.get("sha256"),
+                "loaded": True,
+                "row_count": int(len(audit_frame)),
+            }
+        ],
+        "export_qa": [],
+    }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return summary
+
+
 def run_missingness_measurement_figure(
     *,
     out_dir: Path,
@@ -734,9 +1105,30 @@ def run_missingness_measurement_figure(
     missing_counts = (
         pd.to_numeric(missing_rows["value_missing_n"]).astype(int).to_numpy()
     )
+    zero_missing_display = bool(len(missing_counts)) and all(
+        int(value) == 0 for value in missing_counts
+    )
+    if zero_missing_display:
+        # A zero-only missingness bar chart has no visible marks and can look
+        # like a rendering failure.  Re-express the same audited counts as
+        # completeness among eligible stays: 100% is derived exactly from
+        # measured + missing = eligible, never invented.  An all-not-applicable
+        # row has no eligible denominator and remains an explicit 0/N/A mark.
+        plotted_values = [
+            (
+                100.0
+                * float(per_variable[name]["available"])
+                / float(per_variable[name]["eligible"])
+                if int(per_variable[name]["eligible"]) > 0
+                else 0.0
+            )
+            for name in variables
+        ]
+    else:
+        plotted_values = [float(value) for value in missing_pct]
     bars = ax_a.barh(
         positions,
-        missing_pct,
+        plotted_values,
         color=palette["blue_soft"],
         height=0.62,
     )
@@ -754,19 +1146,48 @@ def run_missingness_measurement_figure(
     )
     ax_a.invert_yaxis()
     ax_a.set_xlim(0, 100)
-    ax_a.set_xlabel("Stays with no source value (% of cohort)")
-    ax_a.set_title("Source missingness", loc="left", pad=4)
+    ax_a.set_xlabel(
+        "Eligible stays with a source value (%)"
+        if zero_missing_display
+        else "Stays with no source value (% of cohort)"
+    )
+    ax_a.set_title(
+        "Source completeness" if zero_missing_display else "Source missingness",
+        loc="left",
+        pad=4,
+    )
     ax_a.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
-    for bar, percentage, missing_n in zip(bars, missing_pct, missing_counts):
+    for variable, bar, percentage, plotted, missing_n in zip(
+        variables,
+        bars,
+        missing_pct,
+        plotted_values,
+        missing_counts,
+    ):
+        if zero_missing_display:
+            eligible_n = int(per_variable[variable]["eligible"])
+            label = (
+                "0 missing / 100% complete"
+                if eligible_n > 0
+                else "0 eligible / completeness N/A"
+            )
+            x = min(float(plotted) - 1.0, 97.0) if eligible_n > 0 else 1.0
+            horizontal_alignment = "right" if eligible_n > 0 else "left"
+        else:
+            label = f"{float(percentage):.1f}%  n={int(missing_n):,}"
+            x = min(float(percentage) + 1.0, 97.0)
+            horizontal_alignment = "left" if percentage < 88 else "right"
         ax_a.text(
-            min(float(percentage) + 1.0, 97.0),
+            x,
             bar.get_y() + bar.get_height() / 2,
-            f"{float(percentage):.1f}%  n={int(missing_n):,}",
+            label,
             va="center",
-            ha="left" if percentage < 88 else "right",
+            ha=horizontal_alignment,
             fontsize=6.1,
         )
-    if any(entry["conditional"] for entry in per_variable.values()):
+    if any(entry["conditional"] for entry in per_variable.values()) and not (
+        zero_missing_display
+    ):
         ax_a.set_xlabel(
             "Stays with no source value (% of cohort)\n"
             "† applies to only part of the cohort; see panel B"
@@ -844,24 +1265,39 @@ def run_missingness_measurement_figure(
         height_mm=height_mm,
         panels=[
             {
-                "panel_id": "A",
-                "title": "Source missingness",
+                "panel_id": DATA_QUALITY_FIGURE_PANELS[0].panel_id,
+                "title": (
+                    "Source completeness"
+                    if zero_missing_display
+                    else "Source missingness"
+                ),
                 "role": "data_quality",
                 "claim": (
-                    "Each audited variable's source-missingness share is the "
-                    "parent table's own value, restated over the cohort it was "
-                    "computed against; measured and missing counts partition "
-                    "the variable's eligible stays, and eligible plus "
-                    "not-applicable stays partition the cohort."
+                    (
+                        "Every audited variable has zero missing source values; "
+                        "the visible bars report 100% completeness among eligible "
+                        "stays, while rows with no eligible stays remain N/A."
+                    )
+                    if zero_missing_display
+                    else (
+                        "Each audited variable's source-missingness share is the "
+                        "parent table's own value, restated over the cohort it was "
+                        "computed against; measured and missing counts partition "
+                        "the variable's eligible stays, and eligible plus "
+                        "not-applicable stays partition the cohort."
+                    )
                 ),
                 "evidence_ids": [missingness_panel_source.name],
                 "metadata": {
-                    "chart_type": "availability_panel",
+                    "article_role": DATA_QUALITY_FIGURE_PANELS[0].article_role,
+                    "chart_type": DATA_QUALITY_FIGURE_PANELS[0].chart_type,
+                    "source_products": [MISSINGNESS_MEASUREMENT_AUDIT_INPUT],
                     "source_data": [missingness_panel_source.name],
+                    "zero_missing_completeness_display": zero_missing_display,
                 },
             },
             {
-                "panel_id": "B",
+                "panel_id": DATA_QUALITY_FIGURE_PANELS[1].panel_id,
                 "title": "Measurement-process coverage",
                 "role": "data_quality",
                 "claim": (
@@ -871,7 +1307,9 @@ def run_missingness_measurement_figure(
                 ),
                 "evidence_ids": [process_source.name],
                 "metadata": {
-                    "chart_type": "coverage_heatmap",
+                    "article_role": DATA_QUALITY_FIGURE_PANELS[1].article_role,
+                    "chart_type": DATA_QUALITY_FIGURE_PANELS[1].chart_type,
+                    "source_products": [MEASUREMENT_PROCESS_AUDIT_INPUT],
                     "source_data": [process_source.name],
                 },
             },
@@ -890,6 +1328,14 @@ def run_missingness_measurement_figure(
             "measurements, not stays, and are not commensurable with this "
             "scale. The executor validates all source rows and introduces no "
             "cohort, variable, missing-data, or modeling decision."
+            + (
+                " Because every missing count is zero, panel A deterministically "
+                "shows eligible-stay completeness (100% when an eligible "
+                "denominator exists) instead of an invisible zero-length "
+                "missingness bar."
+                if zero_missing_display
+                else ""
+            )
         ),
     )
     outputs = save_publication_figure(
@@ -928,6 +1374,7 @@ def run_missingness_measurement_figure(
             MEASUREMENT_PROCESS_AUDIT_INPUT: int(len(process_frame)),
         },
         "audited_variable_count": int(len(per_variable)),
+        "zero_missing_completeness_display": zero_missing_display,
         "measurement_process_cell_count": int(len(process_cells)),
         "source_data_files": source_files,
         "figure_files": figure_files,

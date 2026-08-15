@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from easyicu.research_agent.publication_skills import (
+    publication_skill_workbench_cards,
+)
 from easyicu.webserver import agent_runs, capabilities
 from easyicu.webserver.ideas import mining as idea_mining_web
 
@@ -71,16 +74,7 @@ PROTOCOL_SKILLS = [
         "outputs": ["reviewer gate card", "sign-off checklist", "blocked-claim reasons"],
         "evidence": ["quality_gate.json", "numeric audit", "strict evidence audit"],
     },
-    {
-        "id": "nature_figure_source_data",
-        "title": "Nature figure source-data QA",
-        "stage": "Figure",
-        "route": "agent",
-        "scope": "Keep result-bearing figures tied to source data and plotting code.",
-        "inputs": ["figure gallery", "source data", "plotting code", "axis/unit definitions"],
-        "outputs": ["figure audit", "source-data checklist", "caption-ready caveats"],
-        "evidence": ["figure_gallery.json", "source_run_manifest.json", "plot metadata"],
-    },
+    *publication_skill_workbench_cards(),
 ]
 
 NATIVE_RENDERERS = [
@@ -141,11 +135,19 @@ def build_science_workbench(project_dir: Optional[str] = None) -> Dict[str, Any]
     ledger = payloads.get("evidence_ledger.json", {})
     capability_policy = capabilities.capability_status()
     capability_flags = capability_policy.get("settings") or {}
-    reusable_protocols = (
-        PROTOCOL_SKILLS
-        if bool(capability_flags.get("science_skills_enabled", True))
-        else []
-    )
+    reusable_protocols = []
+    if bool(capability_flags.get("science_skills_enabled", True)):
+        reusable_protocols = [
+            row
+            for row in PROTOCOL_SKILLS
+            if not row.get("setting_key")
+            or bool(
+                capability_flags.get(
+                    str(row["setting_key"]),
+                    row.get("default_enabled", True),
+                )
+            )
+        ]
 
     artifact_history = _artifact_history(
         artifacts=artifacts,

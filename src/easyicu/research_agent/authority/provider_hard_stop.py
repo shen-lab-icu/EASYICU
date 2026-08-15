@@ -44,6 +44,16 @@ import time
 from typing import Any, Dict, Iterator, Mapping, Optional, Sequence
 import uuid
 
+try:  # pragma: no branch - selected once per platform
+    import fcntl
+except ImportError:  # pragma: no cover - exercised on Windows
+    fcntl = None  # type: ignore[assignment]
+
+try:  # pragma: no branch - selected once per platform
+    import msvcrt
+except ImportError:  # pragma: no cover - unavailable on POSIX
+    msvcrt = None  # type: ignore[assignment]
+
 
 PROVIDER_HARD_STOP_SCHEMA = "easyicu.provider_hard_stop_ledger/1"
 PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION = 4096
@@ -57,6 +67,7 @@ _MAX_LEDGER_BYTES = 16 * 1024 * 1024
 _TERMINAL_TASK_STATES = frozenset(
     {"completed", "failed", "batch_canary_blocked", "budget_exhausted"}
 )
+_LEDGER_PROCESS_LOCK = Lock()
 
 
 class ProviderHardStopError(RuntimeError):
@@ -148,6 +159,96 @@ def _payload_digest(payload: Mapping[str, object]) -> str:
     return hashlib.sha256(_canonical_bytes(unsigned)).hexdigest()
 
 
+@contextmanager
+def _exclusive_ledger_file_lock(path: Path) -> Iterator[None]:
+    """Serialize ledger transactions using a stable, non-symlink sidecar."""
+
+    parent = path.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as exc:
+        raise ProviderHardStopLedgerError(
+            "Provider hard-stop ledger parent is unavailable"
+        ) from exc
+    try:
+        parent_info = parent.lstat()
+    except OSError as exc:
+        raise ProviderHardStopLedgerError(
+            "Provider hard-stop ledger parent is unavailable"
+        ) from exc
+    if not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode):
+        raise ProviderHardStopLedgerError(
+            "Provider hard-stop ledger parent must be a real directory"
+        )
+    lock_path = parent / f".{path.name}.lock"
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor: Optional[int] = None
+    acquired = False
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+        opened = os.fstat(descriptor)
+        current = lock_path.lstat()
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+        ):
+            raise ProviderHardStopLedgerError(
+                "Provider hard-stop ledger lock must be a stable regular file"
+            )
+        try:
+            os.fchmod(descriptor, 0o600)
+        except (AttributeError, OSError):  # Windows has no reliable mode bits.
+            pass
+        if fcntl is not None:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        elif msvcrt is not None:  # pragma: no cover - exercised on Windows
+            # Windows permits locking a byte beyond EOF. Lock first, then seed
+            # an empty sidecar so two first-openers cannot race by writing the
+            # byte each other is about to lock.
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+        else:  # pragma: no cover - supported platforms provide one backend
+            raise ProviderHardStopLedgerError(
+                "No cross-process Provider hard-stop ledger lock is available"
+            )
+        acquired = True
+        if msvcrt is not None and fcntl is None and os.fstat(descriptor).st_size == 0:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            os.write(descriptor, b"\0")
+            os.fsync(descriptor)
+        current = lock_path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+        ):
+            raise ProviderHardStopLedgerError(
+                "Provider hard-stop ledger lock changed during acquisition"
+            )
+        yield
+    except ProviderHardStopLedgerError:
+        raise
+    except OSError as exc:
+        raise ProviderHardStopLedgerError(
+            "Could not lock Provider hard-stop ledger"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            if acquired:
+                try:
+                    if fcntl is not None:
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    elif msvcrt is not None:  # pragma: no cover - Windows
+                        os.lseek(descriptor, 0, os.SEEK_SET)
+                        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            os.close(descriptor)
+
+
 def _atomic_write(path: Path, payload: Mapping[str, object]) -> None:
     """Publish one complete owner-only ledger and fsync its directory."""
 
@@ -157,7 +258,7 @@ def _atomic_write(path: Path, payload: Mapping[str, object]) -> None:
         raise ProviderHardStopLedgerError(
             "Provider hard-stop ledger parent must be a real directory"
         )
-    if path.exists() and (path.is_symlink() or not path.is_file()):
+    if path.is_symlink() or (path.exists() and not path.is_file()):
         raise ProviderHardStopLedgerError(
             "Provider hard-stop ledger destination must be a regular file"
         )
@@ -352,15 +453,23 @@ class ProviderHardStopLedger:
         if not self.path.is_absolute():
             raise ValueError("Provider hard-stop ledger path must be absolute")
         self.limits = limits
+        self._task_ids = normalized_ids
+        self._batch_id = str(batch_id).strip() if batch_id else None
+        self._declaration_sha256 = (
+            str(declaration_sha256).strip() if declaration_sha256 else None
+        )
         self._lock = Lock()
+        # Live monotonic clocks exist only while Provider-backed execution is
+        # active.  Human-review pauses persist their cumulative active seconds
+        # in the ledger and deliberately hold no live clock, so time spent by a
+        # reviewer cannot consume the execution stop-loss.
         self._task_started_monotonic: Dict[str, float] = {}
+        self._task_active_started_at: Dict[str, str] = {}
         now = _utc_now()
         initial_payload: Dict[str, object] = {
             "schema_version": PROVIDER_HARD_STOP_SCHEMA,
-            "batch_id": str(batch_id).strip() if batch_id else None,
-            "declaration_sha256": (
-                str(declaration_sha256).strip() if declaration_sha256 else None
-            ),
+            "batch_id": self._batch_id,
+            "declaration_sha256": self._declaration_sha256,
             "created_at": now,
             "updated_at": now,
             "limits": limits.canonical_payload(),
@@ -370,8 +479,12 @@ class ProviderHardStopLedger:
                     "task_id": task_id,
                     "status": "pending",
                     "started_at": None,
+                    "active_started_at": None,
                     "finished_at": None,
-                    "elapsed_seconds": None,
+                    "elapsed_seconds": 0.0,
+                    "paused_at": None,
+                    "paused_active_started_at": None,
+                    "review_checkpoint_at": None,
                     "error": None,
                     "blocked_by": None,
                     "score_summary": {},
@@ -382,39 +495,71 @@ class ProviderHardStopLedger:
             "totals": {},
             "terminal": False,
         }
-        if self.path.exists():
-            if not resume_existing:
-                raise FileExistsError(self.path)
-            loaded = load_provider_hard_stop_ledger(self.path)
-            if (
-                loaded.get("limits") != limits.canonical_payload()
-                or loaded.get("task_order") != list(normalized_ids)
-                or loaded.get("batch_id") != initial_payload["batch_id"]
-                or loaded.get("declaration_sha256")
-                != initial_payload["declaration_sha256"]
-            ):
-                raise ProviderHardStopLedgerError(
-                    "Existing Provider hard-stop ledger differs from this invocation"
-                )
-            loaded.pop("sha256", None)
-            self._payload = loaded
-            now_monotonic = time.monotonic()
-            now_utc = datetime.now(timezone.utc)
-            for task in self._tasks_locked():
-                if task.get("status") != "running":
-                    continue
-                try:
-                    started_at = datetime.fromisoformat(str(task["started_at"]))
-                    elapsed = max(0.0, (now_utc - started_at).total_seconds())
-                except (KeyError, TypeError, ValueError):
-                    elapsed = self.limits.max_wall_clock_seconds_per_task
-                self._task_started_monotonic[str(task["task_id"])] = (
-                    now_monotonic - elapsed
-                )
-        else:
-            self._payload = initial_payload
-            with self._lock:
+        self._payload = initial_payload
+        with self._lock, _LEDGER_PROCESS_LOCK, _exclusive_ledger_file_lock(self.path):
+            if self.path.is_symlink() or self.path.exists():
+                if not resume_existing:
+                    raise FileExistsError(self.path)
+                self._reload_locked()
+            else:
                 self._persist_locked()
+
+    def _validate_invocation_locked(self, payload: Mapping[str, object]) -> None:
+        if (
+            payload.get("limits") != self.limits.canonical_payload()
+            or payload.get("task_order") != list(self._task_ids)
+            or payload.get("batch_id") != self._batch_id
+            or payload.get("declaration_sha256") != self._declaration_sha256
+        ):
+            raise ProviderHardStopLedgerError(
+                "Existing Provider hard-stop ledger differs from this invocation"
+            )
+
+    def _synchronize_live_clocks_locked(self) -> None:
+        running_ids: set[str] = set()
+        now_monotonic = time.monotonic()
+        now_utc = datetime.now(timezone.utc)
+        for task in self._tasks_locked():
+            task_id = str(task.get("task_id") or "")
+            if task.get("status") != "running":
+                continue
+            running_ids.add(task_id)
+            active_anchor = str(task.get("active_started_at") or task.get("started_at"))
+            if (
+                task_id in self._task_started_monotonic
+                and self._task_active_started_at.get(task_id) == active_anchor
+            ):
+                continue
+            try:
+                prior_elapsed = float(task.get("elapsed_seconds") or 0.0)
+                active_started_at = datetime.fromisoformat(active_anchor)
+                elapsed = prior_elapsed + max(
+                    0.0, (now_utc - active_started_at).total_seconds()
+                )
+                if not math.isfinite(elapsed) or elapsed < 0.0:
+                    raise ValueError("invalid elapsed wall clock")
+            except (TypeError, ValueError):
+                elapsed = self.limits.max_wall_clock_seconds_per_task
+            self._task_started_monotonic[task_id] = now_monotonic - elapsed
+            self._task_active_started_at[task_id] = active_anchor
+        for task_id in set(self._task_started_monotonic) - running_ids:
+            self._task_started_monotonic.pop(task_id, None)
+            self._task_active_started_at.pop(task_id, None)
+
+    def _reload_locked(self) -> None:
+        loaded = load_provider_hard_stop_ledger(self.path)
+        self._validate_invocation_locked(loaded)
+        loaded.pop("sha256", None)
+        self._payload = loaded
+        self._synchronize_live_clocks_locked()
+
+    @contextmanager
+    def _durable_transaction(self) -> Iterator[None]:
+        """Lock, digest-check, and reload the durable ledger before use."""
+
+        with self._lock, _LEDGER_PROCESS_LOCK, _exclusive_ledger_file_lock(self.path):
+            self._reload_locked()
+            yield
 
     def _tasks_locked(self) -> list[Dict[str, object]]:
         tasks = self._payload.get("tasks")
@@ -488,7 +633,7 @@ class ProviderHardStopLedger:
         """
 
         normalized = str(task_id).strip()
-        with self._lock:
+        with self._durable_transaction():
             task = self._task_locked(normalized)
             if task.get("status") == "running":
                 if normalized not in self._task_started_monotonic:
@@ -497,6 +642,10 @@ class ProviderHardStopLedger:
                     )
                 return TaskProviderHardStop(self, normalized)
             status = str(task.get("status") or "")
+            if status == "paused":
+                # A restarted host may attach to a human-review pause without
+                # restarting its active clock or resetting any cumulative use.
+                return TaskProviderHardStop(self, normalized)
             if status == "completed" and not reopen_terminal:
                 return TaskProviderHardStop(self, normalized)
             if reopen_terminal and status in {"completed", "failed"}:
@@ -541,14 +690,20 @@ class ProviderHardStopLedger:
                 task["resume_count"] = len(attempts)
                 task["status"] = "running"
                 task["finished_at"] = None
-                task["elapsed_seconds"] = None
+                task["elapsed_seconds"] = prior_elapsed
                 task["error"] = None
                 task["blocked_by"] = None
                 task["score_summary"] = {}
                 if not task.get("started_at"):
                     task["started_at"] = _utc_now()
+                task["active_started_at"] = _utc_now()
+                task["paused_active_started_at"] = None
+                task["review_checkpoint_at"] = None
                 self._task_started_monotonic[normalized] = (
                     time.monotonic() - prior_elapsed
+                )
+                self._task_active_started_at[normalized] = str(
+                    task["active_started_at"]
                 )
                 self._persist_locked()
                 return TaskProviderHardStop(self, normalized)
@@ -557,13 +712,189 @@ class ProviderHardStopLedger:
                     f"Provider hard-stop task cannot start from {status!r}"
                 )
             task["status"] = "running"
-            task["started_at"] = _utc_now()
+            started_at = _utc_now()
+            task["started_at"] = started_at
+            task["active_started_at"] = started_at
+            task["elapsed_seconds"] = 0.0
+            task["paused_at"] = None
+            task["paused_active_started_at"] = None
+            task["review_checkpoint_at"] = None
             self._task_started_monotonic[normalized] = time.monotonic()
+            self._task_active_started_at[normalized] = started_at
             self._persist_locked()
         return TaskProviderHardStop(self, normalized)
 
+    def pause_task(self, task_id: str) -> None:
+        """Pause one live task without charging human-review wait time."""
+
+        normalized = str(task_id).strip()
+        with self._durable_transaction():
+            task = self._task_locked(normalized)
+            if task.get("status") == "paused":
+                return
+            if task.get("status") != "running":
+                raise ProviderHardStopLedgerError(
+                    f"Provider hard-stop task cannot pause from {task.get('status')!r}"
+                )
+            elapsed = self._elapsed_locked(normalized)
+            task["status"] = "paused"
+            task["paused_at"] = _utc_now()
+            task["paused_active_started_at"] = task.get("active_started_at")
+            # A completed resume may reach a later review pause. That pause
+            # establishes a new checkpoint; only a crash while still running
+            # is allowed to reuse the prior anchor.
+            task["review_checkpoint_at"] = None
+            task["elapsed_seconds"] = round(elapsed, 6)
+            task["active_started_at"] = None
+            self._task_started_monotonic.pop(normalized, None)
+            self._task_active_started_at.pop(normalized, None)
+            self._persist_locked()
+
+    def reconcile_review_pause(self, task_id: str, *, paused_at: str) -> None:
+        """Converge a crash-window running task to its durable review pause.
+
+        The human-review checkpoint is fsynced separately from this ledger. If
+        the process dies between those writes, restart must charge activity only
+        through the checkpoint timestamp, not through the later restart time.
+        """
+
+        normalized = str(task_id).strip()
+        with self._durable_transaction():
+            task = self._task_locked(normalized)
+            try:
+                checkpoint_at = datetime.fromisoformat(str(paused_at))
+                if checkpoint_at.tzinfo is None:
+                    raise ValueError("review pause timestamp must be timezone-aware")
+                recorded_raw = task.get("review_checkpoint_at")
+                recorded_at = (
+                    datetime.fromisoformat(str(recorded_raw))
+                    if recorded_raw is not None
+                    else None
+                )
+                if recorded_at is not None and recorded_at.tzinfo is None:
+                    raise ValueError("review checkpoint anchor must be timezone-aware")
+            except (TypeError, ValueError) as exc:
+                raise ProviderHardStopLedgerError(
+                    "Provider hard-stop review pause timestamp is invalid"
+                ) from exc
+
+            status = task.get("status")
+            if recorded_at is not None:
+                if recorded_at != checkpoint_at:
+                    raise ProviderHardStopLedgerError(
+                        "Provider hard-stop review checkpoint changed after pause"
+                    )
+                if status == "paused":
+                    return
+            if status not in {"running", "paused"}:
+                raise ProviderHardStopLedgerError(
+                    "Provider hard-stop review pause cannot reconcile from "
+                    f"{status!r}"
+                )
+            try:
+                prior_elapsed = float(task.get("elapsed_seconds") or 0.0)
+                if status == "running" and recorded_at is not None:
+                    # A prior resume reopened the active clock and crashed before
+                    # committing the still-pending decision. The exact persisted
+                    # anchor is the only timestamp authorized to rewind it.
+                    elapsed = prior_elapsed
+                elif status == "running":
+                    active_started_at = datetime.fromisoformat(
+                        str(task.get("active_started_at") or task["started_at"])
+                    )
+                    if active_started_at.tzinfo is None:
+                        raise ValueError(
+                            "review active timestamp must be timezone-aware"
+                        )
+                    active_delta = (checkpoint_at - active_started_at).total_seconds()
+                    if active_delta < 0.0:
+                        raise ValueError("review checkpoint predates active execution")
+                    elapsed = prior_elapsed + active_delta
+                else:
+                    actual_paused_at = datetime.fromisoformat(str(task["paused_at"]))
+                    active_started_at = datetime.fromisoformat(
+                        str(
+                            task.get("paused_active_started_at")
+                            or task.get("started_at")
+                        )
+                    )
+                    if (
+                        actual_paused_at.tzinfo is None
+                        or active_started_at.tzinfo is None
+                        or not active_started_at <= checkpoint_at <= actual_paused_at
+                    ):
+                        raise ValueError(
+                            "review checkpoint is outside the paused active segment"
+                        )
+                    rewind = (actual_paused_at - checkpoint_at).total_seconds()
+                    elapsed = prior_elapsed - rewind
+                if not math.isfinite(elapsed) or elapsed < 0.0:
+                    raise ValueError("invalid reconciled elapsed wall clock")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ProviderHardStopLedgerError(
+                    "Provider hard-stop review pause timestamp is invalid"
+                ) from exc
+            task["status"] = "paused"
+            task["paused_at"] = checkpoint_at.isoformat()
+            task["review_checkpoint_at"] = checkpoint_at.isoformat()
+            task["elapsed_seconds"] = round(elapsed, 6)
+            task["active_started_at"] = None
+            task["paused_active_started_at"] = None
+            self._task_started_monotonic.pop(normalized, None)
+            self._task_active_started_at.pop(normalized, None)
+            self._persist_locked()
+
+    def resume_task(self, task_id: str) -> None:
+        """Resume a paused task under its cumulative active-time ceiling."""
+
+        normalized = str(task_id).strip()
+        with self._durable_transaction():
+            task = self._task_locked(normalized)
+            if task.get("status") == "running":
+                return
+            if task.get("status") != "paused":
+                raise ProviderHardStopLedgerError(
+                    f"Provider hard-stop task cannot resume from {task.get('status')!r}"
+                )
+            try:
+                prior_elapsed = float(task.get("elapsed_seconds") or 0.0)
+            except (TypeError, ValueError) as exc:
+                raise ProviderHardStopLedgerError(
+                    "Paused Provider hard-stop task elapsed time is invalid"
+                ) from exc
+            if not math.isfinite(prior_elapsed) or prior_elapsed < 0.0:
+                raise ProviderHardStopLedgerError(
+                    "Paused Provider hard-stop task elapsed time is invalid"
+                )
+            if prior_elapsed >= self.limits.max_wall_clock_seconds_per_task:
+                task["status"] = "budget_exhausted"
+                task["finished_at"] = _utc_now()
+                task["active_started_at"] = None
+                task["error"] = "TASK_WALL_CLOCK_EXHAUSTED"
+                self._task_started_monotonic.pop(normalized, None)
+                self._task_active_started_at.pop(normalized, None)
+                self._persist_locked()
+                raise ProviderHardStopExceeded(
+                    code="TASK_WALL_CLOCK_EXHAUSTED",
+                    detail=(
+                        f"task {task_id!r} active execution reached "
+                        f"{prior_elapsed:.3f}s; limit="
+                        f"{self.limits.max_wall_clock_seconds_per_task:.3f}s"
+                    ),
+                )
+            task["status"] = "running"
+            task["paused_at"] = None
+            task["elapsed_seconds"] = prior_elapsed
+            task["active_started_at"] = _utc_now()
+            task["paused_active_started_at"] = None
+            self._task_started_monotonic[normalized] = (
+                time.monotonic() - prior_elapsed
+            )
+            self._task_active_started_at[normalized] = str(task["active_started_at"])
+            self._persist_locked()
+
     def mark_task_blocked(self, task_id: str, *, blocked_by: str) -> None:
-        with self._lock:
+        with self._durable_transaction():
             task = self._task_locked(task_id)
             if task.get("status") != "pending":
                 raise ProviderHardStopLedgerError(
@@ -582,30 +913,36 @@ class ProviderHardStopLedger:
             )
         return max(0.0, time.monotonic() - started)
 
+    def _assert_task_active_locked(self, task_id: str) -> float:
+        task = self._task_locked(task_id)
+        if task.get("status") != "running":
+            raise ProviderHardStopExceeded(
+                code="TASK_NOT_RUNNING",
+                detail=f"task {task_id!r} is {task.get('status')!r}",
+            )
+        elapsed = self._elapsed_locked(task_id)
+        remaining = self.limits.max_wall_clock_seconds_per_task - elapsed
+        if remaining <= 0:
+            task["status"] = "budget_exhausted"
+            task["finished_at"] = _utc_now()
+            task["elapsed_seconds"] = round(elapsed, 6)
+            task["active_started_at"] = None
+            task["error"] = "TASK_WALL_CLOCK_EXHAUSTED"
+            self._task_started_monotonic.pop(str(task_id), None)
+            self._task_active_started_at.pop(str(task_id), None)
+            self._persist_locked()
+            raise ProviderHardStopExceeded(
+                code="TASK_WALL_CLOCK_EXHAUSTED",
+                detail=(
+                    f"task {task_id!r} elapsed {elapsed:.3f}s; "
+                    f"limit={self.limits.max_wall_clock_seconds_per_task:.3f}s"
+                ),
+            )
+        return remaining
+
     def assert_task_active(self, task_id: str) -> float:
-        with self._lock:
-            task = self._task_locked(task_id)
-            if task.get("status") != "running":
-                raise ProviderHardStopExceeded(
-                    code="TASK_NOT_RUNNING",
-                    detail=f"task {task_id!r} is {task.get('status')!r}",
-                )
-            elapsed = self._elapsed_locked(task_id)
-            remaining = self.limits.max_wall_clock_seconds_per_task - elapsed
-            if remaining <= 0:
-                task["status"] = "budget_exhausted"
-                task["finished_at"] = _utc_now()
-                task["elapsed_seconds"] = round(elapsed, 6)
-                task["error"] = "TASK_WALL_CLOCK_EXHAUSTED"
-                self._persist_locked()
-                raise ProviderHardStopExceeded(
-                    code="TASK_WALL_CLOCK_EXHAUSTED",
-                    detail=(
-                        f"task {task_id!r} elapsed {elapsed:.3f}s; "
-                        f"limit={self.limits.max_wall_clock_seconds_per_task:.3f}s"
-                    ),
-                )
-            return remaining
+        with self._durable_transaction():
+            return self._assert_task_active_locked(task_id)
 
     def _task_totals_locked(self, task: Mapping[str, object]) -> Dict[str, float]:
         raw_calls = task.get("calls")
@@ -645,7 +982,6 @@ class ProviderHardStopLedger:
                 usage=None,
                 error_type="TransportRetry",
             )
-        self.assert_task_active(task_id)
         prompt_reserve = _prompt_token_reservation(messages)
         prompt_payload_bytes = _prompt_payload_bytes(messages)
         requested_completion = max(1, int(max_tokens))
@@ -658,7 +994,8 @@ class ProviderHardStopLedger:
             prompt_reserve * self.limits.input_cost_usd_per_million_tokens
             + completion_reserve * self.limits.output_cost_usd_per_million_tokens
         ) / 1_000_000.0
-        with self._lock:
+        with self._durable_transaction():
+            self._assert_task_active_locked(task_id)
             task = self._task_locked(task_id)
             calls = task.get("calls")
             if not isinstance(calls, list):
@@ -761,7 +1098,7 @@ class ProviderHardStopLedger:
         usage: Optional[Mapping[str, object]],
         error_type: Optional[str],
     ) -> None:
-        with self._lock:
+        with self._durable_transaction():
             task = self._task_locked(task_id)
             calls = task.get("calls")
             matches = [
@@ -776,124 +1113,57 @@ class ProviderHardStopLedger:
             call = matches[0]
             call["finished_at"] = _utc_now()
             call["error_type"] = str(error_type) if error_type else None
-            if error_type is not None or not isinstance(usage, Mapping):
+            def reported_tokens(name: str) -> Optional[int]:
+                if not isinstance(usage, Mapping) or usage.get(name) is None:
+                    return None
+                value = usage[name]
+                if isinstance(value, bool) or not isinstance(value, int):
+                    return None
+                return value if value >= 0 else None
+
+            reported_prompt = reported_tokens("prompt_tokens")
+            reported_completion = reported_tokens("completion_tokens")
+            reported_total_value = reported_tokens("total_tokens")
+            component_usage_complete = (
+                reported_prompt is not None
+                and reported_completion is not None
+                and reported_prompt + reported_completion > 0
+            )
+            usage_consistent = not (
+                reported_total_value is not None
+                and (
+                    any(
+                        component is not None and component > reported_total_value
+                        for component in (reported_prompt, reported_completion)
+                    )
+                    or (
+                        component_usage_complete
+                        and reported_prompt + reported_completion
+                        > reported_total_value
+                    )
+                )
+            )
+            has_reported_token_usage = usage_consistent and (
+                component_usage_complete
+                or bool(reported_total_value and reported_total_value > 0)
+            )
+            if error_type is not None or not has_reported_token_usage:
                 call["state"] = (
                     "failed_usage_unknown"
                     if error_type is not None
                     else "completed_usage_unreported"
                 )
-                # A RESERVATION IS A HOLD, AND EVERY HOLD NEEDS A RELEASE PATH.
-                #
-                # ``completion_reserve`` is deliberately taken as
-                # ``max(requested_completion, FLOOR)`` before transport, because
-                # a gateway may return more than we asked for and we must not
-                # start a call we could not afford in the worst case.  A
-                # reported call then releases that hold down to the provider's
-                # own numbers.  An UNREPORTED call had no release path at all,
-                # so it stayed charged at the floor forever.
-                #
-                # MEASURED on a survival-analysis fixture, 2026-08-03.  The
-                # local gateway was answering
-                # HTTP 500 in 0.98 s with ``Post ".../responses": EOF`` -- the
-                # upstream connection died while the request was still being
-                # sent, about a quarter of the time a successful call needs to
-                # come back (3.5-7.9 s).  Every one of the 14 attempts asked for
-                # 4,096 completion tokens (2,048 for repair).  The 10 that died
-                # were each charged the 128,000 floor: 1,848,481 of the run's
-                # 2,000,000 tokens, and $45.39 of the batch's $100, for output
-                # that provably never existed.  The run died at step 3 of 9 --
-                # not on any analysis defect, on its own accounting.
-                #
-                # The floor exists to absorb a provider REPORTING more than it
-                # was asked for; with no report there is nothing to absorb, and
-                # ``requested_completion`` is the true ceiling on what the
-                # provider could have produced for this request.  So release the
-                # completion hold to what the caller actually authorized and
-                # keep the prompt reservation in full -- those bytes may have
-                # reached the provider and been billed.  Attempt storms stay
-                # bounded by ``max_provider_attempts_per_{run,batch}``, which is
-                # the guard that owns retry count; the token ceiling should
-                # charge tokens that could actually be at risk.
-                #
-                # Same 14 attempts under this rule: 699,021 tokens instead of
-                # 1,944,205, leaving 1.3M for the analysis that was starved.
-                requested_completion = int(call.get("requested_completion_tokens") or 0)
-                held_completion = int(call.get("completion_token_reservation") or 0)
-                if 0 < requested_completion < held_completion:
-                    released = held_completion - requested_completion
-                    call["completion_token_reservation"] = requested_completion
-                    call["accounted_tokens"] = max(
-                        0, int(call.get("accounted_tokens") or 0) - released
-                    )
-                    call["accounted_estimated_cost_usd"] = max(
-                        0.0,
-                        float(call.get("accounted_estimated_cost_usd") or 0.0)
-                        - (released * self.limits.output_cost_usd_per_million_tokens)
-                        / 1_000_000.0,
-                    )
-                    call["unreported_completion_hold_released"] = released
-
-                # THE PROMPT HOLD NEEDS THE SAME RELEASE PATH, FOR THE SAME
-                # REASON.
-                #
-                # ``_prompt_token_reservation`` bounds a prompt by its UTF-8
-                # byte count -- one token per byte, which is a true ceiling and
-                # about four times the truth. Its own docstring says why that
-                # is safe: "successful calls release the unused reservation
-                # back to their provider-reported usage." A failed call had no
-                # such release and kept the byte-denominated hold forever.
-                #
-                # MEASURED on verify12, 2026-08-04, from the batch's durable
-                # ledger: a successful call was charged 23,436 tokens and a
-                # failed one 90,542 -- a call that returned nothing cost 3.9x
-                # one that returned an answer. Over the m1 run, 19 of 39 calls
-                # failed and took 707,014 tokens, 35% of the 2,000,000 run
-                # ceiling and 2.75x the 256,708 the successful calls actually
-                # used. All nine analysis steps then passed and the manuscript
-                # writer was refused a 150,931-token reservation.
-                #
-                # The release lands on the estimator this codebase already
-                # calibrated for exactly this question rather than a new
-                # number: ``estimate_prompt_tokens`` divides by
-                # ``CONSERVATIVE_BYTES_PER_TOKEN = 3.0``, deliberately below
-                # the 3.7685 minimum measured over real receipts, so the
-                # charge still over-counts every observed ratio. The provider
-                # framing allowance is already in tokens and is kept whole.
-                # A ledger written before this field existed keeps its full
-                # hold: no bytes recorded, nothing to release.
-                payload_bytes = int(call.get("prompt_payload_bytes") or 0)
-                held_prompt = int(call.get("prompt_token_reservation") or 0)
-                if payload_bytes > 0:
-                    from ..providers.prompt_budget import estimate_prompt_tokens
-
-                    released_prompt = (
-                        estimate_prompt_tokens(payload_bytes)
-                        + PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION
-                    )
-                    if 0 < released_prompt < held_prompt:
-                        given_back = held_prompt - released_prompt
-                        call["prompt_token_reservation"] = released_prompt
-                        call["accounted_tokens"] = max(
-                            0, int(call.get("accounted_tokens") or 0) - given_back
-                        )
-                        call["accounted_estimated_cost_usd"] = max(
-                            0.0,
-                            float(call.get("accounted_estimated_cost_usd") or 0.0)
-                            - (
-                                given_back
-                                * self.limits.input_cost_usd_per_million_tokens
-                            )
-                            / 1_000_000.0,
-                        )
-                        call["unreported_prompt_hold_released"] = given_back
+                # Unknown usage cannot release either hold. The prompt byte
+                # bound and completion floor are what made the decision
+                # pre-transport; only a provider receipt proves a lower charge.
                 self._persist_locked()
                 return
-            prompt_tokens = max(0, int(usage.get("prompt_tokens") or 0))
-            completion_tokens = max(0, int(usage.get("completion_tokens") or 0))
+            prompt_tokens = reported_prompt or 0
+            completion_tokens = reported_completion or 0
             component_total = prompt_tokens + completion_tokens
             reported_total = max(
                 component_total,
-                max(0, int(usage.get("total_tokens") or 0)),
+                reported_total_value or 0,
             )
             reserved_total = int(call.get("accounted_tokens") or 0)
             reserved_completion = int(call.get("completion_token_reservation") or 0)
@@ -956,30 +1226,45 @@ class ProviderHardStopLedger:
         score: Optional[Mapping[str, object]] = None,
         error: Optional[str] = None,
     ) -> None:
-        with self._lock:
-            if self._task_locked(task_id).get("status") == "completed":
-                return
-        # Check the wall clock before granting a completed state.
-        if error is None:
-            self.assert_task_active(task_id)
-        with self._lock:
+        with self._durable_transaction():
             task = self._task_locked(task_id)
-            if task.get("status") != "running":
+            if task.get("status") == "completed":
+                return
+            # Check the wall clock before granting a completed state.
+            if error is None:
+                self._assert_task_active_locked(task_id)
+            status = str(task.get("status") or "")
+            if status not in {"running", "paused"}:
                 if task.get("status") == "budget_exhausted":
                     return
                 raise ProviderHardStopLedgerError(
                     f"Provider hard-stop task cannot finish from {task.get('status')!r}"
                 )
-            elapsed = self._elapsed_locked(task_id)
+            if status == "paused":
+                if error is None:
+                    raise ProviderHardStopLedgerError(
+                        "A paused Provider hard-stop task cannot complete successfully"
+                    )
+                try:
+                    elapsed = float(task.get("elapsed_seconds") or 0.0)
+                except (TypeError, ValueError) as exc:
+                    raise ProviderHardStopLedgerError(
+                        "Paused Provider hard-stop task elapsed time is invalid"
+                    ) from exc
+            else:
+                elapsed = self._elapsed_locked(task_id)
             task["status"] = "failed" if error is not None else "completed"
             task["finished_at"] = _utc_now()
             task["elapsed_seconds"] = round(elapsed, 6)
+            task["active_started_at"] = None
             task["error"] = _safe_error_summary(error)
             task["score_summary"] = _safe_score_summary(score)
+            self._task_started_monotonic.pop(str(task_id), None)
+            self._task_active_started_at.pop(str(task_id), None)
             self._persist_locked()
 
     def snapshot(self) -> Dict[str, object]:
-        with self._lock:
+        with self._durable_transaction():
             # Canonical JSON round-trip returns an isolated plain-data snapshot.
             payload = dict(self._payload)
             payload["sha256"] = _payload_digest(payload)
@@ -988,7 +1273,7 @@ class ProviderHardStopLedger:
     def task_accounting_summary(self, task_id: str) -> Dict[str, object]:
         """Return actual, unknown, and conservative accounting for one task."""
 
-        with self._lock:
+        with self._durable_transaction():
             task = self._task_locked(task_id)
             calls = task.get("calls")
             if not isinstance(calls, list):
@@ -1076,6 +1361,21 @@ class TaskProviderHardStop:
     def cap_timeout(self, requested_seconds: float) -> float:
         remaining = self.assert_active()
         return max(0.001, min(float(requested_seconds), remaining))
+
+    def pause(self) -> None:
+        """Pause active execution while a human decision is outstanding."""
+
+        self.ledger.pause_task(self.task_id)
+
+    def resume(self) -> None:
+        """Resume execution without charging the intervening human wait."""
+
+        self.ledger.resume_task(self.task_id)
+
+    def reconcile_review_pause(self, *, paused_at: str) -> None:
+        """Recover the exact active-time boundary from a durable checkpoint."""
+
+        self.ledger.reconcile_review_pause(self.task_id, paused_at=paused_at)
 
     def finish(
         self,

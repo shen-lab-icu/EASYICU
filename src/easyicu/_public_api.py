@@ -65,6 +65,7 @@ _EXPORT_GROUPS: Final[dict[str, tuple[str, ...]]] = {
         "get_concept_info",
     ),
     "easyicu.callbacks": (
+        "UnsupportedClinicalScoreError",
         "sofa_score",
         "sofa_resp",
         "sofa_coag",
@@ -243,12 +244,16 @@ _EXPORT_GROUPS: Final[dict[str, tuple[str, ...]]] = {
     ),
     "easyicu.scores.sepsis_sofa2": ("sep3_sofa2", "label_sep3_sofa2"),
     "easyicu.scores.sofa2": (
+        "SOFA2InputError",
         "sofa2_score",
         "sofa2_resp",
         "sofa2_coag",
         "sofa2_liver",
         "sofa2_cardio",
         "sofa2_cns",
+        "sofa2_cns_proxy_sensitivity",
+        "sofa2_cns_delirium_tx_ascertainment",
+        "sofa2_cns_ascertainment",
         "sofa2_renal",
     ),
     "easyicu.table": (

@@ -23,7 +23,7 @@ CONCEPT_DICTIONARY = {
     'resp': ('Respiratory Rate', '呼吸频率', 'breaths/min'),
 
     # 呼吸系统
-    'pafi': ('PaO2/FiO2 Ratio', '氧合指数', 'mmHg'),
+    'pafi': ('PaO2/FiO2 Ratio', '氧合指数', 'ratio'),
     'safi': ('SpO2/FiO2 Ratio', '脉氧/吸氧比', ''),
     'supp_o2': ('Supplemental Oxygen', '辅助吸氧', 'boolean'),
     'vent_ind': ('Ventilation Duration Windows', '机械通气时间窗', 'boolean'),
@@ -191,11 +191,14 @@ CONCEPT_DICTIONARY = {
     'sofa2_liver': ('SOFA-2 Liver', 'SOFA-2肝脏评分', '0-4'),
     'sofa2_cardio': ('SOFA-2 Cardiovascular', 'SOFA-2心血管评分', '0-4'),
     'sofa2_cns': ('SOFA-2 Central Nervous System', 'SOFA-2神经评分', '0-4'),
+    'sofa2_cns_proxy_sensitivity': ('SOFA-2 CNS Proxy Sensitivity', 'SOFA-2神经代理敏感性评分', '0-4'),
+    'sofa2_cns_delirium_tx_ascertainment': ('SOFA-2 CNS Delirium-treatment Ascertainment', 'SOFA-2神经谵妄治疗评估回执', 'state'),
+    'sofa2_cns_ascertainment': ('SOFA-2 CNS Ascertainment (Deprecated Alias)', 'SOFA-2神经评估回执（已弃用别名）', 'state'),
     'sofa2_renal': ('SOFA-2 Renal', 'SOFA-2肾脏评分', '0-4'),
 
     # Sepsis 诊断
     'sep3_sofa1': ('Sepsis-3 (SOFA-1 based)', 'Sepsis-3诊断 (基于传统SOFA)', 'boolean'),
-    'sep3_sofa2': ('Sepsis-3 (SOFA-2 based)', 'Sepsis-3诊断 (基于SOFA-2, 2025新标准)', 'boolean'),
+    'sep3_sofa2': ('Experimental Sepsis sensitivity (SOFA-2 based)', '实验性脓毒症敏感性定义（基于SOFA-2）', 'boolean'),
     'susp_inf': ('Suspected Infection (ICD or Abx+Culture timing)', '疑似感染 (ICD诊断码或抗生素+培养时间窗)', 'boolean'),
     'infection_icd': ('ICD Infection Diagnosis (eICU only, Angus 2001)', 'ICD感染诊断 (仅eICU, Angus标准)', 'boolean'),
 
@@ -256,6 +259,12 @@ CONCEPT_DICTIONARY = {
     'aki_stage_creat': ('AKI Stage (Creatinine)', 'AKI分期（肌酐）', '0-3'),
     'aki_stage_uo': ('AKI Stage (Urine Output)', 'AKI分期（尿量）', '0-3'),
     'aki_stage_rrt': ('AKI Stage (RRT)', 'AKI分期（RRT）', '0-3'),
+    'aki_severe': ('Severe AKI (KDIGO Stage 2-3)', '严重AKI（KDIGO 2-3期）', 'boolean'),
+    'aki_severe_creat': ('Severe AKI by Creatinine', '肌酐标准严重AKI', 'boolean'),
+    'aki_severe_uo': ('Severe AKI by Urine Output', '尿量标准严重AKI', 'boolean'),
+    'aki_severe_rrt': ('Severe AKI by RRT', 'RRT标准严重AKI', 'boolean'),
+    'aki_severe_assessable': ('Severe AKI Assessable', '严重AKI可判定性', 'boolean'),
+    'aki_severe_ascertainment': ('Severe AKI Ascertainment', '严重AKI判定状态', 'category'),
     # These are receipts rather than measurements.  Their explicit storage
     # kinds keep native-v2 exports portable and prevent categorical
     # ascertainment states from being coerced to floating point.
@@ -287,7 +296,9 @@ CONCEPT_DICTIONARY = {
     # 神经系统 SOFA-2 扩展
     'motor_response': ('GCS Motor Response', 'GCS运动反应', '1-6'),
     'delirium_positive': ('Delirium Positive (CAM-ICU)', '谵妄阳性（CAM-ICU）', 'boolean'),
-    'delirium_tx': ('Delirium Treatment', '谵妄治疗', 'boolean'),
+    'delirium_tx': ('Delirium Treatment Proxy (Deprecated Alias)', '谵妄治疗药物代理（已弃用别名）', 'boolean'),
+    'delirium_tx_proxy': ('Candidate Delirium-treatment Drug Exposure', '候选谵妄治疗药物暴露', 'boolean'),
+    'delirium_tx_evidence': ('Attributable Delirium-treatment Evidence', '可归因谵妄治疗证据', 'state'),
 
     # 人口统计 (扩展)
     'adm': ('Admission Type', '入院类型', ''),
@@ -361,16 +372,22 @@ CONCEPT_DICTIONARY = {
 # 特征详细描述（英文和中文）
 CONCEPT_DESCRIPTIONS = {
     # SOFA-2
-    'sofa2': ('Total SOFA-2 score (2025 new standard), sum of 6 organ systems (0-24)', 'SOFA-2总分（2025年新标准），6个器官系统评分之和（0-24分）'),
+    'sofa2': ('Database operationalization of SOFA-2 with conservative handling of unconfirmed delirium-treatment proxies', 'SOFA-2数据库操作化实现；对未确认的谵妄治疗代理采取保守处理'),
     'sofa2_resp': ('Respiratory: PaO2/FiO2 (or SpO2/FiO2 if unavailable), scores 3-4 require advanced respiratory support (IMV/NIV/HFNC) or ECMO', '呼吸系统：基于氧合指数，3-4分需要高级呼吸支持（IMV/NIV/HFNC）或ECMO'),
     'sofa2_coag': ('Coagulation: platelet count with updated thresholds (≤50→4, ≤80→3, ≤100→2, ≤150→1)', '凝血系统：基于血小板计数，使用更新的阈值（≤50→4分，≤80→3分，≤100→2分，≤150→1分）'),
     'sofa2_liver': ('Liver: bilirubin with relaxed 1-point threshold (>1.2 mg/dL instead of >1.9)', '肝脏：基于胆红素，1分阈值放宽（>1.2 mg/dL，原为>1.9）'),
     'sofa2_cardio': ('Cardiovascular: combined NE+Epi dose, other vasopressors/inotropes, or mechanical circulatory support (IABP/LVAD/Impella)', '心血管：基于去甲肾+肾上腺素联合剂量、其他血管活性药物或机械循环支持'),
-    'sofa2_cns': ('Neurological: GCS score, with delirium (CAM-ICU+ or treatment) adding 1 point if GCS=15', '神经系统：基于GCS评分，若GCS=15但有谵妄（CAM-ICU阳性或接受治疗）则加1分'),
+    'sofa2_cns': ('Database operationalization of SOFA-2 CNS: GCS=15 gains one point only with confirmed attributable delirium-treatment evidence', 'SOFA-2神经组件的数据库操作化实现：GCS=15仅在谵妄治疗归因证据已确认时加1分'),
+    'sofa2_cns_proxy_sensitivity': ('Explicit sensitivity score that also counts candidate delirium-treatment medication exposure at GCS=15', '显式敏感性评分：GCS=15时也计入候选谵妄治疗药物暴露'),
+    'sofa2_cns_delirium_tx_ascertainment': ('Clause-specific receipt distinguishing complete, proxy-only, proxy-source-complete negative, unavailable, and not-score-relevant states', '谵妄治疗条款回执：区分完整、仅代理、代理源可评估阴性、不可用和与评分无关'),
+    'sofa2_cns_ascertainment': ('Deprecated compatibility alias for sofa2_cns_delirium_tx_ascertainment', 'sofa2_cns_delirium_tx_ascertainment 的已弃用兼容别名'),
+    'delirium_tx_proxy': ('Candidate medication exposure only; indication is unknown and must not be read as confirmed delirium treatment', '仅表示候选药物暴露；适应证未知，不得视为谵妄治疗已确认'),
+    'delirium_tx_evidence': ('Four-state attributable evidence: confirmed, proxy_only, not_detected, or unavailable', '四态可归因证据：已确认、仅代理、未检出或不可用'),
+    'delirium_tx': ('Deprecated compatibility alias of delirium_tx_proxy; never confirmation', 'delirium_tx_proxy 的已弃用兼容别名；不表示已确认'),
     'sofa2_renal': ('Renal: creatinine and urine output (6h/12h/24h windows), score 4 for RRT or meeting RRT criteria', '肾脏：基于肌酐和尿量（6h/12h/24h窗口），接受RRT或满足RRT标准则为4分'),
 
     # Sepsis
-    'sep3_sofa2': ('Sepsis-3 diagnosis: suspected infection + SOFA-2 ≥2 point increase from baseline', '基于SOFA-2的Sepsis-3诊断：疑似感染 + SOFA-2较基线升高≥2分'),
+    'sep3_sofa2': ('Experimental sensitivity phenotype: suspected infection + SOFA-2 ≥2 point increase; not canonical Sepsis-3', '实验性敏感性定义：疑似感染 + SOFA-2较基线升高≥2分；并非标准Sepsis-3定义'),
     'sep3_sofa1': ('Sepsis-3 diagnosis: suspected infection + traditional SOFA ≥2 point increase', '基于传统SOFA的Sepsis-3诊断：疑似感染 + SOFA较基线升高≥2分'),
     'susp_inf': ('Suspected infection: (1) ICD infection diagnosis codes (eICU only) OR (2) antibiotics started within 72h of culture OR culture within 24h of antibiotics. Combines infection_icd, abx, and samp concepts.', '疑似感染：(1) ICD感染诊断码（仅eICU可用）或 (2) 培养后72小时内开始抗生素 或 抗生素后24小时内进行培养。由infection_icd、abx和samp概念组合而成'),
     'infection_icd': ('Infection diagnosis based on Angus 2001 ICD criteria (explicit infection codes). ONLY available in eICU database.', '基于Angus 2001 ICD标准的感染诊断（显性感染编码）。仅eICU数据库可用'),
@@ -424,6 +441,12 @@ CONCEPT_DESCRIPTIONS = {
     'aki_stage': ('KDIGO AKI stage (0-3): max of creatinine and urine output criteria', 'KDIGO AKI分期（0-3）：肌酐和尿量标准的最大值'),
     'aki_stage_creat': ('AKI stage based on creatinine: ≥1.5x baseline or ≥0.3 mg/dL increase in 48h', '基于肌酐的AKI分期：较基线升高≥1.5倍 或 48h内升高≥0.3 mg/dL'),
     'aki_stage_uo': ('AKI stage based on urine output: <0.5 mL/kg/h for 6h (Stage 1), 12h (Stage 2), or <0.3 for 24h (Stage 3)', '基于尿量的AKI分期：<0.5 mL/kg/h持续6h(1期)、12h(2期) 或 <0.3持续24h(3期)'),
+    'aki_severe': ('Severe AKI defined as ascertainable KDIGO stage 2 or 3', '严重AKI定义为可判定的KDIGO 2期或3期'),
+    'aki_severe_creat': ('Creatinine-component severe AKI (KDIGO stage 2-3)', '肌酐组件严重AKI（KDIGO 2-3期）'),
+    'aki_severe_uo': ('Urine-output-component severe AKI (KDIGO stage 2-3)', '尿量组件严重AKI（KDIGO 2-3期）'),
+    'aki_severe_rrt': ('RRT-component severe AKI; missing event evidence remains unknown', 'RRT组件严重AKI；缺少事件证据时保持未知'),
+    'aki_severe_assessable': ('Whether severe AKI is positively or completely negatively ascertained', '严重AKI是否已阳性确认或完整阴性确认'),
+    'aki_severe_ascertainment': ('Severe-AKI ascertainment receipt', '严重AKI判定回执'),
 
     # Circulatory failure
     'circ_failure': ('Circulatory failure (circEWS definition): lactate ≥2 mmol/L with hypotension/vasopressors', '循环衰竭（circEWS定义）：乳酸≥2 mmol/L伴低血压或血管活性药物'),
@@ -484,7 +507,7 @@ def _get_patient_id_table_files(database: str) -> list:
 # 全局特征分组定义 - 供侧边栏和数据字典共用
 # 使用英文key，并提供双语显示名称
 CONCEPT_GROUPS_INTERNAL = {
-    'sofa2_score': ['sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal'],
+    'sofa2_score': ['sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_cns_proxy_sensitivity', 'sofa2_cns_delirium_tx_ascertainment', 'sofa2_cns_ascertainment', 'sofa2_renal'],
     'sofa1_score': ['sofa', 'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal'],
     'sepsis3_sofa2': ['sep3_sofa2'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
@@ -499,6 +522,9 @@ CONCEPT_GROUPS_INTERNAL = {
     'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium', 'apixaban', 'aspirin', 'diltiazem', 'enoxaparin', 'esmolol', 'insulin', 'labetalol', 'nicardipine', 'phenytoin', 'warfarin'],
     # 🔧 2026-02-04: 移除重复的 kdigo_aki/kdigo_creat/kdigo_uo，只保留 aki_* 规范名
     'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
+              'aki_severe', 'aki_severe_creat', 'aki_severe_uo',
+              'aki_severe_rrt', 'aki_severe_assessable',
+              'aki_severe_ascertainment',
               # KDIGO ascertainment receipt.  ``aki_stage == 0`` alone is not
               # evidence of a complete negative when an input component was
               # unavailable, so export the state alongside the stage.
@@ -511,7 +537,7 @@ CONCEPT_GROUPS_INTERNAL = {
               'fluid_balance', 'fluid_balance_cumulative', 'total_input_ml',
               # 衍生肾功能指数 (Tier 1, 2026-06-22)
               'bun_creatinine_ratio', 'egfr'],
-    'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx', 'icp'],
+    'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx_proxy', 'delirium_tx_evidence', 'delirium_tx', 'icp'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
     'other_scores': ['qsofa', 'sirs', 'mews', 'news', 'apache_iv', 'apache_iv_pred_hosp_mort', 'saps3', 'charlson', 'elixhauser'],

@@ -28,7 +28,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from .catalog import (
     AvailableCatalog,
@@ -36,8 +36,10 @@ from .catalog import (
     assess_coverage,
     build_available_catalog,
 )
+from .patient_grouping import PatientGroupingBinding
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.factory import authorized_complete
+from ..contracts.endpoint import EndpointSpec
 from ..intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
@@ -206,6 +208,9 @@ class AcquisitionResult:
     trajectory_provenance_path: Optional[Path] = None
     trajectory_authority_path: Optional[Path] = None
     trajectory_authority_ref: Optional[MaterializedTrajectoryAuthorityRef] = None
+    endpoint: Optional[EndpointSpec] = None
+    analysis_columns: Dict[str, str] = field(default_factory=dict)
+    materialized_columns: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (self.cohort_authority_path is None) != (self.cohort_authority_ref is None):
@@ -241,6 +246,13 @@ class AcquisitionResult:
             "selection_usage": self.selection_usage,
             "selection_cost_usd": self.selection_cost_usd,
             "selection_model": self.selection_model,
+            "endpoint": (
+                self.endpoint.model_dump(mode="json")
+                if self.endpoint is not None
+                else None
+            ),
+            "analysis_columns": dict(self.analysis_columns),
+            "materialized_columns": list(self.materialized_columns),
         }
         if (self.cohort_authority_path is None) != (self.cohort_authority_ref is None):
             raise MaterializedMetadataError(
@@ -292,14 +304,17 @@ def acquire_universe_for_question(
     output_dir: Union[str, Path],
     stem: str = "universe",
     target_outcome: Optional[str],
+    primary_exposure_concept: Optional[str] = None,
     outcome_concepts: Sequence[str],
     required_feature_concepts: Sequence[str] = (),
     static_concepts: Sequence[str] = (),
+    allowed_modules: Sequence[str] = (),
     cohort_window: tuple = (0.0, 24.0),
     database: str = "miiv",
     require_outcome: bool = True,
     emit_trajectory: bool = True,
     trajectory_window: Optional[tuple] = (-24.0, 168.0),
+    patient_grouping: Optional[PatientGroupingBinding] = None,
 ) -> AcquisitionResult:
     """Agent selects concepts, we check coverage, then materialise the universe.
 
@@ -314,6 +329,20 @@ def acquire_universe_for_question(
     from ..cohort.materializer import materialize_to_parquet
 
     catalog = build_available_catalog(export_dir)
+    normalized_modules = {
+        str(module).strip().lower()
+        for module in allowed_modules
+        if isinstance(module, str) and str(module).strip()
+    }
+    if normalized_modules:
+        catalog = AvailableCatalog(
+            source=catalog.source,
+            concepts=[
+                concept
+                for concept in catalog.concepts
+                if Path(concept.file_name).stem.lower() in normalized_modules
+            ],
+        )
     selection = DataFoundationAgent(llm).select_concepts(
         question=question, catalog=catalog, target_outcome=target_outcome
     )
@@ -378,6 +407,16 @@ def acquire_universe_for_question(
         )
     )
     typed_catalog = any(item.typed_metadata for item in catalog.concepts)
+    catalog_by_id = {item.concept_id: item for item in catalog.concepts}
+    event_status_feature_concepts = [
+        concept
+        for concept in feature_concepts
+        if catalog_by_id.get(concept) is not None
+        and catalog_by_id[concept].column_role == "event_status"
+    ]
+    positive_only_event_concepts = (
+        [] if typed_catalog else event_status_feature_concepts
+    )
     if typed_catalog:
         static_coverage = assess_coverage(list(static_concepts), catalog)
         effective_static_concepts = [
@@ -423,6 +462,16 @@ def acquire_universe_for_question(
             selection_model=sel_model,
         )
 
+    if patient_grouping is not None and emit_trajectory:
+        raise MaterializedMetadataError(
+            "patient-grouped materialization cannot silently drop identity from "
+            "a requested longitudinal trajectory"
+        )
+    identity_kwargs = (
+        patient_grouping.materializer_kwargs()
+        if patient_grouping is not None
+        else {}
+    )
     paths = materialize_to_parquet(
         output_dir=output_dir,
         stem=stem,
@@ -431,6 +480,7 @@ def acquire_universe_for_question(
         data_path=str(export_dir),
         outcome_concepts=list(outcome_concepts),
         static_concepts=effective_static_concepts,
+        positive_only_event_concepts=positive_only_event_concepts,
         cohort_window=cohort_window,
         # no cohort_definition => wide universe; agent does 纳排 in-sandbox
         # Also emit the long-format trajectory for the analysis concepts so the
@@ -441,7 +491,53 @@ def acquire_universe_for_question(
         emit_trajectory=emit_trajectory,
         trajectory_concepts=[*feature_concepts, *outcome_concepts],
         trajectory_window=trajectory_window,
+        **identity_kwargs,
     )
+    try:
+        materialized_provenance = json.loads(
+            Path(paths["provenance"]).read_text(encoding="utf-8")
+        )
+    except (KeyError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        materialized_provenance = {}
+    materialized_columns = {
+        str(column)
+        for column in materialized_provenance.get("columns", [])
+        if isinstance(column, str) and column
+    }
+    analysis_columns: Dict[str, str] = {}
+    for concept in [*outcome_concepts, *effective_static_concepts]:
+        if concept in materialized_columns:
+            analysis_columns[concept] = concept
+    # Typed exports already carry the event-status semantics used by the
+    # materializer, so they do not need the legacy ``positive_only`` hint.
+    # They still need the same public analysis-column projection after
+    # materialization; otherwise a valid event-status exposure is silently
+    # treated as an unaggregated repeated measure and Web planning stops.
+    for concept in event_status_feature_concepts:
+        canonical_event_column = f"{concept}_max"
+        if canonical_event_column in materialized_columns:
+            # All positive-only summaries encode the same stay-level 0/1 event
+            # status after owner normalization. ``_max`` is the stable public
+            # coordinate, not a newly inferred scientific aggregation.
+            analysis_columns[concept] = canonical_event_column
+    endpoint: Optional[EndpointSpec] = None
+    target_catalog = catalog_by_id.get(str(target_outcome or ""))
+    target_column = analysis_columns.get(str(target_outcome or ""))
+    if (
+        target_catalog is not None
+        and target_catalog.column_role == "event_status"
+        and target_column is not None
+    ):
+        endpoint = EndpointSpec(
+            name=target_column,
+            kind="binary",
+            absence_semantics="no_absent_rows",
+            levels=[0, 1],
+        )
+    if primary_exposure_concept and primary_exposure_concept not in analysis_columns:
+        # Continuous/repeated concepts require a user- or protocol-selected
+        # aggregation.  Do not silently choose first/max/mean here.
+        analysis_columns.pop(primary_exposure_concept, None)
     verified_authority = load_verified_materialized_cohort_authority(
         Path(paths["parquet"])
     )
@@ -514,4 +610,7 @@ def acquire_universe_for_question(
         selection_usage=sel_usage,
         selection_cost_usd=sel_cost,
         selection_model=sel_model,
+        endpoint=endpoint,
+        analysis_columns=analysis_columns,
+        materialized_columns=tuple(sorted(materialized_columns)),
     )

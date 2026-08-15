@@ -16,6 +16,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..contracts.figure_plan import (
+    MEASUREMENT_PROCESS_AUDIT_INPUT,
+    MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+)
 from ..figures.contracts import figure_contract_paths, panel_chart_type, panel_text
 from ..schema import ResearchContext, ValidationFinding
 from .study_design import infer_study_design_family
@@ -23,6 +27,16 @@ from .study_design_playbook import StudyDesignFamily
 
 ARTICLE_FIGURE_STRATEGY_SCHEMA_VERSION = "easyicu.article_figure_strategy/1"
 ARTICLE_FIGURE_STRATEGY_AUDIT_SCHEMA_VERSION = "easyicu.article_figure_strategy_audit/1"
+
+# One owner vocabulary for the typed data-quality display. Plan shaping and
+# the deterministic renderer both import these identities; a generic
+# sensitivity plot can therefore never masquerade as missingness/measurement
+# evidence simply because it contains the word "audit".
+DATA_QUALITY_FIGURE_REQUIRED_INPUTS = (
+    MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+    MEASUREMENT_PROCESS_AUDIT_INPUT,
+)
+DATA_QUALITY_FIGURE_PRODUCT = "figure:data_quality"
 
 _GENERIC_CHART_TYPES = {"bar", "forest", "heatmap", "unspecified"}
 _GENERIC_PANEL_ROLES = {
@@ -44,7 +58,6 @@ _PRIMARY_PUBLICATION_MIN_ROLES = {
     "causal_emulation": 3,
     "descriptive": 2,
 }
-
 
 class FigureRoleStrategy(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -68,6 +81,41 @@ class ArticleFigureStrategy(BaseModel):
     role_strategies: List[FigureRoleStrategy] = Field(default_factory=list)
     anti_patterns: List[str] = Field(default_factory=list)
     prompt_rules: List[str] = Field(default_factory=list)
+
+
+def _normalise_role_match_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+
+
+def figure_panel_covers_role(panel: Any, role: FigureRoleStrategy) -> bool:
+    """Whether one typed panel exactly satisfies a strategy role."""
+
+    expected_role = _normalise_role_match_text(role.role).replace(" ", "_")
+    declared_role = _normalise_role_match_text(
+        getattr(panel, "article_role", "")
+    ).replace(" ", "_")
+    if declared_role != expected_role:
+        return False
+    chart_type = _normalise_role_match_text(
+        getattr(panel, "chart_type", "")
+    ).replace(" ", "_")
+    return _acceptable_chart_match(role, chart_type)
+
+
+def figure_step_covers_role(step: Any, role: FigureRoleStrategy) -> bool:
+    """Whether a figure step explicitly declares this role and chart grammar.
+
+    Input and output product names are lineage coordinates, not visual
+    semantics.  A renderer that consumes a cohort-flow, missingness, and result
+    table is not thereby three article panels.  Only the Planner's typed panel
+    declarations can satisfy plan-time figure coverage; execution later checks
+    the resulting FigureContract and source data independently.
+    """
+
+    return any(
+        figure_panel_covers_role(panel, role)
+        for panel in getattr(step, "figure_panels", ())
+    )
 
 
 def _role(
@@ -360,7 +408,10 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
                     "density",
                     "histogram",
                     "ridge",
+                    "point_range",
                     "prevalence_panel",
+                    "point_absolute_risk",
+                    "dot_interval_absolute_risk",
                 ),
                 search_terms=("distribution", "prevalence", "density", "histogram"),
             ),
@@ -740,11 +791,20 @@ def validate_run_against_article_figure_strategy(
     context: ResearchContext,
     run_dir: Path,
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    analysis_family: StudyDesignFamily | None = None,
 ) -> List[ValidationFinding]:
+    """Emit the finding for the same coverage readiness already gates on.
+
+    ``analysis_family`` must be the family the readiness projection resolves
+    from the final plan.  Letting this validator re-derive it from context
+    alone would let the emitted finding disagree with the gate it reports on.
+    """
+
     status = summarize_article_figure_strategy_coverage(
         context=context,
         run_dir=run_dir,
         per_step_records=per_step_records,
+        analysis_family=analysis_family,
     )
     if status["article_figure_strategy_complete"]:
         return []
@@ -769,8 +829,12 @@ __all__ = [
     "ARTICLE_FIGURE_STRATEGY_AUDIT_SCHEMA_VERSION",
     "ARTICLE_FIGURE_STRATEGY_SCHEMA_VERSION",
     "ArticleFigureStrategy",
+    "DATA_QUALITY_FIGURE_PRODUCT",
+    "DATA_QUALITY_FIGURE_REQUIRED_INPUTS",
     "FigureRoleStrategy",
     "build_article_figure_strategy",
+    "figure_panel_covers_role",
+    "figure_step_covers_role",
     "render_article_figure_strategy_for_prompt",
     "summarize_article_figure_strategy_coverage",
     "validate_run_against_article_figure_strategy",

@@ -23,7 +23,11 @@ from easyicu.research_agent.execution.development_sample import (
     DevelopmentSampleError,
     materialize_development_execution_sample,
 )
-from easyicu.research_agent.execution.phase import _step_execution_cohort_path
+# 8268d27..02c864f moved this owner out of execution.phase; the test follows the
+# symbol rather than re-exporting it back into the phase module.
+from easyicu.research_agent.execution.cohort_routing import (
+    step_execution_cohort_path as _step_execution_cohort_path,
+)
 from easyicu.research_agent.gates.contract import (
     _primary_cohort_integrity_authority_paths,
 )

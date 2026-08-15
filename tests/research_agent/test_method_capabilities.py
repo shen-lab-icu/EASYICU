@@ -91,7 +91,9 @@ def test_curated_packages_are_declared_in_pyproject_methods_extra(ra):
 def test_coder_prompt_embeds_capability_block(ra):
     """The CoderAgent run prompt must carry the capability block so the model
     sees the real allow-list, not the old hard-coded sklearn-only line."""
-    agents = importlib.import_module("easyicu.research_agent.agents.core")
+    # ``agents/core.py`` is now a compatibility facade; ``CoderAgent`` and its
+    # prompt assembly live in the ``agents.coder`` owner module.
+    agents = importlib.import_module("easyicu.research_agent.agents.coder")
     mc = _mod()
     # The agents module must import and use the block builder.
     assert hasattr(agents, "coder_method_capability_block")

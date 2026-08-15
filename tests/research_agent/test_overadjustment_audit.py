@@ -487,7 +487,9 @@ def test_genuine_constituent_still_fires_after_negation_guard(tmp_path: Path):
 
 
 def test_replanner_injects_methodological_principles(monkeypatch):
-    from easyicu.research_agent.agents import core as A
+    # ``agents/core.py`` is now a compatibility facade; patching it would not
+    # intercept the calls, which resolve inside the ``agents.replanner`` owner.
+    from easyicu.research_agent.agents import replanner as A
     from easyicu.research_agent.providers import structured_retry as SR
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 

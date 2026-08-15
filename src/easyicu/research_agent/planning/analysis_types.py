@@ -252,6 +252,7 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "dynamic discrimination and calibration evaluation",
             "temporal subgroup and drift checks",
         ),
+        capability_id="dynamic_prediction_landmark_v1",
         guardrails=(
             "Do not treat longitudinal forecasting as a static prediction problem.",
             "Keep prediction time, observation window, and target horizon distinct.",
@@ -464,6 +465,7 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Do not silently escalate a quality audit into an outcome model.",
             "Report what was audited and what was not available to audit.",
         ),
+        capability_id="descriptive_measurement_v1",
     ),
     "measurement_bias_audit": AnalysisTypeSpec(
         key="measurement_bias_audit",
@@ -493,6 +495,7 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Do not interpret availability of a lab or score as a neutral random sample.",
             "Separate true physiology from who was selected to be measured.",
         ),
+        capability_id="descriptive_measurement_v1",
     ),
     "cohort_definition_sensitivity": AnalysisTypeSpec(
         key="cohort_definition_sensitivity",
@@ -593,6 +596,9 @@ _FAMILY_ALIASES: Dict[str, str] = {
     "phenotype": "trajectory_clustering",
     "association": "association_study",
     "association_study": "association_study",
+    "descriptive": "descriptive_epidemiology",
+    "descriptive_study": "descriptive_epidemiology",
+    "descriptive_epidemiology": "descriptive_epidemiology",
     "ordinal_dose_response": "ordinal_dose_response",
     "association_ordinal": "ordinal_dose_response",
     "ordered_association": "ordinal_dose_response",
@@ -997,8 +1003,14 @@ def _preferred_family_key(context: ResearchContext) -> Optional[str]:
     for candidate in candidates:
         if not candidate:
             continue
-        key = _FAMILY_ALIASES.get(candidate.strip().lower())
-        if key and key in _REGISTRY:
+        # StudyContext persists the canonical registry key, while older entry
+        # points may still supply one of the supported aliases.  Resolve both
+        # through the same fail-closed owner used for explicit plan families.
+        # Looking only in ``_FAMILY_ALIASES`` silently discarded canonical keys
+        # that do not need an alias entry (notably ``descriptive_epidemiology``),
+        # then re-inferred an association family from predictor/outcome prose.
+        key = canonical_analysis_family(candidate)
+        if key is not None:
             return key
     return None
 
@@ -1102,9 +1114,23 @@ def infer_analysis_type(
     if preferred is not None:
         return _REGISTRY[preferred]
     text = _question_text(context)
+    primary_question_text = (context.research_question or "").lower().strip()
     primary_predictor = primary_predictor or context.primary_exposure
     target_outcome = target_outcome or context.target_outcome
-    cohort_sensitivity_framed = _cohort_definition_sensitivity_framing(text)
+    # Free-text preferences are supplementary design constraints, not a second
+    # primary research question.  In particular, an ordinary association study
+    # may request alternate cohort definitions as a sensitivity analysis.  If
+    # those preference words are allowed to select the execution family, the
+    # robustness analysis replaces the estimand it was meant to challenge.
+    #
+    # A cohort-definition comparison therefore owns the primary family only
+    # when it is stated in ``research_question`` itself (or when the caller has
+    # supplied the typed ``inferred_analysis_family`` authority handled above).
+    # The merged preference text remains available below for method and output
+    # routing, but it cannot silently promote an adjunct into the study family.
+    cohort_sensitivity_framed = _cohort_definition_sensitivity_framing(
+        primary_question_text
+    )
     treatment_response_framed = _treatment_response_framing(text)
     # A bare "causal" anywhere in the text asserts the causal family, so the
     # disclaimer that cancels it must be at least as easy to say as the
@@ -1128,12 +1154,14 @@ def infer_analysis_type(
             r"\b(?:do\s+not|don't|not|avoid|without)\b.{0,40}\bcausal(?:ity|ly)?\b"
             r"|\b(?:rather\s+than|instead\s+of|as\s+opposed\s+to)\b"
             r".{0,30}\bcausal(?:ity|ly)?\b"
-            r"|\bnon-?causal\b"
+            r"|\bnon[-_]?causal\b"
             r"|\bcausal\s+(?:claim|conclusion|interpretation)\b.{0,24}\b"
             r"(?:not|unsupported|avoid)\b"
             r"|(?:不(?:作|做|进行|用于|支持|解释为?)|避免|无意).{0,24}因果"
             r"|因果.{0,16}(?:不成立|不支持|不解释)"
-            r"|(?:而非|不是|并非).{0,12}因果",
+            r"|(?:而非|不是|并非).{0,12}因果"
+            r"|非因果"
+            r"|(?:不得|禁止|拒绝).{0,24}因果",
             text,
             flags=re.IGNORECASE,
         )
@@ -1347,7 +1375,7 @@ def infer_analysis_type(
         # mere presence of an outcome column.  More specialised families have
         # already returned above, so this only prevents the generic descriptive
         # fallback from winning a tie.
-        scores["association_study"] += 2
+        scores["association_study"] += 3
     if primary_predictor and target_outcome:
         scores["association_study"] += 2
     elif target_outcome:
@@ -1423,6 +1451,96 @@ def planner_analysis_type_guide(*, detail: str = "full") -> str:
     return "\n".join(lines)
 
 
+def planner_analysis_type_switch_guide(*, detail: str = "full") -> str:
+    """Budget-aware compact menu for switching away from the inferred family.
+
+    ``locked_analysis_type_guide`` already publishes the inferred family's
+    modules and guardrails. Repeating that level of detail for every alternate
+    family cost every Planner request more than five kilobytes. This menu keeps
+    every family and its scientific description selectable while the separate
+    action catalog carries method-level detail for the active family. Every
+    rung retains every family; only alternate-family prose is shortened.
+    """
+
+    if detail not in CATALOG_DETAIL_LADDER:
+        raise ValueError(
+            f"unknown analysis-type switch-menu detail {detail!r}; "
+            f"expected one of {CATALOG_DETAIL_LADDER}"
+        )
+
+    if detail == "names_only":
+        return (
+            "ANALYSIS TYPES: "
+            + ",".join(spec.key for spec in list_analysis_types())
+            + ". Switch only for a better estimand; explain."
+        )
+    lines = ["ANALYSIS-TYPE SWITCH MENU (all families remain selectable):"]
+    for spec in list_analysis_types():
+        if detail == "full":
+            lines.append(f"- {spec.key}: {spec.description}")
+        elif detail == "without_guardrails":
+            lines.append(f"- {spec.key}: {spec.name}")
+        else:  # pragma: no cover - returned above; keeps the ladder exhaustive.
+            lines.append(f"- {spec.key}")
+    lines.append(
+        "Use the inferred-family block unless another family better matches the "
+        "estimand; explain any switch in rationale."
+    )
+    if detail != "full":
+        lines.append(
+            "Alternate-family descriptions were shortened only to fit the request "
+            "budget; no family was removed."
+        )
+    return "\n".join(lines)
+
+
+def host_authorized_analysis_family(context: ResearchContext) -> Optional[str]:
+    """Return the canonical caller-authorized family, if one was supplied."""
+
+    raw = str(
+        getattr(context.user_preferences, "inferred_analysis_family", "") or ""
+    ).strip()
+    if not raw:
+        return None
+    canonical = canonical_analysis_family(raw)
+    if canonical is None:
+        raise ValueError(f"Host-authorized inferred_analysis_family is unknown: {raw!r}")
+    return canonical
+
+
+def planner_analysis_family_authority_guide(
+    context: ResearchContext,
+    inferred: AnalysisTypeSpec,
+    *,
+    detail: str,
+) -> str:
+    """Publish either the ordinary switch menu or the caller's closed family."""
+
+    authorized = host_authorized_analysis_family(context)
+    if authorized is None:
+        return planner_analysis_type_switch_guide(detail=detail)
+    return (
+        "HOST-AUTHORIZED ANALYSIS FAMILY: `analysis_type` MUST remain "
+        f"{inferred.key!r}. The caller has already approved this typed family; "
+        "do not switch families. If it cannot answer the question, expose the "
+        "incompatibility for host review rather than substituting another family."
+    )
+
+
+def validate_host_authorized_analysis_family(
+    context: ResearchContext,
+    observed: str,
+) -> None:
+    """Reject a Planner family that replaces explicit caller authority."""
+
+    authorized = host_authorized_analysis_family(context)
+    if authorized is not None and observed != authorized:
+        raise ValueError(
+            "Planner analysis_type conflicts with the host-authorized analysis "
+            f"family: expected {authorized!r}, observed {observed!r}"
+        )
+
+
 def locked_analysis_type_guide(spec: AnalysisTypeSpec) -> str:
     """Focused, advisory prompt block naming the inferred family.
 
@@ -1440,8 +1558,9 @@ def locked_analysis_type_guide(spec: AnalysisTypeSpec) -> str:
         "calls for. Do not default to a generic association/logistic plan when the "
         "suggested family is survival, trajectory_clustering, dynamic_prediction, "
         "causal_inference, etc. If the research question clearly belongs to a "
-        "different family than the suggestion above, you may switch — but only "
-        "with an explicit one-line justification in `rationale`.\n"
+        "different family than the suggestion above and the caller did not bind "
+        "a typed family, you may switch with an explicit one-line justification "
+        "in `rationale`; caller-bound family authority may not be replaced.\n"
     )
 
 
@@ -1473,6 +1592,10 @@ __all__ = [
     "infer_analysis_type",
     "strong_trajectory_clustering_framing",
     "planner_analysis_type_guide",
+    "planner_analysis_type_switch_guide",
+    "host_authorized_analysis_family",
+    "planner_analysis_family_authority_guide",
+    "validate_host_authorized_analysis_family",
     "locked_analysis_type_guide",
     "analysis_type_catalog_markdown",
 ]

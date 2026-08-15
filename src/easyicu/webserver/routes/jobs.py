@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -14,6 +15,7 @@ from easyicu.webserver import dataio
 from easyicu.webserver import jobs as job_store
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import sources as source_store
+from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.routes.request_parsing import body_bool
 
 submission_router = APIRouter()
@@ -74,25 +76,165 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
         ),
     )
 
-    def runner(job: Any) -> dict:
-        result = export_runner(job)
-        out_path = str((result or {}).get("out_dir") or "")
-        if out_path and result.get("manifest") and not result.get("cancelled_at"):
-            registry = source_store.register_source(
-                out_path,
-                label=body.get("label"),
-                active=True,
-                crossdb=True,
+    study_context_id = str(body.get("study_context_id") or "").strip()
+    expected_revision = body.get("study_context_revision")
+    study_context = None
+    if study_context_id:
+        try:
+            study_context = context_store.get_context(study_context_id)
+        except context_store.StudyContextError as exc:
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
+        if study_context is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "study_context_not_found",
+                    "study_context_id": study_context_id,
+                },
             )
-            result["registered_source"] = {
-                "ok": bool(registry.get("ok")),
-                "active_path": registry.get("active_path"),
-                "source_count": len(registry.get("sources") or []),
-            }
-        return result
+        current_revision = int(study_context.get("revision") or 0)
+        if expected_revision is not None and expected_revision != current_revision:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "study_context_revision_conflict",
+                    "study_context_id": study_context_id,
+                    "expected_revision": expected_revision,
+                    "current_revision": current_revision,
+                },
+            )
+        bound_source = study_context.get("data_source")
+        bound_source = bound_source if isinstance(bound_source, dict) else {}
+        try:
+            bound_path = context_store.normalize_path(bound_source.get("path"))
+            requested_path = context_store.normalize_path(path)
+        except context_store.StudyContextError as exc:
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
+        if not bound_path or bound_path != requested_path:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "study_context_source_mismatch",
+                    "study_context_id": study_context_id,
+                },
+            )
+        if str(bound_source.get("database") or "").strip() != database:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "study_context_database_mismatch",
+                    "study_context_id": study_context_id,
+                },
+            )
+
+    start_gate = threading.Event()
+    start_abort: Dict[str, Any] = {}
+
+    def runner(job: Any) -> dict:
+        start_gate.wait()
+        if start_abort:
+            error = str(start_abort.get("error") or "study_context_sync_failed")
+            raise RuntimeError(f"extract_start_blocked:{error}")
+        terminal_stage = "extract_failed"
+        result: Dict[str, Any] | None = None
+        try:
+            result = export_runner(job)
+            out_path = str((result or {}).get("out_dir") or "")
+            if out_path and result.get("manifest") and not result.get("cancelled_at"):
+                registry = source_store.register_source(
+                    out_path,
+                    label=body.get("label"),
+                    active=True,
+                    crossdb=True,
+                )
+                result["registered_source"] = {
+                    "ok": bool(registry.get("ok")),
+                    "active_path": registry.get("active_path"),
+                    "source_count": len(registry.get("sources") or []),
+                }
+            terminal_stage = (
+                "extract_cancelled" if job.cancel_requested else "extract_review"
+            )
+            return result
+        finally:
+            if study_context is not None:
+                try:
+                    cleanup = context_store.clear_active_job_if(
+                        study_context_id,
+                        job.id,
+                        current_stage=terminal_stage,
+                        last_route="extract",
+                    )
+                    if isinstance(result, dict):
+                        result["study_context_revision"] = int(
+                            cleanup["context"].get("revision") or 0
+                        )
+                except Exception:
+                    pass
 
     job = submit_job("extract", runner)
-    return {"job_id": job.id, "kind": job.kind, "status": job.status}
+    synced_context = None
+    try:
+        if study_context is not None:
+            synced_context = context_store.handoff_context(
+                study_context_id,
+                current_stage="extract",
+                last_route="extract",
+                active_job_id=job.id,
+                expected_revision=int(study_context.get("revision") or 0),
+            )
+    except context_store.StudyContextError as exc:
+        start_abort.update(exc.detail)
+    except Exception as exc:
+        start_abort.update(
+            {
+                "error": "study_context_active_job_sync_failed",
+                "reason": type(exc).__name__,
+            }
+        )
+    finally:
+        start_gate.set()
+    if start_abort:
+        error = str(start_abort.get("error") or "study_context_sync_failed")
+        status_code = 409 if error.startswith("study_context_revision_") else 500
+        raise HTTPException(
+            status_code=status_code,
+            detail={**start_abort, "job_id": job.id, "job_started": False},
+        )
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "study_context_id": study_context_id or None,
+        "study_context_revision": (
+            int(synced_context.get("revision") or 0) if synced_context else None
+        ),
+    }
+
+
+@submission_router.post("/api/jobs/crossdb-summary")
+def jobs_crossdb_summary(body: Dict[str, Any]) -> dict:
+    """Start a leased, cancellable registered-export Cross-DB summary job."""
+    try:
+        runner = crossdb_review.make_crossdb_review_summary_runner(body)
+    except crossdb_review.CrossdbReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+    lease_receipt = runner.source_lease_receipt()
+    try:
+        job = submit_job("crossdb-summary", runner)
+    except Exception:
+        runner.release()
+        raise
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "selection_receipt": runner.selection_receipt,
+        "source_lease": lease_receipt,
+        "deadline_seconds": runner.deadline_seconds,
+        "deadline_at": runner.deadline_at,
+    }
 
 
 @submission_router.post("/api/jobs/crossdb-raw-distribution")

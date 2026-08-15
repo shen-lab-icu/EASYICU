@@ -18,7 +18,10 @@ loaded.
 |---|---|---|
 | `concept_name` → callbacks per data source | `hr` → `{miiv: {…}, eicu: {…}, …}` | Per-database extraction rules |
 
-**198 concepts in `concept-dict.json`** (verified count, as of 2026-06).
+Exact base, overlay, merged, database, clinical-contract, and capability counts
+are generated from the shipped registries in
+[`docs/catalog_summary.md`](../../../docs/catalog_summary.md). Do not maintain a
+second hand-written count here.
 This is the number of *entries in this file*; the web-side catalog reports
 a larger loadable total (see the root `README.md`) because it also exposes
 derived/special concepts — KDIGO AKI staging, circulatory-failure
@@ -44,7 +47,8 @@ Two roles:
 1. **13 new concepts** unique to SOFA-2: `sofa2`, `sofa2_resp`,
    `sofa2_coag`, `sofa2_liver`, `sofa2_cardio`, `sofa2_cns`,
    `sofa2_renal`, `sep3_sofa2`, plus the supporting concepts
-   `adv_resp`, `delirium_positive`, `delirium_tx`, `motor_response`,
+   `adv_resp`, `delirium_positive`, `delirium_tx_proxy`,
+   `delirium_tx_evidence`, deprecated alias `delirium_tx`, `motor_response`,
    `other_vaso`.
 2. **8 overrides** of existing keys (`ecmo`, `ecmo_indication`,
    `mech_circ_support`, `rrt`, `rrt_criteria`, `uo_6h`, `uo_12h`,

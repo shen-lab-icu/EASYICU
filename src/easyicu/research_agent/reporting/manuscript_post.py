@@ -27,6 +27,8 @@ from ..authority.evidence_store import (
     EvidenceEnforcementError,
     EvidenceEnforcementMode,
     EvidenceStore,
+    NumericEffectScale,
+    NumericEstimand,
     NumericClaim,
     _NUMERIC_IN_PROSE_RE,
 )
@@ -362,16 +364,24 @@ def _apply_writer_evidence_repair_decisions(
     *,
     missing_sentences: Sequence[str],
     decisions: Sequence[Mapping[str, object]],
+    allowed_claim_refs: Sequence[str] = (),
 ) -> tuple[str, List[Dict[str, object]]]:
-    """Apply a validated writer citation/drop decision set without rewriting.
+    """Apply a validated writer citation/drop/claim decision without rewriting.
 
-    The LLM chooses only between registered citations and deletion. This host
-    function preserves every cited sentence byte-for-byte apart from appending
-    the selected evidence placeholders, so the repair cannot quietly change a
-    number, direction, population, or interpretation.
+    The LLM chooses only among registered citations, one exact registered host
+    claim, and deletion. This host function preserves every cited sentence
+    byte-for-byte apart from appending the selected evidence placeholders. A
+    claim decision replaces the whole sentence with one exact host-issued
+    token; no model-authored direction, population, number, or interpretation
+    survives that replacement.
     """
 
     sentences = [str(sentence).strip() for sentence in missing_sentences]
+    allowed_claims = {
+        str(claim_ref).strip()
+        for claim_ref in allowed_claim_refs
+        if str(claim_ref).strip()
+    }
     if len(decisions) != len(sentences):
         raise ValueError("writer evidence repair must decide every missing sentence")
     rewritten = scaffold
@@ -407,12 +417,38 @@ def _apply_writer_evidence_repair_decisions(
             replacement = target
             for evidence_id in evidence_ids:
                 replacement = _append_evidence_citation(replacement, evidence_id)
+        elif action == "claim":
+            if evidence_ids:
+                raise ValueError("claim decision cannot include evidence ids")
+            claim_ref = str(decision.get("claim_ref") or "").strip()
+            if claim_ref not in allowed_claims:
+                raise ValueError("claim decision requires an allowed claim_ref")
+            token = "{claim:" + claim_ref + "}"
+            target_offset = rewritten.find(target)
+            line_start = rewritten.rfind("\n", 0, target_offset) + 1
+            before_target = rewritten[line_start:target_offset]
+            if before_target.lstrip().startswith("#"):
+                # Scientific findings do not belong in a manuscript title or
+                # heading.  A model-selected claim is safely dropped here; the
+                # unchanged strict gate still validates the remaining draft.
+                replacement = ""
+                action = "drop"
+            else:
+                labelled = re.match(
+                    r"^(?P<label>\*\*[^*\n]{1,80}:\*\*)\s+.+$",
+                    target,
+                )
+                replacement = (
+                    f"{labelled.group('label')}\n\n{token}"
+                    if labelled is not None
+                    else token
+                )
         elif action == "drop":
             if evidence_ids:
                 raise ValueError("drop decision cannot include evidence ids")
             replacement = ""
         else:
-            raise ValueError("writer evidence repair action must be cite or drop")
+            raise ValueError("writer evidence repair action must be cite, claim, or drop")
         rewritten = rewritten.replace(target, replacement, 1)
         seen.add(index)
         applied.append(
@@ -421,6 +457,11 @@ def _apply_writer_evidence_repair_decisions(
                 "action": action,
                 "evidence_ids": evidence_ids,
                 "sentence": target[:500],
+                **(
+                    {"claim_ref": str(decision.get("claim_ref") or "").strip()}
+                    if str(decision.get("claim_ref") or "").strip()
+                    else {}
+                ),
             }
         )
     return rewritten, sorted(applied, key=lambda item: int(item["index"]))
@@ -1324,9 +1365,23 @@ def _select_numeric_claim(
     context: str,
     previous_step_id: Optional[str],
     lineage: Optional[Mapping[str, frozenset[str]]] = None,
+    prose_effect_scale: Optional[NumericEffectScale] = None,
+    prose_estimand: Optional[NumericEstimand] = None,
 ) -> tuple[Optional[NumericClaim], bool]:
     """Return ``(claim, ambiguous)`` for one manuscript numeric literal."""
 
+    candidates = [
+        (claim, distance)
+        for claim, distance in candidates
+        if not (
+            prose_effect_scale is not None
+            and claim.effect_scale is not prose_effect_scale
+        )
+        and not (
+            prose_estimand is not None
+            and claim.estimand is not prose_estimand
+        )
+    ]
     if not candidates:
         return None, False
 
@@ -1450,6 +1505,111 @@ def _select_numeric_claim(
 
 _NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(r"(?:[.!?](?=\s|$)|\n{2,})")
 
+_EFFECT_SCALE_PHRASE_PATTERNS = {
+    NumericEffectScale.ODDS_RATIO: re.compile(r"\bodds[\s-]+ratios?\b", re.I),
+    NumericEffectScale.HAZARD_RATIO: re.compile(r"\bhazard[\s-]+ratios?\b", re.I),
+    NumericEffectScale.RISK_RATIO: re.compile(
+        r"\b(?:risk[\s-]+ratios?|relative[\s-]+risks?)\b", re.I
+    ),
+}
+_CI_MARKER = r"(?:95\s*%\s*(?:CI|confidence\s+interval)|confidence\s+interval)"
+_PLAIN_PROSE_NUMBER = r"[-+]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?"
+
+
+def _prose_effect_scale(
+    text: str, *, start: int, end: int
+) -> Optional[NumericEffectScale]:
+    """Resolve the scale label governing one numeric mention.
+
+    Scale is mention-local rather than sentence-global: a results sentence may
+    legitimately report OR, HR, and RR together. A following label is used only
+    when it is directly postfix to the number; otherwise the latest preceding
+    label governs the point estimate and any CI endpoints that follow it.
+    """
+
+    abbreviation_scales = {
+        "OR": NumericEffectScale.ODDS_RATIO,
+        "HR": NumericEffectScale.HAZARD_RATIO,
+        "RR": NumericEffectScale.RISK_RATIO,
+    }
+    context_start = 0
+    for boundary in _NUMERIC_SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
+        context_start = boundary.end()
+    next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
+    context_end = next_boundary.start() if next_boundary is not None else len(text)
+    context = text[context_start:context_end]
+    local_prefix = text[max(context_start, start - 24) : start]
+    local_suffix = text[end : min(context_end, end + 32)]
+    if re.search(
+        r"\b(?:p|SE|standard\s+error)\s*[<=>:]?\s*$",
+        local_prefix,
+        re.I,
+    ) or re.match(
+        r"\s*(?:patients?|stays?|admissions?|observations?|rows?|groups?)\b",
+        local_suffix,
+        re.I,
+    ):
+        return None
+    mentions: list[tuple[int, int, NumericEffectScale]] = []
+    for scale, pattern in _EFFECT_SCALE_PHRASE_PATTERNS.items():
+        mentions.extend(
+            (context_start + match.start(), context_start + match.end(), scale)
+            for match in pattern.finditer(context)
+        )
+    mentions.extend(
+        (
+            context_start + match.start(),
+            context_start + match.end(),
+            abbreviation_scales[match.group(0)],
+        )
+        for match in re.finditer(r"\b(?:OR|HR|RR)\b", context)
+    )
+    if not mentions:
+        return None
+
+    following = sorted((item for item in mentions if item[0] >= end), key=lambda x: x[0])
+    if following:
+        label_start, _label_end, scale = following[0]
+        between = text[end:label_start]
+        if len(between) <= 12 and re.fullmatch(r"[\s()\[\],:=-]*", between):
+            return scale
+    preceding = [item for item in mentions if item[1] <= start]
+    if not preceding:
+        return None
+    latest_end = max(item[1] for item in preceding)
+    scales = {item[2] for item in preceding if item[1] == latest_end}
+    return next(iter(scales)) if len(scales) == 1 else None
+
+
+def _prose_numeric_estimand(text: str, *, start: int, end: int) -> Optional[NumericEstimand]:
+    """Classify an explicitly labelled point estimate or ordered CI endpoint."""
+
+    prefix = text[max(0, start - 180) : start]
+    suffix = text[end : min(len(text), end + 100)]
+    separator = r"(?:-|–|—|\bto\b)"
+    if re.search(_CI_MARKER + r".{0,50}$", prefix, flags=re.I | re.S):
+        if re.match(r"\s*" + separator + r"\s*" + _PLAIN_PROSE_NUMBER, suffix):
+            return NumericEstimand.CONFIDENCE_INTERVAL_LOWER
+    if re.search(
+        _CI_MARKER
+        + r".{0,80}?"
+        + _PLAIN_PROSE_NUMBER
+        + r"\s*"
+        + separator
+        + r"\s*$",
+        prefix,
+        flags=re.I | re.S,
+    ):
+        return NumericEstimand.CONFIDENCE_INTERVAL_UPPER
+    if re.search(
+        r"(?:\b(?:OR|HR|RR)\b|\b(?:odds|hazard|risk)[\s-]+ratio)"
+        r"\s*(?:=|:|,|\bof\b|\bwas\b)\s*$",
+        prefix,
+        flags=re.I,
+    ):
+        return NumericEstimand.POINT_ESTIMATE
+    return None
+
 
 def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
     """Return the current prose sentence for evidence-aware disambiguation.
@@ -1549,10 +1709,11 @@ def repair_miscited_numeric_citations(
     replaced and no citation is ever removed, so a genuine attribution error
     remains visible in the text rather than being quietly rewritten.
 
-    The owner chosen is the earliest-ordered registered owner of that value:
-    provenance flows forward, so the earliest step to register the number is
-    the closest to where it came from. When no owner resolves to a citable
-    evidence name, nothing is added and the gate still refuses.
+    A citation is added only when exactly one registered claim owns the value.
+    ``NumericClaim`` does not yet carry the full estimand/exposure/outcome/
+    population identity needed to prove that multiple same-valued claims are
+    the same fact.  Therefore any multiplicity remains unmodified and the
+    strict binder still refuses it; ordering alone is never semantic evidence.
     """
 
     lineage = _evidence_lineage(evidence)
@@ -1591,6 +1752,19 @@ def repair_miscited_numeric_citations(
             continue
         detail = _miscitation_detail(candidates, context=context, lineage=lineage)
         if detail is None:
+            continue
+        distinct_candidates = {
+            (claim.step_id, claim.evidence_id, claim.source_field)
+            for claim, _distance in candidates
+        }
+        if len(distinct_candidates) != 1:
+            continue
+        citable_candidates = [
+            claim
+            for claim, _distance in candidates
+            if claim.step_id in resolvable or claim.evidence_id in resolvable
+        ]
+        if len(citable_candidates) != 1:
             continue
         owner = next(
             (item for item in sorted(detail["owned_by"]) if item in resolvable),
@@ -1717,6 +1891,16 @@ def bind_numeric_values(
             context=context,
             previous_step_id=previous_step_id,
             lineage=lineage,
+            prose_effect_scale=_prose_effect_scale(
+                manuscript,
+                start=start,
+                end=end,
+            ),
+            prose_estimand=_prose_numeric_estimand(
+                manuscript,
+                start=start,
+                end=end,
+            ),
         )
         if claim is None:
             untraced.append(value)
@@ -1758,6 +1942,10 @@ def bind_numeric_values(
                 f"field={claim.source_field}",
                 f"evidence={claim.evidence_id}",
             ]
+            if claim.effect_scale is not None:
+                fields.append(f"effect_scale={claim.effect_scale.value}")
+            if claim.estimand is not None:
+                fields.append(f"estimand={claim.estimand.value}")
             display_value = display_values.get(fid)
             if display_value and display_value != claim.value:
                 fields.extend(

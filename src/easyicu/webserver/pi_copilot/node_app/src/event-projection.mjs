@@ -15,6 +15,23 @@ function boundedText(value, limit = MAX_TEXT_CHARS) {
   return String(value ?? "").slice(0, limit);
 }
 
+function modelErrorCode(message) {
+  if (!message || message.stopReason !== "error") return "";
+  const detail = String(message.errorMessage || "").toLowerCase();
+  if (detail.includes("pi_shell_token_budget_exhausted")) {
+    return "pi_shell_token_budget_exhausted";
+  }
+  if (detail.includes("pi_shell_session_provider_call_budget_exhausted")) {
+    return "pi_shell_session_provider_call_budget_exhausted";
+  }
+  if (/context|token.*limit|maximum.*length/.test(detail)) return "pi_model_context_limit";
+  if (/rate.?limit|too many requests|quota/.test(detail)) return "pi_model_rate_limited";
+  if (/timeout|timed out|connection reset|server_error|internal_server_error|\b5\d\d\b/.test(detail)) {
+    return "pi_model_provider_unavailable";
+  }
+  return "pi_model_provider_error";
+}
+
 function eventTimestamp(event) {
   const value = Number(event?.timestamp ?? event?.message?.timestamp);
   return Number.isFinite(value) && value > 0
@@ -35,23 +52,108 @@ function safeStableId(value, limit = 160) {
   return /^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(text) ? text : "";
 }
 
+function safeJobId(value) {
+  const text = boundedText(value, 160).trim();
+  return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/.test(text) ? text : "";
+}
+
 function safeArtifactName(value) {
   const name = boundedText(value, 160).trim();
   if (!name || name.includes("/") || name.includes("\\") || !name.endsWith(".json")) return "";
   return /^[A-Za-z0-9_.-]+$/.test(name) ? name : "";
 }
 
+function safeResearchDocumentName(value) {
+  const name = boundedText(value, 80).trim();
+  return /^manuscript_scaffold\.(pdf|tex|bib)$/.test(name) ? name : "";
+}
+
+function safeSystemValidationDocumentName(value) {
+  const name = boundedText(value, 80).trim();
+  return /^system_validation_report\.(html|pdf)$/.test(name) ? name : "";
+}
+
+function safeSha256(value) {
+  const text = boundedText(value, 64).trim().toLowerCase();
+  return /^[a-f0-9]{64}$/.test(text) ? text : "";
+}
+
+function safeLiteratureUrl(value) {
+  const text = boundedText(value, 500).trim();
+  return /^https:\/\/pubmed\.ncbi\.nlm\.nih\.gov\/[0-9]{1,12}\/$/.test(text)
+    || /^https:\/\/doi\.org\/10\.[0-9]{4,9}\/[A-Za-z0-9._;()/:+-]+$/.test(text)
+    ? text : "";
+}
+
 function projectedResource(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  if (value.kind === "literature_source") {
+    const url = safeLiteratureUrl(value.url);
+    const title = boundedText(value.title || value.label, 500).trim();
+    if (!url || !title) return undefined;
+    const authorityClass = value.authority_class === "literature_method"
+      ? "literature_method" : "literature_retrieval_candidate";
+    return {
+      kind: "literature_source",
+      url,
+      label: boundedText(value.label || title, 160),
+      title,
+      year: boundedText(value.year, 16),
+      venue: boundedText(value.venue, 240),
+      relevance: boundedText(value.relevance, 1200),
+      doi: boundedText(value.doi, 240),
+      pmid: boundedText(value.pmid, 32),
+      media_type: "text/html",
+      authority_class: authorityClass,
+    };
+  }
   if (value.kind === "research_artifact") {
     const runId = safeStableId(value.run_id);
     const artifact = safeArtifactName(value.artifact);
     if (!runId || !artifact) return undefined;
+    const sha256 = safeSha256(value.sha256);
     return {
       kind: "research_artifact",
       run_id: runId,
       artifact,
       label: boundedText(value.label || artifact, 160),
+      media_type: "application/json",
+      ...(sha256 ? { sha256 } : {}),
+    };
+  }
+  if (value.kind === "research_document" || value.kind === "system_validation_document") {
+    const runId = safeStableId(value.run_id);
+    const systemValidation = value.kind === "system_validation_document";
+    const artifact = systemValidation
+      ? safeSystemValidationDocumentName(value.artifact)
+      : safeResearchDocumentName(value.artifact);
+    if (!runId || !artifact) return undefined;
+    const sha256 = safeSha256(value.sha256);
+    return {
+      kind: systemValidation ? "system_validation_document" : "research_document",
+      run_id: runId,
+      artifact,
+      label: boundedText(value.label || artifact, 160),
+      media_type: boundedText(value.media_type || "application/octet-stream", 120),
+      ...(sha256 ? { sha256 } : {}),
+    };
+  }
+  if (value.kind === "data_package_review") {
+    const studyContextId = safeStableId(value.study_context_id);
+    const reviewSha256 = safeSha256(value.review_sha256);
+    const studyRevision = Number(value.study_revision);
+    if (
+      !studyContextId
+      || !reviewSha256
+      || !Number.isInteger(studyRevision)
+      || studyRevision < 0
+    ) return undefined;
+    return {
+      kind: "data_package_review",
+      study_context_id: studyContextId,
+      study_revision: studyRevision,
+      review_sha256: reviewSha256,
+      label: boundedText(value.label || "Data package review", 160),
       media_type: "application/json",
     };
   }
@@ -59,11 +161,15 @@ function projectedResource(value) {
   if (!file) return undefined;
   const kind = value.kind === "webpage" ? "webpage" : "file";
   const fallbackLabel = file.split("/").at(-1) || file;
+  const sha256 = safeSha256(value.sha256);
+  const checkedSha256 = kind === "webpage" ? safeSha256(value.checked_sha256) : "";
   return {
     kind,
     file,
     label: boundedText(value.label || fallbackLabel, 160),
     media_type: boundedText(value.media_type || "text/plain", 120),
+    ...(sha256 ? { sha256 } : {}),
+    ...(checkedSha256 ? { checked_sha256: checkedSha256 } : {}),
   };
 }
 
@@ -83,6 +189,8 @@ function toolResource(toolName, args) {
     kind: name === "easyicu_preview_project_file" ? "webpage" : "file",
     file: params?.file,
     media_type: name === "easyicu_preview_project_file" ? "text/html" : "text/plain",
+    checked_sha256: name === "easyicu_preview_project_file"
+      ? params?.checked_sha256 : undefined,
   });
 }
 
@@ -97,11 +205,15 @@ function toolReceipt(result) {
   const fallback = content.find((item) => item && item.type === "text")?.text || "";
   const resource = projectedResource(details.resource || ownerDetails.resource);
   const resources = projectedResources(details.resources || ownerDetails.resources);
+  const jobId = safeJobId(ownerDetails.job_id || details.job_id);
+  const hostRebindAfterTurn = ownerDetails.host_rebind_after_turn === true;
   return {
     status: boundedText(details.status || "", 40),
     code: boundedText(details.code || "", 160),
     summary: boundedText(details.summary || fallback, 2000),
     owner: boundedText(details.owner || "", 240),
+    ...(jobId ? { job_id: jobId } : {}),
+    ...(hostRebindAfterTurn ? { host_rebind_after_turn: true } : {}),
     ...(resource ? { resource } : {}),
     ...(resources.length ? { resources } : {}),
   };
@@ -156,10 +268,12 @@ export function normalizePiEvent(event) {
     };
   }
   if (event.type === "message_end" && event.message?.role === "assistant") {
+    const errorCode = modelErrorCode(event.message);
     return {
       type: "message_end",
       at,
       stop_reason: boundedText(event.message.stopReason || "complete", 80),
+      ...(errorCode ? { error_code: errorCode } : {}),
     };
   }
   if (event.type === "turn_end") {
@@ -239,5 +353,8 @@ export function projectTranscriptMessage(message) {
     stop_reason: role === "assistant"
       ? boundedText(message.stopReason || "", 80)
       : undefined,
+    ...(role === "assistant" && modelErrorCode(message)
+      ? { error_code: modelErrorCode(message) }
+      : {}),
   };
 }

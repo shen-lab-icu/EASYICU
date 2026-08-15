@@ -36,6 +36,16 @@ def test_pipeline_config_rejects_unknown_keys(ra, tmp_path: Path) -> None:
         ra.PipelineConfig.from_kwargs(workdir=tmp_path, task_king="prediction")
 
 
+def test_reportable_capability_requirement_cannot_skip_plan_review(
+    ra, tmp_path: Path
+) -> None:
+    with pytest.raises(ValueError, match="requires require_human_plan_review"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            require_reportable_scientific_capability=True,
+        )
+
+
 def test_task_kind_round_trips_through_config_and_pipeline(ra, tmp_path: Path) -> None:
     config = ra.PipelineConfig.from_kwargs(
         workdir=tmp_path,

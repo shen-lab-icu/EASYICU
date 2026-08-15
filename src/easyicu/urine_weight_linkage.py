@@ -40,6 +40,55 @@ class UnkeyedWeightResolution:
     diagnostic_code: str | None
 
 
+class ConflictingKeyedWeightError(RuntimeError):
+    """A keyed entity has multiple different valid weights without a selector."""
+
+    diagnostic_code = "urine_weight_conflicting_keyed_values"
+
+    def __init__(self, *, conflicting_entity_count: int) -> None:
+        self.conflicting_entity_count = conflicting_entity_count
+        super().__init__(
+            "Multiple different valid weights exist for "
+            f"{conflicting_entity_count} keyed entity/entities"
+        )
+
+
+def resolve_keyed_unique_weights(
+    weight: pd.DataFrame,
+    *,
+    id_columns: Sequence[str],
+    weight_column: str = "weight",
+) -> pd.DataFrame:
+    """Return one weight per key only when the observed value is unique.
+
+    Repeated identical observations are harmless duplicates. Different valid
+    values require an explicit timestamp/clinical selection contract and are
+    therefore rejected instead of being resolved by row order or an implicit
+    aggregate.
+    """
+
+    ids = [column for column in id_columns if column in weight.columns]
+    if not ids or weight_column not in weight.columns:
+        return pd.DataFrame(columns=[*ids, weight_column])
+
+    resolved = weight[ids + [weight_column]].copy()
+    resolved[weight_column] = pd.to_numeric(
+        resolved[weight_column], errors="coerce"
+    )
+    resolved = resolved.dropna(subset=[*ids, weight_column])
+    resolved = resolved[resolved[weight_column] > 0]
+    if resolved.empty:
+        return resolved
+
+    unique_counts = resolved.groupby(ids, dropna=False)[weight_column].nunique()
+    conflicting = unique_counts.gt(1)
+    if conflicting.any():
+        raise ConflictingKeyedWeightError(
+            conflicting_entity_count=int(conflicting.sum())
+        )
+    return resolved.drop_duplicates(ids + [weight_column]).drop_duplicates(ids)
+
+
 def resolve_unkeyed_single_entity_weight(
     urine: pd.DataFrame,
     weight: pd.DataFrame,
@@ -81,4 +130,9 @@ def resolve_unkeyed_single_entity_weight(
     return UnkeyedWeightResolution(float(values.iloc[0]), None)
 
 
-__all__ = ["UnkeyedWeightResolution", "resolve_unkeyed_single_entity_weight"]
+__all__ = [
+    "ConflictingKeyedWeightError",
+    "UnkeyedWeightResolution",
+    "resolve_keyed_unique_weights",
+    "resolve_unkeyed_single_entity_weight",
+]

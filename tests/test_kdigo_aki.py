@@ -6,6 +6,7 @@ from easyicu.scores.kdigo_aki import (
     KDIGOComponentCalculationError,
     KDIGOComponentLoadError,
     KDIGOComponentSchemaError,
+    _calc_aki_stage_creat,
     _calculate_uo_rates_simple,
     get_aki_incidence,
     kdigo_stages,
@@ -13,6 +14,18 @@ from easyicu.scores.kdigo_aki import (
     load_kdigo_aki,
     summarize_aki,
 )
+
+
+@pytest.mark.clinical_conformance
+def test_kdigo_stage3_absolute_threshold_uses_each_current_creatinine_value() -> None:
+    """MIT-LCP KDIGO SQL: current >= 4 and >= 0.3 above 48-hour low."""
+    stage = _calc_aki_stage_creat(
+        pd.Series([4.5, 4.0, 4.0]),
+        pd.Series([4.0, 3.7, 3.71]),
+        pd.Series([4.0, 3.0, 3.0]),
+    )
+
+    assert stage.tolist() == [3, 3, 0]
 
 
 def test_kdigo_uo_requires_minimum_documented_window_hours():
@@ -119,6 +132,67 @@ def test_kdigo_uo_invalid_weight_does_not_fall_back_to_70kg():
     assert result["uo_rt_6hr"].isna().all()
 
 
+@pytest.mark.parametrize("weights", ([50.0, 100.0], [100.0, 50.0]))
+def test_kdigo_uo_conflicting_keyed_weights_fail_closed(weights):
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1] * 6,
+            "charttime": [0, 60, 120, 180, 240, 300],
+            "urine": [30.0] * 6,
+        }
+    )
+    weight = pd.DataFrame({"stay_id": [1, 1], "weight": weights})
+
+    with pytest.raises(KDIGOComponentCalculationError) as caught:
+        _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+
+    assert caught.value.reason_code == "kdigo_weight_values_conflict"
+
+
+def test_kdigo_rate_source_conflicting_keyed_weights_fail_closed():
+    urine = pd.DataFrame(
+        {
+            "patientid": [1, 1, 1],
+            "datetime": [
+                pd.Timedelta(hours=0),
+                pd.Timedelta(hours=2),
+                pd.Timedelta(hours=6),
+            ],
+            "urine": [30.0, 30.0, 30.0],
+        }
+    )
+    weight = pd.DataFrame(
+        {"patientid": [1, 1], "weight": [50.0, 100.0]}
+    )
+
+    with pytest.raises(KDIGOComponentCalculationError) as caught:
+        _calculate_uo_rates_simple(
+            urine,
+            weight,
+            "patientid",
+            "datetime",
+            source_is_rate=True,
+            interval=pd.Timedelta(hours=1),
+        )
+
+    assert caught.value.reason_code == "kdigo_weight_values_conflict"
+
+
+def test_kdigo_uo_duplicate_identical_keyed_weights_are_accepted():
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1] * 6,
+            "charttime": [0, 60, 120, 180, 240, 300],
+            "urine": [30.0] * 6,
+        }
+    )
+    weight = pd.DataFrame({"stay_id": [1, 1], "weight": [100.0, 100.0]})
+
+    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+
+    assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(0.3)
+
+
 def test_empty_weight_source_is_missingness_not_a_calculation_crash():
     urine = pd.DataFrame(
         {
@@ -159,6 +233,9 @@ def test_kdigo_missing_baseline_is_unknown_not_stage_zero():
     assert result["creatinine_ascertainment_reason"].iloc[0] == (
         "insufficient_baseline"
     )
+    assert pd.isna(result["aki_severe"].iloc[0])
+    assert not bool(result["aki_severe_assessable"].iloc[0])
+    assert result["aki_severe_ascertainment"].iloc[0] == "indeterminate"
 
 
 def test_kdigo_uses_urine_timeline_when_creatinine_is_unavailable():
@@ -564,6 +641,12 @@ def test_complete_window_and_three_negative_components_prove_negative_aki():
     assert last["aki_ascertainment"] == "negative_complete"
     assert bool(last["aki"]) is False
     assert bool(last["aki_assessable"]) is True
+    assert bool(last["aki_severe_creat"]) is False
+    assert bool(last["aki_severe_uo"]) is False
+    assert bool(last["aki_severe_rrt"]) is False
+    assert bool(last["aki_severe"]) is False
+    assert bool(last["aki_severe_assessable"]) is True
+    assert last["aki_severe_ascertainment"] == "negative_complete"
 
 
 def test_positive_component_overrides_partial_coverage():
@@ -579,6 +662,58 @@ def test_positive_component_overrides_partial_coverage():
     assert result["observation_window_coverage"].iloc[0] == "partial"
     assert result["aki_ascertainment"].iloc[0] == "positive"
     assert bool(result["aki"].iloc[0]) is True
+    assert bool(result["aki_severe_rrt"].iloc[0]) is True
+    assert bool(result["aki_severe"].iloc[0]) is True
+    assert bool(result["aki_severe_assessable"].iloc[0]) is True
+    assert result["aki_severe_ascertainment"].iloc[0] == "positive"
+
+
+def test_stage_one_is_not_misclassified_as_confirmed_no_severe_aki():
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0, 60],
+            "crea": [1.0, 1.6],
+        }
+    )
+
+    result = kdigo_stages(
+        creatinine,
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    last = result.iloc[-1]
+    assert last["aki_stage_creat"] == 1
+    assert bool(last["aki_severe_creat"]) is False
+    assert pd.isna(last["aki_severe"])
+    assert not bool(last["aki_severe_assessable"])
+    assert last["aki_severe_ascertainment"] == (
+        "partial_no_observed_positive"
+    )
+
+
+def test_stage_two_component_confirms_severe_aki_with_partial_coverage():
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0, 60],
+            "crea": [1.0, 2.1],
+        }
+    )
+
+    result = kdigo_stages(
+        creatinine,
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    last = result.iloc[-1]
+    assert last["aki_stage_creat"] == 2
+    assert bool(last["aki_severe_creat"]) is True
+    assert bool(last["aki_severe"]) is True
+    assert bool(last["aki_severe_assessable"]) is True
+    assert last["aki_severe_ascertainment"] == "positive"
 
 
 def test_nonempty_rrt_with_unresolved_schema_fails_closed():

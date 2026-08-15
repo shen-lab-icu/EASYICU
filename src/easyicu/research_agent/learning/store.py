@@ -7,12 +7,11 @@ never read quarantine memory.
 """
 
 from __future__ import annotations
+from ..authority.filesystem import publish_write_once_bytes
 
 import hashlib
 import json
-import os
 import re
-import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -201,29 +200,13 @@ class FileSystemMemoryStore:
             *memory.namespace.split("/"), memory.key, f"{memory.version}.json"
         )
         payload = memory.model_dump_json(indent=2).encode("utf-8") + b"\n"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            if path.read_bytes() != payload:
-                raise FileExistsError("memory object is immutable and already exists")
-            return
-        fd, temp_name = tempfile.mkstemp(prefix=".memory-", dir=path.parent)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            try:
-                os.link(temp_name, path)
-            except FileExistsError:
-                if path.read_bytes() != payload:
-                    raise FileExistsError(
-                        "memory object is immutable and already exists"
-                    ) from None
-        finally:
-            try:
-                os.unlink(temp_name)
-            except FileNotFoundError:
-                pass
+        publish_write_once_bytes(
+            path,
+            payload,
+            temp_prefix=".memory-",
+            conflict_error=FileExistsError,
+            conflict_message="memory object is immutable and already exists",
+        )
 
     def get(self, namespace: str, key: str, version: str) -> MemoryObject | None:
         self._validate_coordinates(namespace, key, version)

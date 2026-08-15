@@ -18,10 +18,11 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from ..cohort.schema import CohortDefinition, ConceptPredicate, TimeWindow
 from ..authority.evidence_store import NumericClaim
+from ..authority.scientific_claims import ScientificClaim
 from ..robustness.panel import RobustnessPanel, RobustnessPanelRow, RobustnessSpec
 from ..schema import EvidenceRecord as EvidenceArtifact
 from ..schema import ValidationFinding
-from .execution_result import RunResult
+from .execution_result import RunnerFailureCode, RunResult
 
 DerivedClaim = NumericClaim
 
@@ -61,6 +62,19 @@ class _PlanPhaseResult:
     repro_envelope: Optional[ReproEnvelope]
     started_at: datetime
     resume_state: Optional[Dict[str, Any]]
+    # Exact run-bound citation authority handed from planning into execution.
+    # Replanning happens inside the execute phase; without this immutable
+    # handoff a revised plan can silently discard (or invent) the literature
+    # bindings that the initial Planner was required to declare.
+    allowed_literature_citation_keys: Tuple[str, ...] = ()
+    # Included direct-comparator records are a stricter subset of the allowed
+    # citation bundle.  Replanning must retain this role authority, not merely
+    # preserve a syntactically valid citation key.
+    direct_comparator_literature_keys: Tuple[str, ...] = ()
+    # Exact pre-plan authority used by the Planner. Writer must consume this
+    # same bundle; a second post-analysis search must not introduce sources
+    # that never governed the approved scientific plan.
+    preplan_literature: Optional[LiteratureBundle] = None
     aborted_result: Optional[PipelineResult] = None
 
 
@@ -91,8 +105,10 @@ class _WritePhaseResult:
 __all__ = [
     "EvidenceArtifact",
     "NumericClaim",
+    "ScientificClaim",
     "DerivedClaim",
     "RunResult",
+    "RunnerFailureCode",
     "TimeWindow",
     "ConceptPredicate",
     "CohortDefinition",

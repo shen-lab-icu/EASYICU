@@ -32,7 +32,7 @@ from ..contracts.method_packages import (
     FINGERPRINT_ONLY_DISTRIBUTIONS,
     OPTIONAL_BASELINE_PACKAGES,
 )
-from ..contracts.execution_result import RunResult
+from ..contracts.execution_result import RunnerFailureCode, RunResult
 from ..gates.semantics import blocking_validator_findings
 from .provider_budget import ProviderCallBudgetReceiptState
 from ..authority.runtime_artifacts import (
@@ -731,6 +731,7 @@ def seal_execution_capsule(
         "stdout": stdout_ref,
         "stderr": stderr_ref,
         "runner_log": runner_log_ref,
+        "runner_failure_code": run_result.runner_failure_code,
         "outputs": tuple(outputs),
     }
     execution_payload["execution_identity_sha256"] = execution_seal_identity_sha256(
@@ -1608,6 +1609,11 @@ def materialize_sealed_run_result(
         runtime_provenance=runtime_provenance,
         outputs_safe_to_collect=execution.outputs_safe_to_collect,
         runner_log_path=runner_log_path,
+        runner_failure_code=(
+            RunnerFailureCode(execution.runner_failure_code)
+            if execution.runner_failure_code is not None
+            else None
+        ),
     )
 
 

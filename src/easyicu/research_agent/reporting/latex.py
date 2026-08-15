@@ -19,14 +19,13 @@ Usage::
 from __future__ import annotations
 
 import re
+from pathlib import PurePosixPath
 import textwrap
-from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 from .bibtex import (
-    bibtex_key_for,
-    render_bibtex,
     render_thebibliography_block,
+    sanitise_bibtex_key,
 )
 from ..literature import CitationRecord, LiteratureBundle
 
@@ -44,6 +43,31 @@ _BULLET_PATTERN = re.compile(r"^\s*-\s+(?P<text>.+)$", re.MULTILINE)
 # dead relative hyperlink.
 _MD_LINK_PATTERN = re.compile(
     r"\[(?P<label>[^\]]+)\]\((?P<url>[^)\s]+)(?:\s+\"[^\"]*\")?\)"
+)
+_NUMERIC_FOOTNOTE_MARKER_PATTERN = re.compile(r"\[\^(?P<id>[A-Za-z0-9_-]+)\]")
+_NUMERIC_FOOTNOTE_DEFINITION_PATTERN = re.compile(
+    r"^\[\^(?P<id>[A-Za-z0-9_-]+)\]:\s*(?P<text>.+)$"
+)
+_LITERATURE_CITATION_PATTERN = re.compile(
+    r"\[@(?P<key>[A-Za-z0-9_.:-]+)\]"
+)
+_STANDARD_SECTION_HEADINGS = frozenset(
+    {
+        "abstract",
+        "introduction",
+        "methods",
+        "results",
+        "discussion",
+        "limitations",
+        "conclusion",
+        "conclusions",
+        "data availability",
+        "data and code availability",
+        "funding",
+        "conflict of interest",
+        "conflicts of interest",
+        "references",
+    }
 )
 # HTML comments — ``<!-- ... -->`` — produced by the binder when
 # evidence ids are unresolved. They must be stripped, otherwise
@@ -101,13 +125,10 @@ def _md_inline_to_latex(line: str) -> str:
         if raw_url.startswith(("http://", "https://")):
             rendered = r"\href{" + url + "}{" + label + "}"
         else:
-            # Evidence citation: render as a footnote-style marker with
-            # the label preserved, so PDF reviewers can still see the
-            # bound evidence id even though relative paths are not clickable.
-            rendered = (
-                r"\textsuperscript{[" + label + "]}"
-                r"\footnote{\texttt{" + _escape_latex(raw_url) + "}}"
-            )
+            # Internal evidence links are manuscript audit metadata, not
+            # literature citations.  Keep the stable label readable without
+            # dumping a filesystem-shaped path into every page footnote.
+            rendered = r"\textsuperscript{\texttt{" + label + "}}"
         placeholders.append(rendered)
         return f"\x00{len(placeholders) - 1}\x00"
 
@@ -119,6 +140,22 @@ def _md_inline_to_latex(line: str) -> str:
         placeholders.append(r"\texttt{" + _escape_latex(match.group("text")) + "}")
         return f"\x00{len(placeholders) - 1}\x00"
 
+    def _numeric_marker(match: "re.Match[str]") -> str:
+        placeholders.append(
+            r"\textsuperscript{\texttt{"
+            + _escape_latex(match.group("id"))
+            + "}}"
+        )
+        return f"\x00{len(placeholders) - 1}\x00"
+
+    def _literature_citation(match: "re.Match[str]") -> str:
+        placeholders.append(
+            r"\cite{" + sanitise_bibtex_key(match.group("key")) + "}"
+        )
+        return f"\x00{len(placeholders) - 1}\x00"
+
+    line = _LITERATURE_CITATION_PATTERN.sub(_literature_citation, line)
+    line = _NUMERIC_FOOTNOTE_MARKER_PATTERN.sub(_numeric_marker, line)
     line = _MD_LINK_PATTERN.sub(_link, line)
     line = _BOLD_PATTERN.sub(_bold, line)
     line = _INLINE_CODE_PATTERN.sub(_code, line)
@@ -144,6 +181,7 @@ def scaffold_to_latex(
     inline_bibliography: bool = False,
     venue_template: str = "article",
     figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
+    draft_watermark: bool = False,
 ) -> str:
     """Convert the markdown manuscript scaffold into a LaTeX document.
 
@@ -163,6 +201,18 @@ def scaffold_to_latex(
     # raw ``<!`` text into the rendered PDF.
     markdown = _HTML_COMMENT_PATTERN.sub("", markdown)
 
+    if bibliography is not None:
+        allowed_citation_keys = {record.key for record in bibliography.citations}
+        requested_citation_keys = set(_LITERATURE_CITATION_PATTERN.findall(markdown))
+        unknown_citation_keys = sorted(
+            requested_citation_keys - allowed_citation_keys
+        )
+        if unknown_citation_keys:
+            raise ValueError(
+                "manuscript cites keys absent from the run-bound bibliography: "
+                + ", ".join(unknown_citation_keys)
+            )
+
     # Split into headed sections so we can rebuild them as LaTeX sections.
     sections: List[tuple] = []  # (level, title, body)
     current_level = 0
@@ -181,6 +231,25 @@ def scaffold_to_latex(
             current_body.append(line)
     sections.append((current_level, current_title, "\n".join(current_body).strip()))
 
+    # Writer output uses the first H1 as the article title and commonly places
+    # the keyword line in that H1 body.  The old converter skipped the entire
+    # first section unconditionally, which silently discarded both pieces and
+    # rendered a generic API fallback title instead.  Only consume a leading H1
+    # as document metadata; all other first sections remain ordinary content.
+    leading_title_body = ""
+    body_sections = list(sections)
+    if body_sections and body_sections[0][0] == 1:
+        heading_title = str(body_sections[0][1]).strip()
+        heading_key = heading_title.casefold()
+        if heading_title and heading_key not in {
+            "body",
+            *_STANDARD_SECTION_HEADINGS,
+        }:
+            if heading_key != "title":
+                title = heading_title
+            leading_title_body = str(body_sections[0][2] or "").strip()
+            body_sections = body_sections[1:]
+
     # Rebuild as LaTeX
     parts: List[str] = []
     parts.append(latex_template_preamble(venue_template))
@@ -192,17 +261,29 @@ def scaffold_to_latex(
     parts.append(r"\begin{document}")
     parts.append(r"\maketitle")
     parts.append("")
+    if draft_watermark:
+        parts.extend(
+            [
+                r"\begin{center}",
+                r"\fcolorbox{red}{red!5}{\parbox{0.92\linewidth}{\centering\bfseries\color{red}DRAFT -- NOT FOR SUBMISSION\\Human scientific and authorship review required.}}",
+                r"\end{center}",
+                "",
+            ]
+        )
 
     section_cmd = {1: r"\section", 2: r"\section", 3: r"\subsection", 4: r"\subsubsection"}
 
-    for level, title_text, body in sections[1:]:
+    if leading_title_body:
+        parts.append(_render_body(leading_title_body))
+        parts.append("")
+
+    for level, title_text, body in body_sections:
         cmd = section_cmd.get(level, r"\paragraph")
         if title_text.strip().lower() in {"title"}:
             continue  # already in \maketitle
         if title_text.strip().lower() == "discussion":
             parts.append(r"\section{Discussion}")
             parts.append("")
-            parts.append(r"\footnotetext{Evidence citations are rendered as footnote-style markers so the bound manuscript remains readable in PDF form.}")
             if body:
                 parts.append(_render_body(body))
                 parts.append("")
@@ -214,16 +295,6 @@ def scaffold_to_latex(
             parts.append("")
 
     if bibliography is not None and bibliography.citations:
-        # T3.4 — auto-emit a ``\nocite{*}`` so every citation in the
-        # accompanying ``.bib`` is included in the rendered References,
-        # even if the manuscript scaffold body has not yet decided
-        # which keys to ``\cite{}`` explicitly. Authors who want only
-        # the explicitly-cited entries can simply remove the line.
-        keys = [bibtex_key_for(c) for c in bibliography.citations]
-        if keys:
-            parts.append("% Auto-included by easyicu.research_agent (T3.4):")
-            parts.append("\\nocite{" + ",".join(keys) + "}")
-            parts.append("")
         if inline_bibliography:
             block = render_thebibliography_block(bibliography)
             if block:
@@ -241,11 +312,22 @@ def scaffold_to_latex(
         parts.append(r"\section*{Figures}")
         parts.append("")
         for idx, (fig_id, fig_rel_path) in enumerate(figure_paths, start=1):
+            normalized_figure_path = str(fig_rel_path).replace("\\", "/")
+            figure_parts = PurePosixPath(normalized_figure_path).parts
+            if (
+                not normalized_figure_path
+                or normalized_figure_path.startswith("/")
+                or ".." in figure_parts
+                or figure_parts[:2] == ("evidence", "evidence")
+            ):
+                raise ValueError(
+                    "figure_paths must contain one safe run-relative evidence path"
+                )
             parts.append(r"\begin{figure}[htbp]")
             parts.append(r"\centering")
             parts.append(
                 r"\includegraphics[width=\textwidth]{"
-                + _escape_latex(fig_rel_path)
+                + _escape_latex(normalized_figure_path)
                 + "}"
             )
             parts.append(
@@ -303,6 +385,17 @@ def _render_body(body: str) -> str:
         bullet_buffer.clear()
 
     for line in lines:
+        definition = _NUMERIC_FOOTNOTE_DEFINITION_PATTERN.match(line.strip())
+        if definition:
+            flush_bullets()
+            out.append(
+                r"\par\noindent\textsuperscript{\texttt{"
+                + _escape_latex(definition.group("id"))
+                + r"}}\texttt{"
+                + _escape_latex(definition.group("text"))
+                + "}"
+            )
+            continue
         m = _BULLET_PATTERN.match(line)
         if m:
             bullet_buffer.append(m.group("text").strip())

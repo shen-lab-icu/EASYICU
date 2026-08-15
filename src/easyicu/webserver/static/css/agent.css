@@ -523,90 +523,6 @@
   color:var(--ink-4);
 }
 
-/* Agent Projects Canonical9 import module. Owner: screens-agent.js / #agent. */
-.ag-bench-card{
-  border-color:var(--accent-border);
-}
-
-.ag-bench-metrics{
-  display:grid;
-  grid-template-columns:repeat(4, minmax(0, 1fr));
-  gap:8px;
-}
-
-.ag-bench-metric{
-  min-width:0;
-  padding:9px 10px;
-  border:1px solid var(--hair);
-  border-radius:var(--r-2);
-  background:var(--surface-2);
-}
-
-.ag-bench-metric span{
-  display:block;
-  font-size:10px;
-  color:var(--ink-4);
-}
-
-.ag-bench-metric strong{
-  display:block;
-  margin-top:3px;
-  font-family:var(--font-mono);
-  font-size:13px;
-  font-weight:600;
-  color:var(--ink);
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-}
-
-.ag-score-grid{
-  display:flex;
-  flex-direction:column;
-  gap:8px;
-}
-
-.ag-score-row{
-  min-width:0;
-}
-
-.ag-score-top{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  font-size:11.5px;
-  color:var(--ink-3);
-}
-
-.ag-score-top span:first-child{
-  min-width:0;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-}
-
-.ag-score-top .mono{
-  flex:none;
-  font-size:10.5px;
-  color:var(--ink-4);
-}
-
-.ag-score-bar{
-  height:6px;
-  margin-top:4px;
-  border-radius:var(--r-pill);
-  background:var(--hair-2);
-  overflow:hidden;
-}
-
-.ag-score-bar span{
-  display:block;
-  height:100%;
-  border-radius:inherit;
-  background:var(--ok);
-}
-
 .ag-figure-gallery{
   display:grid;
   grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
@@ -1032,10 +948,6 @@
 
   .ag-wf-guide{
     display:none;
-  }
-
-  .ag-bench-metrics{
-    grid-template-columns:repeat(2, minmax(0, 1fr));
   }
 
   .ag-wf-row{

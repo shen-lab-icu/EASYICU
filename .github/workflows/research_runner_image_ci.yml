@@ -1,0 +1,58 @@
+name: Research runner image trust gate
+
+on:
+  push:
+    paths:
+      - "src/easyicu/research_agent/runner_image/**"
+      - "src/easyicu/research_agent/execution/runner.py"
+      - "tests/research_agent/test_docker_runner.py"
+      - ".github/workflows/research_runner_image_ci.yml"
+  pull_request:
+    paths:
+      - "src/easyicu/research_agent/runner_image/**"
+      - "src/easyicu/research_agent/execution/runner.py"
+      - "tests/research_agent/test_docker_runner.py"
+      - ".github/workflows/research_runner_image_ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-smoke-sbom:
+    name: Build, isolate, smoke and inventory runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out current commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build the digest-pinned production runner
+        run: |
+          docker build \
+            --tag easyicu-research-agent:ci \
+            --file src/easyicu/research_agent/runner_image/Dockerfile \
+            .
+
+      - name: Smoke the production isolation contract
+        run: |
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 64 \
+            --memory 1g \
+            --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            easyicu-research-agent:ci \
+            python -c "import easyicu, numpy, pandas, scipy, sklearn, statsmodels; print('runner-smoke-ok')"
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: easyicu-research-agent:ci
+          format: cyclonedx-json
+          output-file: easyicu-research-agent.cdx.json
+          artifact-name: easyicu-research-agent-sbom
+          syft-version: v1.50.0
+          upload-release-assets: false

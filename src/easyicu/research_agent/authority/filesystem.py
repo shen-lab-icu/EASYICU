@@ -18,7 +18,8 @@ import os
 from pathlib import Path
 import secrets
 import stat
-from typing import BinaryIO, Optional
+import tempfile
+from typing import BinaryIO, Callable, Optional
 
 
 class AuthorityFilesystemError(RuntimeError):
@@ -336,7 +337,59 @@ class AnchoredDirectory:
             self.unlink(temporary_name, missing_ok=True)
 
 
+def publish_write_once_bytes(
+    path: Path,
+    payload: bytes,
+    *,
+    temp_prefix: str,
+    conflict_error: Callable[[str], BaseException],
+    conflict_message: str,
+    race_message: Optional[str] = None,
+) -> None:
+    """Publish an immutable receipt, or verify the published bytes match.
+
+    The path-anchored sibling of :meth:`AnchoredDirectory.publish_immutable_bytes`,
+    for callers that hold a plain ``Path`` rather than an open directory
+    descriptor. Six callers -- reviewed memory, the coder resource snapshot, the
+    cross-run memory store and the three capability records -- each wrote this
+    sequence out by hand, differing only in exception type and temp prefix. An
+    integrity rule with six implementations has six chances to drift apart.
+
+    The hard link, not ``os.replace``, is what makes this write-*once*: replace
+    would let a second writer silently overwrite a receipt someone else already
+    published, so the loser of a race would never learn it lost. Losing to
+    identical bytes is a successful publish; losing to different bytes raises.
+
+    ``conflict_error`` is a factory rather than an exception class so callers
+    keep their own typed error and their own wording -- the point is one
+    algorithm, not one vocabulary.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.read_bytes() != payload:
+            raise conflict_error(conflict_message)
+        return
+    descriptor, temporary_name = tempfile.mkstemp(prefix=temp_prefix, dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary_name, path)
+        except FileExistsError:
+            if path.read_bytes() != payload:
+                raise conflict_error(race_message or conflict_message) from None
+    finally:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+
+
 __all__ = [
     "AnchoredDirectory",
     "AuthorityFilesystemError",
+    "publish_write_once_bytes",
 ]

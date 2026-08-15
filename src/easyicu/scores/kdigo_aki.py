@@ -36,7 +36,11 @@ import numpy as np
 import logging
 
 from easyicu.io.ts_utils import _infer_numeric_time_unit
-from easyicu.urine_weight_linkage import resolve_unkeyed_single_entity_weight
+from easyicu.urine_weight_linkage import (
+    ConflictingKeyedWeightError,
+    resolve_keyed_unique_weights,
+    resolve_unkeyed_single_entity_weight,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -363,7 +367,7 @@ def _calc_aki_stage_creat(
     mask_3_fold = creat >= (creat_low_7day * 3.0)
     # For creat ≥ 4.0, require acute increase (≥0.3 in 48h or ≥1.5x baseline)
     mask_3_abs = (creat >= 4.0) & (
-        (creat_low_48hr <= 3.7) |  # Can have 0.3 increase to reach 4.0
+        (creat >= creat_low_48hr + 0.3) |
         (creat >= creat_low_7day * 1.5)  # Or 1.5x baseline
     )
     stage[mask_3_fold | mask_3_abs] = 3
@@ -600,6 +604,24 @@ def _calculate_uo_rates_simple(
     )
     weight_id_col = _detect_id_col(weight)
 
+    keyed_weight = None
+    if weight_id_col and weight_id_col in weight.columns:
+        try:
+            keyed_weight = resolve_keyed_unique_weights(
+                weight,
+                id_columns=[weight_id_col],
+                weight_column=weight_col,
+            )
+        except ConflictingKeyedWeightError as exc:
+            raise KDIGOComponentCalculationError(
+                component="weight",
+                reason_code="kdigo_weight_values_conflict",
+                message=(
+                    "KDIGO urine-output staging cannot choose among "
+                    "different valid keyed weights without a clinical selector"
+                ),
+            ) from exc
+
     if source_is_rate:
         # HiRID 10020000 is OUTurine/h (mL/h), whereas the other databases
         # expose voided volume events. Reusing the event-volume denominator
@@ -609,7 +631,7 @@ def _calculate_uo_rates_simple(
         from easyicu.callbacks import _urine_rate_window_avg_multi
 
         rate_urine = urine.copy()
-        rate_weight = weight.copy()
+        rate_weight = keyed_weight.copy() if keyed_weight is not None else weight.copy()
         if urine_col != "urine" and urine_col in rate_urine.columns:
             rate_urine = rate_urine.rename(columns={urine_col: "urine"})
         if weight_col != "weight" and weight_col in rate_weight.columns:
@@ -644,11 +666,10 @@ def _calculate_uo_rates_simple(
     # one-entity path is explicitly proved below; selecting ``iloc[0]`` from a
     # multi-patient table would silently apply one patient's weight to another.
     global_weight = np.nan
-    if weight_id_col and weight_id_col in weight.columns:
-        valid_weight = weight.loc[weight[weight_col] > 0]
-        weight_per_patient = (
-            valid_weight.groupby(weight_id_col)[weight_col].first().to_dict()
-        )
+    if keyed_weight is not None:
+        weight_per_patient = keyed_weight.set_index(weight_id_col)[
+            weight_col
+        ].to_dict()
     else:
         resolution = resolve_unkeyed_single_entity_weight(
             urine,
@@ -961,6 +982,9 @@ def kdigo_stages(
         - aki_stage_uo: Urine output-based stage (0-3)
         - aki_stage: Final combined stage (0-3, or ``<NA>`` when indeterminate)
         - aki: Boolean indicator (True if aki_stage > 0)
+        - aki_severe: Nullable severe-AKI indicator (KDIGO stage 2-3)
+        - aki_severe_creat, aki_severe_uo, aki_severe_rrt: component indicators
+        - aki_severe_ascertainment, aki_severe_assessable: severe-AKI receipt
         - creatinine_ascertainment, urine_ascertainment, rrt_ascertainment
         - observation_window_coverage, aki_ascertainment
         - aki_assessable, aki_assessment_reason: compatibility/diagnostic fields
@@ -1372,6 +1396,73 @@ def kdigo_stages(
         {"positive", "negative_complete"}
     )
     result['aki_assessment_reason'] = result['aki_ascertainment'].copy()
+
+    # Publish severe AKI (KDIGO stage 2-3) as a separate, nullable endpoint.
+    # A positive component is sufficient to establish severe AKI even when
+    # the other components are missing.  A negative combined endpoint needs
+    # all three components and a complete observation-window receipt; absence
+    # of an RRT event row or of a urine/creatinine window is not negative
+    # evidence.  "Incident" severe AKI is intentionally not encoded here:
+    # incidence depends on a study-specific baseline and follow-up anchor.
+    result['aki_severe_creat'] = pd.Series(
+        pd.NA, index=result.index, dtype="boolean"
+    )
+    creat_known = result['aki_stage_creat'].notna()
+    result.loc[creat_known, 'aki_severe_creat'] = (
+        result.loc[creat_known, 'aki_stage_creat'] >= 2
+    )
+
+    result['aki_severe_uo'] = pd.Series(
+        pd.NA, index=result.index, dtype="boolean"
+    )
+    urine_known = result['aki_stage_uo'].notna()
+    result.loc[urine_known, 'aki_severe_uo'] = (
+        result.loc[urine_known, 'aki_stage_uo'] >= 2
+    )
+
+    result['aki_severe_rrt'] = pd.Series(
+        pd.NA, index=result.index, dtype="boolean"
+    )
+    result.loc[
+        result['rrt_ascertainment'] == "negative", 'aki_severe_rrt'
+    ] = False
+    result.loc[
+        result['rrt_ascertainment'] == "positive", 'aki_severe_rrt'
+    ] = True
+
+    severe_components = result[
+        ['aki_severe_creat', 'aki_severe_uo', 'aki_severe_rrt']
+    ]
+    any_severe = severe_components.eq(True).any(axis=1)
+    all_below_severe = severe_components.eq(False).all(axis=1)
+    any_below_severe = severe_components.eq(False).any(axis=1)
+    complete_severe_negative = all_below_severe & result[
+        'observation_window_coverage'
+    ].eq("complete")
+
+    result['aki_severe_ascertainment'] = pd.Series(
+        "indeterminate", index=result.index, dtype="string"
+    )
+    result.loc[
+        any_below_severe & ~any_severe, 'aki_severe_ascertainment'
+    ] = "partial_no_observed_positive"
+    result.loc[
+        complete_severe_negative, 'aki_severe_ascertainment'
+    ] = "negative_complete"
+    result.loc[any_severe, 'aki_severe_ascertainment'] = "positive"
+
+    result['aki_severe'] = pd.Series(
+        pd.NA, index=result.index, dtype="boolean"
+    )
+    result.loc[
+        result['aki_severe_ascertainment'] == "positive", 'aki_severe'
+    ] = True
+    result.loc[
+        result['aki_severe_ascertainment'] == "negative_complete", 'aki_severe'
+    ] = False
+    result['aki_severe_assessable'] = result[
+        'aki_severe_ascertainment'
+    ].isin({"positive", "negative_complete"})
     
     return result
 

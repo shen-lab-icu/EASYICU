@@ -14,12 +14,14 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
+import stat
 import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from easyicu.webserver import agent_outputs
 from easyicu.webserver import dataio
@@ -46,14 +48,47 @@ _RUN_ARTIFACT_NAMES = [
     "calibration_curve.json",
     "quality_gate.json",
     "agent_plan.json",
+    "literature_evidence.json",
+    "scientific_plan_review.json",
+    "scientific_readiness.json",
     "manuscript_draft.json",
+    "manuscript_pdf_receipt.json",
     "benchmark_scorecard.json",
     "workflow_graph.json",
     "figure_gallery.json",
+    "result_tables.json",
+    "system_validation_report.json",
+    "system_validation_report_receipt.json",
     "source_run_manifest.json",
     "evidence_ledger.json",
     "human_signoff.json",
 ]
+
+# Generated manuscript documents are a separate, fixed browser boundary from
+# JSON review payloads.  They may be downloaded/previewed but are never parsed
+# as JSON or accepted from a browser-supplied path.
+_RUN_DOCUMENT_SPECS = {
+    "manuscript_scaffold.pdf": {
+        "media_type": "application/pdf",
+        "max_bytes": 16 * 1024 * 1024,
+    },
+    "manuscript_scaffold.tex": {
+        "media_type": "text/x-tex; charset=utf-8",
+        "max_bytes": 2 * 1024 * 1024,
+    },
+    "manuscript_scaffold.bib": {
+        "media_type": "application/x-bibtex; charset=utf-8",
+        "max_bytes": 2 * 1024 * 1024,
+    },
+    "system_validation_report.html": {
+        "media_type": "text/html; charset=utf-8",
+        "max_bytes": 8 * 1024 * 1024,
+    },
+    "system_validation_report.pdf": {
+        "media_type": "application/pdf",
+        "max_bytes": 16 * 1024 * 1024,
+    },
+}
 
 _SIGNOFF_CONFIRMATIONS = {
     "evidence_reviewed",
@@ -61,6 +96,7 @@ _SIGNOFF_CONFIRMATIONS = {
     "no_patient_rows_persisted",
 }
 _AGENT_PREFLIGHT_FULL_SCAN_ROW_LIMIT = 1_000_000
+_MAX_RUN_ARTIFACT_BYTES = 2 * 1024 * 1024
 
 
 def make_agent_run_runner(
@@ -467,6 +503,81 @@ def make_agent_run_runner(
     return runner
 
 
+def project_artifact_governance(
+    review: Mapping[str, Any],
+    *,
+    artifact: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Project one run review into the browser-safe artifact authority contract."""
+
+    readiness = review.get("readiness")
+    if not isinstance(readiness, Mapping):
+        return {
+            "ok": False,
+            "error": "run_artifact_governance_readiness_invalid",
+        }
+    gate = review.get("gate")
+    gate = gate if isinstance(gate, Mapping) else {}
+    readiness_status = str(readiness.get("status") or "unknown")
+    signed = bool(readiness.get("signed"))
+    signoff_stale = bool(readiness.get("signoff_stale"))
+    artifact_integrity = None
+    if artifact is not None:
+        artifact_integrity = _signed_artifact_integrity(review.get("signoff"), artifact)
+        if signed and artifact_integrity != "verified":
+            signoff_stale = True
+    artifact_name = str((artifact or {}).get("name") or "")
+    if artifact_name in {
+        "system_validation_report.json",
+        "system_validation_report_receipt.json",
+        "system_validation_report.html",
+        "system_validation_report.pdf",
+    }:
+        return {
+            "ok": True,
+            "authority_class": "easyicu_system_validation_report",
+            "gate_status": gate.get("status"),
+            "readiness_status": readiness_status,
+            "human_signoff": "not_signable",
+            "reportable": False,
+            "claim_ceiling": "engineering_validation_only",
+            **(
+                {"artifact_integrity": artifact_integrity}
+                if artifact_integrity is not None
+                else {}
+            ),
+        }
+    reportable = bool(readiness.get("reportable"))
+    if signoff_stale:
+        human_signoff = "stale"
+    elif signed:
+        human_signoff = "signed"
+    elif readiness_status == "awaiting_human_signoff":
+        human_signoff = "required"
+    else:
+        human_signoff = "not_signable"
+    claim_ceiling = "reportable" if reportable else "unsupported"
+    if (
+        not reportable
+        and not signoff_stale
+        and gate.get("status") == "analysis_only"
+        and readiness_status in {"awaiting_human_signoff", "signed_analysis_only"}
+    ):
+        claim_ceiling = "analysis_only"
+    projection = {
+        "ok": True,
+        "authority_class": "easyicu_run_artifact",
+        "gate_status": gate.get("status"),
+        "readiness_status": readiness_status,
+        "human_signoff": human_signoff,
+        "reportable": reportable,
+        "claim_ceiling": claim_ceiling,
+    }
+    if artifact_integrity is not None:
+        projection["artifact_integrity"] = artifact_integrity
+    return projection
+
+
 def read_run_review(project_dir: str) -> Dict[str, Any]:
     """Read the bounded artifact set for a local agent run review screen."""
     run_dir = _resolve_run_dir(project_dir)
@@ -501,7 +612,11 @@ def read_run_review(project_dir: str) -> Dict[str, Any]:
         "run_id": run_context.get("run_id") or ledger.get("run_id"),
         "run_type": ledger.get("run_type") or "preflight",
         "study_id": run_context.get("study_id"),
+        "scientific_configuration_sha256": run_context.get(
+            "scientific_configuration_sha256"
+        ),
         "mode": run_context.get("mode"),
+        "engine": run_context.get("engine"),
         "gate": gate,
         "readiness": readiness,
         "signed": bool(signoff),
@@ -648,21 +763,32 @@ def list_run_history(
 
 def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     """Return one whitelisted artifact as a bounded JSON viewer payload."""
+    if str(artifact_name or "").strip() not in _RUN_ARTIFACT_NAMES:
+        return {
+            "ok": False,
+            "error": "artifact_json_not_allowed",
+            "artifact": artifact_name,
+        }
     run_dir = _resolve_run_dir(project_dir)
     if run_dir is None:
         return {"ok": False, "error": "project_dir_required"}
-    artifact_path = _safe_artifact_path(run_dir, artifact_name)
-    if artifact_path is None:
-        return {"ok": False, "error": "artifact_not_allowed", "artifact": artifact_name}
-    if not artifact_path.exists() or not artifact_path.is_file():
+    artifact_path, raw, path_error = _read_safe_artifact_bytes(
+        run_dir, artifact_name
+    )
+    if artifact_path is None or raw is None:
         return {
             "ok": False,
-            "error": "artifact_not_found",
-            "project_dir": str(run_dir),
+            "error": path_error or "artifact_not_allowed",
             "artifact": artifact_name,
         }
     try:
-        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        payload = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        return {
+            "ok": False,
+            "error": "artifact_json_invalid_encoding",
+            "artifact": artifact_name,
+        }
     except json.JSONDecodeError as exc:
         return {
             "ok": False,
@@ -680,7 +806,7 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     return {
         "ok": True,
         "project_dir": str(run_dir),
-        "artifact": _artifact(artifact_path, run_dir),
+        "artifact": _artifact_from_raw(artifact_path, run_dir, raw),
         "payload": _public_single_artifact_payload(artifact_path.name, payload),
         "privacy_scan": privacy_scan,
     }
@@ -690,16 +816,20 @@ def read_run_artifact_bytes(project_dir: str, artifact_name: str) -> Dict[str, A
     run_dir = _resolve_run_dir(project_dir)
     if run_dir is None:
         return {"ok": False, "error": "project_dir_required"}
-    artifact_path = _safe_artifact_path(run_dir, artifact_name)
-    if artifact_path is None:
-        return {"ok": False, "error": "artifact_not_allowed", "artifact": artifact_name}
-    if not artifact_path.exists() or not artifact_path.is_file():
-        return {"ok": False, "error": "artifact_not_found", "artifact": artifact_name}
+    artifact_path, raw, path_error = _read_safe_artifact_bytes(
+        run_dir, artifact_name
+    )
+    if artifact_path is None or raw is None:
+        return {
+            "ok": False,
+            "error": path_error or "artifact_not_allowed",
+            "artifact": artifact_name,
+        }
     return {
         "ok": True,
         "name": artifact_path.name,
-        "content": artifact_path.read_bytes(),
-        "media_type": "application/json",
+        "content": raw,
+        "media_type": _artifact_media_type(artifact_path.name),
     }
 
 
@@ -717,9 +847,9 @@ def build_run_bundle(project_dir: str) -> Dict[str, Any]:
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for artifact in artifacts:
             name = str(artifact.get("name") or "")
-            path = _safe_artifact_path(run_dir, name)
-            if path is not None and path.exists() and path.is_file():
-                zf.writestr(name, path.read_bytes())
+            _path, raw, _path_error = _read_safe_artifact_bytes(run_dir, name)
+            if raw is not None:
+                zf.writestr(name, raw)
     filename = f"{run_dir.name}_artifacts.zip"
     return {
         "ok": True,
@@ -761,6 +891,7 @@ def resolve_agent_provider_config(
     llm_provider: str,
     external_llm_opt_in: bool,
     ai_enabled: bool,
+    environ: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     """Resolve the provider boundary without loading credentials or clients."""
     resolved_run_type = normalize_run_type(run_type)
@@ -775,7 +906,10 @@ def resolve_agent_provider_config(
         raise AgentRunConfigError(exc.detail) from exc
     if resolved_run_type == "full" and provider.get("external"):
         try:
-            provider = provider_adapter.require_external_credentials(provider)
+            provider = provider_adapter.require_external_credentials(
+                provider,
+                environ=environ,
+            )
         except provider_adapter.ProviderAdapterError as exc:
             raise AgentRunConfigError(exc.detail) from exc
     return provider
@@ -1110,34 +1244,104 @@ def _resolve_run_dir(project_dir: str) -> Optional[Path]:
     return Path(text).expanduser().resolve()
 
 
-def _safe_artifact_path(run_dir: Path, artifact_name: str) -> Optional[Path]:
+def _safe_artifact_path(
+    run_dir: Path,
+    artifact_name: str,
+) -> tuple[Optional[Path], Optional[str]]:
     name = str(artifact_name or "").strip()
-    if name not in _RUN_ARTIFACT_NAMES:
-        return None
+    if name not in _RUN_ARTIFACT_NAMES and name not in _RUN_DOCUMENT_SPECS:
+        return None, "artifact_not_allowed"
     if Path(name).name != name:
-        return None
-    return run_dir / name
+        return None, "artifact_not_allowed"
+    candidate = run_dir / name
+    try:
+        metadata = candidate.lstat()
+    except FileNotFoundError:
+        return candidate, None
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        return None, "artifact_path_unsafe"
+    if metadata.st_size > _artifact_max_bytes(name):
+        return None, "artifact_too_large"
+    try:
+        resolved_root = run_dir.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(resolved_root)
+    except (FileNotFoundError, ValueError):
+        return None, "artifact_path_unsafe"
+    return resolved, None
+
+
+def _read_safe_artifact_bytes(
+    run_dir: Path,
+    artifact_name: str,
+) -> tuple[Optional[Path], Optional[bytes], Optional[str]]:
+    """Open one allowed regular artifact without following a replacement link."""
+
+    path, path_error = _safe_artifact_path(run_dir, artifact_name)
+    if path is None:
+        return None, None, path_error
+    if not path.exists():
+        return None, None, "artifact_not_found"
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return None, None, "artifact_not_found"
+    except OSError:
+        return None, None, "artifact_path_unsafe"
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            return None, None, "artifact_path_unsafe"
+        max_bytes = _artifact_max_bytes(path.name)
+        if metadata.st_size > max_bytes:
+            return None, None, "artifact_too_large"
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = -1
+            raw = handle.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            return None, None, "artifact_too_large"
+        return path, raw, None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _run_artifacts(run_dir: Path) -> List[Dict[str, Any]]:
     artifacts = []
-    for name in _RUN_ARTIFACT_NAMES:
-        path = run_dir / name
-        if path.exists() and path.is_file():
-            artifacts.append(_artifact(path, run_dir))
+    for name in [*_RUN_ARTIFACT_NAMES, *_RUN_DOCUMENT_SPECS]:
+        path, raw, _path_error = _read_safe_artifact_bytes(run_dir, name)
+        if path is not None and raw is not None:
+            artifacts.append(_artifact_from_raw(path, run_dir, raw))
     return artifacts
+
+
+def _artifact_max_bytes(name: str) -> int:
+    spec = _RUN_DOCUMENT_SPECS.get(str(name))
+    return int(spec["max_bytes"]) if spec is not None else _MAX_RUN_ARTIFACT_BYTES
+
+
+def _artifact_media_type(name: str) -> str:
+    spec = _RUN_DOCUMENT_SPECS.get(str(name))
+    return str(spec["media_type"]) if spec is not None else "application/json"
 
 
 def _load_run_artifacts(run_dir: Path) -> Dict[str, Any]:
     payloads: Dict[str, Dict[str, Any]] = {}
     for name in _RUN_ARTIFACT_NAMES:
-        path = run_dir / name
-        if not path.exists():
+        path, raw, path_error = _read_safe_artifact_bytes(run_dir, name)
+        if path_error == "artifact_not_found":
             continue
-        if not path.is_file():
-            return {"ok": False, "error": "artifact_path_not_file", "artifact": name}
+        if path is None or raw is None:
+            return {"ok": False, "error": path_error, "artifact": name}
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            return {
+                "ok": False,
+                "error": "artifact_json_invalid_encoding",
+                "artifact": name,
+            }
         except json.JSONDecodeError as exc:
             return {
                 "ok": False,
@@ -1214,6 +1418,7 @@ def _signoff_integrity(
             "checked_artifacts": 0,
             "tampered_artifacts": [],
             "missing_artifacts": [],
+            "unexpected_artifacts": [],
         }
     signed = signoff.get("signed_artifacts")
     if not isinstance(signed, list) or not signed:
@@ -1224,6 +1429,7 @@ def _signoff_integrity(
             "checked_artifacts": 0,
             "tampered_artifacts": [],
             "missing_artifacts": [],
+            "unexpected_artifacts": [],
         }
     current = {
         str(item.get("name")): item
@@ -1254,29 +1460,85 @@ def _signoff_integrity(
                     "current_bytes": current_item.get("bytes"),
                 }
             )
-    stale = bool(tampered or missing)
+    signed_names = {
+        str(item.get("name") or "") for item in signed if isinstance(item, dict)
+    }
+    unexpected = sorted(name for name in current if name not in signed_names)
+    stale = bool(tampered or missing or unexpected)
     return {
         "status": "stale" if stale else "verified",
         "signoff_stale": stale,
         "checked_artifacts": checked,
         "tampered_artifacts": tampered,
         "missing_artifacts": missing,
+        "unexpected_artifacts": unexpected,
     }
+
+
+def _signed_artifact_integrity(
+    signoff: Any,
+    artifact: Mapping[str, Any],
+) -> str:
+    if not isinstance(signoff, Mapping):
+        return "unsigned"
+    signed = signoff.get("signed_artifacts")
+    if not isinstance(signed, list):
+        return "unsigned"
+    name = str(artifact.get("name") or "")
+    signed_item = next(
+        (
+            item
+            for item in signed
+            if isinstance(item, Mapping) and str(item.get("name") or "") == name
+        ),
+        None,
+    )
+    if signed_item is None:
+        return "unsigned"
+    if (
+        str(signed_item.get("sha256") or "") == str(artifact.get("sha256") or "")
+        and int(signed_item.get("bytes") or -1) == int(artifact.get("bytes") or -2)
+    ):
+        return "verified"
+    return "mismatch"
 
 
 def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
     readiness = review.get("readiness") or {}
     gate = review.get("gate") or {}
     artifacts = review.get("artifacts") or []
+    artifact_payloads = review.get("artifact_payloads") or {}
+    source_manifest = artifact_payloads.get("source_run_manifest.json") or {}
+    pending_reviews = source_manifest.get("pending_reviews") or []
+    pending_reason_codes = sorted(
+        {
+            str(item.get("reason_code") or "").strip()
+            for item in pending_reviews
+            if isinstance(item, Mapping) and str(item.get("reason_code") or "").strip()
+        }
+    )
     updated = max((run_dir / str(a.get("name"))).stat().st_mtime for a in artifacts)
     return {
         "run_id": review.get("run_id") or run_dir.name,
         "run_label": str(review.get("run_id") or run_dir.name).replace("_", " "),
         "study_id": review.get("study_id"),
+        "scientific_configuration_sha256": review.get(
+            "scientific_configuration_sha256"
+        ),
         "mode": review.get("mode"),
+        "engine": review.get("engine"),
         "run_type": review.get("run_type"),
         "project_dir": review.get("project_dir"),
         "gate_status": gate.get("status"),
+        "run_status": source_manifest.get("status"),
+        "pending_review_reason_codes": pending_reason_codes,
+        "plan_approval_allowed": source_manifest.get("plan_approval_allowed"),
+        "scientific_plan_review_status": source_manifest.get(
+            "scientific_plan_review_status"
+        ),
+        "scientific_plan_review_score": source_manifest.get(
+            "scientific_plan_review_score"
+        ),
         "readiness_status": readiness.get("status"),
         "signed": bool(review.get("signed")),
         "signoff_stale": bool(review.get("signoff_stale")),
@@ -1301,7 +1563,11 @@ def _public_review_payloads(
         public["run_context.json"] = {
             "run_id": row.get("run_id"),
             "study_id": row.get("study_id"),
+            "scientific_configuration_sha256": row.get(
+                "scientific_configuration_sha256"
+            ),
             "mode": row.get("mode"),
+            "engine": row.get("engine"),
             "question": row.get("question"),
             "summary": row.get("summary"),
             "local_first": row.get("local_first"),
@@ -1325,6 +1591,16 @@ def _public_review_payloads(
         }
     if "agent_plan.json" in payloads:
         public["agent_plan.json"] = payloads["agent_plan.json"]
+    if "literature_evidence.json" in payloads:
+        public["literature_evidence.json"] = payloads["literature_evidence.json"]
+    if "scientific_plan_review.json" in payloads:
+        public["scientific_plan_review.json"] = payloads[
+            "scientific_plan_review.json"
+        ]
+    if "scientific_readiness.json" in payloads:
+        public["scientific_readiness.json"] = payloads[
+            "scientific_readiness.json"
+        ]
     if "manuscript_draft.json" in payloads:
         row = payloads["manuscript_draft.json"]
         public["manuscript_draft.json"] = {
@@ -1333,11 +1609,16 @@ def _public_review_payloads(
             "question": row.get("question"),
             "claims": row.get("claims", []),
             "sentences": row.get("sentences", []),
+            "markdown_preview": row.get("markdown_preview"),
+            "source": row.get("source"),
         }
     for name in (
         "benchmark_scorecard.json",
         "workflow_graph.json",
         "figure_gallery.json",
+        "result_tables.json",
+        "system_validation_report.json",
+        "system_validation_report_receipt.json",
         "source_run_manifest.json",
     ):
         if name in payloads:
@@ -1745,8 +2026,12 @@ def _artifact_payload(
     return out
 
 
-def _artifact(path: Path, root: Path, summary: Any = None) -> Dict[str, Any]:
-    raw = path.read_bytes()
+def _artifact_from_raw(
+    path: Path,
+    root: Path,
+    raw: bytes,
+    summary: Any = None,
+) -> Dict[str, Any]:
     out = {
         "name": path.name,
         "path": str(path),
@@ -1758,6 +2043,10 @@ def _artifact(path: Path, root: Path, summary: Any = None) -> Dict[str, Any]:
     if summary is not None:
         out["summary"] = summary
     return out
+
+
+def _artifact(path: Path, root: Path, summary: Any = None) -> Dict[str, Any]:
+    return _artifact_from_raw(path, root, path.read_bytes(), summary)
 
 
 def _slug(value: str) -> str:

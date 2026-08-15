@@ -14,18 +14,16 @@ nothing to evict and a 4.5% overflow was fatal.
 
 Of that prompt, 47% is the task's typed context (drop it and the Planner invents
 columns) and 32% is the plan schema (drop it and the Planner cannot fill the
-form -- m3/h1/h3 already died that way).  The analysis-type catalog is the only
-part that is pure menu, and it is byte-identical for every task.  So the catalog
-descends a detail ladder under budget pressure and nothing else does.
+form -- m3/h1/h3 already died that way).  The reducible portion is the compact
+all-family switch menu plus explanatory detail in the inferred family's typed
+scientific-action catalog.  Both descend the same receipt-bearing detail ladder;
+typed context, schema and execution boundaries do not.
 
 Two properties are load-bearing and each has its own test below:
 
-* the ladder is driven by the byte budget ALONE.  Shortening by inferred family
-  would put a guess between the Planner and its options, and that inference is
-  known to disagree with the Planner's own declaration (see
-  ``describe_article_contract_family_switch``).
-* it shortens entries, never drops them.  All 16 families stay selectable at
-  every rung, because the Planner may switch away from the inferred family.
+* the ladder is driven by the byte budget ALONE;
+* it shortens prose, never drops an analysis family, scientific action id, or
+  execution status.
 """
 
 from __future__ import annotations
@@ -36,8 +34,13 @@ from easyicu.research_agent import schema
 from easyicu.research_agent.agents import core
 from easyicu.research_agent.planning.analysis_types import (
     CATALOG_DETAIL_LADDER,
+    infer_analysis_type,
     list_analysis_types,
     planner_analysis_type_guide,
+    planner_analysis_type_switch_guide,
+)
+from easyicu.research_agent.planning.scientific_action_catalog import (
+    planner_scientific_action_guide,
 )
 
 
@@ -77,7 +80,12 @@ def _budget_headroom(prompt: str) -> int:
 
 def test_the_ladder_is_ordered_most_complete_first():
     sizes = [
-        len(planner_analysis_type_guide(detail=d).encode("utf-8"))
+        len(
+            (
+                planner_analysis_type_switch_guide(detail=d)
+                + planner_scientific_action_guide("association_study", detail=d)
+            ).encode("utf-8")
+        )
         for d in CATALOG_DETAIL_LADDER
     ]
     assert sizes == sorted(sizes, reverse=True)
@@ -95,22 +103,27 @@ def test_every_family_survives_every_rung():
     keys = [spec.key for spec in list_analysis_types()]
     assert keys, "the registry must not be empty for this test to mean anything"
     for detail in CATALOG_DETAIL_LADDER:
-        guide = planner_analysis_type_guide(detail=detail)
-        missing = [key for key in keys if f"- {key}:" not in guide]
+        guide = planner_analysis_type_switch_guide(detail=detail)
+        missing = [key for key in keys if key not in guide]
         assert not missing, f"{detail} dropped {missing}"
 
 
-def test_a_shortened_rung_says_so_in_the_prompt():
-    """A silently shortened menu reads as a menu with no guardrails."""
-
-    assert "shortened" not in planner_analysis_type_guide(detail="full")
+def test_a_shortened_rung_keeps_every_action_and_its_status():
+    full = planner_scientific_action_guide("association_study", detail="full")
     for detail in CATALOG_DETAIL_LADDER[1:]:
-        assert "shortened" in planner_analysis_type_guide(detail=detail)
+        shortened = planner_scientific_action_guide(
+            "association_study", detail=detail
+        )
+        assert len(shortened.encode("utf-8")) < len(full.encode("utf-8"))
+        for token in ("host_owned", "coder_generated", "not_available"):
+            assert token in shortened
 
 
 def test_an_unknown_rung_is_refused_rather_than_guessed():
     with pytest.raises(ValueError, match="unknown analysis-type catalog detail"):
         planner_analysis_type_guide(detail="whatever_fits")
+    with pytest.raises(ValueError, match="unknown analysis-type switch-menu detail"):
+        planner_analysis_type_switch_guide(detail="whatever_fits")
 
 
 # ---------------------------------------------------------------------------
@@ -240,17 +253,20 @@ def test_the_chosen_rung_is_the_first_that_fits_whatever_the_family(
 
 
 def test_a_middle_rung_is_actually_reachable():
-    """The parametrisation above is only meaningful if 2,000 lands mid-ladder.
+    """The production composite has a real, strictly ordered middle rung."""
 
-    If every pressure resolved to the shortest rung, a reordered ladder would
-    still pass. This asserts the ladder has a reachable middle.
-    """
-
-    full_bytes = len(planner_analysis_type_guide(detail="full").encode("utf-8"))
-    mid_bytes = len(
-        planner_analysis_type_guide(detail=CATALOG_DETAIL_LADDER[1]).encode("utf-8")
-    )
-    assert full_bytes - mid_bytes > 2_000
+    sizes = [
+        len(
+            (
+                planner_analysis_type_switch_guide(detail=detail)
+                + planner_scientific_action_guide(
+                    "association_study", detail=detail
+                )
+            ).encode("utf-8")
+        )
+        for detail in CATALOG_DETAIL_LADDER
+    ]
+    assert sizes[0] > sizes[1] > sizes[2]
 
 
 def test_still_over_at_the_shortest_rung_is_an_explicit_failure(
@@ -297,4 +313,6 @@ def test_the_recorded_rung_is_the_one_that_was_sent(minimal_research_context):
         minimal_research_context, planning_contract_context=pad
     )["analysis_type_catalog_detail"]
 
-    assert planner_analysis_type_guide(detail=detail) in sent
+    inferred = infer_analysis_type(minimal_research_context).key
+    assert planner_analysis_type_switch_guide(detail=detail) in sent
+    assert planner_scientific_action_guide(inferred, detail=detail) in sent

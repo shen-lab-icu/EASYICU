@@ -57,6 +57,7 @@ import json
 from collections import defaultdict
 from typing import Any, Dict, List, Sequence, Tuple
 
+from ..planning.robustness_contract import ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS
 from ..schema import ValidationFinding
 
 __all__ = [
@@ -93,6 +94,19 @@ def _collisions(step: Any) -> Tuple[Tuple[str, Tuple[str, ...]], ...]:
     return tuple(found)
 
 
+def _required_robustness_kind(step: Any, product: str) -> str | None:
+    """Resolve a promised label through the replay owner's public contract."""
+
+    spec = getattr(step, "robustness_replay_spec", None)
+    resolve = getattr(spec, "output_for", None)
+    if not callable(resolve):
+        return None
+    output = resolve(product)
+    if output is None:
+        return None
+    return ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS.get(str(output))
+
+
 def product_promise_plan_findings(*, plan: Any) -> List[ValidationFinding]:
     """One repairable finding per product promised as a statistic and as more.
 
@@ -107,7 +121,52 @@ def product_promise_plan_findings(*, plan: Any) -> List[ValidationFinding]:
     findings: List[ValidationFinding] = []
     for step in getattr(plan, "steps", None) or []:
         step_id = str(getattr(step, "step_id", "") or "unknown")
-        for name, kinds in _collisions(step):
+        typed = _typed_promises(step)
+        collisions = {name: kinds for name, kinds in _collisions(step)}
+        for name, kinds_list in sorted(typed.items()):
+            kinds = tuple(kinds_list)
+            required_kind = _required_robustness_kind(step, name)
+            collision = collisions.get(name)
+            if required_kind is None and collision is None:
+                continue
+            if required_kind is not None and kinds == (required_kind,):
+                continue
+            if required_kind is not None:
+                reason = (
+                    "product_promised_as_statistic_and_more"
+                    if collision is not None
+                    else "product_kind_conflicts_with_owner"
+                )
+                findings.append(
+                    ValidationFinding(
+                        validator=_VALIDATOR,
+                        severity="error",
+                        message=(
+                            f"Step {step_id} maps {name!r} through its typed "
+                            "robustness replay declaration to a deterministic "
+                            f"output whose only valid product kind is "
+                            f"'{required_kind}:{name}', but the step promises "
+                            + ", ".join(f"'{kind}:{name}'" for kind in kinds)
+                            + f". Keep exactly '{required_kind}:{name}' and "
+                            "delete every incompatible promise for that bare "
+                            "product. Do not rename the product, remap the "
+                            "replay output, add or split a step, or change any "
+                            "scientific choice."
+                        ),
+                        detail={
+                            "reason": reason,
+                            "step_id": step_id,
+                            "product": name,
+                            "kinds": list(kinds),
+                            "required_kind": required_kind,
+                            "required_promise": f"{required_kind}:{name}",
+                        },
+                    )
+                )
+                continue
+            # A collision outside a typed owner is still provably wrong only
+            # when one of its promises is a scalar statistic.
+            assert collision is not None
             others = [kind for kind in kinds if kind != _STATISTIC]
             findings.append(
                 ValidationFinding(
@@ -154,7 +213,10 @@ def product_promise_replan_directive(
         for finding in findings
         if finding.validator == _VALIDATOR
         and (finding.detail or {}).get("reason")
-        == "product_promised_as_statistic_and_more"
+        in {
+            "product_promised_as_statistic_and_more",
+            "product_kind_conflicts_with_owner",
+        }
     ]
     if not relevant:
         return None
@@ -164,8 +226,11 @@ def product_promise_replan_directive(
         "promised under another kind: a statistic is a single finite number, "
         "the other artifact is not, and the host's typed declarations name "
         "products without their kind, so it cannot tell the two apart. For each "
-        "finding below, keep the product under the one kind that matches what "
-        "the step actually produces and delete the other promise. Do not rename "
+        "finding below, use `required_promise` when it is present; that value "
+        "comes from the deterministic owner's typed contract, not a choice to "
+        "infer. Otherwise keep the product under the one kind that matches what "
+        "the step actually produces and delete the other promise; when several are incompatible, "
+        "delete every incompatible promise for the same bare product. Do not rename "
         "the product, do not add, split, or remove a step, and do not change "
         "the exposure, outcome, cohort, estimator, or analysis method. Contract "
         "findings: "

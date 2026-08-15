@@ -11,6 +11,9 @@ from easyicu.research_agent.cohort.materializer import _hash_df, _sha256_file
 from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedMetadataError,
 )
+from easyicu.research_agent.planning.scientific_review import (
+    patient_identity_available,
+)
 
 
 def _write_legacy_materialization(path: Path) -> pd.DataFrame:
@@ -145,3 +148,61 @@ def test_unbound_legacy_window_receipt_is_not_accepted(ra, tmp_path: Path) -> No
             cohort_name="unbound_receipt",
             database="synthetic",
         )
+
+
+def test_verified_composite_patient_grouping_reaches_scientific_review(
+    ra, tmp_path: Path
+) -> None:
+    source = tmp_path / "patient_grouped.parquet"
+    frame = pd.DataFrame(
+        {
+            "patient_stay_id": ["p10:s1", "p10:s2", "p20:s3"],
+            "age": [40.0, 41.0, 70.0],
+            "death": [0, 1, 0],
+        }
+    )
+    frame.to_parquet(source, index=False)
+    provenance = {
+        "schema_version": "easyicu.cohort_materializer/1",
+        "cohort_window_hours": [0.0, 24.0],
+        "feature_concepts": [],
+        "outcome_concepts": ["death"],
+        "static_concepts": ["age"],
+        "n_stays_after_inclusion_exclusion": len(frame),
+        "columns": list(frame.columns),
+        "cohort_sha256": _hash_df(frame.reset_index(drop=True)),
+        "cohort_file_sha256": _sha256_file(source),
+        "cohort_file_size": source.stat().st_size,
+        "replacement_row_identity": {
+            "mapping_file_sha256": "a" * 64,
+            "output_identity_column": "patient_stay_id",
+            "mapped_cohort_rows": len(frame),
+            "patient_group_derivation": {
+                "algorithm": "prefix_before_:s",
+                "delimiter": ":s",
+            },
+            "authority_coordinates": {
+                "schema_version": "easyicu.patient_grouping_runtime_authority/1",
+                "authority_ref": "owner/bridge/v1",
+                "provider_visible_values": False,
+            },
+        },
+    }
+    source.with_name("patient_grouped_provenance.json").write_text(
+        json.dumps(provenance),
+        encoding="utf-8",
+    )
+
+    context = ra.build_research_context(
+        research_question="Estimate a patient-clustered association.",
+        cohort=source,
+        cohort_name="patient_grouped",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    assert context.cohort.id_columns == ["patient_stay_id"]
+    assert context.cohort.provenance["replacement_row_identity"][
+        "mapping_file_sha256"
+    ] == "a" * 64
+    assert patient_identity_available(context) is True

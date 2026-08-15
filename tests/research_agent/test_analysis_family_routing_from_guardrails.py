@@ -223,6 +223,28 @@ def test_a_reproducibility_requirement_is_not_a_definition_sensitivity_study() -
     assert _family(context) == "association_study"
 
 
+def test_an_explicit_definition_sensitivity_preference_remains_an_adjunct() -> None:
+    """A named secondary analysis must not replace the primary estimand.
+
+    This is reduced from the natural Web E1 run.  The primary question asks for
+    prevalence and a mortality association; the conversational preferences ask
+    to compare timing- and readmission-restricted definitions *as sensitivity
+    analyses*.  Before primary-question authority was separated from free-text
+    preferences, that perfectly legitimate robustness request selected the
+    descriptive cohort-definition family and removed the association analysis.
+    """
+
+    context = _binary_mortality_context(
+        must_have_outputs=(
+            "Estimate prevalence and the adjusted association with mortality. "
+            "Assess timing-restricted and non-readmission-restricted cohort "
+            "definitions as sensitivity analyses."
+        )
+    )
+
+    assert _family(context) == "association_study"
+
+
 @pytest.mark.parametrize(
     "question",
     [
