@@ -408,11 +408,22 @@ def test_large_retry_projection_keeps_authority_as_a_bounded_coordinate_table() 
                 "step_id": f"{index + 1:02d}_analysis_step",
                 "planned_analysis_role": "primary" if index == 4 else "auxiliary",
                 "intent": "long explanation " * 300,
-                "expected_outputs": [f"table:result_{index}"],
+                "inputs": [
+                    "artifact:analysis_cohort",
+                    "sep3_sofa2_max",
+                    "death",
+                    "age",
+                    "charlson",
+                ],
+                "expected_outputs": [f"table:result_{index}", "figure:result"],
                 "method": "adjusted_association_models",
                 "scientific_action_id": "association.adjusted_models",
                 "scientific_capability": "association_adjusted_v1",
-                "literature_citation_keys": ["strobe_2007", "sterne_2009"],
+                "literature_citation_keys": [
+                    "strobe_2007",
+                    "sterne_missing_data_2009",
+                    "durrleman_splines_1989",
+                ],
                 "literature_design_bindings": [
                     {
                         "citation_key": "strobe_2007",
@@ -420,12 +431,21 @@ def test_large_retry_projection_keeps_authority_as_a_bounded_coordinate_table() 
                         "application": "reporting explanation " * 30,
                     },
                     {
-                        "citation_key": "sterne_2009",
+                        "citation_key": "sterne_missing_data_2009",
                         "design_elements": ["missing_data"],
                         "application": "missing-data explanation " * 30,
                     },
+                    {
+                        "citation_key": "durrleman_splines_1989",
+                        "design_elements": ["functional_form"],
+                        "application": "functional-form explanation " * 30,
+                    },
                 ],
-                "sensitivity_spec_ids": ["complete_case"],
+                "sensitivity_spec_ids": [
+                    "complete_case",
+                    "landmark_alive_at_24h",
+                    "non_readmission_icu_stays",
+                ],
                 "model_requirements": [
                     {
                         "requirement_id": "primary",
@@ -441,8 +461,24 @@ def test_large_retry_projection_keeps_authority_as_a_bounded_coordinate_table() 
         json.dumps(
             {
                 "analysis_type": "association_study",
-                "cohort": None,
-                "endpoint": None,
+                "cohort": {
+                    "name": "bench_e1_sepsis3_prevalence_mortality",
+                    "inclusion": [],
+                    "exclusion": [],
+                    "derived_from_named": None,
+                    "locked_at": "not_locked",
+                    "selection_mode": "all_input_rows",
+                },
+                "endpoint": {
+                    "name": "death",
+                    "kind": "binary",
+                    "absence_semantics": "no_absent_rows",
+                    "levels": [0, 1],
+                    "event_column": "death_time",
+                    "time_column": None,
+                    "time_origin": None,
+                    "censoring_rule": None,
+                },
                 "steps": steps,
                 "robustness_specs": [],
             }
@@ -454,12 +490,31 @@ def test_large_retry_projection_keeps_authority_as_a_bounded_coordinate_table() 
     assert "steps" not in payload
     columns = payload["step_coordinate_columns"]
     first = dict(zip(columns, payload["step_coordinates"][0]))
-    assert first["action"] == "association.adjusted_models"
-    assert first["capability"] == "association_adjusted_v1"
-    assert first["citation_keys"] == ["strobe_2007", "sterne_2009"]
-    assert first["binding_coordinates"] == [
+    strings = payload["coordinate_string_table"]
+
+    def deref(value):
+        if isinstance(value, list) and len(value) == 2 and value[0] == "s":
+            return strings[value[1]]
+        if isinstance(value, list):
+            return [deref(item) for item in value]
+        return value
+
+    assert deref(first["action"]) == "association.adjusted_models"
+    assert deref(first["capability"]) == "association_adjusted_v1"
+    assert deref(first["citation_keys"]) == [
+        "strobe_2007",
+        "sterne_missing_data_2009",
+        "durrleman_splines_1989",
+    ]
+    assert deref(first["binding_coordinates"]) == [
         ["strobe_2007", ["reporting"]],
-        ["sterne_2009", ["missing_data"]],
+        ["sterne_missing_data_2009", ["missing_data"]],
+        ["durrleman_splines_1989", ["functional_form"]],
+    ]
+    assert deref(first["sensitivity_ids"]) == [
+        "complete_case",
+        "landmark_alive_at_24h",
+        "non_readmission_icu_stays",
     ]
 
 
