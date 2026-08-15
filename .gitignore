@@ -154,6 +154,7 @@ pilot_runs/
 !README.md
 !README_zh.md
 !CONTRIBUTING.md
+!.github/pull_request_template.md
 !baselines/REGISTRY.md
 !docs/architecture_glossary.md
 !docs/capability_matrix.md
