@@ -9,9 +9,11 @@ valid-looking design. It normalizes only representation-level aliases.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
-from typing import Any, Dict, List, Sequence, Tuple
+from functools import lru_cache
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from ..contracts.declared_product import (
     PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
@@ -25,7 +27,12 @@ from ..planning.literature_bindings import (
     validate_literature_citation_bindings,
 )
 from ..planning.primary_result_contract import model_terms_retry_guide
-from ..planning.robustness_contract import RobustnessSpec
+from ..planning.robustness_contract import (
+    PLANNER_MISSING_OVERRIDE_FIELDS,
+    PLANNER_OUTCOME_OVERRIDE_FIELDS,
+    RobustnessSpec,
+)
+from ..providers.protocol import StructuredOutputRequest
 from ..planning.scientific_review import (
     required_method_layers_for_context,
     required_method_layers_for_plan,
@@ -42,6 +49,258 @@ from ..schema import (
     TableOneVariableSpec,
 )
 from ..research_context.prompt_variables import opaque_level_tokens
+
+
+class PlannerStructuredOutputSchemaError(ValueError):
+    """The host could not derive a closed Planner transport schema."""
+
+
+def _json_scalar_schema() -> Dict[str, Any]:
+    """The exact finite scalar family accepted by closed-level validators."""
+
+    return {
+        "anyOf": [
+            {"type": "string"},
+            {"type": "integer"},
+            {"type": "number"},
+            {"type": "boolean"},
+        ]
+    }
+
+
+def _nullable_string_schema() -> Dict[str, Any]:
+    return {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+
+def _nullable_string_list_schema() -> Dict[str, Any]:
+    return {
+        "anyOf": [
+            {"type": "array", "items": {"type": "string"}},
+            {"type": "null"},
+        ]
+    }
+
+
+def _closed_object_schema(properties: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": dict(properties),
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+def _strictify_planner_transport_schema(node: Any) -> None:
+    """Mutate a Pydantic schema into the provider's strict JSON subset."""
+
+    if not isinstance(node, dict):
+        return
+    # Descriptions/titles are already present in the Planner directive.
+    # Removing them keeps the provider request inside the same reviewed
+    # prompt envelope without weakening keys, types, enums, or bounds. Do not
+    # recurse into the properties mapping itself as though it were a schema: a
+    # real field may legitimately be named ``description`` or ``default``.
+    for key in ("default", "description", "examples", "title"):
+        node.pop(key, None)
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        node["required"] = list(properties)
+        node["additionalProperties"] = False
+        for property_schema in properties.values():
+            _strictify_planner_transport_schema(property_schema)
+    definitions = node.get("$defs")
+    if isinstance(definitions, dict):
+        for definition_schema in definitions.values():
+            _strictify_planner_transport_schema(definition_schema)
+    for key in ("items", "additionalProperties", "not", "if", "then", "else"):
+        value = node.get(key)
+        if isinstance(value, dict):
+            _strictify_planner_transport_schema(value)
+    for key in ("allOf", "anyOf", "oneOf", "prefixItems"):
+        values = node.get(key)
+        if isinstance(values, list):
+            for value in values:
+                _strictify_planner_transport_schema(value)
+
+
+def _assert_closed_planner_transport_schema(node: Any, *, path: str = "$") -> None:
+    if not isinstance(node, dict):
+        return
+    if not node:
+        raise PlannerStructuredOutputSchemaError(f"unconstrained JSON schema at {path}")
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        if set(node.get("required") or ()) != set(properties):
+            raise PlannerStructuredOutputSchemaError(
+                f"strict object does not require every property at {path}"
+            )
+        if node.get("additionalProperties") is not False:
+            raise PlannerStructuredOutputSchemaError(
+                f"strict object permits additional properties at {path}"
+            )
+        for key, value in properties.items():
+            _assert_closed_planner_transport_schema(
+                value, path=f"{path}/properties/{key}"
+            )
+    definitions = node.get("$defs")
+    if isinstance(definitions, dict):
+        for key, value in definitions.items():
+            _assert_closed_planner_transport_schema(
+                value, path=f"{path}/$defs/{key}"
+            )
+    additional = node.get("additionalProperties", False)
+    if additional is not False:
+        raise PlannerStructuredOutputSchemaError(
+            f"open mapping is not permitted at {path}"
+        )
+    for key in ("items", "not", "if", "then", "else"):
+        value = node.get(key)
+        if isinstance(value, dict):
+            _assert_closed_planner_transport_schema(value, path=f"{path}/{key}")
+    for key in ("allOf", "anyOf", "oneOf", "prefixItems"):
+        values = node.get(key)
+        if isinstance(values, list):
+            for index, value in enumerate(values):
+                _assert_closed_planner_transport_schema(
+                    value, path=f"{path}/{key}/{index}"
+                )
+
+
+def _planner_transport_schema() -> Dict[str, Any]:
+    """Return a strict transport schema derived from the authority model.
+
+    Pydantic's validation schema contains three open maps and several ``Any``
+    level values. Those are not representable in strict JSON Schema. The
+    replacements below do not choose science: they expose the exact scalar
+    family and robustness keys already consumed by their owner validators.
+    Presentation-only ``display_labels`` travels as key/value rows and is
+    decoded back to the public mapping before Pydantic validation.
+    """
+
+    schema = copy.deepcopy(AnalysisPlan.model_json_schema(mode="validation"))
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        raise PlannerStructuredOutputSchemaError("AnalysisPlan schema has no $defs")
+    try:
+        robustness = definitions["RobustnessSpec"]["properties"]
+        missing_override = _closed_object_schema(
+            {
+                "strategy": _nullable_string_schema(),
+                "variables": _nullable_string_list_schema(),
+                "audit_flags": _nullable_string_list_schema(),
+            }
+        )
+        outcome_override = _closed_object_schema(
+            {
+                field: _nullable_string_schema()
+                for field in PLANNER_OUTCOME_OVERRIDE_FIELDS
+            }
+        )
+        if tuple(missing_override["properties"]) != tuple(
+            PLANNER_MISSING_OVERRIDE_FIELDS
+        ):
+            raise PlannerStructuredOutputSchemaError(
+                "missingness override schema drifted from its owner contract"
+            )
+        robustness["missing_override"] = {
+            "anyOf": [missing_override, {"type": "null"}]
+        }
+        robustness["outcome_override"] = {
+            "anyOf": [outcome_override, {"type": "null"}]
+        }
+
+        label_entry = _closed_object_schema(
+            {
+                "key": {"type": "string", "minLength": 1, "maxLength": 256},
+                "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                },
+            }
+        )
+        schema["properties"]["display_labels"] = {
+            "type": "array",
+            "items": label_entry,
+        }
+
+        concept_value = definitions["ConceptPredicate"]["properties"]
+        concept_value["value"] = {
+            "anyOf": [
+                _json_scalar_schema(),
+                {"type": "array", "items": _json_scalar_schema()},
+                {"type": "null"},
+            ]
+        }
+        definitions["EndpointSpec"]["properties"]["levels"]["anyOf"][0][
+            "items"
+        ] = _json_scalar_schema()
+        distribution = definitions["ExposureOutcomeDistributionSpec"]["properties"]
+        distribution["outcome_positive_value"] = _json_scalar_schema()
+        distribution["exposure_levels"]["items"] = _json_scalar_schema()
+        distribution["outcome_levels"]["items"] = _json_scalar_schema()
+        contrast = definitions["ExposureOutcomeRiskDifferenceContrast"]["properties"]
+        contrast["reference_exposure_level"] = _json_scalar_schema()
+        contrast["comparison_exposure_level"] = _json_scalar_schema()
+        definitions["TableOneSpec"]["properties"]["group_levels"][
+            "items"
+        ] = _json_scalar_schema()
+        definitions["TableOneVariableSpec"]["properties"]["levels"][
+            "items"
+        ] = _json_scalar_schema()
+    except (KeyError, TypeError) as exc:
+        raise PlannerStructuredOutputSchemaError(
+            "AnalysisPlan schema shape changed; review the transport projection"
+        ) from exc
+
+    _strictify_planner_transport_schema(schema)
+    _assert_closed_planner_transport_schema(schema)
+    return schema
+
+
+@lru_cache(maxsize=1)
+def planner_structured_output_request() -> StructuredOutputRequest:
+    """Return the immutable strict-schema authority for Planner transport."""
+
+    return StructuredOutputRequest.from_schema(
+        name="easyicu_analysis_plan_v1",
+        schema=_planner_transport_schema(),
+        strict=True,
+    )
+
+
+def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
+    """Undo representation-only transport adaptations before validation."""
+
+    decoded: Dict[str, Any] = copy.deepcopy(dict(data))
+    raw_labels = decoded.get("display_labels")
+    if isinstance(raw_labels, list):
+        labels: Dict[str, Any] = {}
+        for index, item in enumerate(raw_labels):
+            if not isinstance(item, dict) or set(item) != {"key", "value"}:
+                raise PlannerStructuredOutputSchemaError(
+                    f"display_labels[{index}] is not one exact key/value row"
+                )
+            key = item.get("key")
+            if key in labels:
+                raise PlannerStructuredOutputSchemaError(
+                    f"display_labels repeats key {key!r}"
+                )
+            labels[key] = item.get("value")
+        decoded["display_labels"] = labels
+
+    raw_specs = decoded.get("robustness_specs")
+    if isinstance(raw_specs, list):
+        for raw_spec in raw_specs:
+            if not isinstance(raw_spec, dict):
+                continue
+            for field in ("missing_override", "outcome_override"):
+                override = raw_spec.get(field)
+                if not isinstance(override, dict):
+                    continue
+                compact = {key: value for key, value in override.items() if value is not None}
+                raw_spec[field] = compact or None
+    return decoded
 
 
 def planner_descriptive_method_guidance(analysis_type: str) -> str:
@@ -990,6 +1249,9 @@ __all__ = [
     "_is_untyped_figure_alias_output",
     "_normalise_plan_payload",
     "PlannerScientificProjectionError",
+    "PlannerStructuredOutputSchemaError",
+    "decode_planner_transport_payload",
+    "planner_structured_output_request",
     "planner_descriptive_method_guidance",
     "planner_descriptive_robustness_guidance",
     "planner_adjusted_association_owner_guidance",

@@ -37,6 +37,35 @@ def test_structured_retry_returns_first_success_without_retrying():
     assert len(client.calls) == 1, "no retry should have happened"
 
 
+def test_structured_retry_forwards_one_immutable_schema_on_every_attempt():
+    from easyicu.research_agent.providers.protocol import StructuredOutputRequest
+
+    request = StructuredOutputRequest.from_schema(
+        name="probe",
+        schema={
+            "type": "object",
+            "properties": {"value": {"type": "integer"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+    )
+    client = ScriptedMockLLMClient(["bad", '{"value": 7}'])
+
+    result = call_llm_with_structured_retry(
+        client,
+        [LLMMessage(role="user", content="give json")],
+        parser=json.loads,
+        max_retries=1,
+        structured_output=request,
+    )
+
+    assert result == {"value": 7}
+    assert [call[1]["structured_output"] for call in client.calls] == [
+        request,
+        request,
+    ]
+
+
 def test_structured_retry_feeds_error_back_and_succeeds_on_second_attempt():
     bad = "{ not valid json"
     good = '{"value": 7}'

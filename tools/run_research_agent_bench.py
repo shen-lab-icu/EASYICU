@@ -1844,6 +1844,7 @@ def _benchmark_execution_identity(
     request_timeout: float = 120.0,
     transport_max_attempts: int = 1,
     stream_enabled: bool = False,
+    planner_strict_json_schema: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
 ):
     from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
@@ -1863,6 +1864,7 @@ def _benchmark_execution_identity(
             request_timeout=request_timeout,
             transport_max_attempts=transport_max_attempts,
             stream_enabled=stream_enabled,
+            supports_strict_json_schema=bool(planner_strict_json_schema),
             environment=provider_environment,
         )
     return ExecutionIdentity.create(
@@ -2399,6 +2401,7 @@ def _make_llm(
     reasoning_effort_profile: str = "provider_default",
     transport_max_attempts: int = 1,
     stream_enabled: bool = False,
+    planner_strict_json_schema: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
 ):
     if not isinstance(transport_max_attempts, int) or isinstance(
@@ -2438,6 +2441,7 @@ def _make_llm(
                 environment=provider_environment,
                 max_retries=transport_max_retries,
                 stream_enabled=bool(stream_enabled),
+                supports_strict_json_schema=bool(planner_strict_json_schema),
                 allow_environment_overrides=False,
             )
         clients_by_effort = {
@@ -2451,6 +2455,7 @@ def _make_llm(
                 extra_body={"reasoning": {"effort": effort}},
                 max_retries=transport_max_retries,
                 stream_enabled=bool(stream_enabled),
+                supports_strict_json_schema=bool(planner_strict_json_schema),
                 allow_environment_overrides=False,
             )
             for effort in sorted(set(effort_by_role.values()))
@@ -2903,6 +2908,7 @@ def _run_suite(
     reasoning_effort_profile: str = "provider_default",
     transport_max_attempts: int = 1,
     stream_enabled: bool = False,
+    planner_strict_json_schema: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
     provider_base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -2937,6 +2943,7 @@ def _run_suite(
         reasoning_effort_profile=reasoning_effort_profile,
         transport_max_attempts=transport_max_attempts,
         stream_enabled=stream_enabled,
+        planner_strict_json_schema=planner_strict_json_schema,
         provider_environment=provider_environment,
     )
     from easyicu.research_agent import (  # type: ignore
@@ -2994,6 +3001,9 @@ def _run_suite(
         "arms": selected_arms,
         "case_registration": case_registration,
         "force_writer_probe": bool(force_writer_probe),
+        "provider_transport_options": {
+            "planner_strict_json_schema": bool(planner_strict_json_schema),
+        },
         "pipeline_options": dict(pipeline_options or {}),
         "items": [it.key for it in items],
         "scores": scores,
@@ -3554,6 +3564,16 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--planner-strict-json-schema",
+        action="store_true",
+        help=(
+            "Require the configured OpenAI-compatible Planner transport to "
+            "enforce the host-derived AnalysisPlan JSON Schema. The capability "
+            "is explicit and becomes part of the provider transport policy, "
+            "not PipelineConfig."
+        ),
+    )
+    parser.add_argument(
         "--max-step-provider-calls",
         type=int,
         default=9,
@@ -4047,6 +4067,9 @@ def main() -> int:
         development_sample_seed=int(getattr(args, "development_sample_seed", 20260719)),
         development_diagnostic=bool(getattr(args, "development_diagnostic", False)),
     )
+    planner_strict_json_schema = bool(
+        getattr(args, "planner_strict_json_schema", False)
+    )
 
     if (
         bool(args.require_figure2_paper_acceptance)
@@ -4128,6 +4151,7 @@ def main() -> int:
                 reasoning_effort_profile=str(args.reasoning_effort_profile),
                 transport_max_attempts=int(args.transport_max_attempts),
                 stream_enabled=bool(args.llm_stream),
+                planner_strict_json_schema=planner_strict_json_schema,
                 provider_environment=provider_environment,
                 provider_base_url=str(args.provider_base_url),
                 items=args.items,
@@ -4207,6 +4231,7 @@ def main() -> int:
             reasoning_effort_profile=str(args.reasoning_effort_profile),
             transport_max_attempts=int(args.transport_max_attempts),
             stream_enabled=bool(args.llm_stream),
+            planner_strict_json_schema=planner_strict_json_schema,
             provider_environment=provider_environment,
             provider_base_url=str(args.provider_base_url),
         )
@@ -4238,6 +4263,9 @@ def main() -> int:
             "provider": args.provider,
             "arms": _normalize_arms(args.arms),
             "case_registration": case_registration,
+            "provider_transport_options": {
+                "planner_strict_json_schema": planner_strict_json_schema,
+            },
             "pipeline_options": pipeline_options,
             "items": [it.key for it in items],
             "runs": all_runs,
@@ -4857,6 +4885,24 @@ def _cohort_shape_without_materialization(path: Path) -> tuple[int, List[str]]:
     raise _CohortMetadataError(f"Unsupported cohort format: {path.suffix or '<none>'}")
 
 
+def _safe_benchmark_structured_attempts(exc: BaseException) -> List[Dict[str, Any]]:
+    """Project retry diagnostics without response text or parser messages."""
+
+    try:
+        from easyicu.research_agent.providers.structured_retry import (
+            safe_structured_attempt_metadata,
+        )
+
+        projected = getattr(exc, "easyicu_structured_attempt_metadata", None)
+        if projected is None:
+            projected = getattr(exc, "attempts", None)
+        if projected is not None:
+            return safe_structured_attempt_metadata(projected)
+    except Exception:
+        pass
+    return []
+
+
 def _run_ehrflowbench_jsonl(
     *,
     jsonl_path: Path,
@@ -4880,6 +4926,7 @@ def _run_ehrflowbench_jsonl(
     reasoning_effort_profile: str = "provider_default",
     transport_max_attempts: int = 1,
     stream_enabled: bool = False,
+    planner_strict_json_schema: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
     provider_base_url: Optional[str] = None,
     items: Optional[Sequence[str]] = None,
@@ -5378,6 +5425,7 @@ def _run_ehrflowbench_jsonl(
                 reasoning_effort_profile=reasoning_effort_profile,
                 transport_max_attempts=transport_max_attempts,
                 stream_enabled=stream_enabled,
+                planner_strict_json_schema=planner_strict_json_schema,
                 provider_environment=provider_environment,
                 provider_hard_stop=task_hard_stop,
             )
@@ -5437,6 +5485,7 @@ def _run_ehrflowbench_jsonl(
             import traceback as _tb
 
             tb = _tb.format_exc()
+            structured_attempts = _safe_benchmark_structured_attempts(exc)
             print(
                 f"[ehrflowbench] item {key} FAILED: {type(exc).__name__}: "
                 f"{str(exc)[:200]}\n{tb}"
@@ -5446,15 +5495,36 @@ def _run_ehrflowbench_jsonl(
                 (out_root / key / "item_exception_traceback.txt").write_text(
                     tb, encoding="utf-8"
                 )
+                diagnostic = {
+                    "schema_version": "easyicu.benchmark_item_exception/1",
+                    "task_id": key,
+                    "error_type": type(exc).__name__,
+                    "message_sha256": hashlib.sha256(
+                        str(exc).encode("utf-8")
+                    ).hexdigest(),
+                    "structured_attempts": structured_attempts,
+                }
+                (out_root / key / "item_exception.json").write_text(
+                    json.dumps(
+                        diagnostic,
+                        indent=2,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
             except Exception:
                 pass
-            pending.append(
-                {
-                    "key": key,
-                    "status": "item_exception",
-                    "error": f"{type(exc).__name__}: {str(exc)[:300]}",
-                }
-            )
+            pending_row: Dict[str, Any] = {
+                "key": key,
+                "status": "item_exception",
+                "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            }
+            if structured_attempts:
+                pending_row["structured_attempts"] = structured_attempts
+            pending.append(pending_row)
             if task_hard_stop is not None:
                 task_hard_stop.finish(
                     error=f"{type(exc).__name__}: {str(exc)[:1800]}"
@@ -5492,6 +5562,9 @@ def _run_ehrflowbench_jsonl(
         "seed": seed,
         "arms": _normalize_arms(arms),
         "reasoning_effort_profile": reasoning_effort_profile,
+        "provider_transport_options": {
+            "planner_strict_json_schema": bool(planner_strict_json_schema),
+        },
         "backend_base_url": (
             str(provider_base_url)
             if provider_base_url is not None
@@ -5710,6 +5783,7 @@ def _run_one_item_from_cohort(
     reasoning_effort_profile: str = "provider_default",
     transport_max_attempts: int = 1,
     stream_enabled: bool = False,
+    planner_strict_json_schema: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
     provider_hard_stop: Optional[Any] = None,
 ) -> Dict[str, Any]:
@@ -5735,6 +5809,7 @@ def _run_one_item_from_cohort(
         request_timeout=request_timeout,
         transport_max_attempts=transport_max_attempts,
         stream_enabled=stream_enabled,
+        planner_strict_json_schema=planner_strict_json_schema,
         provider_environment=provider_environment,
     )
     if reuse_existing and not resume_run_id:
@@ -5762,6 +5837,7 @@ def _run_one_item_from_cohort(
             reasoning_effort_profile=reasoning_effort_profile,
             transport_max_attempts=transport_max_attempts,
             stream_enabled=stream_enabled,
+            planner_strict_json_schema=planner_strict_json_schema,
             provider_environment=provider_environment,
         )
         if run_naive or run_aware
@@ -5810,6 +5886,9 @@ def _run_one_item_from_cohort(
         "operational_exposure": getattr(item, "operational_exposure", None),
         "database": getattr(item, "database", "bench"),
         "reasoning_effort_profile": reasoning_effort_profile,
+        "provider_transport_options": {
+            "planner_strict_json_schema": bool(planner_strict_json_schema),
+        },
         "expected_or_direction": item.expected_or_direction,
         "benchmark_family": getattr(item, "benchmark_family", "external"),
         "difficulty": getattr(item, "difficulty", "external"),

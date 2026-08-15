@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+from types import SimpleNamespace
 
 import pytest
 
@@ -109,6 +110,22 @@ def test_every_declared_consumer_is_enforced_on_complete(consumer: str) -> None:
     assert excinfo.value.limit_tokens == budget.limit_tokens
     assert excinfo.value.actual_tokens == budget.limit_tokens + 1
     # Fail closed means the payload never reached the provider.
+    assert inner.calls == []
+
+
+def test_schema_payload_is_counted_before_prompt_transport() -> None:
+    budget = PROMPT_TRANSPORT_BUDGETS["cohort_extraction"]
+    inner = _RecordingClient()
+    client = budgeted_role_client(_resolver(inner), budget.role, "cohort_extraction")
+
+    with pytest.raises(PromptTransportBudgetError):
+        client.complete(
+            _at_budget(budget),
+            structured_output=SimpleNamespace(
+                payload_bytes=int(CONSERVATIVE_BYTES_PER_TOKEN)
+            ),
+        )
+
     assert inner.calls == []
 
 

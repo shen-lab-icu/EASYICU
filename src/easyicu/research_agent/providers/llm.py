@@ -40,7 +40,12 @@ from ..authority.secret_redaction import (
     redact_debug_value,
 )
 from .capabilities import llm_supports_vision, model_looks_vision_capable
-from .protocol import LLMClient, LLMMessage
+from .protocol import (
+    LLMClient,
+    LLMMessage,
+    StructuredOutputCapabilityError,
+    StructuredOutputRequest,
+)
 
 #: Per-field ceiling for the optional LLM debug dump. A full prompt is tens of
 #: kilobytes, and an unbounded per-call dump fills the disk of a machine that
@@ -456,6 +461,7 @@ class OpenAIClient:
         extra_headers: Optional[Dict[str, str]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
         supports_vision: Optional[bool] = None,
+        supports_strict_json_schema: bool = False,
         stream_enabled: Optional[bool] = None,
         allow_environment_overrides: bool = True,
     ) -> None:
@@ -600,6 +606,7 @@ class OpenAIClient:
             if supports_vision is not None
             else model_looks_vision_capable(model)
         )
+        self.supports_strict_json_schema = bool(supports_strict_json_schema)
         if _model_looks_like_qwen3(model):
             self._extra_body.setdefault("enable_thinking", False)
             chat_kwargs = self._extra_body.get("chat_template_kwargs")
@@ -726,6 +733,7 @@ class OpenAIClient:
         temperature: float = 0.2,
         seed: Optional[int] = None,
         top_p: Optional[float] = None,
+        structured_output: Optional[StructuredOutputRequest] = None,
     ) -> str:
         content, _usage = self.complete_with_usage(
             messages,
@@ -733,6 +741,7 @@ class OpenAIClient:
             temperature=temperature,
             seed=seed,
             top_p=top_p,
+            structured_output=structured_output,
         )
         return content
 
@@ -744,6 +753,7 @@ class OpenAIClient:
         temperature: float = 0.2,
         seed: Optional[int] = None,
         top_p: Optional[float] = None,
+        structured_output: Optional[StructuredOutputRequest] = None,
     ) -> tuple[str, Optional[Dict[str, Any]]]:
         """Return text and usage from the same provider response.
 
@@ -783,6 +793,19 @@ class OpenAIClient:
         # "provider default" rather than "unknown".
         if top_p is not None:
             create_kwargs["top_p"] = float(top_p)
+        if structured_output is not None:
+            if not self.supports_strict_json_schema:
+                raise StructuredOutputCapabilityError(
+                    "OpenAI-compatible client was not configured for strict JSON Schema"
+                )
+            if "response_format" in self._extra_body:
+                raise StructuredOutputCapabilityError(
+                    "response_format is ambiguous between extra_body and the "
+                    "typed structured-output request"
+                )
+            create_kwargs["response_format"] = (
+                structured_output.to_openai_response_format()
+            )
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
         # Manual back-off for 503 / overloaded errors. SDK retries are disabled
@@ -813,6 +836,10 @@ class OpenAIClient:
                     payload["seed"] = int(seed)
                 if top_p is not None:
                     payload["top_p"] = float(top_p)
+                if structured_output is not None:
+                    payload["response_format"] = (
+                        structured_output.to_openai_response_format()
+                    )
                 if self._extra_body:
                     payload.update(self._extra_body)
                 post_kwargs: Dict[str, Any] = {"json": payload}
@@ -1284,6 +1311,16 @@ class FallbackLLMClient:
 
     provider_attempt_budget_aware = True
 
+    @property
+    def supports_strict_json_schema(self) -> bool:
+        """Advertise only when every possible fallback can honor the schema."""
+
+        from .capabilities import llm_supports_strict_json_schema
+
+        return bool(self._clients) and all(
+            llm_supports_strict_json_schema(client) for client in self._clients
+        )
+
     def __init__(
         self,
         *clients: Any,
@@ -1318,6 +1355,7 @@ class FallbackLLMClient:
         temperature: float = 0.2,
         seed: Optional[int] = None,
         top_p: Optional[float] = None,
+        structured_output: Optional[StructuredOutputRequest] = None,
     ) -> str:
         out, _usage = self.complete_with_usage(
             messages,
@@ -1325,6 +1363,7 @@ class FallbackLLMClient:
             temperature=temperature,
             seed=seed,
             top_p=top_p,
+            structured_output=structured_output,
         )
         return out
 
@@ -1336,6 +1375,7 @@ class FallbackLLMClient:
         temperature: float = 0.2,
         seed: Optional[int] = None,
         top_p: Optional[float] = None,
+        structured_output: Optional[StructuredOutputRequest] = None,
     ) -> tuple[str, Optional[Dict[str, Any]]]:
         """Return usage from the same successful fallback call, when available."""
         errors: List[str] = []
@@ -1359,9 +1399,17 @@ class FallbackLLMClient:
                     _params = _inspect.signature(child_method).parameters
                     _accepts_seed = "seed" in _params
                     _accepts_top_p = "top_p" in _params
+                    _accepts_structured_output = (
+                        "structured_output" in _params
+                        or any(
+                            parameter.kind is _inspect.Parameter.VAR_KEYWORD
+                            for parameter in _params.values()
+                        )
+                    )
                 except (TypeError, ValueError):
                     _accepts_seed = False
                     _accepts_top_p = False
+                    _accepts_structured_output = False
                 _kwargs: Dict[str, Any] = {
                     "max_tokens": max_tokens,
                     "temperature": temperature,
@@ -1370,6 +1418,13 @@ class FallbackLLMClient:
                     _kwargs["seed"] = seed
                 if _accepts_top_p and top_p is not None:
                     _kwargs["top_p"] = top_p
+                if structured_output is not None:
+                    if not _accepts_structured_output:
+                        raise StructuredOutputCapabilityError(
+                            "fallback child cannot honor the strict structured-output "
+                            "request"
+                        )
+                    _kwargs["structured_output"] = structured_output
                 if callable(child_complete_with_usage):
                     out, raw_usage = child_method(messages, **_kwargs)
                     usage = dict(raw_usage) if isinstance(raw_usage, dict) else None
@@ -1622,6 +1677,7 @@ class LLMRouter:
         max_tokens: int = 2048,
         temperature: float = 0.2,
         top_p: Optional[float] = None,
+        structured_output: Optional[StructuredOutputRequest] = None,
     ) -> str:
         """Route to the default client.
 
@@ -1638,18 +1694,31 @@ class LLMRouter:
         import inspect as _inspect
 
         try:
-            _accepts_top_p = (
-                "top_p" in _inspect.signature(self._default.complete).parameters
+            _parameters = _inspect.signature(self._default.complete).parameters
+            _accepts_top_p = "top_p" in _parameters
+            _accepts_structured_output = (
+                "structured_output" in _parameters
+                or any(
+                    parameter.kind is _inspect.Parameter.VAR_KEYWORD
+                    for parameter in _parameters.values()
+                )
             )
         except (TypeError, ValueError):
             _accepts_top_p = False
+            _accepts_structured_output = False
+        kwargs: Dict[str, Any] = {
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
         if _accepts_top_p and top_p is not None:
-            return self._default.complete(
-                messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p
-            )
-        return self._default.complete(
-            messages, max_tokens=max_tokens, temperature=temperature
-        )
+            kwargs["top_p"] = top_p
+        if structured_output is not None:
+            if not _accepts_structured_output:
+                raise StructuredOutputCapabilityError(
+                    "router default client cannot honor strict structured output"
+                )
+            kwargs["structured_output"] = structured_output
+        return self._default.complete(messages, **kwargs)
 
 
 class CLIAgentLLMClient:

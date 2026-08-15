@@ -80,4 +80,35 @@ def llm_supports_vision(client: Any) -> bool:
     return False
 
 
-__all__ = ["llm_supports_vision", "model_looks_vision_capable"]
+def llm_supports_strict_json_schema(client: Any) -> bool:
+    """Return only an explicitly advertised strict-schema capability.
+
+    Name-based guessing is unsafe for OpenAI-compatible relays: two endpoints
+    serving the same model name may implement different response-format
+    subsets. Wrappers expose the leaf advertisement through their existing
+    delegation seam; routers are resolved to the Planner role.
+    """
+
+    if client is None:
+        return False
+    if hasattr(client, "supports_strict_json_schema"):
+        advertised = getattr(client, "supports_strict_json_schema")
+        try:
+            return bool(advertised() if callable(advertised) else advertised)
+        except Exception:
+            return False
+    if hasattr(client, "for_role"):
+        try:
+            planner_client = client.for_role("planner")
+        except Exception:
+            planner_client = None
+        if planner_client is not None:
+            return llm_supports_strict_json_schema(planner_client)
+    return False
+
+
+__all__ = [
+    "llm_supports_strict_json_schema",
+    "llm_supports_vision",
+    "model_looks_vision_capable",
+]

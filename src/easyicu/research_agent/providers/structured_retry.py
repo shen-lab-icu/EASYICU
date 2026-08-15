@@ -575,6 +575,9 @@ class StructuredResponseFailure(RuntimeError):
     def __init__(self, attempts: Sequence[StructuredAttempt], role: str) -> None:
         self.attempts = list(attempts)
         self.role = role
+        self.easyicu_structured_attempt_metadata = safe_structured_attempt_metadata(
+            self.attempts
+        )
         super().__init__(
             f"StructuredResponseFailure[role={role}, "
             f"n_attempts={len(self.attempts)}]: "
@@ -597,6 +600,7 @@ def call_llm_with_structured_retry(
     feedback_preamble: str = _DEFAULT_FEEDBACK_PREAMBLE,
     feedback_instructions: str = _DEFAULT_FEEDBACK_INSTRUCTIONS,
     progress_callback: Optional[Callable[[StructuredRetryProgress], None]] = None,
+    structured_output: Any = None,
 ) -> T:
     """Call ``llm.complete`` and parse the result; retry with feedback on parse failure.
 
@@ -668,9 +672,13 @@ def call_llm_with_structured_retry(
         )
         try:
             clear_provider_call_receipt()
-            raw = authorized_complete(
-                llm, current, max_tokens=max_tokens, temperature=temperature
-            )
+            complete_kwargs: Dict[str, Any] = {
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            if structured_output is not None:
+                complete_kwargs["structured_output"] = structured_output
+            raw = authorized_complete(llm, current, **complete_kwargs)
         except BaseException as exc:
             # Transport failures abort the loop here, outside the parser
             # guard below. Carry the attempts recorded so far out with the
