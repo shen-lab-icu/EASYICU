@@ -3,6 +3,7 @@ from pathlib import Path
 
 from tools.audit_capability_inventory import (
     ALLOWED_STATUSES,
+    _current_graph,
     audit_capability_inventory,
     parse_inventory,
     zero_inbound_leaf_paths,
@@ -14,6 +15,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def test_every_zero_inbound_module_has_an_explicit_disposition() -> None:
     assert audit_capability_inventory(REPO_ROOT, today=date(2026, 8, 13)) == ()
+
+
+def test_current_graph_uses_running_interpreter_without_repo_venv(tmp_path) -> None:
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "research_agent_module_graph.py").write_text(
+        'import json\nprint(json.dumps({"modules": {"demo": "demo.py"}, "edges": []}))\n',
+        encoding="utf-8",
+    )
+
+    assert _current_graph(tmp_path) == {
+        "modules": {"demo": "demo.py"},
+        "edges": [],
+    }
 
 
 def test_inventory_parser_keeps_status_and_review_decisions() -> None:

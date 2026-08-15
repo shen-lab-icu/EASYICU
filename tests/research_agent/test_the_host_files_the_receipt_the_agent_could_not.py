@@ -273,7 +273,8 @@ def _injection_assignments(tree: ast.AST) -> list[ast.Assign]:
         for node in ast.walk(tree)
         if isinstance(node, ast.Assign)
         and any(
-            isinstance(target, ast.Name) and target.id == "code"
+            (isinstance(target, ast.Name) and target.id == "code")
+            or (isinstance(target, ast.Attribute) and target.attr == "code")
             for target in node.targets
         )
         and isinstance(node.value, ast.Call)
@@ -301,10 +302,13 @@ def test_the_injection_runs_on_every_candidate_the_audit_will_judge():
 
     import inspect
 
-    from easyicu.research_agent.execution import phase as execution_phase
+    from easyicu.research_agent.execution import candidate_loop
 
-    tree = ast.parse(inspect.getsource(execution_phase))
-    injections = _injection_assignments(tree)
+    loop_tree = ast.parse(inspect.getsource(candidate_loop._run_candidate_loop))
+    gate_tree = ast.parse(
+        inspect.getsource(candidate_loop._candidate_concept_audit_transition)
+    )
+    injections = _injection_assignments(loop_tree)
     assert injections, "the host never injects the receipt"
 
     # CORRECTED TWICE. v1 located the loop by ``reorder_forward_references``
@@ -318,26 +322,31 @@ def test_the_injection_runs_on_every_candidate_the_audit_will_judge():
     # must exist before the FIRST time any gate is asked about the code.
     gate_lines = sorted(
         node.lineno
-        for node in ast.walk(tree)
+        for node in ast.walk(gate_tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "findings_for_code"
     )
     assert gate_lines, "the deterministic gate is no longer asked about the code"
-    assert min(node.lineno for node in injections) < min(gate_lines), (
-        "the receipt is injected after the first gate reads the code; a step "
-        "refused there never reaches any later injection"
-    )
+    transition_calls = [
+        node.lineno
+        for node in ast.walk(loop_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_candidate_concept_audit_transition"
+    ]
+    assert transition_calls
+    assert min(node.lineno for node in injections) < min(transition_calls)
 
     # And it must still be inside a loop, so a repaired rewrite cannot drop it.
     loops = [
         node
-        for node in ast.walk(tree)
+        for node in ast.walk(loop_tree)
         if isinstance(node, (ast.While, ast.For))
         and any(
             isinstance(inner, ast.Call)
-            and isinstance(inner.func, ast.Attribute)
-            and inner.func.attr == "findings_for_code"
+            and isinstance(inner.func, ast.Name)
+            and inner.func.id == "_candidate_concept_audit_transition"
             for inner in ast.walk(node)
         )
     ]
@@ -353,9 +362,9 @@ def test_the_injection_precedes_the_digest_that_seals_the_candidate():
 
     import inspect
 
-    from easyicu.research_agent.execution import phase as execution_phase
+    from easyicu.research_agent.execution import candidate_loop
 
-    source = inspect.getsource(execution_phase)
+    source = inspect.getsource(candidate_loop._run_candidate_loop)
     tree = ast.parse(source)
     injections = _injection_assignments(tree)
     seals = [
@@ -363,7 +372,14 @@ def test_the_injection_precedes_the_digest_that_seals_the_candidate():
         for node in ast.walk(tree)
         if isinstance(node, ast.Assign)
         and any(
-            isinstance(target, ast.Name) and target.id == "candidate_code_digest"
+            (
+                isinstance(target, ast.Name)
+                and target.id == "candidate_code_digest"
+            )
+            or (
+                isinstance(target, ast.Attribute)
+                and target.attr == "candidate_code_digest"
+            )
             for target in node.targets
         )
     ]

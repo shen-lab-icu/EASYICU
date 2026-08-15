@@ -1824,6 +1824,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
                         "table:exposure_outcome_distribution",
                     ],
                     "method": "descriptive_summary",
+                    "scientific_action_id": "descriptive.descriptive_summary",
                     "icu_rule_refs": [],
                 },
                 {
@@ -2032,6 +2033,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
                         "table:exposure_outcome_distribution",
                     ],
                     "method": "descriptive_summary",
+                    "scientific_action_id": "descriptive.descriptive_summary",
                     "icu_rule_refs": [],
                 },
                 {

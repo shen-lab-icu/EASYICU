@@ -240,6 +240,7 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "src/easyicu/research_agent/providers/llm.py",
             "src/easyicu/research_agent/providers/mocks.py",
             "src/easyicu/research_agent/providers/prompts/v1/coder.txt",
+            "src/easyicu/research_agent/providers/prompts/v1/nature_writing.txt",
             "src/easyicu/research_agent/providers/protocol.py",
             "src/easyicu/research_agent/providers/structured_retry.py",
             "src/easyicu/research_agent/research_context/implementation_identity.py",
@@ -346,6 +347,7 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "easyicu/research_agent/providers/mocks.py",
             "easyicu/research_agent/providers/prompts/__init__.py",
             "easyicu/research_agent/providers/prompts/v1/coder.txt",
+            "easyicu/research_agent/providers/prompts/v1/nature_writing.txt",
             "easyicu/research_agent/providers/prompts/v1/replanner.txt",
             "easyicu/research_agent/providers/prompts/v1/system.txt",
             "easyicu/research_agent/providers/prompts/v1/writer.txt",
@@ -479,7 +481,9 @@ assert agent.SubmissionProfile is profiles.SubmissionProfile
 assert agent.ExperimentSpec is spec.ExperimentSpec
 
 from easyicu.research_agent.providers.prompts import load_prompt_pack
-assert set(load_prompt_pack()) == {'system', 'coder', 'replanner', 'writer'}
+assert set(load_prompt_pack()) == {
+    'system', 'coder', 'replanner', 'writer', 'nature_writing'
+}
 """
         smoke_env["EASYICU_WHEEL_ROOT"] = str(wheel_extract_dir)
         smoke_result = subprocess.run(

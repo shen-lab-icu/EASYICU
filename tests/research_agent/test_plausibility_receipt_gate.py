@@ -291,12 +291,12 @@ def test_the_published_contract_and_the_gate_share_their_field_names():
 def test_the_receipt_gate_runs_inside_the_final_deterministic_gates():
     """It has to reach the pipeline, not only its own unit test."""
 
-    from easyicu.research_agent.execution import phase
+    from easyicu.research_agent.execution import final_validation
 
     from .test_gate_evaluator_contract import gate_call_order
 
     order = gate_call_order(
-        phase._evaluate_final_deterministic_gates,
+        final_validation._evaluate_final_deterministic_gates,
         [
             "_demote_step_contract_for_primary_runner",
             "_demote_result_figure_shape_for_family_renderer",
@@ -322,28 +322,34 @@ def test_a_missing_receipt_enters_the_repair_loop_instead_of_sealing_the_step():
     dispatch, so the Coder gets its one attempt at it.
     """
 
-    from easyicu.research_agent.execution import phase
+    from easyicu.research_agent.execution import candidate_loop, phase_support
 
     from .test_gate_evaluator_contract import gate_call_order
 
-    order = gate_call_order(
-        phase.run_execute_phase,
-        [
-            "_step_deterministic_contract_findings",
-            "_demote_step_contract_for_primary_runner",
-            "_fresh_plausibility_receipt_findings",
-            "_deterministic_summary_repair",
-            "deterministic_contract_repair",
-            "_step_contract_repair_guidance",
-        ],
+    names = [
+        "_step_deterministic_contract_findings",
+        "_demote_step_contract_for_primary_runner",
+        "_fresh_plausibility_receipt_findings",
+        "_deterministic_summary_repair",
+        "deterministic_contract_repair",
+        "_step_contract_repair_guidance",
+    ]
+    stages = (
+        candidate_loop._candidate_contract_setup_transition,
+        candidate_loop._candidate_contract_repair_transition,
     )
+    order = {
+        name: (stage_index, line)
+        for stage_index, stage in enumerate(stages)
+        for name, line in gate_call_order(stage, names).items()
+    }
     receipt_gate = "_fresh_plausibility_receipt_findings"
     assert receipt_gate in order, (
         "the receipt check never runs in the pre-registration gate, so a "
         "missing receipt can only ever be terminal"
     )
     assert "plausibility_audit_receipt_findings" in inspect.getsource(
-        phase._fresh_plausibility_receipt_findings
+        phase_support._fresh_plausibility_receipt_findings
     )
     # Raised with the other early contract findings...
     assert (

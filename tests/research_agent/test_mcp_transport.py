@@ -229,9 +229,12 @@ async def test_queue_timeout_never_starts_a_detached_worker() -> None:
             timed_out = await session.call_tool("research_agent.list_skills", {})
 
             assert timed_out.isError is True
-            assert timed_out.structuredContent["error_code"] == "tool_timeout"
-            assert timed_out.structuredContent["dispatch_started"] is False
-            assert timed_out.structuredContent["execution_may_continue"] is False
+            timeout_payload = timed_out.structuredContent or json.loads(
+                timed_out.content[0].text
+            )
+            assert timeout_payload["error_code"] == "tool_timeout"
+            assert timeout_payload["dispatch_started"] is False
+            assert timeout_payload["execution_may_continue"] is False
             assert calls == 1
 
             release.set()

@@ -189,6 +189,12 @@ def _readiness_with_all_content_gates_passing(
         "execution_complete": True,
         "replan_budget_exhausted": False,
         "plan_truncated": False,
+        "scientific_maturity_article_grade": True,
+        "scientific_maturity_status": "article_grade",
+        "scientific_maturity_score": 100,
+        "scientific_maturity_dimension_scores": {},
+        "scientific_maturity_findings": [],
+        "scientific_maturity_facts": {},
     }
     monkeypatch.setattr(
         readiness_mod,

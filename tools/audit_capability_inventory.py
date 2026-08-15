@@ -8,6 +8,7 @@ import ast
 import json
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -73,9 +74,11 @@ def parse_inventory(path: Path) -> tuple[CapabilityRow, ...]:
 
 
 def _current_graph(repo_root: Path) -> dict:
+    local_python = repo_root / ".venv" / "bin" / "python"
+    python = local_python if local_python.is_file() else Path(sys.executable)
     result = subprocess.run(
         [
-            str(repo_root / ".venv" / "bin" / "python"),
+            str(python),
             str(repo_root / "tools" / "research_agent_module_graph.py"),
         ],
         cwd=repo_root,

@@ -188,7 +188,16 @@ def test_the_unbound_rules_use_the_wider_predicate_and_provenance_does_not() -> 
                 }:
                     users.setdefault(call.func.id, set()).add(node.name)
 
-    # The narrow predicate keeps its provenance/raise callers ...
-    assert "_branch_all_paths_raise" in users["_branch_all_paths_exit"]
+    # The narrow predicate is passed explicitly to the extracted provenance
+    # owner rather than called by an old nested helper in this module.
+    provenance_bindings = [
+        keyword.value.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "branch_all_paths_exit"
+        and isinstance(keyword.value, ast.Name)
+    ]
+    assert provenance_bindings == ["_branch_all_paths_exit"]
     # ... and the wider one is used somewhere the narrow one no longer is.
     assert users.get("_branch_never_falls_through")
