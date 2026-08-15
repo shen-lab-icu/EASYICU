@@ -2,7 +2,7 @@
 
 This renderer consumes **one** table and nothing else. That is the point of it:
 the product it reads carries its own denominators, missing counts, event counts
-and intervals, *and* the design that produced them, so there is no second
+and typed uncertainty policy, *and* the design that produced them, so there is no second
 lookup into a cohort summary to make the percentages meaningful. A renderer
 that needed two tables could not have its input contract closed before its
 parent ran, which is what left the figure steps unresolvable in a preflight.
@@ -10,7 +10,7 @@ parent ran, which is what left the figure steps unresolvable in a preflight.
 It draws what the parent already measured and decides nothing: no cohort, no
 exposure, no outcome, no category, no denominator, no interval. What it does do
 is **re-derive** every published quantity from the counts beside it, using the
-method and confidence level the table itself declares, and refuse to draw when
+uncertainty policy the table itself declares, and refuse to draw when
 one disagrees. Recomputing with the producer's own kernel cannot catch a bug in
 that kernel -- the producer verifies itself for that -- but it does catch a
 table that was edited, truncated or rebuilt between the two steps, which is the
@@ -30,6 +30,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from ...contracts.figure_plan import (
+    EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,
 )
@@ -42,6 +43,7 @@ from ...figures.publication import (
 )
 from ...schema import AnalysisStep
 from .exposure_outcome_distribution_executor import (
+    COUNTS_ONLY_COVARIANCE,
     EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
     EXPOSURE_OUTCOME_DISTRIBUTION_CONTRAST_COLUMNS,
     EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS,
@@ -273,7 +275,7 @@ def _declared_risk_difference(
     *,
     levels: pd.DataFrame,
     design: Mapping[str, Any],
-    confidence_level: float,
+    confidence_level: float | None,
 ) -> dict[str, Any] | None:
     """Validate the optional descriptive contrast without refitting a model.
 
@@ -338,6 +340,8 @@ def _declared_risk_difference(
         raise ValueError("the contrast does not declare risk_difference")
     if str(design["risk_difference_interval_method"]) != "linear_probability_wald":
         raise ValueError("the risk-difference interval method is unsupported")
+    if confidence_level is None:
+        raise ValueError("a risk-difference contrast requires confidence authority")
 
     reference = levels.iloc[reference_index]
     comparison = levels.iloc[comparison_index]
@@ -353,7 +357,13 @@ def _declared_risk_difference(
     standard_error = _finite(result["risk_difference_standard_error_pct"])
     low = _finite(result["risk_difference_ci_low_pct"])
     high = _finite(result["risk_difference_ci_high_pct"])
-    if None in {estimate, standard_error, low, high} or float(standard_error) <= 0:
+    if any(value is None for value in (estimate, standard_error, low, high)):
+        raise ValueError("risk-difference estimate or uncertainty is invalid")
+    assert estimate is not None
+    assert standard_error is not None
+    assert low is not None
+    assert high is not None
+    if standard_error <= 0:
         raise ValueError("risk-difference estimate or uncertainty is invalid")
     expected_estimate = round(
         float(comparison["outcome_rate_pct"]) - float(reference["outcome_rate_pct"]),
@@ -442,15 +452,27 @@ def _validate_marginal_interval(
     covariance_key: str,
     cluster_count_key: str,
     interval_method: str,
-    confidence_level: float,
+    confidence_level: float | None,
     label: str,
     structural_total: bool = False,
 ) -> None:
     expected_estimate = percentage(numerator, denominator)
+    if expected_estimate is None:
+        raise ValueError(f"a {label} has no finite denominator")
     if not _close(row[estimate_key], expected_estimate):
         if label == "outcome absolute risk":
             raise ValueError("an outcome rate is not its own events over denominator")
         raise ValueError("an exposure percentage is not its own counts")
+    if interval_method == "none_counts_only":
+        if (
+            not _absent(row[standard_error_key])
+            or not _absent(row[low_key])
+            or not _absent(row[high_key])
+            or str(row[covariance_key]) != COUNTS_ONLY_COVARIANCE
+            or not _absent(row[cluster_count_key])
+        ):
+            raise ValueError(f"a {label} counts-only result carries uncertainty")
+        return
     if structural_total:
         if (
             denominator <= 0
@@ -466,6 +488,8 @@ def _validate_marginal_interval(
             )
         return
     if interval_method == "wilson":
+        if confidence_level is None:
+            raise ValueError(f"a {label} Wilson interval lacks confidence authority")
         expected_low, expected_high = wilson_interval(
             numerator,
             denominator,
@@ -508,6 +532,9 @@ def _validate_marginal_interval(
         raise ValueError(
             f"a {label} interval lacks its patient-cluster covariance receipt"
         )
+    if confidence_level is None:
+        raise ValueError(f"a {label} clustered interval lacks confidence authority")
+    assert standard_error is not None
     critical = statistics.NormalDist().inv_cdf(1.0 - (1.0 - confidence_level) / 2.0)
     expected_low = round(
         max(0.0, float(expected_estimate) - critical * standard_error), 6
@@ -538,14 +565,28 @@ def _validate(
 
     design = _declared_design(frame)
     interval_method = str(design["interval_method"])
-    if interval_method not in {"wilson", "patient_cluster_robust_wald"}:
+    if interval_method not in {
+        "wilson",
+        "patient_cluster_robust_wald",
+        "none_counts_only",
+    }:
         raise ValueError(
             f"distribution table declares interval_method={interval_method!r}, "
             "which this renderer cannot re-derive"
         )
-    if (
+    counts_only = interval_method == "none_counts_only"
+    if counts_only:
+        if (
+            str(design["independent_interval_method"]) != "none_counts_only"
+            or not _absent(design["repeated_unit_interval_method"])
+        ):
+            raise ValueError(
+                "counts-only distribution table carries an interval projection"
+            )
+    elif (
         str(design["independent_interval_method"]) != "wilson"
-        or str(design["repeated_unit_interval_method"]) != "patient_cluster_robust_wald"
+        or str(design["repeated_unit_interval_method"])
+        != "patient_cluster_robust_wald"
     ):
         raise ValueError(
             "distribution table does not carry the closed marginal-interval projection"
@@ -561,7 +602,11 @@ def _validate(
             "effective marginal interval method contradicts the typed dependence design"
         )
     confidence_level = _finite(design["confidence_level"])
-    if confidence_level is None or not (0.5 < confidence_level < 1.0):
+    if counts_only and confidence_level is not None:
+        raise ValueError("counts-only distribution table carries confidence authority")
+    if not counts_only and (
+        confidence_level is None or not (0.5 < confidence_level < 1.0)
+    ):
         raise ValueError("distribution table declares an unusable confidence level")
     denominator_policy = str(design["denominator_policy"])
     if denominator_policy not in {"all_declared_rows", "observed_outcome_rows"}:
@@ -729,6 +774,12 @@ def run_exposure_outcome_distribution_figure(
     )
     frame, binding, source_name = bound.frame, bound.binding, bound.path.name
     levels, total, design, contrast = _validate(frame)
+    counts_only = str(design["interval_method"]) == "none_counts_only"
+    panel_templates = (
+        EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS
+        if counts_only
+        else EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS
+    )
 
     full_source = out_dir / f"{figure_product}_input_source_data.csv"
     prevalence_source = out_dir / f"{figure_product}_prevalence_source_data.csv"
@@ -799,12 +850,20 @@ def run_exposure_outcome_distribution_figure(
     fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(7.2, 3.4))
 
     prevalence = levels["exposure_pct"].astype(float)
-    prevalence_low = levels["exposure_ci_low_pct"].astype(float)
-    prevalence_high = levels["exposure_ci_high_pct"].astype(float)
+    prevalence_low = (
+        levels["exposure_ci_low_pct"].astype(float) if not counts_only else prevalence
+    )
+    prevalence_high = (
+        levels["exposure_ci_high_pct"].astype(float) if not counts_only else prevalence
+    )
     ax_a.barh(
         positions,
         prevalence,
-        xerr=[prevalence - prevalence_low, prevalence_high - prevalence],
+        xerr=(
+            [prevalence - prevalence_low, prevalence_high - prevalence]
+            if not counts_only
+            else None
+        ),
         color=palette["blue"],
         error_kw={"ecolor": palette["neutral"], "capsize": 2.0, "elinewidth": 1.0},
         height=0.55,
@@ -831,19 +890,22 @@ def run_exposure_outcome_distribution_figure(
     add_panel_label(ax_a, "A", x=-0.14, y=1.04)
 
     rate = levels["outcome_rate_pct"].astype(float)
-    low = levels["ci_low_pct"].astype(float)
-    high = levels["ci_high_pct"].astype(float)
-    ax_b.errorbar(
-        rate,
-        positions,
-        xerr=[rate - low, high - rate],
-        fmt="o",
-        color=palette["blue"],
-        ecolor=palette["neutral"],
-        elinewidth=1.0,
-        capsize=2.0,
-        markersize=4.2,
-    )
+    low = levels["ci_low_pct"].astype(float) if not counts_only else rate
+    high = levels["ci_high_pct"].astype(float) if not counts_only else rate
+    if counts_only:
+        ax_b.plot(rate, positions, "o", color=palette["blue"], markersize=4.2)
+    else:
+        ax_b.errorbar(
+            rate,
+            positions,
+            xerr=[rate - low, high - rate],
+            fmt="o",
+            color=palette["blue"],
+            ecolor=palette["neutral"],
+            elinewidth=1.0,
+            capsize=2.0,
+            markersize=4.2,
+        )
     ax_b.set_yticks(positions)
     ax_b.set_yticklabels(labels)
     ax_b.invert_yaxis()
@@ -934,9 +996,9 @@ def run_exposure_outcome_distribution_figure(
         height_mm=86.0,
         panels=[
             {
-                "panel_id": EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[0].panel_id,
+                "panel_id": panel_templates[0].panel_id,
                 "title": "Exposure distribution",
-                "role": EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[0].article_role,
+                "role": panel_templates[0].article_role,
                 "claim": (
                     "The parent's declared exposure levels partition the analysed "
                     "denominator, which each row carries with it."
@@ -944,35 +1006,36 @@ def run_exposure_outcome_distribution_figure(
                 "evidence_ids": [prevalence_source.name],
                 "metadata": {
                     "article_role": (
-                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[0].article_role
+                        panel_templates[0].article_role
                     ),
                     "chart_type": (
-                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[0].chart_type
+                        panel_templates[0].chart_type
                     ),
                     "source_products": list(
-                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[0].source_products
+                        panel_templates[0].source_products
                     ),
                     "source_data": [prevalence_source.name],
                 },
             },
             {
-                "panel_id": EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[1].panel_id,
+                "panel_id": panel_templates[1].panel_id,
                 "title": "Outcome rate by exposure",
-                "role": EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[1].article_role,
+                "role": panel_templates[1].article_role,
                 "claim": (
-                    "Events, the denominator they are taken over, the unobserved "
-                    "count and the interval are shown for every declared level."
+                    "Events, the denominator they are taken over, and the "
+                    + ("observed proportion" if counts_only else "interval")
+                    + " are shown for every declared level."
                 ),
                 "evidence_ids": outcome_evidence,
                 "metadata": {
                     "article_role": (
-                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[1].article_role
+                        panel_templates[1].article_role
                     ),
                     "chart_type": (
-                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[1].chart_type
+                        panel_templates[1].chart_type
                     ),
                     "source_products": list(
-                        EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS[1].source_products
+                        panel_templates[1].source_products
                     ),
                     "source_data": outcome_evidence,
                 },
@@ -980,12 +1043,21 @@ def run_exposure_outcome_distribution_figure(
         ],
         source_data=source_data,
         statistics_note=(
-            "Percentages and intervals are reproduced from the bound parent "
-            "table, which declares them: outcome rates are taken over "
+            (
+                "Counts, denominators, and observed percentages are reproduced "
+                "from the bound parent table; no uncertainty is computed. "
+                if counts_only
+                else "Percentages and intervals are reproduced from the bound parent table. "
+            )
+            + "Outcome rates are taken over "
             f"{design['denominator_policy']} with missing outcomes handled as "
-            f"{design['missing_outcome_policy']}, and intervals are "
-            f"{design['interval_method']} at "
-            f"{float(design['confidence_level']):.3g} coverage. The renderer "
+            f"{design['missing_outcome_policy']}. "
+            + (
+                ""
+                if counts_only
+                else f"Intervals are {design['interval_method']} at {float(design['confidence_level']):.3g} coverage. "
+            )
+            + "The renderer "
             "treats the overall exposure share as a structural 100% total, "
             "not an estimated proportion, so it intentionally carries no "
             "inferential interval. The renderer "

@@ -595,6 +595,26 @@ def test_pipeline_factory_rejects_unaddressed_repeat_stay_dependence_before_job(
     assert foundation_called is False
 
 
+def test_pipeline_design_gate_accepts_counts_only_repeat_stays() -> None:
+    study = {
+        **_complete_study(),
+        "cohort": {
+            **_complete_study()["cohort"],
+            "exclude_readmissions": False,
+        },
+        "analysis_design": {
+            "analysis_family": "descriptive_epidemiology",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        },
+    }
+
+    assert agent_pipeline_runs.validate_analysis_design_for_execution(study) == {
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "none_counts_only",
+    }
+
+
 def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
     study = _complete_study()
     snapshot = build_research_workflow_snapshot(

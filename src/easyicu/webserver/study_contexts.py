@@ -166,7 +166,12 @@ _ANALYSIS_UNITS = frozenset(
     {"row", "icu_stay", "hospital_admission", "patient", "site"}
 )
 _VARIANCE_ESTIMATORS = frozenset(
-    {"model_based", "heteroskedasticity_robust", "cluster_robust"}
+    {
+        "model_based",
+        "heteroskedasticity_robust",
+        "cluster_robust",
+        "none_counts_only",
+    }
 )
 _CLUSTER_UNITS = frozenset({"hospital_admission", "patient", "site", "custom"})
 _IDEA_HANDOFF_SCHEMA = {
@@ -1278,6 +1283,7 @@ def analysis_dependence_finding(context: Dict[str, Any]) -> Optional[Dict[str, A
         not design
         or design.get("analysis_unit") != "icu_stay"
         or cohort.get("exclude_readmissions") is not False
+        or design.get("variance_estimator") == "none_counts_only"
     ):
         return None
     if (

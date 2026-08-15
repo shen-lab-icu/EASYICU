@@ -333,7 +333,7 @@ def _build_planner_user_prompt(
         "count that left travels in the table) -- check the catalog's "
         "missingness for the exposure column, because 'fail_closed' on a "
         "column derived from measurements ends the step with no result; and a "
-        "confidence_level. Close outcome_levels "
+        "confidence_level. " + _payload.counts_only_distribution_guide() + " Close outcome_levels "
         "over every value the source can actually hold: any other observed "
         "value stops the step, because an undeclared value would otherwise be "
         "counted as a non-event and silently deflate every rate. Which "

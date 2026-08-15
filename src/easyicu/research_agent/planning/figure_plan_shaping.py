@@ -16,6 +16,7 @@ from ..contracts.figure_plan import (
     COHORT_FLOW_FIGURE_PANELS,
     COHORT_FLOW_INPUT,
     DATA_QUALITY_FIGURE_PANELS,
+    EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,
     GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS,
@@ -307,6 +308,23 @@ def bind_deterministic_figure_panels(
         ]
         input_set = frozenset(str(value) for value in step.inputs)
         templates = templates_by_inputs.get(input_set)
+        if input_set == frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_INPUT}):
+            producers = [
+                candidate
+                for candidate in plan.steps
+                if EXPOSURE_OUTCOME_DISTRIBUTION_INPUT
+                in {str(value) for value in candidate.expected_outputs}
+            ]
+            if len(producers) == 1:
+                distribution = producers[0].exposure_outcome_distribution_spec
+                if (
+                    distribution is not None
+                    and distribution.schema_version
+                    == "easyicu.exposure_outcome_distribution/3"
+                ):
+                    templates = (
+                        EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS
+                    )
         if templates is None and len(input_set) == 1:
             input_key = next(iter(input_set))
             kind, separator, product = input_key.partition(":")

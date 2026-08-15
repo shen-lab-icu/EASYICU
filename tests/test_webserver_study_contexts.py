@@ -432,6 +432,30 @@ def test_study_context_accepts_explicit_repeat_stay_dependence_closure(
     assert response.status_code == 200
 
 
+def test_study_context_accepts_counts_only_with_repeat_stays() -> None:
+    response = TestClient(app).post(
+        "/api/study-contexts",
+        json={
+            "id": "study_repeat_stay_counts_only",
+            "question": "Report observed counts and proportions only.",
+            "cohort": {
+                "label": "All adult ICU stays",
+                "exclude_readmissions": False,
+            },
+            "analysis_design": {
+                "analysis_family": "descriptive_epidemiology",
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "none_counts_only",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["context"]["analysis_design"]["variance_estimator"] == (
+        "none_counts_only"
+    )
+
+
 def test_study_context_rejects_clinical_event_as_physical_window_anchor() -> None:
     response = TestClient(app).post(
         "/api/study-contexts",

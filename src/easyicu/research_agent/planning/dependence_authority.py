@@ -1,10 +1,10 @@
-"""Bind a study-owned repeated-unit design to executable model contracts.
+"""Bind study-owned inference limits to executable analysis contracts.
 
 The compatibility input currently lives inside ``data_constraints`` as a JSON
-object.  Only the exact ``analysis_design`` object is parsed; ordinary prose,
-including mentions or negations of clustering, has no authority.  The output
-is the typed plan contract consumed unchanged by execution and scientific
-review.
+object. Only the exact ``analysis_design`` object is parsed; ordinary prose,
+including mentions or negations of clustering or uncertainty, has no authority.
+The output is the typed plan contract consumed unchanged by execution and
+scientific review.
 """
 
 from __future__ import annotations
@@ -15,6 +15,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from ..contracts.descriptive_execution import (
+    exposure_outcome_distribution_execution_verdict,
+)
 from ..contracts.dependence import PlannedDependenceRequirement
 from ..schema import AnalysisPlan, ResearchContext
 
@@ -40,7 +43,10 @@ class _AnalysisDesign(BaseModel):
         None
     )
     variance_estimator: Literal[
-        "model_based", "heteroskedasticity_robust", "cluster_robust"
+        "model_based",
+        "heteroskedasticity_robust",
+        "cluster_robust",
+        "none_counts_only",
     ]
 
 
@@ -85,6 +91,58 @@ def _requested_cluster_design(context: ResearchContext) -> _AnalysisDesign | Non
     return parsed
 
 
+def _counts_only_design(context: ResearchContext) -> bool:
+    preferences = context.user_preferences
+    raw = getattr(preferences, "data_constraints", None)
+    if not isinstance(raw, str) or not raw.strip():
+        return False
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, Mapping) or not isinstance(
+        payload.get("analysis_design"), Mapping
+    ):
+        return False
+    try:
+        parsed = _AnalysisDesign.model_validate(dict(payload["analysis_design"]))
+    except ValueError as exc:
+        raise DependenceAuthorityError(
+            "analysis_design does not match the closed repeated-unit contract: "
+            + str(exc)
+        ) from exc
+    return parsed.variance_estimator == "none_counts_only"
+
+
+def _counts_only_step_is_typed(step: object) -> bool:
+    method = str(getattr(step, "method", "") or "").strip().casefold()
+    outputs = [
+        str(value or "").strip()
+        for value in getattr(step, "expected_outputs", None) or ()
+    ]
+    if getattr(step, "exposure_outcome_distribution_spec", None) is not None:
+        return exposure_outcome_distribution_execution_verdict(step).claimed
+    audit = getattr(step, "measurement_audit_spec", None)
+    if audit is not None:
+        return bool(
+            outputs
+            and len(outputs) == len(audit.products)
+            and all(
+                output.startswith("table:")
+                and audit.audit_for(output.partition(":")[2]) is not None
+                for output in outputs
+            )
+        )
+    if method == "cohort_definition_and_attrition":
+        return set(outputs) == {
+            "artifact:analysis_cohort",
+            "table:cohort_flow",
+        }
+    if method == "visualization":
+        return bool(outputs and all(output.startswith("figure:") for output in outputs))
+    return False
+
+
 def _direct_patient_source(context: ResearchContext) -> str | None:
     provenance = context.cohort.provenance or {}
     declared = [
@@ -119,10 +177,10 @@ def context_patient_group_authority(
                 group_derivation="prefix_before_delimiter",
                 delimiter=":s",
             )
-    source = _direct_patient_source(context)
-    if source:
+    direct_source = _direct_patient_source(context)
+    if direct_source:
         return PlannedDependenceRequirement(
-            group_source=source,
+            group_source=direct_source,
             group_derivation="identity",
         )
     return None
@@ -152,7 +210,7 @@ def bind_context_dependence_authority(
     plan: AnalysisPlan,
     context: ResearchContext,
 ) -> AnalysisPlan:
-    """Attach one immutable authority to every adjusted-association requirement.
+    """Project immutable dependence or counts-only authority into the plan.
 
     Existing declarations are accepted only when byte-equivalent after typed
     normalization.  A Planner cannot invent a grouping column, and a stale plan
@@ -160,6 +218,7 @@ def bind_context_dependence_authority(
     """
 
     authority = context_dependence_authority(context)
+    counts_only = _counts_only_design(context)
     existing = [
         requirement.dependence
         for step in plan.steps
@@ -178,7 +237,8 @@ def bind_context_dependence_authority(
                 "analysis dependence was declared without a matching "
                 "StudyContext authority"
             )
-        return plan
+        if not counts_only:
+            return plan
     if any(item != authority for item in existing):
         raise DependenceAuthorityError(
             "analysis dependence conflicts with the StudyContext grouping authority"
@@ -187,6 +247,24 @@ def bind_context_dependence_authority(
     changed = False
     steps = []
     for step in plan.steps:
+        if counts_only and (
+            step.model_requirements
+            or step.family_primary_result_requirement is not None
+            or step.scientific_capability is not None
+        ):
+            raise DependenceAuthorityError(
+                "counts-only analysis_design cannot authorize a model or inferential capability"
+            )
+        if counts_only and step.table_one_spec is not None:
+            raise DependenceAuthorityError(
+                "counts-only analysis_design forbids Table One summaries"
+            )
+        if counts_only and not _counts_only_step_is_typed(step):
+            raise DependenceAuthorityError(
+                "counts-only analysis_design permits only cohort accounting, the "
+                "typed exposure/outcome distribution, measurement audit, and "
+                "rendering steps"
+            )
         requirements = []
         for requirement in step.model_requirements:
             if requirement.dependence is None:
@@ -197,8 +275,26 @@ def bind_context_dependence_authority(
         if requirements != list(step.model_requirements):
             update["model_requirements"] = requirements
         distribution = step.exposure_outcome_distribution_spec
+        if counts_only and distribution is not None:
+            if distribution.risk_difference_contrast is not None:
+                raise DependenceAuthorityError(
+                    "counts-only analysis_design forbids risk-difference contrasts"
+                )
+            distribution_payload = distribution.model_dump(mode="python")
+            distribution_payload.update(
+                schema_version="easyicu.exposure_outcome_distribution/3",
+                interval_method="none_counts_only",
+                repeated_unit_interval_method=None,
+                confidence_level=None,
+                dependence=None,
+            )
+            update["exposure_outcome_distribution_spec"] = type(
+                distribution
+            ).model_validate(distribution_payload)
+            changed = True
         if (
-            distribution is not None
+            not counts_only
+            and distribution is not None
             and distribution.dependence is None
         ):
             update["exposure_outcome_distribution_spec"] = distribution.model_copy(

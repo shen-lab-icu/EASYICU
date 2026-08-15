@@ -103,6 +103,20 @@ EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS = (
         source_products=(EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,),
     ),
 )
+EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS = (
+    DeterministicFigurePanelTemplate(
+        panel_id="exposure_prevalence",
+        article_role="distribution",
+        chart_type="prevalence_panel",
+        source_products=(EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,),
+    ),
+    DeterministicFigurePanelTemplate(
+        panel_id="outcome_absolute_risk",
+        article_role="distribution",
+        chart_type="point_absolute_risk",
+        source_products=(EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,),
+    ),
+)
 GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS = (
     DeterministicFigurePanelTemplate(
         panel_id="grouped_distribution",
@@ -163,6 +177,7 @@ __all__ = [
     "DATA_QUALITY_FIGURE_PANELS",
     "DeterministicFigurePanelTemplate",
     "EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS",
+    "EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS",
     "EXPOSURE_OUTCOME_DISTRIBUTION_INPUT",
     "GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS",
     "GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT",

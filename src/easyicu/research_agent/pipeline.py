@@ -2713,6 +2713,8 @@ class ResearchAgentPipeline:
                 plan=plan
             )
             findings.extend(report_input_findings)
+            # Bind before deterministic figure selection; the universal gate below rechecks every source.
+            plan = bind_context_dependence_authority(plan=plan, context=agent_context)
             # Force a declared figure step whenever the publication-figure skill
             # will produce one regardless of the plan: the scorer reads
             # analysis_plan.json, and a question-only heuristic misses tasks

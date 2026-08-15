@@ -340,6 +340,11 @@ def repeated_unit_design_closed(
         method = _method_head(step)
         model_requirements = tuple(step.model_requirements)
         distribution = step.exposure_outcome_distribution_spec
+        counts_only_distribution = bool(
+            distribution is not None
+            and distribution.schema_version
+            == "easyicu.exposure_outcome_distribution/3"
+        )
         if not (
             model_requirements
             or distribution is not None
@@ -360,7 +365,7 @@ def repeated_unit_design_closed(
             )
         ):
             return False
-        if distribution is not None and not (
+        if distribution is not None and not counts_only_distribution and not (
             has_patient_authority
             and dependence_matches_context(
                 context=context,

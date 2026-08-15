@@ -680,6 +680,11 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
             "cluster_unit": "patient",
             "grouping_coordinate": grouping.output_identity_column,
         }
+    if variance_estimator == "none_counts_only":
+        return {
+            "analysis_unit": analysis_unit,
+            "variance_estimator": variance_estimator,
+        }
     if variance_estimator != "model_based":
         raise ResearchPipelineRunError(
             "research_pipeline_variance_estimator_unsupported",
@@ -687,7 +692,10 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
             details={
                 "analysis_unit": analysis_unit,
                 "variance_estimator": variance_estimator,
-                "supported_variance_estimators": ["model_based"],
+                "supported_variance_estimators": [
+                    "model_based",
+                    "none_counts_only",
+                ],
             },
         )
     return {
