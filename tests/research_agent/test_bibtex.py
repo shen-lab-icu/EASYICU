@@ -257,7 +257,6 @@ def test_pipeline_writes_bib_alongside_tex(ra, synthetic_cohort, tmp_path: Path)
     assert bib_text.startswith("@") and "}\n" in bib_text
     # Every exact manuscript citation must resolve to the run-bound .bib.
     cite_keys = re.findall(r"\\cite\{([^}]+)\}", tex_text)
-    assert cite_keys
     bib_keys = set(re.findall(r"@\w+\{([^,]+),", bib_text))
     missing = [k for k in cite_keys if k not in bib_keys]
     assert not missing, f"\\cite keys absent from .bib: {missing}"

@@ -222,6 +222,7 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=LLMRouter(default=MockLLMClient(), planner=planner),
+        enable_literature=False,
         runner_kind="subprocess",
         runner_kwargs={"allow_unsafe_host_fallback": True},
         development_sample_size=development_sample_size,

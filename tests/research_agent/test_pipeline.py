@@ -9315,7 +9315,8 @@ def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
     ):
         return (
             "The model's performance was consistent across folds, indicating robustness.\n\n"
-            "Baseline characteristics are summarised in Table 1 {evidence:research_context}.\n"
+            "The analysis materials are available in the run evidence record "
+            "{evidence:table_one}.\n"
         )
 
     monkeypatch.setattr(ra.ManuscriptAgent, "run", fake_manuscript_run)

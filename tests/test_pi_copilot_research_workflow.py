@@ -3124,10 +3124,15 @@ def test_web_runner_timeout_is_typed_and_records_bounded_retry_diagnostic(
     class FakePipeline:
         def run(self, **_kwargs: Any) -> SimpleNamespace:
             exc = TimeoutError("provider request timed out")
-            exc.add_note(
+            note = (
                 "structured-retry history: validator rejected /Users/example/run "
                 "api_key=test-secret-value"
             )
+            add_note = getattr(exc, "add_note", None)
+            if add_note is not None:
+                add_note(note)
+            else:
+                exc.__notes__ = [note]
             raise exc
 
     monkeypatch.setattr(

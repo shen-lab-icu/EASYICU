@@ -391,7 +391,12 @@ result = model.fit(disp=0, method='newton')
 
 def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() -> None:
     research_agent_root = Path(code_repair.__file__).resolve().parents[1]
-    source = (research_agent_root / "execution/phase.py").read_text(encoding="utf-8")
+    source = (research_agent_root / "execution/candidate_loop.py").read_text(
+        encoding="utf-8"
+    )
+    phase_source = (research_agent_root / "execution/phase.py").read_text(
+        encoding="utf-8"
+    )
     publication_figure_source = (
         research_agent_root / "execution" / "publication_figure.py"
     ).read_text(encoding="utf-8")
@@ -402,7 +407,7 @@ def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() ->
         research_agent_root / "execution" / "step_candidate_recovery.py"
     ).read_text(encoding="utf-8")
 
-    # Two in-loop boundaries remain in the execute phase.  The resumed-failure
+    # Two in-loop boundaries remain in the candidate-loop owner. The resumed-failure
     # boundary is owned by repairs.coordination and returns a candidate to the
     # execute phase's central authorization callback before it can run.
     assert source.count("_deterministic_summary_repair(") == 2
@@ -425,7 +430,8 @@ def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() ->
     # used by other seams contains this text, so a plain substring check stays
     # green even when the recovery injection is replaced.
     assert re.search(
-        r"(?<![\w])authorize_automatic_repair=_authorize_automatic_repair", source
+        r"(?<![\w])authorize_automatic_repair=_authorize_automatic_repair",
+        phase_source,
     )
     # No second path in the recovery module may run a repair unauthorized.
     assert step_candidate_recovery_source.count("authorize_automatic_repair(") == 1
@@ -440,22 +446,26 @@ def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() ->
     coordination_source = Path(repair_coordination.__file__).read_text(encoding="utf-8")
     assert coordination_source.count("deterministic_concept_audit_repair(") == 1
     assert "authorize(" in coordination_source
-    assert "authorize=_authorize_automatic_repair" in source
+    assert "authorize=_authorize_automatic_repair" in phase_source
     # Six historical code-candidate boundaries minus the extracted concept
     # helper, the rendering-only adapter, plus the local helper definition;
     # 8268d27 moved the resume boundary out to step_candidate_recovery, which
     # reaches the same gate through the injected callback asserted above.
     # Case-plugin candidates share the runner boundary and therefore cannot
     # bypass it.
-    assert source.count("_authorize_automatic_repair(") == 5
+    assert source.count("_authorize_automatic_repair(") == 4
+    assert phase_source.count("_authorize_automatic_repair(") == 1
     assert publication_figure_source.count("_authorize_automatic_repair(") == 1
     assert (
         source.count("_authorize_automatic_repair(")
+        + phase_source.count("_authorize_automatic_repair(")
         + publication_figure_source.count("_authorize_automatic_repair(")
         + step_candidate_recovery_source.count("authorize_automatic_repair(")
         == 7
     )
-    assert "authorizer=lambda repair_id: _automatic_repair_authorized(" in source
+    assert (
+        "authorizer=lambda repair_id: _automatic_repair_authorized(" in phase_source
+    )
 
 
 def test_only_closed_source_figure_renderers_are_structural_and_automatic() -> None:

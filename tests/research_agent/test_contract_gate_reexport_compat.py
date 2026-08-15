@@ -66,4 +66,4 @@ def test_compat_table_is_nonempty_and_covers_both_modules():
     }
     assert len(contract_gate.__all__) >= 14
     assert len(figure_contract_preparation.__all__) == 8
-    assert len(publication_figure_execution.__all__) == 6
+    assert len(publication_figure_execution.__all__) == 8

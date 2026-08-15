@@ -236,6 +236,7 @@ def _patch_load_concepts(monkeypatch, frame):
 def test_p1_1_audit_is_written_without_a_caller_supplied_workdir(tmp_path, monkeypatch):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"{SCOPE_METADATA},{SCOPE_READ_PATIENT_DATA}")
     _patch_load_concepts(monkeypatch, pd.DataFrame({"sofa2": range(30)}))
 
     dispatch(
@@ -298,6 +299,7 @@ def test_p1_1_rows_are_withheld_when_the_audit_cannot_be_written(tmp_path, monke
 def test_p1_1_access_intent_exists_before_the_loader_runs(tmp_path, monkeypatch):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"{SCOPE_METADATA},{SCOPE_READ_PATIENT_DATA}")
     audit_root = tmp_path / "audit" / ".easyicu_mcp_audit"
 
     def _load(**kwargs):

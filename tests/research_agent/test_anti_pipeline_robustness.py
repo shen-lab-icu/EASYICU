@@ -1550,17 +1550,17 @@ def test_prespecified_sensitivity_grid_cannot_pass_with_description_rows_only(
 
 
 def test_locked_sensitivity_contract_is_wired_into_both_contract_passes() -> None:
-    from easyicu.research_agent.execution.phase import (
-        _evaluate_final_deterministic_gates,
-        run_execute_phase,
-    )
-
-    from easyicu.research_agent.execution.phase import (
+    from easyicu.research_agent.execution import candidate_loop, final_validation, phase
+    from easyicu.research_agent.gates.contract import (
         _step_deterministic_contract_findings,
     )
 
-    execute_source = inspect.getsource(run_execute_phase)
-    final_gate_source = inspect.getsource(_evaluate_final_deterministic_gates)
+    early_gate_source = inspect.getsource(
+        candidate_loop._candidate_contract_setup_transition
+    )
+    final_gate_source = inspect.getsource(
+        final_validation._evaluate_final_deterministic_gates
+    )
     shared_source = inspect.getsource(_step_deterministic_contract_findings)
     # Figure repair now completes before evidence seal/registration.  The old
     # third pass belonged to the retired post-registration mutation branch;
@@ -1571,29 +1571,33 @@ def test_locked_sensitivity_contract_is_wired_into_both_contract_passes() -> Non
     # gate wire it in — so the wiring guarantee holds without duplicating the
     # implementation inside the already-large execution function.
     assert shared_source.count("_cohort_definition_sensitivity_contract_findings(") == 1
-    assert execute_source.count("_step_deterministic_contract_findings(") == 1
-    assert "_evaluate_final_deterministic_gates(" in execute_source
+    assert early_gate_source.count("_step_deterministic_contract_findings(") == 1
     assert final_gate_source.count("_step_deterministic_contract_findings(") == 1
+    assert "_evaluate_final_deterministic_gates(" in inspect.getsource(
+        phase.run_execute_phase
+    )
 
 
 def test_later_repairs_receive_prior_concept_findings_as_regression_constraints():
+    from easyicu.research_agent.execution import candidate_loop
     from easyicu.research_agent.execution.concept_repair import (
         run_concept_repair_loop,
     )
     from easyicu.research_agent.execution.phase import run_execute_phase
 
     phase_source = inspect.getsource(run_execute_phase)
+    candidate_source = inspect.getsource(candidate_loop)
     concept_repair_source = inspect.getsource(run_concept_repair_loop)
     assert "def _monotonic_concept_constraint_ticket" in phase_source
-    assert "monotonic_constraint_ticket=(_monotonic_concept_constraint_ticket)" in (
-        phase_source
+    assert "_monotonic_concept_constraint_ticket=(" in phase_source
+    direct_tickets = candidate_source.count(
+        "*attempt._monotonic_concept_constraint_ticket()"
     )
-    direct_tickets = phase_source.count("*_monotonic_concept_constraint_ticket()")
     delegated_tickets = concept_repair_source.count(
         "*services.monotonic_constraint_ticket()"
     )
     assert direct_tickets + delegated_tickets >= 4
-    assert "HOST-OWNED REPAIR AUTHORITY" not in phase_source
+    assert "HOST-OWNED REPAIR AUTHORITY" not in candidate_source
 
 
 def test_untrusted_runtime_diagnostics_can_authorize_syntactic_repairs_only():

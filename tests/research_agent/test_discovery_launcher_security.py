@@ -35,6 +35,10 @@ def test_mcp_loopback_environment_url_never_forwards_provider_secrets(
         def __init__(self, *, workdir, llm):
             pass
 
+        @classmethod
+        def from_config(cls, config, *, services):
+            return cls(workdir=config.workdir, llm=services.llm)
+
         def run(self, *, cohort, **kwargs):
             return SimpleNamespace(model_dump=lambda: {"status": "ok"})
 

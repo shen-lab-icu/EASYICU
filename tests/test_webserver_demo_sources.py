@@ -651,14 +651,15 @@ def test_prepare_stage_wraps_native_demo_error_for_job_and_preserves_cause(
         time.sleep(0.01)
 
     assert job.status == "failed"
-    assert job.error == json.dumps(
+    expected_json = json.dumps(
         expected,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
     )
-    assert json.loads(job.error) == expected
+    assert job.error == f"{expected['code']}: {expected_json}"
+    assert json.loads(job.error.partition(": ")[2]) == expected
 
 
 def test_prepare_stage_does_not_double_wrap_same_phase_diagnostic() -> None:
@@ -756,14 +757,15 @@ def test_prepare_job_falls_back_to_stable_unstructured_diagnostic_string(
     }
     assert job.status == "failed"
     assert isinstance(job.error, str)
-    assert job.error == json.dumps(
+    expected_json = json.dumps(
         expected,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
     )
-    assert json.loads(job.error) == expected
+    assert job.error == f"{expected['code']}: {expected_json}"
+    assert json.loads(job.error.partition(": ")[2]) == expected
     assert job.snapshot()["error"] == job.error
 
 

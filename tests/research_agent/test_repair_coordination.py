@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from easyicu.research_agent.execution import candidate_loop
 from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.execution.step_candidate_recovery import (
     StepCandidateRecovery,
@@ -45,7 +46,7 @@ def _repair_orchestration_tree() -> ast.Module:
 
     source = "\n\n".join(
         (
-            inspect.getsource(pipeline_execute.run_execute_phase),
+            inspect.getsource(candidate_loop),
             inspect.getsource(StepCandidateRecovery),
             inspect.getsource(run_concept_repair_loop),
         )
@@ -58,9 +59,9 @@ def _is_repair_call(node: ast.Call) -> bool:
         isinstance(node.func, ast.Name) and node.func.id == "_repair_with_capsule"
     ) or (
         isinstance(node.func, ast.Attribute)
-        and node.func.attr == "repair_with_capsule"
+        and node.func.attr in {"_repair_with_capsule", "repair_with_capsule"}
         and isinstance(node.func.value, ast.Name)
-        and node.func.value.id in {"self", "services"}
+        and node.func.value.id in {"attempt", "self", "services"}
     )
 
 
@@ -341,7 +342,8 @@ def test_every_pipeline_llm_repair_reservation_is_authority_bound():
             )
             or (
                 isinstance(node.func, ast.Attribute)
-                and node.func.attr == "consume_llm_repair_budget"
+                and node.func.attr
+                in {"_consume_llm_repair_budget", "consume_llm_repair_budget"}
             )
         )
     ]
@@ -383,7 +385,7 @@ def test_every_pipeline_llm_repair_reservation_is_authority_bound():
 
 
 def test_runtime_repair_uses_empty_typed_authority_side_channel():
-    tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
+    tree = ast.parse(inspect.getsource(candidate_loop))
     empty_runtime_assignments = [
         node
         for node in ast.walk(tree)
@@ -403,11 +405,16 @@ def test_runtime_repair_uses_empty_typed_authority_side_channel():
     for function_name in ("_consume_llm_repair_budget", "_repair_with_capsule"):
         runtime_calls = []
         for node in ast.walk(tree):
-            if not (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == function_name
-            ):
+            if not isinstance(node, ast.Call):
+                continue
+            called_name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else ""
+            )
+            if called_name != function_name:
                 continue
             keywords = {keyword.arg: keyword.value for keyword in node.keywords}
             category = keywords.get("provider_category")

@@ -104,6 +104,7 @@ def _visual_governance_llm(
                     "inputs": ["stay_id"],
                     "expected_outputs": ["table:summary"],
                     "method": "descriptive_summary",
+                    "scientific_action_id": "descriptive.descriptive_summary",
                     "icu_rule_refs": [],
                 }
             ],
@@ -309,10 +310,16 @@ def test_visual_qa_stays_before_contract_gate() -> None:
     # test_visual_gate_component + the gate-purity contract.
     from easyicu.research_agent.execution import phase as pipeline_execute
 
-    order = gate_call_order(
-        pipeline_execute.run_execute_phase,
-        {"collect_visual_gate_result", "_step_deterministic_contract_findings"},
+    stages = (
+        pipeline_execute._candidate_success_prepare_transition,
+        pipeline_execute._candidate_contract_setup_transition,
     )
+    names = {"collect_visual_gate_result", "_step_deterministic_contract_findings"}
+    order = {
+        name: (stage_index, line)
+        for stage_index, stage in enumerate(stages)
+        for name, line in gate_call_order(stage, names).items()
+    }
     assert (
         order["collect_visual_gate_result"]
         < order["_step_deterministic_contract_findings"]
@@ -327,14 +334,20 @@ def test_figure_canonicalization_repair_stays_between_gate_and_figure_audits() -
     # contract (was three brittle source.index anchors).
     from easyicu.research_agent.execution import phase as pipeline_execute
 
-    order = gate_call_order(
-        pipeline_execute.run_execute_phase,
-        {
-            "_step_deterministic_contract_findings",
-            "_install_figure_contract_source_data_canonicalization",
-            "_post_canonicalization_figure_findings",
-        },
+    stages = (
+        pipeline_execute._candidate_success_prepare_transition,
+        pipeline_execute._candidate_contract_setup_transition,
     )
+    names = {
+        "_step_deterministic_contract_findings",
+        "_install_figure_contract_source_data_canonicalization",
+        "_post_canonicalization_figure_findings",
+    }
+    order = {
+        name: (stage_index, line)
+        for stage_index, stage in enumerate(stages)
+        for name, line in gate_call_order(stage, names).items()
+    }
     assert (
         order["_step_deterministic_contract_findings"]
         < order["_install_figure_contract_source_data_canonicalization"]

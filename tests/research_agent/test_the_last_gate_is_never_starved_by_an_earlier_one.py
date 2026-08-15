@@ -225,11 +225,11 @@ def test_the_execute_phase_asks_the_gate_by_name():
     source-text test would survive the argument being dropped from one site.
     """
 
-    from easyicu.research_agent.execution import phase as execution_phase
+    from easyicu.research_agent.execution import candidate_loop
     from easyicu.research_agent.execution import concept_repair
 
     trees = (
-        ast.parse(inspect.getsource(execution_phase)),
+        ast.parse(inspect.getsource(candidate_loop)),
         ast.parse(inspect.getsource(concept_repair.run_concept_repair_loop)),
     )
     asked: collections.Counter = collections.Counter()
@@ -408,14 +408,21 @@ def test_the_execute_phase_asks_the_budget_about_runtime_too():
 
     import inspect
 
-    from easyicu.research_agent.execution import phase as execution_phase
+    from easyicu.research_agent.execution import candidate_loop
 
-    tree = ast.parse(inspect.getsource(execution_phase))
+    tree = ast.parse(inspect.getsource(candidate_loop))
     asked: set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+        if not isinstance(node, ast.Call):
             continue
-        if node.func.id not in {
+        function_name = (
+            node.func.id
+            if isinstance(node.func, ast.Name)
+            else node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else ""
+        )
+        if function_name not in {
             "_llm_repair_budget_available",
             "_logical_llm_repair_budget_available",
         }:

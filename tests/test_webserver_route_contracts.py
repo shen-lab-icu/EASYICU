@@ -142,6 +142,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "POST",
+        "/api/copilot/pi/sessions/{session_id}/presentation",
+        "post_pi_copilot_presentation_pin",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/child-jobs/{job_id}/archive",
+        "post_pi_copilot_child_job_archive",
+    ),
+    (
+        "POST",
         "/api/copilot/pi/sessions/{session_id}/abort",
         "post_pi_copilot_abort",
     ),

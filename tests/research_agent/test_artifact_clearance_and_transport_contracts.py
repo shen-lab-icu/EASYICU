@@ -883,7 +883,7 @@ def test_the_receipt_distinguishes_the_five_states(tmp_path):
     payload = json.loads(
         (tmp_path / "figure_egress_receipt.json").read_text(encoding="utf-8")
     )
-    assert payload["schema"] == "easyicu.figure_egress_receipt/3"
+    assert payload["schema"] == "easyicu.figure_egress_receipt/4"
     assert payload["transport_counts"] == {
         "transport_completed": 1,
         "transport_unknown": 1,

@@ -9,5 +9,5 @@ _Generated from the shipped dictionaries, data-source registry, clinical contrac
 | Unique merged dictionary concepts | 269 |
 | Supported public ICU databases | 6: `eicu`, `mimic`, `miiv`, `hirid`, `aumc`, `sic` |
 | Clinical definition contracts | 10 |
-| Scientific capabilities | 8 |
-| Capabilities with an explicit reportable validator owner | 2 |
+| Scientific capabilities | 10 |
+| Capabilities with an explicit reportable validator owner | 3 |

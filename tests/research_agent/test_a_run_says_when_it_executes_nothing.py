@@ -45,13 +45,12 @@ def test_the_emitter_forwards_flat_keywords_into_the_audit_detail():
     nested one level deeper than every other record in the log.
     """
 
-    from easyicu.research_agent import pipeline as pipeline_module
+    from easyicu.research_agent.orchestration.progress import (
+        ResumableProgressChannel,
+    )
 
-    source = inspect.getsource(pipeline_module)
-    marker = "def _emit_progress(stage: str, message: str, **extra: Any) -> None:"
-    assert marker in source
-    body = source.split(marker, 1)[1][:1200]
-    assert 'if k not in {"status", "step_id"}' in body
+    source = inspect.getsource(ResumableProgressChannel.emit)
+    assert 'if key not in {"status", "step_id"}' in source
 
 
 def _announcement_call() -> "ast.Call":
