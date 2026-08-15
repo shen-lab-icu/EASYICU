@@ -17,6 +17,11 @@ pip install -e ".[dev,webapp]"
 2. Update `README.md` / `README_zh.md` if user-facing behavior changed.
 3. Keep AI-related changes explicitly advisory and human-confirmed in both code and docs.
 4. Prefer small, reviewable patches over broad unrelated refactors.
+5. Complete the repository pull request template, including the exact focused
+   test commands, evidence class, claim ceiling, and deliberately excluded scope.
+6. For a release candidate, complete [`docs/release_checklist.md`](docs/release_checklist.md)
+   against the exact candidate commit. A checklist without linked evidence is
+   not a passed gate.
 
 ## Pull request guidance
 
@@ -24,3 +29,24 @@ pip install -e ".[dev,webapp]"
 - Call out any database-specific assumptions or limitations.
 - The maintained Web UI is the native FastAPI app. The legacy Streamlit package was removed from the active package boundary; recover it from git history only for archive forensics.
 - Mention any follow-up work that remains intentionally out of scope.
+
+## Risk-based independent review
+
+The change author cannot satisfy an independent-review requirement. Before
+merge, name and obtain approval from the relevant domain reviewer when a change
+affects:
+
+- clinical definitions, thresholds, units, missingness, or treatment semantics:
+  an ICU clinician;
+- database mappings, extraction, transformation, or temporal alignment: an ICU
+  database engineer or epidemiologic data reviewer;
+- statistical methods or manuscript-facing results: a methods reviewer;
+- credentials, process isolation, filesystem access, network access, or hostile
+  input handling: a security reviewer.
+
+Until repository-valid domain handles are registered in `CODEOWNERS`, record
+the reviewer explicitly in the pull request. Do not invent a team handle or use
+the PR author as the only domain reviewer.
+
+Report suspected vulnerabilities through [`SECURITY.md`](SECURITY.md), using
+synthetic fixtures and redacted logs only.
