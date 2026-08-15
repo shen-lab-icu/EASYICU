@@ -95,9 +95,13 @@ class PlannerKnowHowBinding:
         *,
         planning_contract_context: str = "",
     ) -> dict[str, Any]:
+        strict_transport_schema = bool(
+            planner.last_prompt_metrics.get("structured_output_payload_bytes")
+        )
         baseline = planner.request_metrics(
             context,
             planning_contract_context=planning_contract_context,
+            strict_transport_schema=strict_transport_schema,
         )
         metrics = dict(planner.last_prompt_metrics)
         return {

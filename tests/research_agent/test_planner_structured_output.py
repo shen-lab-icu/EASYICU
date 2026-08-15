@@ -11,6 +11,9 @@ from easyicu.research_agent.agents.plan_payload import (
     decode_planner_transport_payload,
     planner_structured_output_request,
 )
+from easyicu.research_agent.contracts.capability_ids import CAPABILITY_FAMILIES
+from easyicu.research_agent.agents.core import PlannerAgent
+from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 
 
 def _walk_schema(node):
@@ -53,6 +56,16 @@ def test_planner_transport_schema_is_closed_compact_and_deterministic():
     criterion = schema["$defs"]["CohortEligibilityCriterion"]
     assert criterion["properties"]["description"]["type"] == "string"
     assert "description" not in criterion["properties"]["description"]
+
+    capability = schema["$defs"]["AnalysisStep"]["properties"][
+        "scientific_capability"
+    ]
+    assert capability == {
+        "anyOf": [
+            {"type": "string", "enum": sorted(CAPABILITY_FAMILIES)},
+            {"type": "null"},
+        ]
+    }
 
     # Callers receive a fresh wire mapping; mutation cannot alter authority.
     first = request.to_openai_response_format()
@@ -109,6 +122,31 @@ def test_transport_projection_rejects_duplicate_display_label_keys():
                 ]
             }
         )
+
+
+def test_strict_planner_prompt_does_not_duplicate_the_wire_schema_example():
+    context = ResearchContext(
+        research_question="Describe the ICU cohort.",
+        cohort=CohortDescriptor(
+            cohort_name="strict-probe",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+            id_columns=["stay_id"],
+        ),
+        variables=[],
+    )
+
+    ordinary = PlannerAgent.request_messages(context)[1].content
+    strict = PlannerAgent.request_messages(
+        context, strict_transport_schema=True
+    )[1].content
+
+    assert "Required JSON shape (truncated example)" in ordinary
+    assert "Required JSON shape (truncated example)" not in strict
+    assert "HOST-ENFORCED STRICT JSON SCHEMA" in strict
+    assert "RESEARCH CONTEXT:" in strict
+    assert len(strict.encode("utf-8")) < len(ordinary.encode("utf-8"))
 
 
 def test_planner_schema_capability_and_request_survive_runtime_wrapper_chain(tmp_path):

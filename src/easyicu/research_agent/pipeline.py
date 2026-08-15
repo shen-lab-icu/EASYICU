@@ -2483,7 +2483,14 @@ class ResearchAgentPipeline:
             plan = skill_obj.plan(context)
         else:
             plan_generation_mode = "llm"
-            planner = PlannerAgent(role_resolver("planner"))
+            planner = PlannerAgent(
+                budgeted_role_client(
+                    role_resolver,
+                    "planner",
+                    "planner_plan_generation",
+                    limit_tokens=self._max_prompt_tokens_per_call,
+                )
+            )
 
             planner_progress = planner_retry_progress_callback(
                 emit_progress, run_id=run_id

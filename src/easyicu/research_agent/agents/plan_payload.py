@@ -20,6 +20,7 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     typed_product as _canonical_typed_product,
 )
+from ..contracts.capability_ids import CAPABILITY_FAMILIES
 from ..planning.method_literature import METHOD_CARDS
 from ..planning.literature_bindings import (
     allowed_method_source_keys,
@@ -248,6 +249,18 @@ def _planner_transport_schema() -> Dict[str, Any]:
         definitions["TableOneVariableSpec"]["properties"]["levels"][
             "items"
         ] = _json_scalar_schema()
+        # ``AnalysisStep`` validates this field against the stable capability
+        # owner after transport.  Publishing only ``string | null`` here let a
+        # strict-schema provider spend a complete response on prose labels that
+        # the host was guaranteed to reject.  Derive the wire enum from the
+        # same dependency-neutral vocabulary so transport and host validation
+        # cannot drift into two authorities.
+        definitions["AnalysisStep"]["properties"]["scientific_capability"] = {
+            "anyOf": [
+                {"type": "string", "enum": sorted(CAPABILITY_FAMILIES)},
+                {"type": "null"},
+            ]
+        }
     except (KeyError, TypeError) as exc:
         raise PlannerStructuredOutputSchemaError(
             "AnalysisPlan schema shape changed; review the transport projection"
