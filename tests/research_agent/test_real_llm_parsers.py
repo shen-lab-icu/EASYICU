@@ -197,7 +197,7 @@ def test_planner_uses_enough_completion_budget(ra):
         ]
     )
     PlannerAgent(llm).run(ctx)
-    assert llm.calls[0][1]["max_tokens"] >= 8192
+    assert llm.calls[0][1]["max_tokens"] == 16384
 
 
 def test_planner_retries_primary_cohort_step_with_side_output(ra):
