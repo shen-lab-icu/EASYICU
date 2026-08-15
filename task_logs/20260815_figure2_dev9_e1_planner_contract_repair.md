@@ -159,3 +159,40 @@ with `--planner-strict-json-schema`. Never resume or reuse `dev05`.
 
 Commit this general owner-boundary repair, build and validate a new exact-source
 image, and start E1 from a fresh `dev07` root. Never resume or reuse `dev06`.
+
+## Dev07 result
+
+- Source commit: `bed6368`; exact image:
+  `easyicu-research-agent:bed6368-dev`, image id
+  `sha256:2dafa1d788c47ca81cef25628c930c51c7f92dbd18f58255ce1b66338347012f`.
+- Runtime/source validation passed under `network=none` with all 11 method
+  capabilities.
+- Run root: `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260815_bed6368_e1_dev07`.
+- The first Planner call returned HTTP 200 and a strict-schema response. It
+  consumed 32,975 tokens (24,409 prompt; 8,566 completion), estimated cost USD
+  0.50107, then produced seven host validation findings.
+- Before any second provider call, the retry projector failed closed: the
+  complete 11-step coordinate ledger was 5,150 bytes, above its 4,500-byte
+  local envelope. No generated analysis code executed and no scientific
+  coordinate was silently discarded.
+
+## Dev07 projection repair
+
+- The final coordinate-ledger rung now interns repeated actions,
+  capabilities, methods, products, citation keys, design elements, and
+  sensitivity ids in a deterministic string table.
+- References use tagged `["s", index]` pairs, so an invalid literal integer
+  from a non-strict provider cannot be confused with an interned string.
+- The representation remains explicitly labelled as prior-coordinate evidence,
+  not a partial `AnalysisPlan`; the next response must still emit the complete
+  strict schema and full literature-binding applications.
+- A strengthened 11-step E1-shaped regression with three literature bindings
+  per step, multiple outputs/sensitivities, and the invalid binary endpoint
+  shape now fits under 4,500 bytes and round-trips every asserted authority
+  coordinate. Eight focused projection/schema/transport tests, Ruff, and
+  `git diff --check` passed.
+
+## Next
+
+Commit the lossless projection repair, build a new exact-source image, and
+start E1 from a fresh `dev08` root. Never resume or reuse `dev07`.

@@ -1351,12 +1351,38 @@ def _planner_retry_response_projection(
         "binding_coordinates",
         "sensitivity_ids",
     )
+    coordinate_strings: list[str] = []
+    coordinate_string_indexes: dict[str, int] = {}
+
+    def coordinate_ref(value: Any) -> Any:
+        """Intern one string without confusing invalid literal scalars."""
+
+        if not isinstance(value, str):
+            return value
+        index = coordinate_string_indexes.get(value)
+        if index is None:
+            index = len(coordinate_strings)
+            coordinate_string_indexes[value] = index
+            coordinate_strings.append(value)
+        # A tagged reference remains unambiguous if a non-strict provider sent
+        # an invalid integer in a string field.  The projection is lossless
+        # evidence for correction, not a second permissive plan schema.
+        return ["s", index]
+
+    def coordinate_refs(value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        return [coordinate_ref(item) for item in value]
+
     coordinate_steps = []
     for step in projected_steps:
         raw_bindings = step.get("literature_design_bindings")
         binding_coordinates = (
             [
-                [binding.get("citation_key"), binding.get("design_elements")]
+                [
+                    coordinate_ref(binding.get("citation_key")),
+                    coordinate_refs(binding.get("design_elements")),
+                ]
                 for binding in raw_bindings
                 if isinstance(binding, dict)
             ]
@@ -1367,23 +1393,23 @@ def _planner_retry_response_projection(
             [
                 step.get("step_id"),
                 step.get("planned_analysis_role"),
-                step.get("scientific_action_id"),
-                step.get("scientific_capability"),
-                step.get("method"),
-                step.get("expected_outputs"),
-                step.get("literature_citation_keys"),
+                coordinate_ref(step.get("scientific_action_id")),
+                coordinate_ref(step.get("scientific_capability")),
+                coordinate_ref(step.get("method")),
+                coordinate_refs(step.get("expected_outputs")),
+                coordinate_refs(step.get("literature_citation_keys")),
                 binding_coordinates,
-                step.get("sensitivity_spec_ids"),
+                coordinate_refs(step.get("sensitivity_spec_ids")),
             ]
         )
     projection.pop("steps", None)
+    projection["coordinate_string_table"] = coordinate_strings
     projection["step_coordinate_columns"] = list(coordinate_columns)
     projection["step_coordinates"] = coordinate_steps
     projection["projection_note"] = (
-        "Prior coordinates only: action=scientific_action_id, "
-        "capability=scientific_capability, citation_keys and binding_coordinates "
-        "map to their literature fields. Emit the complete schema and binding "
-        "applications under the original prompt contract."
+        "['s',n] indexes coordinate_string_table; other scalars are literal. "
+        "Prior coordinates only: emit the complete schema and literature "
+        "binding applications required by the original prompt."
     )
     projection["robustness_specs"] = [
         {key: spec[key] for key in ("spec_id", "axis") if key in spec}
