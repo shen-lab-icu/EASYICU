@@ -168,6 +168,15 @@ PROMPT_TRANSPORT_BUDGETS: Mapping[str, PromptConsumerBudget] = {
             rationale="Cohort definition extraction.",
         ),
         PromptConsumerBudget(
+            consumer="planner_plan_generation",
+            role="planner",
+            rationale=(
+                "Initial AnalysisPlan generation and every structured retry; "
+                "the request carries typed context plus the closed transport "
+                "schema and retry authority projection."
+            ),
+        ),
+        PromptConsumerBudget(
             consumer="coder_initial_generation",
             role="coder",
             rationale=(

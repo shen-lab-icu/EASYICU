@@ -101,3 +101,61 @@ Never resume or reuse `dev04`.
 Commit the strict transport repair, build an exact-source image for that commit,
 validate source/image/runtime identity, and start E1 from a fresh `dev06` root
 with `--planner-strict-json-schema`. Never resume or reuse `dev05`.
+
+## Dev06 result
+
+- Source commit: `d51c718`; image: `easyicu-research-agent:d51c718-dev`.
+- Run root: `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260815_d51c718_e1_dev06`.
+- Provider attempts: 5 Planner calls; 190,043 accounted tokens; estimated cost
+  USD 2.62937.
+- Execution boundary: no generated analysis code executed; all five attempts
+  remained inside Planner/schema/article-contract validation.
+- Strict transport removed malformed JSON as the failure class, but it still
+  admitted arbitrary prose in `scientific_capability`. Later attempts also
+  lost already-correct scientific coordinates when the retry projection became
+  too large and fell back to an under-specified shape.
+- Initial transport was 119,083 bytes; retries grew to 138,936--140,092 bytes.
+  The Planner was the only live role consumer not checked again at raw
+  transport time, so those oversized retries bypassed the reviewed 120,000-byte
+  ceiling.
+
+## Dev06 owner-contract repair
+
+- `agents/plan_payload.py` now derives the strict
+  `scientific_capability` enum from the capability-owner vocabulary. The live
+  schema is 26,007 bytes with authority SHA-256
+  `2ce0b07af32e5eebfecec270e033ecb21c32e91c15f992ff75b917111178e15a`.
+- `pipeline.py` wraps live Planner generation in the declared
+  `planner_plan_generation` prompt-budget consumer. Every initial and retry
+  request is therefore measured by the same transport boundary.
+- Strict requests omit the duplicate illustrative JSON object and compact only
+  syntax already carried by the closed wire schema. Scientific decisions,
+  owner products, fail-closed semantics, citations, typed context, and plan
+  coordinates remain in the prompt.
+- Retry projection now preserves action, capability, citation/design bindings,
+  typed specifications, and sensitivity ids. If a full projection cannot fit,
+  the final rung is explicitly labelled as a coordinate table rather than as a
+  partial `AnalysisPlan`.
+- The reconstructed exact E1 initial request is 107,853 bytes: 81,846 message
+  bytes including the schema-authority note plus 26,007 schema bytes. This
+  leaves 12,147 bytes below the reviewed 120,000-byte boundary; the full
+  analysis-action catalog remains selected.
+- A live provider probe accepted the revised exact schema and returned
+  `finish_reason=stop`. This proves transport compatibility only, not Planner
+  or scientific success.
+
+## Dev06 repair verification
+
+- 128 focused structured-schema, retry-projection, transport-budget, and
+  catalog-ladder tests passed.
+- 262 additional prompt/scientific-contract regressions passed, including
+  Table 1, exposure/outcome distribution, adjusted-model roster, plan roles,
+  concept allowlists, family switching, and fixed prompt headroom.
+- The previously completed 218-test provider/wrapper/transport suite remains
+  applicable because the final compaction changed only strict Planner prompt
+  rendering; Ruff and `git diff --check` passed after the final edit.
+
+## Next
+
+Commit this general owner-boundary repair, build and validate a new exact-source
+image, and start E1 from a fresh `dev07` root. Never resume or reuse `dev06`.

@@ -198,6 +198,7 @@ def _build_planner_user_prompt(
     know_how_context: str = "",
     planning_contract_context: str = "",
     catalog_detail: str = "full",
+    strict_transport_schema: bool = False,
 ) -> str:
     """Build the planner user prompt with runtime concept-id grounding.
 
@@ -251,15 +252,11 @@ def _build_planner_user_prompt(
         "every task needs Table 1, outcome incidence, missingness, "
         "or a primary association model."
         + sensitivity_guide
-        + "That said, a baseline characteristics table (Table 1) IS a reporting standard for "
-        "observational/association and prediction-model families "
-        "(STROBE item 14 / TRIPOD): for those families include a "
-        "baseline characteristics step (e.g. expected_outputs "
-        "['table:table_one']) describing the analytic cohort before "
-        "the primary analysis. Omit it only when the family genuinely "
-        "does not call for one (e.g. a pure feasibility/protocol task, "
-        "or a clustering task whose per-cluster characteristics table "
-        "already carries the descriptive reporting). "
+        + "Table 1 is standard for observational/association and prediction "
+        "families (STROBE item 14 / TRIPOD): include a `table:table_one` step "
+        "describing the analytic cohort before the primary analysis. Omit it "
+        "only for a family that genuinely does not call for one, such as a pure "
+        "feasibility/protocol task or clustering already described per cluster. "
         "A step that declares the exact output `table:table_one` MUST also "
         "declare `table_one_spec`: group_by, at least two closed group_levels, "
         "and a variables roster whose name/kind/summary/test/closed levels "
@@ -299,34 +296,20 @@ def _build_planner_user_prompt(
         "every other result or figure in a separate step. If only an "
         "ungrouped cohort description is wanted, "
         "emit `table:cohort_summary` instead and omit table_one_spec. "
-        "When a step's purpose is to report counts, events and rates BY "
-        "EXPOSURE LEVEL -- prevalence, absolute risk, or outcome by group -- "
-        "declare the exact output `table:exposure_outcome_distribution` with "
-        "its spec. The host computes that table itself against a fixed "
-        "contract and owns the renderer for it, so its figure can be drawn. "
-        "The same science promised under any other table name is written "
-        "instead by the code generator, with a different shape every run, and "
-        "no host figure can consume it -- measured over the recorded runs, 25 "
-        "of 26 such tables had distinct headers and every figure over them "
-        "failed. Name the step whatever your reader should see; it is the "
-        "declared OUTPUT that decides who computes it.\n\n"
-        "That table holds counts, events and rates for ONE outcome whose "
-        "levels you declare. A summary of a CONTINUOUS variable by the same "
-        "exposure levels -- a median, a mean, quartiles, a distribution -- is "
-        "not part of it and cannot be added to it. Wanting one as well is not "
-        "a reason to give up the product: put the continuous summary in a "
-        "separate step and leave the event/rate table typed. Measured over "
-        "the recorded plans, 10 of the 13 by-level risk tables promised under "
-        "some other name had asked for a continuous summary in the same step, "
-        "against 1 of the 16 that stayed typed -- bundling the second outcome "
-        "is what costs the host-computed table and its figure.\n\n"
-        "A host-drawn figure consumes EXACTLY the typed product it renders and "
-        "nothing else. A figure step that also declares adjusted estimates, a "
-        "robustness matrix or an audit table as inputs is asking for a "
-        "different, composite figure, and no host renderer can draw it -- it "
-        "falls to the code generator, which has no contract for the panel. If "
-        "the reader needs that context, put it in its own figure step or in "
-        "the text; do not add inputs to the step whose figure the host owns.\n\n"
+        "For counts, events, prevalence, absolute risk, or outcome by group BY "
+        "EXPOSURE LEVEL, declare `table:exposure_outcome_distribution` and its "
+        "spec. Another table name sends the same science to generated code: a "
+        "different shape every run that no host figure can consume it. Name the "
+        "step whatever your reader should see; it is the declared OUTPUT that "
+        "decides who computes it.\n\n"
+        "That product covers ONE outcome. A summary of a CONTINUOUS variable by "
+        "the same exposure levels cannot be added to it. Wanting both is not a "
+        "reason to give up the product: put the continuous summary in a separate "
+        "step and keep the event/rate table typed.\n\n"
+        "A host-drawn figure consumes EXACTLY the typed product it renders. "
+        "Adding adjusted estimates, robustness matrices, audit tables, or other "
+        "inputs asks for a composite figure; no host renderer can draw it. Put "
+        "that context in text or put it in its own figure step.\n\n"
         "A step that declares the exact output "
         "`table:exposure_outcome_distribution` MUST also declare "
         "`exposure_outcome_distribution_spec`, and it must consume exactly one "
@@ -856,6 +839,138 @@ def _build_planner_user_prompt(
         + "\n\n"
         + planner_variable_catalog(context, planner_context)
     )
+    if strict_transport_schema:
+        def replace_wire_section(
+            value: str,
+            *,
+            start: str,
+            end: str,
+            replacement: str,
+        ) -> str:
+            """Replace one syntax-heavy section while retaining its science."""
+
+            start_at = value.find(start)
+            end_at = value.find(end, start_at + len(start))
+            if start_at < 0 or end_at < 0:
+                raise RuntimeError(
+                    "Planner strict-prompt compaction marker is missing: "
+                    f"{start!r} -> {end!r}"
+                )
+            return value[:start_at] + replacement + value[end_at:]
+
+        # The wire schema supplies field names, nullability, enums and nesting.
+        # Keep the scientific decisions and fail-closed semantics here, but do
+        # not make a retry pay a second time for a prose rendering of that same
+        # syntax.  These boundaries are explicit and asserted above: schema
+        # evolution cannot silently delete an instruction during compaction.
+        prompt = replace_wire_section(
+            prompt,
+            start=(
+                "A step that declares the exact output `table:table_one` MUST also "
+            ),
+            end="For counts, events, prevalence",
+            replacement=(
+                "A `table:table_one` step MUST carry `table_one_spec` with "
+                "group_by, closed group_levels and its variable roster. The "
+                "grouping column is not also a row. Its inputs list the cohort "
+                "artifact, group_by and every row variable explicitly. Preserve "
+                "observed scalar types; categorical count/percent rows need "
+                "closed levels, continuous rows have none, and numeric ordinal "
+                "rows may either close their levels or omit them. When literals "
+                f"are hidden, copy the opaque tokens (binary: {opaque_binary_json}) "
+                "and never guess labels. Choose the declared missing-group "
+                "policy from the catalogued coverage, and report grouped plus "
+                "Overall summaries, missing n (%), the test and P value. This "
+                "step emits only `table:table_one` plus allowed host audit "
+                "outputs; use a separate step for every other result or figure, "
+                "and use `table:cohort_summary` for an ungrouped description. "
+            ),
+        )
+        prompt = replace_wire_section(
+            prompt,
+            start=(
+                "A step that declares the exact output "
+                "`table:exposure_outcome_distribution` MUST also declare "
+            ),
+            end=(
+                "A primary cohort construction/eligibility + attrition step is also a "
+            ),
+            replacement=(
+                "A `table:exposure_outcome_distribution` step MUST carry its "
+                "typed spec and exactly one typed cohort input, with the bare "
+                "exposure and outcome columns also listed as inputs. Declare "
+                "closed exposure/outcome levels, the positive outcome value, "
+                "level matching, denominator and both missingness policies, and "
+                "confidence level; the host infers none of them. "
+                + _payload.counts_only_distribution_guide()
+                + " Close outcome levels over every observed value, preserve "
+                "scalar types, and choose missingness policies from the sealed "
+                "coverage. If absolute-risk DIFFERENCE is requested, declare "
+                "the typed reference and comparison (comparison minus reference), "
+                "risk-difference effect measure and interval method; never sort "
+                "or infer the levels. Do not declare dependence: the host binds "
+                "verified repeated-unit covariance authority. A post-baseline "
+                "primary descriptive distribution with unresolved exposure "
+                "opportunity carries `descriptive_claim`, the descriptive-only "
+                "ceiling and its typed limitation; it never authorizes association "
+                "or causal language. "
+                + _payload.descriptive_claim_shape_guide()
+                + " "
+            ),
+        )
+        prompt = replace_wire_section(
+            prompt,
+            start=(
+                "The typed `model_requirements` roster currently covers only a complex "
+            ),
+            end="For a counting-only measurement/missingness audit step, set ",
+            replacement=(
+                "Use `model_requirements` only for the exact "
+                "`adjusted_association_models` step that emits "
+                "`table:adjusted_association_estimates`. Declare exactly ONE "
+                "model per step; another outcome or analysis set is another step. "
+                "Bind its id, outcome/type, method family, exposure, role, "
+                "analysis set, required status and covariates. Binary methods: "
+                + ", ".join(sorted(ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES))
+                + "; continuous methods: "
+                + ", ".join(sorted(ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES))
+                + ". Primary/secondary models are required. For a multilevel "
+                "ordinal/categorical exposure, declare the closed levels, "
+                "reference and single headline contrast together; omit all three "
+                "for binary/continuous exposure. `covariates` is the exact "
+                "adjustment set, excludes exposure/outcome, and is not inferred "
+                "from inputs. Other families leave this roster empty and use "
+                "their own typed contracts. "
+                + _payload.planner_adjusted_association_owner_guidance()
+                + "\n\n"
+            ),
+        )
+
+        # A strict-schema request already carries the complete closed JSON
+        # shape as transport authority.  Replaying the older illustrative
+        # object alongside it wastes retry headroom and, for display_labels,
+        # demonstrates the pre-transport mapping representation rather than
+        # the key/value rows the provider is actually required to emit.  Keep
+        # all scientific guidance that follows the example; remove syntax-only
+        # duplication, never typed context or a design coordinate.
+        example_start = "OUTPUT FORMAT — VERY IMPORTANT:\n"
+        optional_science_guide = _payload.planner_endpoint_and_optional_science_guidance()
+        prefix, marker, remainder = prompt.partition(example_start)
+        if not marker:
+            raise RuntimeError("Planner output-format marker is missing")
+        _example, guide_marker, suffix = remainder.partition(optional_science_guide)
+        if not guide_marker:
+            raise RuntimeError("Planner optional-science guide marker is missing")
+        prompt = (
+            prefix
+            + "OUTPUT FORMAT — HOST-ENFORCED STRICT JSON SCHEMA:\n"
+            + "Return only the single schema-valid object. Populate every "
+            + "required property, using null or an empty array only where the "
+            + "schema permits; preserve every scientific contract above.\n\n"
+            + optional_science_guide
+            + suffix
+        )
+
     if planning_contract_context:
         prompt += (
             "\n\nHOST-DERIVED PRE-PLAN DESIGN PROFILE "
@@ -899,10 +1014,11 @@ def _validate_table_one_observed_levels(
         bind_step_declared_levels(step, context)
 
 
-# The Planner's plan-generation call is the largest prompt this system builds,
-# and it is the one budgeted role ``PromptBudgetClient`` does not wrap (only the
-# Coder transports are, in execution/phase.py). So this constant is that call's
-# ONLY ceiling -- not a second opinion layered on a transport check.
+# The Planner's plan-generation call is the largest prompt this system builds.
+# This value governs its lossless initial assembly; production also wraps the
+# resolved Planner client as the declared ``planner_plan_generation`` consumer,
+# so every structured retry is checked against the same reviewed ceiling after
+# response projections and validator feedback are appended.
 #
 # It used to be a hard-coded 80,000. That number predates the review written
 # down in ``providers/prompt_budget.py``, which asked exactly this question for
@@ -932,7 +1048,7 @@ def _validate_table_one_observed_levels(
 _PLANNER_PROMPT_BYTE_LIMIT = int(
     DEFAULT_MAX_PROMPT_TOKENS * CONSERVATIVE_BYTES_PER_TOKEN
 )
-_PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 9_000
+_PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 4_500
 # The Planner emits a complete typed DAG rather than a short answer. A real Web
 # E1 run first proved 4096 too small; a later DeepSeek canary then exhausted all
 # five attempts at exactly 8192 tokens with 36k-38k character responses and
@@ -941,11 +1057,23 @@ _PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 9_000
 _PLANNER_MAX_TOKENS = 16384
 
 
+def _structured_output_authority_note(structured_output: Any) -> str:
+    """Render the exact small message-side pointer to wire-schema authority."""
+
+    return (
+        "\n\nHOST STRUCTURED OUTPUT AUTHORITY: "
+        f"name={structured_output.name}; "
+        f"sha256={structured_output.authority_sha256}; strict=true. "
+        "The transport enforces this schema before host validation."
+    )
+
+
 def _planner_prompt_within_budget(
     context: ResearchContext,
     *,
     know_how_context: str = "",
     planning_contract_context: str = "",
+    strict_transport_schema: bool = False,
 ) -> Tuple[str, str]:
     """Return ``(user_prompt, catalog_detail)``, shortening the menu before failing.
 
@@ -978,10 +1106,16 @@ def _planner_prompt_within_budget(
             know_how_context=know_how_context,
             planning_contract_context=planning_contract_context,
             catalog_detail=detail,
+            strict_transport_schema=strict_transport_schema,
         )
         total = len((_SYSTEM_GUIDE + _PRINCIPLES_GUIDE).encode("utf-8")) + len(
             prompt.encode("utf-8")
         )
+        if strict_transport_schema:
+            structured_output = _payload.planner_structured_output_request()
+            total += structured_output.payload_bytes + len(
+                _structured_output_authority_note(structured_output).encode("utf-8")
+            )
         if total <= _PLANNER_PROMPT_BYTE_LIMIT:
             return prompt, detail
     # Still over at the shortest rung: return it and let the budget check raise,
@@ -1041,8 +1175,20 @@ def describe_article_contract_family_switch(*, shown: Any, judged: Any) -> str:
     )
 
 
-def _planner_retry_response_projection(raw: str) -> str:
-    """Keep prior Planner structure without replaying its long prose."""
+def _planner_retry_response_projection(
+    raw: str,
+    *,
+    max_bytes: int = _PLANNER_RETRY_PROJECTION_BYTE_LIMIT,
+) -> str:
+    """Keep prior scientific coordinates without replaying long prose.
+
+    Every projection rung retains the fields whose loss can change scientific
+    authority (action, capability, article role, citation bindings and typed
+    contracts).  Lower rungs shorten prose and secondary structure; they never
+    silently turn an already-bound method or source back into a blank choice.
+    """
+
+    max_bytes = max(1, int(max_bytes))
 
     text = str(raw or "").strip()
     if "```" in text:
@@ -1064,6 +1210,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "step_id",
         "planned_analysis_role",
         "scientific_action_id",
+        "scientific_capability",
         "inputs",
         "expected_outputs",
         "method",
@@ -1078,9 +1225,9 @@ def _planner_retry_response_projection(raw: str) -> str:
         "trajectory_stability_spec",
         "exposure_outcome_distribution_spec",
         "descriptive_claim",
-        # Omitted here, a spec the previous attempt got right is dropped from
-        # the projection and has to be rediscovered on the retry.
         "cohort_definition_spec",
+        "measurement_audit_spec",
+        "robustness_replay_spec",
     )
     raw_steps = payload.get("steps")
     steps = raw_steps if isinstance(raw_steps, list) else []
@@ -1088,10 +1235,39 @@ def _planner_retry_response_projection(raw: str) -> str:
     robustness_specs = (
         raw_robustness_specs if isinstance(raw_robustness_specs, list) else []
     )
+    def project_step(
+        step: Mapping[str, Any],
+        keys: Sequence[str],
+        *,
+        compact_literature: bool = False,
+        literature_application_chars: int = 240,
+    ) -> Dict[str, Any]:
+        projected = {key: step[key] for key in keys if key in step}
+        if compact_literature and isinstance(
+            projected.get("literature_design_bindings"), list
+        ):
+            compact_bindings = []
+            for binding in projected["literature_design_bindings"]:
+                if not isinstance(binding, dict):
+                    continue
+                compact = {
+                    key: binding.get(key)
+                    for key in ("citation_key", "design_elements")
+                    if key in binding
+                }
+                application = " ".join(str(binding.get("application") or "").split())
+                if application:
+                    compact["application"] = application[
+                        : max(8, int(literature_application_chars))
+                    ]
+                divergence = " ".join(str(binding.get("divergence") or "").split())
+                compact["divergence"] = divergence[:160] if divergence else None
+                compact_bindings.append(compact)
+            projected["literature_design_bindings"] = compact_bindings
+        return projected
+
     projected_steps = [
-        {key: step[key] for key in step_keys if key in step}
-        for step in steps
-        if isinstance(step, dict)
+        project_step(step, step_keys) for step in steps if isinstance(step, dict)
     ]
     projection = {
         "analysis_type": payload.get("analysis_type"),
@@ -1116,24 +1292,31 @@ def _planner_retry_response_projection(raw: str) -> str:
         )
 
     rendered = render(projection)
-    if len(rendered.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+    if len(rendered.encode("utf-8")) <= max_bytes:
         return rendered
 
     minimal_step_keys = (
         "step_id",
         "planned_analysis_role",
         "scientific_action_id",
+        "scientific_capability",
         "inputs",
         "expected_outputs",
         "method",
+        "literature_citation_keys",
+        "literature_design_bindings",
         "sensitivity_spec_ids",
         "model_requirements",
-        "family_primary_result_requirement", "figure_panels",
+        "family_primary_result_requirement",
+        "figure_panels",
         "exposure_outcome_distribution_spec",
         "descriptive_claim",
+        "cohort_definition_spec",
+        "measurement_audit_spec",
+        "robustness_replay_spec",
     )
     projection["steps"] = [
-        {key: step[key] for key in minimal_step_keys if key in step}
+        project_step(step, minimal_step_keys, compact_literature=True)
         for step in projected_steps
     ]
     robustness_keys = (
@@ -1149,32 +1332,70 @@ def _planner_retry_response_projection(raw: str) -> str:
         if isinstance(spec, dict)
     ]
     rendered = render(projection)
-    if len(rendered.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+    if len(rendered.encode("utf-8")) <= max_bytes:
         return rendered
 
-    compact_step_keys = (
+    # Final rung is explicitly a coordinate ledger, not a partial AnalysisPlan.
+    # It keeps the declarations that caused real retries to oscillate while
+    # omitting model-authored explanation.  Using a distinct key for binding
+    # coordinates prevents the model from copying an intentionally prose-free
+    # record as though it were a schema-complete LiteratureDesignBinding.
+    coordinate_columns = (
         "step_id",
-        "planned_analysis_role",
-        "inputs",
-        "expected_outputs",
+        "role",
+        "action",
+        "capability",
         "method",
-        "sensitivity_spec_ids", "figure_panels",
-        "exposure_outcome_distribution_spec",
-        "descriptive_claim",
+        "outputs",
+        "citation_keys",
+        "binding_coordinates",
+        "sensitivity_ids",
     )
-    projection["steps"] = [
-        {key: step[key] for key in compact_step_keys if key in step}
-        for step in projected_steps
-    ]
+    coordinate_steps = []
+    for step in projected_steps:
+        raw_bindings = step.get("literature_design_bindings")
+        binding_coordinates = (
+            [
+                [binding.get("citation_key"), binding.get("design_elements")]
+                for binding in raw_bindings
+                if isinstance(binding, dict)
+            ]
+            if isinstance(raw_bindings, list)
+            else []
+        )
+        coordinate_steps.append(
+            [
+                step.get("step_id"),
+                step.get("planned_analysis_role"),
+                step.get("scientific_action_id"),
+                step.get("scientific_capability"),
+                step.get("method"),
+                step.get("expected_outputs"),
+                step.get("literature_citation_keys"),
+                binding_coordinates,
+                step.get("sensitivity_spec_ids"),
+            ]
+        )
+    projection.pop("steps", None)
+    projection["step_coordinate_columns"] = list(coordinate_columns)
+    projection["step_coordinates"] = coordinate_steps
+    projection["projection_note"] = (
+        "Prior coordinates only: action=scientific_action_id, "
+        "capability=scientific_capability, citation_keys and binding_coordinates "
+        "map to their literature fields. Emit the complete schema and binding "
+        "applications under the original prompt contract."
+    )
     projection["robustness_specs"] = [
         {key: spec[key] for key in ("spec_id", "axis") if key in spec}
         for spec in robustness_specs
         if isinstance(spec, dict)
     ]
     rendered = render(projection)
-    if len(rendered.encode("utf-8")) > _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+    if len(rendered.encode("utf-8")) > max_bytes:
         raise PlannerPromptBudgetError(
-            "Planner retry structure exceeds its bounded projection envelope"
+            "Planner retry authority coordinates exceed their bounded "
+            f"projection envelope ({len(rendered.encode('utf-8'))} > "
+            f"{max_bytes} bytes); no scientific coordinate was discarded"
         )
     return rendered
 
@@ -1201,12 +1422,14 @@ class PlannerAgent:
         *,
         know_how_context: str = "",
         planning_contract_context: str = "",
+        strict_transport_schema: bool = False,
     ) -> list[LLMMessage]:
         """Build the exact initial Planner request used by ``run``."""
         user_prompt, _ = _planner_prompt_within_budget(
             context,
             know_how_context=know_how_context,
             planning_contract_context=planning_contract_context,
+            strict_transport_schema=strict_transport_schema,
         )
         return [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE),
@@ -1220,11 +1443,13 @@ class PlannerAgent:
         *,
         know_how_context: str = "",
         planning_contract_context: str = "",
+        strict_transport_schema: bool = False,
     ) -> Dict[str, Any]:
         _, catalog_detail = _planner_prompt_within_budget(
             context,
             know_how_context=know_how_context,
             planning_contract_context=planning_contract_context,
+            strict_transport_schema=strict_transport_schema,
         )
         try:
             metrics = bounded_request_metrics(
@@ -1233,12 +1458,14 @@ class PlannerAgent:
                     context,
                     planning_contract_context=planning_contract_context,
                     catalog_detail=catalog_detail,
+                    strict_transport_schema=strict_transport_schema,
                 ),
                 full_user_content=_build_planner_user_prompt(
                     context,
                     know_how_context=know_how_context,
                     planning_contract_context=planning_contract_context,
                     catalog_detail=catalog_detail,
+                    strict_transport_schema=strict_transport_schema,
                 ),
                 max_bytes=_PLANNER_PROMPT_BYTE_LIMIT,
             )
@@ -1249,6 +1476,23 @@ class PlannerAgent:
         # A shortened menu is recorded, never silent: the run artifact must say
         # which rung produced the plan it carries.
         metrics["analysis_type_catalog_detail"] = catalog_detail
+        if strict_transport_schema:
+            structured_output = _payload.planner_structured_output_request()
+            authority_note_bytes = len(
+                _structured_output_authority_note(structured_output).encode("utf-8")
+            )
+            metrics["message_payload_bytes"] = metrics["total_bytes"] + (
+                authority_note_bytes
+            )
+            metrics["structured_output_payload_bytes"] = (
+                structured_output.payload_bytes
+            )
+            metrics["structured_output_authority_sha256"] = (
+                structured_output.authority_sha256
+            )
+            metrics["total_bytes"] += (
+                structured_output.payload_bytes + authority_note_bytes
+            )
         return metrics
 
     def run(
@@ -1295,20 +1539,18 @@ class PlannerAgent:
                 _payload.required_method_layers_for_context(context)
             ),
         )
+        structured_output = None
+        if llm_supports_strict_json_schema(self.llm):
+            structured_output = _payload.planner_structured_output_request()
+        strict_transport_schema = structured_output is not None
         messages = self.request_messages(
             context,
             know_how_context=know_how_context,
             planning_contract_context=resolved_planning_contract_context,
+            strict_transport_schema=strict_transport_schema,
         )
-        structured_output = None
-        if llm_supports_strict_json_schema(self.llm):
-            structured_output = _payload.planner_structured_output_request()
-            authority_note = (
-                "\n\nHOST STRUCTURED OUTPUT AUTHORITY: "
-                f"name={structured_output.name}; "
-                f"sha256={structured_output.authority_sha256}; strict=true. "
-                "The transport enforces this schema before host validation."
-            )
+        if structured_output is not None:
+            authority_note = _structured_output_authority_note(structured_output)
             messages[0] = LLMMessage(
                 role=messages[0].role,
                 content=messages[0].content + authority_note,
@@ -1317,6 +1559,7 @@ class PlannerAgent:
             context,
             know_how_context=know_how_context,
             planning_contract_context=resolved_planning_contract_context,
+            strict_transport_schema=strict_transport_schema,
         )
         message_payload_bytes = sum(
             len(message.content.encode("utf-8")) for message in messages
@@ -1367,43 +1610,53 @@ class PlannerAgent:
             progress_callback=progress_callback,
             structured_output=structured_output,
             format_reminder=(
-                "The JSON must be a single object with keys: "
-                "research_question (string), optional analysis_type (string), "
-                "cohort (object or null), optional display_labels (object), "
-                "robustness_specs (array; non-empty when the binding contract "
-                "requires robustness), optional "
-                "know_how_decisions (claim-level adopted/rejected/unresolved/"
-                "requires_confirmation records using exact retrieved version, SHA, "
-                "claim_id, and citation_ids), "
-                "steps (array of objects "
-                "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
-                "method, optional scientific_action_id, icu_rule_refs, sensitivity_spec_ids, "
-                "optional cohort_definition_spec, "
-                "literature_citation_keys (exact keys from "
-                "the supplied literature bundle that support this step), "
-                "literature_design_bindings (records with citation_key, exact "
-                "design_elements, a concise application, and optional divergence), optional "
-                "model_requirements, optional "
-                "family_primary_result_requirement, optional "
-                "input_consumption_contracts, optional figure_panels, optional "
-                "table_one_spec, optional "
-                "trajectory_stability_spec, optional "
-                "exposure_outcome_distribution_spec, and optional descriptive_claim), "
-                "rationale (string). "
-                "All string values must be plain ASCII or UTF-8 quoted strings; "
-                "do not use special Unicode whitespace inside values."
-                + _payload.literature_citation_retry_suffix(
-                    allowed_citation_keys,
-                    direct_comparator_keys=direct_comparator_keys,
-                    required_method_layers=(
-                        _payload.required_method_layers_for_context(context)
-                    ),
+                (
+                    "The host-enforced strict schema already supplies the full "
+                    "JSON shape. Correct every validator-reported field while "
+                    "retaining prior step ids, article roles, action and "
+                    "capability ids, citation keys and bindings, and typed specs. "
+                    "Do not fix one rejection by undoing an earlier contract."
                 )
-                + _payload.planner_science_retry_guide()
-                + "\n\n"
-                + _scientific_actions.planner_scientific_action_guide(
-                    infer_analysis_type(context).key,
-                    detail="names_only",
+                if structured_output is not None
+                else (
+                    "The JSON must be a single object with keys: "
+                    "research_question (string), optional analysis_type (string), "
+                    "cohort (object or null), optional display_labels (object), "
+                    "robustness_specs (array; non-empty when the binding contract "
+                    "requires robustness), optional "
+                    "know_how_decisions (claim-level adopted/rejected/unresolved/"
+                    "requires_confirmation records using exact retrieved version, SHA, "
+                    "claim_id, and citation_ids), "
+                    "steps (array of objects "
+                    "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
+                    "method, optional scientific_action_id, icu_rule_refs, sensitivity_spec_ids, "
+                    "optional cohort_definition_spec, "
+                    "literature_citation_keys (exact keys from "
+                    "the supplied literature bundle that support this step), "
+                    "literature_design_bindings (records with citation_key, exact "
+                    "design_elements, a concise application, and optional divergence), optional "
+                    "model_requirements, optional "
+                    "family_primary_result_requirement, optional "
+                    "input_consumption_contracts, optional figure_panels, optional "
+                    "table_one_spec, optional "
+                    "trajectory_stability_spec, optional "
+                    "exposure_outcome_distribution_spec, and optional descriptive_claim), "
+                    "rationale (string). "
+                    "All string values must be plain ASCII or UTF-8 quoted strings; "
+                    "do not use special Unicode whitespace inside values."
+                    + _payload.literature_citation_retry_suffix(
+                        allowed_citation_keys,
+                        direct_comparator_keys=direct_comparator_keys,
+                        required_method_layers=(
+                            _payload.required_method_layers_for_context(context)
+                        ),
+                    )
+                    + _payload.planner_science_retry_guide()
+                    + "\n\n"
+                    + _scientific_actions.planner_scientific_action_guide(
+                        infer_analysis_type(context).key,
+                        detail="names_only",
+                    )
                 )
             ),
         )

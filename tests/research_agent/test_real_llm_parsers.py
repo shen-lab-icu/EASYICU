@@ -295,6 +295,17 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
                     "inputs": ["exposure_max", "death"],
                     "expected_outputs": ["table:adjusted_association_estimates"],
                     "method": "adjusted_association_models",
+                    "scientific_action_id": "association.adjusted_models",
+                    "scientific_capability": "association_adjusted_v1",
+                    "literature_citation_keys": ["sterne_missing_data_2009"],
+                    "literature_design_bindings": [
+                        {
+                            "citation_key": "sterne_missing_data_2009",
+                            "design_elements": ["missing_data"],
+                            "application": "Prespecify complete-case handling as a sensitivity analysis.",
+                            "divergence": None,
+                        }
+                    ],
                     "sensitivity_spec_ids": ["timing_landmark_24h"],
                     "model_requirements": [
                         {
@@ -354,6 +365,18 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
 
     assert len(projected.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT
     assert payload["steps"][0]["inputs"] == ["exposure_max", "death"]
+    assert payload["steps"][0]["scientific_action_id"] == (
+        "association.adjusted_models"
+    )
+    assert payload["steps"][0]["scientific_capability"] == (
+        "association_adjusted_v1"
+    )
+    assert payload["steps"][0]["literature_citation_keys"] == [
+        "sterne_missing_data_2009"
+    ]
+    assert payload["steps"][0]["literature_design_bindings"][0][
+        "citation_key"
+    ] == "sterne_missing_data_2009"
     assert payload["steps"][0]["sensitivity_spec_ids"] == ["timing_landmark_24h"]
     assert payload["steps"][0]["model_requirements"][0]["outcome"] == "death"
     assert (
@@ -370,6 +393,74 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
     assert payload["subgroup_analysis_spec"]["subgroup_columns"] == ["sex"]
     assert "rationale" not in payload
     assert "intent" not in payload["steps"][0]
+
+
+def test_large_retry_projection_keeps_authority_as_a_bounded_coordinate_table() -> None:
+    from easyicu.research_agent.agents.core import (
+        _PLANNER_RETRY_PROJECTION_BYTE_LIMIT,
+        _planner_retry_response_projection,
+    )
+
+    steps = []
+    for index in range(11):
+        steps.append(
+            {
+                "step_id": f"{index + 1:02d}_analysis_step",
+                "planned_analysis_role": "primary" if index == 4 else "auxiliary",
+                "intent": "long explanation " * 300,
+                "expected_outputs": [f"table:result_{index}"],
+                "method": "adjusted_association_models",
+                "scientific_action_id": "association.adjusted_models",
+                "scientific_capability": "association_adjusted_v1",
+                "literature_citation_keys": ["strobe_2007", "sterne_2009"],
+                "literature_design_bindings": [
+                    {
+                        "citation_key": "strobe_2007",
+                        "design_elements": ["reporting"],
+                        "application": "reporting explanation " * 30,
+                    },
+                    {
+                        "citation_key": "sterne_2009",
+                        "design_elements": ["missing_data"],
+                        "application": "missing-data explanation " * 30,
+                    },
+                ],
+                "sensitivity_spec_ids": ["complete_case"],
+                "model_requirements": [
+                    {
+                        "requirement_id": "primary",
+                        "outcome": "death",
+                        "exposure_source": "exposure",
+                        "covariates": [f"covariate_{item}" for item in range(50)],
+                    }
+                ],
+            }
+        )
+
+    projected = _planner_retry_response_projection(
+        json.dumps(
+            {
+                "analysis_type": "association_study",
+                "cohort": None,
+                "endpoint": None,
+                "steps": steps,
+                "robustness_specs": [],
+            }
+        )
+    )
+    payload = json.loads(projected)
+
+    assert len(projected.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT
+    assert "steps" not in payload
+    columns = payload["step_coordinate_columns"]
+    first = dict(zip(columns, payload["step_coordinates"][0]))
+    assert first["action"] == "association.adjusted_models"
+    assert first["capability"] == "association_adjusted_v1"
+    assert first["citation_keys"] == ["strobe_2007", "sterne_2009"]
+    assert first["binding_coordinates"] == [
+        ["strobe_2007", ["reporting"]],
+        ["sterne_2009", ["missing_data"]],
+    ]
 
 
 def test_planner_retries_dictionary_concept_absent_from_sealed_typed_input(
