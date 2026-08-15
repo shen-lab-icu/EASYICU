@@ -2753,7 +2753,6 @@ class ResearchAgentPipeline:
                 context=context,
             )
             findings.extend(companion_input_findings)
-
             cap = self._max_total_steps
             plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
             findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
@@ -4445,23 +4444,6 @@ class ResearchAgentPipeline:
             )
         return candidate
 
-    def _restore_durable_human_review_pause(
-        self,
-        *,
-        run_id: str,
-        progress_callback: Optional[Callable[[Dict[str, Any]], None]],
-        rejection_only: bool = False,
-    ) -> Dict[str, Any]:
-        """Delegate restart recovery to its digest-bound owner."""
-
-        return restore_durable_human_review_pause(
-            self,
-            run_id=run_id,
-            progress_callback=progress_callback,
-            plan_result_factory=_PlanPhaseResult,
-            load_resume_state=_load_resume_state,
-            rejection_only=rejection_only,
-        )
     def _record_human_review_records(
         self,
         records: Sequence[Mapping[str, Any]],
@@ -4471,7 +4453,6 @@ class ResearchAgentPipeline:
         evidence: EvidenceStore,
     ) -> None:
         """Delegate decision persistence to the checkpoint owner."""
-
         persist_human_review_records(
             records,
             run_id=run_id,
@@ -5552,9 +5533,12 @@ class ResearchAgentPipeline:
 
         pending_state = self._pending_human_review
         if not pending_state and run_id is not None:
-            pending_state = self._restore_durable_human_review_pause(
+            pending_state = restore_durable_human_review_pause(
+                self,
                 run_id=str(run_id),
                 progress_callback=progress_callback,
+                plan_result_factory=_PlanPhaseResult,
+                load_resume_state=_load_resume_state,
                 rejection_only=all_rejected,
             )
         if not pending_state:

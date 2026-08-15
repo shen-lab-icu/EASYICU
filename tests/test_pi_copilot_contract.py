@@ -1438,7 +1438,11 @@ def test_provider_error_marks_message_job_failed_without_raw_network_detail(
     assert record.active_message_job_id is None
 
 
-def test_orphaned_replay_execution_is_marked_interrupted(tmp_path: Path) -> None:
+def test_orphaned_replay_execution_is_marked_interrupted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": True})
     service = PiCopilotService(
         store_path=tmp_path / "sessions.json",
         gateway=FakeGateway(),
@@ -1494,6 +1498,7 @@ def test_pi_replay_survives_service_restart_and_archives_only_safe_child_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": True})
     store_path = tmp_path / "sessions.json"
     service = PiCopilotService(store_path=store_path, gateway=FakeGateway())
     session_id = service.create_session(
