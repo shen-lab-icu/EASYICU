@@ -14,7 +14,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
 
-from ..contracts.declared_product import locked_primary_cohort_product
+from ..contracts.primary_cohort import locked_primary_cohort_product
 from .evidence_store import sha256_of_file
 from .runtime_artifacts import verified_run_evidence_path
 from .typed_input_receipt import typed_input_row_identity_sha256

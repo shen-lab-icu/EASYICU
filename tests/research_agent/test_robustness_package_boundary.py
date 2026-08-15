@@ -71,6 +71,9 @@ def test_robustness_runtime_does_not_reverse_import_pipeline(leaf: str) -> None:
 def test_pipeline_consumers_use_canonical_robustness_modules() -> None:
     pipeline = importlib.import_module("easyicu.research_agent.pipeline")
     execute = importlib.import_module("easyicu.research_agent.execution.phase")
+    runtime_panel = importlib.import_module(
+        "easyicu.research_agent.robustness.runtime_panel"
+    )
     panel = importlib.import_module("easyicu.research_agent.robustness.panel")
     estimators = importlib.import_module("easyicu.research_agent.robustness.estimators")
     primary_effect = importlib.import_module(
@@ -82,10 +85,14 @@ def test_pipeline_consumers_use_canonical_robustness_modules() -> None:
         is primary_effect._extract_primary_effect_row
     )
     assert (
-        execute.build_robustness_panel_from_records
+        runtime_panel.build_robustness_panel_from_records
         is panel.build_robustness_panel_from_records
     )
     assert (
-        execute.fit_robustness_rows_from_records
+        runtime_panel.fit_robustness_rows_from_records
         is estimators.fit_robustness_rows_from_records
+    )
+    assert (
+        execute.finalize_run_robustness_panel
+        is runtime_panel.finalize_run_robustness_panel
     )

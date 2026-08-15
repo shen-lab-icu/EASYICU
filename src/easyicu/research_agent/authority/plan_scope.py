@@ -173,6 +173,11 @@ def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
     seal/resume comparison that cannot see the difference would accept the
     substitution under the approved plan's identity.
 
+    ``scientific_action_id`` similarly binds the exact method/resource action
+    published to Planner. Changing RMST to a PH diagnostic, or a reviewed
+    DeLong kernel to an unrelated generated method, is a scientific change even
+    if the free-text intent happens to remain the same.
+
     This is a comparison between two signatures computed by the same code --
     the sealed record is re-validated through ``AnalysisStep`` before it is
     fingerprinted -- so no stored digest changes: a pre-existing record
@@ -189,6 +194,7 @@ def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
         " ".join(str(step.intent or "").split()).casefold(),
         tuple(step.icu_rule_refs),
         step.planned_analysis_role,
+        step.scientific_action_id,
         step.scientific_capability,
         json.dumps(structured_payload, sort_keys=True, separators=(",", ":")),
     )
@@ -207,11 +213,17 @@ _ANALYSIS_STEP_CORE_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
         "intent",
         "icu_rule_refs",
         "planned_analysis_role",
+        "scientific_action_id",
         "scientific_capability",
     }
 )
 _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
     {
+        "literature_citation_keys",
+        "literature_design_bindings",
+        "sensitivity_spec_ids",
+        "descriptive_claim",
+        "figure_panels",
         "model_requirements",
         "family_primary_result_requirement",
         "input_consumption_contracts",

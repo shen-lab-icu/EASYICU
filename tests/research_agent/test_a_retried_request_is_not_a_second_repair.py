@@ -44,7 +44,7 @@ exactly 9 of 9.
 
 The charge is not what bounds retries.  ``providers/llm.py`` owns that::
 
-    manual_attempts = max(1, int(getattr(self, "_max_retries", 8)))
+    manual_attempts = 1 + max(0, int(getattr(self, "_max_retries", 8)))
     for attempt in range(manual_attempts):
 
 and nothing else decides whether to attempt.  (A second check did consult
@@ -189,7 +189,10 @@ def test_the_transport_retry_bound_lives_elsewhere_and_is_unchanged():
     from easyicu.research_agent.providers import llm
 
     source = inspect.getsource(llm)
-    assert 'manual_attempts = max(1, int(getattr(self, "_max_retries", 8)))' in source
+    assert (
+        'manual_attempts = 1 + max(0, int(getattr(self, "_max_retries", 8)))'
+        in source
+    )
     assert "for attempt in range(manual_attempts):" in source
     assert "active_provider_retry_available" not in source
 

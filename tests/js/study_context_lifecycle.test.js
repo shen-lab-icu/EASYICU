@@ -147,12 +147,27 @@ require(path.resolve(process.argv[2]));
           : { cohort_size: 10, comparison: 'outcome' },
       modules: ['vitals'],
       comparator: route === 'crossdb' ? 'cross_database_descriptive' : '',
+      crossdb_selection: route === 'crossdb' ? {
+        schema_version: 'crossdb-selection-v1',
+        source_count: 2,
+        sources: [
+          { source_id: 'src_miiv', label: 'Primary MIIV', database: 'miiv', path_hash: 'aaaaaaaaaaaa' },
+          { source_id: 'src_eicu', label: 'Comparator eICU', database: 'eicu', path_hash: 'bbbbbbbbbbbb' },
+        ],
+        selection_digest: 'c'.repeat(64),
+      } : {},
     }),
   };
   require(path.resolve(process.argv[3]));
   const crossdb = store.handoff({ sourceRoute: 'crossdb', targetRoute: 'agent' });
   assert.equal(crossdb.context.current_stage, 'crossdb_plan_only');
   assert.equal(crossdb.context.confirmations.crossdb_plan_only, true);
+  assert.equal(crossdb.context.data_source, null, 'Cross-DB must not collapse to one active export');
+  assert.equal(crossdb.context.crossdb_selection.source_count, 2);
+  assert.deepEqual(
+    crossdb.context.crossdb_selection.sources.map(source => source.source_id),
+    ['src_miiv', 'src_eicu'],
+  );
   await crossdb.persisted;
   const patient = store.handoff({ sourceRoute: 'patient', targetRoute: 'agent' });
   assert.notEqual(patient.context.id, crossdb.context.id, 'leaving a Cross-DB plan must start a single-export project');
@@ -168,6 +183,7 @@ require(path.resolve(process.argv[2]));
   assert.equal(patient.context.cohort.review_scope, 'browser_bounded_entity_sample');
   assert.equal(patient.context.confirmations.patient_review_bounded_sample, true);
   assert.equal(patient.context.confirmations.patient_review_full_entity_set, false);
+  assert.deepEqual(patient.context.crossdb_selection, {}, 'single-export review must clear Cross-DB selection');
   for (const key of ['source_count', 'source_type', 'comparison_mode']) {
     assert.equal(Object.hasOwn(patient.context.cohort, key), false, `Patient cohort must remove ${key}`);
   }
@@ -312,6 +328,58 @@ require(path.resolve(process.argv[2]));
   assert.equal(activated.current_stage, 'review', 'activation must not roll back a server-advanced stage');
 
   require(path.resolve(process.argv[5]));
+  global.EU_WORKSPACE_REGISTRY = {
+    active_path: '/exports/active-single',
+    sources: [{ path: '/exports/active-single', label: 'Unrelated active export', summary: { stays: 140 } }],
+  };
+  const crossdbProject = {
+    planOnly: true,
+    studyContext: crossdb.context,
+  };
+  assert.equal(
+    global.EU_AGENT_STUDY_CONTEXT.sourceFor(crossdbProject, global.EU_WORKSPACE_REGISTRY.sources[0]),
+    null,
+    'Cross-DB selection receipt must not fall back to one active registry export',
+  );
+  assert.equal(
+    global.EU_AGENT_STUDY_CONTEXT.sourceFor({
+      planOnly: true,
+      studyContext: {
+        data_source: global.EU_WORKSPACE_REGISTRY.sources[0],
+        crossdb_selection: {},
+      },
+    }, global.EU_WORKSPACE_REGISTRY.sources[0]),
+    null,
+    'A legacy or damaged plan-only receipt must fail closed instead of using the active registry export',
+  );
+  assert.equal(
+    global.EU_AGENT_STUDY_CONTEXT.sourceFor({
+      planOnly: false,
+      studyContext: {
+        data_source: global.EU_WORKSPACE_REGISTRY.sources[0],
+        crossdb_selection: crossdb.context.crossdb_selection,
+      },
+    }, global.EU_WORKSPACE_REGISTRY.sources[0]),
+    null,
+    'A multi-source receipt must stay authoritative even if the lifecycle stage drifts',
+  );
+  const guidedBinding = await global.EU_AGENT_STUDY_CONTEXT.prepareGuidedHandoff(crossdbProject);
+  assert.equal(guidedBinding.schema_version, 'easyicu.guided-project-handoff/1');
+  assert.equal(guidedBinding.project_id, crossdb.context.id);
+  assert.equal(guidedBinding.binding_receipt.schema_version, 'easyicu.pi-project-binding-handoff/1');
+  assert.equal(guidedBinding.binding_receipt.study_context_id, crossdb.context.id);
+  assert.equal(guidedBinding.binding_receipt.study_context_revision, persisted.get(crossdb.context.id).revision);
+  assert.equal(JSON.stringify(guidedBinding).includes('/exports/'), false, 'Pi handoff must remain path-free');
+  assert.deepEqual(global.EU_AGENT_STUDY_CONTEXT.takeGuidedHandoff(), guidedBinding);
+  assert.equal(global.EU_AGENT_STUDY_CONTEXT.takeGuidedHandoff(), null, 'handoff is consumed once');
+  const unboundProject = {
+    id: 'idea-project-unbound',
+    name: ['Idea project', 'Idea project'],
+  };
+  const unboundGuided = await global.EU_AGENT_STUDY_CONTEXT.prepareGuidedHandoff(unboundProject);
+  assert.equal(unboundGuided.project_id, unboundProject.id);
+  assert.equal(unboundGuided.binding_receipt, null, 'unbound projects initialize inside Copilot');
+  assert.deepEqual(global.EU_AGENT_STUDY_CONTEXT.takeGuidedHandoff(), unboundGuided);
   const jobContext = store.startNew({
     question: 'Job lifecycle context',
     data_source: { path: '/exports/jobs', label: 'Jobs export', database: 'miiv' },

@@ -38,6 +38,8 @@ import pytest
 from easyicu.research_agent.execution.runners.deterministic_robustness import (
     ROBUSTNESS_REPLAY_OUTPUT_FILES,
     ROBUSTNESS_REPLAY_OUTPUT_KINDS,
+    ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS,
+    _declared_robustness_product_bindings,
     declared_robustness_product_registrations,
     robustness_replay_spec_is_emittable,
     robustness_sensitivity_preflight_scaffold,
@@ -112,7 +114,7 @@ def test_a_statistic_label_resolves_through_the_same_table():
     )
 
     assert declared_robustness_product_registrations(step) == {
-        "statistic:primary_effect": "primary_or.json"
+        "statistic:primary_effect": "primary_effect.json"
     }
 
 
@@ -217,11 +219,24 @@ def test_every_filename_comes_from_the_runners_own_published_table():
     """
 
     for output in sorted(ROBUSTNESS_REPLAY_OUTPUT_FILES):
+        kind = ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS[output]
+        target = (
+            "reader_chosen_label.json"
+            if kind == "statistic"
+            else ROBUSTNESS_REPLAY_OUTPUT_FILES[output]
+        )
         step = _step(
-            ["table:reader_chosen_label"], _spec(("reader_chosen_label", output))
+            [f"{kind}:reader_chosen_label"],
+            _spec(("reader_chosen_label", output)),
         )
         assert declared_robustness_product_registrations(step) == {
-            "table:reader_chosen_label": ROBUSTNESS_REPLAY_OUTPUT_FILES[output]
+            f"{kind}:reader_chosen_label": target
+        }
+        assert _declared_robustness_product_bindings(step) == {
+            f"{kind}:reader_chosen_label": (
+                target,
+                ROBUSTNESS_REPLAY_OUTPUT_FILES[output],
+            )
         }
 
 
@@ -410,6 +425,10 @@ def test_the_promised_label_never_changes_which_science_ran(tmp_path):
     """
 
     (tmp_path / "primary_or.json").write_text('{"primary_or": 1.57}', encoding="utf-8")
+    (tmp_path / "primary_effect.json").write_text(
+        '{"statistic": "primary_effect", "value": 1.57}',
+        encoding="utf-8",
+    )
     _summary(
         tmp_path,
         status="ok",
@@ -427,7 +446,14 @@ def test_the_promised_label_never_changes_which_science_ran(tmp_path):
     assert summary["primary_or"] == 1.566375890701969
     assert summary["complete_case_n"] == 1000
     assert summary["status"] == "ok"
-    assert summary["output_files"]["statistic:headline_effect"] == "primary_or.json"
+    assert summary["output_files"]["statistic:headline_effect"] == "headline_effect.json"
+    headline_payload = json.loads(
+        (tmp_path / "headline_effect.json").read_text(encoding="utf-8")
+    )
+    assert headline_payload == {
+        "statistic": "headline_effect",
+        "value": 1.57,
+    }
 
 
 @pytest.mark.parametrize(

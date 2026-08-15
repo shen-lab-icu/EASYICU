@@ -1,0 +1,79 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const source = fs.readFileSync(path.resolve(process.argv[2]), 'utf8');
+const sandbox = {
+  window: {
+    t: (english) => english,
+    icon: () => '',
+  },
+};
+vm.runInNewContext(source, sandbox);
+const renderer = sandbox.window.AGENT_RENDER;
+
+const hostileLabel = 'figure" onerror="globalThis.pwned=1';
+const safePng = 'data:image/png;base64,iVBORw0KGgo=';
+const escaped = renderer.figureGallery({
+  figures: [{ label: hostileLabel, data_url: safePng }],
+});
+assert.ok(escaped.includes('&quot;'), 'attribute quotes must be entity escaped');
+assert.ok(!escaped.includes('alt="figure" onerror='), 'label must not create a new attribute');
+
+const hostileSource = renderer.figureGallery({
+  figures: [{
+    label: 'bad source',
+    data_url: 'data:image/png;base64,AAAA" onerror="globalThis.pwned=1',
+  }],
+});
+assert.equal(hostileSource, '', 'malformed image data URL must not create an image');
+
+const activeData = renderer.figureGallery({
+  figures: [{ label: 'html', data_url: 'data:text/html,<script>alert(1)</script>' }],
+});
+assert.equal(activeData, '', 'only bounded PNG data URLs may render');
+
+const hostileKey = '<img src=x onerror="globalThis.pwned=1">';
+const hostileStructured = renderer.artifactStructuredView('fallback.json', {
+  rows: [{ [hostileKey]: 'value' }],
+});
+assert.ok(hostileStructured.includes('&lt;img'), 'object keys must be rendered as text');
+assert.ok(!hostileStructured.includes(`<th>${hostileKey}</th>`), 'object key must not create table-header markup');
+
+const hostileTableChrome = renderer.artifactTable(
+  '<svg onload="globalThis.pwned=2">',
+  ['safe'],
+  [],
+  '<img src=x onerror="globalThis.pwned=3">',
+);
+assert.ok(hostileTableChrome.includes('&lt;svg'), 'table title must be rendered as text');
+assert.ok(hostileTableChrome.includes('&lt;img'), 'empty-state text must be rendered as text');
+assert.ok(!hostileTableChrome.includes('<svg onload='), 'table title must not create markup');
+
+const planRows = renderer.stepRowsFrom({
+  steps: [{
+    step_id: '06_primary_adjusted_association',
+    intent: 'Estimate the adjusted binary association.',
+    planned_analysis_role: 'primary',
+    expected_outputs: ['table:adjusted_association_estimates'],
+  }],
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(planRows)),
+  [[
+    '06_primary_adjusted_association',
+    'Estimate the adjusted binary association.',
+    'planned · primary',
+    'table:adjusted_association_estimates',
+  ]],
+  'plan previews must expose the typed step identity, intent, role, and outputs',
+);
+
+assert.equal(renderer.fmtCount(null), '—', 'missing denominators must not render as zero');
+assert.equal(renderer.fmtCount(undefined), '—');
+assert.equal(renderer.fmtCount(''), '—');
+
+process.stdout.write(JSON.stringify({ ok: true, cases: 7 }));

@@ -9,7 +9,8 @@ promote any result. Those lifecycle responsibilities remain in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from types import MappingProxyType
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from .cohort_contract import CohortDefinition, coerce_cohort_definition
 
@@ -23,6 +24,25 @@ RobustnessAxis = Literal["cohort", "missing", "outcome"]
 # scientific axes the current task can actually support.
 MIN_AXIS_COUNTS: Dict[str, int] = {"cohort": 0, "missing": 0, "outcome": 0}
 MIN_TOTAL_SPEC_COUNT = 1
+
+#: The one typed-product kind for each output of the deterministic locked-grid
+#: replay.  This belongs to the dependency-neutral robustness planning contract
+#: because neither the Planner nor a plan-time gate may guess whether an output
+#: implemented as a row-bearing CSV is a table or a scalar JSON statistic.
+#: The execution owner, schema facade, and product-promise gate all consume the
+#: same immutable value.
+ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS: Mapping[str, str] = MappingProxyType(
+    {
+        "robustness_matrix": "table",
+        "robustness_summary": "table",
+        "specification_grid": "table",
+        "membership_change": "table",
+        "outcome_label_executability": "table",
+        "missingness_strategy_notes": "log",
+        "primary_effect": "statistic",
+        "complete_case_n": "statistic",
+    }
+)
 
 #: The missing-data strategy that re-fits the primary model on complete cases.
 COMPLETE_CASE_STRATEGY = "complete_case"
@@ -204,6 +224,7 @@ __all__ = [
     "COMPLETE_CASE_VARIABLES_KEY",
     "MIN_AXIS_COUNTS",
     "MIN_TOTAL_SPEC_COUNT",
+    "ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS",
     "RobustnessAxis",
     "RobustnessPlanError",
     "RobustnessSpec",

@@ -1,0 +1,14 @@
+{
+  "source": "SOFA-2 Table 2 brain component and footnote c plus EasyICU attributable-evidence contract",
+  "inputs": {
+    "gcs": [15, 15, 15, 15, 14, null, 6, 6],
+    "delirium_tx_proxy": [true, true, false, false, false, false, false, false],
+    "delirium_tx_evidence": ["confirmed", "proxy_only", "not_detected", "unavailable", "unavailable", "unavailable", "unavailable", "unavailable"],
+    "motor_response": [null, null, null, null, null, 6, 2, 2],
+    "sedated_gcs": [null, null, null, null, null, null, 15, null],
+    "sedated": [false, false, false, false, false, false, true, true]
+  },
+  "expected": [1, 0, 0, 0, 1, 0, 0, 0],
+  "expected_proxy_sensitivity": [1, 1, 0, 0, 1, 0, 0, 0],
+  "expected_ascertainment": ["complete", "proxy_only", "complete_for_proxy_source", "unavailable", "not_score_relevant", "unavailable", "unavailable", "unavailable"]
+}

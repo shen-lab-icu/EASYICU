@@ -105,6 +105,64 @@ _EXECUTION_INCOMPLETE_EXIT_CODE = 4
 # as a clean pass -- `scores=0, pending=1, exit=0`.
 _PENDING_ITEMS_EXIT_CODE = 5
 
+_SCIENTIFIC_RUNTIME_AUTHORITY_OPTIONS = (
+    "trajectory_scientific_runtime_authority",
+    "current_case_scientific_runtime_authority",
+)
+
+
+def _bind_runtime_scientific_projection_options(
+    pipeline_options: Optional[Mapping[str, Any]],
+    runtime_projection: object,
+) -> Dict[str, Any]:
+    """Bind a reviewed runtime projection without permitting an override."""
+
+    options = dict(pipeline_options or {})
+    if not isinstance(runtime_projection, Mapping):
+        return options
+    execution_contract = runtime_projection.get("deterministic_execution_contract")
+    if not isinstance(execution_contract, Mapping):
+        return options
+    projection_digest = str(
+        runtime_projection.get("runtime_projection_sha256") or ""
+    ).strip()
+    schema_version = str(execution_contract.get("schema_version") or "")
+    authority_option_by_schema = {
+        "easyicu.trajectory_scientific_runtime_authority/1": (
+            "trajectory_scientific_runtime_authority"
+        ),
+        "easyicu.landmark_spline_runtime_authority/1": (
+            "current_case_scientific_runtime_authority"
+        ),
+        "easyicu.source_feasibility_runtime_authority/1": (
+            "current_case_scientific_runtime_authority"
+        ),
+    }
+    try:
+        authority_option = authority_option_by_schema[schema_version]
+    except KeyError as exc:
+        raise ValueError(
+            "SCIENTIFIC_RUNTIME_AUTHORITY_SCHEMA_UNSUPPORTED: "
+            f"{schema_version or '<missing>'}"
+        ) from exc
+
+    expected_contract = dict(execution_contract)
+    for option_name in _SCIENTIFIC_RUNTIME_AUTHORITY_OPTIONS:
+        if option_name not in options:
+            continue
+        supplied = options[option_name]
+        if option_name != authority_option or supplied != expected_contract:
+            raise ValueError(
+                "SCIENTIFIC_RUNTIME_AUTHORITY_OVERRIDE_FORBIDDEN: "
+                f"{option_name}"
+            )
+    supplied_digest = options.get("scientific_runtime_projection_sha256")
+    if supplied_digest is not None and str(supplied_digest) != projection_digest:
+        raise ValueError("SCIENTIFIC_RUNTIME_PROJECTION_OVERRIDE_FORBIDDEN")
+    options[authority_option] = expected_contract
+    options["scientific_runtime_projection_sha256"] = projection_digest
+    return options
+
 
 def _is_figure2_task_id(value: object) -> bool:
     """Return True only for an exact frozen Canonical9 identifier."""
@@ -204,7 +262,7 @@ def _register_case_patterns(case_name: Optional[str]) -> Optional[Dict[str, Any]
     _bootstrap_imports()
     from easyicu.research_agent.cohort.schema import default_pattern_registry
 
-    module_name = f"benchmark.cases.{case_name}.register_patterns"
+    module_name = f"benchmarks.cases.{case_name}.register_patterns"
     try:
         module = importlib.import_module(module_name)
     except ModuleNotFoundError as exc:
@@ -1387,9 +1445,11 @@ def _run_one_arm(
         # free-text analysis-family inference, which emitted STROBE for the
         # mortality_prediction task while the scorecard expected TRIPOD+AI — so
         # reporting_completeness was silently NA on a run that did reach the write
-        # phase (detector/emitter contract mismatch, G-2). ``setdefault`` lets an
-        # explicit pipeline_options override win.
-        opts = dict(pipeline_options or {})
+        # phase (detector/emitter contract mismatch, G-2).
+        opts = _bind_runtime_scientific_projection_options(
+            pipeline_options,
+            getattr(item, "runtime_scientific_projection", None),
+        )
         opts.setdefault(
             "reporting_checklist_names",
             list(checklist_names_for_kind(getattr(item, "kind", None))),
@@ -1781,6 +1841,10 @@ def _benchmark_execution_identity(
     provider: str | None = None,
     model: str | None = None,
     reasoning_effort_profile: str = "provider_default",
+    request_timeout: float = 120.0,
+    transport_max_attempts: int = 1,
+    stream_enabled: bool = False,
+    provider_environment: Optional[Mapping[str, str]] = None,
 ):
     from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
     from easyicu.research_agent.providers.factory import (
@@ -1796,6 +1860,10 @@ def _benchmark_execution_identity(
             provider=provider,
             model=model,
             reasoning_effort_profile=reasoning_effort_profile,
+            request_timeout=request_timeout,
+            transport_max_attempts=transport_max_attempts,
+            stream_enabled=stream_enabled,
+            environment=provider_environment,
         )
     return ExecutionIdentity.create(
         submission_profile_name=options.get("submission_profile_name"),
@@ -2333,6 +2401,13 @@ def _make_llm(
     stream_enabled: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
 ):
+    if not isinstance(transport_max_attempts, int) or isinstance(
+        transport_max_attempts, bool
+    ):
+        raise ValueError("transport_max_attempts must be a positive integer")
+    total_transport_attempts = transport_max_attempts
+    if total_transport_attempts <= 0:
+        raise ValueError("transport_max_attempts must be a positive integer")
     _bootstrap_imports()
     from easyicu.research_agent import (  # type: ignore
         LLMRouter,
@@ -2348,6 +2423,10 @@ def _make_llm(
     if provider == "mock":
         return MockLLMClient()
     try:
+        # The CLI option is deliberately expressed as total physical attempts,
+        # while OpenAIClient's conventional ``max_retries`` contract counts
+        # only attempts after the initial request.
+        transport_max_retries = total_transport_attempts - 1
         effort_by_role = reasoning_effort_by_role(reasoning_effort_profile)
         if not effort_by_role:
             return build_provider_client(
@@ -2357,7 +2436,7 @@ def _make_llm(
                 title="EasyICU research-agent benchmark",
                 client_cls=OpenAIClient,
                 environment=provider_environment,
-                max_retries=int(transport_max_attempts),
+                max_retries=transport_max_retries,
                 stream_enabled=bool(stream_enabled),
                 allow_environment_overrides=False,
             )
@@ -2370,7 +2449,7 @@ def _make_llm(
                 client_cls=OpenAIClient,
                 environment=provider_environment,
                 extra_body={"reasoning": {"effort": effort}},
-                max_retries=int(transport_max_attempts),
+                max_retries=transport_max_retries,
                 stream_enabled=bool(stream_enabled),
                 allow_environment_overrides=False,
             )
@@ -3756,7 +3835,7 @@ def main() -> int:
         "--case",
         default=None,
         help=(
-            "Optional case protocol directory name under benchmark/cases. "
+            "Optional case protocol directory name under benchmarks/cases. "
             "When set, case-owned cohort patterns are registered before "
             "planning. Example: case_b_sofa2_sepsis."
         ),
@@ -4691,6 +4770,23 @@ def _external_item_from_row(
             dict(row.get("scientific_acceptance_contract") or {})
             if isinstance(row.get("scientific_acceptance_contract"), Mapping)
             else None
+        ),
+        case_scientific_protocol=(
+            dict(row.get("case_scientific_protocol") or {})
+            if isinstance(row.get("case_scientific_protocol"), Mapping)
+            else None
+        ),
+        case_scientific_protocol_sha256=(
+            str(row.get("case_scientific_protocol_sha256") or "").strip() or None
+        ),
+        runtime_scientific_projection=(
+            dict(row.get("runtime_scientific_projection") or {})
+            if isinstance(row.get("runtime_scientific_projection"), Mapping)
+            else None
+        ),
+        runtime_scientific_projection_sha256=(
+            str(row.get("runtime_scientific_projection_sha256") or "").strip()
+            or None
         ),
         protocol_adapter=protocol_adapter,
         cohort_size=int(cohort_size),
@@ -5636,6 +5732,10 @@ def _run_one_item_from_cohort(
         provider=provider,
         model=model,
         reasoning_effort_profile=reasoning_effort_profile,
+        request_timeout=request_timeout,
+        transport_max_attempts=transport_max_attempts,
+        stream_enabled=stream_enabled,
+        provider_environment=provider_environment,
     )
     if reuse_existing and not resume_run_id:
         if "naive" in selected:

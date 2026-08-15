@@ -18,10 +18,12 @@ from easyicu.research_agent.execution.runners.missingness_measurement_figure_exe
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
     missingness_measurement_figure_executor_code,
+    measurement_missingness_figure_executor_owns_step,
     _COLUMNS_BY_INPUT,
     _validate_audit_rows,
     _validate_process_rows,
     missingness_measurement_figure_executor_owns_step,
+    run_measurement_missingness_figure,
     run_missingness_measurement_figure,
 )
 from easyicu.research_agent.execution.runners.selection import (
@@ -149,8 +151,8 @@ def _audit_row(
         100.0 * missing / _N,
         eligible,
         not_applicable,
-        "measurement",
-        "measurement_missing",
+        "conditional_event_time" if not_applicable else "measurement_availability",
+        "conditional_event_time" if not_applicable else "measurement_missing",
     ]
 
 
@@ -479,6 +481,41 @@ def test_runner_renders_complete_source_backed_bundle(tmp_path: Path) -> None:
         )
         if finding.severity == "error"
     ]
+
+
+def test_all_zero_missingness_renders_explicit_completeness_instead_of_blank_bars(
+    tmp_path: Path,
+) -> None:
+    audit = _audit_frame()
+    audit["value_missing_n"] = 0
+    audit["value_missing_pct"] = 0.0
+    audit["measured_one_n"] = audit["eligible_n"]
+    audit["measured_one_pct"] = 100.0 * audit["measured_one_n"] / audit["n_total"]
+    process = _process_frame()
+    process["measured_one_n"] = process["eligible_n"]
+    process["repeat_measured_n"] = 0
+
+    run_dir, manifest = _binding(tmp_path, audit=audit, process=process)
+    out_dir, summary = _run(run_dir, manifest)
+
+    assert summary["zero_missing_completeness_display"] is True
+    source = pd.read_csv(
+        out_dir / f"{PRODUCT}_source_missingness_panel_source_data.csv"
+    )
+    assert source["value_missing_n"].tolist() == [0, 0, 0]
+    assert source["value_missing_pct"].tolist() == [0.0, 0.0, 0.0]
+
+    svg = (out_dir / f"{PRODUCT}.svg").read_text(encoding="utf-8")
+    assert "Source completeness" in svg
+    assert "0 missing / 100% complete" in svg
+    contract = json.loads(
+        (out_dir / f"{PRODUCT}.figure_contract.json").read_text(encoding="utf-8")
+    )
+    panel = contract["panels"][0]
+    assert panel["title"] == "Source completeness"
+    assert panel["metadata"]["zero_missing_completeness_display"] is True
+    assert panel["metadata"]["source_products"] == [MISSINGNESS_MEASUREMENT_AUDIT_INPUT]
+    assert "zero missing source values" in panel["claim"]
 
 
 # The long-format schema these tests were written against (metric / level /
@@ -836,6 +873,144 @@ def test_the_real_plans_figure_step_is_owned() -> None:
     )
     assert selection is not None
     assert selection.analysis_kind == "missingness_measurement_figure"
+
+
+def test_typed_measurement_alias_selects_and_renders_the_single_panel_owner(
+    tmp_path: Path,
+) -> None:
+    input_key = "table:missingness_data_quality"
+    producer = AnalysisStep(
+        step_id=PARENT_STEP,
+        planned_analysis_role="auxiliary",
+        intent="Audit source availability.",
+        method="measurement_audit",
+        expected_outputs=[input_key],
+        measurement_audit_spec={
+            "products": [
+                {
+                    "product_id": "missingness_data_quality",
+                    "audit": "measurement_missingness",
+                }
+            ]
+        },
+    )
+    figure = AnalysisStep(
+        step_id=STEP_ID,
+        planned_analysis_role="auxiliary",
+        intent="Render the exact source-availability audit.",
+        method="visualization",
+        inputs=[input_key],
+        expected_outputs=["figure:missingness_data_quality"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
+        ],
+        figure_panels=[
+            {
+                "panel_id": "source_availability",
+                "figure_output": "figure:missingness_data_quality",
+                "article_role": "data_quality",
+                "chart_type": "availability_panel",
+                "source_products": [input_key],
+            }
+        ],
+    )
+    plan = AnalysisPlan(
+        research_question="Audit source availability.",
+        steps=[producer, figure],
+    )
+    run_dir = tmp_path / "run"
+    binding = _register(
+        run_dir,
+        _audit_frame(),
+        input_key=input_key,
+        product="missingness_data_quality",
+    )
+
+    assert measurement_missingness_figure_executor_owns_step(
+        figure,
+        plan=plan,
+        resolved_bindings={input_key: binding},
+    )
+    selection = select_standard_executor(
+        figure,
+        plan=plan,
+        resolved_bindings={input_key: binding},
+    )
+    assert selection is not None
+    assert selection.analysis_kind == "measurement_missingness_figure"
+    assert selection.consumed_input_keys == (input_key,)
+
+    out_dir = run_dir / "steps" / STEP_ID / "outputs"
+    summary = run_measurement_missingness_figure(
+        out_dir=out_dir,
+        run_dir=run_dir,
+        resolved_inputs={
+            "schema_version": "2.1",
+            "step_id": STEP_ID,
+            "inputs": {input_key: binding},
+        },
+        step_id=STEP_ID,
+        figure_product="missingness_data_quality",
+        input_key=input_key,
+    )
+    contract = json.loads(
+        (out_dir / "missingness_data_quality.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert contract["panels"][0]["metadata"] == {
+        "article_role": "data_quality",
+        "chart_type": "availability_panel",
+        "source_data": ["missingness_data_quality_source_data.csv"],
+        "source_products": [input_key],
+    }
+    assert summary["source_inputs"] == [input_key]
+
+
+@pytest.mark.parametrize("audit", [None, "event_timing"])
+def test_untyped_or_wrong_measurement_alias_is_not_claimed(audit: str | None) -> None:
+    input_key = "table:missingness_data_quality"
+    figure = AnalysisStep(
+        step_id=STEP_ID,
+        planned_analysis_role="auxiliary",
+        intent="Render a table whose audit meaning is not yet closed.",
+        method="visualization",
+        inputs=[input_key],
+        expected_outputs=["figure:missingness_data_quality"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
+        ],
+    )
+    steps = []
+    if audit is not None:
+        steps.append(
+            AnalysisStep(
+                step_id=PARENT_STEP,
+                planned_analysis_role="auxiliary",
+                intent="Produce a different audit.",
+                method="measurement_audit",
+                expected_outputs=[input_key],
+                measurement_audit_spec={
+                    "products": [
+                        {
+                            "product_id": "missingness_data_quality",
+                            "audit": audit,
+                        }
+                    ]
+                },
+            )
+        )
+    steps.append(figure)
+    plan = AnalysisPlan(research_question="Audit source availability.", steps=steps)
+    binding = {
+        "product_contract": {"columns": list(_AUDIT_COLUMNS)},
+    }
+
+    assert not measurement_missingness_figure_executor_owns_step(
+        figure,
+        plan=plan,
+        resolved_bindings={input_key: binding},
+    )
 
 
 @pytest.mark.parametrize(

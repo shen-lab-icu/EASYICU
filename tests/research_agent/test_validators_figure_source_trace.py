@@ -252,6 +252,40 @@ def test_estimate_unit_is_compared_as_text_not_parsed_as_a_number(
     assert drift.get("mismatches", [])[0]["column"] == "estimate_unit"
 
 
+def test_numeric_candidate_with_equal_semantic_text_is_a_faithful_projection(
+    tmp_path: Path,
+):
+    """Names containing risk/effect do not turn equal receipt text into NaN drift."""
+
+    upstream = tmp_path / "distribution.csv"
+    pd.DataFrame(
+        {
+            "source_row_index": [0, 1, 2],
+            "row_role": ["exposure_level", "exposure_level", "overall"],
+            "risk_difference_pct": [None, None, 4.25],
+            "risk_difference_covariance": [None, None, "cluster_robust"],
+            "risk_difference_effect_measure": [None, None, "risk_difference"],
+        }
+    ).to_csv(upstream, index=False)
+    source = pd.read_csv(upstream)
+
+    clean = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "distribution_source_data.csv",
+        upstream_path=upstream,
+    )
+    assert clean.get("ok") is True, clean
+
+    source.loc[2, "risk_difference_covariance"] = "model_based"
+    drift = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "distribution_source_data.csv",
+        upstream_path=upstream,
+    )
+    assert drift.get("ok") is False, drift
+    assert drift.get("reason") == "source_values_disagree", drift
+
+
 def test_model_id_term_composite_key_disambiguates_shared_terms_and_flags_drift(
     tmp_path: Path,
 ):

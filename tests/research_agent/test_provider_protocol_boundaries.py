@@ -13,6 +13,7 @@ import pytest
 
 import easyicu.research_agent as research_agent
 from easyicu.research_agent import providers
+from easyicu.research_agent.providers import capabilities
 from easyicu.research_agent.providers import llm, mocks as llm_mocks
 from easyicu.research_agent.providers import protocol
 
@@ -22,6 +23,21 @@ def test_canonical_llm_protocol_exports_are_identical() -> None:
     assert llm.LLMMessage is protocol.LLMMessage
     assert research_agent.LLMClient is protocol.LLMClient
     assert research_agent.MockLLMClient is llm_mocks.MockLLMClient
+
+
+def test_vision_capability_probe_has_one_dependency_neutral_owner() -> None:
+    assert llm.llm_supports_vision is capabilities.llm_supports_vision
+    assert capabilities.model_looks_vision_capable("gpt-4o") is True
+    assert capabilities.model_looks_vision_capable("qwen-coder") is False
+
+    path = Path(inspect.getsourcefile(capabilities))
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    assert not imported & {"llm", "mocks", "reporting", "pipeline"}
 
 
 def test_mock_annotations_resolve_without_importing_back_from_llm() -> None:

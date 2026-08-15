@@ -47,6 +47,10 @@ class CatalogConcept:
     methodology: str = ""
     resolved_column: str = ""
     typed_metadata: bool = False
+    column_role: str = ""
+    selection_mode: str = "ordinary"
+    selection_note: str = ""
+    canonical_alternative: str = ""
 
 
 @dataclass
@@ -71,7 +75,9 @@ class AvailableCatalog:
         ``max_per_category`` 0 means list all; a positive cap truncates long
         categories (the agent still sees the category exists).
         """
-        has_tags = any(c.methodology for c in self.concepts)
+        has_tags = any(
+            c.methodology or c.selection_mode != "ordinary" for c in self.concepts
+        )
         lines = [
             f"Available concepts in the provided data ({len(self.concepts)} "
             f"total). The agent may ONLY request concepts from this list; "
@@ -80,14 +86,19 @@ class AvailableCatalog:
         if has_tags:
             lines.append(
                 "  [⚠ tags are methodological cautions for the role you assign a "
-                "concept — heed them when choosing exposure / outcome / covariates.]"
+                "concept — heed them when choosing exposure / outcome / covariates. "
+                "An explicit-only concept may be selected only when the user "
+                "positively names that variant.]"
             )
         for category, items in sorted(self.by_category().items()):
             shown = items if max_per_category <= 0 else items[:max_per_category]
             lines.append(f"\n[{category}] ({len(items)})")
             for c in sorted(shown, key=lambda x: x.concept_id):
                 desc = f" — {c.description}" if c.description else ""
-                warn = f"  ⚠ {c.methodology}" if c.methodology else ""
+                warnings = [
+                    value for value in (c.methodology, c.selection_note) if value
+                ]
+                warn = f"  ⚠ {'; '.join(warnings)}" if warnings else ""
                 lines.append(f"  - {c.concept_id}{desc}{warn}")
             if max_per_category > 0 and len(items) > max_per_category:
                 lines.append(f"  … (+{len(items) - max_per_category} more)")
@@ -143,14 +154,17 @@ def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
     malformed dictionary just yields no enrichment.
     """
     try:
-        from ..concept.loader import _load_concept_dict_cached  # heavy import
+        from easyicu.concept.loader import _load_concept_dict_cached
 
         raw = _load_concept_dict_cached()
     except Exception:
-        return {}
+        raw = {}
     meta: Dict[str, Dict[str, str]] = {}
     if not isinstance(raw, Mapping):
-        return {}
+        raw = {}
+    from easyicu.concept.export_metadata import concept_declares_event_status
+    from easyicu.concept.schema import ConceptDefinition
+
     for cid, entry in raw.items():
         if not isinstance(entry, Mapping):
             continue
@@ -164,10 +178,30 @@ def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
             or entry.get("unit")
             or ""
         )
+        try:
+            definition = ConceptDefinition.from_name_and_payload(str(cid), entry)
+        except Exception:
+            definition = None
         meta[str(cid)] = {
             "description": str(description),
             "category": str(category),
+            "column_role": (
+                "event_status"
+                if concept_declares_event_status(str(cid), definition)
+                else ""
+            ),
         }
+    # Derived catalog outputs need not exist in the raw extraction dictionary.
+    # Their public descriptions are still owner metadata, not a filename or
+    # dtype inference, so add them as a truthful fallback for legacy exports.
+    from easyicu.concept.catalog import CONCEPT_DESCRIPTIONS, CONCEPT_DICTIONARY
+
+    for cid, (name, _name_zh, _unit) in CONCEPT_DICTIONARY.items():
+        row = meta.setdefault(str(cid), {})
+        description, _description_zh = CONCEPT_DESCRIPTIONS.get(cid, ("", ""))
+        row.setdefault("description", str(description or name or ""))
+        row.setdefault("category", "")
+        row.setdefault("column_role", "")
     return meta
 
 
@@ -229,10 +263,23 @@ def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
                 )
             description = binding.metadata.description or ""
             category = binding.metadata.category or ""
+            column_role = binding.metadata.role.value
         else:
             m = meta.get(cid, {})
             description = m.get("description", "")
             category = m.get("category", "")
+            column_role = m.get("column_role", "")
+            if not column_role:
+                from easyicu.concept.export_metadata import (
+                    concept_declares_event_status,
+                )
+
+                column_role = (
+                    "event_status" if concept_declares_event_status(cid) else ""
+                )
+        from easyicu.concept.selection_policy import concept_selection_policy
+
+        selection_policy = concept_selection_policy(cid)
         concepts.append(
             CatalogConcept(
                 concept_id=cid,
@@ -242,7 +289,17 @@ def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
                 n_rows=int(info.get("rows", 0) or 0),
                 resolved_column=resolved_column,
                 typed_metadata=typed_metadata,
+                column_role=column_role,
                 methodology=_methodology_tag(cid, category),
+                selection_mode=(
+                    selection_policy.selection_mode if selection_policy else "ordinary"
+                ),
+                selection_note=(selection_policy.rationale if selection_policy else ""),
+                canonical_alternative=(
+                    selection_policy.canonical_alternative or ""
+                    if selection_policy
+                    else ""
+                ),
             )
         )
     return AvailableCatalog(source=str(export_dir), concepts=concepts)

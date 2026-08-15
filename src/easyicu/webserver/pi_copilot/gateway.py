@@ -24,8 +24,13 @@ from .install import (
     preferred_app_dir,
     runtime_is_installed,
 )
+from .host_tool_dispatcher import (
+    HostToolDispatchRejected,
+    HostToolDispatcher,
+    HostToolOutcome,
+)
 from .provider_config import PiProviderConfig, PiProviderConfigStore
-from .tools import execute_tool
+from .tools import MUTATING_HOST_TOOLS, execute_tool
 
 MAX_PROTOCOL_LINE_BYTES = 1024 * 1024
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 15 * 60
@@ -50,6 +55,10 @@ _CHILD_ENV_KEYS = frozenset(
         "EASYICU_PI_SESSION_TOKEN_BUDGET",
         "EASYICU_PI_MAX_PROVIDER_CALLS_PER_MESSAGE",
         "EASYICU_PI_MAX_PROVIDER_CALLS_PER_SESSION",
+        "EASYICU_PI_INPUT_PRICE_USD_PER_1M_TOKENS",
+        "EASYICU_PI_OUTPUT_PRICE_USD_PER_1M_TOKENS",
+        "EASYICU_PI_MAX_COST_USD_PER_MESSAGE",
+        "EASYICU_PI_MAX_COST_USD_PER_SESSION",
     }
 )
 
@@ -79,6 +88,8 @@ class PiGatewayClient:
         tool_executor: Callable[
             [str, Mapping[str, Any], ToolExecutionContext], Dict[str, Any]
         ] = execute_tool,
+        tool_dispatch_max_workers: int = 4,
+        tool_dispatch_max_pending: int = 64,
     ) -> None:
         self.app_dir = (
             Path(app_dir)
@@ -86,16 +97,18 @@ class PiGatewayClient:
             else preferred_app_dir()
         ).resolve()
         self.entrypoint = self.app_dir / "src" / "main.mjs"
-        self.session_dir = (
+        self.declared_session_dir = (
             Path(session_dir)
             if session_dir is not None
             else Path.home() / ".easyicu" / "pi-agent" / "sessions"
-        ).resolve()
-        self.cwd = (
+        ).expanduser().absolute()
+        self.session_dir = self.declared_session_dir.resolve()
+        self.declared_cwd = (
             Path(cwd)
             if cwd is not None
-            else self.session_dir.parent / "workspace"
-        ).resolve()
+            else self.declared_session_dir.parent / "workspace"
+        ).expanduser().absolute()
+        self.cwd = self.declared_cwd.resolve()
         self.provider_store = provider_store or PiProviderConfigStore()
         self._provider_file_enabled = environ is None
         source_environment = os.environ if environ is None else environ
@@ -113,6 +126,10 @@ class PiGatewayClient:
             if key in _CHILD_ENV_KEYS or key.startswith("LC_")
         }
         self._tool_executor = tool_executor
+        self._tool_dispatch_max_workers = int(tool_dispatch_max_workers)
+        self._tool_dispatch_max_pending = int(tool_dispatch_max_pending)
+        self._tool_dispatch_generation = 0
+        self._tool_dispatcher: Optional[HostToolDispatcher] = None
         self._process: Optional[subprocess.Popen[str]] = None
         self._write_lock = threading.Lock()
         self._state_lock = threading.RLock()
@@ -124,6 +141,33 @@ class PiGatewayClient:
         # Verify it once per gateway/sidecar lifetime, then invalidate the
         # receipt whenever that sidecar is closed or exits.
         self._installed_runtime_integrity: Optional[bool] = None
+
+    def _new_tool_dispatcher(self) -> HostToolDispatcher:
+        self._tool_dispatch_generation += 1
+        generation = self._tool_dispatch_generation
+        return HostToolDispatcher(
+            max_workers=self._tool_dispatch_max_workers,
+            max_pending=self._tool_dispatch_max_pending,
+            on_response_error=lambda exc: self._handle_tool_response_error(
+                generation, exc
+            ),
+        )
+
+    def _handle_tool_response_error(
+        self, generation: int, error: Exception
+    ) -> None:
+        with self._state_lock:
+            if generation != self._tool_dispatch_generation:
+                return
+        if isinstance(error, PiCopilotError):
+            failure = error
+        else:
+            failure = PiCopilotError(
+                "pi_host_tool_response_failed",
+                "The EasyICU host could not return a tool response to Pi.",
+                status_code=503,
+            )
+        self._fail_all(failure)
 
     def _node_binary(self) -> Optional[str]:
         direct = shutil.which("node", path=self.environ.get("PATH"))
@@ -280,6 +324,8 @@ class PiGatewayClient:
                 errors="replace",
                 bufsize=1,
             )
+            if self._tool_dispatcher is None or self._tool_dispatcher.closed:
+                self._tool_dispatcher = self._new_tool_dispatcher()
             self._reader_thread = threading.Thread(
                 target=self._read_stdout,
                 name="easyicu-pi-gateway-reader",
@@ -419,17 +465,23 @@ class PiGatewayClient:
                 self._handle_payload(payload)
         finally:
             return_code = process.poll()
+            dispatcher: Optional[HostToolDispatcher] = None
             with self._state_lock:
                 if self._process is process:
                     self._installed_runtime_integrity = None
-            self._fail_all(
-                PiCopilotError(
-                    "pi_gateway_exited",
-                    "The Pi gateway process exited unexpectedly.",
-                    status_code=503,
-                    details={"return_code": return_code},
-                )
+                    dispatcher = self._tool_dispatcher
+                    self._tool_dispatcher = None
+            gateway_exit = PiCopilotError(
+                "pi_gateway_exited",
+                "The Pi gateway process exited unexpectedly.",
+                status_code=503,
+                details={"return_code": return_code},
             )
+            # Preserve the precise process-exit cause before dispatcher
+            # shutdown attempts any final response writes to the dead pipe.
+            self._fail_all(gateway_exit)
+            if dispatcher is not None:
+                dispatcher.shutdown()
 
     def _read_stderr(self) -> None:
         process = self._process
@@ -592,32 +644,114 @@ class PiGatewayClient:
                 "The Pi host rejected unknown tool request fields.",
             )
             return
-        try:
-            result = self._tool_executor(
-                str(params.get("name") or ""),
-                (
-                    params.get("arguments")
-                    if isinstance(params.get("arguments"), dict)
-                    else {}
-                ),
-                pending.tool_context,
+        tool_name = str(params.get("name") or "")
+        tool_arguments = (
+            dict(params.get("arguments"))
+            if isinstance(params.get("arguments"), dict)
+            else {}
+        )
+        tool_context = pending.tool_context
+        session_id = tool_context.session.session_id
+        with self._state_lock:
+            dispatcher = self._tool_dispatcher
+        if dispatcher is None:
+            self._send_tool_error(
+                request_id,
+                "pi_host_tool_dispatcher_closed",
+                "The EasyICU host-tool dispatcher is closed.",
             )
+            return
+
+        def execute() -> Dict[str, Any]:
+            with self._state_lock:
+                current_parent = self._pending.get(parent_request_id)
+            if current_parent is not pending or pending.done.is_set():
+                raise PiCopilotError(
+                    "pi_tool_parent_request_stale",
+                    "The Pi host rejected a tool whose parent request is no longer active.",
+                    status_code=409,
+                )
+            return self._tool_executor(tool_name, tool_arguments, tool_context)
+
+        def respond(outcome: HostToolOutcome) -> None:
+            self._write_tool_outcome(request_id, outcome)
+
+        try:
+            dispatcher.submit(
+                session_id=session_id,
+                operation_id=request_id,
+                mutating=tool_name in MUTATING_HOST_TOOLS,
+                execute=execute,
+                respond=respond,
+            )
+        except HostToolDispatchRejected as exc:
+            self._send_tool_error(request_id, exc.code, exc.message)
+
+    def _write_tool_outcome(
+        self, request_id: str, outcome: HostToolOutcome
+    ) -> None:
+        if outcome.ok:
+            payload: Dict[str, Any] = {
+                "protocol_version": PROTOCOL_VERSION,
+                "kind": "tool_response",
+                "request_id": request_id,
+                "ok": True,
+                "result": dict(outcome.result or {}),
+            }
+        else:
+            payload = {
+                "protocol_version": PROTOCOL_VERSION,
+                "kind": "tool_response",
+                "request_id": request_id,
+                "ok": False,
+                "error": {
+                    "code": str(outcome.error_code or "pi_host_tool_failed"),
+                    "message": str(
+                        outcome.error_message or "The EasyICU host tool failed."
+                    ),
+                    **(
+                        {
+                            "details": {
+                                "operation_id": outcome.operation_id,
+                                "operation_state": outcome.operation_state,
+                            }
+                        }
+                        if outcome.operation_id and outcome.operation_state
+                        else {}
+                    ),
+                },
+            }
+        try:
+            self._write(payload)
+        except (TypeError, ValueError):
+            if not outcome.ok:
+                raise
             self._write(
                 {
                     "protocol_version": PROTOCOL_VERSION,
                     "kind": "tool_response",
                     "request_id": request_id,
-                    "ok": True,
-                    "result": result,
+                    "ok": False,
+                    "error": {
+                        "code": "pi_host_tool_result_invalid",
+                        "message": "The EasyICU host tool returned a non-serializable result.",
+                    },
                 }
             )
         except PiCopilotError as exc:
-            self._send_tool_error(request_id, exc.code, exc.message)
-        except Exception:
-            self._send_tool_error(
-                request_id,
-                "pi_host_tool_failed",
-                "The EasyICU host tool failed without exposing traceback text.",
+            if not outcome.ok or exc.code != "pi_protocol_line_too_large":
+                raise
+            self._write(
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "kind": "tool_response",
+                    "request_id": request_id,
+                    "ok": False,
+                    "error": {
+                        "code": "pi_host_tool_result_too_large",
+                        "message": "The EasyICU host tool result exceeded the protocol limit.",
+                    },
+                }
             )
 
     def _send_tool_error(self, request_id: str, code: str, message: str) -> None:
@@ -645,8 +779,19 @@ class PiGatewayClient:
     def close(self) -> None:
         with self._state_lock:
             process = self._process
+            dispatcher = self._tool_dispatcher
             self._process = None
+            self._tool_dispatcher = None
             self._installed_runtime_integrity = None
+        if dispatcher is not None:
+            dispatcher.shutdown()
+        self._fail_all(
+            PiCopilotError(
+                "pi_gateway_closed",
+                "The Pi gateway was closed before the request completed.",
+                status_code=503,
+            )
+        )
         if process is None:
             return
         try:

@@ -10,8 +10,10 @@ import pytest
 
 from easyicu import api
 from easyicu.api import concepts as concept_api
+from easyicu.api.cache import data_path_fingerprint
 from easyicu.api import extraction as extraction_api
 from easyicu.config import load_src_cfg
+from easyicu.content_identity import file_content_receipt
 from easyicu.datasource import (
     FilterOp,
     FilterSpec,
@@ -81,7 +83,17 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
     monkeypatch.setattr(
         kdigo,
         "load_kdigo_aki",
-        record("aki", pd.DataFrame({"stay_id": [7], "aki": [1]})),
+        record(
+            "aki",
+            pd.DataFrame(
+                {
+                    "stay_id": [7],
+                    "aki": [1],
+                    "aki_severe": [True],
+                    "aki_severe_ascertainment": ["positive"],
+                }
+            ),
+        ),
     )
     monkeypatch.setattr(
         circ,
@@ -105,7 +117,15 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
     )
 
     result = api.load_concepts(
-        ["aki", "circ_failure", "charlson", "mort_28d", "culture_positive"],
+        [
+            "aki",
+            "aki_severe",
+            "aki_severe_ascertainment",
+            "circ_failure",
+            "charlson",
+            "mort_28d",
+            "culture_positive",
+        ],
         patient_ids={"stay_id": [7]},
         merge=False,
         concept_workers=1,
@@ -115,6 +135,8 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
 
     assert set(result) == {
         "aki",
+        "aki_severe",
+        "aki_severe_ascertainment",
         "circ_failure",
         "charlson",
         "mort_28d",
@@ -238,6 +260,68 @@ def test_concept_cache_isolates_cohort_source_and_data_fingerprint(
     assert first["aligned"].all() and cached["aligned"].all()
 
 
+def test_concept_cache_invalidates_same_size_content_with_restored_mtime(
+    monkeypatch, tmp_path
+):
+    data_path = tmp_path / "data"
+    cache_path = tmp_path / "cache"
+    data_path.mkdir()
+    source_file = data_path / "stays.csv"
+    source_file.write_bytes(b"id,value\n1,old\n")
+    original_stat = source_file.stat()
+    calls = []
+
+    def fake_load_concepts(**kwargs):
+        calls.append(kwargs)
+        return pd.DataFrame({"stay_id": [len(calls)]})
+
+    monkeypatch.setattr(api, "load_concepts", fake_load_concepts)
+    api.load_concept_cached(
+        "hr",
+        "miiv",
+        data_path,
+        cache_dir=cache_path,
+        patient_ids=[1],
+        verbose=False,
+    )
+
+    source_file.write_bytes(b"id,value\n1,new\n")
+    os.utime(
+        source_file,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    api.load_concept_cached(
+        "hr",
+        "miiv",
+        data_path,
+        cache_dir=cache_path,
+        patient_ids=[1],
+        verbose=False,
+    )
+
+    assert len(calls) == 2
+
+
+def test_content_fingerprint_does_not_exclude_data_when_cache_is_an_ancestor(
+    tmp_path: Path,
+) -> None:
+    data_path = tmp_path / "data"
+    data_path.mkdir()
+    source_file = data_path / "stays.csv"
+    source_file.write_bytes(b"id,value\n1,old\n")
+    original_stat = source_file.stat()
+
+    before = data_path_fingerprint(data_path, exclude_dir=tmp_path)
+    source_file.write_bytes(b"id,value\n1,new\n")
+    os.utime(
+        source_file,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    after = data_path_fingerprint(data_path, exclude_dir=tmp_path)
+
+    assert after != before
+
+
 def test_concept_cache_does_not_truncate_digest_to_collision_prone_prefix(
     monkeypatch, tmp_path
 ):
@@ -278,6 +362,72 @@ def test_concept_cache_does_not_truncate_digest_to_collision_prone_prefix(
     assert calls == [[1], [2]]
     assert first["stay_id"].tolist() == [1]
     assert second["stay_id"].tolist() == [2]
+
+
+def test_concept_cache_uses_opaque_parquet_name_by_default(monkeypatch, tmp_path):
+    data_path = tmp_path / "data"
+    cache_path = tmp_path / "cache"
+    data_path.mkdir()
+    calls = []
+
+    def fake_load_concepts(**kwargs):
+        calls.append(kwargs)
+        return pd.DataFrame({"stay_id": [1], "charttime": [pd.Timestamp("2020-01-01")]})
+
+    monkeypatch.setattr(api, "load_concepts", fake_load_concepts)
+
+    first = api.load_concept_cached(
+        "../heart/rate",
+        "../../miiv",
+        data_path,
+        cache_dir=cache_path,
+        verbose=False,
+    )
+    second = api.load_concept_cached(
+        "../heart/rate",
+        "../../miiv",
+        data_path,
+        cache_dir=cache_path,
+        verbose=False,
+    )
+
+    receipt_index = cache_path / ".easyicu_content_receipts.json"
+    cache_files = [path for path in cache_path.iterdir() if path != receipt_index]
+    assert len(calls) == 1
+    assert first.equals(second)
+    assert receipt_index.is_file()
+    assert len(cache_files) == 1
+    assert cache_files[0].parent == cache_path
+    assert cache_files[0].suffix == ".parquet"
+    assert len(cache_files[0].stem) == 64
+    int(cache_files[0].stem, 16)
+
+
+def test_pickle_cache_is_explicit_and_uses_an_opaque_name(monkeypatch, tmp_path):
+    data_path = tmp_path / "data"
+    cache_path = tmp_path / "cache"
+    data_path.mkdir()
+    monkeypatch.setattr(
+        api,
+        "load_concepts",
+        lambda **_kwargs: pd.DataFrame({"stay_id": [1]}),
+    )
+
+    api.load_concept_cached(
+        "../heart/rate",
+        "../../miiv",
+        data_path,
+        cache_dir=cache_path,
+        use_pickle=True,
+        verbose=False,
+    )
+
+    receipt_index = cache_path / ".easyicu_content_receipts.json"
+    cache_files = [path for path in cache_path.iterdir() if path != receipt_index]
+    assert receipt_index.is_file()
+    assert len(cache_files) == 1
+    assert cache_files[0].name.endswith(".trusted.pkl")
+    assert len(cache_files[0].name.removesuffix(".trusted.pkl")) == 64
 
 
 def test_transformed_bounds_are_applied_before_hourly_aggregation(tmp_path):
@@ -858,6 +1008,7 @@ def test_converter_rejects_completed_single_file_with_row_count_mismatch(tmp_pat
         "status": ConversionStatus.COMPLETED,
         "row_count": 2,
         "shards": 0,
+        "source_content_receipt": file_content_receipt(csv_path),
     }
 
     needed, reason = converter._is_conversion_needed(csv_path)
@@ -888,6 +1039,7 @@ def test_converter_rejects_completed_shards_with_row_count_mismatch(tmp_path):
         "status": ConversionStatus.COMPLETED,
         "row_count": 3,
         "shards": 2,
+        "source_content_receipt": file_content_receipt(csv_path),
     }
     converter._invalidate_dir_caches()
 
@@ -901,6 +1053,27 @@ def test_converter_rejects_completed_shards_with_row_count_mismatch(tmp_path):
 
     assert needed is False
     assert reason == "sharded (2 files)"
+
+
+def test_converter_rebuilds_same_size_source_with_restored_mtime(tmp_path):
+    csv_path = tmp_path / "events.csv"
+    csv_path.write_bytes(b"id,value\n1,old\n")
+    converter = DataConverter(tmp_path, database="miiv", verbose=False)
+    first = converter.convert_all(force=True)
+    assert first[csv_path.name]["status"] == ConversionStatus.COMPLETED
+    original_stat = csv_path.stat()
+
+    csv_path.write_bytes(b"id,value\n1,new\n")
+    os.utime(csv_path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+    needed, reason = converter._is_conversion_needed(csv_path)
+    assert needed is True
+    assert reason == "source content changed since completed conversion"
+
+    second = converter.convert_all()
+    assert second[csv_path.name]["status"] == ConversionStatus.COMPLETED
+    converted = pd.read_parquet(tmp_path / "events.parquet")
+    assert converted["value"].tolist() == ["new"]
 
 
 def test_converter_manifest_keeps_existing_tables_and_counts_bad_rows(tmp_path):
@@ -937,7 +1110,9 @@ def test_converter_distinguishes_mimic_generations_and_rejects_ambiguity(tmp_pat
         DataConverter(ambiguous, verbose=False)
 
 
-def test_outcomes_preserve_missing_free_days_and_sort_readmissions(monkeypatch):
+def test_unverified_stay_history_does_not_publish_free_days_or_readmission(
+    monkeypatch,
+):
     import easyicu.scores.outcomes as outcomes
 
     icu = pd.DataFrame(
@@ -957,15 +1132,62 @@ def test_outcomes_preserve_missing_free_days_and_sort_readmissions(monkeypatch):
     )
 
     result = outcomes.load_outcomes("miiv")
-    by_stay = result.set_index("stay_id")
-
-    assert by_stay.loc[1, "icu_free_days_28"] == 26.0
-    assert pd.isna(by_stay.loc[2, "icu_free_days_28"])
-    assert bool(by_stay.loc[1, "icu_readmission"]) is False
-    assert bool(by_stay.loc[2, "icu_readmission"]) is True
+    assert "icu_free_days_28" not in result.columns
+    assert "icu_readmission" not in result.columns
+    assert result["stay_id"].tolist() == [2, 1]
 
 
-def test_missing_eicu_vent_days_are_not_treated_as_28_free_days(monkeypatch):
+def test_sic_outcomes_use_icu_origin_and_censor_incomplete_365d_followup(
+    monkeypatch,
+):
+    import easyicu.scores.outcomes as outcomes
+
+    cases = pd.DataFrame(
+        {
+            "CaseID": [1, 2, 3],
+            "TimeOfStay": [90_000, 90_000, 90_000],
+            "ICUOffset": [3_600, 3_600, 3_600],
+            "OffsetOfDeath": [None, None, 3_600 + 300 * 86_400],
+            "EstimatedSurvivalObservationTime": [3077, 3076, 3076],
+        }
+    )
+    monkeypatch.setattr(outcomes, "_raw_table", lambda *_args: cases)
+
+    result = outcomes.load_outcomes("sic").set_index("CaseID")
+
+    assert "icu_free_days_28" not in result.columns
+    assert bool(result.loc[1, "mort_365d"]) is False
+    assert pd.isna(result.loc[2, "mort_365d"])
+    assert bool(result.loc[2, "mort_90d"]) is False
+    assert bool(result.loc[3, "mort_365d"]) is True
+
+
+def test_sic_outcomes_accept_the_public_sicdb_alias(monkeypatch):
+    import easyicu.scores.outcomes as outcomes
+
+    observed = {}
+
+    def fake_sic(database, _data_path):
+        observed["database"] = database
+        return pd.DataFrame(
+            {
+                "_stay": [1],
+                "days_to_death": [400.0],
+                "los_days": [1.0],
+                "followup_days": [365.0],
+                "hadm_id": [pd.NA],
+            }
+        )
+
+    monkeypatch.setattr(outcomes, "_sic_stay_death_days", fake_sic)
+
+    result = outcomes.load_outcomes("sicdb")
+
+    assert observed["database"] == "sic"
+    assert result["CaseID"].tolist() == [1]
+
+
+def test_eicu_hospital_mortality_does_not_publish_vfd28(monkeypatch):
     import easyicu.scores.outcomes as outcomes
 
     apache = pd.DataFrame(
@@ -978,11 +1200,10 @@ def test_missing_eicu_vent_days_are_not_treated_as_28_free_days(monkeypatch):
     )
     monkeypatch.setattr(outcomes, "_raw_table", lambda *args: apache)
 
-    result = outcomes.load_outcomes("eicu").set_index("patientunitstayid")
+    result = outcomes.load_outcomes("eicu")
 
-    assert pd.isna(result.loc[1, "vent_free_days_28"])
-    assert result.loc[2, "vent_free_days_28"] == 0
-    assert result.loc[3, "vent_free_days_28"] == 24
+    assert result.empty
+    assert "vent_free_days_28" not in result.columns
 
 
 def test_eicu_microbiology_uses_all_stays_as_denominator(monkeypatch):

@@ -12,23 +12,27 @@ _Generated from `easyicu.research_agent.planning.capability_registry`. Do not ed
 | Association — exact single-model adjusted | deterministic ✅ | Host-computed adjusted association under one exact Planner-owned estimator and typed model-term contract | `adjusted_association_estimates` | deterministic ✅ (`base_association_skill`) | The owner declines names-only coding, unsupported estimators, multiple model requirements, undeclared levels, rank loss or a non-estimable fit; no estimator or predictor is substituted. |
 | Association — general / free-form | LLM-coded ⚠️ | Agent-coded association for scientific kernels outside the exact single-model host contract | — | deterministic ✅ (`base_association_skill`) | Unsupported or under-declared scientific kernels remain agent-coded and cannot be relabelled as the deterministic adjusted-association owner. |
 | Prediction / risk modelling | LLM-coded ⚠️ | LLM-coded discrimination + calibration (AUROC, calibration); value-provenance verified | — | deterministic ✅ (`prediction`) | LLM code failure -> repair -> fail-closed. manuscript_numeric_auditor catches rounded/hallucinated metrics (caught AUROC 0.766->0.7 in a pilot). |
+| Dynamic prediction / landmark early warning | LLM-coded ⚠️ | Time-updated binary risks at prespecified landmarks and target horizons using only measurements available by each prediction time | — | deterministic ✅ (`prediction`) | Missing event/follow-up times, post-landmark feature leakage, an unobservable target horizon, or a row-level rather than patient-level split blocks the action. Static prediction is offered only as a user-confirmed alternative, never as an automatic substitute. |
 | Phenotyping / clustering | LLM-coded ⚠️ | Agent-planned cluster solution; outcome-by-cluster kept descriptive (not causal) | — | deterministic ✅ (`phenotyping`) | figure_strategy anti-pattern blocks 'clusters are causal entities'; an LLM failure fails closed to diagnostic_only. |
 | Descriptive / measurement audit | LLM-coded ⚠️ | LLM-coded descriptive summaries / Table One / measurement-process audits | — | deterministic ✅ (`base_association_skill`) | Evidence STRICT mode blocks unbound sentences; the plausibility gate flags implausible descriptives before they reach the manuscript. |
+| Descriptive — typed exposure/outcome absolute risks | deterministic ✅ | Host-computed exposure prevalence, outcome absolute risks and an optional prespecified unadjusted risk difference under an exact typed descriptive-only contract | `exposure_outcome_distribution` | deterministic ✅ (`base_association_skill`) | The owner declines an untyped cohort, an incomplete distribution design, any adjusted/causal owner contract, or any claim ceiling above descriptive-only. Runtime evidence and host-derived claim metadata must reproduce from the exact registered summary bytes. |
 
 ## Scientific claim readiness
 
 A capability can execute an analysis without having a sufficient scientific validator for a publication claim. `analysis_only` is an explicit fail-closed boundary, not an error the Agent may write around.
 
-| Capability | Result contract | Required diagnostics | Claim ceiling |
-| --- | --- | --- | --- |
-| `survival_time_to_event_v1` | host-issued digest-bound survival receipt + primary CSV + PH table | event/censoring closure; time-origin binding; proportional-hazards diagnostic when Cox is declared | reportable ✅ |
-| `causal_target_trial_v1` | family_primary_result_requirement + registered primary CSV | target-trial time-zero and treatment-strategy protocol; identification/refutation; positivity and balance | analysis_only ⚠️ |
-| `association_ordinal_trend_v1` | planned_model_requirement + registered adjusted estimate | declared levels; primary contrast; model contract | reportable ✅ |
-| `association_adjusted_v1` | typed planned_model_requirement + host model contract + registered adjusted estimate | model-term coding receipt; primary model contract; effect/interval reconciliation | reportable ✅ |
-| `association_freeform_v1` | agent-authored registered result under deterministic gates | method-specific contract; effect/interval reconciliation | analysis_only ⚠️ |
-| `prediction_risk_model_v1` | registered discrimination and calibration products | split/leakage; discrimination; calibration | reportable ✅ |
-| `phenotyping_cluster_v1` | registered clustering, profile, and stability products | representation; cluster stability; descriptive outcome use | reportable ✅ |
-| `descriptive_measurement_v1` | registered summary/source-data products | denominators; measurement availability | reportable ✅ |
+| Capability | Result contract | Validator owner | Required diagnostics | Claim ceiling |
+| --- | --- | --- | --- | --- |
+| `survival_time_to_event_v1` | host-issued digest-bound survival receipt + primary CSV + PH table | `execution.runners.survival_primary_executor` / `SurvivalPrimaryResultReceipt` | event/censoring closure; time-origin binding; proportional-hazards diagnostic when Cox is declared | reportable ✅ |
+| `causal_target_trial_v1` | family_primary_result_requirement + registered primary CSV | — | target-trial time-zero and treatment-strategy protocol; identification/refutation; positivity and balance | analysis_only ⚠️ |
+| `association_ordinal_trend_v1` | planned_model_requirement + registered adjusted estimate | — | declared levels; primary contrast; model contract | analysis_only ⚠️ |
+| `association_adjusted_v1` | typed planned_model_requirement + host model contract + registered adjusted estimate | `execution.runners.adjusted_association_executor` / `AssociationExecutionVerdict` | model-term coding receipt; primary model contract; effect/interval reconciliation | reportable ✅ |
+| `association_freeform_v1` | agent-authored registered result under deterministic gates | — | method-specific contract; effect/interval reconciliation | analysis_only ⚠️ |
+| `prediction_risk_model_v1` | registered discrimination and calibration products | — | split/leakage; discrimination; calibration | analysis_only ⚠️ |
+| `dynamic_prediction_landmark_v1` | typed scientific action + leakage-safe landmark dataset receipt + registered per-landmark discrimination/calibration products | — | prediction-time/observation-window/target-horizon separation; patient-level split and leakage audit; per-landmark discrimination, calibration and horizon observability; temporal subgroup or drift assessment when data support it | analysis_only ⚠️ |
+| `phenotyping_cluster_v1` | registered clustering, profile, and stability products | — | representation; cluster stability; descriptive outcome use | analysis_only ⚠️ |
+| `descriptive_measurement_v1` | registered summary/source-data products | — | denominators; measurement availability | analysis_only ⚠️ |
+| `descriptive_exposure_outcome_distribution_v1` | exposure_outcome_distribution/2 summary + digest-bound ScientificClaimRegistration | `execution.runners.exposure_outcome_distribution_executor` / `exposure_outcome_distribution_result_receipt_valid + ScientificClaimRegistration` | closed exposure/outcome levels and denominators; interval/dependence contract; descriptive-only noncausal claim ceiling | reportable ✅ |
 
 ## Auxiliary deterministic runners (support, not family-primary)
 

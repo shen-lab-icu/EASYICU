@@ -11,16 +11,27 @@ except ModuleNotFoundError:  # Python 3.10 runtime
 
 import pytest
 
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.plan_lifecycle import (
+    NormalizedPlan,
+    ProposedPlan,
+    approve_normalized_plan_for_execution,
+    persist_normalized_plan,
+)
+from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.orchestration.workflow import (
     HumanReviewDecision,
     HumanReviewRejected,
     HumanReviewRequest,
+    HumanReviewStateDrift,
     WorkflowEngine,
     WorkflowCompleted,
     WorkflowPaused,
     build_pipeline_workflow,
     orchestration_runtime_receipt,
+    human_review_requests_for_plan,
 )
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
 def _workflow(**overrides):
@@ -115,6 +126,195 @@ def test_human_review_pause_requires_digest_bound_approval() -> None:
     assert completed.human_review_decisions[0]["review_id"] == request.review_id
     assert recorded[0]["authority_sha256"] == request.authority_sha256
     assert calls == ["plan", "execute", "write", "finalise"]
+
+
+def test_execute_reconstructs_the_persisted_approved_plan_after_callback_mutation(
+    tmp_path,
+) -> None:
+    plan = AnalysisPlan(
+        revision=1,
+        research_question="What is observed in this ICU cohort?",
+        analysis_type="descriptive_epidemiology",
+        steps=[
+            AnalysisStep(
+                step_id="01_summary",
+                intent="Summarize the approved cohort.",
+                method="descriptive",
+                expected_outputs=["table:cohort_summary"],
+            )
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    normalized = NormalizedPlan.create(
+        proposed=ProposedPlan.create(plan=plan, source="planner_llm"),
+        transformation_receipts=(),
+        plan=plan,
+    )
+    persist_normalized_plan(
+        run_dir=tmp_path,
+        evidence=evidence,
+        normalized=normalized,
+    )
+    handoff = SimpleNamespace(
+        aborted_result=None,
+        context={"cohort": "approved"},
+        agent_context={"question": "approved"},
+        context_path=tmp_path / "research_context.json",
+        plan=plan,
+        plan_path=tmp_path / "analysis_plan.json",
+        evidence=evidence,
+        findings=["approved finding"],
+        prompt_files={"planner": "approved.txt"},
+        resume_state={"step": "approved"},
+    )
+    requests = []
+    decisions = []
+    executed_intents = []
+    executed_handoffs = []
+
+    def review(plan_result):
+        requests[:] = human_review_requests_for_plan(
+            findings=[],
+            plan=plan_result.plan,
+            evidence=plan_result.evidence,
+            require_plan_review=True,
+        )
+        return requests
+
+    def commit(_records):
+        approve_normalized_plan_for_execution(
+            run_dir=tmp_path,
+            evidence=evidence,
+            revision=1,
+            review_requests=requests,
+            decision_set_sha256=canonical_sha256(
+                [item.model_dump(mode="json") for item in decisions]
+            ),
+        )
+        handoff.plan.steps[0].intent = "Run callback-mutated, unapproved work."
+        handoff.context["cohort"] = "mutated"
+        handoff.agent_context["question"] = "mutated"
+        handoff.context_path = tmp_path / "mutated_context.json"
+        handoff.plan_path = tmp_path / "mutated_plan.json"
+        handoff.evidence = EvidenceStore(tmp_path / "mutated_evidence")
+        handoff.findings.append("mutated finding")
+        handoff.prompt_files["planner"] = "mutated.txt"
+        handoff.resume_state["step"] = "mutated"
+
+    def execute(approved):
+        executed_intents.append(approved.plan.steps[0].intent)
+        executed_handoffs.append(approved)
+        return "executed"
+
+    workflow = build_pipeline_workflow(
+        plan_invoker=lambda: handoff,
+        execute_invoker=execute,
+        write_invoker=lambda _plan, _execute: "written",
+        finalise_invoker=lambda _plan, _execute, _write: "final",
+        human_review_invoker=review,
+        human_review_execution_commit=commit,
+    )
+    paused = workflow.start()
+    assert isinstance(paused, WorkflowPaused)
+    decisions.append(
+        HumanReviewDecision(
+            review_id=paused.requests[0].review_id,
+            authority_sha256=paused.requests[0].authority_sha256,
+            decision="approved",
+            reviewer="maintainer",
+            decided_at="2026-08-14T05:00:00Z",
+        )
+    )
+
+    completed = workflow.resume(decisions)
+
+    assert completed.final_result == "final"
+    assert handoff.plan.steps[0].intent == "Run callback-mutated, unapproved work."
+    assert executed_intents == ["Summarize the approved cohort."]
+    approved_handoff = executed_handoffs[0]
+    assert approved_handoff.context == {"cohort": "approved"}
+    assert approved_handoff.agent_context == {"question": "approved"}
+    assert approved_handoff.context_path == tmp_path / "research_context.json"
+    assert approved_handoff.plan_path == tmp_path / "analysis_plan.json"
+    assert approved_handoff.evidence is evidence
+    assert approved_handoff.findings == ["approved finding"]
+    assert approved_handoff.prompt_files == {"planner": "approved.txt"}
+    assert approved_handoff.resume_state == {"step": "approved"}
+
+
+def test_write_does_not_start_if_execute_mutates_the_approved_plan() -> None:
+    plan = AnalysisPlan(
+        research_question="Does the approved plan remain immutable?",
+        steps=[AnalysisStep(step_id="01", intent="Run approved work.")],
+    )
+    handoff = SimpleNamespace(aborted_result=None, plan=plan)
+    writes = []
+
+    def mutate_during_execute(plan_result):
+        plan_result.plan.steps[0].intent = "Mutated during Execute."
+        return SimpleNamespace(plan=plan_result.plan)
+
+    workflow = build_pipeline_workflow(
+        plan_invoker=lambda: handoff,
+        execute_invoker=mutate_during_execute,
+        write_invoker=lambda _plan, _execute: writes.append("write"),
+        finalise_invoker=lambda _plan, _execute, _write: "final",
+    )
+    workflow._approved_plan_sha256 = canonical_sha256(plan.model_dump(mode="json"))
+
+    with pytest.raises(HumanReviewStateDrift, match="Write was not started"):
+        workflow.start()
+
+    assert writes == []
+
+
+def test_operator_plan_review_policy_pauses_without_error_findings() -> None:
+    from easyicu.research_agent.orchestration.workflow import (
+        human_review_requests_for_plan,
+    )
+
+    requests = human_review_requests_for_plan(
+        findings=[],
+        plan={"research_question": "Does X predict Y?", "steps": []},
+        require_plan_review=True,
+    )
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.kind == "scientific_stop"
+    assert request.payload["reason"] == "operator_plan_approval_required"
+    assert request.payload["plan_review_authority"]["plan_sha256"]
+
+
+def test_resume_scientific_migration_forces_review_without_global_policy() -> None:
+    from easyicu.research_agent.orchestration.workflow import (
+        human_review_requests_for_plan,
+    )
+
+    requests = human_review_requests_for_plan(
+        findings=[
+            SimpleNamespace(
+                validator="planner_schema_migration",
+                severity="error",
+                message="A new Planner model roster requires approval.",
+                evidence_ids=[],
+                detail={
+                    "reason": "resume_scientific_migration_requires_review",
+                    "human_review_required": True,
+                    "approval_allowed": True,
+                },
+            )
+        ],
+        plan={"research_question": "Does X predict Y?", "steps": []},
+        require_plan_review=False,
+    )
+
+    assert len(requests) == 1
+    assert requests[0].kind == "scientific_stop"
+    assert (
+        requests[0].payload["reason"]
+        == "resume_scientific_migration_requires_review"
+    )
 
 
 def test_human_review_rejects_duplicate_request_ids_before_pause() -> None:

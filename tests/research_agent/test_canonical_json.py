@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,7 @@ from easyicu.research_agent.canonical_json import (
     canonical_json_bytes,
     canonical_sha256,
     sha256_bytes,
+    sha256_file,
 )
 
 
@@ -40,3 +42,19 @@ def test_non_finite_values_and_non_json_objects_fail_closed() -> None:
         canonical_json({"value": math.nan})
     with pytest.raises(TypeError):
         canonical_json({"value": object()})
+
+
+def test_file_digest_streams_exact_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "payload.bin"
+    path.write_bytes(CANONICAL_BYTES * 5)
+
+    assert sha256_file(path, chunk_size=7) == sha256_bytes(path.read_bytes())
+    assert sha256_file(str(path)) == sha256_bytes(path.read_bytes())
+
+
+def test_file_digest_rejects_nonpositive_chunk_size(tmp_path: Path) -> None:
+    path = tmp_path / "payload.bin"
+    path.write_bytes(b"payload")
+
+    with pytest.raises(ValueError, match="chunk_size must be positive"):
+        sha256_file(path, chunk_size=0)

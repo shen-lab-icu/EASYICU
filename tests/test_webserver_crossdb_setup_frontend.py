@@ -33,7 +33,7 @@ def test_crossdb_setup_owner_is_unique_and_wired_in_dependency_order() -> None:
     shell = _read("js/screens-viz.js")
     setup_src = "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2"
     charts_src = "js/screens-viz-crossdb-charts.js?v=20260728-shared-echarts1"
-    results_src = "js/screens-viz-crossdb-results.js?v=20260802-gate-remedy"
+    results_src = "js/screens-viz-crossdb-results.js?v=20260812-tab-a11y1"
 
     assert index.count(setup_src) == 1
     assert index.count(results_src) == 1
@@ -217,6 +217,7 @@ def test_crossdb_results_owner_executes_navigation_and_single_chart_contract() -
         text=True,
     )
     assert json.loads(result.stdout) == {
+        "accessible_tabs": True,
         "complete_catalog_filter": True,
         "full_scope_handoff": True,
         "no_duplicate_actions": True,

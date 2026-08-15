@@ -8,7 +8,10 @@ cross-database claims remain fail-closed until the numeric evidence audit gate.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -99,6 +102,22 @@ class _CrossdbRawCancelled(RuntimeError):
         self.completed_databases = completed_databases
         self.completed_chunks = completed_chunks
         super().__init__("crossdb_raw_cancelled")
+
+
+class _CrossdbSummaryAbandoned(RuntimeError):
+    """Stop the worker at its next boundary after its job has gone terminal."""
+
+
+class CrossdbSummaryDeadlineError(RuntimeError):
+    """Stable diagnostic for a registered summary that exceeds its deadline."""
+
+    code = "crossdb_summary_deadline_exceeded"
+
+    def __init__(self, deadline_seconds: float) -> None:
+        self.deadline_seconds = deadline_seconds
+        super().__init__(
+            f"registered Cross-DB summary exceeded its {deadline_seconds:g}s deadline"
+        )
 _DEMO_MULTIDB_FEATURE_SPECS = {
     "miiv": {
         "hr": (80, 15),
@@ -310,10 +329,24 @@ def crossdb_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     """Return native Cross-DB descriptive aggregates for registered exports."""
     _reject_unsupported_request(body)
     requested_sources = _resolve_registered_sources(body)
+    return _crossdb_review_summary_for_sources(requested_sources)
+
+
+def _crossdb_review_summary_for_sources(
+    requested_sources: List[Dict[str, Any]],
+    *,
+    checkpoint: Optional[
+        Callable[[str, int, int, Optional[Dict[str, Any]]], None]
+    ] = None,
+) -> Dict[str, Any]:
+    """Build one summary from an already-resolved immutable source selection."""
 
     cohort_payloads: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
-    for source in requested_sources:
+    source_total = len(requested_sources)
+    for index, source in enumerate(requested_sources, start=1):
+        if checkpoint is not None:
+            checkpoint("summarizing", index - 1, source_total, source)
         safe_source = _safe_registered_source(source)
         try:
             cohort_payloads.append(
@@ -327,6 +360,8 @@ def crossdb_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
                     "detail": _safe_error_detail(exc.detail),
                 }
             )
+        if checkpoint is not None:
+            checkpoint("summarizing", index, source_total, source)
     if errors:
         raise CrossdbReviewError(
             {
@@ -339,10 +374,15 @@ def crossdb_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
-    sources = [
-        _source_aggregate(source, payload)
-        for source, payload in zip(requested_sources, cohort_payloads)
-    ]
+    sources: List[Dict[str, Any]] = []
+    for index, (source, payload) in enumerate(
+        zip(requested_sources, cohort_payloads), start=1
+    ):
+        if checkpoint is not None:
+            checkpoint("aggregating", index - 1, source_total, source)
+        sources.append(_source_aggregate(source, payload))
+        if checkpoint is not None:
+            checkpoint("aggregating", index, source_total, source)
     module_sets = [set(source.get("modules") or []) for source in sources]
     shared_modules = sorted(set.intersection(*module_sets)) if module_sets else []
     all_modules = sorted(set.union(*module_sets)) if module_sets else []
@@ -365,12 +405,15 @@ def crossdb_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
+    if checkpoint is not None:
+        checkpoint("finalizing", source_total, source_total, None)
     return {
         "ok": True,
         "mode": "real",
         "demo": False,
         "source_count": len(sources),
         "sources": _public_sources(sources),
+        "selection_receipt": _crossdb_selection_receipt(sources),
         "rows": _comparison_rows(sources, compatibility_gate),
         "availability": _module_availability(sources, all_modules),
         "feature_density": _feature_density_payload(sources),
@@ -503,6 +546,7 @@ def crossdb_raw_distribution(
         "source_type": "raw_database_root",
         "source_count": len(sources),
         "sources": sources,
+        "selection_receipt": _crossdb_selection_receipt(sources),
         "rows": _raw_comparison_rows(loaded, features),
         "availability": _raw_module_availability(feature_distributions, sources),
         "feature_density": [],
@@ -656,6 +700,212 @@ def crossdb_raw_root_scan(body: Dict[str, Any]) -> Dict[str, Any]:
         "runnable": runnable,
         "hint": hint,
     }
+
+
+def _crossdb_summary_deadline_seconds(value: Any) -> float:
+    if value is None or value == "":
+        return 120.0
+    if isinstance(value, bool):
+        raise CrossdbReviewError({"error": "invalid_deadline_seconds"})
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError) as exc:
+        raise CrossdbReviewError({"error": "invalid_deadline_seconds"}) from exc
+    if not math.isfinite(seconds) or seconds < 0.05 or seconds > 600:
+        raise CrossdbReviewError(
+            {
+                "error": "invalid_deadline_seconds",
+                "minimum": 0.05,
+                "maximum": 600,
+            }
+        )
+    return seconds
+
+
+class CrossdbReviewSummaryRunner:
+    """One registered summary job bound to an exact source-path lease."""
+
+    def __init__(
+        self,
+        *,
+        sources: List[Dict[str, Any]],
+        lease: source_store.SourcePathLease,
+        deadline_seconds: float,
+    ) -> None:
+        self.sources = [dict(source) for source in sources]
+        self.lease = lease
+        self.deadline_seconds = deadline_seconds
+        self.deadline_at = time.time() + deadline_seconds
+        self.selection_receipt = _crossdb_selection_receipt(
+            [_safe_registered_source(source) for source in self.sources]
+        )
+        self._deadline_monotonic = time.monotonic() + deadline_seconds
+        self._release_deferred = False
+        self._release_lock = threading.Lock()
+
+    def source_lease_receipt(self) -> Dict[str, Any]:
+        return self.lease.public_receipt(
+            str(self.selection_receipt["selection_digest"])
+        )
+
+    def release(self) -> None:
+        self.lease.release()
+
+    def _defer_release_until(self, worker_done: threading.Event, job: Any) -> None:
+        with self._release_lock:
+            if self._release_deferred:
+                return
+            self._release_deferred = True
+        begin_draining = getattr(job, "begin_draining", None)
+        if callable(begin_draining):
+            begin_draining()
+
+        def release_after_read() -> None:
+            try:
+                worker_done.wait()
+                self.release()
+            finally:
+                end_draining = getattr(job, "end_draining", None)
+                if callable(end_draining):
+                    end_draining()
+
+        threading.Thread(target=release_after_read, daemon=True).start()
+
+    def __call__(self, job: Any) -> Dict[str, Any]:
+        abandoned = threading.Event()
+        worker_done = threading.Event()
+        result_box: Dict[str, Any] = {}
+        error_box: List[Exception] = []
+        source_total = len(self.sources)
+
+        def cancelled() -> bool:
+            checker = getattr(job, "is_cancel_requested", None)
+            if callable(checker):
+                return bool(checker())
+            return bool(getattr(job, "cancel_requested", False))
+
+        def checkpoint(
+            phase: str,
+            current: int,
+            total: int,
+            source: Optional[Dict[str, Any]],
+        ) -> None:
+            if abandoned.is_set():
+                raise _CrossdbSummaryAbandoned("registered summary abandoned")
+            safe_source = _safe_registered_source(source) if source else None
+            event: Dict[str, Any] = {
+                "type": "progress",
+                "phase": phase,
+                "current": current,
+                "total": total,
+                "source_count": source_total,
+                "deadline_at": self.deadline_at,
+                "message": {
+                    "summarizing": "Computing bounded cohort aggregates for registered exports.",
+                    "aggregating": "Combining path-free Cross-DB aggregate summaries.",
+                    "finalizing": "Validating compatibility and the source-selection receipt.",
+                }.get(phase, "Processing registered Cross-DB summary."),
+            }
+            if safe_source:
+                event["source"] = {
+                    "id": safe_source.get("id"),
+                    "label": safe_source.get("label"),
+                    "database": safe_source.get("database"),
+                    "path_hash": safe_source.get("path_hash"),
+                }
+            job.emit(event)
+
+        def work() -> None:
+            try:
+                result_box["result"] = _crossdb_review_summary_for_sources(
+                    self.sources,
+                    checkpoint=checkpoint,
+                )
+            except Exception as exc:  # noqa: BLE001 - transferred to job owner thread.
+                error_box.append(exc)
+            finally:
+                worker_done.set()
+
+        try:
+            job.emit(
+                {
+                    "type": "progress",
+                    "phase": "resolving",
+                    "current": 0,
+                    "total": source_total,
+                    "source_count": source_total,
+                    "deadline_at": self.deadline_at,
+                    "message": "Resolved and leased the exact registered export selection.",
+                }
+            )
+            if cancelled():
+                return self._cancelled_result("resolving", job)
+
+            worker = threading.Thread(target=work, daemon=True)
+            worker.start()
+            while not worker_done.wait(timeout=0.025):
+                if cancelled():
+                    abandoned.set()
+                    self._defer_release_until(worker_done, job)
+                    return self._cancelled_result("summarizing", job)
+                if time.monotonic() >= self._deadline_monotonic:
+                    abandoned.set()
+                    self._defer_release_until(worker_done, job)
+                    raise CrossdbSummaryDeadlineError(self.deadline_seconds)
+
+            if cancelled():
+                return self._cancelled_result("finalizing", job)
+            if time.monotonic() >= self._deadline_monotonic:
+                raise CrossdbSummaryDeadlineError(self.deadline_seconds)
+            if error_box:
+                raise error_box[0]
+            result = result_box.get("result")
+            if not isinstance(result, dict):
+                raise RuntimeError("crossdb_summary_result_missing")
+            receipt = result.get("selection_receipt") or {}
+            if (
+                receipt.get("selection_digest")
+                != self.selection_receipt.get("selection_digest")
+            ):
+                raise RuntimeError("crossdb_summary_selection_receipt_mismatch")
+            return result
+        finally:
+            if not self._release_deferred:
+                self.release()
+
+    def _cancelled_result(self, phase: str, job: Any) -> Dict[str, Any]:
+        return {
+            "ok": False,
+            "cancelled": True,
+            "cancelled_at": phase,
+            "cancel_reason": getattr(job, "cancel_reason", None)
+            or "user_requested",
+            "selection_receipt": self.selection_receipt,
+            "privacy": _privacy_payload(),
+        }
+
+
+def make_crossdb_review_summary_runner(
+    body: Dict[str, Any],
+) -> CrossdbReviewSummaryRunner:
+    """Resolve, validate, and lease a registered-source summary before submit."""
+    request_body = dict(body or {})
+    _reject_unsupported_request(request_body)
+    deadline_seconds = _crossdb_summary_deadline_seconds(
+        request_body.get("deadline_seconds")
+    )
+    resolved = _resolve_registered_sources(request_body)
+    try:
+        lease = source_store.acquire_path_lease(
+            str(source.get("path") or "") for source in resolved
+        )
+    except source_store.SourcePathLeaseError as exc:
+        raise CrossdbReviewError(exc.detail) from exc
+    return CrossdbReviewSummaryRunner(
+        sources=list(lease.sources),
+        lease=lease,
+        deadline_seconds=deadline_seconds,
+    )
 
 
 def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
@@ -836,6 +1086,7 @@ def crossdb_demo_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
         "source_type": "legacy_simulated_multidb_feature_frames",
         "source_count": len(sources),
         "sources": sources,
+        "selection_receipt": _crossdb_selection_receipt(sources),
         "rows": _raw_comparison_rows(loaded, features),
         "availability": _raw_module_availability(feature_distributions, sources),
         "feature_density": [],
@@ -2574,6 +2825,34 @@ def _public_sources(sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         }
         for source in sources
     ]
+
+
+def _crossdb_selection_receipt(
+    sources: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Return an immutable, path-free receipt for the exact selected sources."""
+
+    selected = [
+        {
+            "source_id": str(source.get("id") or ""),
+            "label": str(source.get("label") or ""),
+            "database": str(source.get("database") or ""),
+            "path_hash": str(source.get("path_hash") or ""),
+        }
+        for source in sources
+    ]
+    canonical = json.dumps(
+        selected,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "schema_version": "crossdb-selection-v1",
+        "source_count": len(selected),
+        "sources": selected,
+        "selection_digest": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
 
 
 def _is_feature_column(name: str) -> bool:

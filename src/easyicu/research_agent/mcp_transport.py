@@ -20,7 +20,6 @@ from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from typing import Any, Optional
 
-import anyio
 import mcp.server.stdio
 import mcp.types as mcp_types
 from mcp.server.lowlevel import Server
@@ -38,7 +37,9 @@ from .mcp_policy import (
     process_scopes,
     scope_override,
 )
+
 MCP_BEARER_TOKEN_ENV = "EASYICU_MCP_BEARER_TOKEN"
+MCP_TRUSTED_REVERSE_PROXY_ENV = "EASYICU_MCP_TRUSTED_REVERSE_PROXY"
 DEFAULT_HTTP_MAX_BODY_BYTES = 1024 * 1024
 DEFAULT_MAX_CONCURRENT_TOOL_CALLS = 4
 LOOPBACK_ANONYMOUS_SCOPES = frozenset({SCOPE_METADATA})
@@ -65,8 +66,15 @@ class _BoundedDispatcher:
         invoke: Callable[[], dict[str, Any]],
         *,
         state: dict[str, bool],
+        queue_timeout_seconds: Optional[float] = None,
     ) -> dict[str, Any]:
-        await self._slots.acquire()
+        if queue_timeout_seconds is None:
+            await self._slots.acquire()
+        else:
+            await asyncio.wait_for(
+                self._slots.acquire(),
+                timeout=queue_timeout_seconds,
+            )
         state["started"] = True
         try:
             # asyncio.to_thread preserves the request ContextVars carrying MCP
@@ -76,9 +84,28 @@ class _BoundedDispatcher:
             self._slots.release()
             raise
         task.add_done_callback(self._worker_finished)
-        # The request may time out or be cancelled; the synchronous dispatcher
-        # cannot be killed safely and retains the slot until this task finishes.
-        return await asyncio.shield(task)
+        # A running synchronous dispatcher cannot be killed safely. Do not let
+        # protocol cancellation detach it from request lifecycle: retain the
+        # slot and wait for the actual operation to converge before propagating
+        # cancellation.
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError as cancelled:
+            while True:
+                if task.done():
+                    break
+                try:
+                    await asyncio.shield(task)
+                    break
+                except asyncio.CancelledError:
+                    # Repeated protocol cancellation still cannot detach the
+                    # synchronous worker from this request lifecycle.
+                    continue
+                except BaseException:
+                    # The caller cancelled first. Converge the worker and keep
+                    # that cancellation authoritative over a later worker error.
+                    break
+            raise cancelled
 
     def _worker_finished(self, task: asyncio.Task[dict[str, Any]]) -> None:
         self._slots.release()
@@ -105,10 +132,10 @@ def create_mcp_server(
 ) -> Server:
     """Build the official low-level SDK server around EasyICU contracts.
 
-    ``tool_timeout_seconds`` bounds how long the protocol request waits. The
-    dispatcher is synchronous, so a timed-out worker is allowed to finish
-    inside a slot that remains occupied until the actual call returns instead
-    of being unsafely killed or leaking concurrency capacity.
+    ``tool_timeout_seconds`` bounds queue wait before dispatch starts. Once a
+    synchronous dispatcher starts, the request waits for its real completion;
+    returning a timeout while paid or mutating work continues would create an
+    unsafe detached operation.
     """
 
     if max_concurrent_tool_calls <= 0:
@@ -138,28 +165,19 @@ def create_mcp_server(
         invoke = partial(dispatcher, name, dict(arguments))
         dispatch_state = {"started": False}
         try:
-            if tool_timeout_seconds is None:
-                result = await dispatcher_supervisor.run(
-                    invoke,
-                    state=dispatch_state,
-                )
-            else:
-                with anyio.fail_after(tool_timeout_seconds):
-                    result = await dispatcher_supervisor.run(
-                        invoke,
-                        state=dispatch_state,
-                    )
-        except TimeoutError:
+            result = await dispatcher_supervisor.run(
+                invoke,
+                state=dispatch_state,
+                queue_timeout_seconds=tool_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
             result = {
                 "error": (
-                    f"tool {name!r} exceeded the configured MCP request timeout"
+                    f"tool {name!r} exceeded the configured MCP queue timeout"
                 ),
                 "error_code": "tool_timeout",
-                # True means the synchronous worker may still finish after this
-                # response; false means the request timed out waiting for a
-                # slot and its dispatcher was never started.
                 "dispatch_started": dispatch_state["started"],
-                "execution_may_continue": dispatch_state["started"],
+                "execution_may_continue": False,
             }
 
         safe_result = _json_safe(result)
@@ -194,15 +212,34 @@ def _is_loopback_host(host: str) -> bool:
 def validate_http_server_config(
     host: str,
     bearer_token: Optional[str],
+    *,
+    trusted_reverse_proxy: bool = False,
+    tls_certfile: Optional[str] = None,
+    tls_keyfile: Optional[str] = None,
 ) -> Optional[str]:
     """Fail closed before binding an externally reachable MCP socket."""
 
     token = str(bearer_token or "").strip() or None
-    if not _is_loopback_host(host) and token is None:
-        raise ValueError(
-            "non-loopback MCP HTTP binding requires an independent bearer token "
-            f"in {MCP_BEARER_TOKEN_ENV}"
-        )
+    cert = str(tls_certfile or "").strip() or None
+    key = str(tls_keyfile or "").strip() or None
+    if bool(cert) != bool(key):
+        raise ValueError("direct MCP TLS requires both a certificate and private key")
+    if cert is not None and key is not None:
+        for label, value in (("TLS certificate", cert), ("TLS private key", key)):
+            path = os.path.expanduser(value)
+            if os.path.islink(path) or not os.path.isfile(path):
+                raise ValueError(f"{label} must be an existing regular file")
+    if not _is_loopback_host(host):
+        if token is None:
+            raise ValueError(
+                "non-loopback MCP HTTP binding requires an independent bearer token "
+                f"in {MCP_BEARER_TOKEN_ENV}"
+            )
+        if not trusted_reverse_proxy and (cert is None or key is None):
+            raise ValueError(
+                "direct non-loopback MCP Streamable HTTP requires --tls-certfile "
+                "and --tls-keyfile, or explicit --trusted-reverse-proxy mode"
+            )
     if token is not None:
         for secret_name in ("OPENAI_API_KEY", "OPENROUTER_API_KEY"):
             provider_secret = os.environ.get(secret_name)
@@ -343,13 +380,22 @@ def create_streamable_http_app(
     host: str = "127.0.0.1",
     port: int = 8765,
     bearer_token: Optional[str] = None,
+    trusted_reverse_proxy: bool = False,
+    tls_certfile: Optional[str] = None,
+    tls_keyfile: Optional[str] = None,
     allowed_hosts: Optional[Sequence[str]] = None,
     allowed_origins: Optional[Sequence[str]] = None,
     max_body_bytes: int = DEFAULT_HTTP_MAX_BODY_BYTES,
 ) -> Starlette:
     """Create a stateless JSON Streamable HTTP app using the official SDK."""
 
-    token = validate_http_server_config(host, bearer_token)
+    token = validate_http_server_config(
+        host,
+        bearer_token,
+        trusted_reverse_proxy=trusted_reverse_proxy,
+        tls_certfile=tls_certfile,
+        tls_keyfile=tls_keyfile,
+    )
     exact_hosts = list(dict.fromkeys([*_default_allowed_hosts(host, port), *(allowed_hosts or ())]))
     exact_origins = list(
         dict.fromkeys(
@@ -411,6 +457,9 @@ def _run_streamable_http(
     host: str,
     port: int,
     bearer_token: Optional[str],
+    trusted_reverse_proxy: bool,
+    tls_certfile: Optional[str],
+    tls_keyfile: Optional[str],
     allowed_hosts: Sequence[str],
     allowed_origins: Sequence[str],
     max_body_bytes: int,
@@ -422,11 +471,20 @@ def _run_streamable_http(
         host=host,
         port=port,
         bearer_token=bearer_token,
+        trusted_reverse_proxy=trusted_reverse_proxy,
+        tls_certfile=tls_certfile,
+        tls_keyfile=tls_keyfile,
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
         max_body_bytes=max_body_bytes,
     )
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        ssl_certfile=tls_certfile,
+        ssl_keyfile=tls_keyfile,
+    )
     return 0
 
 
@@ -448,6 +506,16 @@ def main(
     parser.add_argument("--allowed-host", action="append", default=[])
     parser.add_argument("--allowed-origin", action="append", default=[])
     parser.add_argument(
+        "--trusted-reverse-proxy",
+        action="store_true",
+        help=(
+            "assert that a non-loopback bind is behind a configured trusted "
+            "TLS-terminating reverse proxy"
+        ),
+    )
+    parser.add_argument("--tls-certfile")
+    parser.add_argument("--tls-keyfile")
+    parser.add_argument(
         "--max-request-bytes",
         type=int,
         default=DEFAULT_HTTP_MAX_BODY_BYTES,
@@ -456,9 +524,9 @@ def main(
         "--tool-timeout-seconds",
         type=float,
         help=(
-            "maximum seconds an MCP request waits for a tool; a synchronous "
-            "worker that has already started remains bounded and finishes "
-            "in-process"
+            "maximum seconds an MCP request waits for a dispatcher slot; once "
+            "a synchronous worker starts, the request waits for its real "
+            "in-process completion"
         ),
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -471,6 +539,15 @@ def main(
                 host=args.host,
                 port=args.port,
                 bearer_token=os.environ.get(MCP_BEARER_TOKEN_ENV),
+                trusted_reverse_proxy=(
+                    args.trusted_reverse_proxy
+                    or str(os.environ.get(MCP_TRUSTED_REVERSE_PROXY_ENV, ""))
+                    .strip()
+                    .lower()
+                    in {"1", "true", "yes", "on"}
+                ),
+                tls_certfile=args.tls_certfile,
+                tls_keyfile=args.tls_keyfile,
                 allowed_hosts=args.allowed_host,
                 allowed_origins=args.allowed_origin,
                 max_body_bytes=args.max_request_bytes,
@@ -487,6 +564,7 @@ __all__ = [
     "DEFAULT_MAX_CONCURRENT_TOOL_CALLS",
     "LOOPBACK_ANONYMOUS_SCOPES",
     "MCP_BEARER_TOKEN_ENV",
+    "MCP_TRUSTED_REVERSE_PROXY_ENV",
     "create_mcp_server",
     "create_streamable_http_app",
     "main",

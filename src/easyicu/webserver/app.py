@@ -20,6 +20,14 @@ from easyicu.webserver.host_security import (
     resolve_allowed_hosts,
     trusts_proxy,
 )
+from easyicu.webserver.deployment_lease import (
+    acquire_single_process_lease,
+    release_single_process_lease,
+)
+from easyicu.webserver.agent_review_recovery import (
+    WebReviewRecoveryError,
+    reconcile_records as reconcile_review_recovery_records,
+)
 from easyicu.webserver.routes.agent import artifact_router as agent_artifact_router
 from easyicu.webserver.routes.agent import control_router as agent_control_router
 from easyicu.webserver.routes.copilot import router as copilot_router
@@ -30,6 +38,7 @@ from easyicu.webserver.routes.demo_sources import (
     submission_router as demo_source_submission_router,
 )
 from easyicu.webserver.routes.extraction import router as extraction_router
+from easyicu.webserver.routes.extensions import router as extensions_router
 from easyicu.webserver.routes.guided import router as guided_router
 from easyicu.webserver.routes.ideas import router as ideas_router
 from easyicu.webserver.routes.jobs import lifecycle_router as job_lifecycle_router
@@ -62,6 +71,22 @@ def _package_version() -> str:
 
 
 app = FastAPI(title="EasyICU", version=_package_version())
+
+
+@app.on_event("startup")
+def _acquire_web_deployment_lease() -> None:
+    acquire_single_process_lease()
+    try:
+        reconcile_review_recovery_records()
+    except WebReviewRecoveryError:
+        # A damaged private index must not make the whole local Web UI
+        # unavailable; individual recovery queries still fail closed.
+        pass
+
+
+@app.on_event("shutdown")
+def _release_web_deployment_lease() -> None:
+    release_single_process_lease()
 
 
 WEB_ALLOWED_HOSTS = resolve_allowed_hosts()
@@ -118,8 +143,32 @@ async def local_clients_only(request: Request, call_next):
 
 
 @app.middleware("http")
-async def no_store_native_ui_assets(request: Request, call_next):
+async def native_ui_security_headers(request: Request, call_next):
     response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=()",
+    )
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "; ".join(
+            (
+                "default-src 'self'",
+                "base-uri 'none'",
+                "object-src 'none'",
+                "frame-ancestors 'self'",
+                "form-action 'self'",
+                "script-src 'self'",
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data: blob:",
+                "font-src 'self'",
+                "connect-src 'self'",
+                "frame-src 'self' blob:",
+            )
+        ),
+    )
     path = request.url.path
     if path in {"/", "/index.html"} or path.startswith(("/js/", "/css/")):
         response.headers["Cache-Control"] = "no-store"
@@ -129,6 +178,7 @@ async def no_store_native_ui_assets(request: Request, call_next):
 
 # Registration order is a compatibility contract; keep the root static mount last.
 app.include_router(system_router)
+app.include_router(extensions_router)
 app.include_router(local_data_router)
 app.include_router(reviews_router)
 app.include_router(extraction_router)

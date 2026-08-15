@@ -1,5 +1,10 @@
 /* App shell and navigation owner styles. Do not put route-specific panels here. */
 
+.shell-sr-only{
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0, 0, 0, 0); white-space:nowrap; border:0;
+}
+
 .nav-sec{ margin:12px 12px 4px; }
 
 /* Stage status on the three nav sections. The sections already were the main

@@ -4,7 +4,13 @@
    "sofa2",
    "susp_inf"
   ],
-  "description": "sepsis-3 criterion based on SOFA-2",
+  "description": "experimental Sepsis-3 sensitivity phenotype using SOFA-2; not the canonical 2016 definition",
+  "clinical_status": "experimental",
+  "canonical_definition": false,
+  "requires_explicit_opt_in": true,
+  "definition_source": "SOFA-2 Table 2 + Sepsis-3 sensitivity adaptation",
+  "definition_version": "2025-sensitivity-v1",
+  "clinical_contract_id": "sepsis3_sofa2_sensitivity_2025",
   "category": "outcome",
   "callback": "sep3_sofa2",
   "keep_components": [
@@ -22,7 +28,13 @@
    "sofa2_cns",
    "sofa2_renal"
   ],
-  "description": "SOFA-2 (2025) aggregate score",
+  "description": "Database operationalization of SOFA-2 (2025) with conservative handling of unconfirmed delirium-treatment proxies",
+  "clinical_status": "source_bound_golden",
+  "canonical_definition": false,
+  "requires_explicit_opt_in": false,
+  "definition_source": "JAMA 2025 SOFA-2 Table 2",
+  "definition_version": "2025",
+  "clinical_contract_id": "sofa2_aggregate_2025",
   "category": "outcome",
   "callback": "sofa2_score",
   "class_name": "rec_cncpt"
@@ -36,7 +48,13 @@
    "ecmo",
    "ecmo_indication"
   ],
-  "description": "SOFA-2 respiratory component (P/F≤300/225/150/75 with advanced support; any ECMO auto-4)",
+  "description": "SOFA-2 respiratory component; valid P/F or S/F observations use the published thresholds unless explicitly documented as a transient <1h episode; scores 3/4 additionally require advanced support or documented support-unavailable/treatment-ceiling evidence; any ECMO auto-4",
+  "clinical_status": "source_bound_golden",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "JAMA 2025 SOFA-2 Table 2",
+  "definition_version": "2025",
+  "clinical_contract_id": "sofa2_resp_2025",
   "category": "outcome",
   "callback": "sofa2_resp",
   "class_name": "rec_cncpt"
@@ -44,6 +62,12 @@
  "sofa2_coag": {
   "concepts": "plt",
   "description": "SOFA-2 hemostasis component (updated thresholds: ≤150/100/80/50)",
+  "clinical_status": "source_bound_golden",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "JAMA 2025 SOFA-2 Table 2",
+  "definition_version": "2025",
+  "clinical_contract_id": "sofa2_coag_2025",
   "category": "outcome",
   "callback": "sofa2_coag",
   "class_name": "rec_cncpt",
@@ -52,6 +76,12 @@
  "sofa2_liver": {
   "concepts": "bili",
   "description": "SOFA-2 liver component (relaxed 1pt threshold: ≤3.0 mg/dL vs ≤1.9 in SOFA-1)",
+  "clinical_status": "source_bound_golden",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "JAMA 2025 SOFA-2 Table 2",
+  "definition_version": "2025",
+  "clinical_contract_id": "sofa2_liver_2025",
   "category": "outcome",
   "aggregate": "max",
   "callback": "sofa2_liver",
@@ -69,7 +99,13 @@
    "ecmo",
    "ecmo_indication"
   ],
-  "description": "SOFA-2 cardiovascular component (combined norepi+epi: ≤0.2/0.2-0.4/>0.4 μg/kg/min; dopamine backup only; mechanical support)",
+  "description": "SOFA-2 cardiovascular component (combined norepi+epi; any dopamine/dobutamine/other adjunct escalates low/medium tiers; dopamine dose tiers apply only when dopamine is the sole vasoactive drug)",
+  "clinical_status": "source_bound_golden",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "JAMA 2025 SOFA-2 Table 2",
+  "definition_version": "2025",
+  "clinical_contract_id": "sofa2_cardio_2025",
   "category": "outcome",
   "aggregate": [
    "min",
@@ -88,13 +124,75 @@
  "sofa2_cns": {
   "concepts": [
    "gcs",
-   "delirium_tx",
+   "delirium_tx_proxy",
+   "delirium_tx_evidence",
    "delirium_positive",
-   "motor_response"
+   "motor_response",
+   "sedated_gcs"
   ],
-  "description": "SOFA-2 brain component (GCS 15/13-14/9-12/6-8/3-5; delirium treatment or positive CAM-ICU → 1pt even if GCS=15; motor response as GCS alternative)",
+  "description": "Database operationalization of the SOFA-2 brain component with conservative handling of unconfirmed delirium-treatment proxies; GCS=15 gains a treatment point only from confirmed attributable evidence",
+  "clinical_status": "source_bound_golden",
+  "canonical_definition": false,
+  "requires_explicit_opt_in": false,
+  "definition_source": "JAMA 2025 SOFA-2 Table 2",
+  "definition_version": "2025",
+  "clinical_contract_id": "sofa2_cns_2025",
   "category": "outcome",
   "callback": "sofa2_cns",
+  "class_name": "rec_cncpt"
+ },
+ "sofa2_cns_proxy_sensitivity": {
+  "concepts": [
+   "gcs",
+   "delirium_tx_proxy",
+   "delirium_tx_evidence",
+   "delirium_positive",
+   "motor_response",
+   "sedated_gcs"
+  ],
+  "description": "Explicit SOFA-2 CNS sensitivity analysis in which candidate delirium-treatment medication exposure can contribute the GCS=15 point",
+  "canonical_definition": false,
+  "requires_explicit_opt_in": true,
+  "definition_source": "JAMA 2025 SOFA-2 Table 2 + database proxy sensitivity adaptation",
+  "definition_version": "2025-proxy-sensitivity-v1",
+  "category": "outcome",
+  "callback": "sofa2_cns_proxy_sensitivity",
+  "class_name": "rec_cncpt"
+ },
+ "sofa2_cns_delirium_tx_ascertainment": {
+  "concepts": [
+   "gcs",
+   "delirium_tx_proxy",
+   "delirium_tx_evidence",
+   "delirium_positive",
+   "motor_response",
+   "sedated_gcs"
+  ],
+  "description": "SOFA-2 CNS delirium-treatment-clause receipt: complete, proxy_only, complete_for_proxy_source, unavailable, or not_score_relevant",
+  "canonical_definition": false,
+  "requires_explicit_opt_in": false,
+  "definition_source": "EasyICU SOFA-2 evidence contract",
+  "definition_version": "2025-delirium-tx-ascertainment-v2",
+  "category": "outcome",
+  "callback": "sofa2_cns_delirium_tx_ascertainment",
+  "class_name": "rec_cncpt"
+ },
+ "sofa2_cns_ascertainment": {
+  "concepts": [
+   "gcs",
+   "delirium_tx_proxy",
+   "delirium_tx_evidence",
+   "delirium_positive",
+   "motor_response",
+   "sedated_gcs"
+  ],
+  "description": "Deprecated compatibility alias for sofa2_cns_delirium_tx_ascertainment",
+  "canonical_definition": false,
+  "requires_explicit_opt_in": false,
+  "definition_source": "EasyICU SOFA-2 evidence contract compatibility surface",
+  "definition_version": "2025-ascertainment-alias-v2",
+  "category": "outcome",
+  "callback": "sofa2_cns_ascertainment",
   "class_name": "rec_cncpt"
  },
  "sofa2_renal": {
@@ -108,7 +206,13 @@
    "ph",
    "bicarb"
   ],
-  "description": "SOFA-2 renal component with duration-based UO (6h/12h/24h windows for accurate temporal scoring). RRT criteria calculated internally from potassium/ph/bicarb.",
+  "description": "SOFA-2 renal component with duration-based UO. RRT event evidence scores the active treatment time; intermittent off-days/chronic state and non-renal-only exclusion require explicit episode/indication inputs and remain database ascertainment limitations.",
+  "clinical_status": "source_bound_golden",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "JAMA 2025 SOFA-2 Table 2",
+  "definition_version": "2025",
+  "clinical_contract_id": "sofa2_renal_2025",
   "category": "outcome",
   "aggregate": [
    "max",
@@ -839,8 +943,28 @@
   }
  },
  "delirium_tx": {
+  "concepts": "delirium_tx_proxy",
+  "class_name": "rec_cncpt",
+  "description": "Deprecated compatibility alias for delirium_tx_proxy; candidate medication exposure only and never confirmation of delirium treatment",
+  "category": "neurology",
+  "callback": "delirium_tx_alias"
+ },
+ "delirium_tx_evidence": {
+  "concepts": "delirium_tx_proxy",
+  "class_name": "rec_cncpt",
+  "levels": [
+   "confirmed",
+   "proxy_only",
+   "not_detected",
+   "unavailable"
+  ],
+  "description": "Four-state attributable delirium-treatment evidence. Current medication-only mappings can emit proxy_only but cannot infer not_detected without verified source and time coverage.",
+  "category": "neurology",
+  "callback": "delirium_tx_evidence"
+ },
+ "delirium_tx_proxy": {
   "class_name": "lgl_cncpt",
-  "description": "Delirium treatment per PADIS Guidelines (antipsychotics: haloperidol, quetiapine, olanzapine, risperidone, ziprasidone, aripiprazole) - validated: Haloperidol IV (4251 stays), prescriptions: haloperidol (16219), quetiapine (14883), olanzapine (13571), risperidone (3847), ziprasidone (672), aripiprazole (2849)",
+  "description": "Candidate exposure to medications that may be used for delirium. Indication is not established, so this proxy must not be treated as confirmed delirium treatment.",
   "category": "neurology",
   "sources": {
    "miiv": [

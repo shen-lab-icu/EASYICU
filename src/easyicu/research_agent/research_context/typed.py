@@ -192,6 +192,7 @@ def descriptor_physical_updates(
         updates["analysis_window"] = (
             f"{window.origin}[{window.start_hours:g},{window.end_hours:g}]h"
         )
+        updates["analysis_window_role"] = "outer_observation_window"
     if metadata.time_origin is not None and metadata.time_unit is not None:
         updates["temporal_resolution"] = (
             f"relative to {metadata.time_origin} in {metadata.time_unit}"

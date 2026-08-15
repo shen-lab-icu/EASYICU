@@ -74,7 +74,16 @@ RA = REPO_ROOT / "src" / "easyicu" / "research_agent"
 # comparable.
 TARGET_FILES: List[Path] = [
     RA / "execution/phase.py",
+    # 2026-08-14 phase.py decomposition batch: self-contained pre-loop
+    # helpers moved to execution/phase_support.py behind a facade import;
+    # run_execute_phase and every test-patched seam stay in phase.py.
+    RA / "execution/phase_support.py",
     RA / "pipeline.py",
+    # 2026-08-14 pipeline.py decomposition batch: the publication-bundle
+    # renderer family moved to reporting/publication_bundles.py behind a
+    # facade import; renderer dispatch and every test-patched name stay in
+    # pipeline.py so module-global monkeypatch seams keep working.
+    RA / "reporting" / "publication_bundles.py",
     RA / "reporting" / "readiness.py",
     RA / "authority" / "typed_binding.py",
     RA / "authority" / "plan_authority.py",
@@ -82,6 +91,11 @@ TARGET_FILES: List[Path] = [
     RA / "authority" / "typed_input_sdk.py",
     RA / "authority" / "development_projection.py",
     RA / "gates" / "preflight.py",
+    # 2026-08-14 preflight.py decomposition batch: name-resolution statics and
+    # provenance/exposure authority statics moved to sibling owner modules
+    # behind the preflight facade; the patched seam and audit entry stay.
+    RA / "gates" / "preflight_statics.py",
+    RA / "gates" / "preflight_provenance.py",
     RA / "gates" / "typed_input.py",
     RA / "repairs" / "source.py",
     RA / "repairs" / "typed_input.py",
@@ -93,8 +107,30 @@ TARGET_FILES: List[Path] = [
     # active refactor batch, so one lane cannot baseline another lane's dirty
     # working-tree bytes.
     RA / "audits" / "validators.py",
+    # 2026-08-14 audits/validators.py decomposition batch: concept-audit owner
+    # stays in validators.py (the authorized_complete module seam tests patch
+    # lives there); every other validator moved to sibling owner modules and
+    # inherits the ratchet from day one. figures.py holds the mutually
+    # referencing figure validators that cannot split without a cycle.
+    RA / "audits" / "cohort.py",
+    RA / "audits" / "cross_step.py",
+    RA / "audits" / "statistical.py",
+    RA / "audits" / "figures.py",
+    RA / "audits" / "clinical.py",
+    RA / "audits" / "publication.py",
+    RA / "audits" / "_v_support.py",
     RA / "plan_utils.py",
     RA / "agents" / "core.py",
+    # 2026-08-14 agents/core.py decomposition batch: the monolith was split
+    # into owner modules behind the core.py facade. The facade itself stays
+    # measured (it must remain a thin re-export), and the new owners inherit
+    # the same lower-is-better ratchet from day one.
+    RA / "agents" / "_support.py",
+    RA / "agents" / "planner.py",
+    RA / "agents" / "replanner.py",
+    RA / "agents" / "roles.py",
+    RA / "agents" / "coder.py",
+    RA / "agents" / "reporting.py",
     # Scientific contract consolidation now makes the compatibility schema an
     # active owner boundary; keep its future growth on the same ratchet.
     RA / "schema.py",

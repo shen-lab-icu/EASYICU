@@ -751,8 +751,11 @@ def test_enforce_evidence_bound_scaffold_filters_unsupported_result_sentences(
     filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
     assert "The cohort comprised 10 stays." not in filtered
     assert "This study describes baseline characteristics." in filtered
-    assert "Median age was 65 years {evidence:table_one}." in filtered
-    assert removed == ["The cohort comprised 10 stays."]
+    assert "Median age was 65 years {evidence:table_one}." not in filtered
+    assert removed == [
+        "The cohort comprised 10 stays.",
+        "Median age was 65 years {evidence:table_one}.",
+    ]
 
 
 def test_enforce_evidence_bound_scaffold_filters_bold_section_result_sentences(
@@ -767,13 +770,14 @@ def test_enforce_evidence_bound_scaffold_filters_bold_section_result_sentences(
         "**Results:** Median age was 65 years {evidence:table_one}.\n"
     )
     filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
-    assert "**Results:** Median age was 65 years {evidence:table_one}." in filtered
+    assert "**Results:** Median age was 65 years {evidence:table_one}." not in filtered
     assert "**Background:**" not in filtered
     assert "**Discussion:**" not in filtered
     assert any(
         "missingness and component-completeness artefacts" in item for item in removed
     )
     assert any("consistent with the observed association" in item for item in removed)
+    assert any("Median age was 65 years" in item for item in removed)
 
 
 def test_enforce_evidence_bound_scaffold_does_not_exempt_list_or_quote_claims(
@@ -797,11 +801,12 @@ def test_enforce_evidence_bound_scaffold_does_not_exempt_list_or_quote_claims(
     assert "Mortality was higher after adjustment" not in filtered
     assert "- This section explains the prespecified study design." in filtered
     assert "> Context for the analysis is described here." in filtered
-    assert "- **Results:** Mortality was lower {evidence:primary_result}." in filtered
+    assert "- **Results:** Mortality was lower {evidence:primary_result}." not in filtered
     assert "- **Results:**" in filtered
     assert removed == [
         "**Results:** Mortality was lower in the intervention arm.",
         "Mortality was higher after adjustment.",
+        "**Results:** Mortality was lower {evidence:primary_result}.",
     ]
 
 
@@ -821,11 +826,12 @@ def test_enforce_evidence_bound_scaffold_audits_assertive_result_headings(
     assert "Mortality was lower in the intervention arm" not in filtered
     assert "Median age was 65 years" not in filtered
     assert "Mean age was sixty-five years" not in filtered
-    assert "## Mortality was lower {evidence:primary_result}" in filtered
+    assert "## Mortality was lower {evidence:primary_result}" not in filtered
     assert removed == [
         "Mortality was lower in the intervention arm.",
         "Median age was 65 years.",
         "Mean age was sixty-five years.",
+        "Mortality was lower {evidence:primary_result}",
     ]
 
 

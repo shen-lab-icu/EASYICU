@@ -61,6 +61,39 @@ def _survival_endpoint(levels: list[int]) -> EndpointSpec:
     )
 
 
+def _typed_descriptive_plan() -> AnalysisPlan:
+    return AnalysisPlan(
+        research_question="Describe exposure prevalence and observed mortality.",
+        analysis_type="descriptive_epidemiology",
+        steps=[
+            AnalysisStep(
+                step_id="01_distribution",
+                planned_analysis_role="primary",
+                intent="Report prespecified unadjusted descriptive risks.",
+                method="descriptive",
+                inputs=["artifact:analysis_cohort", "exposure", "death"],
+                expected_outputs=["table:exposure_outcome_distribution"],
+                descriptive_claim={
+                    "unresolved_limitations": [
+                        "post_baseline_exposure_opportunity_unresolved"
+                    ]
+                },
+                exposure_outcome_distribution_spec={
+                    "exposure": "exposure",
+                    "exposure_levels": [0, 1],
+                    "outcome": "death",
+                    "outcome_levels": [0, 1],
+                    "outcome_positive_value": 1,
+                    "level_match_policy": "exact_typed",
+                    "denominator_policy": "all_declared_rows",
+                    "missing_outcome_policy": "structural_absence_is_non_event",
+                    "confidence_level": 0.95,
+                },
+            )
+        ],
+    )
+
+
 def test_registry_records_machine_readable_scientific_contracts() -> None:
     for capability in CAPABILITY_REGISTRY:
         assert capability.capability_id
@@ -95,6 +128,33 @@ def test_causal_execution_is_honest_about_missing_identification_validator() -> 
     assert assessment.claim_ceiling_allows_reportable is False
 
 
+def test_exact_typed_descriptive_primary_has_a_registered_validator() -> None:
+    assessment = assess_scientific_capability(
+        analysis_type="descriptive_epidemiology",
+        context=_context(),
+        plan=_typed_descriptive_plan(),
+    )
+
+    assert assessment.capability_id == (
+        "descriptive_exposure_outcome_distribution_v1"
+    )
+    assert assessment.scientific_validator_available is True
+    assert assessment.claim_ceiling == "reportable"
+    assert assessment.issue_code is None
+
+
+def test_broad_descriptive_family_is_not_upgraded_without_the_exact_owner() -> None:
+    assessment = assess_scientific_capability(
+        analysis_type="descriptive_epidemiology",
+        context=_context(),
+    )
+
+    assert assessment.capability_id == "descriptive_measurement_v1"
+    assert assessment.scientific_validator_available is False
+    assert assessment.claim_ceiling == "analysis_only"
+    assert assessment.issue_code == "scientific_validator_unavailable"
+
+
 def test_ordinary_survival_is_distinguished_from_a_competing_risk_endpoint() -> None:
     ordinary = assess_scientific_capability(
         analysis_type="survival",
@@ -112,7 +172,7 @@ def test_ordinary_survival_is_distinguished_from_a_competing_risk_endpoint() -> 
     assert competing.execution_backend_available is None
 
 
-def test_ordinal_association_uses_its_directly_declared_capability() -> None:
+def test_ordinal_association_stays_analysis_only_without_a_validator() -> None:
     context = ResearchContext(
         research_question="Does ordered severity predict mortality?",
         cohort=CohortDescriptor(
@@ -139,7 +199,9 @@ def test_ordinal_association_uses_its_directly_declared_capability() -> None:
     )
 
     assert assessment.capability_id == "association_ordinal_trend_v1"
-    assert assessment.claim_ceiling == "reportable"
+    assert assessment.claim_ceiling == "analysis_only"
+    assert assessment.scientific_validator_available is False
+    assert assessment.issue_code == "scientific_validator_unavailable"
 
 
 def test_ordinal_association_fails_closed_without_a_declared_ordinal_input() -> None:

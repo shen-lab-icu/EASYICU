@@ -197,7 +197,7 @@ def test_planner_uses_enough_completion_budget(ra):
         ]
     )
     PlannerAgent(llm).run(ctx)
-    assert llm.calls[0][1]["max_tokens"] >= 4096
+    assert llm.calls[0][1]["max_tokens"] == 16384
 
 
 def test_planner_retries_primary_cohort_step_with_side_output(ra):
@@ -295,6 +295,7 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
                     "inputs": ["exposure_max", "death"],
                     "expected_outputs": ["table:adjusted_association_estimates"],
                     "method": "adjusted_association_models",
+                    "sensitivity_spec_ids": ["timing_landmark_24h"],
                     "model_requirements": [
                         {
                             "requirement_id": "primary",
@@ -302,6 +303,28 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
                             "exposure_source": "exposure_max",
                         }
                     ],
+                    "exposure_outcome_distribution_spec": {
+                        "schema_version": "easyicu.exposure_outcome_distribution/2",
+                        "exposure": "exposure_max",
+                        "exposure_levels": [0, 1],
+                        "outcome": "death",
+                        "outcome_levels": [0, 1],
+                        "outcome_positive_value": 1,
+                        "level_match_policy": "exact_typed",
+                        "denominator_policy": "all_declared_rows",
+                        "missing_outcome_policy": "structural_absence_is_non_event",
+                        "risk_difference_contrast": {
+                            "reference_exposure_level": 0,
+                            "comparison_exposure_level": 1,
+                        },
+                        "confidence_level": 0.95,
+                    },
+                    "descriptive_claim": {
+                        "claim_ceiling": "descriptive_only",
+                        "unresolved_limitations": [
+                            "post_baseline_exposure_opportunity_unresolved"
+                        ],
+                    },
                 }
             ],
             "robustness_specs": [
@@ -331,7 +354,17 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
 
     assert len(projected.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT
     assert payload["steps"][0]["inputs"] == ["exposure_max", "death"]
+    assert payload["steps"][0]["sensitivity_spec_ids"] == ["timing_landmark_24h"]
     assert payload["steps"][0]["model_requirements"][0]["outcome"] == "death"
+    assert (
+        payload["steps"][0]["exposure_outcome_distribution_spec"][
+            "risk_difference_contrast"
+        ]["comparison_exposure_level"]
+        == 1
+    )
+    assert payload["steps"][0]["descriptive_claim"]["claim_ceiling"] == (
+        "descriptive_only"
+    )
     assert payload["robustness_specs"][0]["spec_id"] == "complete_case"
     assert payload["evalue_conversion_spec"]["baseline_population"] == "unexposed"
     assert payload["subgroup_analysis_spec"]["subgroup_columns"] == ["sex"]
@@ -959,10 +992,15 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     # assert on the alias token rather than a specific sentence.
     assert "`model_performance`" in captured["system"]
     assert "Use exactly single braces" in captured["user"]
+    assert "SCIENTIFIC CLAIM RULE" in captured["user"]
+    assert "complete standalone sentence" in captured["user"]
+    assert "Run-bound typed methodology applications" in captured["user"]
     assert "mechanisms, strengths, or limitations" in captured["user"]
-    assert "Each conclusion sentence must cite" in captured["user"]
+    assert "must either be one exact host-authorized claim token" in captured["user"]
     assert "TBD by author" not in captured["user"]
-    assert "Funding information was not available" in captured["user"]
+    # Administrative facts are host-owned and appended after the LLM sections.
+    assert "Funding information requires author verification" not in captured["user"]
+    assert "Funding information requires author verification before submission." in out
     # The dummy LLM's stock response should land in the bound output.
     assert "{evidence:table_one}" in out
 
@@ -1030,6 +1068,79 @@ def test_writer_evidence_repair_rejects_unregistered_evidence_id():
             evidence_ids=["literature_prisma"],
             evidence_digest="literature_prisma: background evidence",
             missing_sentences=["Sepsis is clinically important."],
+        )
+
+
+def test_writer_evidence_repair_can_select_only_an_exact_host_claim():
+    from easyicu.research_agent.reporting.writer_evidence_repair import (
+        decide_writer_evidence_repairs,
+    )
+
+    sentence = "The exposed group had higher observed mortality."
+    claim_ref = "03_primary.observed_risk_difference"
+    raw = json.dumps(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "claim",
+                    "evidence_ids": [],
+                    "claim_ref": claim_ref,
+                }
+            ]
+        }
+    )
+
+    decisions = decide_writer_evidence_repairs(
+        ScriptedMockLLMClient([raw], repeat_last=True),
+        evidence_ids=["primary_summary"],
+        evidence_digest="primary summary",
+        missing_sentences=[sentence],
+        scientific_claims={claim_ref: "Host-rendered descriptive claim."},
+        claim_required_sentences=[sentence],
+    )
+
+    assert decisions == [
+        {
+            "index": 0,
+            "action": "claim",
+            "evidence_ids": [],
+            "claim_ref": claim_ref,
+        }
+    ]
+
+
+def test_writer_evidence_repair_cannot_cite_around_claim_authority():
+    from easyicu.research_agent.providers.structured_retry import (
+        StructuredResponseFailure,
+    )
+    from easyicu.research_agent.reporting.writer_evidence_repair import (
+        decide_writer_evidence_repairs,
+    )
+
+    sentence = "The exposed group had higher observed mortality."
+    raw = json.dumps(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "cite",
+                    "evidence_ids": ["primary_summary"],
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(StructuredResponseFailure):
+        decide_writer_evidence_repairs(
+            ScriptedMockLLMClient([raw], repeat_last=True),
+            evidence_ids=["primary_summary"],
+            evidence_digest="primary summary",
+            missing_sentences=[sentence],
+            scientific_claims={
+                "03_primary.observed_risk_difference": "Host claim."
+            },
+            claim_required_sentences=[sentence],
         )
 
 

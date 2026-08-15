@@ -8,6 +8,8 @@ row count; this one guards the middle layer so it does not rot —
   is not staler than ``--stale-days`` (warning: it may no longer be the truth);
 - no page references the per-session ``scratchpad/`` (a dead link the moment
   another agent picks up — this is the exact gap that bit us on 2026-07-10);
+- every current ``task_logs/*.md`` evidence pointer resolves in its declared
+  workspace or ``EASYICU/`` owner;
 - every page keeps the 7 required sections (🎯 📍 🔨 ✅ ⏭️ ⚠️ 📚);
 - **no page outgrows the one thing it exists to do** (see below);
 - the README index lists every module directory that actually has a CURRENT.md.
@@ -37,6 +39,7 @@ in ``CLAUDE.md`` — a page slightly over is a nudge, not a crisis.
 
 Run before and after editing any CURRENT.md, like the main-plan lint.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -50,6 +53,8 @@ DEFAULT_ROOT = Path(__file__).resolve().parents[2] / "项目进度"
 REQUIRED_SECTIONS = ["🎯", "📍", "🔨", "✅", "⏭️", "⚠️", "📚"]
 DATE_RE = re.compile(r"更新[:：]\s*(\d{4})-(\d{2})-(\d{2})")
 SCRATCHPAD_RE = re.compile(r"scratchpad/")
+REPO_TASK_LOG_RE = re.compile(r"EASYICU/task_logs/([A-Za-z0-9_.-]+\.md)")
+WORKSPACE_TASK_LOG_RE = re.compile(r"(?<!EASYICU/)task_logs/([A-Za-z0-9_.-]+\.md)")
 
 #: Whole-page budgets, in bytes of UTF-8, anchored on a measured number rather
 #: than on wherever the pages happened to land after the 2026-07-27 cleanup.
@@ -82,7 +87,13 @@ INDEX_ROW_MAX_CHARS = 150
 INDEX_ROW_RE = re.compile(r"^\| \[([^\]]+)\]\([^)]*CURRENT\.md\) \|([^|]*)\|")
 
 
-def lint_current(path: Path, today: date, stale_days: int) -> tuple[list[str], list[str]]:
+def lint_current(
+    path: Path,
+    today: date,
+    stale_days: int,
+    *,
+    workspace_root: Path | None = None,
+) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
     text = path.read_text(encoding="utf-8")
@@ -106,6 +117,21 @@ def lint_current(path: Path, today: date, stale_days: int) -> tuple[list[str], l
             errors.append(
                 f"{rel}:{i}: 引用了 session `scratchpad/`（换 agent 即失效）——迁到持久路径"
             )
+
+    # Evidence links are part of the handoff contract.  A prose claim pointing
+    # at a file that existed only in another worktree is not reproducible
+    # evidence.  Keep the two owners explicit instead of guessing based on the
+    # current process working directory.
+    if workspace_root is not None:
+        for i, line in enumerate(text.splitlines(), start=1):
+            for name in REPO_TASK_LOG_RE.findall(line):
+                target = workspace_root / "EASYICU" / "task_logs" / name
+                if not target.is_file():
+                    errors.append(f"{rel}:{i}: 缺失仓库证据 `EASYICU/task_logs/{name}`")
+            for name in WORKSPACE_TASK_LOG_RE.findall(line):
+                target = workspace_root / "task_logs" / name
+                if not target.is_file():
+                    errors.append(f"{rel}:{i}: 缺失工作区证据 `task_logs/{name}`")
 
     # 3. required sections present
     missing = [s for s in REQUIRED_SECTIONS if s not in text]
@@ -155,15 +181,23 @@ def _section_text(text: str, heading: str) -> str:
     return "\n".join(out)
 
 
-def lint_root(root: Path, *, today: date, stale_days: int) -> tuple[list[str], list[str]]:
+def lint_root(
+    root: Path, *, today: date, stale_days: int
+) -> tuple[list[str], list[str]]:
     currents = sorted(root.glob("*/CURRENT.md"))
     if not currents:
         return [f"{root} 下没有任何 <模块>/CURRENT.md"], []
 
     errors: list[str] = []
     warnings: list[str] = []
+    workspace_root = root.resolve().parent
     for path in currents:
-        e, w = lint_current(path, today, stale_days)
+        e, w = lint_current(
+            path,
+            today,
+            stale_days,
+            workspace_root=workspace_root,
+        )
         errors += e
         warnings += w
 
@@ -175,7 +209,9 @@ def lint_root(root: Path, *, today: date, stale_days: int) -> tuple[list[str], l
         for path in currents:
             name = path.parent.name
             if f"{name}/CURRENT.md" not in rtext:
-                errors.append(f"README.md: 索引缺模块 `{name}`（目录存在但 README 未链接）")
+                errors.append(
+                    f"README.md: 索引缺模块 `{name}`（目录存在但 README 未链接）"
+                )
         for line in rtext.splitlines():
             m = INDEX_ROW_RE.match(line)
             if m and len(m.group(2).strip()) > INDEX_ROW_MAX_CHARS:
@@ -195,7 +231,9 @@ def main() -> int:
     parser.add_argument("--strict", action="store_true", help="把 warning 也当失败")
     args = parser.parse_args()
 
-    errors, warnings = lint_root(args.root, today=date.today(), stale_days=args.stale_days)
+    errors, warnings = lint_root(
+        args.root, today=date.today(), stale_days=args.stale_days
+    )
 
     for w in warnings:
         print(f"WARN: {w}", file=sys.stderr)

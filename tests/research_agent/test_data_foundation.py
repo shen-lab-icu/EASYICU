@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 import easyicu.research_agent.acquisition.foundation as df_mod
 from easyicu.research_agent.acquisition.catalog import (
     AvailableCatalog,
@@ -12,6 +16,12 @@ from easyicu.research_agent.acquisition.foundation import (
     DataFoundationAgent,
     _extract_json,
     acquire_universe_for_question,
+)
+from easyicu.research_agent.acquisition.patient_grouping import (
+    PatientGroupingBinding,
+)
+from easyicu.research_agent.intake.materialized_metadata import (
+    MaterializedMetadataError,
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
@@ -207,6 +217,195 @@ def test_acquire_proceeds_on_available_subset_when_outcome_present(monkeypatch):
     assert "re-extract" in res.note.lower()
 
 
+def test_legacy_acquisition_declares_sparse_event_features_before_materialization(
+    monkeypatch,
+):
+    captured = {}
+    catalog = AvailableCatalog(
+        source="legacy",
+        concepts=[
+            CatalogConcept(
+                concept_id="sep3_sofa2",
+                file_name="sepsis3_sofa2.parquet",
+                column_role="event_status",
+            ),
+            CatalogConcept(
+                concept_id="death",
+                file_name="outcome.parquet",
+                column_role="event_status",
+            ),
+            CatalogConcept(concept_id="age", file_name="demographics.parquet"),
+        ],
+    )
+    monkeypatch.setattr(df_mod, "build_available_catalog", lambda _d: catalog)
+    import easyicu.research_agent.cohort.materializer as cm
+
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **kwargs: captured.update(kwargs)
+        or {"parquet": "u.parquet", "provenance": "u.json"},
+    )
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="q",
+        llm=_stub('{"selected_concepts": ["sep3_sofa2", "death"]}'),
+        output_dir="/tmp/x",
+        target_outcome="death",
+        outcome_concepts=["death"],
+        required_feature_concepts=["sep3_sofa2"],
+        static_concepts=["age"],
+    )
+
+    assert result.blocked is False
+    assert captured["feature_concepts"] == ["sep3_sofa2"]
+    assert captured["outcome_concepts"] == ["death"]
+    assert captured["positive_only_event_concepts"] == ["sep3_sofa2"]
+
+
+@pytest.mark.parametrize("typed_metadata", [False, True])
+def test_acquisition_binds_event_endpoint_and_exposure_to_materialized_columns(
+    monkeypatch, tmp_path, typed_metadata
+):
+    catalog = AvailableCatalog(
+        source="legacy",
+        concepts=[
+            CatalogConcept(
+                concept_id="sep3_sofa2",
+                file_name="sepsis3_sofa2.parquet",
+                column_role="event_status",
+                typed_metadata=typed_metadata,
+            ),
+            CatalogConcept(
+                concept_id="death",
+                file_name="outcome.parquet",
+                column_role="event_status",
+                typed_metadata=typed_metadata,
+            ),
+            CatalogConcept(
+                concept_id="age",
+                file_name="demographics.parquet",
+                typed_metadata=typed_metadata,
+            ),
+        ],
+    )
+    monkeypatch.setattr(df_mod, "build_available_catalog", lambda _d: catalog)
+    import easyicu.research_agent.cohort.materializer as cm
+
+    captured = {}
+
+    def materialize(**kwargs):
+        captured.update(kwargs)
+        parquet = tmp_path / "universe.parquet"
+        provenance = tmp_path / "universe_provenance.json"
+        parquet.write_bytes(b"legacy-parquet-placeholder")
+        provenance.write_text(
+            json.dumps(
+                {
+                    "columns": [
+                        "stay_id",
+                        "age",
+                        "sep3_sofa2_max",
+                        "death",
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {"parquet": str(parquet), "provenance": str(provenance)}
+
+    monkeypatch.setattr(cm, "materialize_to_parquet", materialize)
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="q",
+        llm=_stub('{"selected_concepts": ["sep3_sofa2", "death"]}'),
+        output_dir=tmp_path,
+        target_outcome="death",
+        primary_exposure_concept="sep3_sofa2",
+        outcome_concepts=["death"],
+        required_feature_concepts=["sep3_sofa2"],
+        static_concepts=["age"],
+    )
+
+    assert result.analysis_columns == {
+        "age": "age",
+        "death": "death",
+        "sep3_sofa2": "sep3_sofa2_max",
+    }
+    assert captured["positive_only_event_concepts"] == (
+        [] if typed_metadata else ["sep3_sofa2"]
+    )
+    assert result.endpoint is not None
+    assert result.endpoint.model_dump(mode="json") == {
+        "name": "death",
+        "kind": "binary",
+        "absence_semantics": "no_absent_rows",
+        "levels": [0, 1],
+        "event_column": None,
+        "time_column": None,
+        "time_origin": None,
+        "censoring_rule": None,
+    }
+
+
+def test_acquire_limits_agent_catalog_to_configured_modules(monkeypatch):
+    captured = {}
+    catalog = AvailableCatalog(
+        source="mem",
+        concepts=[
+            CatalogConcept(
+                concept_id="age",
+                file_name="demographics.parquet",
+            ),
+            CatalogConcept(
+                concept_id="death",
+                file_name="outcome.parquet",
+            ),
+            CatalogConcept(
+                concept_id="lact",
+                file_name="blood_gas.parquet",
+            ),
+        ],
+    )
+
+    monkeypatch.setattr(df_mod, "build_available_catalog", lambda _d: catalog)
+    original_select = DataFoundationAgent.select_concepts
+
+    def capture_catalog(self, *, question, catalog, target_outcome):
+        captured["catalog_ids"] = catalog.ids()
+        return original_select(
+            self,
+            question=question,
+            catalog=catalog,
+            target_outcome=target_outcome,
+        )
+
+    monkeypatch.setattr(DataFoundationAgent, "select_concepts", capture_catalog)
+    import easyicu.research_agent.cohort.materializer as cm
+
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **_kwargs: {"parquet": "u.parquet", "provenance": "u.json"},
+    )
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="q",
+        llm=_stub('{"selected_concepts": ["death"]}'),
+        output_dir="/tmp/x",
+        target_outcome="death",
+        outcome_concepts=["death"],
+        static_concepts=["age"],
+        allowed_modules=["demographics", "outcome"],
+    )
+
+    assert result.blocked is False
+    assert captured["catalog_ids"] == ["age", "death"]
+
+
 def test_outcome_free_acquisition_materialises_required_trajectory_concept(
     monkeypatch,
 ):
@@ -382,3 +581,84 @@ def test_acquisition_requires_caller_owned_outcome_and_has_no_static_science_def
     assert parameters["target_outcome"].default is inspect.Parameter.empty
     assert parameters["outcome_concepts"].default is inspect.Parameter.empty
     assert parameters["static_concepts"].default == ()
+
+
+def test_acquisition_forwards_verified_patient_grouping_to_materializer(
+    monkeypatch, tmp_path
+):
+    mapping = tmp_path / "mapping.parquet"
+    mapping.write_bytes(b"mapping")
+    grouping = PatientGroupingBinding(
+        mapping_path=mapping,
+        mapping_sha256="a" * 64,
+        mapping_stay_column="stay_id",
+        mapping_patient_column="patient_key",
+        authority_coordinates={"authority_ref": "owner/bridge/v1"},
+    )
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("death", "age"),
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    captured = {}
+    universe = tmp_path / "universe.parquet"
+    provenance = tmp_path / "universe_provenance.json"
+    universe.write_bytes(b"legacy-parquet-placeholder")
+    provenance.write_text(
+        json.dumps({"columns": ["patient_stay_id", "age", "death"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **kwargs: captured.update(kwargs)
+        or {"parquet": universe, "provenance": provenance},
+    )
+
+    result = acquire_universe_for_question(
+        export_dir=tmp_path,
+        question="q",
+        llm=_stub('{"selected_concepts": ["death", "age"]}'),
+        output_dir=tmp_path,
+        target_outcome="death",
+        outcome_concepts=["death"],
+        static_concepts=["age"],
+        emit_trajectory=False,
+        patient_grouping=grouping,
+    )
+
+    assert result.blocked is False
+    assert captured["replacement_identity_path"] == mapping
+    assert captured["replacement_identity_sha256"] == "a" * 64
+    assert captured["output_identity_column"] == "patient_stay_id"
+
+
+def test_acquisition_does_not_silently_ungroup_requested_trajectory(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("death", "age"),
+    )
+    grouping = PatientGroupingBinding(
+        mapping_path=tmp_path / "mapping.parquet",
+        mapping_sha256="a" * 64,
+        mapping_stay_column="stay_id",
+        mapping_patient_column="patient_key",
+    )
+
+    with pytest.raises(MaterializedMetadataError, match="longitudinal trajectory"):
+        acquire_universe_for_question(
+            export_dir=tmp_path,
+            question="q",
+            llm=_stub('{"selected_concepts": ["death", "age"]}'),
+            output_dir=tmp_path,
+            target_outcome="death",
+            outcome_concepts=["death"],
+            static_concepts=["age"],
+            emit_trajectory=True,
+            patient_grouping=grouping,
+        )

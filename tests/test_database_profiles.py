@@ -17,6 +17,7 @@ from easyicu.config import (
     DataSourceRegistry,
 )
 from easyicu.databases.profiles import (
+    DATABASE_LABELS,
     DatabaseIdConfigView,
     DatabaseProfileMetadata,
     get_database_profile,
@@ -25,11 +26,25 @@ from easyicu.databases.profiles import (
     normalize_database_key,
     public_database_keys,
 )
+from easyicu.database_config import (
+    DATABASE_FULL_NAMES,
+    SUPPORTED_DATABASES,
+    is_offset_based,
+)
 from easyicu.io.data_paths import DATABASE_ALIASES, find_database_path
 from easyicu.webserver import crossdb_review
 
 
 EXPECTED_PUBLIC = ("miiv", "eicu", "aumc", "hirid", "mimic", "sic")
+
+
+def test_legacy_database_metadata_is_registry_backed() -> None:
+    assert tuple(SUPPORTED_DATABASES) == public_database_keys()
+    assert dict(DATABASE_FULL_NAMES) == dict(DATABASE_LABELS)
+
+
+def test_aumc_global_millisecond_clock_is_offset_based() -> None:
+    assert is_offset_based("aumc") is True
 
 
 def test_packaged_registry_has_six_typed_public_profiles_and_two_demo_profiles() -> (

@@ -41,7 +41,9 @@ from easyicu.research_agent.literature import CitationRecord
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 REPO = Path(__file__).resolve().parents[2]
-_HAS_ICD = (REPO / "benchmark" / "icd_cohort_catalog_miiv.json").exists()
+_HAS_ICD = (
+    REPO / "benchmarks" / "catalogs" / "icd_cohort_catalog_miiv.json"
+).exists()
 
 PRIMITIVES = ["bmi", "weight", "height", "bun", "crea", "los_icu", "hr", "sbp", "death"]
 

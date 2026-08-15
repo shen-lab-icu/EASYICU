@@ -20,11 +20,11 @@ For every time-series concept it emits a wide per-stay summary
 (``<c>_max/_min/_mean/_first/_n/_measured``) over a window, matching the
 data-quality-gate input contract (see ``docs/qc_eligibility_gate_design_v1``),
 plus timing columns ``<c>_first_time/_last_time`` carrying the ``charttime``
-(hours from ICU admission) of the first/last recorded value. The timing
-columns are what make exposure-timing questions answerable — e.g. the first
-``charttime`` where ``norepi_rate`` is recorded is the vasopressor initiation
-time, so "early vs delayed" exposure groups can be constructed from the wide
-cohort without re-reading the raw event stream.
+(hours from ICU admission) of the first/last non-null observation inside the
+materialisation window. These are observation-coverage coordinates, not
+certified clinical onset, treatment initiation, resolution, or cessation
+times. Timing-dependent definitions must use an owner-authorized event time or
+derive a qualifying transition from the bound long trajectory.
 Each outcome is emitted as a whole-stay binary ``<outcome>`` and, when its
 source carries a timestamp, an event time ``<outcome>_time`` (e.g.
 ``death_time`` = time-of-death in hours from ICU admission, NaN when the event
@@ -37,6 +37,8 @@ inclusion/exclusion (纳排) deterministically and auditably.
 """
 
 from __future__ import annotations
+
+from ..canonical_json import sha256_file as _sha256_file
 
 import hashlib
 import inspect
@@ -462,7 +464,11 @@ def _normalize_declared_positive_only_event_concepts(
                 f"declared positive-only event {concept!r} has no summary columns"
             )
         for column in summary_columns:
-            numeric = pd.to_numeric(wide[column], errors="coerce")
+            # Nullable boolean keeps its extension dtype through
+            # ``to_numeric``; filling it with ``0.0`` then raises instead of
+            # producing the promised explicit event level.  Convert to the
+            # owner's numeric representation before applying absence semantics.
+            numeric = pd.to_numeric(wide[column], errors="coerce").astype("Float64")
             invalid = wide[column].notna() & numeric.isna()
             if column.endswith("_mean"):
                 outside_domain = numeric.notna() & ((numeric < 0.0) | (numeric > 1.0))
@@ -472,7 +478,12 @@ def _normalize_declared_positive_only_event_concepts(
                 raise MaterializedMetadataError(
                     f"declared positive-only event {concept!r} is outside its domain"
                 )
-            wide[column] = numeric.fillna(0.0)
+            filled = numeric.fillna(0.0)
+            wide[column] = (
+                filled.astype(float)
+                if column.endswith("_mean")
+                else filled.astype("int64")
+            )
             normalized.append(column)
     return normalized
 
@@ -559,20 +570,18 @@ def _resolve_source(
 def _timing_columns(w: pd.DataFrame, concept: str) -> pd.DataFrame:
     """Per-stay ``<c>_first_time`` / ``<c>_last_time`` for one concept.
 
-    The time index (``charttime``, hours from ICU admission) of the FIRST and
-    LAST *recorded* (non-null) value of ``concept`` inside the window. Computed
-    on the raw column **before** any presence-coercion, so a categorical event's
-    ``_first_time`` is its true onset, not the window start.
+    The time index (``charttime``, hours from ICU admission) of the first and
+    last *recorded* (non-null) value of ``concept`` inside the window. Computed
+    on the raw column before any presence coercion, an explicit zero or
+    event-negative state is still an observation and may therefore be
+    ``_first_time``.
 
-    This is what makes timing-dependent questions answerable: e.g. the first
-    ``charttime`` where ``norepi_rate`` is recorded IS the vasopressor
-    initiation time, so "early vs delayed" exposure can be constructed. Without
-    it the wide summary only exposes magnitude (``_max/_min/_mean/_first``) and
-    an agent wrongly concludes no row-level timing exists and BLOCKs the study.
-
-    A stay with no recorded value is absent here -> the column is NaN after the
-    left-merge, which honestly reads as "never measured / event never occurred",
-    i.e. no onset time.
+    These columns describe observation coverage only. They do not certify a
+    clinical onset or treatment initiation; those require an owner-authorized
+    event time or a qualifying state transition in the bound long trajectory.
+    A stay with no recorded value is absent here and becomes NaN after the left
+    merge. That means no qualifying observation was recorded inside the window,
+    not that the event or treatment never occurred.
     """
     if TIME_COL not in w.columns:
         return pd.DataFrame(columns=[ID_COL])
@@ -611,7 +620,18 @@ def _load_concept(
         if source_mode == "export":
             if isinstance(root, ExportPackage):
                 require_canonical_time_projection(root, concept)
-            return _coerce_int_stay(read_exported_concept(root, concept))
+            extra_columns = (
+                [f"{concept}_observed", f"{concept}_available"]
+                if str(concept).startswith("sofa2")
+                else None
+            )
+            return _coerce_int_stay(
+                read_exported_concept(
+                    root,
+                    concept,
+                    extra_columns=extra_columns,
+                )
+            )
         from ...api import load_concepts  # local import: heavy module
 
         return _coerce_int_stay(
@@ -620,6 +640,11 @@ def _load_concept(
                 database=database,
                 data_path=str(root),
                 patient_ids=patient_ids,
+                # SOFA-2 component owners issue observed/available receipts only
+                # on their component-preserving projection.  A longitudinal
+                # trajectory must retain those receipts so an unavailable
+                # missing-as-normal zero cannot masquerade as an observation.
+                keep_components=str(concept).startswith("sofa2"),
             )
         )
     except ExportPackageError:
@@ -685,9 +710,9 @@ def _summarize_timeseries_with_representation(
     w = _window(df, window[0], window[1])
     if w.empty or concept not in w.columns:
         return pd.DataFrame(columns=[ID_COL]), False
-    # Timing (onset/last-record time) is taken from the RAW non-null values
-    # before the presence-coercion below, so a categorical event keeps its true
-    # onset charttime rather than the window start.
+    # Observation bounds are taken from RAW non-null values before the
+    # presence-coercion below. They deliberately do not claim clinical onset,
+    # initiation, resolution, or cessation.
     timing = _timing_columns(w, concept)
     # The wide summary emits numeric _max/_min/_mean. A concept stored as object
     # (e.g. a ventilation status or a vasopressor drug name) cannot be reduced
@@ -940,14 +965,6 @@ def _hash_df(df: pd.DataFrame) -> str:
     return hashlib.sha256(
         pd.util.hash_pandas_object(df, index=False).values.tobytes()
     ).hexdigest()
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _atomic_write_parquet(frame: pd.DataFrame, path: Path) -> None:
@@ -1396,7 +1413,7 @@ def build_trajectory_long(
     prefer_existing: bool = True,
     bounds_violation_policy: str = "reject",
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """Long-format trajectory ``(stay_id, charttime, concept, value_num, value_str)``.
+    """Long-format trajectory with concept-owner evidence receipts.
 
     The wide per-stay summary in :func:`materialize_cohort` decides the temporal
     aggregation (max/min/first over a fixed window) up front, BEFORE the agent
@@ -1407,10 +1424,13 @@ def build_trajectory_long(
     construct those temporal features itself in-sandbox, instead of being forced
     through the baseline-summary lens.
 
-    Only rows with a recorded (non-null) value are kept. ``value_num`` is the
-    numeric view (NaN when the concept is categorical/unparseable); ``value_str``
-    preserves the raw value. ``window`` (hours from ICU admission) bounds the
-    series; ``None`` keeps the full available trajectory.
+    Only rows with an owner-available recorded value are kept. ``value_num`` is
+    the numeric view (NaN when the concept is categorical/unparseable),
+    ``value_str`` preserves the raw value, and ``evidence_state`` distinguishes
+    direct observation from an owner-authorized LOCF state.  Owner-unavailable
+    synthetic values are excluded and counted in provenance. ``window`` (hours
+    from ICU admission) bounds the series; ``None`` keeps the full available
+    trajectory.
     """
     source_mode, root = _resolve_source(data_path, prefer_existing)
     common = dict(
@@ -1465,6 +1485,9 @@ def _build_trajectory_long_from_resolved_source(
     bounds_violation_counts: dict[str, int] = {}
     unavailable: List[str] = []
     available_unobserved: List[str] = []
+    receipt_aware: List[str] = []
+    evidence_state_counts: dict[str, dict[str, int]] = {}
+    unavailable_value_rows_excluded: dict[str, int] = {}
     frames: List[pd.DataFrame] = []
     materialized: List[str] = []
     for concept in dict.fromkeys(concepts):
@@ -1512,10 +1535,84 @@ def _build_trajectory_long_from_resolved_source(
                 unavailable.append(concept)
             continue
         w = _window(df, window[0], window[1]) if window is not None else df
-        sub = w.loc[w[concept].notna(), [ID_COL, TIME_COL, concept]]
+        observed_name = f"{concept}_observed"
+        available_name = f"{concept}_available"
+        has_observed = observed_name in w.columns
+        has_available = available_name in w.columns
+        if has_observed != has_available:
+            raise MaterializedMetadataError(
+                f"trajectory concept {concept!r} has an incomplete owner evidence receipt"
+            )
+        if str(concept).startswith("sofa2") and not has_observed:
+            raise MaterializedMetadataError(
+                f"trajectory concept {concept!r} requires its owner observed/available "
+                "receipt; refusing to treat a SOFA-2 value as directly observed"
+            )
+        if has_observed:
+            observed = _require_finite_numeric(
+                pd.to_numeric(w[observed_name], errors="coerce"),
+                original=w[observed_name],
+                concept=concept,
+                purpose="trajectory observed receipt",
+            )
+            available = _require_finite_numeric(
+                pd.to_numeric(w[available_name], errors="coerce"),
+                original=w[available_name],
+                concept=concept,
+                purpose="trajectory available receipt",
+            )
+            if bool((~observed.isin([0, 1])).any()) or bool(
+                (~available.isin([0, 1])).any()
+            ):
+                raise MaterializedMetadataError(
+                    f"trajectory concept {concept!r} owner receipts are not binary"
+                )
+            if bool(((observed == 1) & (available != 1)).any()):
+                raise MaterializedMetadataError(
+                    f"trajectory concept {concept!r} is observed but unavailable"
+                )
+            if bool(((available == 1) & w[concept].isna()).any()):
+                raise MaterializedMetadataError(
+                    f"trajectory concept {concept!r} is available without a value"
+                )
+            retained = (available == 1) & w[concept].notna()
+            unavailable_value_rows_excluded[concept] = int(
+                ((available == 0) & w[concept].notna()).sum()
+            )
+            evidence_state = pd.Series(
+                np.where(
+                    available.eq(0),
+                    "unavailable",
+                    np.where(
+                        observed.eq(1),
+                        "direct_observed",
+                        "owner_locf_available",
+                    ),
+                ),
+                index=w.index,
+                dtype="string",
+            )
+            evidence_state_counts[concept] = {
+                str(key): int(value)
+                for key, value in evidence_state.value_counts().items()
+            }
+            receipt_aware.append(concept)
+        else:
+            retained = w[concept].notna()
+            observed = pd.Series(1, index=w.index, dtype="int8")
+            available = pd.Series(1, index=w.index, dtype="int8")
+            evidence_state = pd.Series(
+                "direct_observed", index=w.index, dtype="string"
+            )
+        sub = w.loc[retained, [ID_COL, TIME_COL, concept]]
         if sub.empty:
             available_unobserved.append(concept)
             continue
+        states = evidence_state.loc[sub.index]
+        if concept not in evidence_state_counts:
+            evidence_state_counts[concept] = {
+                str(key): int(value) for key, value in states.value_counts().items()
+            }
         frames.append(
             pd.DataFrame(
                 {
@@ -1526,6 +1623,13 @@ def _build_trajectory_long_from_resolved_source(
                         sub[concept], errors="coerce"
                     ).to_numpy(),
                     "value_str": sub[concept].astype("string").to_numpy(),
+                    "evidence_state": states.to_numpy(),
+                    "owner_observed": observed.loc[sub.index]
+                    .astype("int8")
+                    .to_numpy(),
+                    "owner_available": available.loc[sub.index]
+                    .astype("int8")
+                    .to_numpy(),
                 }
             )
         )
@@ -1538,7 +1642,16 @@ def _build_trajectory_long_from_resolved_source(
         )
     else:
         long_df = pd.DataFrame(
-            columns=[ID_COL, TIME_COL, "concept", "value_num", "value_str"]
+            columns=[
+                ID_COL,
+                TIME_COL,
+                "concept",
+                "value_num",
+                "value_str",
+                "evidence_state",
+                "owner_observed",
+                "owner_available",
+            ]
         )
     if export_package is not None and verify_source_package:
         verify_export_package(export_package)
@@ -1552,6 +1665,9 @@ def _build_trajectory_long_from_resolved_source(
         "trajectory_concepts_requested": list(dict.fromkeys(concepts)),
         "trajectory_concepts_materialized": materialized,
         "available_unobserved_concepts": available_unobserved,
+        "owner_receipt_concepts": receipt_aware,
+        "evidence_state_counts": evidence_state_counts,
+        "unavailable_value_rows_excluded": unavailable_value_rows_excluded,
         "unavailable_concepts": unavailable,
         "source_bounds_violation_policy": bounds_violation_policy,
         "source_bounds_exclusions": dict(sorted(bounds_violation_counts.items())),

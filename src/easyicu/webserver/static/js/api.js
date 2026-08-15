@@ -266,9 +266,6 @@
   function loadCohortReviewSummary(body) {
     return postJSON('/api/cohort-review/summary', body || {});
   }
-  function loadCrossdbReviewSummary(body) {
-    return postJSON('/api/crossdb-review/summary', body || {});
-  }
   function loadCrossdbRawDistribution(body) {
     return postJSON('/api/crossdb-review/raw-distribution', body || {});
   }
@@ -278,11 +275,11 @@
   function startCrossdbRawDistributionJob(body) {
     return postJSON('/api/jobs/crossdb-raw-distribution', body || {});
   }
+  function startCrossdbReviewSummaryJob(body) {
+    return postJSON('/api/jobs/crossdb-summary', body || {});
+  }
   function loadCrossdbDemoDistribution(body) {
     return postJSON('/api/crossdb-review/demo-distribution', body || {});
-  }
-  function loadCrossdbSummary(paths) {
-    return postJSON('/api/workspaces/crossdb-summary', { paths: paths || [] });
   }
   function loadAgentProviderStatus(provider) {
     const q = provider ? '?provider=' + encodeURIComponent(provider) : '';
@@ -323,6 +320,33 @@
   }
   function loadCapabilities() {
     return hydrateCapabilities();
+  }
+  async function loadExtensions() {
+    window.EU_EXTENSIONS = await getJSON('/api/extensions');
+    return window.EU_EXTENSIONS;
+  }
+  async function installExtensionSkill(body) {
+    const result = await postJSON('/api/extensions/skills/install', body || {});
+    if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
+    return result;
+  }
+  async function installExtensionMcp(body) {
+    const result = await postJSON('/api/extensions/mcp/install', body || {});
+    if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
+    return result;
+  }
+  async function setExtensionState(body) {
+    const result = await postJSON('/api/extensions/state', body || {});
+    if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
+    return result;
+  }
+  async function removeExtension(body) {
+    const result = await postJSON('/api/extensions/remove', body || {});
+    if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
+    return result;
+  }
+  function testExtensionMcp(body) {
+    return postJSON('/api/extensions/mcp/test', body || {});
   }
   function checkCapabilityTool(body) {
     return postJSON('/api/capabilities/tool-check', body || {});
@@ -388,12 +412,22 @@
   function initializePiCopilotProject(body) {
     return postJSON('/api/copilot/pi/projects/initialize', body || {});
   }
-  function loadPiCopilotSessions(limit, projectId) {
-    const n = Math.max(1, Math.min(100, Number(limit) || 30));
-    return getJSON('/api/copilot/pi/sessions?project_id=' + encodeURIComponent(projectId || '') + '&limit=' + encodeURIComponent(n));
+  function loadPiCopilotProjectWorkflow(projectId) {
+    return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId || '') + '/workflow');
   }
-  function loadPiCopilotSession(sessionId, projectId) {
-    return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '?project_id=' + encodeURIComponent(projectId || ''));
+  function loadPiCopilotSessions(limit, projectId, agentMode) {
+    const n = Math.max(1, Math.min(100, Number(limit) || 30));
+    const mode = agentMode === 'research' || agentMode === 'workspace' ? '&agent_mode=' + encodeURIComponent(agentMode) : '';
+    return getJSON('/api/copilot/pi/sessions?project_id=' + encodeURIComponent(projectId || '') + '&limit=' + encodeURIComponent(n) + mode);
+  }
+  function loadPiCopilotSession(sessionId, projectId, options) {
+    const opts = options || {};
+    const query = new URLSearchParams({ project_id: String(projectId || '') });
+    if (opts.transcriptCursor != null) query.set('transcript_cursor', String(opts.transcriptCursor));
+    if (opts.transcriptLimit != null) query.set('transcript_limit', String(opts.transcriptLimit));
+    if (opts.replayCursor != null) query.set('replay_cursor', String(opts.replayCursor));
+    if (opts.replayLimit != null) query.set('replay_limit', String(opts.replayLimit));
+    return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '?' + query.toString());
   }
   function sendPiCopilotMessage(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/message', body || {});
@@ -401,14 +435,26 @@
   function rebindPiCopilotSession(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/rebind', body || {});
   }
+  function pinPiCopilotPresentation(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/presentation', body || {});
+  }
+  function archivePiCopilotChildJob(sessionId, jobId, body) {
+    return postJSON(
+      '/api/copilot/pi/sessions/' + encodeURIComponent(sessionId)
+      + '/child-jobs/' + encodeURIComponent(jobId) + '/archive',
+      body || {},
+    );
+  }
   function abortPiCopilotSession(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/abort', body || {});
   }
   function loadPiCopilotWorkspaceFile(projectId, file) {
     return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/workspace/file?file=' + encodeURIComponent(file));
   }
-  function piCopilotWorkspacePreviewUrl(projectId, file) {
-    return '/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/workspace/preview?file=' + encodeURIComponent(file);
+  function piCopilotWorkspacePreviewUrl(projectId, file, checkedSha256) {
+    return '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/workspace/preview?file=' + encodeURIComponent(file)
+      + '&checked_sha256=' + encodeURIComponent(checkedSha256 || '');
   }
   function loadPiCopilotResearchArtifact(projectId, runId, artifact) {
     return getJSON(
@@ -416,6 +462,18 @@
       + '/runs/' + encodeURIComponent(runId)
       + '/artifacts/' + encodeURIComponent(artifact)
     );
+  }
+  function loadPiCopilotDataPackageReview(projectId, studyRevision, reviewSha256) {
+    return getJSON(
+      '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/data-package-review?study_revision=' + encodeURIComponent(studyRevision)
+      + '&review_sha256=' + encodeURIComponent(reviewSha256)
+    );
+  }
+  function piCopilotResearchDocumentUrl(projectId, runId, documentName) {
+    return '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/runs/' + encodeURIComponent(runId)
+      + '/documents/' + encodeURIComponent(documentName);
   }
   function createPageGuideSession(body) {
     return postJSON('/api/page-guide/sessions', body || {});
@@ -533,12 +591,11 @@
   window.EU_API.loadPatientReviewTablePreview = loadPatientReviewTablePreview;
   window.EU_API.loadPatientReviewFeature = loadPatientReviewFeature;
   window.EU_API.loadCohortReviewSummary = loadCohortReviewSummary;
-  window.EU_API.loadCrossdbReviewSummary = loadCrossdbReviewSummary;
   window.EU_API.loadCrossdbRawDistribution = loadCrossdbRawDistribution;
   window.EU_API.scanCrossdbRawRoot = scanCrossdbRawRoot;
   window.EU_API.startCrossdbRawDistributionJob = startCrossdbRawDistributionJob;
+  window.EU_API.startCrossdbReviewSummaryJob = startCrossdbReviewSummaryJob;
   window.EU_API.loadCrossdbDemoDistribution = loadCrossdbDemoDistribution;
-  window.EU_API.loadCrossdbSummary = loadCrossdbSummary;
   window.EU_API.loadAgentProviderStatus = loadAgentProviderStatus;
   window.EU_API.saveAgentProviderConfig = saveAgentProviderConfig;
   window.EU_API.startAgentRun = startAgentRun;
@@ -552,6 +609,12 @@
   window.EU_API.loadAgentRunReview = loadAgentRunReview;
   window.EU_API.loadAgentScienceWorkbench = loadAgentScienceWorkbench;
   window.EU_API.loadCapabilities = loadCapabilities;
+  window.EU_API.loadExtensions = loadExtensions;
+  window.EU_API.installExtensionSkill = installExtensionSkill;
+  window.EU_API.installExtensionMcp = installExtensionMcp;
+  window.EU_API.setExtensionState = setExtensionState;
+  window.EU_API.removeExtension = removeExtension;
+  window.EU_API.testExtensionMcp = testExtensionMcp;
   window.EU_API.checkCapabilityTool = checkCapabilityTool;
   window.EU_API.searchZotero = searchZotero;
   window.EU_API.testZoteroConnection = testZoteroConnection;
@@ -573,14 +636,19 @@
   window.EU_API.savePiCopilotProviderConfig = savePiCopilotProviderConfig;
   window.EU_API.createPiCopilotSession = createPiCopilotSession;
   window.EU_API.initializePiCopilotProject = initializePiCopilotProject;
+  window.EU_API.loadPiCopilotProjectWorkflow = loadPiCopilotProjectWorkflow;
   window.EU_API.loadPiCopilotSessions = loadPiCopilotSessions;
   window.EU_API.loadPiCopilotSession = loadPiCopilotSession;
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
   window.EU_API.rebindPiCopilotSession = rebindPiCopilotSession;
+  window.EU_API.pinPiCopilotPresentation = pinPiCopilotPresentation;
+  window.EU_API.archivePiCopilotChildJob = archivePiCopilotChildJob;
   window.EU_API.abortPiCopilotSession = abortPiCopilotSession;
   window.EU_API.loadPiCopilotWorkspaceFile = loadPiCopilotWorkspaceFile;
   window.EU_API.piCopilotWorkspacePreviewUrl = piCopilotWorkspacePreviewUrl;
   window.EU_API.loadPiCopilotResearchArtifact = loadPiCopilotResearchArtifact;
+  window.EU_API.loadPiCopilotDataPackageReview = loadPiCopilotDataPackageReview;
+  window.EU_API.piCopilotResearchDocumentUrl = piCopilotResearchDocumentUrl;
   window.EU_API.createPageGuideSession = createPageGuideSession;
   window.EU_API.sendPageGuideMessage = sendPageGuideMessage;
   window.EU_API.runPageGuideAction = runPageGuideAction;

@@ -1,10 +1,7 @@
 """Normalize replanner candidates without owning provider or run mutation.
 
-The Planner/Replanner retains every scientific choice.  This module only
-projects a returned candidate through host-owned invariants before the execute
-orchestrator decides whether to register it.  Provider calls, plan revision
-files, EvidenceStore promotion, cohort materialization, runner rebuilding, and
-replan-budget state deliberately remain outside this boundary.
+The Planner/Replanner retains every scientific choice. This owner only projects
+host invariants; provider, persistence, materialization, and budgets stay outside.
 """
 
 from __future__ import annotations
@@ -18,6 +15,7 @@ from ..plan_utils import (
     _cap_plan_preserving_figure_steps,
     _preserve_figure_steps_after_replan,
 )
+from ..planning.figure_plan_shaping import bind_deterministic_figure_panels
 from ..robustness.panel import (
     RobustnessSpec,
     robustness_specs_for_execution,
@@ -355,6 +353,8 @@ def normalize_replan_candidate(
         context=context,
     )
     findings.extend(companion_findings)
+    revised, panel_findings = bind_deterministic_figure_panels(plan=revised)
+    findings.extend(panel_findings)
 
     # Structural transforms may touch an already completed step. Re-apply the
     # immutable execution snapshots after every transform, not only before them.

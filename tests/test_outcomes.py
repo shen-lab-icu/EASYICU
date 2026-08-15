@@ -31,8 +31,7 @@ def test_horizon_mortality_plausible_and_monotonic(database, lo28, hi28):
     m365 = out["mort_365d"].mean()
     assert lo28 <= m28 <= hi28, f"{database} 28d mortality {m28:.3f} out of band"
     assert m28 <= m90 <= m365 + 1e-9, "horizons must be monotonic"
-    # ICU-free days bounded [0, 28]
-    assert out["icu_free_days_28"].dropna().between(0, 28).all()
+    assert "icu_free_days_28" not in out.columns
 
 
 @pytest.mark.needs_real_data
@@ -46,13 +45,11 @@ def test_no_followup_returns_empty(database):
 
 
 @pytest.mark.needs_real_data
-def test_icu_readmission_present_for_mimic():
+def test_icu_readmission_is_unavailable_without_history_completeness():
     from easyicu.scores.outcomes import load_outcomes
 
     out = load_outcomes("miiv")
-    assert "icu_readmission" in out.columns
-    # ICU readmission within a hospitalisation is a minority event
-    assert 0.02 <= out["icu_readmission"].mean() <= 0.25
+    assert "icu_readmission" not in out.columns
 
 
 @pytest.mark.needs_real_data
@@ -61,23 +58,16 @@ def test_outcomes_via_load_concepts():
 
     df = load_concepts(["mort_28d", "icu_free_days_28"], database="miiv")
     assert "mort_28d" in df.columns and "stay_id" in df.columns
-    assert df["icu_free_days_28"].dropna().between(0, 28).all()
+    assert "icu_free_days_28" not in df.columns
 
 
 @pytest.mark.needs_real_data
-def test_eicu_ventilator_free_days():
+def test_eicu_ventilator_free_days_are_structurally_unavailable():
     from easyicu.scores.outcomes import load_outcomes
 
     out = load_outcomes("eicu")
-    assert not out.empty
-    assert "vent_free_days_28" in out.columns
-    vfd = out["vent_free_days_28"]
-    observed_vfd = vfd.dropna()
-    assert observed_vfd.between(0, 28).all()
-    # Missing / -1 actualventdays remains unknown rather than being scored as
-    # the best possible outcome (28 free days).
-    assert len(observed_vfd) > 0
-    assert (observed_vfd == 0).any()
+    assert out.empty
+    assert "vent_free_days_28" not in out.columns
 
 
 @pytest.mark.needs_real_data

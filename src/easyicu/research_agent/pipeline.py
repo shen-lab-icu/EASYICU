@@ -47,6 +47,7 @@ import threading
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -86,9 +87,13 @@ from .providers.hard_stop import HardStopClient
 from .figures.distribution_availability import (
     _distribution_availability_figure_step_matches_parent,
 )
+from .figures.missingness_publication import (
+    render_missingness_publication_bundle_from_prior_outputs as _render_missingness_publication_bundle_from_prior_outputs,
+)
 from .figures.sealed_registry import sealed_renderer_adapter
 from .replication.envelope import (
     ENVELOPE_SCHEMA_VERSION,
+    ReproCallRecord,
     ReproEnvelope,
     envelope_role_resolver,
 )
@@ -143,6 +148,7 @@ from .research_context.typed import parse_research_context_json
 from .gates.preplan import preplan_data_failure_reason, preplan_data_findings
 from .authority.context_numeric_claims import register_context_numeric_claims
 from .authority.declared_levels import bind_step_declared_levels
+from .authority.plan_input_closure import close_measurement_companion_inputs
 from .authority.table_one_binding import (
     bind_table_one_execution_spec,
     restore_table_one_private_checkpoint,
@@ -151,23 +157,59 @@ from .authority.table_one_binding import (
 from .authority.resume_plan import (
     load_compatible_resume_plan as _load_compatible_resume_plan,
 )
-from .authority import pipeline_cache as _pipeline_cache
+from .authority import pipeline_cache as _pipeline_cache, plan_lifecycle as _plan_lifecycle
 from .planning.analysis_blueprint import (
     build_analysis_blueprint,
     render_analysis_blueprint_for_prompt,
     validate_plan_against_analysis_blueprint,
 )
+from .planning.adjustment_authority import (
+    validate_plan_against_adjustment_authority,
+)
 from .planning.cohort_contract import cohort_definition_has_explicit_selection
+from .planning.dependence_authority import (
+    DependenceAuthorityError,
+    bind_context_dependence_authority,
+)
 from .reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
 )
 from .planning.figure_strategy import build_article_figure_strategy
+from .planning.scientific_review import (
+    render_plan_scientific_guardrails,
+)
 from .orchestration.config import (
     PipelineConfig,
     assert_step_provider_budget_funds_its_repairs,
 )
+from .orchestration.instance_lifecycle import (
+    PipelineInstanceLifecycleLease,
+    pipeline_instance_lifecycle as _pipeline_instance_lifecycle,
+)
+from .orchestration.human_review_checkpoint import (
+    HumanReviewCheckpoint,
+    HumanReviewCheckpointError,
+    checkpoint_path as human_review_checkpoint_path,
+    load_checkpoint as load_human_review_checkpoint,
+    write_checkpoint as write_human_review_checkpoint,
+)
+from .orchestration.human_review_restore import (
+    bind_checkpoint_decision_payloads,
+    commit_human_review_decision,
+    fail_human_review_checkpoint,
+    mark_human_review_execution_phase,
+    mark_human_review_execution_started,
+    persist_human_review_records,
+    prepare_human_review_decision,
+    restore_durable_human_review_pause,
+)
 from .orchestration.services import PipelineServices
+from .orchestration.progress import (
+    ResumableProgressChannel,
+    planner_retry_progress_callback,
+)
+from .orchestration.scientific_runtime import ScientificRuntimeAuthorities
 from .orchestration.workflow import PipelineRunOutcome
 from .resources.capability_runtime import CapabilityWorkflowRuntime
 from .contracts.runtime import (
@@ -180,6 +222,7 @@ from .execution.host_services import (
     ExecutePhaseServices,
     PublicationFigureAuthorityServices,
 )
+from .execution.cohort_routing import PreselectionUniverseOwnerCapability
 from .execution.output_files import _clear_output_dir, _has_figure_exports
 from .concept_dict_audit import (
     assert_dict_matches as assert_concept_dict_matches,
@@ -251,9 +294,7 @@ from .audits.manuscript_claims import (  # noqa: E402,F401
     _extract_percent_claims_near,
 )
 
-_audit_manuscript_numeric_claims = (
-    audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
-)
+_audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
 
 from .authority.evidence_store import (
     EvidenceEnforcementError,
@@ -328,7 +369,6 @@ from .plan_utils import (
     _cohort_definition_contract_findings,
     endpoint_contract_findings,
     _cohort_definition_is_empty,
-    _ensure_audit_panel_step_in_plan,
     _ensure_publication_figure_step_in_plan,
     _effect_figure_semantics_supported_by_inputs,
     _effect_figure_semantics_supported_by_model_roster,
@@ -349,8 +389,22 @@ from .plan_utils import (
     _step_produces_figure,
     effect_output_authorized,
 )
+from .planning.figure_plan_shaping import (
+    bind_deterministic_figure_panels,
+    ensure_data_quality_figure_step as _ensure_audit_panel_step_in_plan,
+    ensure_primary_result_figure_step,
+)
+from .planning.final_plan_shape import validate_final_plan_shape
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
+from .orchestration.scientific_plan_review_gate import (
+    prepare_scientific_plan_review_gate,
+)
 from .figures.skill import PublicationFigureSkill
+from .figures.prior_output_support import (
+    figure_parent_candidate_step_dirs as _figure_parent_candidate_step_dirs,
+    publication_label as _publication_label,
+    short_figure_label as _short_figure_label,
+)
 from .reporting.bibtex import render_bibtex
 from .reporting.latex import scaffold_to_latex
 from .literature import (
@@ -397,6 +451,7 @@ from .schema import (
     CritiqueReport,
     EvidenceRecord,
     EvidenceRef,
+    EndpointSpec,
     ManuscriptDraftPacket,
     PaperProfile,
     PaperReplicationSpec,
@@ -436,11 +491,12 @@ from .authority.run_input import (
     RunInputIdentityError,
     build_environment_identity,
     build_scientific_identity,
+    load_verified_run_input_capsule,
     prepare_existing_resume_input,
     seal_run_input_capsule,
     verify_legacy_trajectory_capsule_receipt,
 )
-from .authority.plan_review import ReviewExecutionAuthority
+from .authority.plan_review import PlanReviewAuthority, ReviewExecutionAuthority
 from .canonical_json import canonical_sha256
 from .authority.run_lock import (
     acquire_run_execution_lock,
@@ -449,7 +505,6 @@ from .authority.run_lock import (
 )
 from .authority.run_heartbeat import (
     bind_active_run_heartbeat,
-    record_active_run_progress,
     run_heartbeat_scope,
 )
 from .audits.validators import (
@@ -1165,6 +1220,7 @@ def _migrate_legacy_resume_model_requirements(
     prompt_version: str,
     llm_signature: str,
     max_prompt_tokens: Optional[int] = None,
+    allow_scientific_migration: bool = True,
 ) -> tuple[AnalysisPlan, Optional[Path], tuple[str, ...]]:
     """Ask the planner LLM to migrate an old empty typed-model roster.
 
@@ -1187,6 +1243,11 @@ def _migrate_legacy_resume_model_requirements(
     )
     if not target_step_ids:
         return plan, None, ()
+    if not allow_scientific_migration:
+        raise LegacyResumePlanMigrationError(
+            "paper-facing legacy runs missing typed model authority cannot be "
+            "resumed with a new Planner decision; create a fresh run"
+        )
 
     target_steps = [
         {
@@ -1367,6 +1428,20 @@ def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
     return legacy
 
 
+@dataclass(frozen=True)
+class _PlanGenerationResult:
+    """Immutable handoff between plan generation and host validation."""
+
+    plan: AnalysisPlan
+    reused_prior_plan: bool
+    reused_plan_path: Optional[Path]
+    migrated_plan_path: Optional[Path]
+    plan_generation_mode: str
+    used_mock_llm: bool
+    planner_prompt_metrics: Optional[Dict[str, Any]]
+    proposed_plan: AnalysisPlan
+
+
 class ResearchAgentPipeline:
     """One-shot orchestration. Construct, call :meth:`run`, read the result."""
 
@@ -1470,7 +1545,26 @@ class ResearchAgentPipeline:
         self._enable_publication_figure_skill = bool(
             config.enable_publication_figure_skill
         )
+        self._enable_nature_writing_skill = bool(config.enable_nature_writing_skill)
+        from .user_extensions import compile_user_extension_activation
+
+        self._user_extension_activation = compile_user_extension_activation(
+            config.extension_activation
+        )
         self._vlm_client = services.vlm_client
+        if (
+            self._provider_hard_stop is not None
+            and self._vlm_client is not None
+            and not isinstance(self._vlm_client, HardStopClient)
+        ):
+            # An explicitly injected VLM bypasses the normal analyzer role
+            # resolver. Keep its image and text transports under the same
+            # task/batch stop-loss as every other Provider-backed role.
+            self._vlm_client = HardStopClient(
+                self._vlm_client,
+                role="visual_qa",
+                task=self._provider_hard_stop,
+            )
         self._visual_qa_adapter = services.visual_qa_adapter
         # Deny-by-default: a rendered figure is not covered by the text
         # outbound projection, so uploading its bytes to an external VLM is a
@@ -1493,7 +1587,7 @@ class ResearchAgentPipeline:
         if config.enable_vlm_visual_qa is None:
             self._enable_vlm_visual_qa = bool(
                 services.visual_qa_adapter is not None
-                or llm_supports_vision(services.vlm_client)
+                or llm_supports_vision(self._vlm_client)
                 or llm_supports_vision(services.llm)
             )
         else:
@@ -1508,6 +1602,7 @@ class ResearchAgentPipeline:
         self._enable_memory = config.enable_memory
         self._enable_latex = config.enable_latex
         self._latex_venue_template = config.latex_venue_template or "article"
+        self._latex_draft_watermark = bool(config.latex_draft_watermark)
         lang = (config.manuscript_language or "en").lower()
         self._manuscript_language = (
             "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
@@ -1563,6 +1658,14 @@ class ResearchAgentPipeline:
         self._enable_pubmed = bool(config.enable_pubmed)
         self._pubmed_email = config.pubmed_email
         self._pubmed_api_key = config.pubmed_api_key
+        self._bound_preplan_literature = (
+            LiteratureBundle.model_validate(config.bound_preplan_literature)
+            if config.bound_preplan_literature is not None
+            else None
+        )
+        self._bound_plan_revision_contract = str(
+            config.bound_plan_revision_contract or ""
+        ).strip()
         # O5 — opt-in Tavily web search for preprints/guidelines/trial
         # registries that PubMed may not index. Off by default so CI
         # and offline demos remain deterministic.
@@ -1657,6 +1760,13 @@ class ResearchAgentPipeline:
         self._benchmark_task_kind = config.task_kind
         self._required_primary_cohort_selection_mode = (
             config.required_primary_cohort_selection_mode
+        )
+        self._scientific_runtime_authorities = ScientificRuntimeAuthorities.load(
+            trajectory=config.trajectory_scientific_runtime_authority,
+            current_case=config.current_case_scientific_runtime_authority,
+        )
+        self._scientific_runtime_projection_sha256 = (
+            config.scientific_runtime_projection_sha256
         )
         # O15 — Three-role reviewer round (statistician / clinician /
         # methodologist) driven off already-computed evidence and
@@ -1802,6 +1912,10 @@ class ResearchAgentPipeline:
         # ``resume_human_review()``. Holds the state machine because its phase
         # invokers close over this run's evidence store and services.
         self._pending_human_review: Optional[Dict[str, Any]] = None
+        # Instance-local owner for mutable run/runtime/review state.  Unlike
+        # the run-id file lock, this lease spans a human-review pause and sees
+        # fresh run ids, so one object cannot be driven by two calls at once.
+        self._instance_lifecycle_lease = PipelineInstanceLifecycleLease()
         self._know_how_paths = tuple(Path(path) for path in config.know_how_paths)
         self._know_how_top_k = int(config.know_how_top_k)
         self._know_how_min_score = float(config.know_how_min_score)
@@ -1898,6 +2012,9 @@ class ResearchAgentPipeline:
         cohort_path: Path,
         target_outcome: Optional[str] = None,
         universe_path: Optional[Path] = None,
+        preselection_universe_capability: Optional[
+            PreselectionUniverseOwnerCapability
+        ] = None,
         universe_is_typed: bool = False,
         universe_authority_ref: Optional[MaterializedCohortAuthorityRef] = None,
         trajectory_path: Optional[Path] = None,
@@ -1906,6 +2023,7 @@ class ResearchAgentPipeline:
             VerifiedLegacyTrajectoryCapsuleReceipt
         ] = None,
         timeout_seconds: Optional[float] = None,
+        cap_provider_timeout: bool = True,
     ):
         """Return the configured runner backend for a single ``run()``.
 
@@ -1914,9 +2032,9 @@ class ResearchAgentPipeline:
         ``run(step_id=..., code=...) -> RunResult``.
 
         ``cohort_path`` is the canonical analysis cohort the steps read as
-        ``COHORT_PARQUET``. ``universe_path`` (when given) is exposed as
-        ``EASYICU_UNIVERSE_PARQUET`` so explicit robustness steps can reach the
-        pre-纳排 universe without re-running extraction.
+        ``COHORT_PARQUET``. ``universe_path`` remains host authority metadata;
+        it is exposed as ``EASYICU_UNIVERSE_PARQUET`` only when the caller has
+        supplied this exact typed robustness/cohort-construction capability.
         """
         # Runner capability discovery is scoped to the backend selected for
         # this build.  Clear a Docker snapshot left in the current ContextVar
@@ -1943,7 +2061,19 @@ class ResearchAgentPipeline:
         )
         if target_outcome:
             extra_env["OUTCOME_COL"] = target_outcome
-        if universe_path is not None:
+        if preselection_universe_capability is not None and not isinstance(
+            preselection_universe_capability,
+            PreselectionUniverseOwnerCapability,
+        ):
+            raise TypeError(
+                "preselection_universe_capability must be a "
+                "PreselectionUniverseOwnerCapability"
+            )
+        if preselection_universe_capability is not None and universe_path is None:
+            raise ValueError(
+                "pre-selection universe authorization requires universe_path"
+            )
+        if preselection_universe_capability is not None:
             extra_env["EASYICU_UNIVERSE_PARQUET"] = str(universe_path)
         if trajectory_path is not None:
             candidate = Path(trajectory_path).expanduser()
@@ -2003,7 +2133,7 @@ class ResearchAgentPipeline:
         effective_timeout_seconds = (
             self._timeout_seconds if timeout_seconds is None else float(timeout_seconds)
         )
-        if self._provider_hard_stop is not None:
+        if self._provider_hard_stop is not None and cap_provider_timeout:
             effective_timeout_seconds = self._provider_hard_stop.cap_timeout(
                 effective_timeout_seconds
             )
@@ -2070,6 +2200,7 @@ class ResearchAgentPipeline:
         run_dir: Path,
         cohort_path: Path,
         target_outcome: Optional[str],
+        cap_provider_timeout: bool = True,
     ) -> Tuple[str, ...]:
         """Validate the real execution environment before Planner spend.
 
@@ -2084,6 +2215,7 @@ class ResearchAgentPipeline:
             cohort_path=cohort_path,
             target_outcome=target_outcome,
             universe_path=cohort_path,
+            cap_provider_timeout=cap_provider_timeout,
         )
         validate = getattr(runner, "validate_runtime_capabilities", None)
         if not callable(validate):
@@ -2114,6 +2246,859 @@ class ResearchAgentPipeline:
         set_runtime_capability_snapshot_provider(lambda: frozen_snapshot)
         return frozen_snapshot
 
+    def _generate_or_resume_plan(
+        self,
+        *,
+        agent_context: Any,
+        allowed_literature_citation_keys: Sequence[str],
+        cohort_path: Path,
+        context: Any,
+        direct_comparator_literature_keys: Sequence[str],
+        emit_progress: Callable[..., None],
+        evidence: Any,
+        findings: List[ValidationFinding],
+        know_how_binding: PlannerKnowHowBinding,
+        llm_signature: str,
+        planning_contract_context: str,
+        planner_prompt_metrics: Optional[Dict[str, Any]],
+        prompt_version: str,
+        resume_from_step_id: Optional[str],
+        resume_state: Optional[Dict[str, Any]],
+        role_resolver: Callable[[str], Any],
+        run_dir: Path,
+        run_id: str,
+        skill_obj: Optional[ClinicalSkill],
+        used_mock_llm: bool,
+    ) -> _PlanGenerationResult:
+        """Resume or generate one plan without shaping or persisting it."""
+        # Resume: reuse the locked plan from the prior run instead of
+        # re-planning. A non-deterministic planner would otherwise emit a
+        # *different* plan on resume, whose step_ids no longer match the
+        # completed-step skip set — so the "resume" would silently re-run the
+        # whole analysis under new names. Reusing the saved plan keeps the
+        # already-completed step_ids aligned and continues from the failed step.
+        reused_prior_plan = False
+        reused_plan_path: Optional[Path] = None
+        migrated_plan_path: Optional[Path] = None
+        proposed_plan: Optional[AnalysisPlan] = None
+        if resume_state is not None:
+            plan, _prior_plan_path = _load_compatible_resume_plan(
+                run_dir=run_dir,
+                resume_state=resume_state,
+                context=context,
+                evidence=evidence,
+                prompt_pack_version=PROMPT_PACK_VERSION,
+            )
+            if plan is not None and plan.steps:
+                proposed_plan = plan.model_copy(deep=True)
+                restore_table_one_private_checkpoint(
+                    run_dir=run_dir,
+                    plan=plan,
+                    context=agent_context,
+                )
+                # The resumed plan is the one on disk, so it still carries the
+                # host's opaque placeholders; a resume that skipped this would
+                # execute a different declaration than the first attempt did.
+                for resumed_step in plan.steps:
+                    bind_step_declared_levels(resumed_step, agent_context)
+                know_how_binding.verify_resume(
+                    plan.know_how_decisions,
+                    enabled=self._enable_know_how,
+                )
+                reused_prior_plan = True
+                reused_plan_path = _prior_plan_path
+                plan_generation_mode = "resumed"
+                findings.append(
+                    ValidationFinding(
+                        validator="planner",
+                        severity="warning",
+                        message=(
+                            "Resuming prior run: reused the latest compatible "
+                            "saved analysis plan (skipped re-planning) so "
+                            "completed step_ids stay aligned and execution "
+                            "continues from the failed step."
+                        ),
+                        detail={
+                            "generation_mode": "resumed",
+                            "n_steps": len(plan.steps),
+                            "plan_path": (
+                                str(_prior_plan_path.relative_to(run_dir))
+                                if _prior_plan_path is not None
+                                and _prior_plan_path.is_relative_to(run_dir)
+                                else str(_prior_plan_path)
+                            ),
+                        },
+                    )
+                )
+            else:
+                raise LegacyResumePlanMigrationError(
+                    "resume checkpoint has no digest-verified analysis plan "
+                    "evidence compatible with every completed step"
+                )
+
+        if reused_prior_plan:
+            from .orchestration.profiles import is_paper_facing_profile
+
+            plan, migrated_plan_path, migrated_step_ids = (
+                _migrate_legacy_resume_model_requirements(
+                    plan=plan,
+                    context=agent_context,
+                    run_dir=run_dir,
+                    resume_state=resume_state,
+                    resume_from_step_id=resume_from_step_id,
+                    role_resolver=role_resolver,
+                    evidence=evidence,
+                    prompt_version=prompt_version,
+                    llm_signature=llm_signature,
+                    max_prompt_tokens=self._max_prompt_tokens_per_call,
+                    allow_scientific_migration=not is_paper_facing_profile(
+                        self._submission_profile_name
+                    ),
+                )
+            )
+            if migrated_plan_path is not None:
+                plan_generation_mode = "resume_with_scientific_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema_migration",
+                        severity="error",
+                        message=(
+                            "A new Planner decision migrated legacy remaining "
+                            "adjusted-association step(s) to a typed model roster; "
+                            "the revised plan requires fresh human approval."
+                        ),
+                        detail={
+                            "reason": "resume_scientific_migration_requires_review",
+                            "human_review_required": True,
+                            "approval_allowed": True,
+                            "generation_mode": "resume_with_scientific_migration",
+                            "target_step_ids": list(migrated_step_ids),
+                            "plan_path": str(migrated_plan_path.relative_to(run_dir)),
+                        },
+                    )
+                )
+            plan, lock_restore_path = _restore_resume_plan_robustness_lock(
+                plan=plan,
+                run_dir=run_dir,
+                evidence=evidence,
+                prompt_version=prompt_version,
+                llm_signature=llm_signature,
+            )
+            if lock_restore_path is not None:
+                migrated_plan_path = lock_restore_path
+                if plan_generation_mode != "resume_with_scientific_migration":
+                    plan_generation_mode = "resume_with_authority_restore"
+                findings.append(
+                    ValidationFinding(
+                        validator="robustness_spec_lock",
+                        severity="warning",
+                        message=(
+                            "Resume restored the verified plan-time robustness "
+                            "specifications after an older replan drifted from "
+                            "the immutable lock."
+                        ),
+                        detail={
+                            "plan_path": str(lock_restore_path.relative_to(run_dir)),
+                            "lock_path": "robustness_specs_locked.json",
+                        },
+                    )
+                )
+            plan, trajectory_migration_path, trajectory_migration_findings = (
+                _migrate_resume_trajectory_products(
+                    plan=plan,
+                    context=agent_context,
+                    run_dir=run_dir,
+                    evidence=evidence,
+                    prompt_version=prompt_version,
+                    llm_signature=llm_signature,
+                )
+            )
+            findings.extend(trajectory_migration_findings)
+            if trajectory_migration_path is not None:
+                migrated_plan_path = trajectory_migration_path
+                if plan_generation_mode == "resumed":
+                    plan_generation_mode = "resume_with_schema_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="plan_contract",
+                        severity="warning",
+                        message=(
+                            "Resume migrated an older trajectory plan to the "
+                            "canonical replay-product schema without changing "
+                            "scientific ownership or step identities."
+                        ),
+                        detail={
+                            "kind": "resume_trajectory_schema_migration",
+                            "plan_path": str(
+                                trajectory_migration_path.relative_to(run_dir)
+                            ),
+                        },
+                    )
+                )
+            (
+                plan,
+                figure_edge_migration_path,
+                figure_edge_step_ids,
+            ) = _migrate_legacy_resume_figure_render_edges(
+                plan=plan,
+                run_dir=run_dir,
+                resume_state=resume_state,
+                resume_from_step_id=resume_from_step_id,
+                evidence=evidence,
+                prompt_version=prompt_version,
+                llm_signature=llm_signature,
+            )
+            if figure_edge_migration_path is not None:
+                migrated_plan_path = figure_edge_migration_path
+                if plan_generation_mode == "resumed":
+                    plan_generation_mode = "resume_with_schema_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema_migration",
+                        severity="warning",
+                        message=(
+                            "Resume restored exact typed parent edges on "
+                            "legacy framework-split rendering steps."
+                        ),
+                        detail={
+                            "kind": "legacy_figure_render_edge",
+                            "target_step_ids": list(figure_edge_step_ids),
+                            "plan_path": str(
+                                figure_edge_migration_path.relative_to(run_dir)
+                            ),
+                        },
+                    )
+                )
+        elif skill_obj is not None:
+            plan_generation_mode = "deterministic_skill"
+            issues = skill_obj.validate_against(pd.read_parquet(cohort_path))
+            for msg in issues:
+                findings.append(
+                    ValidationFinding(
+                        validator="clinical_skill",
+                        severity="warning",
+                        message=msg,
+                    )
+                )
+            plan = skill_obj.plan(context)
+        else:
+            plan_generation_mode = "llm"
+            planner = PlannerAgent(role_resolver("planner"))
+
+            planner_progress = planner_retry_progress_callback(
+                emit_progress, run_id=run_id
+            )
+
+            try:
+                plan = planner.run(
+                    agent_context,
+                    **know_how_binding.planner_kwargs,
+                    allowed_literature_citation_keys=allowed_literature_citation_keys,
+                    direct_comparator_literature_keys=(
+                        direct_comparator_literature_keys
+                    ),
+                    enforce_article_contract=True,
+                    article_contract_context=context,
+                    planning_contract_context=planning_contract_context,
+                    progress_callback=planner_progress,
+                )
+                planner_prompt_metrics = know_how_binding.prompt_metrics(
+                    planner,
+                    agent_context,
+                    planning_contract_context=planning_contract_context,
+                )
+            except PlannerArticleContractError:
+                raise
+            except Exception as exc:
+                if not self._enable_deterministic_planner_fallback:
+                    raise
+                findings.append(
+                    ValidationFinding(
+                        validator="planner",
+                        severity="warning",
+                        message=(
+                            "Planner agent failed; using deterministic fallback plan: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                        detail={"generation_mode": "fallback"},
+                    )
+                )
+                plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
+                    agent_context,
+                    **know_how_binding.planner_kwargs,
+                    allowed_literature_citation_keys=(allowed_literature_citation_keys),
+                    direct_comparator_literature_keys=(
+                        direct_comparator_literature_keys
+                    ),
+                )
+                used_mock_llm = True
+                plan_generation_mode = "fallback"
+            dropped_plan_keys = getattr(planner, "last_dropped_plan_keys", None) or {}
+            dropped_keys = list(dropped_plan_keys.get("top_level", [])) + list(
+                dropped_plan_keys.get("steps", [])
+            )
+            if dropped_keys:
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema",
+                        severity="warning",
+                        message=(
+                            "Planner returned unsupported plan fields that were dropped "
+                            "before schema validation."
+                        ),
+                        detail={"dropped_keys": dropped_keys},
+                    )
+                )
+            # A hosted model occasionally emits structurally-broken plan JSON
+            # (e.g. a stray time-window at the top level and no usable steps
+            # array) that normalises to 0 steps. An empty plan must never run:
+            # retry the real planner once, then fall back to the deterministic
+            # plan so the pipeline always executes a real analysis.
+            if not plan.steps and self._enable_deterministic_planner_fallback:
+                retry_plan = None
+                try:
+                    retry_plan = planner.run(
+                        agent_context,
+                        **know_how_binding.planner_kwargs,
+                        allowed_literature_citation_keys=allowed_literature_citation_keys,
+                        direct_comparator_literature_keys=(
+                            direct_comparator_literature_keys
+                        ),
+                        enforce_article_contract=True,
+                        article_contract_context=context,
+                        planning_contract_context=planning_contract_context,
+                    )
+                except Exception:
+                    retry_plan = None
+                if retry_plan is not None and retry_plan.steps:
+                    plan = retry_plan
+                    findings.append(
+                        ValidationFinding(
+                            validator="planner",
+                            severity="warning",
+                            message="Planner returned an empty plan; recovered on retry.",
+                            detail={"generation_mode": "retry"},
+                        )
+                    )
+                else:
+                    findings.append(
+                        ValidationFinding(
+                            validator="planner",
+                            severity="warning",
+                            message=(
+                                "Planner returned an empty plan (0 steps after schema "
+                                "validation) twice; using deterministic fallback plan."
+                            ),
+                            detail={"generation_mode": "fallback"},
+                        )
+                    )
+                    plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
+                        agent_context,
+                        **know_how_binding.planner_kwargs,
+                        allowed_literature_citation_keys=(
+                            allowed_literature_citation_keys
+                        ),
+                        direct_comparator_literature_keys=(
+                            direct_comparator_literature_keys
+                        ),
+                    )
+                    used_mock_llm = True
+                    plan_generation_mode = "fallback"
+            # Structured-纳排 retry: if the plan implies an analysis cohort (a
+            # cohort / eligibility / attrition step) but left plan.cohort
+            # unstructured, the 纳排 is unenforceable free text. Give the planner
+            # one focused retry; adopt it only if it actually structures the
+            # cohort, so a good plan is never discarded when the retry doesn't.
+            if (
+                not used_mock_llm
+                and _plan_expects_analysis_cohort(plan)
+                and _cohort_definition_is_empty(plan)
+            ):
+                cohort_retry = None
+                try:
+                    cohort_retry = planner.run(
+                        agent_context,
+                        **know_how_binding.planner_kwargs,
+                        allowed_literature_citation_keys=allowed_literature_citation_keys,
+                        direct_comparator_literature_keys=(
+                            direct_comparator_literature_keys
+                        ),
+                        enforce_article_contract=True,
+                        article_contract_context=context,
+                        planning_contract_context=planning_contract_context,
+                    )
+                except Exception:
+                    cohort_retry = None
+                if (
+                    cohort_retry is not None
+                    and cohort_retry.steps
+                    and not _cohort_definition_is_empty(cohort_retry)
+                ):
+                    plan = cohort_retry
+                    findings.append(
+                        ValidationFinding(
+                            validator="cohort_contract",
+                            severity="warning",
+                            message=(
+                                "Planner initially left the analysis cohort "
+                                "unstructured; recovered structured inclusion/"
+                                "exclusion on retry."
+                            ),
+                            detail={"generation_mode": "cohort_retry"},
+                        )
+                    )
+        if proposed_plan is None:
+            proposed_plan = plan.model_copy(deep=True)
+        return _PlanGenerationResult(
+            plan=plan,
+            reused_prior_plan=reused_prior_plan,
+            reused_plan_path=reused_plan_path,
+            migrated_plan_path=migrated_plan_path,
+            plan_generation_mode=plan_generation_mode,
+            used_mock_llm=used_mock_llm,
+            planner_prompt_metrics=planner_prompt_metrics,
+            proposed_plan=proposed_plan,
+        )
+
+    def _validate_and_persist_plan(
+        self,
+        *,
+        generation: _PlanGenerationResult,
+        agent_context: Any,
+        allowed_literature_citation_keys: Sequence[str],
+        analysis_blueprint: Any,
+        article_contract: Any,
+        article_figure_strategy: Any,
+        cohort_path: Path,
+        context: Any,
+        context_path: Path,
+        cost_meter: Optional[CostMeter],
+        direct_comparator_literature_keys: Sequence[str],
+        emit_progress: Callable[..., None],
+        evidence: Any,
+        findings: List[ValidationFinding],
+        know_how_binding: PlannerKnowHowBinding,
+        llm_signature: str,
+        long_trajectory_bound: bool,
+        preplan_literature: Optional[LiteratureBundle],
+        prompt_files: Sequence[Path],
+        prompt_version: str,
+        repro_envelope: Optional[ReproEnvelope],
+        resume_state: Optional[Dict[str, Any]],
+        role_resolver: Callable[[str], Any],
+        run_dir: Path,
+        run_id: str,
+        skill_obj: Optional[ClinicalSkill],
+        study_design_brief: Any,
+    ) -> _PlanPhaseResult:
+        """Shape, validate, bind, and persist the generated analysis plan."""
+        plan = generation.plan
+        reused_prior_plan = generation.reused_prior_plan
+        reused_plan_path = generation.reused_plan_path
+        migrated_plan_path = generation.migrated_plan_path
+        plan_generation_mode = generation.plan_generation_mode
+        used_mock_llm = generation.used_mock_llm
+        planner_prompt_metrics = generation.planner_prompt_metrics
+        host_normalization_input = plan.model_copy(deep=True)
+        # Skip the plan-shaping transforms when resuming: the saved plan is
+        # already in its final, transformed form, and re-running split/cap/
+        # ensure_* could rename or reorder step_ids and break the resume skip
+        # set. A freshly generated plan still gets the full treatment.
+        if not reused_prior_plan:
+            plan, plan_contract_findings = _enforce_advanced_plan_contract(
+                plan=plan,
+                context=context,
+                long_trajectory_bound=long_trajectory_bound,
+            )
+            findings.extend(plan_contract_findings)
+            plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+            findings.extend(split_findings)
+            plan, report_input_findings = _augment_report_typed_product_inputs(
+                plan=plan
+            )
+            findings.extend(report_input_findings)
+            # Bind before deterministic figure selection; the universal gate below rechecks every source.
+            plan = bind_context_dependence_authority(plan=plan, context=agent_context)
+            # Force a declared figure step whenever the publication-figure skill
+            # will produce one regardless of the plan: the scorer reads
+            # analysis_plan.json, and a question-only heuristic misses tasks
+            # that never say "figure" yet still require one. Likewise
+            # ensure a declared audit/robustness panel, since that evidence is
+            # produced (locked robustness specs, data-quality summaries) but the
+            # plan often never presents it.
+            plan, primary_figure_findings = ensure_primary_result_figure_step(
+                plan=plan,
+            )
+            findings.extend(primary_figure_findings)
+            plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
+                plan=plan,
+                context=context,
+                force=self._enable_publication_figure_skill,
+            )
+            findings.extend(figure_guard_findings)
+            plan, audit_panel_findings = _ensure_audit_panel_step_in_plan(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(audit_panel_findings)
+            plan, deterministic_panel_findings = bind_deterministic_figure_panels(
+                plan=plan
+            )
+            findings.extend(deterministic_panel_findings)
+            # Measurement provenance companions are public Coder inputs. Close
+            # them before lifecycle sealing and human review so Execute cannot
+            # change the exact Plan payload that the decision approved.
+            plan, companion_input_findings = close_measurement_companion_inputs(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(companion_input_findings)
+            cap = self._max_total_steps
+            plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
+            findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
+            plan, trajectory_product_findings = augment_trajectory_plan_products(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(trajectory_product_findings)
+            # The probe-aware replanner receives these structural issues before
+            # execution. Keep the initial snapshot advisory so a successfully
+            # repaired plan is not blocked by its superseded pre-probe shape.
+            findings.extend(
+                finding.model_copy(
+                    update={
+                        "validator": "plan_contract_pending",
+                        "severity": "warning",
+                        "detail": {
+                            **dict(finding.detail or {}),
+                            "pending_probe_replan": True,
+                        },
+                    }
+                )
+                for finding in trajectory_plan_dag_findings(
+                    plan=plan,
+                    context=context,
+                    long_trajectory_bound=long_trajectory_bound,
+                )
+            )
+            plan = ensure_cohort_definition(plan)
+            plan = ensure_robustness_specs(plan)
+            # Final gate: if the plan implies a cohort but still has no
+            # structured inclusion/exclusion (the retry above didn't recover
+            # it), record a loud, auditable contract error instead of silently
+            # running the analysis on the full universe.
+            findings.extend(_cohort_definition_contract_findings(plan))
+        # One boundary for every plan source: LLM, deterministic skill and
+        # digest-verified resume. Planner parsing also binds early for prompt
+        # diagnostics, but execution authority cannot depend on which producer
+        # happened to create the plan.
+        bound_dependence_plan = bind_context_dependence_authority(
+            plan=plan,
+            context=agent_context,
+        )
+        if reused_prior_plan and bound_dependence_plan != plan:
+            raise DependenceAuthorityError(
+                "digest-verified resume plan lacks the current repeated-unit "
+                "authority projection; start a fresh plan rather than changing "
+                "a previously executed plan in memory"
+            )
+        plan = bound_dependence_plan
+        # The endpoint half of the same declaration, checked for every plan
+        # rather than only inside the cohort branch above: a family can require
+        # a typed endpoint whether or not it also defines an analysis cohort.
+        findings.extend(endpoint_contract_findings(plan, context=context))
+        # Planner output was validated before shaping, but the host has since
+        # split mixed outputs, closed typed dependencies, and applied the step
+        # cap. Never offer a human an approval request for a transform-corrupted
+        # plan (for example a visualization step whose sole figure declaration
+        # was moved away during de-duplication).
+        validate_final_plan_shape(plan)
+        if study_design_brief is not None:
+            if (
+                plan.analysis_type
+                and article_contract is not None
+                and plan.analysis_type != article_contract.source_analysis_type
+            ):
+                # The pre-plan contract is a prompt profile.  Once the Planner
+                # has selected a valid analysis type, seal a separate final
+                # contract instead of letting provisional inference retain
+                # scientific headline authority.
+                final_brief = build_study_design_brief(
+                    context,
+                    analysis_type=plan.analysis_type,
+                )
+                final_contract = build_article_analysis_contract(
+                    context,
+                    brief=final_brief,
+                    analysis_type=plan.analysis_type,
+                )
+                final_strategy = build_article_figure_strategy(
+                    context,
+                    analysis_family=final_brief.analysis_family,
+                )
+                final_blueprint = build_analysis_blueprint(
+                    context,
+                    brief=final_brief,
+                    contract=final_contract,
+                    figure_strategy=final_strategy,
+                )
+                final_payloads = (
+                    (
+                        "study_design_brief_final",
+                        "study_design_brief.final.json",
+                        final_brief,
+                    ),
+                    (
+                        "article_analysis_contract_final",
+                        "article_analysis_contract.final.json",
+                        final_contract,
+                    ),
+                    (
+                        "article_figure_strategy_final",
+                        "article_figure_strategy.final.json",
+                        final_strategy,
+                    ),
+                    (
+                        "analysis_blueprint_final",
+                        "analysis_blueprint.final.json",
+                        final_blueprint,
+                    ),
+                )
+                for evidence_id, filename, payload in final_payloads:
+                    final_path = run_dir / filename
+                    final_path.write_text(
+                        payload.model_dump_json(indent=2),
+                        encoding="utf-8",
+                    )
+                    if evidence.get(evidence_id) is None:
+                        evidence.register_file(
+                            kind="log",
+                            description=(
+                                "Planner-final article design authority bound to "
+                                f"analysis_type={plan.analysis_type}."
+                            ),
+                            source_path=final_path,
+                            evidence_id=evidence_id,
+                            producer="planner_contract_finalizer",
+                            generation_mode="deterministic_skill",
+                        )
+                study_design_brief = final_brief
+                article_contract = final_contract
+                article_figure_strategy = final_strategy
+                analysis_blueprint = final_blueprint
+            findings.extend(
+                validate_plan_against_study_design_brief(
+                    plan=plan,
+                    brief=study_design_brief,
+                )
+            )
+        if article_contract is not None:
+            findings.extend(
+                validate_plan_against_article_contract(
+                    plan=plan,
+                    contract=article_contract,
+                )
+            )
+        if analysis_blueprint is not None:
+            findings.extend(
+                validate_plan_against_analysis_blueprint(
+                    plan=plan,
+                    blueprint=analysis_blueprint,
+                )
+            )
+        if self._required_primary_cohort_selection_mode is not None:
+            observed_mode = str(getattr(plan.cohort, "selection_mode", "") or "")
+            if observed_mode != self._required_primary_cohort_selection_mode:
+                raise CohortAuthorityError(
+                    "Planner primary cohort selection mode does not match the "
+                    "caller-bound contract: expected "
+                    f"{self._required_primary_cohort_selection_mode!r}, observed "
+                    f"{observed_mode!r}"
+                )
+            if not cohort_definition_has_explicit_selection(plan.cohort):
+                raise CohortAuthorityError(
+                    "Planner primary cohort selection is not explicit"
+                )
+        validate_plan_against_adjustment_authority(plan=plan, context=agent_context)
+        self._scientific_runtime_authorities.validate_plan(plan)
+        plan_path = (
+            migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
+        )
+        for planned_step in plan.steps:
+            bind_table_one_execution_spec(planned_step, agent_context)
+            bind_step_declared_levels(planned_step, agent_context)
+        normalized_plan = _plan_lifecycle.build_normalized_plan_lineage(
+            proposed_plan=generation.proposed_plan,
+            proposed_source=plan_generation_mode,
+            pre_normalization_plan=host_normalization_input,
+            normalized_plan=plan,
+            resume_scientific_semantics_changed=plan_generation_mode in {
+                "resume_with_scientific_migration",
+                "resume_with_authority_restore",
+            },
+            host_scientific_semantics_changed=not reused_prior_plan,
+        )
+        write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
+        if not reused_prior_plan:
+            plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+        if evidence.get("analysis_plan") is None:
+            evidence.register_file(
+                kind="log",
+                description=(
+                    f"Analysis plan from ClinicalSkill '{skill_obj.key}'."
+                    if skill_obj
+                    else "Analysis plan emitted by PlannerAgent."
+                ),
+                source_path=plan_path,
+                evidence_id="analysis_plan",
+                producer="planner" if skill_obj is None else "clinical_skill",
+                generation_mode=plan_generation_mode,
+                prompt_pack_version=prompt_version,
+                metadata={
+                    "llm_signature": llm_signature,
+                    "used_mock_llm": used_mock_llm,
+                },
+            )
+        _plan_lifecycle.persist_normalized_plan(
+            run_dir=run_dir, evidence=evidence, normalized=normalized_plan
+        )
+        if self._config.require_human_plan_review:
+            review_gate = prepare_scientific_plan_review_gate(
+                context=context,
+                plan=plan,
+                literature=preplan_literature,
+                figure_strategy=article_figure_strategy,
+                run_dir=run_dir,
+                evidence=evidence,
+                require_reportable_capability=(
+                    self._config.require_reportable_scientific_capability
+                ),
+            )
+            findings.append(review_gate.finding)
+        know_how_binding.persist_prompt_metrics(
+            planner_prompt_metrics,
+            run_dir=run_dir,
+            evidence=evidence,
+        )
+        write_locked_cohort_definition(
+            run_dir=run_dir,
+            plan=plan,
+            evidence=evidence,
+            prompt_pack_version=prompt_version,
+            llm_signature=llm_signature,
+        )
+        write_locked_robustness_specs(
+            run_dir=run_dir,
+            plan=plan,
+            evidence=evidence,
+            prompt_pack_version=prompt_version,
+            llm_signature=llm_signature,
+        )
+        # Materialize the locked cohort definition into the canonical analysis
+        # cohort so the declared inclusion/exclusion is enforced once, on the
+        # data every downstream step reads — instead of relying on each
+        # LLM-generated step to re-apply 纳排 (which run10/run11 showed it does
+        # not, so the primary model ran on the full universe). The full universe
+        # is exposed only to typed robustness/cohort-construction steps.
+        if not reused_prior_plan:
+            analysis_cohort = materialize_locked_analysis_cohort(
+                run_dir=run_dir,
+                plan=plan,
+                universe_path=cohort_path,
+                context=context,
+            )
+            if analysis_cohort["status"] == "applied":
+                findings.append(
+                    ValidationFinding(
+                        validator="cohort_materializer",
+                        severity="info",
+                        message=(
+                            "Applied the locked cohort definition: analysis cohort "
+                            f"n={analysis_cohort['n_cohort']} of universe "
+                            f"n={analysis_cohort['n_universe']}. Downstream steps read "
+                            "the filtered cohort (COHORT_PARQUET); the full universe "
+                            "is available only to explicitly authorized typed steps."
+                        ),
+                        detail={
+                            "n_universe": analysis_cohort["n_universe"],
+                            "n_analysis_cohort": analysis_cohort["n_cohort"],
+                            "cohort_definition_sha256": analysis_cohort[
+                                "cohort_definition_sha256"
+                            ],
+                            "materialized_cohort_authority_ref": analysis_cohort[
+                                "authority_ref"
+                            ],
+                        },
+                    )
+                )
+            elif analysis_cohort["status"] == "error":
+                # The comment above this block records why the materializer
+                # exists: run10/run11 left 纳排 to each generated step, and the
+                # primary model silently ran on the full universe. Falling back
+                # to "downstream steps must apply it themselves" on failure
+                # reinstates exactly that path, on a run that has already
+                # *locked* a cohort definition. A locked cohort that cannot be
+                # applied is a stop, not a warning.
+                findings.append(
+                    ValidationFinding(
+                        validator="cohort_materializer",
+                        severity="error",
+                        message=(
+                            "Could not apply the locked cohort definition to the "
+                            "universe. The run is stopped rather than analysing "
+                            "the unfiltered universe under a cohort the plan "
+                            f"declared. Reason: {analysis_cohort['error']}"
+                        ),
+                        detail={
+                            "reason": "locked_cohort_not_materialized",
+                            "materializer_error": str(analysis_cohort["error"]),
+                            "cohort_definition_sha256": analysis_cohort.get(
+                                "cohort_definition_sha256"
+                            ),
+                        },
+                    )
+                )
+                raise CohortAuthorityError(
+                    "the locked cohort definition could not be materialised "
+                    f"({analysis_cohort['error']}); refusing to continue on the "
+                    "unfiltered universe"
+                )
+        emit_progress(
+            "plan",
+            f"Analysis plan ready with {len(plan.steps)} step(s).",
+            run_id=run_id,
+            total_steps=len(plan.steps),
+        )
+
+        started_at = datetime.now(timezone.utc)
+        if resume_state and resume_state.get("started_at"):
+            try:
+                started_at = datetime.fromisoformat(resume_state["started_at"])
+            except Exception:
+                pass
+
+        return _PlanPhaseResult(
+            context=context,
+            agent_context=agent_context,
+            context_path=context_path,
+            evidence=evidence,
+            findings=findings,
+            plan=plan,
+            plan_path=plan_path,
+            llm_signature=llm_signature,
+            used_mock_llm=used_mock_llm,
+            prompt_version=prompt_version,
+            prompt_files=prompt_files,
+            role_resolver=role_resolver,
+            cost_meter=cost_meter,
+            repro_envelope=repro_envelope,
+            started_at=started_at,
+            resume_state=resume_state,
+            allowed_literature_citation_keys=tuple(allowed_literature_citation_keys),
+            direct_comparator_literature_keys=tuple(direct_comparator_literature_keys),
+            preplan_literature=preplan_literature,
+        )
+
     def _run_plan_phase(
         self,
         *,
@@ -2122,6 +3107,7 @@ class ResearchAgentPipeline:
         cohort_name: str,
         database: str,
         target_outcome: Optional[str],
+        endpoint: Optional[EndpointSpec],
         primary_exposure: Optional[str],
         cross_database_validation: Optional[Sequence[str]],
         inclusion_criteria: Optional[Sequence[str]],
@@ -2182,6 +3168,7 @@ class ResearchAgentPipeline:
                 cohort_name=cohort_name,
                 database=database,
                 target_outcome=target_outcome,
+                endpoint=endpoint,
                 primary_exposure=primary_exposure,
                 cross_database_validation=cross_database_validation,
                 inclusion_criteria=inclusion_criteria,
@@ -2382,6 +3369,9 @@ class ResearchAgentPipeline:
                     generation_mode="system",
                 )
 
+        allowed_literature_citation_keys: list[str] = []
+        direct_comparator_literature_keys: list[str] = []
+        preplan_literature: Optional[LiteratureBundle] = None
         if self._enable_literature and skill_obj is None:
             try:
                 emit_progress(
@@ -2400,7 +3390,17 @@ class ResearchAgentPipeline:
                     tavily_api_key=self._tavily_api_key,
                     tavily_retmax=self._tavily_retmax,
                     tavily_include_domains=self._tavily_include_domains,
+                    bound_seed=self._bound_preplan_literature,
                 )
+                allowed_literature_citation_keys = [
+                    citation.key for citation in preplan_literature.citations
+                ]
+                direct_comparator_literature_keys = [
+                    decision.citation_key
+                    for decision in preplan_literature.screening_decisions
+                    if decision.disposition == "include"
+                    and decision.evidence_role == "direct_comparator"
+                ]
                 # O17 — Front-door hypothesis generation. Opt-in; writes
                 # ``hypothesis_candidates.json`` + ``.md`` so the paper
                 # Methods section can quote "Out of N candidates we
@@ -2686,6 +3686,16 @@ class ResearchAgentPipeline:
                     ),
                 )
             )
+        scientific_plan_guardrails = render_plan_scientific_guardrails(agent_context)
+        planning_contract_context = "\n\n".join(
+            value
+            for value in (
+                planning_contract_context,
+                scientific_plan_guardrails,
+                self._bound_plan_revision_contract,
+            )
+            if value
+        )
         if self._required_primary_cohort_selection_mode is not None:
             population_contract = (
                 "CALLER-BOUND PRIMARY COHORT MODE: set "
@@ -2821,666 +3831,56 @@ class ResearchAgentPipeline:
         else:
             role_resolver = stopped_role_resolver
 
-        # Resume: reuse the locked plan from the prior run instead of
-        # re-planning. A non-deterministic planner would otherwise emit a
-        # *different* plan on resume, whose step_ids no longer match the
-        # completed-step skip set — so the "resume" would silently re-run the
-        # whole analysis under new names. Reusing the saved plan keeps the
-        # already-completed step_ids aligned and continues from the failed step.
-        reused_prior_plan = False
-        reused_plan_path: Optional[Path] = None
-        migrated_plan_path: Optional[Path] = None
-        if resume_state is not None:
-            plan, _prior_plan_path = _load_compatible_resume_plan(
-                run_dir=run_dir,
-                resume_state=resume_state,
-                context=context,
-                evidence=evidence,
-                prompt_pack_version=PROMPT_PACK_VERSION,
-            )
-            if plan is not None and plan.steps:
-                restore_table_one_private_checkpoint(
-                    run_dir=run_dir,
-                    plan=plan,
-                    context=agent_context,
-                )
-                # The resumed plan is the one on disk, so it still carries the
-                # host's opaque placeholders; a resume that skipped this would
-                # execute a different declaration than the first attempt did.
-                for resumed_step in plan.steps:
-                    bind_step_declared_levels(resumed_step, agent_context)
-                know_how_binding.verify_resume(
-                    plan.know_how_decisions,
-                    enabled=self._enable_know_how,
-                )
-                reused_prior_plan = True
-                reused_plan_path = _prior_plan_path
-                plan_generation_mode = "resumed"
-                findings.append(
-                    ValidationFinding(
-                        validator="planner",
-                        severity="warning",
-                        message=(
-                            "Resuming prior run: reused the latest compatible "
-                            "saved analysis plan (skipped re-planning) so "
-                            "completed step_ids stay aligned and execution "
-                            "continues from the failed step."
-                        ),
-                        detail={
-                            "generation_mode": "resumed",
-                            "n_steps": len(plan.steps),
-                            "plan_path": (
-                                str(_prior_plan_path.relative_to(run_dir))
-                                if _prior_plan_path is not None
-                                and _prior_plan_path.is_relative_to(run_dir)
-                                else str(_prior_plan_path)
-                            ),
-                        },
-                    )
-                )
-            else:
-                raise LegacyResumePlanMigrationError(
-                    "resume checkpoint has no digest-verified analysis plan "
-                    "evidence compatible with every completed step"
-                )
-
-        if reused_prior_plan:
-            plan, migrated_plan_path, migrated_step_ids = (
-                _migrate_legacy_resume_model_requirements(
-                    plan=plan,
-                    context=agent_context,
-                    run_dir=run_dir,
-                    resume_state=resume_state,
-                    resume_from_step_id=resume_from_step_id,
-                    role_resolver=role_resolver,
-                    evidence=evidence,
-                    prompt_version=prompt_version,
-                    llm_signature=llm_signature,
-                    max_prompt_tokens=self._max_prompt_tokens_per_call,
-                )
-            )
-            if migrated_plan_path is not None:
-                plan_generation_mode = "resumed_planner_migration"
-                findings.append(
-                    ValidationFinding(
-                        validator="planner_schema_migration",
-                        severity="warning",
-                        message=(
-                            "Migrated legacy remaining adjusted-association "
-                            "step(s) to the planner-owned typed model roster."
-                        ),
-                        detail={
-                            "target_step_ids": list(migrated_step_ids),
-                            "plan_path": str(migrated_plan_path.relative_to(run_dir)),
-                        },
-                    )
-                )
-            plan, lock_restore_path = _restore_resume_plan_robustness_lock(
-                plan=plan,
-                run_dir=run_dir,
-                evidence=evidence,
-                prompt_version=prompt_version,
-                llm_signature=llm_signature,
-            )
-            if lock_restore_path is not None:
-                migrated_plan_path = lock_restore_path
-                plan_generation_mode = "resumed_planner_migration"
-                findings.append(
-                    ValidationFinding(
-                        validator="robustness_spec_lock",
-                        severity="warning",
-                        message=(
-                            "Resume restored the verified plan-time robustness "
-                            "specifications after an older replan drifted from "
-                            "the immutable lock."
-                        ),
-                        detail={
-                            "plan_path": str(lock_restore_path.relative_to(run_dir)),
-                            "lock_path": "robustness_specs_locked.json",
-                        },
-                    )
-                )
-            plan, trajectory_migration_path, trajectory_migration_findings = (
-                _migrate_resume_trajectory_products(
-                    plan=plan,
-                    context=agent_context,
-                    run_dir=run_dir,
-                    evidence=evidence,
-                    prompt_version=prompt_version,
-                    llm_signature=llm_signature,
-                )
-            )
-            findings.extend(trajectory_migration_findings)
-            if trajectory_migration_path is not None:
-                migrated_plan_path = trajectory_migration_path
-                plan_generation_mode = "resumed_planner_migration"
-                findings.append(
-                    ValidationFinding(
-                        validator="plan_contract",
-                        severity="warning",
-                        message=(
-                            "Resume migrated an older trajectory plan to the "
-                            "canonical replay-product schema without changing "
-                            "scientific ownership or step identities."
-                        ),
-                        detail={
-                            "kind": "resume_trajectory_schema_migration",
-                            "plan_path": str(
-                                trajectory_migration_path.relative_to(run_dir)
-                            ),
-                        },
-                    )
-                )
-            (
-                plan,
-                figure_edge_migration_path,
-                figure_edge_step_ids,
-            ) = _migrate_legacy_resume_figure_render_edges(
-                plan=plan,
-                run_dir=run_dir,
-                resume_state=resume_state,
-                resume_from_step_id=resume_from_step_id,
-                evidence=evidence,
-                prompt_version=prompt_version,
-                llm_signature=llm_signature,
-            )
-            if figure_edge_migration_path is not None:
-                migrated_plan_path = figure_edge_migration_path
-                plan_generation_mode = "resumed_planner_migration"
-                findings.append(
-                    ValidationFinding(
-                        validator="planner_schema_migration",
-                        severity="warning",
-                        message=(
-                            "Resume restored exact typed parent edges on "
-                            "legacy framework-split rendering steps."
-                        ),
-                        detail={
-                            "kind": "legacy_figure_render_edge",
-                            "target_step_ids": list(figure_edge_step_ids),
-                            "plan_path": str(
-                                figure_edge_migration_path.relative_to(run_dir)
-                            ),
-                        },
-                    )
-                )
-        elif skill_obj is not None:
-            plan_generation_mode = "deterministic_skill"
-            issues = skill_obj.validate_against(pd.read_parquet(cohort_path))
-            for msg in issues:
-                findings.append(
-                    ValidationFinding(
-                        validator="clinical_skill",
-                        severity="warning",
-                        message=msg,
-                    )
-                )
-            plan = skill_obj.plan(context)
-        else:
-            plan_generation_mode = "llm"
-            planner = PlannerAgent(role_resolver("planner"))
-            try:
-                plan = planner.run(
-                    agent_context,
-                    **know_how_binding.planner_kwargs,
-                    enforce_article_contract=True,
-                    article_contract_context=context,
-                    planning_contract_context=planning_contract_context,
-                )
-                planner_prompt_metrics = know_how_binding.prompt_metrics(
-                    planner,
-                    agent_context,
-                    planning_contract_context=planning_contract_context,
-                )
-            except PlannerArticleContractError:
-                raise
-            except Exception as exc:
-                if not self._enable_deterministic_planner_fallback:
-                    raise
-                findings.append(
-                    ValidationFinding(
-                        validator="planner",
-                        severity="warning",
-                        message=(
-                            "Planner agent failed; using deterministic fallback plan: "
-                            f"{type(exc).__name__}: {exc}"
-                        ),
-                        detail={"generation_mode": "fallback"},
-                    )
-                )
-                plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
-                    agent_context,
-                    **know_how_binding.planner_kwargs,
-                )
-                used_mock_llm = True
-                plan_generation_mode = "fallback"
-            dropped_plan_keys = getattr(planner, "last_dropped_plan_keys", None) or {}
-            dropped_keys = list(dropped_plan_keys.get("top_level", [])) + list(
-                dropped_plan_keys.get("steps", [])
-            )
-            if dropped_keys:
-                findings.append(
-                    ValidationFinding(
-                        validator="planner_schema",
-                        severity="warning",
-                        message=(
-                            "Planner returned unsupported plan fields that were dropped "
-                            "before schema validation."
-                        ),
-                        detail={"dropped_keys": dropped_keys},
-                    )
-                )
-            # A hosted model occasionally emits structurally-broken plan JSON
-            # (e.g. a stray time-window at the top level and no usable steps
-            # array) that normalises to 0 steps. An empty plan must never run:
-            # retry the real planner once, then fall back to the deterministic
-            # plan so the pipeline always executes a real analysis.
-            if not plan.steps and self._enable_deterministic_planner_fallback:
-                retry_plan = None
-                try:
-                    retry_plan = planner.run(
-                        agent_context,
-                        **know_how_binding.planner_kwargs,
-                        enforce_article_contract=True,
-                        article_contract_context=context,
-                        planning_contract_context=planning_contract_context,
-                    )
-                except Exception:
-                    retry_plan = None
-                if retry_plan is not None and retry_plan.steps:
-                    plan = retry_plan
-                    findings.append(
-                        ValidationFinding(
-                            validator="planner",
-                            severity="warning",
-                            message="Planner returned an empty plan; recovered on retry.",
-                            detail={"generation_mode": "retry"},
-                        )
-                    )
-                else:
-                    findings.append(
-                        ValidationFinding(
-                            validator="planner",
-                            severity="warning",
-                            message=(
-                                "Planner returned an empty plan (0 steps after schema "
-                                "validation) twice; using deterministic fallback plan."
-                            ),
-                            detail={"generation_mode": "fallback"},
-                        )
-                    )
-                    plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
-                        agent_context,
-                        **know_how_binding.planner_kwargs,
-                    )
-                    used_mock_llm = True
-                    plan_generation_mode = "fallback"
-            # Structured-纳排 retry: if the plan implies an analysis cohort (a
-            # cohort / eligibility / attrition step) but left plan.cohort
-            # unstructured, the 纳排 is unenforceable free text. Give the planner
-            # one focused retry; adopt it only if it actually structures the
-            # cohort, so a good plan is never discarded when the retry doesn't.
-            if (
-                not used_mock_llm
-                and _plan_expects_analysis_cohort(plan)
-                and _cohort_definition_is_empty(plan)
-            ):
-                cohort_retry = None
-                try:
-                    cohort_retry = planner.run(
-                        agent_context,
-                        **know_how_binding.planner_kwargs,
-                        enforce_article_contract=True,
-                        article_contract_context=context,
-                        planning_contract_context=planning_contract_context,
-                    )
-                except Exception:
-                    cohort_retry = None
-                if (
-                    cohort_retry is not None
-                    and cohort_retry.steps
-                    and not _cohort_definition_is_empty(cohort_retry)
-                ):
-                    plan = cohort_retry
-                    findings.append(
-                        ValidationFinding(
-                            validator="cohort_contract",
-                            severity="warning",
-                            message=(
-                                "Planner initially left the analysis cohort "
-                                "unstructured; recovered structured inclusion/"
-                                "exclusion on retry."
-                            ),
-                            detail={"generation_mode": "cohort_retry"},
-                        )
-                    )
-        # Skip the plan-shaping transforms when resuming: the saved plan is
-        # already in its final, transformed form, and re-running split/cap/
-        # ensure_* could rename or reorder step_ids and break the resume skip
-        # set. A freshly generated plan still gets the full treatment.
-        if not reused_prior_plan:
-            plan, plan_contract_findings = _enforce_advanced_plan_contract(
-                plan=plan,
-                context=context,
-                long_trajectory_bound=long_trajectory_bound,
-            )
-            findings.extend(plan_contract_findings)
-            plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
-            findings.extend(split_findings)
-            plan, report_input_findings = _augment_report_typed_product_inputs(
-                plan=plan
-            )
-            findings.extend(report_input_findings)
-            # Force a declared figure step whenever the publication-figure skill
-            # will produce one regardless of the plan: the scorer reads
-            # analysis_plan.json, and a question-only heuristic misses tasks
-            # that never say "figure" yet still require one. Likewise
-            # ensure a declared audit/robustness panel, since that evidence is
-            # produced (locked robustness specs, data-quality summaries) but the
-            # plan often never presents it.
-            plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
-                plan=plan,
-                context=context,
-                force=self._enable_publication_figure_skill,
-            )
-            findings.extend(figure_guard_findings)
-            plan, audit_panel_findings = _ensure_audit_panel_step_in_plan(
-                plan=plan,
-                context=context,
-            )
-            findings.extend(audit_panel_findings)
-
-            cap = self._max_total_steps
-            plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
-            findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
-            plan, trajectory_product_findings = augment_trajectory_plan_products(
-                plan=plan,
-                context=context,
-            )
-            findings.extend(trajectory_product_findings)
-            # The probe-aware replanner receives these structural issues before
-            # execution. Keep the initial snapshot advisory so a successfully
-            # repaired plan is not blocked by its superseded pre-probe shape.
-            findings.extend(
-                finding.model_copy(
-                    update={
-                        "validator": "plan_contract_pending",
-                        "severity": "warning",
-                        "detail": {
-                            **dict(finding.detail or {}),
-                            "pending_probe_replan": True,
-                        },
-                    }
-                )
-                for finding in trajectory_plan_dag_findings(
-                    plan=plan,
-                    context=context,
-                    long_trajectory_bound=long_trajectory_bound,
-                )
-            )
-            plan = ensure_cohort_definition(plan)
-            plan = ensure_robustness_specs(plan)
-            # Final gate: if the plan implies a cohort but still has no
-            # structured inclusion/exclusion (the retry above didn't recover
-            # it), record a loud, auditable contract error instead of silently
-            # running the analysis on the full universe.
-            findings.extend(_cohort_definition_contract_findings(plan))
-        # The endpoint half of the same declaration, checked for every plan
-        # rather than only inside the cohort branch above: a family can require
-        # a typed endpoint whether or not it also defines an analysis cohort.
-        findings.extend(endpoint_contract_findings(plan, context=context))
-        if study_design_brief is not None:
-            if (
-                plan.analysis_type
-                and article_contract is not None
-                and plan.analysis_type != article_contract.source_analysis_type
-            ):
-                # The pre-plan contract is a prompt profile.  Once the Planner
-                # has selected a valid analysis type, seal a separate final
-                # contract instead of letting provisional inference retain
-                # scientific headline authority.
-                final_brief = build_study_design_brief(
-                    context,
-                    analysis_type=plan.analysis_type,
-                )
-                final_contract = build_article_analysis_contract(
-                    context,
-                    brief=final_brief,
-                    analysis_type=plan.analysis_type,
-                )
-                final_strategy = build_article_figure_strategy(
-                    context,
-                    analysis_family=final_brief.analysis_family,
-                )
-                final_blueprint = build_analysis_blueprint(
-                    context,
-                    brief=final_brief,
-                    contract=final_contract,
-                    figure_strategy=final_strategy,
-                )
-                final_payloads = (
-                    (
-                        "study_design_brief_final",
-                        "study_design_brief.final.json",
-                        final_brief,
-                    ),
-                    (
-                        "article_analysis_contract_final",
-                        "article_analysis_contract.final.json",
-                        final_contract,
-                    ),
-                    (
-                        "article_figure_strategy_final",
-                        "article_figure_strategy.final.json",
-                        final_strategy,
-                    ),
-                    (
-                        "analysis_blueprint_final",
-                        "analysis_blueprint.final.json",
-                        final_blueprint,
-                    ),
-                )
-                for evidence_id, filename, payload in final_payloads:
-                    final_path = run_dir / filename
-                    final_path.write_text(
-                        payload.model_dump_json(indent=2),
-                        encoding="utf-8",
-                    )
-                    if evidence.get(evidence_id) is None:
-                        evidence.register_file(
-                            kind="log",
-                            description=(
-                                "Planner-final article design authority bound to "
-                                f"analysis_type={plan.analysis_type}."
-                            ),
-                            source_path=final_path,
-                            evidence_id=evidence_id,
-                            producer="planner_contract_finalizer",
-                            generation_mode="deterministic_skill",
-                        )
-                study_design_brief = final_brief
-                article_contract = final_contract
-                article_figure_strategy = final_strategy
-                analysis_blueprint = final_blueprint
-            findings.extend(
-                validate_plan_against_study_design_brief(
-                    plan=plan,
-                    brief=study_design_brief,
-                )
-            )
-        if article_contract is not None:
-            findings.extend(
-                validate_plan_against_article_contract(
-                    plan=plan,
-                    contract=article_contract,
-                )
-            )
-        if analysis_blueprint is not None:
-            findings.extend(
-                validate_plan_against_analysis_blueprint(
-                    plan=plan,
-                    blueprint=analysis_blueprint,
-                )
-            )
-        if self._required_primary_cohort_selection_mode is not None:
-            observed_mode = str(getattr(plan.cohort, "selection_mode", "") or "")
-            if observed_mode != self._required_primary_cohort_selection_mode:
-                raise CohortAuthorityError(
-                    "Planner primary cohort selection mode does not match the "
-                    "caller-bound contract: expected "
-                    f"{self._required_primary_cohort_selection_mode!r}, observed "
-                    f"{observed_mode!r}"
-                )
-            if not cohort_definition_has_explicit_selection(plan.cohort):
-                raise CohortAuthorityError(
-                    "Planner primary cohort selection is not explicit"
-                )
-        plan_path = (
-            migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
-        )
-        for planned_step in plan.steps:
-            bind_table_one_execution_spec(planned_step, agent_context)
-            bind_step_declared_levels(planned_step, agent_context)
-        write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
-        if not reused_prior_plan:
-            plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
-        if evidence.get("analysis_plan") is None:
-            evidence.register_file(
-                kind="log",
-                description=(
-                    f"Analysis plan from ClinicalSkill '{skill_obj.key}'."
-                    if skill_obj
-                    else "Analysis plan emitted by PlannerAgent."
-                ),
-                source_path=plan_path,
-                evidence_id="analysis_plan",
-                producer="planner" if skill_obj is None else "clinical_skill",
-                generation_mode=plan_generation_mode,
-                prompt_pack_version=prompt_version,
-                metadata={
-                    "llm_signature": llm_signature,
-                    "used_mock_llm": used_mock_llm,
-                },
-            )
-        know_how_binding.persist_prompt_metrics(
-            planner_prompt_metrics,
-            run_dir=run_dir,
-            evidence=evidence,
-        )
-        write_locked_cohort_definition(
-            run_dir=run_dir,
-            plan=plan,
-            evidence=evidence,
-            prompt_pack_version=prompt_version,
-            llm_signature=llm_signature,
-        )
-        write_locked_robustness_specs(
-            run_dir=run_dir,
-            plan=plan,
-            evidence=evidence,
-            prompt_pack_version=prompt_version,
-            llm_signature=llm_signature,
-        )
-        # Materialize the locked cohort definition into the canonical analysis
-        # cohort so the declared inclusion/exclusion is enforced once, on the
-        # data every downstream step reads — instead of relying on each
-        # LLM-generated step to re-apply 纳排 (which run10/run11 showed it does
-        # not, so the primary model ran on the full universe). The full universe
-        # stays reachable via EASYICU_UNIVERSE_PARQUET for robustness steps.
-        if not reused_prior_plan:
-            analysis_cohort = materialize_locked_analysis_cohort(
-                run_dir=run_dir,
-                plan=plan,
-                universe_path=cohort_path,
-                context=context,
-            )
-            if analysis_cohort["status"] == "applied":
-                findings.append(
-                    ValidationFinding(
-                        validator="cohort_materializer",
-                        severity="info",
-                        message=(
-                            "Applied the locked cohort definition: analysis cohort "
-                            f"n={analysis_cohort['n_cohort']} of universe "
-                            f"n={analysis_cohort['n_universe']}. Downstream steps read "
-                            "the filtered cohort (COHORT_PARQUET); the full universe "
-                            "stays available as EASYICU_UNIVERSE_PARQUET."
-                        ),
-                        detail={
-                            "n_universe": analysis_cohort["n_universe"],
-                            "n_analysis_cohort": analysis_cohort["n_cohort"],
-                            "cohort_definition_sha256": analysis_cohort[
-                                "cohort_definition_sha256"
-                            ],
-                            "materialized_cohort_authority_ref": analysis_cohort[
-                                "authority_ref"
-                            ],
-                        },
-                    )
-                )
-            elif analysis_cohort["status"] == "error":
-                # The comment above this block records why the materializer
-                # exists: run10/run11 left 纳排 to each generated step, and the
-                # primary model silently ran on the full universe. Falling back
-                # to "downstream steps must apply it themselves" on failure
-                # reinstates exactly that path, on a run that has already
-                # *locked* a cohort definition. A locked cohort that cannot be
-                # applied is a stop, not a warning.
-                findings.append(
-                    ValidationFinding(
-                        validator="cohort_materializer",
-                        severity="error",
-                        message=(
-                            "Could not apply the locked cohort definition to the "
-                            "universe. The run is stopped rather than analysing "
-                            "the unfiltered universe under a cohort the plan "
-                            f"declared. Reason: {analysis_cohort['error']}"
-                        ),
-                        detail={
-                            "reason": "locked_cohort_not_materialized",
-                            "materializer_error": str(analysis_cohort["error"]),
-                            "cohort_definition_sha256": analysis_cohort.get(
-                                "cohort_definition_sha256"
-                            ),
-                        },
-                    )
-                )
-                raise CohortAuthorityError(
-                    "the locked cohort definition could not be materialised "
-                    f"({analysis_cohort['error']}); refusing to continue on the "
-                    "unfiltered universe"
-                )
-        emit_progress(
-            "plan",
-            f"Analysis plan ready with {len(plan.steps)} step(s).",
-            run_id=run_id,
-            total_steps=len(plan.steps),
-        )
-
-        started_at = datetime.now(timezone.utc)
-        if resume_state and resume_state.get("started_at"):
-            try:
-                started_at = datetime.fromisoformat(resume_state["started_at"])
-            except Exception:
-                pass
-
-        return _PlanPhaseResult(
-            context=context,
+        generation = self._generate_or_resume_plan(
             agent_context=agent_context,
-            context_path=context_path,
+            allowed_literature_citation_keys=allowed_literature_citation_keys,
+            cohort_path=cohort_path,
+            context=context,
+            direct_comparator_literature_keys=direct_comparator_literature_keys,
+            emit_progress=emit_progress,
             evidence=evidence,
             findings=findings,
-            plan=plan,
-            plan_path=plan_path,
+            know_how_binding=know_how_binding,
             llm_signature=llm_signature,
-            used_mock_llm=used_mock_llm,
+            planning_contract_context=planning_contract_context,
+            planner_prompt_metrics=planner_prompt_metrics,
             prompt_version=prompt_version,
-            prompt_files=prompt_files,
-            role_resolver=role_resolver,
-            cost_meter=cost_meter,
-            repro_envelope=repro_envelope,
-            started_at=started_at,
+            resume_from_step_id=resume_from_step_id,
             resume_state=resume_state,
+            role_resolver=role_resolver,
+            run_dir=run_dir,
+            run_id=run_id,
+            skill_obj=skill_obj,
+            used_mock_llm=used_mock_llm,
+        )
+        return self._validate_and_persist_plan(
+            generation=generation,
+            agent_context=agent_context,
+            allowed_literature_citation_keys=allowed_literature_citation_keys,
+            analysis_blueprint=analysis_blueprint,
+            article_contract=article_contract,
+            article_figure_strategy=article_figure_strategy,
+            cohort_path=cohort_path,
+            context=context,
+            context_path=context_path,
+            cost_meter=cost_meter,
+            direct_comparator_literature_keys=direct_comparator_literature_keys,
+            emit_progress=emit_progress,
+            evidence=evidence,
+            findings=findings,
+            know_how_binding=know_how_binding,
+            llm_signature=llm_signature,
+            long_trajectory_bound=long_trajectory_bound,
+            preplan_literature=preplan_literature,
+            prompt_files=prompt_files,
+            prompt_version=prompt_version,
+            repro_envelope=repro_envelope,
+            resume_state=resume_state,
+            role_resolver=role_resolver,
+            run_dir=run_dir,
+            run_id=run_id,
+            skill_obj=skill_obj,
+            study_design_brief=study_design_brief,
         )
 
     def _execute_phase_services(self) -> ExecutePhaseServices:
@@ -3742,6 +4142,325 @@ class ResearchAgentPipeline:
     # Public API
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _relative_run_path(run_dir: Path, value: Optional[Path]) -> Optional[str]:
+        if value is None:
+            return None
+        resolved = Path(value).resolve()
+        try:
+            return resolved.relative_to(run_dir.resolve()).as_posix()
+        except ValueError as exc:
+            raise HumanReviewCheckpointError(
+                "human-review handoff path escapes its run directory"
+            ) from exc
+
+    def _persist_review_checkpoint(
+        self,
+        *,
+        plan_result: _PlanPhaseResult,
+        requests: Sequence[Any],
+        run_id: str,
+        run_dir: Path,
+        cohort_path: Path,
+        trajectory_binding: Optional[StagedTrajectoryBinding],
+        runtime_capabilities: Sequence[str],
+        runtime_bundle: Optional[Mapping[str, Any]],
+        run_environment_identity: Mapping[str, Any],
+        notes: Optional[str],
+        database: str,
+        target_outcome: Optional[str],
+        stop_after_step_id: Optional[str],
+        stop_after_analysis: bool,
+        manuscript_title: Optional[str],
+        manuscript_authors: Optional[Sequence[str]],
+        run_language: str,
+        force_writer_probe: bool,
+        scientific_identity: Mapping[str, Any],
+        experiment_spec_path: Optional[Path],
+        cache_key: Optional[str],
+        skill_obj: Optional[ClinicalSkill],
+    ) -> Optional[HumanReviewCheckpoint]:
+        """Persist a fresh Plan→Review handoff without serializing live objects.
+
+        A run already resumed from a prior execution checkpoint may contain
+        legacy scientific migrations.  That is deliberately left on the
+        existing same-process path: making it durable would require a second
+        authority contract for migration history, which this narrow P0 does
+        not invent.
+        """
+
+        if plan_result.resume_state is not None:
+            return None
+        capsule = plan_result.evidence.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
+        if capsule is None:
+            raise HumanReviewCheckpointError(
+                "cannot persist human review without a run-input capsule"
+            )
+        execution_authorities: list[ReviewExecutionAuthority] = []
+        for request in requests:
+            payload = request.payload if hasattr(request, "payload") else {}
+            raw_authority = (
+                payload.get("plan_review_authority")
+                if isinstance(payload, Mapping)
+                else None
+            )
+            if not isinstance(raw_authority, Mapping):
+                raise HumanReviewCheckpointError(
+                    "human-review request lacks plan-review authority"
+                )
+            authority = PlanReviewAuthority.model_validate(raw_authority)
+            if authority.execution is None:
+                raise HumanReviewCheckpointError(
+                    "human-review request lacks execution authority"
+                )
+            execution_authorities.append(authority.execution)
+        if not execution_authorities or any(
+            item != execution_authorities[0] for item in execution_authorities[1:]
+        ):
+            raise HumanReviewCheckpointError(
+                "human-review requests do not share one execution authority"
+            )
+        execution_authority = execution_authorities[0]
+        if execution_authority.run_input_capsule_sha256 != str(capsule.sha256):
+            raise HumanReviewCheckpointError(
+                "review execution authority does not bind the run-input capsule"
+            )
+        trajectory_payload: Optional[dict[str, Any]] = None
+        if trajectory_binding is not None:
+            trajectory_payload = {
+                "path": self._relative_run_path(run_dir, trajectory_binding.path),
+                "sha256": trajectory_binding.sha256,
+                "size": trajectory_binding.size,
+                "authority_ref": (
+                    trajectory_binding.authority_ref.to_dict()
+                    if trajectory_binding.authority_ref is not None
+                    else None
+                ),
+                "legacy_capsule_receipt": (
+                    {
+                        "capsule_sha256": (
+                            trajectory_binding.legacy_capsule_receipt.capsule_sha256
+                        ),
+                        "trajectory_relative_path": (
+                            trajectory_binding.legacy_capsule_receipt.trajectory_relative_path
+                        ),
+                        "trajectory_sha256": (
+                            trajectory_binding.legacy_capsule_receipt.trajectory_sha256
+                        ),
+                        "trajectory_size": (
+                            trajectory_binding.legacy_capsule_receipt.trajectory_size
+                        ),
+                        "universe_authority_sha256": (
+                            trajectory_binding.legacy_capsule_receipt.universe_authority_sha256
+                        ),
+                        "schema_version": (
+                            trajectory_binding.legacy_capsule_receipt.schema_version
+                        ),
+                    }
+                    if trajectory_binding.legacy_capsule_receipt is not None
+                    else None
+                ),
+            }
+        repro_payload = None
+        if plan_result.repro_envelope is not None:
+            repro_payload = {
+                "seed": plan_result.repro_envelope.seed,
+                "preview_max_chars": plan_result.repro_envelope.preview_max_chars,
+                "include_previews": plan_result.repro_envelope.include_previews,
+                "env_snapshot": dict(plan_result.repro_envelope.env_snapshot),
+                "calls": [
+                    item.to_json() for item in plan_result.repro_envelope.calls
+                ],
+            }
+        plan_handoff = {
+            "context": plan_result.context.model_dump(mode="json"),
+            "agent_context": plan_result.agent_context.model_dump(mode="json"),
+            "context_path": self._relative_run_path(run_dir, plan_result.context_path),
+            "findings": [item.model_dump(mode="json") for item in plan_result.findings],
+            "plan": plan_result.plan.model_dump(mode="json"),
+            "plan_path": self._relative_run_path(run_dir, plan_result.plan_path),
+            "llm_signature": plan_result.llm_signature,
+            "used_mock_llm": bool(plan_result.used_mock_llm),
+            "prompt_version": plan_result.prompt_version,
+            "prompt_files": dict(plan_result.prompt_files),
+            "started_at": plan_result.started_at.isoformat(),
+            "allowed_literature_citation_keys": list(
+                plan_result.allowed_literature_citation_keys
+            ),
+            "direct_comparator_literature_keys": list(
+                plan_result.direct_comparator_literature_keys
+            ),
+            "preplan_literature": (
+                plan_result.preplan_literature.model_dump(mode="json")
+                if plan_result.preplan_literature is not None
+                else None
+            ),
+            "repro_envelope": repro_payload,
+        }
+        execution_coordinates = {
+            "cohort_path": self._relative_run_path(run_dir, cohort_path),
+            "trajectory_binding": trajectory_payload,
+            "notes": notes,
+            "database": database,
+            "target_outcome": target_outcome,
+            "stop_after_step_id": stop_after_step_id,
+            "stop_after_analysis": bool(stop_after_analysis),
+            "manuscript_title": manuscript_title,
+            "manuscript_authors": list(manuscript_authors or ()),
+            "run_language": run_language,
+            "force_writer_probe": bool(force_writer_probe),
+            "scientific_identity": dict(scientific_identity),
+            "experiment_spec_path": self._relative_run_path(
+                run_dir, experiment_spec_path
+            ),
+            "cache_key": cache_key,
+            "skill_key": skill_obj.key if skill_obj is not None else None,
+        }
+        checkpoint = HumanReviewCheckpoint.create(
+            run_id=run_id,
+            pipeline_config_sha256=self._config.canonical_digest(),
+            environment_identity=run_environment_identity,
+            llm_signature_sha256=canonical_sha256(plan_result.llm_signature),
+            run_input_capsule_sha256=str(capsule.sha256),
+            capability_activation_sha256=(
+                execution_authority.capability_activation_sha256
+            ),
+            runtime_capabilities=runtime_capabilities,
+            runtime_bundle=runtime_bundle,
+            requests=tuple(requests),
+            plan_handoff=plan_handoff,
+            execution_coordinates=execution_coordinates,
+        )
+        write_human_review_checkpoint(
+            human_review_checkpoint_path(run_dir), checkpoint
+        )
+        return checkpoint
+
+    def _restore_role_handoff(
+        self,
+        *,
+        run_id: str,
+        run_dir: Path,
+        repro_payload: Optional[Mapping[str, Any]],
+    ) -> tuple[Callable[[str], Any], Optional[CostMeter], Optional[ReproEnvelope]]:
+        llm = self._llm
+        if llm is None:
+            raise HumanReviewCheckpointError(
+                "durable human-review resume requires the configured provider"
+            )
+        repro_envelope: Optional[ReproEnvelope] = None
+        if self._enable_reproducibility_envelope:
+            if not isinstance(repro_payload, Mapping):
+                raise HumanReviewCheckpointError(
+                    "reproducibility envelope is absent from the plan handoff"
+                )
+            try:
+                calls = [
+                    ReproCallRecord(**dict(item))
+                    for item in list(repro_payload.get("calls") or ())
+                ]
+                repro_envelope = ReproEnvelope(
+                    run_id=run_id,
+                    seed=repro_payload.get("seed"),
+                    preview_max_chars=int(
+                        repro_payload.get("preview_max_chars") or 280
+                    ),
+                    include_previews=bool(repro_payload.get("include_previews")),
+                    calls=calls,
+                    env_snapshot=dict(repro_payload.get("env_snapshot") or {}),
+                )
+            except Exception as exc:
+                raise HumanReviewCheckpointError(
+                    "reproducibility envelope cannot be rehydrated"
+                ) from exc
+        base_role_resolver = (
+            envelope_role_resolver(llm, repro_envelope, seed=self._llm_seed)
+            if repro_envelope is not None
+            else lambda role: resolve_role_client(llm, role)
+        )
+        if self._provider_hard_stop is not None:
+
+            def stopped_role_resolver(role: str):
+                base = base_role_resolver(role)
+                if base is None or isinstance(base, HardStopClient):
+                    return base
+                return HardStopClient(
+                    base, role=role, task=self._provider_hard_stop
+                )
+
+        else:
+            stopped_role_resolver = base_role_resolver
+        cost_meter = None
+        if self._enable_cost_tracking:
+            cost_meter = (
+                CostMeter(
+                    price_table=dict(self._cost_price_table),
+                    runtime_dir=run_dir / ".runtime",
+                )
+                if self._cost_price_table is not None
+                else CostMeter(runtime_dir=run_dir / ".runtime")
+            )
+
+            class _RoleResolverShim:
+                name = "restored_role_resolver_shim"
+
+                def for_role(self, role: str):
+                    return stopped_role_resolver(role)
+
+                def complete(self, *_args: Any, **_kwargs: Any):
+                    raise RuntimeError("call for_role() before provider use")
+
+            role_resolver = metered_role_resolver(_RoleResolverShim(), cost_meter)
+        else:
+            role_resolver = stopped_role_resolver
+        return role_resolver, cost_meter, repro_envelope
+
+    @staticmethod
+    def _checkpoint_run_path(
+        *,
+        run_dir: Path,
+        relative_path: Any,
+        required: bool = True,
+    ) -> Optional[Path]:
+        """Resolve one checkpoint path without permitting path substitution."""
+
+        if relative_path is None:
+            if required:
+                raise HumanReviewCheckpointError(
+                    "durable human-review checkpoint is missing a required path"
+                )
+            return None
+        text = str(relative_path).strip()
+        candidate = (run_dir / text).resolve()
+        try:
+            candidate.relative_to(run_dir.resolve())
+        except ValueError as exc:
+            raise HumanReviewCheckpointError(
+                "durable human-review checkpoint path escapes its run directory"
+            ) from exc
+        if candidate.is_symlink() or not candidate.is_file():
+            raise HumanReviewCheckpointError(
+                "durable human-review checkpoint references a missing artifact"
+            )
+        return candidate
+
+    def _record_human_review_records(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        *,
+        run_id: str,
+        run_dir: Path,
+        evidence: EvidenceStore,
+    ) -> None:
+        """Delegate decision persistence to the checkpoint owner."""
+        persist_human_review_records(
+            records,
+            run_id=run_id,
+            run_dir=run_dir,
+            evidence=evidence,
+            submission_profile_name=self._submission_profile_name,
+        )
+    @_pipeline_instance_lifecycle("run")
     @exclusive_run_execution
     @_one_capability_job
     def run(
@@ -3761,6 +4480,7 @@ class ResearchAgentPipeline:
         cohort_name: str = "cohort",
         database: str = "miiv",
         target_outcome: Optional[str] = None,
+        endpoint: Optional[EndpointSpec] = None,
         primary_exposure: Optional[str] = None,
         cross_database_validation: Optional[Sequence[str]] = None,
         inclusion_criteria: Optional[Sequence[str]] = None,
@@ -4017,49 +4737,8 @@ class ResearchAgentPipeline:
         run_language = self._normalise_manuscript_language(
             manuscript_language or self._manuscript_language
         )
-        audit_logger: Optional[AuditLogger] = None
-
-        def _emit_progress(stage: str, message: str, **extra: Any) -> None:
-            progress_status = str(extra.get("status", "running"))
-            progress_step_id = (
-                str(extra.get("step_id")) if extra.get("step_id") else None
-            )
-            record_active_run_progress(
-                stage=stage,
-                message=message,
-                status=progress_status,
-                step_id=progress_step_id,
-                phase_timeout_seconds=extra.get("phase_timeout_seconds"),
-                run_id=(str(extra.get("run_id")) if extra.get("run_id") else None),
-            )
-            if audit_logger is not None:
-                try:
-                    audit_logger.emit(
-                        phase=stage,
-                        event=message,
-                        status=progress_status,
-                        step_id=progress_step_id,
-                        detail={
-                            k: v
-                            for k, v in extra.items()
-                            if k not in {"status", "step_id"}
-                        },
-                    )
-                except Exception:
-                    pass
-            if progress_callback is None:
-                return
-            payload = {
-                "stage": stage,
-                "message": message,
-                "status": extra.pop("status", "running"),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            payload.update(extra)
-            try:
-                progress_callback(payload)
-            except Exception:
-                pass
+        progress_channel = ResumableProgressChannel(progress_callback)
+        _emit_progress = progress_channel.emit
 
         _emit_progress("run", "Starting research-agent run.")
 
@@ -4079,6 +4758,7 @@ class ResearchAgentPipeline:
             cohort_name=cohort_name,
             database=database,
             target_outcome=target_outcome,
+            endpoint=endpoint,
             primary_exposure=primary_exposure,
             cross_database_validation=cross_database_validation,
             inclusion_criteria=inclusion_criteria,
@@ -4284,6 +4964,7 @@ class ResearchAgentPipeline:
                 path=str(cohort_path),
             )
         audit_logger = AuditLogger(run_dir / "audit_log.jsonl")
+        progress_channel.bind_audit_logger(audit_logger)
 
         cache_key: Optional[str] = None
         if self._enable_cache and not resume_run_id:
@@ -4332,6 +5013,7 @@ class ResearchAgentPipeline:
                 cohort_name=cohort_name,
                 database=database,
                 target_outcome=target_outcome,
+                endpoint=endpoint,
                 primary_exposure=primary_exposure,
                 cross_database_validation=cross_database_validation,
                 inclusion_criteria=inclusion_criteria,
@@ -4543,6 +5225,7 @@ class ResearchAgentPipeline:
                     findings=plan_result.findings,
                     plan=plan_result.plan,
                     evidence=plan_evidence,
+                    require_plan_review=self._config.require_human_plan_review,
                 )
                 if not requests_without_execution:
                     return requests_without_execution
@@ -4570,124 +5253,75 @@ class ResearchAgentPipeline:
                 plan=plan_result.plan,
                 evidence=plan_evidence,
                 execution_authority=execution_authority,
+                require_plan_review=self._config.require_human_plan_review,
             )
             return requests
 
         def _human_review_recorder(records):
-            if not records:
-                return
-            from .orchestration.profiles import is_paper_facing_profile
-
-            decision_records = list(records)
-            if is_paper_facing_profile(self._submission_profile_name):
-                # Field names follow the workflow decision record,
-                # which emits a flat record. Reading a nested ``request`` key
-                # here raised KeyError on every real decision and turned the
-                # authentication check into a crash.
-                unauthenticated = [
-                    str(record.get("review_id") or "<unknown>")
-                    for record in decision_records
-                    if record.get("reviewer_identity_source") != "authenticated"
-                ]
-                if unauthenticated:
-                    raise RuntimeError(
-                        "human review under submission profile "
-                        f"{self._submission_profile_name!r} requires an "
-                        "authenticated reviewer identity; a client-claimed "
-                        "reviewer is diagnostic-only "
-                        f"(unauthenticated: {', '.join(unauthenticated)})"
-                    )
-            decisions_path = run_dir / "human_review_decisions.json"
-            decisions_path.write_text(
-                json.dumps(
-                    {
-                        "schema": "easyicu.human_review_decisions/1",
-                        "run_id": run_id,
-                        "decisions": decision_records,
-                    },
-                    indent=2,
-                    sort_keys=True,
-                ),
-                encoding="utf-8",
+            self._record_human_review_records(
+                records,
+                run_id=run_id,
+                run_dir=run_dir,
+                evidence=_review_evidence_store(),
             )
-            # Registering into this run's own store is what puts the decision
-            # into the final manifest: workflow state is discarded at exit, so an
-            # unregistered approval leaves the run unable to answer who
-            # authorised it, against which digest, and when.
-            review_evidence = _review_evidence_store()
-            review_evidence.register_file(
-                kind="log",
-                description=(
-                    "Operator decisions for the human-review interrupts raised "
-                    "by this run, with server-stamped decision time and the "
-                    "authority digest each decision was bound to."
-                ),
-                source_path=decisions_path,
-                evidence_id="human_review_decisions",
-                producer="pipeline",
-                generation_mode="human_confirmed",
-            )
-            rejected_review_ids = [
-                str(record.get("review_id") or "<unknown>")
-                for record in decision_records
-                if record.get("decision") == "rejected"
-            ]
-            if rejected_review_ids:
-                # A rejection ends before the normal finalisation phase, so
-                # write the canonical run-level receipt here. This lets a
-                # restarted process distinguish a terminal operator refusal
-                # from a merely paused or abandoned run without reconstructing
-                # state from the decision log.
-                run_status_path = run_dir / "run_status.json"
-                run_status_path.write_text(
-                    json.dumps(
-                        {
-                            "schema_version": "easyicu.run_status/2",
-                            "run_id": run_id,
-                            "status": "human_review_rejected",
-                            "strict_fail_closed": True,
-                            "terminal_reason": "operator_rejected",
-                            "rejected_review_ids": rejected_review_ids,
-                            "gates": {
-                                "human_review_approved": False,
-                                "execution_complete": False,
-                                "manuscript_ready": False,
-                                "publication_ready": False,
-                                # The paper-authority contract is three axes.
-                                # State all three: a consumer that has to tell
-                                # "absent" from "explicitly false" is reading a
-                                # different schema from a completed run's.
-                                "publication_artifacts_ready": False,
-                                "execution_paper_eligible": False,
-                                "paper_authorized": False,
-                            },
-                            "canonical_outputs": {
-                                "human_review_decisions": (
-                                    "human_review_decisions.json"
-                                ),
-                                "run_status": "run_status.json",
-                            },
-                        },
-                        indent=2,
-                        sort_keys=True,
-                    ),
-                    encoding="utf-8",
-                )
-                review_evidence.register_file(
-                    kind="log",
-                    description=(
-                        "Fail-closed terminal status for an operator-rejected "
-                        "human-review pause."
-                    ),
-                    source_path=run_status_path,
-                    evidence_id="run_status",
-                    aliases=["run_status"],
-                    producer="pipeline",
-                    generation_mode="system",
-                )
 
         gate = self._human_review_gate
-        from .orchestration.workflow import build_pipeline_workflow
+        from .orchestration.workflow import WorkflowPaused, build_pipeline_workflow
+
+        checkpoint_commit: Dict[str, Any] = {
+            "path": None,
+            "decision_sha256": None,
+            "decision_payloads": None,
+        }
+
+        def _prepare_human_review_execution(
+            decision_records: Sequence[Mapping[str, Any]],
+        ) -> None:
+            path = checkpoint_commit.get("path")
+            if path is None:
+                return
+            prepare_human_review_decision(
+                checkpoint_file=Path(path),
+                decision_payloads=checkpoint_commit.get("decision_payloads") or (),
+                decision_records=decision_records,
+                decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
+            )
+
+        def _commit_human_review_execution(
+            decision_records: Sequence[Mapping[str, Any]],
+        ) -> None:
+            path = checkpoint_commit.get("path")
+            if path is None:
+                return
+            if not reviewed_plan:
+                raise HumanReviewCheckpointError(
+                    "approved execution has no restored typed plan handoff"
+                )
+            commit_human_review_decision(
+                checkpoint_file=Path(path),
+                run_dir=run_dir,
+                evidence=reviewed_plan[-1].evidence,
+                plan_revision=reviewed_plan[-1].plan.revision,
+                decision_payloads=checkpoint_commit.get("decision_payloads") or (),
+                decision_records=decision_records,
+                decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
+            )
+
+        def _commit_human_review_execution_start() -> None:
+            path = checkpoint_commit.get("path")
+            if path is None:
+                return
+            mark_human_review_execution_started(Path(path))
+
+        def _commit_human_review_write_start() -> None:
+            path = checkpoint_commit.get("path")
+            if path is not None:
+                mark_human_review_execution_phase(Path(path), "write_in_progress")
+
+        def _commit_human_review_finalize_start() -> None:
+            path = checkpoint_commit.get("path")
+            if path is not None:
+                mark_human_review_execution_phase(Path(path), "finalize_in_progress")
 
         workflow = build_pipeline_workflow(
             plan_invoker=_plan_invoker,
@@ -4697,6 +5331,11 @@ class ResearchAgentPipeline:
             provenance_hook=_provenance_hook,
             human_review_invoker=_human_review_invoker,
             human_review_recorder=_human_review_recorder,
+            human_review_decision_prepare=_prepare_human_review_execution,
+            human_review_execution_commit=_commit_human_review_execution,
+            human_review_execution_start=_commit_human_review_execution_start,
+            human_review_write_start=_commit_human_review_write_start,
+            human_review_finalize_start=_commit_human_review_finalize_start,
             reviewer_identity_resolver=(
                 getattr(gate, "reviewer_identity_resolver", None)
                 if gate is not None
@@ -4704,11 +5343,50 @@ class ResearchAgentPipeline:
             ),
         )
         outcome = workflow.start()
+        durable_checkpoint = None
+        if isinstance(outcome, WorkflowPaused):
+            if not reviewed_plan:
+                raise HumanReviewCheckpointError(
+                    "workflow paused without a typed plan handoff"
+                )
+            durable_checkpoint = self._persist_review_checkpoint(
+                plan_result=reviewed_plan[-1],
+                requests=outcome.requests,
+                run_id=run_id,
+                run_dir=run_dir,
+                cohort_path=cohort_path,
+                trajectory_binding=staged_trajectory_binding,
+                runtime_capabilities=runtime_capabilities,
+                runtime_bundle=self._validated_runtime_bundle,
+                run_environment_identity=run_environment_identity,
+                notes=notes,
+                database=database,
+                target_outcome=target_outcome,
+                stop_after_step_id=stop_after_step_id,
+                stop_after_analysis=stop_after_analysis,
+                manuscript_title=manuscript_title,
+                manuscript_authors=manuscript_authors,
+                run_language=run_language,
+                force_writer_probe=force_writer_probe,
+                scientific_identity=run_scientific_identity,
+                experiment_spec_path=experiment_spec_path,
+                cache_key=cache_key,
+                skill_obj=skill_obj,
+            )
+            if durable_checkpoint is not None:
+                checkpoint_commit["path"] = str(
+                    human_review_checkpoint_path(run_dir)
+                )
+                if self._provider_hard_stop is not None:
+                    self._provider_hard_stop.pause()
         return self._pipeline_result_or_pending(
             outcome,
             workflow=workflow,
             run_id=run_id,
             run_dir=run_dir,
+            progress_channel=progress_channel,
+            durable_checkpoint=durable_checkpoint,
+            checkpoint_commit=checkpoint_commit,
         )
 
     def _pipeline_result_or_pending(
@@ -4718,6 +5396,9 @@ class ResearchAgentPipeline:
         workflow: Any,
         run_id: str,
         run_dir: Path,
+        progress_channel: Optional[ResumableProgressChannel] = None,
+        durable_checkpoint: Optional[HumanReviewCheckpoint] = None,
+        checkpoint_commit: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """Return the run's result, or the typed pause that replaced it.
 
@@ -4733,6 +5414,20 @@ class ResearchAgentPipeline:
 
         if isinstance(outcome, WorkflowCompleted):
             self._pending_human_review = None
+            if checkpoint_commit and checkpoint_commit.get("path"):
+                path = Path(str(checkpoint_commit["path"]))
+                checkpoint = load_human_review_checkpoint(
+                    path, require_pending=False
+                )
+                if checkpoint.state in {
+                    "executing",
+                    "write_in_progress",
+                    "finalize_in_progress",
+                    "consumed",
+                }:
+                    write_human_review_checkpoint(
+                        path, checkpoint.transitioned("completed")
+                    )
             return outcome.final_result
 
         if not isinstance(outcome, WorkflowPaused):
@@ -4745,6 +5440,12 @@ class ResearchAgentPipeline:
             thread_id=run_id,
             run_dir=str(run_dir),
             requests=outcome.requests,
+            resume_scope=(
+                "durable_checkpoint"
+                if durable_checkpoint is not None
+                else "same_process"
+            ),
+            resume_pid=(None if durable_checkpoint is not None else os.getpid()),
         )
         # Held so ``resume_human_review`` can drive the same state machine: its
         # invokers close over this run's evidence store, run dir and services.
@@ -4767,15 +5468,36 @@ class ResearchAgentPipeline:
             "runtime_bundle": deepcopy(
                 getattr(self, "_validated_runtime_bundle", None)
             ),
+            # Mutable indirection owned by this paused run.  Resume may replace
+            # only the transport callback; the workflow, plan and scientific
+            # authority remain the exact objects reviewed by the operator.
+            "progress_sink": progress_channel,
+            "checkpoint_commit": checkpoint_commit,
         }
         return pending
 
+    @property
+    def has_resumable_human_review(self) -> bool:
+        """Whether the live workflow still owns an answerable review pause."""
+
+        state = self._pending_human_review
+        if not isinstance(state, Mapping):
+            return False
+        workflow = state.get("workflow")
+        pending = state.get("pending")
+        return bool(
+            getattr(workflow, "state", None) == "paused"
+            and getattr(pending, "resumable_here", False)
+        )
+
+    @_pipeline_instance_lifecycle("resume")
     @_one_capability_job
     def resume_human_review(
         self,
         decisions: Sequence[Union[Any, Mapping[str, Any]]],
         *,
         run_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Any:
         """Answer the review that paused :meth:`run` and finish the run.
 
@@ -4784,27 +5506,47 @@ class ResearchAgentPipeline:
         a decision that does not bind the request it claims to answer, so an
         approval cannot be replayed against a different pause.
 
-        Resume is ``same_process`` only (see
-        :data:`~easyicu.research_agent.orchestration.workflow.HUMAN_REVIEW_RESUME_SCOPE`);
-        the pause object states that in ``resume_scope``/``resume_pid`` so a
-        caller can check before asking a human for a decision it cannot deliver.
+        A fresh Plan-phase pause is also persisted as a digest-bound checkpoint.
+        When ``run_id`` names that checkpoint, a new pipeline instance may
+        reconstruct the reviewed handoff without invoking Planner again.
         """
 
         from .orchestration.workflow import (
             HUMAN_REVIEW_RESUME_SCOPE,
             HumanReviewRejected,
         )
+        from .authority.provider_hard_stop import ProviderHardStopExceeded
+
+        all_rejected = bool(decisions) and all(
+            str(
+                item.get("decision")
+                if isinstance(item, Mapping)
+                else getattr(item, "decision", "")
+            )
+            == "rejected"
+            for item in decisions
+        )
+        if self._config.planner_only and not all_rejected:
+            raise RuntimeError(
+                "this pipeline authority is planner-only and cannot resume into Execute"
+            )
 
         pending_state = self._pending_human_review
+        if not pending_state and run_id is not None:
+            pending_state = restore_durable_human_review_pause(
+                self,
+                run_id=str(run_id),
+                progress_callback=progress_callback,
+                plan_result_factory=_PlanPhaseResult,
+                load_resume_state=_load_resume_state,
+                rejection_only=all_rejected,
+            )
         if not pending_state:
             raise RuntimeError(
                 "no human review is pending on this pipeline instance. "
-                "resume_human_review() answers the pause returned by run(), "
-                "and that pause is resumable only in the process and pipeline "
-                "instance that produced it (HumanReviewPending.resume_scope == "
-                f"{HUMAN_REVIEW_RESUME_SCOPE!r}): the plan phase's live "
-                "evidence store cannot be checkpointed, so a new process has "
-                "nothing to resume from. Re-run instead."
+                "resume_human_review() requires either the live pause returned "
+                "by run() or its exact durable checkpoint coordinate "
+                f"(legacy scope {HUMAN_REVIEW_RESUME_SCOPE!r})."
             )
         pending = pending_state["pending"]
         if not pending.resumable_here:
@@ -4832,45 +5574,107 @@ class ResearchAgentPipeline:
             item if isinstance(item, Mapping) else item.model_dump(mode="json")
             for item in decisions
         ]
+        checkpoint_commit = pending_state.get("checkpoint_commit")
+        if isinstance(checkpoint_commit, dict) and checkpoint_commit.get("path"):
+            bind_checkpoint_decision_payloads(
+                checkpoint_commit, requests=pending.requests, payload=payload
+            )
         # Same writer lease ``run`` holds, bound to the paused run's own id
         # rather than a fresh one: resuming writes into that run's directory
         # and evidence store, so it must not proceed while another call is
         # writing there. ``run`` returns when it pauses, releasing its lease,
         # which is exactly why resume has to take one of its own.
         workflow = pending_state["workflow"]
+        progress_channel = pending_state.get("progress_sink")
+        if progress_callback is not None:
+            if isinstance(progress_channel, ResumableProgressChannel):
+                progress_channel.replace_callback(progress_callback)
+            elif isinstance(progress_channel, dict):
+                # Same-process pauses created before a hot reload retain the
+                # historical mutable callback sink.
+                progress_channel["callback"] = progress_callback
+        provider_resumed = False
+        review_checkpoint_at: Optional[str] = None
         try:
-            with run_heartbeat_scope(run_id=pending.run_id):
-                bind_active_run_heartbeat(
-                    Path(pending.run_dir),
-                    task_timeout_seconds=self._heartbeat_wall_clock_remaining(),
-                )
-                with acquire_run_execution_lock(
-                    workdir=Path(self.workdir), run_id=pending.run_id
-                ):
+            with acquire_run_execution_lock(
+                workdir=Path(self.workdir), run_id=pending.run_id
+            ):
+                if self._provider_hard_stop is not None and not all_rejected:
+                    # A process may die after reopening the Provider clock but
+                    # before the decision commit changes a still-pending review
+                    # checkpoint. Converge that exact window back to the durable
+                    # pause before reopening it; paused tasks make this a no-op.
+                    if isinstance(checkpoint_commit, dict):
+                        checkpoint_path = checkpoint_commit.get("path")
+                        reconcile_pause = getattr(
+                            self._provider_hard_stop,
+                            "reconcile_review_pause",
+                            None,
+                        )
+                        if checkpoint_path and callable(reconcile_pause):
+                            checkpoint = load_human_review_checkpoint(
+                                Path(str(checkpoint_path)), require_pending=False
+                            )
+                            if checkpoint.state == "pending":
+                                review_checkpoint_at = checkpoint.created_at
+                                reconcile_pause(paused_at=review_checkpoint_at)
+                    self._provider_hard_stop.resume()
+                    provider_resumed = True
+                with run_heartbeat_scope(run_id=pending.run_id):
+                    bind_active_run_heartbeat(
+                        Path(pending.run_dir),
+                        task_timeout_seconds=(
+                            None
+                            if all_rejected
+                            else self._heartbeat_wall_clock_remaining()
+                        ),
+                    )
                     outcome = workflow.resume(payload)
-            return self._pipeline_result_or_pending(
-                outcome,
-                workflow=workflow,
-                run_id=pending.run_id,
-                run_dir=Path(pending.run_dir),
-            )
+                return self._pipeline_result_or_pending(
+                    outcome,
+                    workflow=workflow,
+                    run_id=pending.run_id,
+                    run_dir=Path(pending.run_dir),
+                    progress_channel=(
+                        progress_channel
+                        if isinstance(progress_channel, ResumableProgressChannel)
+                        else None
+                    ),
+                    checkpoint_commit=(
+                        checkpoint_commit
+                        if isinstance(checkpoint_commit, dict)
+                        else None
+                    ),
+                )
         except HumanReviewRejected:
             # The workflow has recorded the rejection and discarded its live
             # handoff. Do not keep presenting the public pipeline pause as
             # answerable or allow a later approval attempt against it.
+            if isinstance(checkpoint_commit, dict):
+                fail_human_review_checkpoint(checkpoint_commit)
             self._pending_human_review = None
             raise
-        except Exception:
+        except Exception as exc:
             # Validation failures leave the workflow paused so the caller can
             # correct and resubmit the exact decision set. Once execution,
             # writing or finalisation terminalises the workflow, however, the
             # live handoff is no longer resumable and must not be retained.
-            if getattr(workflow, "state", None) in {
-                "failed",
-                "rejected",
-                "completed",
-            }:
+            if isinstance(exc, ProviderHardStopExceeded) or getattr(
+                workflow, "state", None
+            ) in {"failed", "rejected", "completed"}:
+                if isinstance(checkpoint_commit, dict):
+                    fail_human_review_checkpoint(checkpoint_commit)
                 self._pending_human_review = None
+            elif provider_resumed and self._provider_hard_stop is not None:
+                reconcile_pause = getattr(
+                    self._provider_hard_stop,
+                    "reconcile_review_pause",
+                    None,
+                )
+                if review_checkpoint_at and callable(reconcile_pause):
+                    reconcile_pause(paused_at=review_checkpoint_at)
+                else:
+                    self._provider_hard_stop.pause()
             raise
 
     def run_from_spec(
@@ -5381,7 +6185,10 @@ class ResearchAgentPipeline:
             "enable_deterministic_runner_repair": bool(
                 self._enable_deterministic_runner_repair
             ),
+            "enable_latex": bool(self._enable_latex),
+            "enable_pdf_render": bool(self._enable_pdf_render),
             "latex_venue_template": self._latex_venue_template,
+            "latex_draft_watermark": bool(self._latex_draft_watermark),
         }
 
     def _finalise_aborted(
@@ -5415,3417 +6222,555 @@ class ResearchAgentPipeline:
 # ---------------------------------------------------------------------------
 
 
-def _build_probe_summary(
-    *,
-    context: ResearchContext,
-    cohort_path: Path,
-    out_dir: Path,
-) -> tuple[Dict[str, Any], List[Path]]:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    df = pd.read_parquet(cohort_path)
-    summary: Dict[str, Any] = {
-        "n_rows": int(len(df)),
-        "n_columns": int(df.shape[1]),
-        "target_outcome": context.target_outcome,
-        "top_missing_columns": [],
-        "score_completeness": [],
-    }
-    missing_rows = []
-    for col in df.columns:
-        frac = float(df[col].isna().mean()) if len(df) else 0.0
-        missing_rows.append(
-            {
-                "variable": col,
-                "fraction_missing": frac,
-                "n_missing": int(df[col].isna().sum()),
-                "n_unique_non_missing": int(df[col].dropna().nunique()),
-            }
-        )
-    missing_df = pd.DataFrame(missing_rows).sort_values(
-        ["fraction_missing", "variable"], ascending=[False, True]
-    )
-    summary["top_missing_columns"] = missing_df.head(10).to_dict(orient="records")
-    files: List[Path] = []
-    missing_path = out_dir / "probe_variable_profile.csv"
-    missing_df.to_csv(missing_path, index=False)
-    files.append(missing_path)
-
-    from easyicu.io.data_quality import composite_score_completeness
-
-    for variable in context.variables:
-        if variable.role not in {
-            VariableRole.ORDINAL_SCORE,
-            VariableRole.COMPOSITE_SCORE,
-        }:
-            continue
-        if variable.name not in df.columns:
-            continue
-        observed = df[variable.name].dropna()
-        if observed.empty:
-            continue
-        stats: Dict[str, Any] = {
-            "variable": variable.name,
-            "min": float(observed.min()),
-            "max": float(observed.max()),
-            "n_zero": (
-                int((observed == 0).sum())
-                if pd.api.types.is_numeric_dtype(observed)
-                else None
-            ),
-        }
-        n_components_col = f"{variable.name}_n_components"
-        if n_components_col in df.columns:
-            stats["completeness"] = composite_score_completeness(
-                df,
-                variable.name,
-                n_components_col=n_components_col,
-            )
-            summary["score_completeness"].append(stats)
-    summary_path = out_dir / "probe_summary.json"
-    summary_path.write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    files.append(summary_path)
-    return summary, files
-
-
-def _promote_sibling_figure_exports(*, out_dir: Path) -> Optional[str]:
-    """Promote figure files written beside ``outputs/`` into ``outputs/``.
-
-    Some generated scripts treat ``STEP_OUT_DIR`` as a filename stem and
-    write ``outputs.svg`` / ``outputs.png`` beside the canonical
-    ``outputs/`` directory. The execution contract only registers files inside
-    ``outputs/``, so normalize that common layout before declaring the
-    publication figure missing.
-    """
-    parent = out_dir.parent
-    source_stem = out_dir.name
-    figure_suffixes = (".pdf", ".png", ".svg", ".tiff", ".tif", ".pptx")
-    figure_sources = [
-        parent / f"{source_stem}{suffix}"
-        for suffix in figure_suffixes
-        if (parent / f"{source_stem}{suffix}").is_file()
-    ]
-    if not figure_sources:
-        return None
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    target_stem = "publication_figure"
-    exported_figure_files: List[str] = []
-    for source in figure_sources:
-        target = out_dir / f"{target_stem}{source.suffix.lower()}"
-        shutil.copy2(source, target)
-        exported_figure_files.append(target.name)
-
-    contract_source = parent / f"{source_stem}.figure_contract.json"
-    if contract_source.is_file():
-        shutil.copy2(contract_source, out_dir / f"{target_stem}.figure_contract.json")
-
-    step_summary_path = out_dir / "step_summary.json"
-    summary: Dict[str, Any] = {}
-    if step_summary_path.exists():
-        try:
-            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                summary = loaded
-        except Exception:
-            summary = {}
-    summary.setdefault("publication_figure_rescue", {})
-    summary["publication_figure_rescue"].update(
-        {
-            "mode": "sibling_outputs_stem",
-            "source_stem": source_stem,
-            "source_dir": str(parent),
-        }
-    )
-    summary["figure_files"] = sorted(exported_figure_files)
-    if exported_figure_files:
-        summary["figure_path"] = sorted(exported_figure_files)[0]
-    step_summary_path.write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    return "sibling_figure_exports_promote_v1"
-
-
-def _promote_prior_publication_bundle(
-    *,
-    run_dir: Path,
-    current_step_id: str,
-    out_dir: Path,
-    required_roles: Optional[Sequence[str]] = None,
-    require_declared_sources: bool = False,
-) -> Optional[str]:
-    """Promote the strongest earlier figure bundle into a publication step."""
-    steps_dir = run_dir / "steps"
-    if not steps_dir.exists():
-        return None
-
-    figure_suffixes = {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}
-    contract_suffix = ".figure_contract.json"
-    best: Optional[tuple[tuple[int, int, int], str, Dict[str, Path]]] = None
-    role_filter = {
-        str(role).strip().lower()
-        for role in (required_roles or [])
-        if str(role).strip()
-    }
-
-    # A split ``<parent>_figure`` step may only promote exports produced by its
-    # direct parent.  If that parent has no figure bundle, copying an unrelated
-    # earlier figure is scientifically worse than failing closed (for example,
-    # a cohort-flow figure must never satisfy an absolute-risk figure step).
-    # Generic terminal publication steps that do not have a sibling parent keep
-    # the historical run-wide strongest-bundle behaviour.
-    parent_step_id = str(current_step_id or "").removesuffix("_figure")
-    direct_parent = steps_dir / parent_step_id
-    if parent_step_id != str(current_step_id or "") and direct_parent.is_dir():
-        candidate_step_dirs = [direct_parent]
-    else:
-        candidate_step_dirs = sorted(steps_dir.iterdir())
-
-    for step_dir in candidate_step_dirs:
-        if not step_dir.is_dir() or step_dir.name == current_step_id:
-            continue
-        outputs_dir = step_dir / "outputs"
-        if not outputs_dir.exists():
-            continue
-        bundles: Dict[str, Dict[str, Path]] = {}
-        for path in outputs_dir.iterdir():
-            if not path.is_file():
-                continue
-            if path.name.endswith(contract_suffix):
-                stem = path.name[: -len(contract_suffix)]
-                bundles.setdefault(stem, {})["contract"] = path
-                continue
-            if path.suffix.lower() in figure_suffixes:
-                bundles.setdefault(path.stem, {})[path.suffix.lower()] = path
-        for stem, files in bundles.items():
-            figure_count = sum(1 for key in files if key.startswith("."))
-            if figure_count == 0:
-                continue
-            if role_filter and not _publication_bundle_has_any_role(files, role_filter):
-                continue
-            if (
-                require_declared_sources
-                and not _publication_bundle_has_resolvable_sources(files)
-            ):
-                continue
-            score = (
-                1 if "publication_figure" in stem else 0,
-                1 if "primary_association" in stem else 0,
-                figure_count,
-            )
-            if best is None or score > best[0]:
-                best = (score, stem, files)
-
-    if best is None:
-        return None
-
-    _, source_stem, files = best
-    target_stem = "publication_figure"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for key, source in files.items():
-        if key == "contract":
-            target = out_dir / f"{target_stem}.figure_contract.json"
-        else:
-            target = out_dir / f"{target_stem}{key}"
-        shutil.copy2(source, target)
-
-    # A figure contract is not self-contained when its source-data and panel
-    # evidence files remain behind in the analysis step.  Promotion previously
-    # copied only the rendered exports + JSON contract, leaving a formally
-    # untraceable bundle in the split figure step.  Copy every file-like local
-    # reference while preserving safe relative names; logical evidence IDs
-    # without a file suffix are intentionally left alone.
-    copied_trace_files: List[str] = []
-    contract_path = files.get("contract")
-    if contract_path is not None and contract_path.is_file():
-        try:
-            contract = json.loads(contract_path.read_text(encoding="utf-8"))
-        except Exception:
-            contract = {}
-
-        artifact_refs = _publication_contract_file_references(contract)
-
-        source_outputs = contract_path.parent.resolve()
-        for ref in dict.fromkeys(artifact_refs):
-            relative_ref = Path(ref)
-            if relative_ref.is_absolute() or ".." in relative_ref.parts:
-                relative_ref = Path(relative_ref.name)
-            source = (source_outputs / relative_ref).resolve()
-            if not source.is_relative_to(source_outputs) or not source.is_file():
-                continue
-            target = out_dir / relative_ref
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-            copied_trace_files.append(str(relative_ref))
-
-    step_summary_path = out_dir / "step_summary.json"
-    summary: Dict[str, Any] = {}
-    if step_summary_path.exists():
-        try:
-            summary = json.loads(step_summary_path.read_text(encoding="utf-8"))
-        except Exception:
-            summary = {}
-    summary.setdefault("publication_figure_rescue", {})
-    source_outputs_dir = files[next(iter(files))].parent
-    source_step_id = source_outputs_dir.parent.name
-    summary["publication_figure_rescue"].update(
-        {
-            "mode": "promotion",
-            "source_step_stem": source_stem,
-            "source_outputs_dir": str(source_outputs_dir),
-            "copied_trace_files": sorted(copied_trace_files),
-        }
-    )
-    exported_figure_files = [
-        str((out_dir / f"{target_stem}{key}").name)
-        for key in sorted(files)
-        if key != "contract"
-    ]
-    summary.update(
-        {
-            "step_id": current_step_id,
-            "method": "deterministic_publication_bundle_promotion",
-            "rendering_only": True,
-            "source_step_id": source_step_id,
-            "source_data_files": sorted(copied_trace_files),
-        }
-    )
-    summary["figure_files"] = exported_figure_files
-    if exported_figure_files:
-        summary["figure_path"] = exported_figure_files[0]
-    step_summary_path.write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    return "publication_bundle_promote_v1"
-
-
-def _publication_contract_file_references(contract: Any) -> List[str]:
-    """Return local file-like source/evidence references from a contract."""
-
-    artifact_refs: List[str] = []
-
-    def _collect(value: Any) -> None:
-        if isinstance(value, str):
-            token = value.strip()
-            if token and Path(token).suffix:
-                artifact_refs.append(token)
-            return
-        if isinstance(value, (list, tuple, set)):
-            for item in value:
-                _collect(item)
-            return
-        if isinstance(value, dict):
-            for item in value.values():
-                _collect(item)
-
-    if isinstance(contract, dict):
-        _collect(contract.get("source_data"))
-        panels = contract.get("panels") or []
-        if isinstance(panels, list):
-            for panel in panels:
-                if isinstance(panel, dict):
-                    _collect(panel.get("evidence_ids"))
-    return list(dict.fromkeys(artifact_refs))
-
-
-def _publication_bundle_has_resolvable_sources(files: Mapping[str, Path]) -> bool:
-    """Require every declared file reference to exist beside the parent bundle."""
-
-    contract_path = files.get("contract")
-    if contract_path is None or not contract_path.is_file():
-        return False
-    try:
-        contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    refs = _publication_contract_file_references(contract)
-    if not refs:
-        return False
-    source_outputs = contract_path.parent.resolve()
-    for ref in refs:
-        relative_ref = Path(ref)
-        if relative_ref.is_absolute() or ".." in relative_ref.parts:
-            relative_ref = Path(relative_ref.name)
-        source = (source_outputs / relative_ref).resolve()
-        if not source.is_relative_to(source_outputs) or not source.is_file():
-            return False
-    return True
-
-
-def _publication_bundle_has_any_role(
-    files: Mapping[str, Path], required_roles: set[str]
-) -> bool:
-    contract_path = files.get("contract")
-    if contract_path is None or not contract_path.exists():
-        return False
-    try:
-        contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    if not isinstance(contract, dict):
-        return False
-    roles: set[str] = set()
-    panels = contract.get("panels") or []
-    if isinstance(panels, list):
-        for panel in panels:
-            if not isinstance(panel, dict):
-                continue
-            role = str(panel.get("role") or "").strip().lower()
-            if role:
-                roles.add(role)
-    top_role = str(contract.get("role") or "").strip().lower()
-    if top_role:
-        roles.add(top_role)
-    return bool(roles & required_roles)
-
-
-def _figure_parent_candidate_step_dirs(
-    *, steps_dir: Path, current_step_id: str
-) -> tuple[List[Path], bool]:
-    """Return direct parent only for split figures, else legacy prior steps.
-
-    A ``<analysis>_figure`` child is an ownership edge: it may render only the
-    standardized products emitted by ``<analysis>``.  Searching an older step
-    for a same-shaped CSV can silently switch estimand or cohort while remaining
-    formally source-backed.  Legacy terminal overview figures without an
-    existing direct parent retain run-wide rescue behavior.
-    """
-
-    parent_step_id = str(current_step_id or "").removesuffix("_figure")
-    direct_parent = steps_dir / parent_step_id
-    is_split = parent_step_id != str(current_step_id or "")
-    if is_split and direct_parent.is_dir():
-        return [direct_parent], True
-    return (
-        [
-            step_dir
-            for step_dir in sorted(steps_dir.iterdir())
-            if step_dir.is_dir() and step_dir.name != current_step_id
-        ],
-        False,
-    )
-
-
-def _render_prediction_publication_bundle_from_prior_outputs(
-    *,
-    run_dir: Path,
-    current_step_id: str,
-    out_dir: Path,
-) -> Optional[str]:
-    """Deterministically build a validation figure from prior prediction outputs.
-
-    Some small models successfully write ``model_performance.csv`` and
-    ``step_summary.json`` in the parent model-training step but fail to
-    render the follow-up figure step. When that happens, we can still
-    construct a publication-style validation bundle from the structured
-    parent artefacts instead of failing the entire run.
-    """
-    steps_dir = run_dir / "steps"
-    if not steps_dir.exists():
-        return None
-
-    best_parent: Optional[tuple[Path, Path, Dict[str, Any]]] = None
-    candidate_step_dirs, _direct_parent_only = _figure_parent_candidate_step_dirs(
-        steps_dir=steps_dir, current_step_id=current_step_id
-    )
-    for step_dir in candidate_step_dirs:
-        outputs_dir = step_dir / "outputs"
-        perf_path = outputs_dir / "model_performance.csv"
-        summary_path = outputs_dir / "step_summary.json"
-        if not perf_path.exists() or not summary_path.exists():
-            continue
-        try:
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(summary, dict):
-            continue
-        best_parent = (perf_path, summary_path, summary)
-        break
-    if best_parent is None:
-        return None
-
-    perf_path, summary_path, summary = best_parent
-    try:
-        frame = pd.read_csv(perf_path)
-    except Exception:
-        return None
-    metric_cols = [col for col in ("auroc", "brier_score") if col in frame.columns]
-    calib_cols = [
-        col
-        for col in ("calibration_slope", "calibration_intercept")
-        if col in frame.columns
-    ]
-    if not metric_cols and not calib_cols:
-        return None
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    from easyicu.research_agent.figures.publication import (
-        add_panel_label,
-        apply_publication_style,
-        make_figure_contract,
-        save_publication_figure,
-    )
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(
-        1, 2, figsize=(183 / 25.4, 82 / 25.4), constrained_layout=True
-    )
-    apply_publication_style(fig)
-    if not isinstance(axes, (list, tuple)):
-        axes = axes.ravel()
-    folds = frame.get("fold")
-    if folds is None:
-        folds = pd.Series([f"Fold {idx + 1}" for idx in range(len(frame))])
-    folds = folds.astype(str)
-
-    ax1, ax2 = axes[0], axes[1]
-    if "auroc" in frame.columns:
-        ax1.plot(
-            folds,
-            frame["auroc"].astype(float),
-            marker="o",
-            linewidth=1.4,
-            label="AUROC",
-        )
-    if "brier_score" in frame.columns:
-        ax1.plot(
-            folds,
-            frame["brier_score"].astype(float),
-            marker="s",
-            linewidth=1.2,
-            label="Brier",
-        )
-    ax1.set_title("Cross-validation discrimination", loc="left", pad=4)
-    ax1.set_xlabel("Fold")
-    ax1.set_ylabel("Metric value")
-    ax1.tick_params(axis="x", rotation=35)
-    ax1.legend(frameon=False, fontsize=7)
-    add_panel_label(ax1, "A", x=-0.1)
-
-    if "calibration_slope" in frame.columns:
-        ax2.plot(
-            folds,
-            frame["calibration_slope"].astype(float),
-            marker="o",
-            linewidth=1.4,
-            label="Slope",
-        )
-        ax2.axhline(1.0, linestyle="--", linewidth=0.8, color="#8F8F8F")
-    if "calibration_intercept" in frame.columns:
-        ax2.plot(
-            folds,
-            frame["calibration_intercept"].astype(float),
-            marker="s",
-            linewidth=1.2,
-            label="Intercept",
-        )
-        ax2.axhline(0.0, linestyle=":", linewidth=0.8, color="#B64342")
-    ax2.set_title("Cross-validation calibration", loc="left", pad=4)
-    ax2.set_xlabel("Fold")
-    ax2.set_ylabel("Calibration statistic")
-    ax2.tick_params(axis="x", rotation=35)
-    if calib_cols:
-        ax2.legend(frameon=False, fontsize=7)
-    add_panel_label(ax2, "B", x=-0.1)
-
-    contract = make_figure_contract(
-        figure_id="publication_figure",
-        core_claim=(
-            "Prediction-model validation metrics are summarised from the "
-            "registered cross-validation performance table."
-        ),
-        panels=[
-            {
-                "panel_id": "A",
-                "title": "Discrimination",
-                "role": "validation",
-                "claim": "Fold-level AUROC and Brier score are derived from the model-performance table.",
-                "evidence_ids": ["model_performance", "01_model_training"],
-            },
-            {
-                "panel_id": "B",
-                "title": "Calibration",
-                "role": "validation",
-                "claim": "Fold-level calibration slope and intercept are derived from the registered step summary and performance table.",
-                "evidence_ids": ["model_performance", "01_model_training"],
-            },
-        ],
-        source_data=["model_performance", "01_model_training"],
-        statistics_note=(
-            "Deterministic rescue figure generated from parent-step outputs "
-            "when the figure-only child step did not emit exports."
-        ),
-    )
-    outputs = save_publication_figure(
-        fig,
-        out_dir / "publication_figure",
-        contract=contract,
-        dpi=300,
-    )
-    plt.close(fig)
-
-    existing_summary: Dict[str, Any] = {}
-    step_summary_path = out_dir / "step_summary.json"
-    if step_summary_path.exists():
-        try:
-            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing_summary = loaded
-        except Exception:
-            existing_summary = {}
-    existing_summary.setdefault("publication_figure_rescue", {})
-    existing_summary["publication_figure_rescue"].update(
-        {
-            "mode": "prediction_validation_from_parent_outputs",
-            "source_model_performance": str(perf_path),
-            "source_step_summary": str(summary_path),
-        }
-    )
-    figure_files = [path.name for key, path in outputs.items() if key != "contract"]
-    existing_summary["figure_files"] = figure_files
-    if figure_files:
-        existing_summary["figure_path"] = figure_files[0]
-    existing_summary.setdefault("cv_auroc_mean", summary.get("statistic:auroc"))
-    existing_summary.setdefault("cv_brier_mean", summary.get("statistic:brier_score"))
-    existing_summary.setdefault(
-        "calibration_slope", summary.get("statistic:calibration_slope")
-    )
-    existing_summary.setdefault(
-        "calibration_intercept", summary.get("statistic:calibration_intercept")
-    )
-    step_summary_path.write_text(
-        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    return "prediction_publication_bundle_from_parent_outputs_v1"
-
-
-def _render_cohort_overlap_publication_bundle_from_prior_outputs(
-    *,
-    run_dir: Path,
-    current_step_id: str,
-    out_dir: Path,
-) -> Optional[str]:
-    """Deterministically build a cohort-definition overlap figure.
-
-    Cohort eligibility and overlap steps do not emit OR/CI tables, so they
-    should never fall through to the generic association forest rescue. This
-    renderer consumes the immediate parent step's attrition and overlap tables
-    and writes traceable source-data copies keyed by cohort-definition ids.
-    """
-
-    steps_dir = run_dir / "steps"
-    if not steps_dir.exists():
-        return None
-
-    parent_step_id = current_step_id.removesuffix("_figure")
-    parent_outputs = steps_dir / parent_step_id / "outputs"
-    attrition_path = parent_outputs / "alternative_cohort_attrition.csv"
-    overlap_path = parent_outputs / "cohort_overlap_matrix.csv"
-    audit_path = parent_outputs / "cohort_definition_empirical_equivalence_audit.csv"
-    if not attrition_path.exists() or not overlap_path.exists():
-        return None
-
-    try:
-        attrition = pd.read_csv(attrition_path)
-        overlap = pd.read_csv(overlap_path)
-    except Exception:
-        return None
-
-    attrition_required = {
-        "definition_id",
-        "definition_label",
-        "definition_type",
-        "n_included",
-        "included_pct_of_rows",
-        "overlap_with_primary_pct_of_primary",
-        "moved_in_vs_primary_n",
-        "moved_out_vs_primary_n",
-    }
-    overlap_required = {"definition_a", "definition_b", "jaccard"}
-    if not attrition_required <= set(attrition.columns):
-        return None
-    if not overlap_required <= set(overlap.columns):
-        return None
-    if attrition.empty or overlap.empty:
-        return None
-
-    source_attrition = attrition.copy()
-    for col in (
-        "n_included",
-        "n_excluded",
-        "included_pct_of_rows",
-        "overlap_with_primary_n",
-        "overlap_with_primary_pct_of_primary",
-        "overlap_with_primary_pct_of_definition",
-        "moved_in_vs_primary_n",
-        "moved_out_vs_primary_n",
-    ):
-        if col in source_attrition.columns:
-            source_attrition[col] = pd.to_numeric(
-                source_attrition[col], errors="coerce"
-            )
-
-    def _cohort_definition_display_label(row: Mapping[str, Any]) -> str:
-        definition_id = str(row.get("definition_id") or "").strip()
-        known = {
-            "primary_adult_los1_all_vitals_sepsis3_derivable": "Primary",
-            "alt_adult_no_los_all_vitals_sepsis3_derivable": "No LOS threshold",
-            "alt_adult_los1_three_of_four_vitals_sepsis3_derivable": ">=3 of 4 vitals",
-            "alt_adult_los1_no_temp_requirement_sepsis3_derivable": "No temperature",
-            "alt_adult_los2_all_vitals_sepsis3_derivable": "LOS >=2 d",
-            "primary_adult_los1_all_vitals_sep3_measured": "Primary",
-            "alt_adult_no_los_all_vitals_sep3_measured": "No LOS threshold",
-            "alt_adult_los1_three_of_four_vitals_sep3_measured": ">=3 of 4 vitals",
-            "alt_adult_los1_no_temp_requirement_sep3_measured": "No temperature",
-            "alt_adult_los2_all_vitals_sep3_measured": "LOS >=2 d",
-        }
-        if definition_id in known:
-            return known[definition_id]
-        label = str(row.get("definition_label") or definition_id or "").strip()
-        return label or "Definition"
-
-    source_attrition["display_label"] = [
-        _cohort_definition_display_label(row)
-        for row in source_attrition.to_dict(orient="records")
-    ]
-
-    source_overlap = overlap.copy()
-    for col in (
-        "n_a",
-        "n_b",
-        "intersection_n",
-        "union_n",
-        "jaccard",
-        "a_in_b_pct",
-        "b_in_a_pct",
-    ):
-        if col in source_overlap.columns:
-            source_overlap[col] = pd.to_numeric(source_overlap[col], errors="coerce")
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    source_attrition_path = out_dir / "publication_figure_definition_source_data.csv"
-    source_overlap_path = out_dir / "publication_figure_overlap_source_data.csv"
-    source_attrition.to_csv(source_attrition_path, index=False)
-    source_overlap.to_csv(source_overlap_path, index=False)
-
-    plot_df = source_attrition.reset_index(drop=True).copy()
-    labels = plot_df["display_label"].astype(str).tolist()
-    y = list(range(len(plot_df)))
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    from easyicu.research_agent.figures.publication import (
-        add_panel_label,
-        apply_publication_style,
-        make_figure_contract,
-        save_publication_figure,
-    )
-
-    palette = apply_publication_style()
-    fig = plt.figure(figsize=(183 / 25.4, 132 / 25.4), constrained_layout=False)
-    grid = fig.add_gridspec(
-        2,
-        2,
-        width_ratios=[1.05, 1.05],
-        height_ratios=[1.0, 0.88],
-        left=0.18,
-        right=0.98,
-        top=0.92,
-        bottom=0.16,
-        wspace=0.45,
-        hspace=0.58,
-    )
-    ax_n = fig.add_subplot(grid[0, 0])
-    ax_delta = fig.add_subplot(grid[1, 0])
-    ax_heat = fig.add_subplot(grid[:, 1])
-
-    colors = [
-        (
-            palette.get("blue", "#0F4D92")
-            if str(row.get("definition_type", "")).lower() == "primary"
-            else palette.get("teal", "#42949E")
-        )
-        for row in plot_df.to_dict(orient="records")
-    ]
-    ax_n.barh(y, plot_df["n_included"].astype(float), color=colors, height=0.58)
-    ax_n.set_yticks(y)
-    ax_n.set_yticklabels(labels)
-    ax_n.invert_yaxis()
-    ax_n.set_xlabel("Included ICU stays")
-    ax_n.set_title("Eligibility definitions", loc="left", pad=4)
-    ax_n.grid(axis="x", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.55)
-    add_panel_label(ax_n, "A", x=-0.20)
-
-    moved_in = plot_df["moved_in_vs_primary_n"].astype(float)
-    moved_out = -plot_df["moved_out_vs_primary_n"].astype(float)
-    ax_delta.barh(
-        y,
-        moved_in,
-        color=palette.get("green", "#008B5E"),
-        height=0.36,
-        label="Added vs primary",
-    )
-    ax_delta.barh(
-        y,
-        moved_out,
-        color=palette.get("orange", "#E28E2C"),
-        height=0.36,
-        label="Removed vs primary",
-    )
-    ax_delta.axvline(0, color=palette.get("neutral", "#8F8F8F"), linewidth=0.8)
-    ax_delta.set_yticks(y)
-    ax_delta.set_yticklabels(labels)
-    ax_delta.invert_yaxis()
-    ax_delta.set_xlabel("ICU-stay count change")
-    ax_delta.set_title("Movement relative to primary", loc="left", pad=4)
-    ax_delta.grid(
-        axis="x", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.55
-    )
-    ax_delta.legend(
-        frameon=False,
-        fontsize=6.2,
-        loc="lower center",
-        bbox_to_anchor=(0.54, -0.36),
-        ncol=2,
-    )
-    add_panel_label(ax_delta, "B", x=-0.20)
-
-    definition_order = plot_df["definition_id"].astype(str).tolist()
-    label_map = dict(zip(definition_order, labels))
-    heat = (
-        source_overlap.pivot_table(
-            index="definition_a",
-            columns="definition_b",
-            values="jaccard",
-            aggfunc="first",
-        )
-        .reindex(index=definition_order, columns=definition_order)
-        .astype(float)
-    )
-    image = ax_heat.imshow(
-        heat.to_numpy() * 100.0,
-        cmap="Blues",
-        vmin=0,
-        vmax=100,
-        aspect="auto",
-    )
-    ax_heat.set_xticks(range(len(definition_order)))
-    ax_heat.set_xticklabels(
-        [
-            _short_figure_label(label_map.get(item, item), limit=18)
-            for item in definition_order
-        ],
-        rotation=45,
-        ha="right",
-    )
-    ax_heat.set_yticks(range(len(definition_order)))
-    ax_heat.set_yticklabels(
-        [
-            _short_figure_label(label_map.get(item, item), limit=18)
-            for item in definition_order
-        ]
-    )
-    ax_heat.set_title("Pairwise cohort overlap", loc="left", pad=4)
-    for row_idx in range(len(definition_order)):
-        for col_idx in range(len(definition_order)):
-            value = heat.iat[row_idx, col_idx]
-            if pd.isna(value):
-                continue
-            ax_heat.text(
-                col_idx,
-                row_idx,
-                f"{value * 100:.0f}",
-                ha="center",
-                va="center",
-                fontsize=5.8,
-                color="#1F1F1F" if value < 0.72 else "white",
-            )
-    cbar = fig.colorbar(image, ax=ax_heat, fraction=0.046, pad=0.03)
-    cbar.set_label("Jaccard overlap (%)")
-    add_panel_label(ax_heat, "C", x=-0.12)
-
-    contract = make_figure_contract(
-        figure_id="publication_figure",
-        core_claim=(
-            "Alternative eligibility definitions change the cohort denominator "
-            "and overlap structure, which must be visible before interpreting "
-            "model sensitivity."
-        ),
-        panels=[
-            {
-                "panel_id": "A",
-                "title": "Eligibility denominators",
-                "role": "overview",
-                "claim": "Included ICU-stay counts are read from the parent attrition table.",
-                "evidence_ids": ["alternative_cohort_attrition"],
-            },
-            {
-                "panel_id": "B",
-                "title": "Movement relative to primary",
-                "role": "audit",
-                "claim": "Each alternative definition's added and removed stays are explicit.",
-                "evidence_ids": ["alternative_cohort_attrition"],
-            },
-            {
-                "panel_id": "C",
-                "title": "Pairwise overlap",
-                "role": "robustness",
-                "claim": "Jaccard overlap is computed from the parent overlap matrix.",
-                "evidence_ids": ["cohort_overlap_matrix"],
-            },
-        ],
-        source_data=[
-            "alternative_cohort_attrition",
-            "cohort_overlap_matrix",
-            "publication_figure_definition_source_data.csv",
-            "publication_figure_overlap_source_data.csv",
-        ],
-        statistics_note=(
-            "Generated deterministically from the parent cohort-definition "
-            "attrition and overlap tables; no values are inferred from the image."
-        ),
-    )
-    outputs = save_publication_figure(
-        fig,
-        out_dir / "publication_figure",
-        contract=contract,
-        dpi=300,
-    )
-    plt.close(fig)
-
-    step_summary_path = out_dir / "step_summary.json"
-    existing_summary: Dict[str, Any] = {}
-    if step_summary_path.exists():
-        try:
-            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing_summary = loaded
-        except Exception:
-            existing_summary = {}
-    existing_summary.update(
-        {
-            "step_id": current_step_id,
-            "method": "deterministic_cohort_overlap_publication_figure_repair",
-            "rendering_only": True,
-            "source_step_id": parent_step_id,
-            "source_attrition_table": str(attrition_path),
-            "source_overlap_table": str(overlap_path),
-            "source_equivalence_audit": (
-                str(audit_path) if audit_path.exists() else None
-            ),
-            "source_data_files": [
-                source_attrition_path.name,
-                source_overlap_path.name,
-            ],
-            "n_definitions": int(len(plot_df)),
-            "figure_files": [
-                path.name for key, path in outputs.items() if key != "contract"
-            ],
-            "figure_path": "publication_figure.png",
-        }
-    )
-    step_summary_path.write_text(
-        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    return "cohort_overlap_publication_bundle_from_parent_outputs_v1"
-
-
-def _render_cohort_flow_publication_bundle_from_prior_outputs(
-    *,
-    run_dir: Path,
-    current_step_id: str,
-    out_dir: Path,
-    preverified_parent_artifacts: Optional[Mapping[str, bytes]] = None,
-) -> Optional[str]:
-    """Deterministically render a simple sequential cohort-flow contract.
-
-    This is deliberately narrower than the cohort-definition overlap renderer:
-    it accepts only a parent ``cohort_flow.csv`` plus ``attrition.csv`` with
-    explicit stages, denominators, removals, and exclusion categories.  The
-    overlap renderer remains the first choice for multi-definition analyses.
-    """
-
-    steps_dir = run_dir / "steps"
-    if not steps_dir.exists():
-        return None
-
-    parent_step_id = current_step_id.removesuffix("_figure")
-    parent_outputs = steps_dir / parent_step_id / "outputs"
-    flow_path = parent_outputs / "cohort_flow.csv"
-    attrition_path = parent_outputs / "attrition.csv"
-    flow_payload = (
-        preverified_parent_artifacts.get("cohort_flow.csv")
-        if preverified_parent_artifacts is not None
-        else None
-    )
-    attrition_payload = (
-        preverified_parent_artifacts.get("attrition.csv")
-        if preverified_parent_artifacts is not None
-        else None
-    )
-    if preverified_parent_artifacts is None and (
-        not flow_path.exists() or not attrition_path.exists()
-    ):
-        return None
-    if preverified_parent_artifacts is not None and (
-        flow_payload is None
-        or attrition_payload is None
-        or "step_summary.json" not in preverified_parent_artifacts
-    ):
-        return None
-
-    try:
-        flow = pd.read_csv(
-            io.BytesIO(flow_payload) if flow_payload is not None else flow_path
-        )
-        attrition = pd.read_csv(
-            io.BytesIO(attrition_payload)
-            if attrition_payload is not None
-            else attrition_path
-        )
-    except Exception:
-        return None
-
-    flow_required = {
-        "stage",
-        "n",
-        "percent_of_universe",
-        "n_removed_from_prior_stage",
-        "criterion",
-    }
-    attrition_required = {
-        "attrition_category",
-        "n",
-        "percent_of_universe",
-        "status",
-        "reason",
-        "partition_role",
-    }
-    if not flow_required <= set(flow.columns):
-        return None
-    if not attrition_required <= set(attrition.columns):
-        return None
-    if flow.empty or attrition.empty:
-        return None
-
-    flow_plot = flow.copy()
-    attrition_plot = attrition.copy()
-    for frame, numeric_columns in (
-        (
-            flow_plot,
-            ("n", "percent_of_universe", "n_removed_from_prior_stage"),
-        ),
-        (attrition_plot, ("n", "percent_of_universe")),
-    ):
-        for column in numeric_columns:
-            frame[column] = pd.to_numeric(frame[column], errors="coerce")
-            if frame[column].isna().any() or (~frame[column].map(math.isfinite)).any():
-                return None
-            if (frame[column] < 0).any():
-                return None
-
-    if flow_plot["stage"].fillna("").astype(str).str.strip().eq("").any():
-        return None
-    if (
-        attrition_plot["attrition_category"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-        .eq("")
-        .any()
-    ):
-        return None
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    source_flow = flow.copy()
-    source_flow["source_table"] = flow_path.name
-    source_attrition = attrition.copy()
-    source_attrition["source_table"] = attrition_path.name
-    source_flow_path = out_dir / "publication_figure_source_data.csv"
-    source_attrition_path = out_dir / "publication_figure_attrition_source_data.csv"
-    source_flow.to_csv(source_flow_path, index=False)
-    source_attrition.to_csv(source_attrition_path, index=False)
-
-    excluded = attrition_plot[
-        attrition_plot["status"].fillna("").astype(str).str.lower().eq("excluded")
-    ].copy()
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    from easyicu.research_agent.figures.publication import (
-        add_panel_label,
-        apply_publication_style,
-        make_figure_contract,
-        save_publication_figure,
-    )
-
-    palette = apply_publication_style()
-    height_mm = max(112.0, min(170.0, 70.0 + 13.0 * len(flow_plot)))
-    fig, (ax_flow, ax_attrition) = plt.subplots(
-        1,
-        2,
-        figsize=(183 / 25.4, height_mm / 25.4),
-        gridspec_kw={"width_ratios": [1.12, 0.88]},
-        constrained_layout=True,
-    )
-
-    n_stages = len(flow_plot)
-    if n_stages == 1:
-        y_positions = [0.50]
-    else:
-        y_positions = [
-            0.90 - index * 0.78 / (n_stages - 1) for index in range(n_stages)
-        ]
-    box_height = min(0.13, 0.52 / max(n_stages, 1))
-    flow_rows = flow_plot.reset_index(drop=True).to_dict(orient="records")
-    for index, (row, y_pos) in enumerate(zip(flow_rows, y_positions)):
-        stage_label = str(row["stage"]).replace("_", " ").strip().title()
-        stage_label = _short_figure_label(stage_label, limit=34)
-        count = int(round(float(row["n"])))
-        percent = float(row["percent_of_universe"])
-        facecolor = (
-            palette.get("blue", "#0F4D92")
-            if index in (0, n_stages - 1)
-            else palette.get("teal", "#42949E")
-        )
-        ax_flow.text(
-            0.46,
-            y_pos,
-            f"{stage_label}\n{count:,} ({percent:.1f}% of universe)",
-            ha="center",
-            va="center",
-            fontsize=7.0,
-            color="white",
-            transform=ax_flow.transAxes,
-            bbox={
-                "boxstyle": "round,pad=0.42",
-                "facecolor": facecolor,
-                "edgecolor": "none",
-            },
-        )
-        if index + 1 >= n_stages:
-            continue
-        next_y = y_positions[index + 1]
-        ax_flow.annotate(
-            "",
-            xy=(0.46, next_y + box_height / 2),
-            xytext=(0.46, y_pos - box_height / 2),
-            xycoords="axes fraction",
-            arrowprops={
-                "arrowstyle": "-|>",
-                "color": palette.get("neutral", "#8F8F8F"),
-                "linewidth": 0.9,
-            },
-        )
-        removed = int(round(float(flow_rows[index + 1]["n_removed_from_prior_stage"])))
-        ax_flow.text(
-            0.62,
-            (y_pos + next_y) / 2,
-            f"Removed: {removed:,}",
-            ha="left",
-            va="center",
-            fontsize=6.3,
-            color=palette.get("neutral_dark", "#4A4A4A"),
-            transform=ax_flow.transAxes,
-        )
-    ax_flow.set_title("Registered eligibility sequence", loc="left", pad=4)
-    ax_flow.set_axis_off()
-    add_panel_label(ax_flow, "A", x=-0.04)
-
-    if excluded.empty:
-        ax_attrition.text(
-            0.5,
-            0.5,
-            "No excluded categories were registered",
-            ha="center",
-            va="center",
-            transform=ax_attrition.transAxes,
-            fontsize=7.0,
-        )
-        ax_attrition.set_xticks([])
-        ax_attrition.set_yticks([])
-    else:
-        excluded = excluded.reset_index(drop=True)
-        y = list(range(len(excluded)))
-        values = excluded["n"].astype(float)
-        labels = [
-            _short_figure_label(
-                str(value).replace("_", " ").strip().title(),
-                limit=28,
-            )
-            for value in excluded["attrition_category"]
-        ]
-        ax_attrition.barh(
-            y,
-            values,
-            color=palette.get("orange", "#E28E2C"),
-            height=0.58,
-        )
-        ax_attrition.set_yticks(y)
-        ax_attrition.set_yticklabels(labels)
-        ax_attrition.invert_yaxis()
-        max_count = float(values.max())
-        ax_attrition.set_xlim(0, max(1.0, max_count * 1.28))
-        for index, row in excluded.iterrows():
-            count = int(round(float(row["n"])))
-            percent = float(row["percent_of_universe"])
-            x_pos = max(float(row["n"]), max(max_count, 1.0) * 0.015)
-            ax_attrition.text(
-                x_pos,
-                index,
-                f" {count:,} ({percent:.1f}%)",
-                ha="left",
-                va="center",
-                fontsize=6.2,
-            )
-        ax_attrition.set_xlabel("Excluded records")
-        ax_attrition.grid(
-            axis="x",
-            color=palette.get("neutral_light", "#D8D8D8"),
-            linewidth=0.55,
-        )
-    ax_attrition.set_title("Recorded attrition", loc="left", pad=4)
-    add_panel_label(ax_attrition, "B", x=-0.16)
-
-    contract = make_figure_contract(
-        figure_id="publication_figure",
-        core_claim=(
-            "The registered eligibility sequence defines the analysis cohort "
-            "and explicitly accounts for exclusions from the supplied study universe."
-        ),
-        panels=[
-            {
-                "panel_id": "A",
-                "title": "Eligibility sequence",
-                "role": "overview",
-                "claim": (
-                    "Stage-specific denominators and removals are read from the "
-                    "registered cohort-flow table."
-                ),
-                "evidence_ids": ["cohort_flow"],
-                "metadata": {"planner_product_slots": ["cohort_flow"]},
-            },
-            {
-                "panel_id": "B",
-                "title": "Attrition accounting",
-                "role": "audit",
-                "claim": (
-                    "Explicit exclusion categories and percentages are read from "
-                    "the registered attrition table."
-                ),
-                "evidence_ids": ["attrition"],
-                "metadata": {"planner_product_slots": ["attrition_audit"]},
-            },
-        ],
-        height_mm=height_mm,
-        source_data=[
-            "cohort_flow",
-            "attrition",
-            source_flow_path.name,
-            source_attrition_path.name,
-        ],
-        statistics_note=(
-            "Counts, percentages, and stage removals are rendered directly from "
-            "the parent cohort-flow and attrition tables; no values are inferred "
-            "from the image."
-        ),
-    )
-    outputs = save_publication_figure(
-        fig,
-        out_dir / "publication_figure",
-        contract=contract,
-        dpi=300,
-    )
-    plt.close(fig)
-
-    step_summary_path = out_dir / "step_summary.json"
-    existing_summary: Dict[str, Any] = {}
-    if step_summary_path.exists():
-        try:
-            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing_summary = loaded
-        except Exception:
-            existing_summary = {}
-    if (
-        existing_summary.get("deterministic_publication_figure_rescue")
-        == "no_parent_outputs"
-    ):
-        existing_summary.pop("warning", None)
-    figure_files = [path.name for key, path in outputs.items() if key != "contract"]
-    existing_summary.update(
-        {
-            "step_id": current_step_id,
-            "method": "deterministic_cohort_flow_publication_figure_repair",
-            "rendering_only": True,
-            "deterministic_publication_figure_rescue": (
-                "cohort_flow_publication_bundle_from_parent_outputs_v1"
-            ),
-            "source_step_id": parent_step_id,
-            "source_cohort_flow_table": str(flow_path),
-            "source_attrition_table": str(attrition_path),
-            "source_data_files": [
-                source_flow_path.name,
-                source_attrition_path.name,
-            ],
-            "n_flow_stages": int(len(flow_plot)),
-            "n_exclusion_categories": int(len(excluded)),
-            "figure_files": figure_files,
-            "figure_path": "publication_figure.png",
-            "figure_contract": "publication_figure.figure_contract.json",
-        }
-    )
-    step_summary_path.write_text(
-        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    return "cohort_flow_publication_bundle_from_parent_outputs_v1"
-
-
-def _render_missingness_publication_bundle_from_prior_outputs(
-    *,
-    run_dir: Path,
-    current_step_id: str,
-    out_dir: Path,
-) -> Optional[str]:
-    """Deterministically rebuild a missingness/measurement audit figure."""
-
-    steps_dir = run_dir / "steps"
-    if not steps_dir.exists():
-        return None
-    parent_step_id = current_step_id.removesuffix("_figure")
-    candidate_paths: List[Path] = []
-    candidate_step_dirs, direct_parent_only = _figure_parent_candidate_step_dirs(
-        steps_dir=steps_dir, current_step_id=current_step_id
-    )
-    for step_dir in candidate_step_dirs:
-        text = step_dir.name.lower()
-        if not direct_parent_only and not any(
-            token in text for token in ("missing", "measurement", "quality")
-        ):
-            continue
-        outputs_dir = step_dir / "outputs"
-        if outputs_dir.exists():
-            candidate_paths.extend(sorted(outputs_dir.glob("*.csv")))
-
-    def _first_col(frame: pd.DataFrame, names: Sequence[str]) -> Optional[str]:
-        for name in names:
-            if name in frame.columns:
-                return name
-        return None
-
-    parent: Optional[tuple[Path, pd.DataFrame]] = None
-    parent_score = -1
-    for csv_path in candidate_paths:
-        try:
-            frame = pd.read_csv(csv_path)
-        except Exception:
-            continue
-        has_label = _first_col(
-            frame,
-            ("variable", "exposure_or_variable", "concept", "label", "value_col"),
-        )
-        has_total = _first_col(
-            frame,
-            ("total_n", "n_total", "denominator", "denominator_n", "n"),
-        )
-        has_missing = _first_col(
-            frame,
-            ("missing_n", "n_missing", "value_missing_n", "raw_missing_n"),
-        )
-        has_unavailable = _first_col(
-            frame,
-            ("analysis_unavailable_n", "unavailable_n", "invalid_or_missing_n"),
-        )
-        has_measured = _first_col(
-            frame, ("measured_n", "measured_one_n", "n_nonmissing")
-        )
-        has_pct = _first_col(
-            frame,
-            (
-                "missing_pct",
-                "value_missing_pct",
-                "raw_missing_pct",
-                "analysis_unavailable_pct",
-                "measured_pct",
-                "measured_one_pct",
-                "percentage",
-            ),
-        )
-        if not (
-            has_label
-            and (
-                has_total
-                and (has_missing or has_unavailable or has_measured)
-                or has_pct
-            )
-        ):
-            continue
-        name = csv_path.name.lower()
-        score = 0
-        if "missingness" in name:
-            score += 100
-        if "measurement" in name:
-            score += 100
-        if has_missing:
-            score += 20
-        if has_unavailable:
-            score += 20
-        if "metric" in frame.columns and any(
-            column in frame.columns for column in ("table_section", "section")
-        ):
-            score += 10
-        if score > parent_score:
-            parent = (csv_path, frame)
-            parent_score = score
-    if parent is None:
-        return None
-
-    table_path, frame = parent
-    label_col = _first_col(
-        frame,
-        ("variable", "exposure_or_variable", "concept", "value_col", "label"),
-    )
-    display_col = _first_col(
-        frame,
-        (
-            "display_label",
-            "label",
-            "concept",
-            "variable",
-            "exposure_or_variable",
-            "value_col",
-        ),
-    )
-    section_col = _first_col(frame, ("table_section", "section"))
-    metric_col = _first_col(frame, ("metric",))
-    cohort_col = _first_col(frame, ("cohort", "scope"))
-    category_col = _first_col(frame, ("category", "status_category"))
-    total_col = _first_col(
-        frame,
-        ("total_n", "n_total", "denominator", "denominator_n", "n"),
-    )
-    missing_n_col = _first_col(
-        frame,
-        ("missing_n", "n_missing", "value_missing_n", "raw_missing_n"),
-    )
-    unavailable_n_col = _first_col(
-        frame,
-        ("analysis_unavailable_n", "unavailable_n", "invalid_or_missing_n"),
-    )
-    measured_n_col = _first_col(frame, ("measured_n", "measured_one_n", "n_nonmissing"))
-    missing_pct_col = _first_col(
-        frame,
-        ("missing_pct", "value_missing_pct", "raw_missing_pct"),
-    )
-    unavailable_pct_col = _first_col(
-        frame,
-        ("analysis_unavailable_pct", "unavailable_pct", "invalid_or_missing_pct"),
-    )
-    measured_pct_col = _first_col(frame, ("measured_pct", "measured_one_pct"))
-    if label_col is None:
-        return None
-
-    rich_process_table = section_col is not None and metric_col is not None
-    source_all = frame.copy()
-    if rich_process_table:
-        source_all["source_row_index"] = range(len(source_all))
-    source = source_all.copy()
-    source_row_filter = "all_compatible_rows"
-    if rich_process_table:
-        section = source[section_col].astype(str).str.lower()
-        metric = source[metric_col].astype(str).str.lower()
-        raw_rows = section.eq("column_missingness") & metric.eq("raw_missing")
-        unavailable_rows = section.eq("column_missingness") & metric.str.contains(
-            "analysis_unavailable",
-            regex=False,
-        )
-        if raw_rows.any():
-            source = source.loc[raw_rows].copy()
-            source_row_filter = "column_missingness:raw_missing"
-        elif unavailable_rows.any():
-            source = source.loc[unavailable_rows].copy()
-            source_row_filter = "column_missingness:analysis_unavailable"
-        if missing_n_col is None and "n" in source.columns:
-            missing_n_col = "n"
-        if missing_pct_col is None and "percentage" in source.columns:
-            missing_pct_col = "percentage"
-    total = (
-        pd.to_numeric(source[total_col], errors="coerce")
-        if total_col is not None
-        else pd.Series(pd.NA, index=source.index, dtype="Float64")
-    )
-    missing_n = (
-        pd.to_numeric(source[missing_n_col], errors="coerce")
-        if missing_n_col is not None
-        else pd.Series(pd.NA, index=source.index, dtype="Float64")
-    )
-    measured_n = (
-        pd.to_numeric(source[measured_n_col], errors="coerce")
-        if measured_n_col is not None
-        else pd.Series(pd.NA, index=source.index, dtype="Float64")
-    )
-    unavailable_n = (
-        pd.to_numeric(source[unavailable_n_col], errors="coerce")
-        if unavailable_n_col is not None
-        else pd.Series(pd.NA, index=source.index, dtype="Float64")
-    )
-    if measured_n_col is None and total_col is not None:
-        if unavailable_n_col is not None:
-            measured_n = total - unavailable_n
-        elif missing_n_col is not None:
-            measured_n = total - missing_n
-    present_but_measured_zero_col = _first_col(
-        source,
-        ("value_present_but_measured_zero_n", "value_present_but_n_zero_n"),
-    )
-    if (
-        present_but_measured_zero_col is not None
-        and total_col is not None
-        and missing_n_col is not None
-    ):
-        present_but_unflagged = pd.to_numeric(
-            source[present_but_measured_zero_col],
-            errors="coerce",
-        ).fillna(0)
-        use_value_availability = present_but_unflagged > 0
-        measured_n = measured_n.mask(use_value_availability, total - missing_n)
-    missing_pct = (
-        100.0 * missing_n / total
-        if total_col is not None and missing_n_col is not None
-        else (
-            pd.to_numeric(source[missing_pct_col], errors="coerce")
-            if missing_pct_col is not None
-            else pd.Series(pd.NA, index=source.index, dtype="Float64")
-        )
-    )
-    unavailable_pct = (
-        100.0 * unavailable_n / total
-        if total_col is not None and unavailable_n_col is not None
-        else (
-            pd.to_numeric(source[unavailable_pct_col], errors="coerce")
-            if unavailable_pct_col is not None
-            else pd.Series(pd.NA, index=source.index, dtype="Float64")
-        )
-    )
-    measured_pct = (
-        100.0 * measured_n / total
-        if total_col is not None and measured_n.notna().any()
-        else (
-            pd.to_numeric(source[measured_pct_col], errors="coerce")
-            if measured_pct_col is not None
-            else 100.0 - missing_pct
-        )
-    )
-    labels = source[label_col].astype(str)
-    display_labels = (
-        source[display_col].astype(str)
-        if display_col is not None
-        else labels.map(_publication_label)
-    )
-    indicator_semantics_col = _first_col(source, ("indicator_semantics",))
-    event_status_mask = pd.Series(False, index=source.index)
-    if indicator_semantics_col is not None:
-        event_status_mask = (
-            source[indicator_semantics_col].astype(str).eq("binary_event_presence")
-        )
-        display_labels = display_labels.mask(
-            event_status_mask,
-            display_labels.astype(str) + " — analytic event status",
-        )
-    label_output_col = "variable_name" if rich_process_table else "variable"
-    source_data_payload: Dict[str, Any] = {
-        label_output_col: labels,
-        "display_label": display_labels,
-        "missing_pct": missing_pct.astype(float),
-        "missing_n": missing_n.astype(float),
-        "n_nonmissing": measured_n.astype(float),
-        "total_n": total.astype(float),
-        "measured_pct": measured_pct.astype(float),
-        "measured_n": measured_n.astype(float),
-        "source_table": table_path.name,
-        "source_transform": "missingness_measurement_summary_v1",
-        "source_row_filter": source_row_filter,
-    }
-    if rich_process_table:
-        source_data_payload["source_row_index"] = source["source_row_index"].astype(int)
-    else:
-        if "concept" in source.columns:
-            source_data_payload["concept"] = source["concept"].astype(str)
-        else:
-            source_data_payload["concept"] = labels
-        if "label" in source.columns:
-            source_data_payload["label"] = source["label"].astype(str)
-    if missing_n_col is not None:
-        source_data_payload["value_missing_n"] = pd.to_numeric(
-            source[missing_n_col],
-            errors="coerce",
-        )
-        if rich_process_table:
-            source_data_payload[missing_n_col] = pd.to_numeric(
-                source[missing_n_col],
-                errors="coerce",
-            )
-    if missing_pct_col is not None:
-        source_data_payload["value_missing_pct"] = pd.to_numeric(
-            source[missing_pct_col],
-            errors="coerce",
-        )
-        if rich_process_table:
-            source_data_payload[missing_pct_col] = pd.to_numeric(
-                source[missing_pct_col],
-                errors="coerce",
-            )
-    if unavailable_n_col is not None:
-        source_data_payload["analysis_unavailable_n"] = unavailable_n
-    if unavailable_pct_col is not None or unavailable_n_col is not None:
-        source_data_payload["analysis_unavailable_pct"] = unavailable_pct
-    if total_col is not None:
-        source_data_payload["n_total"] = pd.to_numeric(
-            source[total_col], errors="coerce"
-        )
-        if rich_process_table:
-            source_data_payload[total_col] = pd.to_numeric(
-                source[total_col],
-                errors="coerce",
-            )
-    if cohort_col is not None:
-        cohort_output_col = "cohort_name" if rich_process_table else "cohort"
-        source_data_payload[cohort_output_col] = source[cohort_col].astype(str)
-    if "measured_one_n" in source.columns:
-        source_data_payload["measured_one_n"] = pd.to_numeric(
-            source["measured_one_n"],
-            errors="coerce",
-        )
-    if "measured_one_pct" in source.columns:
-        source_data_payload["measured_one_pct"] = pd.to_numeric(
-            source["measured_one_pct"],
-            errors="coerce",
-        )
-    if indicator_semantics_col is not None:
-        source_data_payload["indicator_semantics"] = source[
-            indicator_semantics_col
-        ].astype(str)
-    if "raw_indicator_one_n" in source.columns:
-        source_data_payload["raw_indicator_one_n"] = pd.to_numeric(
-            source["raw_indicator_one_n"],
-            errors="coerce",
-        )
-    if "event_count_column" in source.columns:
-        source_data_payload["event_count_column"] = (
-            source["event_count_column"].fillna("").astype(str)
-        )
-    source_data = pd.DataFrame(source_data_payload).dropna(
-        subset=["missing_pct", "measured_pct"],
-        how="all",
-    )
-    if source_data.empty:
-        return None
-    if rich_process_table:
-        variable_order = (
-            source_data.groupby(label_output_col, sort=False)["missing_pct"]
-            .max()
-            .sort_values(ascending=False)
-            .head(12)
-            .index
-        )
-        source_data = source_data[
-            source_data[label_output_col].isin(variable_order)
-        ].copy()
-        source_data[label_output_col] = pd.Categorical(
-            source_data[label_output_col],
-            categories=list(variable_order),
-            ordered=True,
-        )
-        source_data = source_data.sort_values(
-            [label_output_col, "cohort_name"],
-        )
-        source_data[label_output_col] = source_data[label_output_col].astype(str)
-    else:
-        source_data = source_data.sort_values("missing_pct", ascending=False).head(12)
-
-    has_event_status_rows = bool(
-        "indicator_semantics" in source_data.columns
-        and source_data["indicator_semantics"]
-        .astype(str)
-        .eq("binary_event_presence")
-        .any()
-    )
-    availability_title = (
-        "Analytic availability" if has_event_status_rows else "Measurement availability"
-    )
-    availability_axis_label = (
-        "Value / event status available (%)"
-        if has_event_status_rows
-        else "Available observations (%)"
-    )
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    availability_source_path = out_dir / "missingness_measurement_panel_source_data.csv"
-    source_data.to_csv(availability_source_path, index=False)
-
-    status_source_data = pd.DataFrame()
-    status_source_path = out_dir / "missingness_status_matrix_source_data.csv"
-    if (
-        rich_process_table
-        and label_col is not None
-        and category_col is not None
-        and cohort_col is not None
-        and total_col is not None
-        and {"n", "percentage"}.issubset(source_all.columns)
-    ):
-        status_mask = source_all[section_col].astype(str).str.lower().eq(
-            "source_status"
-        ) & source_all[metric_col].astype(str).str.lower().isin(
-            ("mutually_exclusive_source_status", "source_status")
-        )
-        status_rows = source_all.loc[status_mask].copy()
-        if not status_rows.empty:
-            status_source_data = pd.DataFrame(
-                {
-                    "variable_name": status_rows[label_col].astype(str),
-                    "display_label": status_rows[label_col]
-                    .astype(str)
-                    .map(_publication_label),
-                    "cohort_name": status_rows[cohort_col].astype(str),
-                    "status_category": status_rows[category_col].astype(str),
-                    "n": pd.to_numeric(status_rows["n"], errors="coerce"),
-                    "denominator": pd.to_numeric(
-                        status_rows[total_col], errors="coerce"
-                    ),
-                    "percentage": pd.to_numeric(
-                        status_rows["percentage"], errors="coerce"
-                    ),
-                    "source_row_index": status_rows["source_row_index"].astype(int),
-                    "source_table": table_path.name,
-                    "source_transform": "source_status_matrix_v1",
-                }
-            ).dropna(subset=["percentage"])
-            if not status_source_data.empty:
-                status_source_data.to_csv(status_source_path, index=False)
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    from easyicu.research_agent.figures.publication import (
-        add_panel_label,
-        apply_publication_style,
-        make_figure_contract,
-        save_publication_figure,
-    )
-
-    palette = apply_publication_style()
-    rich_matrix_rendered = not status_source_data.empty
-    if rich_matrix_rendered:
-        fig = plt.figure(
-            figsize=(183 / 25.4, 126 / 25.4),
-            constrained_layout=False,
-        )
-        grid = fig.add_gridspec(
-            1,
-            2,
-            width_ratios=[1.18, 0.82],
-            left=0.16,
-            right=0.98,
-            top=0.88,
-            bottom=0.25,
-            wspace=0.62,
-        )
-        ax_missing = fig.add_subplot(grid[0, 0])
-        ax_measured = fig.add_subplot(grid[0, 1])
-
-        status_plot = status_source_data.copy()
-        multi_cohort = status_plot["cohort_name"].nunique() > 1
-        status_plot["row_label"] = status_plot["display_label"].astype(str)
-        if multi_cohort:
-            status_plot["row_label"] = (
-                status_plot["row_label"]
-                + "\n"
-                + status_plot["cohort_name"].map(_publication_label)
-            )
-        status_rows = list(dict.fromkeys(status_plot["row_label"].tolist()))
-        status_columns = list(
-            dict.fromkeys(status_plot["status_category"].astype(str).tolist())
-        )
-        status_matrix = status_plot.pivot_table(
-            index="row_label",
-            columns="status_category",
-            values="percentage",
-            aggfunc="first",
-        ).reindex(index=status_rows, columns=status_columns)
-
-        def _status_display(value: str) -> str:
-            text = value.lower().replace("_", " ")
-            if "valid observed" in text:
-                return "Observed"
-            if "no recorded source" in text:
-                return "No source"
-            if "summary missing" in text:
-                return "Source present;\nsummary missing"
-            if "contradictory" in text or "invalid" in text:
-                return "Contradictory /\ninvalid"
-            return _short_figure_label(value, limit=24)
-
-        status_values = status_matrix.to_numpy(dtype=float)
-        ax_missing.imshow(
-            status_values,
-            aspect="auto",
-            vmin=0,
-            vmax=100,
-            cmap="Blues",
-        )
-        ax_missing.set_xticks(range(len(status_columns)))
-        ax_missing.set_xticklabels(
-            [_status_display(value) for value in status_columns],
-            rotation=28,
-            ha="right",
-        )
-        ax_missing.set_yticks(range(len(status_rows)))
-        ax_missing.set_yticklabels(status_rows)
-        for row_idx in range(len(status_rows)):
-            for col_idx in range(len(status_columns)):
-                value = status_values[row_idx, col_idx]
-                if pd.isna(value):
-                    continue
-                ax_missing.text(
-                    col_idx,
-                    row_idx,
-                    f"{value:.1f}",
-                    ha="center",
-                    va="center",
-                    fontsize=6.5,
-                    color="white" if value >= 55 else "black",
-                )
-        ax_missing.set_xlabel("Source-status share of cohort (%)")
-        ax_missing.set_title("Measurement-source status", loc="left", pad=4)
-        add_panel_label(ax_missing, "A", x=0.0, y=1.08)
-
-        availability_plot = source_data.copy()
-        variable_rows = list(
-            dict.fromkeys(availability_plot["variable_name"].astype(str).tolist())
-        )
-        cohort_columns = list(
-            dict.fromkeys(availability_plot["cohort_name"].astype(str).tolist())
-        )
-        availability_matrix = availability_plot.pivot_table(
-            index="variable_name",
-            columns="cohort_name",
-            values="measured_pct",
-            aggfunc="first",
-        ).reindex(index=variable_rows, columns=cohort_columns)
-        availability_values = availability_matrix.to_numpy(dtype=float)
-
-        def _measurement_display_map(values: Sequence[str]) -> Dict[str, str]:
-            raw_values = list(dict.fromkeys(str(value) for value in values))
-            display = {value: _publication_label(value) for value in raw_values}
-            counts: Dict[str, int] = {}
-            for label in display.values():
-                counts[label] = counts.get(label, 0) + 1
-            suffix_labels = {
-                "_first": "First value",
-                "_max": "Maximum",
-                "_min": "Minimum",
-                "_mean": "Mean",
-                "_n": "Observation count",
-                "_measured": "Measured flag",
-            }
-            always_expand = ("_first", "_n", "_measured")
-            for value in raw_values:
-                lower_value = value.lower()
-                if counts.get(display[value], 0) <= 1 and not lower_value.endswith(
-                    always_expand
-                ):
-                    continue
-                for suffix, suffix_label in suffix_labels.items():
-                    if lower_value.endswith(suffix):
-                        base = value[: -len(suffix)]
-                        display[value] = f"{_publication_label(base)} — {suffix_label}"
-                        break
-                else:
-                    display[value] = value.replace("_", " ").title()
-            return display
-
-        variable_display = _measurement_display_map(variable_rows)
-        ax_measured.imshow(
-            availability_values,
-            aspect="auto",
-            vmin=0,
-            vmax=100,
-            cmap="Blues",
-        )
-        ax_measured.set_xticks(range(len(cohort_columns)))
-        ax_measured.set_xticklabels(
-            [_publication_label(value) for value in cohort_columns],
-            rotation=28,
-            ha="right",
-        )
-        ax_measured.set_yticks(range(len(variable_rows)))
-        ax_measured.set_yticklabels(
-            [
-                _short_figure_label(variable_display[value], limit=32).replace(
-                    " — ", "\n"
-                )
-                for value in variable_rows
-            ]
-        )
-        for row_idx in range(len(variable_rows)):
-            for col_idx in range(len(cohort_columns)):
-                value = availability_values[row_idx, col_idx]
-                if pd.isna(value):
-                    continue
-                ax_measured.text(
-                    col_idx,
-                    row_idx,
-                    f"{value:.1f}",
-                    ha="center",
-                    va="center",
-                    fontsize=6.5,
-                    color="white" if value >= 55 else "black",
-                )
-        ax_measured.set_xlabel(availability_axis_label)
-        ax_measured.set_title(availability_title, loc="left", pad=4)
-        add_panel_label(ax_measured, "B", x=0.0, y=1.08)
-    else:
-        plot_df = source_data.reset_index(drop=True)
-        y = list(range(len(plot_df)))
-        labels = [
-            _short_figure_label(label, limit=30)
-            for label in plot_df["display_label"].astype(str)
-        ]
-        fig = plt.figure(
-            figsize=(183 / 25.4, 104 / 25.4),
-            constrained_layout=False,
-        )
-        grid = fig.add_gridspec(
-            1,
-            2,
-            width_ratios=[1.05, 0.95],
-            left=0.28,
-            right=0.98,
-            top=0.88,
-            bottom=0.16,
-            wspace=0.50,
-        )
-        ax_missing = fig.add_subplot(grid[0, 0])
-        ax_measured = fig.add_subplot(grid[0, 1], sharey=ax_missing)
-
-        missing = pd.to_numeric(plot_df["missing_pct"], errors="coerce").fillna(0)
-        measured = pd.to_numeric(plot_df["measured_pct"], errors="coerce").fillna(0)
-        ax_missing.barh(
-            y,
-            missing.clip(0, 100),
-            color=palette.get("red", "#B2182B"),
-            height=0.56,
-        )
-        ax_missing.axvline(
-            20,
-            color=palette.get("neutral", "#8F8F8F"),
-            linestyle="--",
-            linewidth=0.8,
-        )
-        ax_missing.set_yticks(y)
-        ax_missing.set_yticklabels(labels)
-        ax_missing.invert_yaxis()
-        ax_missing.set_xlabel("Missing values (%)")
-        ax_missing.set_title("Value missingness", loc="left", pad=4)
-        ax_missing.grid(
-            axis="x",
-            color=palette.get("neutral_light", "#D8D8D8"),
-            linewidth=0.55,
-        )
-        add_panel_label(ax_missing, "A", x=0.0, y=1.08)
-
-        ax_measured.barh(
-            y,
-            measured.clip(0, 100),
-            color=palette.get("blue", "#0F4D92"),
-            height=0.56,
-        )
-        ax_measured.set_xlim(0, 100)
-        ax_measured.set_xlabel(availability_axis_label)
-        ax_measured.set_title(availability_title, loc="left", pad=4)
-        ax_measured.tick_params(axis="y", labelleft=False)
-        ax_measured.grid(
-            axis="x",
-            color=palette.get("neutral_light", "#D8D8D8"),
-            linewidth=0.55,
-        )
-        add_panel_label(ax_measured, "B", x=0.0, y=1.08)
-
-    parent_evidence_id = table_path.stem
-    availability_source_id = availability_source_path.stem
-    status_source_id = status_source_path.stem
-    panel_a_title = (
-        "Measurement-source status" if rich_matrix_rendered else "Value missingness"
-    )
-    panel_a_claim = (
-        "Mutually exclusive source-status percentages are shown for each audited "
-        "measurement summary and cohort."
-        if rich_matrix_rendered
-        else "Missing percentages are recomputed from missing counts and denominators "
-        "in the parent audit table."
-    )
-    panel_a_evidence = [
-        parent_evidence_id,
-        status_source_id if rich_matrix_rendered else availability_source_id,
-    ]
-    # Figure contracts name concrete local CSV files; upstream evidence ids stay
-    # in the panel bindings above. A stem-only list leaves the strict source-data
-    # validator with no verifiable file and must not pass.
-    contract_source_data = [availability_source_path.name]
-    if rich_matrix_rendered:
-        contract_source_data.append(status_source_path.name)
-
-    contract = make_figure_contract(
-        figure_id="missingness_measurement_panel",
-        core_claim=(
-            "First-24h variable availability is shown directly from the "
-            "registered missingness and measurement audit table."
-        ),
-        panels=[
-            {
-                "panel_id": "A",
-                "title": panel_a_title,
-                "role": "data_quality",
-                "chart_type": (
-                    "missingness_matrix" if rich_matrix_rendered else "missingness_bar"
-                ),
-                "claim": panel_a_claim,
-                "evidence_ids": panel_a_evidence,
-            },
-            {
-                "panel_id": "B",
-                "title": availability_title,
-                "role": "data_quality",
-                "chart_type": "availability_panel",
-                "claim": (
-                    "Value availability percentages are recomputed from counts and "
-                    "denominators in the parent audit table. Registered binary-event "
-                    "rows report analytic status availability under the locked "
-                    "absence-as-negative convention, not literal measurement capture."
-                    if has_event_status_rows
-                    else "Measured or available percentages are recomputed from "
-                    "measurement counts and denominators in the parent audit table."
-                ),
-                "evidence_ids": [parent_evidence_id, availability_source_id],
-            },
-        ],
-        source_data=contract_source_data,
-        statistics_note=(
-            "Generated deterministically from the registered parent-step "
-            "missingness/measurement audit; percentages are count-derived."
-        ),
-    )
-    outputs = save_publication_figure(
-        fig,
-        out_dir / "missingness_measurement_panel",
-        contract=contract,
-        dpi=300,
-    )
-    plt.close(fig)
-
-    step_summary_path = out_dir / "step_summary.json"
-    existing_summary: Dict[str, Any] = {}
-    if step_summary_path.exists():
-        try:
-            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing_summary = loaded
-        except Exception:
-            existing_summary = {}
-    existing_summary.update(
-        {
-            "step_id": current_step_id,
-            "method": "deterministic_missingness_publication_figure_repair",
-            "rendering_only": True,
-            "source_step_id": parent_step_id,
-            "source_missingness_table": str(table_path),
-            "source_row_filter": source_row_filter,
-            "source_data_csv": str(availability_source_path),
-            "source_data_files": [
-                availability_source_path.name,
-                *([status_source_path.name] if rich_matrix_rendered else []),
-            ],
-            "n_variables_plotted": int(source_data[label_output_col].nunique()),
-            "n_availability_rows": int(len(source_data)),
-            "n_source_status_rows": int(len(status_source_data)),
-            "n_binary_event_status_rows": int(
-                source_data.get("indicator_semantics", pd.Series(dtype=str))
-                .astype(str)
-                .eq("binary_event_presence")
-                .sum()
-            ),
-            "rich_missingness_matrix_rendered": rich_matrix_rendered,
-            "figure_files": [
-                path.name for key, path in outputs.items() if key != "contract"
-            ],
-            "figure_path": "missingness_measurement_panel.png",
-        }
-    )
-    step_summary_path.write_text(
-        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    return "missingness_publication_bundle_from_parent_outputs_v1"
-
-
-def _render_phenotype_publication_bundle_from_prior_outputs(
-    *,
-    run_dir: Path,
-    current_step_id: str,
-    out_dir: Path,
-) -> Optional[str]:
-    """Deterministically rebuild a phenotyping figure from agent-produced,
-    source-backed standardized clustering products.
-
-    Reads ``outcome_by_cluster.csv`` (the descriptive outcome contrast, which
-    carries ``ci_low``/``ci_high`` -- validator-checked value columns) as the
-    primary traceable source, falling back to ``cluster_sizes.csv``. Renders a
-    two-panel figure (cluster sizes + descriptive outcome-by-cluster with CIs) and
-    emits a validator-conformant ``*_source_data.csv`` traced positionally via
-    ``source_row_index`` (like the prediction/association renderers). Returns
-    ``None`` when no cluster table with >= 2 clusters is found, so a run that never
-    produced a partition falls through cleanly rather than emitting an empty
-    figure. Descriptive by construction -- no OR/HR is drawn or claimed.
-    """
-
-    steps_dir = run_dir / "steps"
-    if not steps_dir.exists():
-        return None
-    parent_step_id = current_step_id.removesuffix("_figure")
-    candidate_paths: List[Path] = []
-    candidate_step_dirs, direct_parent_only = _figure_parent_candidate_step_dirs(
-        steps_dir=steps_dir, current_step_id=current_step_id
-    )
-    for step_dir in candidate_step_dirs:
-        text = step_dir.name.lower()
-        if not direct_parent_only and not any(
-            token in text
-            for token in ("cluster", "phenotype", "subphenotype", "trajectory")
-        ):
-            continue
-        outputs_dir = step_dir / "outputs"
-        if outputs_dir.exists():
-            candidate_paths.extend(sorted(outputs_dir.glob("*.csv")))
-
-    def _first_col(frame: pd.DataFrame, names: Sequence[str]) -> Optional[str]:
-        for name in names:
-            if name in frame.columns:
-                return name
-        return None
-
-    # Prefer the outcome-by-cluster table (traceable ci_low/ci_high); else sizes.
-    outcome: Optional[tuple[Path, pd.DataFrame]] = None
-    sizes: Optional[tuple[Path, pd.DataFrame]] = None
-    for csv_path in candidate_paths:
-        name = csv_path.name.lower()
-        try:
-            frame = pd.read_csv(csv_path)
-        except Exception:
-            continue
-        cluster_col = _first_col(frame, ("cluster", "cluster_id", "phenotype", "label"))
-        if cluster_col is None:
-            continue
-        if outcome is None and "outcome_by_cluster" in name:
-            outcome = (csv_path, frame)
-        if sizes is None and (
-            "cluster_sizes" in name or "size" in frame.columns or "n" in frame.columns
-        ):
-            sizes = (csv_path, frame)
-    primary = outcome or sizes
-    if primary is None:
-        return None
-    table_path, frame = primary
-    cluster_col = _first_col(frame, ("cluster", "cluster_id", "phenotype", "label"))
-    if cluster_col is None or frame[cluster_col].nunique() < 2:
-        return None
-
-    # Positional trace: keep the ORIGINAL row order so source_row_index maps 1:1
-    # into the upstream table the validator re-reads.
-    plot_df = frame.reset_index(drop=True)
-    plot_df.insert(0, "source_row_index", plot_df.index.astype(int))
-    n_col = _first_col(plot_df, ("n", "n_stays", "cluster_size", "size", "count"))
-    rate_col = _first_col(
-        plot_df, ("mortality_rate", "outcome_rate", "event_rate", "rate")
-    )
-    ci_low_col = _first_col(plot_df, ("ci_low", "ci_lower", "lower"))
-    ci_high_col = _first_col(plot_df, ("ci_high", "ci_upper", "upper"))
-
-    clusters = plot_df[cluster_col].astype(str)
-    source_payload: Dict[str, Any] = {
-        "source_row_index": plot_df["source_row_index"].astype(int),
-        # The cluster label is carried under a NON-key column name so the validator
-        # traces POSITIONALLY (source_row_index) and value-checks ci_low/ci_high,
-        # rather than joining on a key column that is either unshared or non-unique.
-        "cluster_label": clusters,
-        "source_table": table_path.name,
-        "source_transform": "phenotype_cluster_outcome_summary_v1",
-    }
-    if n_col is not None:
-        source_payload["n"] = pd.to_numeric(plot_df[n_col], errors="coerce")
-    if rate_col is not None:
-        source_payload["mortality_rate"] = pd.to_numeric(
-            plot_df[rate_col], errors="coerce"
-        )
-    if ci_low_col is not None:
-        source_payload["ci_low"] = pd.to_numeric(plot_df[ci_low_col], errors="coerce")
-    if ci_high_col is not None:
-        source_payload["ci_high"] = pd.to_numeric(plot_df[ci_high_col], errors="coerce")
-    source_data = pd.DataFrame(source_payload)
-    if source_data.empty:
-        return None
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    source_data.to_csv(out_dir / "phenotype_cluster_panel_source_data.csv", index=False)
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    from easyicu.research_agent.figures.publication import (
-        add_panel_label,
-        apply_publication_style,
-        make_figure_contract,
-        save_publication_figure,
-    )
-
-    palette = apply_publication_style()
-    labels = [f"C{c}" for c in clusters.tolist()]
-    x = list(range(len(labels)))
-    has_outcome = rate_col is not None
-    ncols = 2 if (n_col is not None and has_outcome) else 1
-    fig = plt.figure(figsize=(183 / 25.4, 92 / 25.4), constrained_layout=False)
-    grid = fig.add_gridspec(
-        1, ncols, left=0.12, right=0.97, top=0.88, bottom=0.18, wspace=0.42
-    )
-    col = 0
-    if n_col is not None:
-        ax_size = fig.add_subplot(grid[0, col])
-        sizes_v = pd.to_numeric(plot_df[n_col], errors="coerce").fillna(0).to_numpy()
-        ax_size.bar(x, sizes_v, color=palette.get("blue", "#0F4D92"), width=0.62)
-        ax_size.set_xticks(x, labels, fontsize=6.2)
-        ax_size.set_ylabel("Cluster size (n)")
-        ax_size.set_title("Cluster sizes", loc="left", pad=4)
-        add_panel_label(ax_size, "A", x=-0.12)
-        col += 1
-    if has_outcome:
-        ax_out = fig.add_subplot(grid[0, col])
-        rate = pd.to_numeric(plot_df[rate_col], errors="coerce").fillna(0).to_numpy()
-        # Scale a 0-1 proportion to percent for display; leave an already-percent
-        # column untouched.
-        scale = 100.0 if float(np.nanmax(rate)) <= 1.0 else 1.0
-        rate_pct = rate * scale
-        yerr = None
-        if ci_low_col is not None and ci_high_col is not None:
-            lo = (
-                pd.to_numeric(plot_df[ci_low_col], errors="coerce").fillna(0).to_numpy()
-                * scale
-            )
-            hi = (
-                pd.to_numeric(plot_df[ci_high_col], errors="coerce")
-                .fillna(0)
-                .to_numpy()
-                * scale
-            )
-            yerr = np.vstack(
-                [np.clip(rate_pct - lo, 0, None), np.clip(hi - rate_pct, 0, None)]
-            )
-        ax_out.bar(
-            x,
-            rate_pct,
-            yerr=yerr,
-            color=palette.get("red", "#B2182B"),
-            width=0.62,
-            capsize=3,
-        )
-        ax_out.set_xticks(x, labels, fontsize=6.2)
-        ax_out.set_ylabel("Outcome rate (%)")
-        ax_out.set_title("Outcome by cluster (descriptive)", loc="left", pad=4)
-        add_panel_label(ax_out, "B" if n_col is not None else "A", x=-0.12)
-
-    contract = make_figure_contract(
-        figure_id="phenotype_cluster_panel",
-        core_claim=(
-            "Discovered phenotype clusters are shown by size and a DESCRIPTIVE "
-            "outcome-by-cluster comparison, rendered from the agent-produced, "
-            "source-backed clustering products (no causal claim)."
-        ),
-        panels=[
-            {
-                "panel_id": "A",
-                "title": "Cluster sizes",
-                "role": "phenotype_structure",
-                "claim": "Cluster sizes come directly from the declared parent table.",
-                "evidence_ids": ["phenotype_cluster_panel_source_data.csv"],
-            },
-            {
-                "panel_id": "B",
-                "title": "Outcome by cluster",
-                "role": "phenotype_outcome",
-                "claim": (
-                    "Outcome rates and confidence intervals are copied from the "
-                    "agent's descriptive outcome-by-cluster product; comparison is "
-                    "descriptive, explicitly not causal."
-                ),
-                "evidence_ids": ["phenotype_cluster_panel_source_data.csv"],
-            },
-        ],
-        source_data=["phenotype_cluster_panel_source_data.csv"],
-        statistics_note=(
-            "Rendered deterministically from agent-produced standardized "
-            "clustering products; outcome-by-cluster is descriptive (no adjusted "
-            "effect)."
-        ),
-    )
-    outputs = save_publication_figure(
-        fig, out_dir / "phenotype_cluster_panel", contract=contract, dpi=300
-    )
-    plt.close(fig)
-
-    step_summary_path = out_dir / "step_summary.json"
-    existing_summary: Dict[str, Any] = {}
-    if step_summary_path.exists():
-        try:
-            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing_summary = loaded
-        except Exception:
-            existing_summary = {}
-    existing_summary.update(
-        {
-            "step_id": current_step_id,
-            "method": "deterministic_phenotype_publication_figure_repair",
-            "rendering_only": True,
-            "source_step_id": parent_step_id,
-            "source_cluster_table": str(table_path),
-            "source_data_csv": str(out_dir / "phenotype_cluster_panel_source_data.csv"),
-            "n_clusters_plotted": int(frame[cluster_col].nunique()),
-            "figure_files": [
-                path.name for key, path in outputs.items() if key != "contract"
-            ],
-            "figure_path": "phenotype_cluster_panel.png",
-        }
-    )
-    step_summary_path.write_text(
-        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    return "phenotype_publication_bundle_from_parent_outputs_v1"
-
-
-# Descriptive "table one" / baseline-characteristics signature. Historically the
-# deterministic figure path deliberately EXCLUDED descriptive figures so an empty
-# renderer would not claim an association forest. This renderer reverses that only
-# for a table that is UNAMBIGUOUSLY a table-one summary (variable + row-type +
-# per-group median/percentage cells) and returns None otherwise, so a result table
-# still falls through to its own renderer / the coder.
-_TABLE_ONE_ROWTYPE_COLS = ("row_type", "summary_type", "variable_class")
-_TABLE_ONE_VALUE_TOKENS = ("median", "mean", "percentage", "count", "q25", "q75")
-_RESULT_TABLE_COLS = (
-    "odds_ratio",
-    "hazard_ratio",
-    "risk_ratio",
-    "estimate",
-    "point_estimate",
-    "coef",
-    "auroc",
+from .reporting.publication_bundles import (  # noqa: F401 — owner module
+    _AMBIGUOUS_FIGURE_DATA_FAMILY,
+    _BINARY_GROUP_EXCLUDED_TOKENS,
+    _INCOMPATIBLE_FIGURE_DATA_FAMILY,
+    _RESULT_TABLE_COLS,
+    _TABLE_ONE_ROWTYPE_COLS,
+    _TABLE_ONE_VALUE_TOKENS,
+    _UPSTREAM_FAMILY_TO_RENDERER_KEY,
+    _UPSTREAM_FIGURE_DATA_FAMILY_TO_RENDERER_KEY,
+    _UPSTREAM_METHOD_TO_RENDERER_KEY,
+    _as_percent,
+    _association_descriptive_context,
+    _binary_group_column,
+    _binary_group_label,
+    _build_probe_summary,
+    _context_axis_label,
+    _event_count_column,
+    _explicit_false_figure_value,
+    _find_column,
+    _is_risk_difference_row,
+    _iter_prior_output_tables,
+    _label_column,
+    _promote_prior_publication_bundle,
+    _promote_sibling_figure_exports,
+    _publication_bundle_has_any_role,
+    _publication_bundle_has_resolvable_sources,
+    _publication_contract_file_references,
+    _render_absolute_risk_publication_bundle_from_prior_outputs,
+    _render_cohort_flow_publication_bundle_from_prior_outputs,
+    _render_cohort_overlap_publication_bundle_from_prior_outputs,
+    _render_descriptive_publication_bundle_from_prior_outputs,
+    _render_phenotype_publication_bundle_from_prior_outputs,
+    _render_prediction_publication_bundle_from_prior_outputs,
+    _renderer_for_upstream_figure_data_family,
+    _resolve_upstream_analysis_family,
+    _sensitivity_plot_label,
+    _truthy_figure_value,
+    deterministic_figure_family_supported,
 )
 
 
-def _render_descriptive_publication_bundle_from_prior_outputs(
-    *,
-    run_dir: Path,
-    current_step_id: str,
-    out_dir: Path,
-) -> Optional[str]:
-    """Deterministically rebuild a descriptive baseline / table-one figure.
+def _renderer_for_upstream_family(family: Optional[str]):
+    """Map a parent ``analysis_family`` to its deterministic figure renderer."""
 
-    Fires ONLY for a genuine table-one summary (a ``variable`` key column, a
-    row-type column, and per-group median/percentage cells) and returns ``None``
-    for anything else -- an association/result table (has an odds_ratio/estimate
-    column) is left to its own renderer, and a run without a descriptive table
-    falls through cleanly. Renders continuous (median) and categorical (percent)
-    baseline summaries and emits a validator-conformant ``*_source_data.csv``
-    traced positionally via ``source_row_index`` into the parent table.
-    """
-
-    steps_dir = run_dir / "steps"
-    if not steps_dir.exists():
+    key = _UPSTREAM_FAMILY_TO_RENDERER_KEY.get(str(family or "").strip().lower())
+    if key is None:
         return None
-    parent_step_id = current_step_id.removesuffix("_figure")
-    candidate_paths: List[Path] = []
-    candidate_step_dirs, direct_parent_only = _figure_parent_candidate_step_dirs(
-        steps_dir=steps_dir, current_step_id=current_step_id
-    )
-    for step_dir in candidate_step_dirs:
-        text = step_dir.name.lower()
-        if not direct_parent_only and not any(
-            token in text
-            for token in (
-                "baseline",
-                "table_one",
-                "table1",
-                "descriptive",
-                "characteristic",
-            )
-        ):
-            continue
-        outputs_dir = step_dir / "outputs"
-        if outputs_dir.exists():
-            candidate_paths.extend(sorted(outputs_dir.glob("*.csv")))
-
-    def _first_col(frame: pd.DataFrame, names: Sequence[str]) -> Optional[str]:
-        for name in names:
-            if name in frame.columns:
-                return name
-        return None
-
-    def _is_table_one(frame: pd.DataFrame) -> bool:
-        cols = {str(c).lower() for c in frame.columns}
-        if "variable" not in cols:
-            return False
-        # A result/effect table is NOT a table one.
-        if any(c in cols for c in _RESULT_TABLE_COLS):
-            return False
-        if not any(c in cols for c in _TABLE_ONE_ROWTYPE_COLS):
-            return False
-        return any(any(tok in c for c in cols) for tok in _TABLE_ONE_VALUE_TOKENS)
-
-    parent: Optional[tuple[Path, pd.DataFrame]] = None
-    for csv_path in candidate_paths:
-        name = csv_path.name.lower()
-        try:
-            frame = pd.read_csv(csv_path)
-        except Exception:
-            continue
-        if not _is_table_one(frame):
-            continue
-        parent = (csv_path, frame)
-        if "table_one" in name or "baseline" in name or "characteristic" in name:
-            break
-    if parent is None:
-        return None
-
-    table_path, frame = parent
-    frame = frame.reset_index(drop=True)
-    row_type_col = _first_col(frame, _TABLE_ONE_ROWTYPE_COLS)
-    label_col = _first_col(frame, ("label", "variable"))
-    category_col = _first_col(frame, ("category",))
-    median_col = _first_col(frame, ("overall_median", "median"))
-    pct_col = _first_col(frame, ("overall_percentage", "percentage"))
-    if label_col is None or (median_col is None and pct_col is None):
-        return None
-
-    # Positional trace: keep original row order; source_row_index maps 1:1 into the
-    # upstream table the validator re-reads.
-    rows: List[Dict[str, Any]] = []
-    for idx, row in frame.iterrows():
-        rtype = str(row.get(row_type_col, "") if row_type_col else "").lower()
-        label = str(row.get(label_col, "")).strip()
-        cat = str(row.get(category_col, "")).strip() if category_col else ""
-        median_v = (
-            pd.to_numeric(pd.Series([row.get(median_col)]), errors="coerce").iloc[0]
-            if median_col
-            else float("nan")
+    if key == "survival":
+        from .figures.survival import (
+            render_survival_bundle_from_prior_outputs as _render_survival_bundle,
         )
-        pct_v = (
-            pd.to_numeric(pd.Series([row.get(pct_col)]), errors="coerce").iloc[0]
-            if pct_col
-            else float("nan")
-        )
-        is_cont = ("continuous" in rtype) or (pd.notna(median_v) and pd.isna(pct_v))
-        display = label if not cat or cat.lower() == "nan" else f"{label} ({cat})"
-        rows.append(
-            {
-                # ``variable``/``category`` are _KEY_COLUMNS and non-unique in a
-                # table one (e.g. sex -> Female + Male); carrying them under NON-key
-                # names forces the validator to trace POSITIONALLY via
-                # source_row_index rather than an ambiguous named-key join that
-                # false-flags disagreement.
-                "source_row_index": int(idx),
-                "variable_name": str(row.get("variable", label)),
-                "row_category": cat,
-                "display_label": display,
-                "is_continuous": bool(is_cont),
-                "overall_median": (
-                    float(median_v) if pd.notna(median_v) else float("nan")
-                ),
-                "overall_percentage": float(pct_v) if pd.notna(pct_v) else float("nan"),
-                "source_table": table_path.name,
-                "source_transform": "table_one_baseline_summary_v1",
-            }
-        )
-    source_data = pd.DataFrame(rows)
-    cont_rows = source_data[
-        source_data["is_continuous"] & source_data["overall_median"].notna()
-    ].head(12)
-    cat_rows = source_data[
-        (~source_data["is_continuous"]) & source_data["overall_percentage"].notna()
-    ].head(12)
-    if cont_rows.empty and cat_rows.empty:
-        return None
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    keep = pd.concat([cont_rows, cat_rows]).sort_values("source_row_index")
-    keep.to_csv(out_dir / "baseline_table_one_source_data.csv", index=False)
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    from easyicu.research_agent.figures.publication import (
-        add_panel_label,
-        apply_publication_style,
-        make_figure_contract,
-        save_publication_figure,
-    )
-
-    palette = apply_publication_style()
-    ncols = int(not cont_rows.empty) + int(not cat_rows.empty)
-    fig = plt.figure(figsize=(183 / 25.4, 104 / 25.4), constrained_layout=False)
-    grid = fig.add_gridspec(
-        1, max(1, ncols), left=0.30, right=0.97, top=0.88, bottom=0.14, wspace=0.55
-    )
-    col = 0
-    if not cont_rows.empty:
-        ax = fig.add_subplot(grid[0, col])
-        y = list(range(len(cont_rows)))
-        ax.barh(
-            y,
-            cont_rows["overall_median"].to_numpy(),
-            color=palette.get("blue", "#0F4D92"),
-            height=0.6,
-        )
-        ax.set_yticks(y)
-        ax.set_yticklabels(
-            [_short_figure_label(v, limit=28) for v in cont_rows["display_label"]]
-        )
-        ax.invert_yaxis()
-        ax.set_xlabel("Median (overall)")
-        ax.set_title("Continuous characteristics", loc="left", pad=4)
-        add_panel_label(ax, "A", x=0.0, y=1.06)
-        col += 1
-    if not cat_rows.empty:
-        ax = fig.add_subplot(grid[0, col])
-        y = list(range(len(cat_rows)))
-        ax.barh(
-            y,
-            cat_rows["overall_percentage"].clip(0, 100).to_numpy(),
-            color=palette.get("green", "#2E7D32"),
-            height=0.6,
-        )
-        ax.set_yticks(y)
-        ax.set_yticklabels(
-            [_short_figure_label(v, limit=28) for v in cat_rows["display_label"]]
-        )
-        ax.invert_yaxis()
-        ax.set_xlim(0, 100)
-        ax.set_xlabel("Percentage (overall)")
-        ax.set_title("Categorical characteristics", loc="left", pad=4)
-        add_panel_label(ax, "B" if not cont_rows.empty else "A", x=0.0, y=1.06)
-
-    contract = make_figure_contract(
-        figure_id="baseline_table_one",
-        core_claim=(
-            "Baseline cohort characteristics are shown directly from the "
-            "registered descriptive table-one summary."
-        ),
-        panels=[
-            {
-                "panel_id": "A",
-                "title": "Baseline characteristics",
-                "role": "descriptive",
-                "claim": (
-                    "Median and percentage summaries are copied from the parent "
-                    "table-one; no effect is estimated."
-                ),
-                "evidence_ids": ["table_one"],
-            }
-        ],
-        source_data=["table_one"],
-        statistics_note=(
-            "Generated deterministically from the registered parent-step "
-            "table-one; descriptive only (no adjusted effect)."
-        ),
-    )
-    outputs = save_publication_figure(
-        fig, out_dir / "baseline_table_one", contract=contract, dpi=300
-    )
-    plt.close(fig)
-
-    step_summary_path = out_dir / "step_summary.json"
-    existing_summary: Dict[str, Any] = {}
-    if step_summary_path.exists():
-        try:
-            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing_summary = loaded
-        except Exception:
-            existing_summary = {}
-    existing_summary.update(
-        {
-            "step_id": current_step_id,
-            "method": "deterministic_descriptive_publication_figure_repair",
-            "rendering_only": True,
-            "source_step_id": parent_step_id,
-            "source_table_one": str(table_path),
-            "source_data_csv": str(out_dir / "baseline_table_one_source_data.csv"),
-            "n_rows_plotted": int(len(keep)),
-            "figure_files": [
-                path.name for key, path in outputs.items() if key != "contract"
-            ],
-            "figure_path": "baseline_table_one.png",
-        }
-    )
-    step_summary_path.write_text(
-        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    return "descriptive_publication_bundle_from_parent_outputs_v1"
-
-
-def _iter_prior_output_tables(
-    *,
-    run_dir: Path,
-    current_step_id: str,
-) -> Sequence[Tuple[Path, pd.DataFrame]]:
-    steps_dir = run_dir / "steps"
-    if not steps_dir.exists():
-        return []
-    tables: List[Tuple[Path, pd.DataFrame]] = []
-    for step_dir in sorted(steps_dir.iterdir()):
-        if not step_dir.is_dir() or step_dir.name == current_step_id:
-            continue
-        outputs_dir = step_dir / "outputs"
-        if not outputs_dir.exists():
-            continue
-        for csv_path in sorted(outputs_dir.glob("*.csv")):
-            try:
-                tables.append((csv_path, pd.read_csv(csv_path)))
-            except Exception:
-                continue
-    return tables
-
-
-def _find_column(
-    frame: pd.DataFrame,
-    *,
-    exact: Sequence[str] = (),
-    suffixes: Sequence[str] = (),
-    contains: Sequence[str] = (),
-    exclude: Sequence[str] = (),
-) -> Optional[str]:
-    excluded = {item.lower() for item in exclude}
-    lower_to_orig = {str(c).lower(): c for c in frame.columns}
-    for candidate in exact:
-        key = candidate.lower()
-        if key in lower_to_orig and key not in excluded:
-            return str(lower_to_orig[key])
-    for column in frame.columns:
-        key = str(column).lower()
-        if key in excluded:
-            continue
-        if suffixes and any(key.endswith(suffix.lower()) for suffix in suffixes):
-            return str(column)
-        if contains and any(token.lower() in key for token in contains):
-            return str(column)
-    return None
-
-
-def _as_percent(row: pd.Series, column: Optional[str]) -> Optional[float]:
-    if not column:
-        return None
-    value = pd.to_numeric(pd.Series([row.get(column)]), errors="coerce").iloc[0]
-    if pd.isna(value):
-        return None
-    value = float(value)
-    return value * 100.0 if abs(value) <= 1.0 else value
-
-
-def _event_count_column(
-    frame: pd.DataFrame, denominator_col: Optional[str]
-) -> Optional[str]:
-    excluded = {
-        "n",
-        "n_total",
-        "total_n",
-        "denominator",
-        "n_denominator",
-        str(denominator_col or "").lower(),
-    }
-    column = _find_column(
-        frame,
-        exact=("event_n", "events", "outcome_n", "n_positive"),
-        suffixes=("_event_n", "_events", "_n"),
-        exclude=tuple(excluded),
-    )
-    return column
-
-
-def _label_column(frame: pd.DataFrame) -> Optional[str]:
-    return _find_column(
-        frame,
-        exact=(
-            "label",
-            "group_label",
-            "exposure_label",
-            "stratum_label",
-            "category_label",
-        ),
-        suffixes=("_label",),
-    )
-
-
-_BINARY_GROUP_EXCLUDED_TOKENS = (
-    "n",
-    "count",
-    "event",
-    "events",
-    "death",
-    "mort",
-    "risk",
-    "rate",
-    "prevalence",
-    "incidence",
-    "ci",
-    "lower",
-    "upper",
-    "pct",
-    "percent",
-    "source",
-    "row",
-)
-
-
-def _binary_group_column(frame: pd.DataFrame) -> Optional[str]:
-    binary_tokens = {"0", "1", "0.0", "1.0", "false", "true", "no", "yes"}
-    for column in frame.columns:
-        key = str(column).lower()
-        if any(token in key for token in _BINARY_GROUP_EXCLUDED_TOKENS):
-            continue
-        values = [
-            str(value).strip().lower()
-            for value in frame[column].dropna().tolist()
-            if str(value).strip()
-        ]
-        if not values:
-            continue
-        binary_values = [value for value in values if value in binary_tokens]
-        allowed_extra_values = [
-            value
-            for value in values
-            if value not in binary_tokens and "risk_difference" not in value
-        ]
-        if len(set(binary_values)) >= 2 and not allowed_extra_values:
-            return str(column)
-    return None
-
-
-def _binary_group_label(column: str, value: Any) -> str:
-    normalized = str(value).strip().lower()
-    base = _publication_label(column)
-    if normalized in {"1", "1.0", "true", "yes"}:
-        return f"{base} positive"
-    if normalized in {"0", "0.0", "false", "no"}:
-        return f"{base} negative"
-    return _publication_label(value)
-
-
-def _is_risk_difference_row(row: pd.Series, *values: Any) -> bool:
-    haystack = " ".join([str(value or "") for value in values])
-    haystack = (
-        f"{haystack} {' '.join(str(value or '') for value in row.to_dict().values())}"
-    )
-    return (
-        "risk_difference" in haystack.lower() or "risk difference" in haystack.lower()
-    )
-
-
-def _context_axis_label(metric: Any, group: Any) -> str:
-    metric_text = str(metric or "").strip()
-    group_text = str(group or "").strip()
-    if metric_text.lower() == "exposure prevalence":
-        suffix = " prevalence"
-        if group_text.lower().endswith(suffix) and len(group_text) > len(suffix):
-            return (
-                f"{_short_figure_label(group_text[: -len(suffix)].strip(), limit=24)}\n"
-                "prevalence"
-            )
-        return _short_figure_label(group_text or metric_text, limit=28)
-    if metric_text and group_text and metric_text.lower() not in group_text.lower():
-        return (
-            f"{_short_figure_label(group_text, limit=24)}\n"
-            f"{_short_figure_label(metric_text, limit=24)}"
-        )
-    return _short_figure_label(group_text or metric_text or "Context", limit=28)
-
-
-def _association_descriptive_context(
-    *,
-    run_dir: Path,
-    current_step_id: str,
-    out_dir: Path,
-    primary_exposure: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Collect source-backed prevalence or absolute-risk rows for association figures.
-
-    The helper is deliberately keyed to generic column semantics
-    (prevalence/risk/event-rate), not to a benchmark variable name.
-    """
-
-    plot_rows: List[Dict[str, Any]] = []
-    source_files: List[str] = []
-    has_prevalence = False
-    has_outcome_risk = False
-
-    def _canonical_exposure_token(value: Any) -> str:
-        token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
-        suffixes = (
-            "_log1p_active",
-            "_log1p",
-            "_active",
-            "_maximum",
-            "_minimum",
-            "_median",
-            "_mean",
-            "_first",
-            "_last",
-            "_value",
-            "_max",
-            "_min",
-        )
-        changed = True
-        while changed and token:
-            changed = False
-            for suffix in suffixes:
-                if token.endswith(suffix) and len(token) > len(suffix):
-                    token = token[: -len(suffix)]
-                    changed = True
-                    break
-        return token
-
-    primary_token = _canonical_exposure_token(primary_exposure)
-
-    for table_path, frame in _iter_prior_output_tables(
-        run_dir=run_dir,
-        current_step_id=current_step_id,
-    ):
-        if frame.empty:
-            continue
-        frame = frame.copy()
-        if primary_token:
-            exposure_col = _find_column(
-                frame,
-                exact=(
-                    "exposure",
-                    "exposure_source",
-                    "source_variable",
-                    "concept",
-                    "variable",
-                ),
-            )
-            if exposure_col:
-                matches = (
-                    frame[exposure_col].map(_canonical_exposure_token).eq(primary_token)
-                )
-                if matches.any():
-                    frame = frame.loc[matches].copy()
-                elif frame[exposure_col].nunique(dropna=True) > 1:
-                    # This is explicitly a multi-exposure context table but it
-                    # contains no row for the locked primary exposure.
-                    continue
-        prevalence_pct_col = _find_column(
-            frame,
-            exact=("prevalence_pct", "incidence_pct"),
-        )
-        prevalence_prop_col = _find_column(frame, exact=("prevalence", "incidence"))
-        if not has_prevalence and (prevalence_pct_col or prevalence_prop_col):
-            denominator_col = _find_column(
-                frame,
-                exact=("n_denominator", "denominator", "n_total", "total_n", "n"),
-            )
-            event_col = _find_column(frame, exact=("n_positive", "event_n", "events"))
-            label_col = _find_column(
-                frame,
-                exact=("label", "exposure", "variable", "concept"),
-            )
-            source_rows: List[Dict[str, Any]] = []
-            for idx, row in frame.iterrows():
-                estimate = _as_percent(row, prevalence_pct_col or prevalence_prop_col)
-                if estimate is None:
-                    continue
-                base_label = row.get(label_col) if label_col else "Exposure"
-                display_label = f"{_publication_label(base_label)} prevalence"
-                record = row.to_dict()
-                record.update(
-                    {
-                        "plot_metric": "Exposure prevalence",
-                        "plot_group_label": display_label,
-                        "plot_estimate_pct": estimate,
-                        "plot_ci_low_pct": _as_percent(
-                            row,
-                            _find_column(frame, exact=("ci_low_pct", "lower_pct"))
-                            or _find_column(frame, exact=("ci_low", "lower")),
-                        ),
-                        "plot_ci_high_pct": _as_percent(
-                            row,
-                            _find_column(frame, exact=("ci_high_pct", "upper_pct"))
-                            or _find_column(frame, exact=("ci_high", "upper")),
-                        ),
-                        "plot_denominator": (
-                            row.get(denominator_col) if denominator_col else None
-                        ),
-                        "plot_event_n": row.get(event_col) if event_col else None,
-                        "source_table": table_path.name,
-                        "source_row_index": int(idx),
-                    }
-                )
-                source_rows.append(record)
-                plot_rows.append(record)
-            if source_rows:
-                source_path = out_dir / "publication_figure_prevalence_source_data.csv"
-                pd.DataFrame(source_rows).to_csv(source_path, index=False)
-                source_files.append(source_path.name)
-                has_prevalence = True
-
-        risk_pct_col = _find_column(
-            frame,
-            exact=("outcome_risk_pct", "risk_pct", "event_rate_pct"),
-            suffixes=("_risk_pct", "_rate_pct"),
-            exclude=("prevalence_pct", "incidence_pct"),
-        )
-        risk_prop_col = _find_column(
-            frame,
-            exact=("outcome_risk", "risk", "event_rate"),
-            suffixes=("_risk", "_rate"),
-            exclude=("prevalence", "incidence"),
-        )
-        if not has_outcome_risk and (risk_pct_col or risk_prop_col):
-            denominator_col = _find_column(
-                frame,
-                exact=("n", "n_total", "total_n", "denominator", "n_denominator"),
-            )
-            event_col = _event_count_column(frame, denominator_col)
-            label_col = _label_column(frame) or _find_column(
-                frame,
-                exact=("group", "category", "stratum", "exposure"),
-            )
-            binary_group_col = None if label_col else _binary_group_column(frame)
-            metric_source = str(risk_pct_col or risk_prop_col or "outcome risk")
-            metric_label = _publication_label(
-                metric_source.replace("_pct", "").replace("_risk", " risk")
-            )
-            source_rows = []
-            for idx, row in frame.iterrows():
-                estimate = _as_percent(row, risk_pct_col or risk_prop_col)
-                if estimate is None:
-                    continue
-                if _is_risk_difference_row(
-                    row,
-                    row.get(label_col) if label_col else None,
-                    row.get(binary_group_col) if binary_group_col else None,
-                ):
-                    continue
-                if label_col:
-                    group_label = row.get(label_col)
-                elif binary_group_col:
-                    group_label = _binary_group_label(
-                        binary_group_col,
-                        row.get(binary_group_col),
-                    )
-                else:
-                    group_label = f"Group {idx + 1}"
-                record = row.to_dict()
-                record.update(
-                    {
-                        "plot_metric": metric_label,
-                        "plot_group_label": _publication_label(group_label),
-                        "plot_estimate_pct": estimate,
-                        "plot_ci_low_pct": _as_percent(
-                            row,
-                            _find_column(frame, exact=("ci_low_pct", "lower_pct"))
-                            or _find_column(
-                                frame,
-                                exact=("ci_low", "lower"),
-                                suffixes=(
-                                    "_ci_low_pct",
-                                    "_ci_low",
-                                    "_lower_pct",
-                                    "_lower",
-                                ),
-                            ),
-                        ),
-                        "plot_ci_high_pct": _as_percent(
-                            row,
-                            _find_column(frame, exact=("ci_high_pct", "upper_pct"))
-                            or _find_column(
-                                frame,
-                                exact=("ci_high", "upper"),
-                                suffixes=(
-                                    "_ci_high_pct",
-                                    "_ci_high",
-                                    "_upper_pct",
-                                    "_upper",
-                                ),
-                            ),
-                        ),
-                        "plot_denominator": (
-                            row.get(denominator_col) if denominator_col else None
-                        ),
-                        "plot_event_n": row.get(event_col) if event_col else None,
-                        "source_table": table_path.name,
-                        "source_row_index": int(idx),
-                    }
-                )
-                source_rows.append(record)
-                plot_rows.append(record)
-            if source_rows:
-                source_path = (
-                    out_dir / "publication_figure_absolute_risk_source_data.csv"
-                )
-                pd.DataFrame(source_rows).to_csv(source_path, index=False)
-                source_files.append(source_path.name)
-                has_outcome_risk = True
-
-        if has_prevalence and has_outcome_risk:
-            break
-
-    if has_prevalence and has_outcome_risk:
-        title = "Prevalence and absolute outcome risk"
-        claim = "Exposure prevalence and absolute outcome risk are shown before adjusted relative estimates."
-    elif has_prevalence:
-        title = "Exposure prevalence"
-        claim = "Exposure prevalence is shown before adjusted relative estimates."
-    elif has_outcome_risk:
-        title = "Absolute outcome risk"
-        claim = "Absolute outcome risk is shown before adjusted relative estimates."
-    else:
-        title = ""
-        claim = ""
+        return _render_survival_bundle
     return {
-        "plot_rows": plot_rows,
-        "source_files": source_files,
-        "has_prevalence": has_prevalence,
-        "has_outcome_risk": has_outcome_risk,
-        "title": title,
-        "claim": claim,
-    }
+        "association": _render_association_publication_bundle_from_prior_outputs,
+        "prediction": _render_prediction_publication_bundle_from_prior_outputs,
+        "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
+        "cohort": _render_cohort_overlap_publication_bundle_from_prior_outputs,
+        "missingness": _render_missingness_publication_bundle_from_prior_outputs,
+        "absolute_risk": _render_absolute_risk_publication_bundle_from_prior_outputs,
+        "phenotype": _render_phenotype_publication_bundle_from_prior_outputs,
+        "descriptive": _render_descriptive_publication_bundle_from_prior_outputs,
+    }.get(key)
 
-
-def _render_absolute_risk_publication_bundle_from_prior_outputs(
+def _render_publication_bundle_from_prior_outputs_for_step(
     *,
     run_dir: Path,
     current_step_id: str,
     out_dir: Path,
+    step_text: str = "",
+    preverified_parent_digests: Optional[Mapping[str, str]] = None,
 ) -> Optional[str]:
-    """Render measurement availability and unadjusted outcome risk.
+    """Route by the direct parent's artifact, exact method, or family contract."""
 
-    The renderer accepts only the direct parent's tidy absolute-risk contract
-    (``exposure``, ``group_type``, ``estimate_type``).  It never re-reads the
-    cohort and every plotted row carries a positional trace back to the parent
-    CSV.  This is intentionally separate from the association renderer: an
-    absolute-risk context step has no adjusted estimand to invent or borrow.
+    del step_text
+
+    # An explicit artifact family has first priority, followed by the exact
+    # parent-method compatibility adapter.  A supporting QC figure can
+    # contain a generic token such as ``quality`` in its stochastic step id; the
+    # token router would otherwise steal it for the missingness renderer even
+    # though the parent recorded a more precise controlled method.
+    _upstream_artifact_family = _resolve_upstream_figure_data_family(
+        run_dir, current_step_id
+    )
+    _upstream_artifact_renderer = _renderer_for_upstream_figure_data_family(
+        _upstream_artifact_family
+    )
+    _upstream_method_renderer = _renderer_for_upstream_method(
+        _resolve_upstream_analysis_method(run_dir, current_step_id)
+    )
+
+    # Parent-family renderer (used as the else branch AND as a fallback for the
+    # strict phenotype/descriptive renderers when their guard returns None, so a
+    # mis-routed step still reaches the correct renderer rather than the coder).
+    _upstream_family = _resolve_upstream_analysis_family(run_dir, current_step_id)
+    _upstream_renderer = _renderer_for_upstream_family(_upstream_family)
+    _upstream_fallback = (_upstream_renderer,) if _upstream_renderer is not None else ()
+    # Cohort sensitivity, overlap, and attrition/flow are sibling renderings of
+    # one closed cohort-definition family.  A direct-parent family declaration
+    # should outrank stochastic step text, but a sensitivity/overlap renderer
+    # that rejects an attrition-shaped parent must still hand off to the flow
+    # renderer in the same family.  Keep this as an exact-family fallback; do
+    # not reintroduce token routing for unrelated methods.
+    if _upstream_family == "cohort_definition_sensitivity":
+        _upstream_fallback = (
+            _render_sensitivity_publication_bundle_from_prior_outputs,
+            _render_cohort_overlap_publication_bundle_from_prior_outputs,
+            _render_cohort_flow_publication_bundle_from_prior_outputs,
+        )
+    elif _upstream_family == "cohort_definition":
+        # The automatic path admits this family only when the current direct
+        # parent has digest-bound cohort_flow.csv + attrition.csv.  Render that
+        # exact closed product; never probe an overlap renderer first and let a
+        # schema coincidence choose a different scientific display.
+        _upstream_fallback = (
+            _render_cohort_flow_publication_bundle_from_prior_outputs,
+        )
+
+    if _upstream_artifact_family is not None:
+        if _upstream_artifact_renderer is None:
+            return None
+        renderers = (_upstream_artifact_renderer,)
+    elif _upstream_method_renderer is not None:
+        renderers = (_upstream_method_renderer,)
+    elif _upstream_fallback:
+        renderers = _upstream_fallback
+    else:
+        return None
+
+    # A split association-figure step should preserve a source-backed figure
+    # that the direct analysis parent already produced.  Re-rendering from the
+    # first OR-like CSV can discard panel semantics and flatten primary,
+    # secondary, sensitivity, and adjustment rows into one forest plot.  Role
+    # filtering plus the direct-parent rule in the promoter keeps this scoped;
+    # when no eligible bundle exists, the deterministic renderer below remains
+    # the fallback.
+    if _render_association_publication_bundle_from_prior_outputs in renderers:
+        promoted = _promote_prior_publication_bundle(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            required_roles=("primary_estimand",),
+            require_declared_sources=True,
+        )
+        if promoted is not None:
+            return promoted
+
+    for renderer in renderers:
+        renderer_kwargs: Dict[str, Any] = {}
+        if preverified_parent_digests is not None:
+            from .figures.distribution_availability import (
+                render_distribution_availability_bundle_from_prior_outputs,
+            )
+
+            if renderer is render_distribution_availability_bundle_from_prior_outputs:
+                renderer_kwargs["preverified_parent_digests"] = dict(
+                    preverified_parent_digests
+                )
+        repair_id = renderer(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            **renderer_kwargs,
+        )
+        if repair_id is not None:
+            return repair_id
+    return None
+
+def _resolve_upstream_analysis_method(
+    run_dir: Path, current_step_id: str
+) -> Optional[str]:
+    """Return the controlled ``method`` recorded by a figure step's parent."""
+
+    parent = str(current_step_id or "").removesuffix("_figure")
+    if not parent or parent == str(current_step_id):
+        return None
+    summ = Path(run_dir) / "steps" / parent / "outputs" / "step_summary.json"
+    try:
+        method = json.loads(summ.read_text("utf-8")).get("method")
+    except Exception:
+        method = None
+    if method:
+        return str(method).strip().lower()
+
+    # Free-model summaries need not repeat planning metadata.  The partial
+    # manifest retains the exact structured AnalysisStep that produced the
+    # parent, so use that method as a closed fallback instead of inferring a
+    # renderer from the stochastic step id or intent prose.
+    request_step = _resolve_upstream_manifest_step(run_dir, current_step_id)
+    method = request_step.get("method") if request_step else None
+    if method:
+        return str(method).strip().lower()
+    return None
+
+def _planned_primary_association_contract(
+    run_dir: Path,
+    figure_step_id: str,
+    summary: Mapping[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Resolve one Planner-required primary model to its validated contract."""
+
+    request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
+    if not isinstance(request_step, Mapping):
+        return None
+    requirements = request_step.get("model_requirements")
+    primary_requirements = [
+        item
+        for item in requirements or []
+        if isinstance(item, Mapping)
+        and str(item.get("analysis_role") or "").strip().lower() == "primary"
+        and item.get("required_for_step_success") is not False
+    ]
+    if len(primary_requirements) != 1:
+        return None
+    requirement_id = str(primary_requirements[0].get("requirement_id") or "")
+    contracts = summary.get("model_contracts")
+    matching_contracts = [
+        item
+        for item in contracts or []
+        if isinstance(item, Mapping)
+        and str(item.get("requirement_id") or "") == requirement_id
+        and str(item.get("analysis_role") or "").strip().lower() == "primary"
+        and str(item.get("fit_status") or "").strip().lower() == "fitted"
+    ]
+    if len(matching_contracts) != 1:
+        return None
+    contract = dict(matching_contracts[0])
+    if not str(contract.get("model_id") or "").strip():
+        return None
+    if not str(contract.get("exposure_source") or "").strip():
+        return None
+    return contract
+
+def _absolute_risk_parent_digest_seal(
+    run_dir: Path,
+    figure_step_id: str,
+) -> Optional[dict[str, str]]:
+    """Validate and seal the absolute-risk renderer's exact parent product."""
+
+    digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
+    required_names = {
+        "step_summary.json",
+        "outcome_incidence.csv",
+        "exposure_prevalence.csv",
+    }
+    if not digests or not required_names <= set(digests):
+        return None
+    request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
+    if not isinstance(request_step, Mapping):
+        return None
+    from .contracts.declared_product import (
+        read_digest_bound_artifact_snapshot,
+        typed_product,
+    )
+    from .figures.absolute_risk import (
+        CONTROLLED_METHOD,
+        prepare_absolute_risk_inputs,
+    )
+
+    if str(request_step.get("method") or "").strip().lower() != CONTROLLED_METHOD:
+        return None
+    declared_tables = {
+        parsed
+        for raw in (request_step.get("expected_outputs") or [])
+        if (parsed := typed_product(raw)) is not None and parsed[0] == "table"
+    }
+    if declared_tables != {
+        ("table", "outcome_incidence"),
+        ("table", "exposure_prevalence"),
+    }:
+        return None
+    sealed = {name: digests[name] for name in sorted(required_names)}
+    parent_step_id = str(figure_step_id or "").removesuffix("_figure")
+    parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
+    try:
+        context_payload = json.loads(
+            (Path(run_dir) / "research_context.json").read_text(encoding="utf-8")
+        )
+        expected_primary_exposure = str(
+            context_payload.get("primary_exposure") or ""
+        ).strip()
+        expected_target_outcome = str(
+            context_payload.get("target_outcome") or ""
+        ).strip()
+        if not expected_primary_exposure or not expected_target_outcome:
+            return None
+        snapshot = read_digest_bound_artifact_snapshot(
+            parent_out=parent_out,
+            artifact_digests=sealed,
+        )
+        summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
+    except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    if (
+        not isinstance(summary, Mapping)
+        or prepare_absolute_risk_inputs(
+            summary,
+            snapshot["outcome_incidence.csv"],
+            snapshot["exposure_prevalence.csv"],
+            expected_primary_exposure=expected_primary_exposure,
+            expected_target_outcome=expected_target_outcome,
+        )
+        is None
+    ):
+        return None
+    return sealed
+
+def _sealed_renderer_parent_digest_seal(
+    run_dir: Path,
+    figure_step_id: str,
+    repair_id: str,
+) -> Optional[dict[str, str]]:
+    """Return the exact evidence digests one sealed renderer may consume."""
+
+    if adapter := sealed_renderer_adapter(repair_id):
+        return adapter.seal(run_dir, figure_step_id)
+    if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
+        return _absolute_risk_parent_digest_seal(run_dir, figure_step_id)
+    digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
+    if not digests or "step_summary.json" not in digests:
+        return None
+    csv_names = {name for name in digests if Path(name).suffix.lower() == ".csv"}
+    if repair_id == "ordered_category_distribution_publication_bundle_v1":
+        required_names = {"step_summary.json", *csv_names}
+        if not csv_names:
+            return None
+    elif repair_id == "cohort_flow_publication_bundle_from_parent_outputs_v1":
+        required_names = {
+            "step_summary.json",
+            "cohort_flow.csv",
+            "attrition.csv",
+        }
+    elif repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":
+        required_names = {"step_summary.json", "robustness_summary.csv"}
+    elif repair_id == ("association_publication_bundle_from_planned_model_contract_v1"):
+        required_names = {
+            "step_summary.json",
+            "adjusted_association_estimates.csv",
+        }
+    else:
+        return None
+    if not required_names <= set(digests):
+        return None
+    sealed = {name: digests[name] for name in sorted(required_names)}
+    if repair_id != "association_publication_bundle_from_planned_model_contract_v1":
+        return sealed
+
+    # Association rendering is automatic only after the Planner and the
+    # validated parent summary identify one exact primary model contract.  The
+    # renderer then selects by model_id + exposure_source; it never searches
+    # table prose, variable-name fragments, or benchmark vocabulary.
+    parent_step_id = str(figure_step_id or "").removesuffix("_figure")
+    parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
+    try:
+        from .contracts.declared_product import read_digest_bound_artifact_snapshot
+
+        snapshot = read_digest_bound_artifact_snapshot(
+            parent_out=parent_out,
+            artifact_digests=sealed,
+        )
+        summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
+        estimates = pd.read_csv(
+            io.BytesIO(snapshot["adjusted_association_estimates.csv"])
+        )
+    except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(summary, Mapping):
+        return None
+    contract = _planned_primary_association_contract(
+        run_dir,
+        figure_step_id,
+        summary,
+    )
+    if contract is None:
+        return None
+    model_id = str(contract.get("model_id") or "").strip()
+    exposure = str(contract.get("exposure_source") or "").strip()
+    required_columns = {"model_id", "term_role", "source_variable"}
+    if not model_id or not exposure or not required_columns <= set(estimates.columns):
+        return None
+    selected = estimates.loc[
+        estimates["model_id"].astype(str).eq(model_id)
+        & estimates["term_role"].astype(str).str.lower().eq("exposure")
+        & estimates["source_variable"].astype(str).eq(exposure)
+    ]
+    if selected.empty:
+        return None
+    return sealed
+
+def _resolve_upstream_figure_data_family(
+    run_dir: Path, current_step_id: str
+) -> Optional[str]:
+    """Return one unambiguous figure-data family declared by the parent."""
+
+    parent = str(current_step_id or "").removesuffix("_figure")
+    if not parent or parent == str(current_step_id):
+        return None
+    summ = Path(run_dir) / "steps" / parent / "outputs" / "step_summary.json"
+    try:
+        summary = json.loads(summ.read_text("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(summary, dict):
+        return None
+    families = {str(summary.get("figure_data_family") or "").strip().lower()}
+    contracts = summary.get("figure_data_contracts")
+    if isinstance(contracts, list):
+        families.update(
+            str(item.get("family") or "").strip().lower()
+            for item in contracts
+            if isinstance(item, dict)
+        )
+    families.discard("")
+    if not families:
+        return None
+    if len(families) > 1:
+        return _AMBIGUOUS_FIGURE_DATA_FAMILY
+    family = next(iter(families))
+    if family == "ordered_category_distribution":
+        request_step = _resolve_upstream_manifest_step(run_dir, current_step_id)
+        declared_outputs = (
+            request_step.get("expected_outputs") if request_step else None
+        )
+        if isinstance(declared_outputs, list) and declared_outputs:
+            names = {
+                re.sub(
+                    r"[^a-z0-9]+",
+                    "_",
+                    str(item).split(":", 1)[-1].strip().lower(),
+                ).strip("_")
+                for item in declared_outputs
+            }
+            has_distribution = any(
+                name.endswith("_distribution")
+                or name in {"category_distribution", "level_distribution"}
+                for name in names
+            )
+            has_result_product = any(
+                token in name
+                for name in names
+                for token in (
+                    "association",
+                    "effect",
+                    "estimate",
+                    "outcome",
+                    "trend",
+                )
+            )
+            if has_result_product or not has_distribution:
+                return _INCOMPATIBLE_FIGURE_DATA_FAMILY
+    return family
+
+def deterministic_figure_repair_id_for_upstream(
+    run_dir: Path, step_id: str
+) -> Optional[str]:
+    """Return one Planner-authorized, evidence-bound renderer repair id.
+
+    Sealed preflight may replace the coder, so coder-written summary fields are
+    never routing authority.  The host-recorded parent planning request selects
+    one exact standard method family; registered table names and the closed
+    renderer schema then provide the structural evidence.  A summary method, if
+    present, is only an equality check against the Planner method.
     """
 
-    parent_step_id = str(current_step_id or "").removesuffix("_figure")
-    if not parent_step_id or parent_step_id == str(current_step_id or ""):
+    verified_tables = _verified_direct_parent_table_names(run_dir, step_id)
+    if not verified_tables:
         return None
-    parent_outputs = Path(run_dir) / "steps" / parent_step_id / "outputs"
-    if not parent_outputs.exists():
+    request = _resolve_upstream_manifest_analysis_request(run_dir, step_id)
+    request_step = request.get("step") if isinstance(request, Mapping) else None
+    if not isinstance(request_step, Mapping):
         return None
+    from .contracts.declared_product import typed_product
 
-    candidates = [parent_outputs / "exposure_outcome_summary.csv"]
-    candidates.extend(
-        path for path in sorted(parent_outputs.glob("*.csv")) if path not in candidates
-    )
-    table_path: Optional[Path] = None
-    frame: Optional[pd.DataFrame] = None
-    required = {"exposure", "group_type", "estimate_type"}
-    for candidate in candidates:
-        if not candidate.exists():
-            continue
-        try:
-            loaded = pd.read_csv(candidate).reset_index(drop=True)
-        except Exception:
-            continue
-        if loaded.empty or not required.issubset(set(loaded.columns)):
-            continue
-        if not any(
-            column in loaded.columns
-            for column in ("outcome_risk_pct", "outcome_risk", "estimate")
-        ):
-            continue
-        table_path, frame = candidate, loaded
-        break
-    if table_path is None or frame is None:
-        return None
-
-    estimate_type = frame["estimate_type"].astype(str).str.lower()
-    group_type = frame["group_type"].astype(str).str.lower()
-    group_value = (
-        frame.get("group_value", pd.Series("", index=frame.index, dtype="object"))
-        .astype(str)
-        .str.lower()
-    )
-
-    availability_mask = (
-        estimate_type.eq("prevalence")
-        & group_type.eq("source_state")
-        & group_value.eq("observed")
-    )
-    availability = frame.loc[availability_mask].copy()
-
-    risk_mask = estimate_type.eq("outcome_risk")
-    level_risk = frame.loc[risk_mask & group_type.eq("exposure_level")].copy()
-    if len(level_risk) >= 2:
-        counts = level_risk["exposure"].astype(str).value_counts()
-        primary_exposure = str(counts.index[0])
-        risk = level_risk[
-            level_risk["exposure"].astype(str).eq(primary_exposure)
-        ].copy()
-        no_source = frame.loc[
-            risk_mask
-            & group_type.eq("source_state")
-            & group_value.eq("no_source")
-            & frame["exposure"].astype(str).eq(primary_exposure)
-        ].copy()
-        risk = pd.concat([risk, no_source], axis=0)
-    else:
-        risk = frame.loc[risk_mask & group_type.eq("source_state")].copy()
-
-    distribution = frame.loc[
-        estimate_type.eq("continuous_distribution")
-        & frame.get("median", pd.Series(float("nan"), index=frame.index)).notna()
-    ].copy()
-    if availability.empty or risk.empty:
-        return None
-
-    def traced(rows: pd.DataFrame, transform: str) -> pd.DataFrame:
-        traced_rows = rows.copy()
-        traced_rows.insert(0, "source_row_index", traced_rows.index.astype(int))
-        # The parent table repeats exposure/label across prevalence and risk
-        # rows.  Those names are generic validator key columns, so preserving
-        # them would trigger an ambiguous many-to-many join.  Rename only the
-        # display identifiers and let ``source_row_index`` provide the exact
-        # positional trace; numeric source columns remain byte-for-byte intact.
-        traced_rows = traced_rows.rename(
-            columns={
-                column: f"source_{column}"
-                for column in (
-                    "label",
-                    "variable",
-                    "term",
-                    "exposure",
-                    "contrast",
-                    "stage",
-                    "level",
-                    "band",
-                    "category",
-                )
-                if column in traced_rows.columns
-            }
-        )
-        traced_rows["source_table"] = table_path.name
-        traced_rows["source_transform"] = transform
-        return traced_rows.reset_index(drop=True)
-
-    availability_source = traced(availability, "observed_source_prevalence_rows_v1")
-    risk_source = traced(risk, "absolute_outcome_risk_rows_v1")
-    distribution_source = traced(distribution, "continuous_distribution_rows_v1")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    availability_name = "absolute_risk_availability_source_data.csv"
-    risk_name = "absolute_risk_outcome_source_data.csv"
-    availability_source.to_csv(out_dir / availability_name, index=False)
-    risk_source.to_csv(out_dir / risk_name, index=False)
-    source_files = [availability_name, risk_name]
-    distribution_name = "absolute_risk_distribution_source_data.csv"
-    if not distribution_source.empty:
-        distribution_source.to_csv(out_dir / distribution_name, index=False)
-        source_files.append(distribution_name)
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    from easyicu.research_agent.figures.publication import (
-        add_panel_label,
-        apply_publication_style,
-        make_figure_contract,
-        save_publication_figure,
-    )
-
-    palette = apply_publication_style()
-    has_distribution = not distribution.empty
-    fig = plt.figure(
-        figsize=(183 / 25.4, (112 if has_distribution else 88) / 25.4),
-        constrained_layout=False,
-    )
-    if has_distribution:
-        grid = fig.add_gridspec(
-            2,
-            2,
-            width_ratios=[0.82, 1.35],
-            height_ratios=[1.0, 0.72],
-            left=0.16,
-            right=0.98,
-            top=0.84,
-            bottom=0.14,
-            wspace=0.78,
-            hspace=0.70,
-        )
-        ax_availability = fig.add_subplot(grid[0, 0])
-        ax_distribution = fig.add_subplot(grid[1, 0])
-        ax_risk = fig.add_subplot(grid[:, 1])
-    else:
-        grid = fig.add_gridspec(
-            1,
-            2,
-            width_ratios=[0.88, 1.32],
-            left=0.16,
-            right=0.98,
-            top=0.84,
-            bottom=0.18,
-            wspace=0.78,
-        )
-        ax_availability = fig.add_subplot(grid[0, 0])
-        ax_distribution = None
-        ax_risk = fig.add_subplot(grid[0, 1])
-
-    availability_x = [
-        _as_percent(
-            row, "prevalence_pct" if "prevalence_pct" in frame.columns else "prevalence"
-        )
-        for _, row in availability.iterrows()
-    ]
-    availability_lo = [_as_percent(row, "ci_low") for _, row in availability.iterrows()]
-    availability_hi = [
-        _as_percent(row, "ci_high") for _, row in availability.iterrows()
-    ]
-    availability_labels = [
-        _short_figure_label(_publication_label(value), limit=25)
-        for value in availability["exposure"].astype(str)
-    ]
-    y_availability = list(range(len(availability)))
-    ax_availability.errorbar(
-        availability_x,
-        y_availability,
-        xerr=[
-            [
-                max(0.0, x - (lo if lo is not None else x))
-                for x, lo in zip(availability_x, availability_lo)
-            ],
-            [
-                max(0.0, (hi if hi is not None else x) - x)
-                for x, hi in zip(availability_x, availability_hi)
-            ],
-        ],
-        fmt="o",
-        color=palette.get("teal", "#42949E"),
-        ecolor=palette.get("teal", "#42949E"),
-        elinewidth=1.0,
-        capsize=2.3,
-        markersize=4.2,
-    )
-    ax_availability.set_yticks(y_availability)
-    ax_availability.set_yticklabels(availability_labels, fontsize=6.7)
-    ax_availability.set_xlim(0, 100)
-    ax_availability.set_xlabel("Observed stays, % (95% CI)")
-    ax_availability.set_title("Measurement availability", loc="left", pad=4)
-    ax_availability.invert_yaxis()
-    ax_availability.grid(axis="x", color="#D8D8D8", linewidth=0.55, alpha=0.8)
-    add_panel_label(ax_availability, "A", x=0.0, y=1.08)
-
-    risk_x = [
-        _as_percent(
-            row,
-            (
-                "outcome_risk_pct"
-                if "outcome_risk_pct" in frame.columns
-                else "outcome_risk"
-            ),
-        )
-        for _, row in risk.iterrows()
-    ]
-    risk_lo = [_as_percent(row, "ci_low") for _, row in risk.iterrows()]
-    risk_hi = [_as_percent(row, "ci_high") for _, row in risk.iterrows()]
-    risk_labels = []
-    for _, row in risk.iterrows():
-        exposure_label = _publication_label(row.get("exposure"))
-        if str(row.get("group_type") or "").lower() == "exposure_level":
-            label = f"{exposure_label} = {row.get('group_value')}"
-        elif str(row.get("group_value") or "").lower() == "no_source":
-            label = "No recorded source"
-        else:
-            label = _publication_label(row.get("label") or row.get("group_value"))
-        risk_labels.append(_short_figure_label(label, limit=30))
-    y_risk = list(range(len(risk)))
-    ax_risk.errorbar(
-        risk_x,
-        y_risk,
-        xerr=[
-            [
-                max(0.0, x - (lo if lo is not None else x))
-                for x, lo in zip(risk_x, risk_lo)
-            ],
-            [
-                max(0.0, (hi if hi is not None else x) - x)
-                for x, hi in zip(risk_x, risk_hi)
-            ],
-        ],
-        fmt="o",
-        color=palette.get("blue", "#0F4D92"),
-        ecolor=palette.get("blue", "#0F4D92"),
-        elinewidth=1.0,
-        capsize=2.3,
-        markersize=4.2,
-    )
-    max_risk = max([value for value in risk_hi if value is not None] or risk_x)
-    ax_risk.set_xlim(0, max(10.0, max_risk * 1.28))
-    ax_risk.set_yticks(y_risk)
-    ax_risk.set_yticklabels(risk_labels, fontsize=6.8)
-    ax_risk.set_xlabel("Outcome risk, % (95% CI)")
-    ax_risk.set_title("Absolute outcome risk", loc="left", pad=4)
-    ax_risk.invert_yaxis()
-    ax_risk.grid(axis="x", color="#D8D8D8", linewidth=0.55, alpha=0.8)
-    for row_index, (value, upper) in enumerate(zip(risk_x, risk_hi)):
-        ax_risk.text(
-            max(value, upper if upper is not None else value) + 0.45,
-            row_index,
-            f"{value:.1f}%",
-            va="center",
-            fontsize=6.2,
-            color=palette.get("baseline", "#272727"),
-        )
-    add_panel_label(ax_risk, "B", x=0.0, y=1.06)
-
-    panels: List[Dict[str, Any]] = [
-        {
-            "panel_id": "A",
-            "title": "Measurement availability",
-            "role": "descriptive_result",
-            "chart_type": "dot_interval_prevalence",
-            "claim": "Source-consistent observed prevalence is shown for each requested exposure.",
-            "evidence_ids": [availability_name],
-        },
-        {
-            "panel_id": "B",
-            "title": "Absolute outcome risk",
-            "role": "descriptive_result",
-            "chart_type": "dot_interval_absolute_risk",
-            "claim": "Unadjusted outcome risks and Wilson 95% confidence intervals are shown for prespecified exposure levels, retaining the no-source group.",
-            "evidence_ids": [risk_name],
-        },
-    ]
-    if ax_distribution is not None:
-        medians = pd.to_numeric(distribution["median"], errors="coerce").to_numpy()
-        q25 = pd.to_numeric(distribution["q25"], errors="coerce").to_numpy()
-        q75 = pd.to_numeric(distribution["q75"], errors="coerce").to_numpy()
-        y_distribution = list(range(len(distribution)))
-        ax_distribution.errorbar(
-            medians,
-            y_distribution,
-            xerr=[medians - q25, q75 - medians],
-            fmt="o",
-            color=palette.get("orange", "#E69F00"),
-            ecolor=palette.get("orange", "#E69F00"),
-            elinewidth=1.0,
-            capsize=2.3,
-            markersize=4.2,
-        )
-        ax_distribution.set_yticks(y_distribution)
-        ax_distribution.set_yticklabels(
-            [
-                _short_figure_label(_publication_label(value), limit=25)
-                for value in distribution["exposure"].astype(str)
-            ],
-            fontsize=6.7,
-        )
-        ax_distribution.set_xlabel("Median (IQR)")
-        ax_distribution.set_title("Observed distribution", loc="left", pad=4)
-        ax_distribution.invert_yaxis()
-        ax_distribution.grid(axis="x", color="#D8D8D8", linewidth=0.55, alpha=0.8)
-        add_panel_label(ax_distribution, "C", x=0.0, y=1.10)
-        panels.append(
-            {
-                "panel_id": "C",
-                "title": "Observed distribution",
-                "role": "descriptive_result",
-                "chart_type": "median_iqr",
-                "claim": "Continuous observed exposures are summarised by median and interquartile range without post-hoc binning.",
-                "evidence_ids": [distribution_name],
-            }
-        )
-
-    fig.suptitle(
-        "Measurement availability and unadjusted outcome context",
-        x=0.16,
-        ha="left",
-        y=0.98,
-        fontsize=9.2,
-        fontweight="bold",
-    )
-    contract = make_figure_contract(
-        figure_id="publication_figure",
-        core_claim=(
-            "The figure shows measurement availability, absolute outcome risk, "
-            "and continuous-distribution context before adjusted modelling."
-        ),
-        panels=panels,
-        source_data=source_files,
-        statistics_note=(
-            "Rendered deterministically from the direct parent's tidy summary. "
-            "Risk and prevalence intervals are Wilson 95% confidence intervals; "
-            "continuous values are median (IQR)."
-        ),
-    )
-    outputs = save_publication_figure(
-        fig, out_dir / "publication_figure", contract=contract, dpi=300
-    )
-    plt.close(fig)
-
-    figure_files = [path.name for key, path in outputs.items() if key != "contract"]
-    summary = {
-        "step_id": current_step_id,
-        "method": "deterministic_absolute_risk_publication_figure",
-        "rendering_only": True,
-        "source_step_id": parent_step_id,
-        "source_table": str(table_path),
-        "source_data_files": source_files,
-        "n_availability_rows": int(len(availability)),
-        "n_risk_rows": int(len(risk)),
-        "n_distribution_rows": int(len(distribution)),
-        "figure_files": figure_files,
-        "figure_path": "publication_figure.png",
+    planner_table_tokens = {
+        tuple(part for part in parsed[1].split("_") if part)
+        for raw in (request_step.get("expected_outputs") or [])
+        if (parsed := typed_product(raw)) is not None
+        and parsed[0] in {"table", "artifact", "dataset"}
     }
-    (out_dir / "step_summary.json").write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    return "absolute_risk_publication_bundle_from_parent_outputs_v1"
 
+    def _declares(role_suffixes: Sequence[Sequence[str]]) -> bool:
+        return any(
+            len(tokens) >= len(suffix) and tokens[-len(suffix) :] == tuple(suffix)
+            for tokens in planner_table_tokens
+            for suffix in role_suffixes
+        )
+
+    planner_method = str(request_step.get("method") or "").strip().lower()
+    if not planner_method:
+        return None
+    reported_method = _resolve_upstream_analysis_method(run_dir, step_id)
+    if reported_method and reported_method != planner_method:
+        return None
+    from .repair_registry import sealed_renderer_metadata
+
+    candidates = [
+        metadata
+        for metadata in sealed_renderer_metadata()
+        if planner_method in metadata.planner_methods
+        and all(
+            _declares(role_alternatives)
+            for role_alternatives in metadata.planner_parent_output_role_groups
+        )
+    ]
+    if not candidates:
+        structural_v2 = (
+            "ordered_category_distribution_availability_publication_bundle_v2"
+        )
+        if (
+            _ordered_distribution_availability_parent_digest_seal(run_dir, step_id)
+            is not None
+        ):
+            return structural_v2
+    if len(candidates) != 1:
+        return None
+    repair_id = candidates[0].repair_id
+    if adapter := sealed_renderer_adapter(repair_id):
+        return repair_id if adapter.seal(run_dir, step_id) is not None else None
+    if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
+        required_tables = {"outcome_incidence.csv", "exposure_prevalence.csv"}
+        return (
+            repair_id
+            if required_tables <= verified_tables
+            and _absolute_risk_parent_digest_seal(run_dir, step_id) is not None
+            else None
+        )
+    if repair_id == ("association_publication_bundle_from_planned_model_contract_v1"):
+        return (
+            repair_id
+            if "adjusted_association_estimates.csv" in verified_tables
+            and _sealed_renderer_parent_digest_seal(
+                run_dir,
+                step_id,
+                repair_id,
+            )
+            is not None
+            else None
+        )
+    if repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":
+        return repair_id if "robustness_summary.csv" in verified_tables else None
+    if repair_id == "cohort_flow_publication_bundle_from_parent_outputs_v1":
+        return (
+            repair_id
+            if {"cohort_flow.csv", "attrition.csv"} <= verified_tables
+            else None
+        )
+    if repair_id == "ordered_category_distribution_publication_bundle_v1":
+        return repair_id
+    return None
 
 def _render_association_publication_bundle_from_prior_outputs(
     *,
@@ -9549,7 +7494,6 @@ def _render_association_publication_bundle_from_prior_outputs(
     )
     return observed_repair_id
 
-
 def _render_sensitivity_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -10157,198 +8101,12 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         return "sensitivity_publication_bundle_from_locked_summary_v1"
     return "sensitivity_publication_bundle_from_parent_outputs_v2"
 
+def deterministic_figure_family_supported_for_upstream(
+    run_dir: Path, step_id: str
+) -> bool:
+    """Compatibility boolean for the typed automatic-renderer gate."""
 
-# A ``*_figure`` step renders its parent analysis step's outputs. The parent's
-# deterministic runner records a CONTROLLED ``analysis_family`` in its
-# step_summary.json (e.g. the ordinal dose-response runner writes
-# ``analysis_family='association'``). Routing the figure by that PROVEN family is
-# the structural signal to use when the (stochastically named) figure step id
-# carries no family token — e.g. ``05_primary_stage_outcome_analysis_figure`` has
-# no association token, yet its parent produced a canonical association forest.
-# This is a small CLOSED enum (the families the runners emit) mapped to renderers,
-# NOT a fragile substring match against a free-form step id / intent prose. Only
-# RESULT families are mapped; ``descriptive``/baseline figures are intentionally
-# absent so they keep their existing (LLM-coder) path rather than being claimed by
-# a renderer that would emit an empty figure.
-_UPSTREAM_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
-    "association": "association",
-    "dose_response": "association",
-    "prediction": "prediction",
-    "prediction_model": "prediction",
-    "survival": "survival",
-    "survival_analysis": "survival",
-    "cohort_definition": "cohort",
-    "cohort_definition_sensitivity": "sensitivity",
-    "sensitivity_analysis": "sensitivity",
-    "missingness": "missingness",
-    "measurement": "missingness",
-    "data_quality": "missingness",
-    "absolute_risk_context": "absolute_risk",
-    "phenotyping": "phenotype",
-    "clustering": "phenotype",
-    "descriptive": "descriptive",
-    "table_one": "descriptive",
-    "baseline": "descriptive",
-}
-
-
-# Some supporting/QC analyses intentionally retain a broad analysis family
-# (for example, ``association_study``) while recording a narrower controlled
-# method.  Exact-method routing lets those steps use a schema-matched renderer
-# without teaching the global router any clinical variable, benchmark item, or
-# figure-specific name.  Keep this map closed and exact: free-text method-token
-# matching would recreate the same accidental routing problem as step-id prose.
-_UPSTREAM_METHOD_TO_RENDERER_KEY: dict[str, str] = {
-    "ordinal_exposure_derivation_and_quality_control": "ordered_distribution",
-    "exposure_distribution_and_missingness_audit": "distribution_availability",
-    "cohort_definition_sensitivity": "sensitivity",
-    "missingness": "missingness",
-    "missingness_audit": "missingness",
-    "missingness_measurement_audit": "missingness",
-}
-
-
-# A step-level artifact contract is more precise than either the whole-step
-# analysis family or the planner's free-form step id.  New producers should
-# declare this closed enum; exact-method routing below remains a compatibility
-# adapter for completed runs that predate the field.
-_UPSTREAM_FIGURE_DATA_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
-    "ordered_category_distribution": "ordered_distribution",
-}
-_AMBIGUOUS_FIGURE_DATA_FAMILY = "__ambiguous_figure_data_family__"
-_INCOMPATIBLE_FIGURE_DATA_FAMILY = "__incompatible_figure_data_family__"
-
-
-def _resolve_upstream_analysis_family(
-    run_dir: Path, current_step_id: str
-) -> Optional[str]:
-    """Return the ``analysis_family`` recorded by a figure step's parent step."""
-
-    parent = str(current_step_id or "").removesuffix("_figure")
-    if not parent or parent == str(current_step_id):
-        return None
-    summ = Path(run_dir) / "steps" / parent / "outputs" / "step_summary.json"
-    try:
-        fam = json.loads(summ.read_text("utf-8")).get("analysis_family")
-    except Exception:
-        return None
-    return str(fam).strip().lower() if fam else None
-
-
-def _resolve_upstream_analysis_method(
-    run_dir: Path, current_step_id: str
-) -> Optional[str]:
-    """Return the controlled ``method`` recorded by a figure step's parent."""
-
-    parent = str(current_step_id or "").removesuffix("_figure")
-    if not parent or parent == str(current_step_id):
-        return None
-    summ = Path(run_dir) / "steps" / parent / "outputs" / "step_summary.json"
-    try:
-        method = json.loads(summ.read_text("utf-8")).get("method")
-    except Exception:
-        method = None
-    if method:
-        return str(method).strip().lower()
-
-    # Free-model summaries need not repeat planning metadata.  The partial
-    # manifest retains the exact structured AnalysisStep that produced the
-    # parent, so use that method as a closed fallback instead of inferring a
-    # renderer from the stochastic step id or intent prose.
-    request_step = _resolve_upstream_manifest_step(run_dir, current_step_id)
-    method = request_step.get("method") if request_step else None
-    if method:
-        return str(method).strip().lower()
-    return None
-
-
-def _resolve_upstream_figure_data_family(
-    run_dir: Path, current_step_id: str
-) -> Optional[str]:
-    """Return one unambiguous figure-data family declared by the parent."""
-
-    parent = str(current_step_id or "").removesuffix("_figure")
-    if not parent or parent == str(current_step_id):
-        return None
-    summ = Path(run_dir) / "steps" / parent / "outputs" / "step_summary.json"
-    try:
-        summary = json.loads(summ.read_text("utf-8"))
-    except Exception:
-        return None
-    if not isinstance(summary, dict):
-        return None
-    families = {str(summary.get("figure_data_family") or "").strip().lower()}
-    contracts = summary.get("figure_data_contracts")
-    if isinstance(contracts, list):
-        families.update(
-            str(item.get("family") or "").strip().lower()
-            for item in contracts
-            if isinstance(item, dict)
-        )
-    families.discard("")
-    if not families:
-        return None
-    if len(families) > 1:
-        return _AMBIGUOUS_FIGURE_DATA_FAMILY
-    family = next(iter(families))
-    if family == "ordered_category_distribution":
-        request_step = _resolve_upstream_manifest_step(run_dir, current_step_id)
-        declared_outputs = (
-            request_step.get("expected_outputs") if request_step else None
-        )
-        if isinstance(declared_outputs, list) and declared_outputs:
-            names = {
-                re.sub(
-                    r"[^a-z0-9]+",
-                    "_",
-                    str(item).split(":", 1)[-1].strip().lower(),
-                ).strip("_")
-                for item in declared_outputs
-            }
-            has_distribution = any(
-                name.endswith("_distribution")
-                or name in {"category_distribution", "level_distribution"}
-                for name in names
-            )
-            has_result_product = any(
-                token in name
-                for name in names
-                for token in (
-                    "association",
-                    "effect",
-                    "estimate",
-                    "outcome",
-                    "trend",
-                )
-            )
-            if has_result_product or not has_distribution:
-                return _INCOMPATIBLE_FIGURE_DATA_FAMILY
-    return family
-
-
-def _renderer_for_upstream_family(family: Optional[str]):
-    """Map a parent ``analysis_family`` to its deterministic figure renderer."""
-
-    key = _UPSTREAM_FAMILY_TO_RENDERER_KEY.get(str(family or "").strip().lower())
-    if key is None:
-        return None
-    if key == "survival":
-        from .figures.survival import (
-            render_survival_bundle_from_prior_outputs as _render_survival_bundle,
-        )
-
-        return _render_survival_bundle
-    return {
-        "association": _render_association_publication_bundle_from_prior_outputs,
-        "prediction": _render_prediction_publication_bundle_from_prior_outputs,
-        "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
-        "cohort": _render_cohort_overlap_publication_bundle_from_prior_outputs,
-        "missingness": _render_missingness_publication_bundle_from_prior_outputs,
-        "absolute_risk": _render_absolute_risk_publication_bundle_from_prior_outputs,
-        "phenotype": _render_phenotype_publication_bundle_from_prior_outputs,
-        "descriptive": _render_descriptive_publication_bundle_from_prior_outputs,
-    }.get(key)
-
+    return deterministic_figure_repair_id_for_upstream(run_dir, step_id) is not None
 
 def _renderer_for_upstream_method(method: Optional[str]):
     """Map an exact controlled parent method to a deterministic renderer."""
@@ -10370,220 +8128,6 @@ def _renderer_for_upstream_method(method: Optional[str]):
         "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
         "missingness": _render_missingness_publication_bundle_from_prior_outputs,
     }.get(key)
-
-
-def _renderer_for_upstream_figure_data_family(family: Optional[str]):
-    """Map an explicit step-level figure-data contract to its renderer."""
-
-    key = _UPSTREAM_FIGURE_DATA_FAMILY_TO_RENDERER_KEY.get(
-        str(family or "").strip().lower()
-    )
-    if key == "ordered_distribution":
-        from .figures.ordered_distribution import (
-            render_ordered_distribution_bundle_from_prior_outputs,
-        )
-
-        return render_ordered_distribution_bundle_from_prior_outputs
-    return None
-
-
-def _absolute_risk_parent_digest_seal(
-    run_dir: Path,
-    figure_step_id: str,
-) -> Optional[dict[str, str]]:
-    """Validate and seal the absolute-risk renderer's exact parent product."""
-
-    digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
-    required_names = {
-        "step_summary.json",
-        "outcome_incidence.csv",
-        "exposure_prevalence.csv",
-    }
-    if not digests or not required_names <= set(digests):
-        return None
-    request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
-    if not isinstance(request_step, Mapping):
-        return None
-    from .contracts.declared_product import (
-        read_digest_bound_artifact_snapshot,
-        typed_product,
-    )
-    from .figures.absolute_risk import (
-        CONTROLLED_METHOD,
-        prepare_absolute_risk_inputs,
-    )
-
-    if str(request_step.get("method") or "").strip().lower() != CONTROLLED_METHOD:
-        return None
-    declared_tables = {
-        parsed
-        for raw in (request_step.get("expected_outputs") or [])
-        if (parsed := typed_product(raw)) is not None and parsed[0] == "table"
-    }
-    if declared_tables != {
-        ("table", "outcome_incidence"),
-        ("table", "exposure_prevalence"),
-    }:
-        return None
-    sealed = {name: digests[name] for name in sorted(required_names)}
-    parent_step_id = str(figure_step_id or "").removesuffix("_figure")
-    parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
-    try:
-        context_payload = json.loads(
-            (Path(run_dir) / "research_context.json").read_text(encoding="utf-8")
-        )
-        expected_primary_exposure = str(
-            context_payload.get("primary_exposure") or ""
-        ).strip()
-        expected_target_outcome = str(
-            context_payload.get("target_outcome") or ""
-        ).strip()
-        if not expected_primary_exposure or not expected_target_outcome:
-            return None
-        snapshot = read_digest_bound_artifact_snapshot(
-            parent_out=parent_out,
-            artifact_digests=sealed,
-        )
-        summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
-    except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        return None
-    if (
-        not isinstance(summary, Mapping)
-        or prepare_absolute_risk_inputs(
-            summary,
-            snapshot["outcome_incidence.csv"],
-            snapshot["exposure_prevalence.csv"],
-            expected_primary_exposure=expected_primary_exposure,
-            expected_target_outcome=expected_target_outcome,
-        )
-        is None
-    ):
-        return None
-    return sealed
-
-
-def _planned_primary_association_contract(
-    run_dir: Path,
-    figure_step_id: str,
-    summary: Mapping[str, Any],
-) -> Optional[dict[str, Any]]:
-    """Resolve one Planner-required primary model to its validated contract."""
-
-    request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
-    if not isinstance(request_step, Mapping):
-        return None
-    requirements = request_step.get("model_requirements")
-    primary_requirements = [
-        item
-        for item in requirements or []
-        if isinstance(item, Mapping)
-        and str(item.get("analysis_role") or "").strip().lower() == "primary"
-        and item.get("required_for_step_success") is not False
-    ]
-    if len(primary_requirements) != 1:
-        return None
-    requirement_id = str(primary_requirements[0].get("requirement_id") or "")
-    contracts = summary.get("model_contracts")
-    matching_contracts = [
-        item
-        for item in contracts or []
-        if isinstance(item, Mapping)
-        and str(item.get("requirement_id") or "") == requirement_id
-        and str(item.get("analysis_role") or "").strip().lower() == "primary"
-        and str(item.get("fit_status") or "").strip().lower() == "fitted"
-    ]
-    if len(matching_contracts) != 1:
-        return None
-    contract = dict(matching_contracts[0])
-    if not str(contract.get("model_id") or "").strip():
-        return None
-    if not str(contract.get("exposure_source") or "").strip():
-        return None
-    return contract
-
-
-def _sealed_renderer_parent_digest_seal(
-    run_dir: Path,
-    figure_step_id: str,
-    repair_id: str,
-) -> Optional[dict[str, str]]:
-    """Return the exact evidence digests one sealed renderer may consume."""
-
-    if adapter := sealed_renderer_adapter(repair_id):
-        return adapter.seal(run_dir, figure_step_id)
-    if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
-        return _absolute_risk_parent_digest_seal(run_dir, figure_step_id)
-    digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
-    if not digests or "step_summary.json" not in digests:
-        return None
-    csv_names = {name for name in digests if Path(name).suffix.lower() == ".csv"}
-    if repair_id == "ordered_category_distribution_publication_bundle_v1":
-        required_names = {"step_summary.json", *csv_names}
-        if not csv_names:
-            return None
-    elif repair_id == "cohort_flow_publication_bundle_from_parent_outputs_v1":
-        required_names = {
-            "step_summary.json",
-            "cohort_flow.csv",
-            "attrition.csv",
-        }
-    elif repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":
-        required_names = {"step_summary.json", "robustness_summary.csv"}
-    elif repair_id == ("association_publication_bundle_from_planned_model_contract_v1"):
-        required_names = {
-            "step_summary.json",
-            "adjusted_association_estimates.csv",
-        }
-    else:
-        return None
-    if not required_names <= set(digests):
-        return None
-    sealed = {name: digests[name] for name in sorted(required_names)}
-    if repair_id != "association_publication_bundle_from_planned_model_contract_v1":
-        return sealed
-
-    # Association rendering is automatic only after the Planner and the
-    # validated parent summary identify one exact primary model contract.  The
-    # renderer then selects by model_id + exposure_source; it never searches
-    # table prose, variable-name fragments, or benchmark vocabulary.
-    parent_step_id = str(figure_step_id or "").removesuffix("_figure")
-    parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
-    try:
-        from .contracts.declared_product import read_digest_bound_artifact_snapshot
-
-        snapshot = read_digest_bound_artifact_snapshot(
-            parent_out=parent_out,
-            artifact_digests=sealed,
-        )
-        summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
-        estimates = pd.read_csv(
-            io.BytesIO(snapshot["adjusted_association_estimates.csv"])
-        )
-    except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(summary, Mapping):
-        return None
-    contract = _planned_primary_association_contract(
-        run_dir,
-        figure_step_id,
-        summary,
-    )
-    if contract is None:
-        return None
-    model_id = str(contract.get("model_id") or "").strip()
-    exposure = str(contract.get("exposure_source") or "").strip()
-    required_columns = {"model_id", "term_role", "source_variable"}
-    if not model_id or not exposure or not required_columns <= set(estimates.columns):
-        return None
-    selected = estimates.loc[
-        estimates["model_id"].astype(str).eq(model_id)
-        & estimates["term_role"].astype(str).str.lower().eq("exposure")
-        & estimates["source_variable"].astype(str).eq(exposure)
-    ]
-    if selected.empty:
-        return None
-    return sealed
-
 
 def _render_authorized_sealed_publication_bundle(
     *,
@@ -10667,337 +8211,6 @@ def _render_authorized_sealed_publication_bundle(
     else:
         return None
     return observed if observed == repair_id else None
-
-
-def deterministic_figure_repair_id_for_upstream(
-    run_dir: Path, step_id: str
-) -> Optional[str]:
-    """Return one Planner-authorized, evidence-bound renderer repair id.
-
-    Sealed preflight may replace the coder, so coder-written summary fields are
-    never routing authority.  The host-recorded parent planning request selects
-    one exact standard method family; registered table names and the closed
-    renderer schema then provide the structural evidence.  A summary method, if
-    present, is only an equality check against the Planner method.
-    """
-
-    verified_tables = _verified_direct_parent_table_names(run_dir, step_id)
-    if not verified_tables:
-        return None
-    request = _resolve_upstream_manifest_analysis_request(run_dir, step_id)
-    request_step = request.get("step") if isinstance(request, Mapping) else None
-    if not isinstance(request_step, Mapping):
-        return None
-    from .contracts.declared_product import typed_product
-
-    planner_table_tokens = {
-        tuple(part for part in parsed[1].split("_") if part)
-        for raw in (request_step.get("expected_outputs") or [])
-        if (parsed := typed_product(raw)) is not None
-        and parsed[0] in {"table", "artifact", "dataset"}
-    }
-
-    def _declares(role_suffixes: Sequence[Sequence[str]]) -> bool:
-        return any(
-            len(tokens) >= len(suffix) and tokens[-len(suffix) :] == tuple(suffix)
-            for tokens in planner_table_tokens
-            for suffix in role_suffixes
-        )
-
-    planner_method = str(request_step.get("method") or "").strip().lower()
-    if not planner_method:
-        return None
-    reported_method = _resolve_upstream_analysis_method(run_dir, step_id)
-    if reported_method and reported_method != planner_method:
-        return None
-    from .repair_registry import sealed_renderer_metadata
-
-    candidates = [
-        metadata
-        for metadata in sealed_renderer_metadata()
-        if planner_method in metadata.planner_methods
-        and all(
-            _declares(role_alternatives)
-            for role_alternatives in metadata.planner_parent_output_role_groups
-        )
-    ]
-    if not candidates:
-        structural_v2 = (
-            "ordered_category_distribution_availability_publication_bundle_v2"
-        )
-        if (
-            _ordered_distribution_availability_parent_digest_seal(run_dir, step_id)
-            is not None
-        ):
-            return structural_v2
-    if len(candidates) != 1:
-        return None
-    repair_id = candidates[0].repair_id
-    if adapter := sealed_renderer_adapter(repair_id):
-        return repair_id if adapter.seal(run_dir, step_id) is not None else None
-    if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
-        required_tables = {"outcome_incidence.csv", "exposure_prevalence.csv"}
-        return (
-            repair_id
-            if required_tables <= verified_tables
-            and _absolute_risk_parent_digest_seal(run_dir, step_id) is not None
-            else None
-        )
-    if repair_id == ("association_publication_bundle_from_planned_model_contract_v1"):
-        return (
-            repair_id
-            if "adjusted_association_estimates.csv" in verified_tables
-            and _sealed_renderer_parent_digest_seal(
-                run_dir,
-                step_id,
-                repair_id,
-            )
-            is not None
-            else None
-        )
-    if repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":
-        return repair_id if "robustness_summary.csv" in verified_tables else None
-    if repair_id == "cohort_flow_publication_bundle_from_parent_outputs_v1":
-        return (
-            repair_id
-            if {"cohort_flow.csv", "attrition.csv"} <= verified_tables
-            else None
-        )
-    if repair_id == "ordered_category_distribution_publication_bundle_v1":
-        return repair_id
-    return None
-
-
-def deterministic_figure_family_supported_for_upstream(
-    run_dir: Path, step_id: str
-) -> bool:
-    """Compatibility boolean for the typed automatic-renderer gate."""
-
-    return deterministic_figure_repair_id_for_upstream(run_dir, step_id) is not None
-
-
-def deterministic_figure_family_supported(step_id: str) -> bool:
-    """Deprecated name-only compatibility probe; names never establish ownership."""
-
-    del step_id
-    return False
-
-
-def _render_publication_bundle_from_prior_outputs_for_step(
-    *,
-    run_dir: Path,
-    current_step_id: str,
-    out_dir: Path,
-    step_text: str = "",
-    preverified_parent_digests: Optional[Mapping[str, str]] = None,
-) -> Optional[str]:
-    """Route by the direct parent's artifact, exact method, or family contract."""
-
-    del step_text
-
-    # An explicit artifact family has first priority, followed by the exact
-    # parent-method compatibility adapter.  A supporting QC figure can
-    # contain a generic token such as ``quality`` in its stochastic step id; the
-    # token router would otherwise steal it for the missingness renderer even
-    # though the parent recorded a more precise controlled method.
-    _upstream_artifact_family = _resolve_upstream_figure_data_family(
-        run_dir, current_step_id
-    )
-    _upstream_artifact_renderer = _renderer_for_upstream_figure_data_family(
-        _upstream_artifact_family
-    )
-    _upstream_method_renderer = _renderer_for_upstream_method(
-        _resolve_upstream_analysis_method(run_dir, current_step_id)
-    )
-
-    # Parent-family renderer (used as the else branch AND as a fallback for the
-    # strict phenotype/descriptive renderers when their guard returns None, so a
-    # mis-routed step still reaches the correct renderer rather than the coder).
-    _upstream_family = _resolve_upstream_analysis_family(run_dir, current_step_id)
-    _upstream_renderer = _renderer_for_upstream_family(_upstream_family)
-    _upstream_fallback = (_upstream_renderer,) if _upstream_renderer is not None else ()
-    # Cohort sensitivity, overlap, and attrition/flow are sibling renderings of
-    # one closed cohort-definition family.  A direct-parent family declaration
-    # should outrank stochastic step text, but a sensitivity/overlap renderer
-    # that rejects an attrition-shaped parent must still hand off to the flow
-    # renderer in the same family.  Keep this as an exact-family fallback; do
-    # not reintroduce token routing for unrelated methods.
-    if _upstream_family == "cohort_definition_sensitivity":
-        _upstream_fallback = (
-            _render_sensitivity_publication_bundle_from_prior_outputs,
-            _render_cohort_overlap_publication_bundle_from_prior_outputs,
-            _render_cohort_flow_publication_bundle_from_prior_outputs,
-        )
-    elif _upstream_family == "cohort_definition":
-        # The automatic path admits this family only when the current direct
-        # parent has digest-bound cohort_flow.csv + attrition.csv.  Render that
-        # exact closed product; never probe an overlap renderer first and let a
-        # schema coincidence choose a different scientific display.
-        _upstream_fallback = (
-            _render_cohort_flow_publication_bundle_from_prior_outputs,
-        )
-
-    if _upstream_artifact_family is not None:
-        if _upstream_artifact_renderer is None:
-            return None
-        renderers = (_upstream_artifact_renderer,)
-    elif _upstream_method_renderer is not None:
-        renderers = (_upstream_method_renderer,)
-    elif _upstream_fallback:
-        renderers = _upstream_fallback
-    else:
-        return None
-
-    # A split association-figure step should preserve a source-backed figure
-    # that the direct analysis parent already produced.  Re-rendering from the
-    # first OR-like CSV can discard panel semantics and flatten primary,
-    # secondary, sensitivity, and adjustment rows into one forest plot.  Role
-    # filtering plus the direct-parent rule in the promoter keeps this scoped;
-    # when no eligible bundle exists, the deterministic renderer below remains
-    # the fallback.
-    if _render_association_publication_bundle_from_prior_outputs in renderers:
-        promoted = _promote_prior_publication_bundle(
-            run_dir=run_dir,
-            current_step_id=current_step_id,
-            out_dir=out_dir,
-            required_roles=("primary_estimand",),
-            require_declared_sources=True,
-        )
-        if promoted is not None:
-            return promoted
-
-    for renderer in renderers:
-        renderer_kwargs: Dict[str, Any] = {}
-        if preverified_parent_digests is not None:
-            from .figures.distribution_availability import (
-                render_distribution_availability_bundle_from_prior_outputs,
-            )
-
-            if renderer is render_distribution_availability_bundle_from_prior_outputs:
-                renderer_kwargs["preverified_parent_digests"] = dict(
-                    preverified_parent_digests
-                )
-        repair_id = renderer(
-            run_dir=run_dir,
-            current_step_id=current_step_id,
-            out_dir=out_dir,
-            **renderer_kwargs,
-        )
-        if repair_id is not None:
-            return repair_id
-    return None
-
-
-def _publication_label(value: Any) -> str:
-    token = str(value or "").strip()
-    mapping = {
-        "sepsis3": "Sepsis-3",
-        "sep3_sofa2_max": "Sepsis-3",
-        "age": "Age",
-        "age_filled": "Age",
-        "age_per_10y": "Age, per 10 years",
-        "sex_m": "Male sex",
-        "sex_male": "Male sex",
-        "male": "Male sex",
-        "hr_first": "Heart rate",
-        "hr_first_filled": "Heart rate",
-        "hr_max_per_10bpm": "Maximum heart rate, per 10 bpm",
-        "map_first": "Mean arterial pressure",
-        "map_first_filled": "Mean arterial pressure",
-        "map_min": "Minimum mean arterial pressure",
-        "resp_max_per_5": "Maximum respiratory rate, per 5/min",
-        "temp_max_c": "Maximum temperature, per 1 deg C",
-        "lactate": "Lactate",
-        "lact": "Lactate",
-        "lact_max_mmol_l": "Maximum lactate, per 1 mmol/L",
-        "lact_measured": "Lactate measured",
-        "bun_max_per_10": "Maximum BUN, per 10 units",
-        "wbc_max_per_10": "Maximum WBC, per 10 units",
-        "sofa2": "SOFA-2",
-        "death": "In-hospital mortality",
-        "alt_adult_no_los_all_vitals_sepsis3_derivable": "No LOS threshold",
-        "alt_adult_los1_three_of_four_vitals_sepsis3_derivable": ">=3 of 4 vitals",
-        "alt_adult_los1_no_temp_requirement_sepsis3_derivable": "No temperature",
-        "alt_adult_los2_all_vitals_sepsis3_derivable": "ICU LOS >=2 d",
-    }
-    lower = token.lower()
-    if lower in mapping:
-        return mapping[lower]
-    cleaned = lower
-    for suffix in ("_filled", "_first", "_measured"):
-        cleaned = cleaned.removesuffix(suffix)
-    return cleaned.replace("_", " ").strip().title() or token
-
-
-def _short_figure_label(value: Any, *, limit: int = 38) -> str:
-    text = str(value or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[: max(1, limit - 1)].rstrip() + "..."
-
-
-def _truthy_figure_value(value: Any) -> bool:
-    if value is True:
-        return True
-    if value is False or value is None:
-        return False
-    try:
-        if pd.isna(value):
-            return False
-    except (TypeError, ValueError):
-        pass
-    return str(value).strip().lower() in {"true", "1", "yes"}
-
-
-def _explicit_false_figure_value(value: Any) -> bool:
-    if value is False:
-        return True
-    if value is True or value is None:
-        return False
-    try:
-        if pd.isna(value):
-            return False
-    except (TypeError, ValueError):
-        pass
-    return str(value).strip().lower() in {"false", "0", "no"}
-
-
-def _sensitivity_plot_label(row: Mapping[str, Any]) -> str:
-    spec_id = str(row.get("spec_id") or "").strip().lower()
-    if spec_id.endswith("_crude_rd"):
-        spec_id = spec_id.removesuffix("_crude_rd")
-    mapping = {
-        "full_export_step03_scope": "Full export",
-        "primary_los_ge_1d": "Primary cohort",
-        "primary": "Primary cohort",
-        "cohort_no_los_restriction": "No ICU LOS restriction",
-        "cohort_los_ge_2d": "ICU LOS >=2 d",
-        "cohort_core_physiology_present": "Core physiology present",
-        "primary_adult_los1_all_vitals_sepsis3_derivable": "Primary cohort",
-        "alt_adult_no_los_all_vitals_sepsis3_derivable": "No LOS threshold",
-        "alt_adult_los1_three_of_four_vitals_sepsis3_derivable": ">=3 of 4 vitals",
-        "alt_adult_los1_no_temp_requirement_sepsis3_derivable": "No temperature",
-        "alt_adult_los2_all_vitals_sepsis3_derivable": "ICU LOS >=2 d",
-        "primary_lactate_complete_case": "Lactate obs.",
-        "primary_without_lactate_adjustment": "No lactate adj.",
-        "missing_raw_complete_case": "Complete-case",
-        "missing_drop_lactate": "Drop lactate",
-        "effect_robust_poisson_rr": "Risk ratio",
-        "effect_marginal_standardized_rd": "Risk difference",
-    }
-    if spec_id in mapping:
-        return mapping[spec_id]
-    los_match = re.fullmatch(r"alt_cohort_los_ge_(\d+(?:p\d+)?)([hd])", spec_id)
-    if los_match:
-        value = los_match.group(1).replace("p", ".")
-        unit = "h" if los_match.group(2) == "h" else "d"
-        return f"ICU LOS >= {value} {unit}"
-    if "complete_case" in spec_id:
-        return "Complete-case"
-    if "source_aware" in spec_id:
-        return "Source-aware"
-    label = str(row.get("display_label") or row.get("label") or spec_id).strip()
-    return _short_figure_label(label.replace("LOS ≥", "LOS >="), limit=30)
 
 
 # ---------------------------------------------------------------------------
@@ -11212,9 +8425,7 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
         ):
             out.append("clustering_performance")
             if not (artefact.parent / "cluster_characteristics.csv").exists():
-                out.extend(
-                    ["cluster_summary", "cluster_characteristics", "table_one"]
-                )
+                out.extend(["cluster_summary", "cluster_characteristics", "table_one"])
             if not (artefact.parent / "cluster_mortality.csv").exists():
                 out.append("cluster_mortality")
             if not any(

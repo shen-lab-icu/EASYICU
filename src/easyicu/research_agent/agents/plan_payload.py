@@ -10,18 +10,530 @@ valid-looking design. It normalizes only representation-level aliases.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Dict, List, Tuple
+import json
+from typing import Any, Dict, List, Sequence, Tuple
 
-from ..contracts.declared_product import typed_product as _canonical_typed_product
+from ..contracts.declared_product import (
+    PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
+    RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
+    typed_product as _canonical_typed_product,
+)
+from ..planning.method_literature import METHOD_CARDS
+from ..planning.literature_bindings import (
+    allowed_method_source_keys,
+    normalize_literature_citation_keys,
+    validate_literature_citation_bindings,
+)
+from ..planning.primary_result_contract import model_terms_retry_guide
 from ..planning.robustness_contract import RobustnessSpec
+from ..planning.scientific_review import (
+    required_method_layers_for_context,
+    required_method_layers_for_plan,
+)
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
     ArtifactConsumptionContract,
+    PlannedFigurePanelSpec,
     PlannedModelRequirement,
     TableOneSpec,
     TableOneVariableSpec,
 )
+
+
+def planner_descriptive_method_guidance(analysis_type: str) -> str:
+    """Return the exact contracts for compact descriptive host owners."""
+
+    if str(analysis_type).strip().casefold() != "descriptive_epidemiology":
+        return ""
+    return (
+        "Two compact descriptive methods have exact host contracts. For "
+        "`method='descriptive_distribution'`, declare exactly one typed cohort "
+        "input followed by exactly one categorical grouping column and exactly "
+        "one continuous value column, in that order; declare only "
+        "`table:distribution_prevalence`. Do not add a third column or an "
+        "association to that step. For a non-causal two-continuous-variable "
+        "association, use a separate `method='descriptive_association'` step "
+        "with exactly one typed cohort input followed by the predictor and "
+        "outcome columns, in that order, and exactly one "
+        "`statistic:<descriptive_name>` output. This contract computes a "
+        "complete-case Spearman rho without adjustment or imputation. A figure "
+        "of the grouped distribution consumes only the distribution table; a "
+        "figure of the association scalar consumes only its statistic. Never "
+        "bundle the grouped distribution and the association into one step.\n\n"
+    )
+
+
+def planner_descriptive_robustness_guidance(analysis_type: str) -> str:
+    """Keep effect robustness out of descriptive-only analysis families."""
+
+    if str(analysis_type).strip().casefold() != "descriptive_epidemiology":
+        return ""
+    return (
+        " This replay contract applies only when a primary fitted "
+        "effect and its uncertainty already exist. For "
+        "`analysis_type='descriptive_epidemiology'`, do NOT declare "
+        "`robustness_specs`, a `robustness_sensitivity` step, effect-style "
+        "products such as `primary_or`, or a robustness forest plot. Use the "
+        "typed measurement/missingness audits above for denominator and "
+        "complete-case availability checks; any additional descriptive "
+        "summary must remain a separately declared descriptive method.\n\n"
+    )
+
+
+def planner_adjusted_association_owner_guidance() -> str:
+    """Name the one method family implemented by the sealed host owner."""
+
+    return (
+        "`table:adjusted_association_estimates` requires "
+        "`method_family='statsmodels_logit_mle'`; no sealed executor owns "
+        "`statsmodels_glm_binomial`, which needs an agent-coded step and a "
+        "different output. "
+    )
+
+
+def planner_endpoint_and_optional_science_guidance() -> str:
+    """Render host-owned endpoint and optional post-analysis boundaries."""
+
+    return (
+        "`ResearchContext.endpoint` is sealed host authority: copy exactly; never "
+        "infer or repair. A required missing endpoint blocks execution.\n\n"
+        "Leave `evalue_conversion_spec` null unless requested; it requires a "
+        "baseline-risk evidence id, rate and population columns, and exact "
+        "population. Leave `subgroup_analysis_spec` null unless requested; then "
+        "bind a primary model requirement and declare predictor, outcome, subgroup "
+        "columns, quantile buckets, minimum sizes, effect scale, adjustment roster, "
+        "and multiplicity family. The Planner chooses these fields.\n\n"
+    )
+
+
+def render_methodological_principles(principles: Sequence[Any]) -> str:
+    """Project case-neutral methodological principles into Planner guidance."""
+
+    errors = [principle for principle in principles if principle.kind == "error"]
+    cautions = [
+        principle for principle in principles if principle.kind == "caution"
+    ]
+    lines = [
+        "\n\nCROSS-CUTTING ICU METHODOLOGY (case-neutral; apply when planning):",
+        "Objective errors to avoid — wrong under any study design:",
+    ]
+    lines.extend(
+        f"- [{principle.phase}] {principle.principle}" for principle in errors
+    )
+    lines.append(
+        "Defensible choices — state and justify in the plan; do not let them "
+        "pass silently, but the analyst, not these rules, decides:"
+    )
+    lines.extend(
+        f"- [{principle.phase}] {principle.principle}" for principle in cautions
+    )
+    return "\n".join(lines)
+
+
+def _required_method_binding_options(
+    method_cards: Sequence[Any],
+    required_method_layers: Sequence[str],
+) -> dict[str, dict[str, list[str]]]:
+    """Project only run-available choices for context-required method layers."""
+
+    required = {
+        str(layer or "").strip()
+        for layer in required_method_layers
+        if str(layer or "").strip()
+    }
+    options: dict[str, dict[str, set[str]]] = {}
+    for card in method_cards:
+        if card.layer not in required:
+            continue
+        options.setdefault(card.layer, {}).setdefault(card.source_key, set()).update(
+            card.design_elements
+        )
+    return {
+        layer: {
+            key: sorted(elements)
+            for key, elements in sorted(sources.items())
+        }
+        for layer, sources in sorted(options.items())
+    }
+
+
+def _required_method_binding_examples(
+    options: dict[str, dict[str, list[str]]],
+) -> dict[str, dict[str, object]]:
+    """Render one minimal schema-valid binding example per required layer."""
+
+    examples: dict[str, dict[str, object]] = {}
+    for layer, sources in sorted(options.items()):
+        if not sources:
+            continue
+        source_key = sorted(sources)[0]
+        elements = sources[source_key]
+        if not elements:
+            continue
+        examples[layer] = {
+            "literature_citation_keys": [source_key],
+            "literature_design_bindings": [
+                {
+                    "citation_key": source_key,
+                    "design_elements": [elements[0]],
+                    "application": (
+                        f"Apply the source's {layer} method card to this step."
+                    ),
+                    "divergence": None,
+                }
+            ],
+        }
+    return examples
+
+
+def bind_literature_citation_authority(
+    planning_contract_context: str,
+    allowed_keys: Sequence[str],
+    *,
+    direct_comparator_keys: Sequence[str] = (),
+    required_method_layers: Sequence[str] = (),
+) -> str:
+    """Append role-bound LiteratureBundle authority to the Planner profile.
+
+    Citation keys alone are not a scientific design aid: the model also needs
+    to know which source supports which methodological decision, and which
+    retrieved records survived the direct-comparator screen.  This projection
+    is deliberately assembled by the host from the sealed pre-plan bundle.
+    """
+
+    if not allowed_keys:
+        return planning_contract_context
+    method_source_keys = allowed_method_source_keys(allowed_keys)
+    direct_keys = tuple(
+        key
+        for key in normalize_literature_citation_keys(direct_comparator_keys)
+        if key in set(allowed_keys)
+    )
+    method_cards = [
+        card for card in METHOD_CARDS if card.source_key in method_source_keys
+    ]
+    required_binding_options = _required_method_binding_options(
+        method_cards,
+        required_method_layers,
+    )
+    required_binding_examples = _required_method_binding_examples(
+        required_binding_options
+    )
+    authority = (
+        "PRE-PLAN LITERATURE CITATION AUTHORITY (exact, run-bound):\n"
+        "- allowed_literature_citation_keys: "
+        + json.dumps(list(allowed_keys), ensure_ascii=False)
+        + (
+            "\n- allowed_method_source_keys: "
+            + json.dumps(list(method_source_keys), ensure_ascii=False)
+            if method_source_keys
+            else ""
+        )
+        + (
+            "\n- screened_direct_comparator_keys: "
+            + json.dumps(list(direct_keys), ensure_ascii=False)
+            if direct_keys
+            else "\n- screened_direct_comparator_keys: []"
+        )
+        + "\n- Every primary, secondary, and sensitivity step MUST bind one or "
+        "more exact values from this list in literature_citation_keys. Do not cite "
+        "an evidence artifact, analysis contract, study-design brief, or invented "
+        "semantic label in that field. Auxiliary steps may use an empty list."
+        + " Every scientific step MUST also emit literature_design_bindings. "
+        + literature_design_binding_shape_guide()
+        + " Do not invent or copy a source quotation; the host joins the sealed "
+        "excerpt."
+        + (
+            " Every scientific step MUST include at least one exact "
+            "allowed_method_source_key that supports its design or method; a "
+            "disease-definition or database paper alone is insufficient. Add "
+            "topic/direct-comparator keys when they support the step's population, "
+            "exposure, outcome, or interpretation."
+            if method_source_keys
+            else ""
+        )
+        + (
+            " When screened_direct_comparator_keys is non-empty, at least one "
+            "primary analysis step MUST additionally bind one of those keys. "
+            "Use its source excerpt only to compare population, time zero, "
+            "exposure, outcome/estimand, and analysis choices. It is not "
+            "automatic authority to copy eligibility criteria or change this "
+            "study's sealed ResearchContext."
+            if direct_keys
+            else ""
+        )
+        + (
+            "\n- method_decision_cards (host-curated; id|layer|supported_design_elements|question|requirement|source):\n"
+            + "\n".join(
+                "  - "
+                + " | ".join(
+                    (
+                        card.id,
+                        card.layer,
+                        ",".join(card.design_elements),
+                        card.question,
+                        card.requirement,
+                        card.source_key,
+                    )
+                )
+                for card in method_cards
+            )
+            if method_cards
+            else ""
+        )
+        + (
+            "\n- case_applicable_required_method_layers: "
+            + json.dumps(sorted(required_binding_options), ensure_ascii=False)
+            + "\n- Cover every listed layer at least once through one of these "
+            "exact source/design-element options: "
+            + json.dumps(
+                required_binding_options,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            + "\n- Minimal schema-valid examples by required layer (copy only "
+            "the layers that truly govern a scientific estimator; support "
+            "steps remain auxiliary): "
+            + json.dumps(
+                required_binding_examples,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            if required_binding_options
+            else ""
+        )
+    )
+    return "\n\n".join(
+        value for value in (planning_contract_context, authority) if value
+    )
+
+
+def literature_citation_retry_suffix(
+    allowed_keys: Sequence[str],
+    *,
+    direct_comparator_keys: Sequence[str] = (),
+    required_method_layers: Sequence[str] = (),
+) -> str:
+    """Render exact citation keys in the structured-retry reminder."""
+
+    if not allowed_keys:
+        return ""
+    method_source_keys = allowed_method_source_keys(allowed_keys)
+    direct_keys = tuple(
+        key
+        for key in normalize_literature_citation_keys(direct_comparator_keys)
+        if key in set(allowed_keys)
+    )
+    method_element_map = {
+        key: sorted(
+            {
+                element
+                for card in METHOD_CARDS
+                if card.source_key == key
+                for element in card.design_elements
+            }
+        )
+        for key in method_source_keys
+    }
+    required_binding_options = _required_method_binding_options(
+        [card for card in METHOD_CARDS if card.source_key in method_source_keys],
+        required_method_layers,
+    )
+    required_binding_examples = _required_method_binding_examples(
+        required_binding_options
+    )
+    return (
+        " Allowed literature_citation_keys for this run are exactly: "
+        + json.dumps(list(allowed_keys), ensure_ascii=False)
+        + "."
+        + " Each scientific step must also include literature_design_bindings. "
+        + literature_design_binding_shape_guide()
+        + (
+            " Every scientific step must include at least one method-source key "
+            "from: "
+            + json.dumps(list(method_source_keys), ensure_ascii=False)
+            + ". Method-source bindings may use ONLY the design elements in "
+            "this exact host-owned map (use another source or omit an "
+            "unsupported element; never broaden a method card): "
+            + json.dumps(method_element_map, ensure_ascii=False, sort_keys=True)
+            + "."
+            if method_source_keys
+            else ""
+        )
+        + (
+            " At least one primary step must also cite a screened direct "
+            "comparator from: "
+            + json.dumps(list(direct_keys), ensure_ascii=False)
+            + "."
+            if direct_keys
+            else ""
+        )
+        + (
+            " Case-applicable method layers that must be covered at least once "
+            "are: "
+            + json.dumps(sorted(required_binding_options), ensure_ascii=False)
+            + ". Exact source/design-element options are: "
+            + json.dumps(
+                required_binding_options,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            + ". Minimal schema-valid examples by required layer are: "
+            + json.dumps(
+                required_binding_examples,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            + "."
+            if required_binding_options
+            else ""
+        )
+    )
+
+
+def literature_design_binding_shape_guide() -> str:
+    """Publish the one exact nested JSON shape owned by the literature contract."""
+
+    return (
+        "Each record must use exactly this JSON shape: "
+        '{"citation_key":"<same exact bound key>",'
+        '"design_elements":["<one or more exact allowed elements>"],'
+        '"application":"<how the source shapes this step>",'
+        '"divergence":null}. '
+        "`divergence` may instead be a concise string. The only permitted keys "
+        "are `citation_key`, `design_elements`, `application`, and `divergence`; "
+        "do not rename them."
+    )
+
+
+def descriptive_claim_shape_guide() -> str:
+    """Publish the exact nested JSON shape for a descriptive claim ceiling."""
+
+    return (
+        "When this ceiling is required, emit exactly "
+        '`"descriptive_claim":{"claim_ceiling":"descriptive_only",'
+        '"unresolved_limitations":'
+        '["post_baseline_exposure_opportunity_unresolved"]}`. '
+        "`unresolved_limitations` is an array; do not rename it to a singular "
+        "`limitation` field."
+    )
+
+
+def counts_only_distribution_guide() -> str:
+    """Publish the no-uncertainty projection selected by typed study authority."""
+
+    return (
+        "For variance_estimator='none_counts_only', use one primary descriptive "
+        "step outputting only table:exposure_outcome_distribution, "
+        "and uses schema /3 with interval_method='none_counts_only'. Set repeated "
+        "unit method, confidence, contrast, and dependence to null. No models, "
+        "Table One, extra result tables, or mislabeled audits. Keep as siblings: "
+        '{"descriptive_claim":{"claim_ceiling":"descriptive_only",'
+        '"unresolved_limitations":'
+        '["post_baseline_exposure_opportunity_unresolved"]},'
+        '"exposure_outcome_distribution_spec":{'
+        '"schema_version":"easyicu.exposure_outcome_distribution/3",'
+        '"interval_method":"none_counts_only",'
+        '"repeated_unit_interval_method":null,"risk_difference_contrast":null,'
+        '"dependence":null,"confidence_level":null}}.'
+    )
+
+
+def descriptive_claim_example_fragment() -> str:
+    """Render the worked-example fragment from the claim schema owner."""
+
+    return (
+        '      "descriptive_claim": {\n'
+        '        "claim_ceiling": "descriptive_only",\n'
+        '        "unresolved_limitations": '
+        '["post_baseline_exposure_opportunity_unresolved"]\n'
+        "      },\n"
+    )
+
+
+def figure_panel_shape_guide() -> str:
+    """Publish the exact case-neutral visual-semantics declaration."""
+
+    return (
+        "For every visualization panel, emit one `figure_panels` record with "
+        "exact keys `panel_id`, `figure_output`, `article_role`, `chart_type`, "
+        "and `source_products`. Copy `article_role` and one accepted "
+        "`chart_type` from the supplied ARTICLE FIGURE STRATEGY; "
+        "`figure_output` must be this step's exact `figure:*` output and every "
+        "`source_products` item must be this step's exact typed input. Input "
+        "or output names and intent prose do not establish a visual role."
+    )
+
+
+def planner_science_retry_guide() -> str:
+    """Return schema-owned retry guidance outside the Planner god module."""
+
+    optional_fields = (
+        "Contract applicability is exact: `family_primary_result_requirement` is "
+        "legal only on the primary step when `analysis_type` is `causal_inference` "
+        "or `survival`. An `association_study` must omit that field and declare its "
+        "supported adjusted model through `model_requirements`. Optional "
+        "collections such as `know_how_decisions` use JSON arrays, never `null`. "
+        "Every `input_consumption_contracts` item has this exact shape: "
+        "`{\"input_key\": \"table:exact_product\", \"mode\": \"all_rows\"}`. "
+        "The only modes are `all_rows`, `single_row`, and `one_per_role`; never "
+        "rename `input_key` to `input` or `mode` to `cardinality`. Only "
+        "`one_per_role` also declares `role_column` and `expected_roles`; "
+        "`schema_version` is optional. "
+        + figure_panel_shape_guide()
+        + " "
+        "Omit `AnalysisPlan.endpoint` or emit null."
+    )
+    binding_fields = (
+        "A `literature_design_bindings` record never cites a source by itself: "
+        "its `citation_key` must also appear in that same step's "
+        "`literature_citation_keys`. Adding or changing a design binding must "
+        "therefore update both fields together. `model_requirements` is legal "
+        "only on a step whose method is exactly "
+        "`adjusted_association_models` and whose expected outputs include "
+        "`table:adjusted_association_estimates`; every other step emits "
+        "`model_requirements: []` and uses its family-specific contract."
+    )
+    model_representation_fields = (
+        "Within `model_requirements`, categorical `exposure_levels`, "
+        "`exposure_reference_level`, and `primary_contrast_level` are symbolic "
+        "model-term labels and therefore must be JSON strings, for example "
+        "`[\"0\", \"1\"]`, `\"0\"`, and `\"1\"`. This is deliberately "
+        "different from `exposure_outcome_distribution_spec`, whose closed "
+        "observed values preserve their source scalar types. Every "
+        "`robustness_specs` item must include non-empty `spec_id`, `axis`, and "
+        "`description`; the description states the prespecified scientific "
+        "alternative rather than merely repeating the axis."
+    )
+    representation_fields = (
+        "Use only schema product kinds: `protocol` is not a product kind. A "
+        "non-executable future/feasibility step uses method "
+        "`feasibility_protocol` and output `report:<name>`; never consume that "
+        "terminal report downstream. "
+        "`TableOneSpec` already requires "
+        "`missingness_display='n_percent_by_group'`; do not add undeclared "
+        "`report_missing_by_group`. An `exposure_outcome_distribution_spec` "
+        "step must list its exact exposure and outcome in `inputs`. "
+        "A `table_one_spec` step must list its `group_by` and every "
+        "`variables[*].name` in that same step's `inputs`. "
+        "Preserve observed scalar types (JSON numbers remain numbers). On retry retain "
+        "every article role and required `robustness_specs`; do not fix one "
+        "error by dropping an already-satisfied requirement. "
+        + descriptive_claim_shape_guide()
+    )
+    return (
+        "\n\n"
+        + model_terms_retry_guide()
+        + "\n\n"
+        + optional_fields
+        + "\n\n"
+        + binding_fields
+        + "\n\n"
+        + model_representation_fields
+        + "\n\n"
+        + representation_fields
+    )
 
 
 def _canonicalise_figure_output_alias(token: object) -> object:
@@ -113,6 +625,50 @@ def _require_exact_scientific_keys(
         raise PlannerScientificProjectionError(path=path, unknown_keys=unknown)
 
 
+def _require_runtime_supported_product_kinds(
+    *,
+    step_id: str,
+    inputs: object,
+    expected_outputs: object,
+) -> None:
+    """Reject typed product spellings the runtime cannot honour.
+
+    Product *names* and the scientific dependency graph remain Planner-owned.
+    The closed kind vocabulary is a representation/runtime contract: accepting
+    ``text:x`` here only to reject it after the paid probe/replan cycle cannot
+    make the plan more expressive.  A terminal ``report`` is intentionally a
+    valid output but not a consumable input; the writer materialises it after
+    the evidence-producing analysis steps have completed.
+    """
+
+    for field, values, supported in (
+        ("inputs", inputs, RUNTIME_BINDABLE_TYPED_INPUT_KINDS),
+        (
+            "expected_outputs",
+            expected_outputs,
+            PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
+        ),
+    ):
+        if not isinstance(values, list):
+            continue
+        for index, raw in enumerate(values):
+            product = _canonical_typed_product(raw) if isinstance(raw, str) else None
+            if product is None or product[0] in supported:
+                continue
+            terminal_report_note = (
+                " A report product is terminal writer output and cannot be "
+                "consumed by another analysis step."
+                if field == "inputs" and product[0] == "report"
+                else ""
+            )
+            raise ValueError(
+                f"Planner step {step_id!r} declares unsupported typed product "
+                f"kind {product[0]!r} at {field}[{index}]. Supported kinds are "
+                f"{sorted(supported)!r}.{terminal_report_note} Re-emit the same "
+                "scientific plan with a runtime-supported product kind."
+            )
+
+
 def _normalise_plan_payload(
     data: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
@@ -122,6 +678,7 @@ def _normalise_plan_payload(
     allowed_step = _declared_field_names(AnalysisStep)
     allowed_model_requirement = _declared_field_names(PlannedModelRequirement)
     allowed_consumption_contract = _declared_field_names(ArtifactConsumptionContract)
+    allowed_figure_panel = _declared_field_names(PlannedFigurePanelSpec)
     allowed_table_one_spec = _declared_field_names(TableOneSpec)
     allowed_table_one_variable = _declared_field_names(TableOneVariableSpec)
     allowed_robustness_spec = _declared_field_names(RobustnessSpec)
@@ -130,6 +687,7 @@ def _normalise_plan_payload(
         "steps": [],
         "model_requirements": [],
         "input_consumption_contracts": [],
+        "figure_panels": [],
         "table_one_spec": [],
         "robustness_specs": [],
     }
@@ -214,6 +772,35 @@ def _normalise_plan_payload(
                 )
         if "input_consumption_contracts" in step_payload:
             step_payload["input_consumption_contracts"] = consumption_contracts
+        figure_panels = []
+        for panel_idx, raw_panel in enumerate(
+            step_payload.get("figure_panels", []) or []
+        ):
+            if not isinstance(raw_panel, dict):
+                figure_panels.append(raw_panel)
+                continue
+            panel_payload = {
+                key: value
+                for key, value in raw_panel.items()
+                if key in allowed_figure_panel
+            }
+            panel_id = (
+                raw_panel.get("panel_id")
+                or f"step[{idx}].figure_panels[{panel_idx}]"
+            )
+            _require_exact_scientific_keys(
+                raw_panel,
+                allowed=allowed_figure_panel,
+                path=f"steps[{idx}].figure_panels[{panel_idx}]({panel_id})",
+            )
+            if panel_payload:
+                figure_panels.append(panel_payload)
+            else:
+                dropped["figure_panels"].append(
+                    f"{panel_id}:empty_after_normalization"
+                )
+        if "figure_panels" in step_payload:
+            step_payload["figure_panels"] = figure_panels
         raw_table_one = step_payload.get("table_one_spec")
         if isinstance(raw_table_one, dict):
             _require_exact_scientific_keys(
@@ -284,6 +871,25 @@ def _normalise_plan_payload(
                     "declare each figure exactly once as 'figure:<name>'."
                 )
             step_payload["expected_outputs"] = normalised_outputs
+        method_head = (
+            str(step_payload.get("method") or "")
+            .strip()
+            .casefold()
+            .split(" with ", 1)[0]
+        )
+        if method_head == "visualization" and not (
+            step_payload.get("expected_outputs") or []
+        ):
+            raise ValueError(
+                f"Planner step {step_id!r} is a visualization but declares no "
+                "typed figure output; either drop the redundant step or re-emit "
+                "it with exactly the intended 'figure:<name>' product."
+            )
+        _require_runtime_supported_product_kinds(
+            step_id=str(step_id),
+            inputs=step_payload.get("inputs"),
+            expected_outputs=step_payload.get("expected_outputs"),
+        )
         steps.append(step_payload)
     out["steps"] = steps
     specs = []
@@ -305,6 +911,43 @@ def _normalise_plan_payload(
         specs.append(spec_payload)
     if "robustness_specs" in out:
         out["robustness_specs"] = specs
+    analysis_type = str(out.get("analysis_type") or "").strip().casefold()
+    descriptive_robustness_steps = [
+        str(step.get("step_id") or "")
+        for step in steps
+        if str(step.get("method") or "").strip().casefold().split(" with ", 1)[0]
+        == "robustness_sensitivity"
+    ]
+    if analysis_type == "descriptive_epidemiology" and descriptive_robustness_steps:
+        raise ValueError(
+            "A descriptive_epidemiology plan cannot route "
+            f"{descriptive_robustness_steps!r} through method "
+            "'robustness_sensitivity': that executor re-estimates an already "
+            "fitted primary effect with an interval. Re-emit the descriptive "
+            "plan without robustness_specs/robustness_sensitivity, and use "
+            "typed missingness or denominator audits for descriptive "
+            "sensitivity instead."
+        )
+    narrative_execution_steps = [
+        str(step.get("step_id") or "")
+        for step in steps
+        if str(step.get("method") or "").strip().casefold().split(" with ", 1)[0]
+        in {
+            "descriptive_interpretation",
+            "result_interpretation",
+            "report_writing",
+            "manuscript_writing",
+        }
+    ]
+    if narrative_execution_steps:
+        raise ValueError(
+            "Analysis steps cannot execute narrative interpretation or writing "
+            f"methods for {narrative_execution_steps!r}. Re-emit only the "
+            "evidence-producing statistical, audit, and figure steps. The "
+            "gate-bound result interpreter and manuscript writer consume the "
+            "verified products after analysis execution; do not generate "
+            "Python code to narrate or draft them."
+        )
     return out, dropped
 
 
@@ -315,4 +958,16 @@ __all__ = [
     "_is_untyped_figure_alias_output",
     "_normalise_plan_payload",
     "PlannerScientificProjectionError",
+    "planner_descriptive_method_guidance",
+    "planner_descriptive_robustness_guidance",
+    "planner_adjusted_association_owner_guidance",
+    "planner_endpoint_and_optional_science_guidance",
+    "render_methodological_principles",
+    "normalize_literature_citation_keys",
+    "bind_literature_citation_authority",
+    "descriptive_claim_example_fragment",
+    "literature_citation_retry_suffix",
+    "required_method_layers_for_context",
+    "required_method_layers_for_plan",
+    "validate_literature_citation_bindings",
 ]

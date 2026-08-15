@@ -8,18 +8,12 @@ their exact implementation bytes rather than relying on package version labels.
 
 from __future__ import annotations
 
+from ..canonical_json import sha256_file as _sha256_file
+
 import hashlib
 import json
 from pathlib import Path
 from typing import Mapping
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def metadata_implementation_identity() -> Mapping[str, str]:

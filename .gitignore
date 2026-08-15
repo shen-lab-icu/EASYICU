@@ -75,6 +75,8 @@ src/easyicu/data/concept-dict2.json
 # Demo、示例和工具 - 不上传示例代码
 demo.py
 demo/
+!src/easyicu/webserver/static/assets/demo/
+!src/easyicu/webserver/static/assets/demo/*.png
 dictionary/
 # examples/ is now shipped (curated onboarding scripts); keep only its caches out
 examples/__pycache__/
@@ -154,12 +156,21 @@ pilot_runs/
 !README.md
 !README_zh.md
 !CONTRIBUTING.md
+!SECURITY.md
+!.github/pull_request_template.md
 !baselines/REGISTRY.md
 !docs/architecture_glossary.md
 !docs/capability_matrix.md
 !docs/analysis_method_suite.md
 !docs/deprecation_policy.md
 !docs/pi_copilot_integration_architecture.md
+!docs/release_checklist.md
+!docs/repository_layout.md
+!docs/research_agent_capability_inventory.md
+!docs/qa/
+!docs/qa/*.md
+!docs/evidence/
+!docs/evidence/*.md
 !src/easyicu/webserver/pi_copilot/node_app/README.md
 !src/easyicu/webserver/pi_copilot/node_app/THIRD_PARTY_NOTICES.md
 !benchmarks/meta_generalization/README.md

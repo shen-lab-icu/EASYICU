@@ -29,6 +29,8 @@ from pydantic import (
     model_validator,
 )
 
+from ..contracts.execution_result import RunnerFailureCode
+
 from ..canonical_json import (
     canonical_json_bytes as _canonical_json_bytes,
     sha256_bytes as _sha256_bytes,
@@ -303,6 +305,7 @@ class ExecutionSeal(_StrictFrozenModel):
     stdout: ContentRef
     stderr: ContentRef
     runner_log: Optional[ContentRef] = None
+    runner_failure_code: Optional[RunnerFailureCode] = None
     outputs: tuple[ExecutionOutput, ...] = ()
 
     @model_validator(mode="after")
@@ -471,6 +474,11 @@ def execution_seal_identity_sha256(
         payload = dict(execution)
         payload.pop("execution_identity_sha256", None)
         payload = _json_compatible(payload)
+    # ``runner_failure_code`` was added after execution identity v1 shipped.
+    # Keep the absent/None representation identical to older capsules while
+    # binding an actual typed runner finding into every new affected seal.
+    if payload.get("runner_failure_code") is None:
+        payload.pop("runner_failure_code", None)
     return _sha256_bytes(
         _canonical_json_bytes(
             {

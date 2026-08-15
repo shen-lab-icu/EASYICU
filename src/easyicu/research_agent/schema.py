@@ -18,7 +18,6 @@ they are a stable v1 the rest of the module can lean on.
 
 from __future__ import annotations
 
-import math
 import re
 from datetime import datetime, timezone
 from enum import Enum
@@ -36,9 +35,17 @@ from pydantic import (
 )
 
 from .contracts.capability_ids import capability_family
-from .contracts.closed_levels import validate_closed_scalar_levels
+from .contracts.claim_ceiling import DescriptiveClaimContract
+from .contracts.closed_levels import (
+    validate_closed_scalar_levels,
+)
+from .contracts.dependence import PlannedDependenceRequirement
 from .contracts.endpoint import EndpointAbsenceSemantics, EndpointKind, EndpointSpec
+from .contracts.exposure_outcome_distribution import (
+    ExposureOutcomeDistributionSpec,
+)
 from .contracts.family_primary import FamilyPrimaryResultRequirement
+from .contracts.figure_plan import PlannedFigurePanelSpec
 from .contracts.model_terms import ModelTermSpec, validate_model_term_roster
 from .contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND as PLANNED_MODEL_REQUIREMENTS_OUTPUT,
@@ -60,10 +67,23 @@ from .planning.cohort_contract import (
     CohortSchemaError,
     coerce_cohort_definition,
 )
+from .planning.literature_contract import (
+    LiteratureDesignBinding,
+)
 from .planning.robustness_contract import (
+    ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS,
     RobustnessPlanError,
     RobustnessSpec,
     validate_robustness_specs,
+)
+from .planning.sensitivity_authority import PrespecifiedSensitivitySpec
+from .research_context.clinical_definition import ClinicalDefinitionReference
+
+# Compatibility exports: these contracts have dependency-neutral owners, while
+# established callers continue to import them from ``research_agent.schema``.
+from .contracts.closed_levels import typed_level_key as _typed_level_key  # noqa: F401
+from .contracts.exposure_outcome_distribution import (  # noqa: F401
+    ExposureOutcomeRiskDifferenceContrast,
 )
 
 PlannedAnalysisRole = Literal[
@@ -85,6 +105,7 @@ TableOneTest = Literal[
     "welch_t_or_anova",
     "mann_whitney_or_kruskal",
     "chi_square_with_fisher_exact_for_sparse_2x2",
+    "none_descriptive_smd_only",
 ]
 TABLE_ONE_CLOSED_OUTPUTS = frozenset(
     {
@@ -152,26 +173,7 @@ MEASUREMENT_AUDIT_KINDS = frozenset(
 # Claiming it and then failing for a missing product is strictly worse than
 # never claiming it.  Only the Planner can say "this step IS that replay", so
 # it says it here.
-ROBUSTNESS_REPLAY_OUTPUTS = frozenset(
-    {
-        # Per locked specification: the estimate, its interval and its n.
-        "robustness_matrix",
-        # Agreement/disagreement across the grid, as one summary.
-        "robustness_summary",
-        # The locked grid itself, one row per specification.
-        "specification_grid",
-        # Cohort overlap and attrition between the primary set and each variant.
-        "membership_change",
-        # Whether each variant's outcome label could be executed at all.
-        "outcome_label_executability",
-        # The prespecified missing-data strategies and their warnings.
-        "missingness_strategy_notes",
-        # The primary effect on its declared scale.
-        "primary_effect",
-        # The complete-case denominator.
-        "complete_case_n",
-    }
-)
+ROBUSTNESS_REPLAY_OUTPUTS = frozenset(ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS)
 
 
 def _closed_table_one_levels(values: List[Any], *, label: str) -> List[Any]:
@@ -517,6 +519,23 @@ class ConceptDescriptor(BaseModel):
         default=None,
         description="Named time window used to derive this variable, e.g. 'first_24h'.",
     )
+    analysis_window_role: Optional[
+        Literal["exposure_definition", "outer_observation_window"]
+    ] = Field(
+        default=None,
+        description=(
+            "Whether analysis_window defines the exposure's clinical time zero "
+            "or merely bounds observation of an already-derived phenotype. "
+            "None means the role is not owner-verified."
+        ),
+    )
+    clinical_definition: Optional[ClinicalDefinitionReference] = Field(
+        default=None,
+        description=(
+            "Digest-bound clinical definition/version/source projected from the "
+            "EasyICU clinical-contract registry for this concept."
+        ),
+    )
     temporal_resolution: Optional[str] = Field(
         default=None,
         description="Sampling granularity or windowing resolution, e.g. hourly, stay-level, event-level.",
@@ -611,12 +630,79 @@ class UserPreferences(BaseModel):
     data_constraints: Optional[str] = None
     must_have_outputs: Optional[str] = None
     covariates: List[str] = Field(default_factory=list)
+    covariate_selection: Literal["planner_selectable", "exact"] = Field(
+        default="planner_selectable",
+        description=(
+            "Whether covariates remain a Planner-owned choice or are the exact "
+            "user-approved adjustment roster. With 'exact', an empty covariates "
+            "list authorizes only an unadjusted model."
+        ),
+    )
+    covariate_rationales: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "User-reviewed clinical rationale for each exact adjustment "
+            "covariate. Keys are exact covariate identifiers; values explain "
+            "the pre-exposure confounding role rather than mere availability."
+        ),
+    )
+    covariate_temporal_roles: Dict[
+        str, Literal["baseline_static", "at_or_before_time_zero"]
+    ] = Field(
+        default_factory=dict,
+        description=(
+            "User-reviewed temporal eligibility for each exact adjustment "
+            "covariate. Post-time-zero measurements cannot satisfy this contract."
+        ),
+    )
     # Optional landmark / immortal-time origin (hours) for time-to-event
     # designs. Consumed by the deterministic survival runner; ``None`` means
     # "use the skill's case-neutral default" (24h) rather than a study-specific
     # constant baked into the skill.
     landmark_hours: Optional[float] = None
+    sensitivity_specs: List[PrespecifiedSensitivitySpec] = Field(
+        default_factory=list,
+        max_length=16,
+        description=(
+            "Exact user-reviewed sensitivity analyses. These typed commitments "
+            "govern materialization and plan review; prose is not authority."
+        ),
+    )
     extra_notes: Optional[str] = None
+
+    @field_validator("covariate_rationales")
+    @classmethod
+    def _bounded_covariate_rationales(cls, value: Dict[str, str]) -> Dict[str, str]:
+        result: Dict[str, str] = {}
+        for raw_key, raw_text in value.items():
+            key = str(raw_key or "").strip()
+            text = " ".join(str(raw_text or "").split())
+            if not key or key in result:
+                raise ValueError("covariate_rationales keys must be unique non-empty names")
+            if len(text) < 8 or len(text) > 600:
+                raise ValueError(
+                    "covariate_rationales values must contain 8-600 characters"
+                )
+            result[key] = text
+        return result
+
+    @model_validator(mode="after")
+    def _covariate_decisions_match_exact_roster(self) -> "UserPreferences":
+        rationale_keys = set(self.covariate_rationales)
+        temporal_keys = set(self.covariate_temporal_roles)
+        roster = set(self.covariates)
+        if rationale_keys - roster or temporal_keys - roster:
+            raise ValueError(
+                "covariate rationale/temporal-role keys must belong to covariates"
+            )
+        if self.covariate_selection != "exact" and (
+            rationale_keys or temporal_keys
+        ):
+            raise ValueError(
+                "covariate rationales and temporal roles require "
+                "covariate_selection='exact'"
+            )
+        return self
 
 
 RESEARCH_CONTEXT_SCHEMA_VERSION = "easyicu.research_context/1"
@@ -832,6 +918,14 @@ class PlannedModelRequirement(BaseModel):
             "With more than two levels this cannot be inferred: the highest "
             "level against the reference and a per-level trend are different "
             "scientific claims, and choosing between them is the planner's."
+        ),
+    )
+    dependence: Optional[PlannedDependenceRequirement] = Field(
+        default=None,
+        description=(
+            "Exact repeated-unit covariance contract bound from StudyContext "
+            "authority. Null means model-based covariance; execution must not "
+            "infer clustering from intent text or identifier-like column names."
         ),
     )
 
@@ -1233,14 +1327,18 @@ class TableOneVariableSpec(BaseModel):
             "welch_t_or_anova",
             "mann_whitney_or_kruskal",
         }
+        no_test = self.test == "none_descriptive_smd_only"
         if self.variable_kind == "continuous":
-            if not numeric_summary or not numeric_test or self.levels:
+            if not numeric_summary or not (numeric_test or no_test) or self.levels:
                 raise ValueError(
                     "continuous Table 1 variables require a numeric summary/test "
                     "and must not declare categorical levels"
                 )
         elif self.summary == "count_percent":
-            if self.test != "chi_square_with_fisher_exact_for_sparse_2x2":
+            if self.test not in {
+                "chi_square_with_fisher_exact_for_sparse_2x2",
+                "none_descriptive_smd_only",
+            }:
                 raise ValueError(
                     "count/percent Table 1 variables require the categorical test"
                 )
@@ -1253,7 +1351,7 @@ class TableOneVariableSpec(BaseModel):
             if (
                 self.variable_kind != "ordinal"
                 or not numeric_summary
-                or not numeric_test
+                or not (numeric_test or no_test)
             ):
                 raise ValueError(
                     "only ordinal variables may use a numeric Table 1 summary/test "
@@ -1297,15 +1395,19 @@ class TableOneSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["easyicu.table_one/1"] = "easyicu.table_one/1"
+    schema_version: Literal["easyicu.table_one/1", "easyicu.table_one/2"] = (
+        "easyicu.table_one/1"
+    )
     group_by: str
     group_levels: List[Any] = Field(min_length=2)
     variables: List[TableOneVariableSpec] = Field(min_length=1)
     include_overall: Literal[True] = True
     missing_group_policy: Literal["fail_closed", "exclude_and_report"] = "fail_closed"
     missingness_display: Literal["n_percent_by_group"] = "n_percent_by_group"
-    p_values_required: Literal[True] = True
-    p_value_adjustment: Literal["none_descriptive_table"] = "none_descriptive_table"
+    p_values_required: bool = True
+    p_value_adjustment: Literal[
+        "none_descriptive_table", "not_applicable_repeated_units"
+    ] = "none_descriptive_table"
     standardized_difference_mode: Literal["auto_binary_groups"] = "auto_binary_groups"
 
     @field_validator("group_levels")
@@ -1323,191 +1425,28 @@ class TableOneSpec(BaseModel):
             raise ValueError("Table 1 variable names must be unique")
         if self.group_by in names:
             raise ValueError("Table 1 group_by must not also be a row variable")
-        return self
-
-
-def _typed_level_key(value: Any) -> tuple[str, str]:
-    """Identity of a declared level: its type *and* its value.
-
-    ``1`` and ``"1"`` and ``True`` are three different declarations. Comparing
-    them by ``==`` would make the first two indistinguishable and would let the
-    third be absorbed by the first, because ``True == 1`` in Python.
-    """
-
-    return (type(value).__name__, repr(value))
-
-
-class ExposureOutcomeDistributionSpec(BaseModel):
-    """Planner-owned exposure-by-outcome distribution design.
-
-    The host executes this declaration but never decides which column is the
-    exposure, which is the outcome, which outcome value counts as the event,
-    whose rows form each denominator, or how the interval is built. Those are
-    scientific choices; an executor that infers them from column names, from
-    input ordering, or from prose has taken a decision that belongs to the
-    Planner.
-
-    Three fields carry most of the scientific weight:
-
-    ``outcome_levels`` closes the outcome. Without it an outcome value the
-    study never declared -- a ``2`` in a column believed to be 0/1, or a
-    ``"yes"`` in a column declared numerically -- is observed, matches no
-    event, and is therefore counted as a *non-event*. That silently deflates
-    every rate in the table and nothing downstream can detect it. With the set
-    closed, an undeclared observed value stops the step instead.
-
-    ``denominator_policy`` and ``missing_outcome_policy`` together decide what
-    an unobserved outcome means. Treating missingness as "the event did not
-    happen" is legitimate only when absence really is structural (no death
-    record because the patient lived), and that is a claim about the data
-    source, not a default an executor may take.
-
-    ``level_match_policy`` decides whether a declared number may match the same
-    number stored as text. Prepared exports differ, so this is real, but it is
-    declared rather than assumed -- and no policy ever lets a boolean answer a
-    numeric level.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    schema_version: Literal["easyicu.exposure_outcome_distribution/2"] = (
-        "easyicu.exposure_outcome_distribution/2"
-    )
-    exposure: str
-    exposure_levels: List[Any] = Field(min_length=2)
-    outcome: str
-    outcome_levels: List[Any] = Field(
-        min_length=2,
-        description=(
-            "The closed set of observed outcome values the study recognises. "
-            "Any other non-missing value stops the step rather than being "
-            "counted as a non-event."
-        ),
-    )
-    outcome_positive_value: Any = Field(
-        description=(
-            "The exact observed value that counts as the event. Declared "
-            "because a binary outcome is not always encoded 1/0, and guessing "
-            "silently inverts every rate in the table. Must be one of "
-            "outcome_levels, by type as well as by value."
-        ),
-    )
-    level_match_policy: Literal["exact_typed", "numeric_string_equivalent"] = Field(
-        description=(
-            "'exact_typed' matches a declared level only against values of the "
-            "same kind. 'numeric_string_equivalent' additionally treats a "
-            "number and its exact text spelling as the same value, for exports "
-            "that store codes as strings. Neither policy lets a boolean match "
-            "a numeric level."
-        ),
-    )
-    denominator_policy: Literal["all_declared_rows", "observed_outcome_rows"]
-    missing_exposure_policy: Literal["fail_closed", "exclude_from_denominator"] = Field(
-        default="fail_closed",
-        description=(
-            "What a row with no observed exposure means. 'fail_closed' stops "
-            "the step. 'exclude_from_denominator' is complete-case on the "
-            "exposure: those rows leave the table and their count travels in "
-            "it, so the denominator change is visible rather than inferred. "
-            "There is deliberately NO option to pool them into a level -- an "
-            "unobserved exposure is not the reference and not any other "
-            "category, and encoding it as one reports a stay under a stage "
-            "nobody recorded."
-        ),
-    )
-    missing_outcome_policy: Literal[
-        "fail_closed",
-        "exclude_from_denominator",
-        "structural_absence_is_non_event",
-    ] = Field(
-        description=(
-            "What an unobserved outcome means. 'fail_closed' refuses any "
-            "missing outcome. 'exclude_from_denominator' is complete-case and "
-            "requires denominator_policy='observed_outcome_rows'. "
-            "'structural_absence_is_non_event' asserts that absence encodes "
-            "'the event did not occur' and requires "
-            "denominator_policy='all_declared_rows'."
-        ),
-    )
-    undeclared_outcome_policy: Literal["fail_closed"] = "fail_closed"
-    interval_method: Literal["wilson"] = "wilson"
-    confidence_level: float = Field(
-        gt=0.5,
-        lt=1.0,
-        description=(
-            "Planner-owned two-sided confidence level for every interval in "
-            "the product. Declared rather than defaulted so the executor never "
-            "hard-codes a coverage the study did not choose."
-        ),
-    )
-
-    @field_validator("exposure_levels")
-    @classmethod
-    def _closed_exposure_levels(cls, values: List[Any]) -> List[Any]:
-        return _closed_table_one_levels(
-            values, label="exposure_outcome_distribution exposure_levels"
-        )
-
-    @field_validator("outcome_levels")
-    @classmethod
-    def _closed_outcome_levels(cls, values: List[Any]) -> List[Any]:
-        return _closed_table_one_levels(
-            values, label="exposure_outcome_distribution outcome_levels"
-        )
-
-    @field_validator("outcome_positive_value")
-    @classmethod
-    def _closed_positive_value(cls, value: Any) -> Any:
-        return _closed_table_one_levels(
-            [value], label="exposure_outcome_distribution outcome_positive_value"
-        )[0]
-
-    @field_validator("confidence_level")
-    @classmethod
-    def _finite_confidence_level(cls, value: float) -> float:
-        if not math.isfinite(float(value)):
-            raise ValueError(
-                "exposure_outcome_distribution confidence_level must be finite"
-            )
-        return float(value)
-
-    @model_validator(mode="after")
-    def _closed_design(self) -> "ExposureOutcomeDistributionSpec":
-        self.exposure = str(self.exposure or "").strip()
-        self.outcome = str(self.outcome or "").strip()
-        if not self.exposure:
-            raise ValueError("exposure_outcome_distribution exposure must be non-empty")
-        if not self.outcome:
-            raise ValueError("exposure_outcome_distribution outcome must be non-empty")
-        if self.exposure == self.outcome:
-            raise ValueError(
-                "exposure_outcome_distribution exposure and outcome must differ"
-            )
-        declared = {_typed_level_key(value) for value in self.outcome_levels}
-        if _typed_level_key(self.outcome_positive_value) not in declared:
-            raise ValueError(
-                "exposure_outcome_distribution outcome_positive_value must be one "
-                "of outcome_levels, matched by type as well as by value: a "
-                "positive value outside the closed set would make every "
-                "remaining level a non-event by omission"
-            )
-        if (
-            self.missing_outcome_policy == "exclude_from_denominator"
-            and self.denominator_policy != "observed_outcome_rows"
+        no_test = [
+            item.name
+            for item in self.variables
+            if item.test == "none_descriptive_smd_only"
+        ]
+        if self.schema_version == "easyicu.table_one/1":
+            if (
+                not self.p_values_required
+                or self.p_value_adjustment != "none_descriptive_table"
+                or no_test
+            ):
+                raise ValueError(
+                    "Table One /1 requires the declared independent-row tests"
+                )
+        elif (
+            self.p_values_required
+            or self.p_value_adjustment != "not_applicable_repeated_units"
+            or len(no_test) != len(self.variables)
         ):
             raise ValueError(
-                "exposure_outcome_distribution missing_outcome_policy="
-                "'exclude_from_denominator' is complete-case analysis and "
-                "requires denominator_policy='observed_outcome_rows'"
-            )
-        if (
-            self.missing_outcome_policy == "structural_absence_is_non_event"
-            and self.denominator_policy != "all_declared_rows"
-        ):
-            raise ValueError(
-                "exposure_outcome_distribution missing_outcome_policy="
-                "'structural_absence_is_non_event' keeps unobserved rows in the "
-                "denominator and requires denominator_policy='all_declared_rows'"
+                "Table One /2 is descriptive/SMD-only for repeated units and "
+                "must not declare an inferential test"
             )
         return self
 
@@ -1942,6 +1881,17 @@ class AnalysisStep(BaseModel):
         description="Logical outputs — table_name, figure_name, statistic_name.",
     )
     method: Optional[str] = None
+    scientific_action_id: Optional[str] = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$",
+        description=(
+            "Exact family.method_key selected from the host-published scientific "
+            "action catalog. It binds a reviewed method/resource coordinate; it "
+            "does not upgrade Coder-generated work to a deterministic owner or "
+            "publication-ready claim. Null preserves historical plans and steps "
+            "that are not scientific analyses."
+        ),
+    )
     scientific_capability: Optional[str] = Field(
         default=None,
         description=(
@@ -1957,7 +1907,64 @@ class AnalysisStep(BaseModel):
             "interaction model become indistinguishable to a validator."
         ),
     )
+    descriptive_claim: Optional[DescriptiveClaimContract] = Field(
+        default=None,
+        description=(
+            "Typed descriptive-only claim ceiling and retained limitations. "
+            "Scientific review accepts it only for a closed descriptive "
+            "method/product shape; prose cannot create this exemption."
+        ),
+    )
     icu_rule_refs: List[str] = Field(default_factory=list)
+    sensitivity_spec_ids: List[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description=(
+            "Exact StudyContext sensitivity authorities this executable step "
+            "implements. The host validates these ids against sealed user "
+            "preferences; descriptive prose is not a binding."
+        ),
+    )
+    literature_citation_keys: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Exact keys from this run's pre-plan LiteratureBundle that support "
+            "the step's scientific design or method. Empty means no citation "
+            "was bound; it must not be filled retrospectively by a renderer."
+        ),
+    )
+    literature_design_bindings: List[LiteratureDesignBinding] = Field(
+        default_factory=list,
+        description=(
+            "Typed article-to-design adoption records for this exact step. "
+            "Each citation_key must also appear in literature_citation_keys; "
+            "the host joins it to the sealed source record rather than trusting "
+            "Planner-authored quotations."
+        ),
+    )
+
+    @field_validator("literature_citation_keys")
+    @classmethod
+    def _validate_literature_citation_keys(cls, values: List[str]) -> List[str]:
+        cleaned = [str(value or "").strip() for value in values]
+        if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}", item) for item in cleaned):
+            raise ValueError("literature_citation_keys must contain stable citation keys")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("literature_citation_keys must be unique")
+        return cleaned
+
+    @field_validator("sensitivity_spec_ids")
+    @classmethod
+    def _validate_sensitivity_spec_ids(cls, values: List[str]) -> List[str]:
+        cleaned = [str(value or "").strip() for value in values]
+        if any(
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", item)
+            for item in cleaned
+        ):
+            raise ValueError("sensitivity_spec_ids must contain stable ids")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("sensitivity_spec_ids must be unique")
+        return cleaned
     model_requirements: List[PlannedModelRequirement] = Field(
         default_factory=list,
         description=(
@@ -1982,6 +1989,15 @@ class AnalysisStep(BaseModel):
             "inputs. Rendering-only children synthesized by the host receive "
             "all_rows contracts so they cannot silently collapse a multi-row "
             "source to one row."
+        ),
+    )
+    figure_panels: List[PlannedFigurePanelSpec] = Field(
+        default_factory=list,
+        max_length=16,
+        description=(
+            "Typed article role, chart family, figure product, and exact source "
+            "products for every planned figure panel. Figure names, input table "
+            "names, and intent prose are not substitutes for this declaration."
         ),
     )
     table_one_spec: Optional[TableOneSpec] = Field(
@@ -2094,6 +2110,19 @@ class AnalysisStep(BaseModel):
 
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
+        binding_keys = [item.citation_key for item in self.literature_design_bindings]
+        if len(binding_keys) != len(set(binding_keys)):
+            raise ValueError(
+                "literature_design_bindings must contain at most one record per citation_key"
+            )
+        unbound_design_keys = sorted(
+            set(binding_keys) - set(self.literature_citation_keys)
+        )
+        if unbound_design_keys:
+            raise ValueError(
+                "literature_design_bindings citation_key values must also appear "
+                "in literature_citation_keys; unbound " + ", ".join(unbound_design_keys)
+            )
         if self.table_one_spec is not None:
             if "table:table_one" not in self.expected_outputs:
                 raise ValueError(
@@ -2188,6 +2217,42 @@ class AnalysisStep(BaseModel):
                 raise ValueError(
                     "visualization input_consumption_contracts must cover every "
                     "exact typed table input"
+                )
+        if self.figure_panels:
+            method_head = str(self.method or "").strip().lower().split(" with ", 1)[0]
+            if method_head != "visualization":
+                raise ValueError(
+                    "figure_panels are valid only on method='visualization' steps"
+                )
+            panel_ids = [panel.panel_id for panel in self.figure_panels]
+            if len(panel_ids) != len(set(panel_ids)):
+                raise ValueError("figure_panels panel_id values must be unique per step")
+            declared_outputs = set(self.expected_outputs)
+            declared_inputs = set(self.inputs)
+            undeclared_outputs = sorted(
+                {
+                    panel.figure_output
+                    for panel in self.figure_panels
+                    if panel.figure_output not in declared_outputs
+                }
+            )
+            if undeclared_outputs:
+                raise ValueError(
+                    "figure_panels figure_output values must be declared in "
+                    f"expected_outputs; missing {undeclared_outputs!r}"
+                )
+            undeclared_sources = sorted(
+                {
+                    source
+                    for panel in self.figure_panels
+                    for source in panel.source_products
+                    if source not in declared_inputs
+                }
+            )
+            if undeclared_sources:
+                raise ValueError(
+                    "figure_panels source_products must be exact step inputs; "
+                    f"missing {undeclared_sources!r}"
                 )
         requirement_ids = [item.requirement_id for item in self.model_requirements]
         if len(requirement_ids) != len(set(requirement_ids)):
@@ -3163,11 +3228,13 @@ __all__ = [
     "FixedWindowTrajectoryMetadata",
     "ClusterSelectionCandidate",
     "ClusterSelectionManifest",
+    "ClinicalDefinitionReference",
     "ConceptDescriptor",
     "CohortDescriptor",
     "ResearchContext",
     "HypothesisBlueprint",
     "FamilyPrimaryResultRequirement",
+    "PlannedFigurePanelSpec",
     "SURVIVAL_ANALYSIS_RECEIPT_PRODUCT",
     "SurvivalAnalysisReceipt",
     "AnalysisStep",

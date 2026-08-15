@@ -440,6 +440,7 @@ def test_statistical_validator_delegates_to_locked_cohort_numeric_replay(
 
 
 def test_numeric_replay_is_wired_before_the_existing_in_run_repair_gate() -> None:
+    from easyicu.research_agent.execution import candidate_loop
     from easyicu.research_agent.execution import phase as pipeline_execute
 
     # The ordered-stratified numeric replay now runs inside
@@ -450,21 +451,32 @@ def test_numeric_replay_is_wired_before_the_existing_in_run_repair_gate() -> Non
     )
     assert "ordered_stratified_numeric_findings(" in helper_source
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
-    replay = source.index(
+    # The contract-setup and contract-repair stages moved to the candidate
+    # loop (1e5182a): setup accumulates the replay findings before the repair
+    # gate closes over them, and the repair transition feeds every early
+    # error into the aggregate typed repair ticket.
+    setup_source = inspect.getsource(
+        candidate_loop._candidate_contract_setup_transition
+    )
+    replay = setup_source.index(
         "early_contract_findings += _post_canonicalization_figure_findings"
     )
-    repair_gate = source.index("early_contract_errors =", replay)
-    typed_ticket = source.index(
-        "structured_repair_ticket = typed_repair_ticket(", repair_gate
-    )
-
+    repair_gate = setup_source.index("early_contract_errors =", replay)
     assert replay < repair_gate
+
+    repair_source = inspect.getsource(
+        candidate_loop._candidate_contract_repair_transition
+    )
+    typed_ticket = repair_source.index(
+        "structured_repair_ticket = typed_repair_ticket("
+    )
+    ticket_inputs = repair_source.index("early_contract_errors", 0, typed_ticket)
+    assert ticket_inputs < typed_ticket
     # Every error returned by the replay now enters the aggregate typed repair
     # ticket. The retired validator-name string filter would have made this
     # contract depend on prose/routing text and could silently drop a new typed
     # occurrence.
-    assert repair_gate < typed_ticket
+    assert repair_gate is not None and typed_ticket is not None
 
 
 def test_controlled_method_has_no_whole_step_deterministic_runner() -> None:

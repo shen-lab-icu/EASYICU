@@ -74,6 +74,82 @@ def test_config_provenance_hashes_secret_keys_and_credential_values(tmp_path):
     assert rotated.canonical_digest() != config.canonical_digest()
 
 
+def test_config_recovery_preserves_digest_bound_literature_keys(tmp_path):
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+
+    citation_key = "pubmed_41159833"
+    config = PipelineConfig(
+        workdir=tmp_path / "pipeline",
+        bound_preplan_literature={
+            "research_question": "SOFA-2 and in-hospital mortality",
+            "citations": [
+                {
+                    "key": citation_key,
+                    "title": "Development and Validation of the SOFA-2 Score",
+                    "pmid": "41159833",
+                }
+            ],
+            "screening_decisions": [],
+        },
+    )
+
+    payload = config.recovery_payload()
+    assert payload["bound_preplan_literature"]["citations"][0]["key"] == (
+        citation_key
+    )
+    restored = PipelineConfig.from_recovery_payload(
+        payload,
+        expected_digest=config.canonical_digest(),
+    )
+    assert restored.canonical_digest() == config.canonical_digest()
+    assert restored.bound_preplan_literature["citations"][0]["key"] == citation_key
+
+
+def test_config_recovery_refuses_credentials_and_opaque_runner_state(tmp_path):
+    from easyicu.research_agent.orchestration.config import (
+        PipelineConfig,
+        PipelineConfigRecoveryError,
+    )
+
+    with pytest.raises(
+        PipelineConfigRecoveryError,
+        match="pipeline_config_recovery_field_not_persistable:pubmed_api_key",
+    ):
+        PipelineConfig(
+            workdir=tmp_path / "with-key",
+            pubmed_api_key="provider-secret-123456789",
+        ).recovery_payload()
+
+    with pytest.raises(
+        PipelineConfigRecoveryError,
+        match="pipeline_config_recovery_field_not_persistable:runner_kwargs",
+    ):
+        PipelineConfig(
+            workdir=tmp_path / "with-runner",
+            runner_kwargs={"headers": {"Authorization": "Bearer secret"}},
+        ).recovery_payload()
+
+
+def test_config_recovery_rejects_payload_drift(tmp_path):
+    from easyicu.research_agent.orchestration.config import (
+        PipelineConfig,
+        PipelineConfigRecoveryError,
+    )
+
+    config = PipelineConfig(workdir=tmp_path / "pipeline")
+    payload = config.recovery_payload()
+    payload["enable_literature"] = False
+
+    with pytest.raises(
+        PipelineConfigRecoveryError,
+        match="pipeline_config_recovery_digest_mismatch",
+    ):
+        PipelineConfig.from_recovery_payload(
+            payload,
+            expected_digest=config.canonical_digest(),
+        )
+
+
 def test_raw_parse_dump_is_off_without_explicit_flag_and_directory(
     tmp_path, monkeypatch
 ):

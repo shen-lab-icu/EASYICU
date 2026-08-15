@@ -29,7 +29,7 @@ class RunExecutionState:
 class RunTransition:
     """A caller-authorized scheduling transition after one completed step."""
 
-    kind: Literal["continue", "stop", "replan"]
+    kind: Literal["continue", "stop", "pause", "replan"]
     reason: Optional[str] = None
     revised_plan: Any = None
     rerun_current_step: bool = False
@@ -41,6 +41,12 @@ class RunTransition:
     @classmethod
     def stop(cls, reason: str) -> "RunTransition":
         return cls(kind="stop", reason=str(reason))
+
+    @classmethod
+    def pause(cls, reason: str) -> "RunTransition":
+        """Stop scheduling without converting a review wait into a failure."""
+
+        return cls(kind="pause", reason=str(reason))
 
     @classmethod
     def replan(
@@ -121,7 +127,7 @@ class RunCoordinator:
                 record,
                 bool(state.remaining_steps),
             )
-            if transition.kind == "stop":
+            if transition.kind in {"stop", "pause"}:
                 state.stop_reason = transition.reason
                 break
             if transition.kind == "replan":

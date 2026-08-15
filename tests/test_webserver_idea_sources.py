@@ -19,6 +19,7 @@ from easyicu.webserver.ideas.handoff import (
     build_web_handoff_packet,
     map_web_ledger_row,
 )
+from easyicu.webserver.ideas import direct_evidence_search
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.app import app
 
@@ -276,13 +277,15 @@ def test_pasted_literature_source_flows_to_agent_project_list(
 
     imported = client.post(
         "/api/capabilities/zotero/import",
-        json={"text": """@article{smith2026shock,
+        json={
+            "text": """@article{smith2026shock,
               title={Early Vasopressors in Septic Shock},
               journal={Intensive Care Medicine},
               year={2026},
               doi={10.1000/example},
               abstract={Early vasopressors may define a measurable ICU exposure.}
-            }"""},
+            }"""
+        },
     )
     assert imported.status_code == 200
     source_payload = imported.json()["suggested_payload"]
@@ -430,9 +433,7 @@ def test_idea_plan_stage_precedes_agent_handoff_and_stays_metadata_only(
     assert canonical.analysis_ready is False
     assert frozen["canonical_handoff_path"] == "discovery_handoff.json"
     assert len(frozen["canonical_handoff_sha256"]) == 64
-    assert (
-        idea_mining._run_dir(run["run_id"]) / "discovery_handoff.json"
-    ).is_file()
+    assert (idea_mining._run_dir(run["run_id"]) / "discovery_handoff.json").is_file()
 
 
 def test_web_handoff_adapter_matches_canonical_core_semantics(tmp_path: Path) -> None:
@@ -544,9 +545,7 @@ def test_agent_project_rejects_tampered_canonical_handoff(
         }
     )
     idea = run["idea_ledger"][0]
-    idea_mining.create_handoff(
-        {"run_id": run["run_id"], "idea_id": idea["idea_id"]}
-    )
+    idea_mining.create_handoff({"run_id": run["run_id"], "idea_id": idea["idea_id"]})
     run_dir = idea_mining._run_dir(run["run_id"])
     if tamper_target in {"artifact", "artifact_with_replan"}:
         path = run_dir / "discovery_handoff.json"
@@ -606,9 +605,7 @@ def test_legacy_handoff_refreshes_to_locked_unconfirmed_agent_seed(
     legacy.pop("canonical_handoff")
     legacy.pop("canonical_handoff_path")
     legacy.pop("canonical_handoff_sha256")
-    (run_dir / "idea_handoff.json").write_text(
-        json.dumps(legacy), encoding="utf-8"
-    )
+    (run_dir / "idea_handoff.json").write_text(json.dumps(legacy), encoding="utf-8")
     (run_dir / "discovery_handoff.json").unlink()
 
     result = idea_mining.create_agent_project(
@@ -702,6 +699,237 @@ def test_idea_literature_discovery_blocks_without_network_opt_in(
     assert payload["queries_to_run"]
 
 
+def test_conversational_sepsis_scope_compiles_to_bounded_pubmed_queries() -> None:
+    topic = (
+        "请帮我从 MIMIC-IV 寻找成人首次 ICU 入住后 24 小时内 Sepsis-3 "
+        "与院内死亡的研究机会，并完成数据提取和分析计划。"
+    )
+
+    queries = idea_mining._discovery_queries(
+        topic,
+        "",
+        {"exposure": "sep3_sofa1_max", "outcome": "death"},
+    )
+
+    assert len(queries) == 6
+    assert all('"Sepsis-3"[Title/Abstract]' in query for query in queries)
+    assert all(
+        '"mortality"[Title/Abstract]' in query
+        for index, query in enumerate(queries)
+        if index != 1
+    )
+    assert "definition[Title/Abstract]" in queries[1]
+    assert any("observational[Title/Abstract]" in query for query in queries)
+    all_years, recent = queries[2:4]
+    assert "adult[Title/Abstract]" in all_years
+    assert "pediatric[Title/Abstract]" in all_years
+    assert "NOT (Review[Publication Type]" in all_years
+    assert "association[Title/Abstract]" in all_years
+    assert "prevalence[Title/Abstract]" in all_years
+    assert "Date - Publication" not in all_years
+    assert "2021/01/01" in recent
+    assert all("请帮我" not in query for query in queries)
+
+
+def test_sofa2_execution_concept_uses_retrieval_aliases_without_granting_evidence() -> (
+    None
+):
+    scope = {
+        "topic": "adult ICU experimental SOFA-2 Sepsis-3 phenotype and mortality",
+        "exposure": "experimental Sepsis-3 phenotype using SOFA-2",
+        "outcome": "in-hospital mortality",
+        "exposure_concept": "sep3_sofa2",
+        "outcome_concept": "death",
+        "population": "adult ICU stays",
+        "database": "miiv",
+        "analysis_family": "association_study",
+    }
+
+    queries = idea_mining._discovery_queries(scope["topic"], "", scope)
+    fallback = direct_evidence_search.build_query(scope)
+
+    assert len(queries) == 6
+    assert all('"SOFA-2"[Title/Abstract]' in query for query in queries)
+    assert all(
+        '"Sepsis-3"[Title/Abstract]' in query
+        for index, query in enumerate(queries)
+        if index != 1
+    )
+    assert all(
+        '"SOFA"[Title/Abstract]' in query
+        for index, query in enumerate(queries)
+        if index != 1
+    )
+    assert '"SOFA-2"[Title/Abstract]' in queries[1]
+    assert '"Sepsis-3"[Title/Abstract]' not in queries[1]
+    assert all('"SOFA-2 sepsis"[Title/Abstract]' not in query for query in queries)
+    assert '"hospital mortality"[Title/Abstract]' in fallback
+    assert '"MIMIC-IV"[Title/Abstract]' in fallback
+
+    # Retrieval aliases increase recall only.  A Sepsis-3/SOFA paper that does
+    # not study the exact SOFA-2 exposure remains related context at this stage.
+    decision = direct_evidence_search.screen_article(
+        {
+            "pmid": "123",
+            "title": "Sepsis-3 prevalence and hospital mortality in adult ICU stays",
+            "design_excerpt": (
+                "An observational adult ICU cohort assessed Sepsis-3 prevalence "
+                "and hospital mortality using SOFA."
+            ),
+            "publication_types": ["Observational Study"],
+        },
+        scope,
+    )
+    assert decision["disposition"] == "exclude"
+    assert decision["evidence_role"] == "related_context"
+
+
+def test_inferred_concept_search_uses_literature_identity_not_display_label() -> None:
+    queries = idea_mining._discovery_queries(
+        "adult ICU Sepsis-3 prevalence and in-hospital mortality",
+        "",
+        {"population": "adult ICU stays"},
+    )
+
+    assert all('"Sepsis-3"[Title/Abstract]' in query for query in queries)
+    assert all('"mortality"[Title/Abstract]' in query for query in queries)
+    assert all("Sepsis-3 (SOFA-1 based)" not in query for query in queries)
+    assert all("In-hospital Mortality" not in query for query in queries)
+
+
+def test_pediatric_literature_scope_does_not_compile_an_adult_filter() -> None:
+    queries = idea_mining._discovery_queries(
+        "儿童 ICU 脓毒症与院内死亡",
+        "",
+        {"exposure_concept": "sep3_sofa1", "outcome_concept": "death"},
+    )
+
+    direct = queries[1]
+    assert "pediatric[Title/Abstract]" in direct
+    assert "NOT (adult[Title/Abstract]" in direct
+    assert "AND (adult[Title/Abstract]" not in direct
+
+
+def test_generic_sepsis_maps_to_canonical_sofa1_and_preserves_explicit_adjustment() -> (
+    None
+):
+    text = (
+        "纳入成人首次 ICU stay，采用 Sepsis-3 操作定义，主要结局为院内死亡，"
+        "同时描述 SOFA、乳酸和尿量，初步按年龄和性别调整。"
+    )
+
+    hits = idea_mining._match_concepts(text)
+    concept_ids = {row["concept_id"] for row in hits}
+
+    assert "sep3_sofa1" in concept_ids
+    assert "sep3_sofa2" not in concept_ids
+    assert idea_mining._requested_adjustment_concepts(text, hits) == ["age", "sex"]
+
+    explicit = (
+        "主要暴露采用标准 Sepsis-3（传统 SOFA / sep3_sofa1），主要结局为院内死亡；"
+        "乳酸和尿量仅用于描述，按年龄和性别调整。"
+    )
+    explicit_hits = idea_mining._match_concepts(explicit)
+    assert idea_mining._requested_exposure_concepts(explicit, explicit_hits) == [
+        "sep3_sofa1"
+    ]
+    idea = idea_mining._idea_from_source(
+        {"source_id": "source", "title": "Sepsis study"},
+        explicit,
+        explicit_hits,
+        {
+            "concept_to_file": {
+                concept_id: {"module": row.get("module")}
+                for row in explicit_hits
+                if (concept_id := str(row.get("concept_id") or ""))
+            },
+            "entity_ids": {"1"},
+            "demo_like": False,
+        },
+    )
+    assert idea["idea_title"].startswith("Sepsis-3 (SOFA-1 based)")
+    assert idea["requested_adjustment_concepts"] == ["age", "sex"]
+    assert all(
+        '"Sepsis-3"[Title/Abstract]' in query
+        for query in idea["prior_art"]["queries_to_run"]
+    )
+    assert all(
+        '"mortality"[Title/Abstract]' in query
+        for query in idea["prior_art"]["queries_to_run"]
+    )
+    assert all(
+        '"SOFA Score (Total)"[Title/Abstract]' not in query
+        for query in idea["prior_art"]["queries_to_run"]
+    )
+
+
+def test_prior_art_executes_the_queries_prespecified_by_the_mined_idea(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path)
+    run_id = "idea_prespecified_query"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    queries = [
+        '("Sepsis-3"[Title/Abstract] AND "mortality"[Title/Abstract]) '
+        'AND ICU[Title/Abstract]'
+    ]
+    (run_dir / "idea_mining_run.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "selected_idea_id": "idea_sepsis",
+                "source_evidence": [{"title": "Sepsis idea"}],
+                "idea_ledger": [
+                    {
+                        "idea_id": "idea_sepsis",
+                        # The title contains another mapped concept. It must not
+                        # be allowed to replace the frozen primary query.
+                        "idea_title": "SOFA Score (Total) and mortality",
+                        "prior_art": {"queries_to_run": queries},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    checked = idea_mining.check_prior_art(
+        {"run_id": run_id, "idea_id": "idea_sepsis", "allow_network": False}
+    )
+
+    assert checked["prior_art"]["queries_to_run"] == queries
+
+
+def test_pubmed_esearch_requests_relevance_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[str] = []
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self, limit: int) -> bytes:
+            assert limit > 0
+            return b'{"esearchresult":{"idlist":["26903338"]}}'
+
+    def fake_urlopen(url: str, *, timeout: float) -> Response:
+        assert timeout > 0
+        requested.append(url)
+        return Response()
+
+    monkeypatch.setattr(idea_mining.request, "urlopen", fake_urlopen)
+
+    assert idea_mining._pubmed_esearch("sepsis mortality", limit=5) == [
+        "26903338"
+    ]
+    assert "sort=relevance" in requested[0]
+
+
 def test_pubmed_connector_setting_blocks_idea_discovery_network(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -740,7 +968,7 @@ def test_idea_literature_discovery_maps_pubmed_candidates_metadata_only(
     monkeypatch.setattr(
         idea_mining,
         "_pubmed_article_records",
-        lambda ids: [
+        lambda ids, *, focus_terms=(): [
             {
                 "pmid": "12345",
                 "title": "Vasopressors and Fluids in Early Septic Shock",
@@ -756,6 +984,11 @@ def test_idea_literature_discovery_maps_pubmed_candidates_metadata_only(
                     "A trial suggests early vasopressor and fluid-resuscitation strategy "
                     "may affect outcomes in adult septic shock."
                 ),
+                "design_excerpt": (
+                    "Adult ICU patients were randomized to early vasopressor and "
+                    "fluid-resuscitation strategies; mortality was the outcome."
+                ),
+                "publication_types": ["Randomized Controlled Trial"],
                 "full_text_stored": False,
             }
         ],
@@ -781,6 +1014,10 @@ def test_idea_literature_discovery_maps_pubmed_candidates_metadata_only(
     assert payload["privacy"]["full_text_stored"] is False
     assert payload["source_candidates"][0]["pmid"] == "12345"
     assert "vasopressor" in payload["source_candidates"][0]["evidence_quote"].lower()
+    assert payload["source_candidates"][0]["publication_types"] == [
+        "Randomized Controlled Trial"
+    ]
+    assert "Adult ICU patients" in payload["source_candidates"][0]["design_excerpt"]
     idea = payload["idea_candidates"][0]["idea"]
     concept_ids = {row["concept_id"] for row in idea["mapped_concepts"]}
     assert {"vaso_ind", "death"} & concept_ids
@@ -788,6 +1025,306 @@ def test_idea_literature_discovery_maps_pubmed_candidates_metadata_only(
     assert "stay_id" not in str(payload)
     assert "subject_id" not in str(payload)
     assert "tableRows" not in str(payload)
+
+
+def test_literature_discovery_round_robins_prespecified_query_strata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    returned = iter(
+        [
+            ["100", "101", "102"],
+            ["150", "151"],
+            ["175", "176"],
+            ["200", "201"],
+            ["300", "301"],
+            ["350", "351"],
+        ]
+    )
+    fetched: list[str] = []
+
+    monkeypatch.setattr(
+        idea_mining,
+        "_pubmed_esearch",
+        lambda query, limit=5: next(returned),
+    )
+
+    def article_records(
+        ids: list[str], *, focus_terms=()
+    ) -> list[dict[str, object]]:
+        fetched.extend(ids)
+        return [
+            {
+                "pmid": pmid,
+                "title": f"Sepsis-3 mortality record {pmid}",
+                "journal": "Critical Care",
+                "year": 2025,
+                "abstract_excerpt": "Sepsis-3 and ICU mortality were evaluated.",
+                "evidence_sentence": "Sepsis-3 and ICU mortality were evaluated.",
+            }
+            for pmid in ids
+        ]
+
+    monkeypatch.setattr(idea_mining, "_pubmed_article_records", article_records)
+
+    payload = idea_mining.discover_literature(
+        {
+            "topic": "Sepsis-3 mortality",
+            "exposure_concept": "sep3_sofa1",
+            "outcome_concept": "death",
+            "allow_network": True,
+            "limit": 3,
+        }
+    )
+
+    assert fetched == ["100", "150", "175"]
+    assert [row["id"] for row in payload["query_strata"]] == [
+        "broad_icu",
+        "concept_definition_or_validation",
+        "direct_observational_comparator_all_years",
+        "direct_observational_comparator_recent",
+        "review_or_guideline",
+        "critical_care_database",
+    ]
+    assert [row["retained_count"] for row in payload["query_strata"]] == [
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+    ]
+    assert [
+        row["matched_query_strata"] for row in payload["source_candidates"]
+    ] == [
+        ["broad_icu"],
+        ["concept_definition_or_validation"],
+        ["direct_observational_comparator_all_years"],
+    ]
+
+
+def test_literature_discovery_runs_typed_direct_fallback_after_source_screen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def search(query: str, limit: int = 5) -> list[str]:
+        calls.append(query)
+        if len(calls) <= 6:
+            return [f"10{len(calls)}"]
+        return ["900", "901"]
+
+    def article_records(
+        ids: list[str], *, focus_terms=()
+    ) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for pmid in ids:
+            if pmid == "900":
+                rows.append(
+                    {
+                        "pmid": pmid,
+                        "title": (
+                            "Sepsis-3 prevalence and hospital mortality among "
+                            "adult ICU stays"
+                        ),
+                        "year": 2024,
+                        "design_excerpt": (
+                            "An observational cohort of adult ICU stays estimated "
+                            "Sepsis-3 prevalence and hospital mortality."
+                        ),
+                        "abstract_excerpt": (
+                            "An observational cohort of adult ICU stays estimated "
+                            "Sepsis-3 prevalence and hospital mortality."
+                        ),
+                        "publication_types": ["Observational Study"],
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "pmid": pmid,
+                        "title": "Vasopressin timing and mortality in septic shock",
+                        "year": 2025,
+                        "design_excerpt": (
+                            "Adult ICU patients meeting Sepsis-3 criteria received "
+                            "vasopressin; timing was associated with mortality."
+                        ),
+                        "abstract_excerpt": (
+                            "Adult ICU patients meeting Sepsis-3 criteria received "
+                            "vasopressin; timing was associated with mortality."
+                        ),
+                        "publication_types": ["Observational Study"],
+                    }
+                )
+        return rows
+
+    monkeypatch.setattr(idea_mining, "_pubmed_esearch", search)
+    monkeypatch.setattr(idea_mining, "_pubmed_article_records", article_records)
+
+    payload = idea_mining.discover_literature(
+        {
+            "topic": "adult ICU Sepsis-3 hospital mortality",
+            "exposure_concept": "sep3_sofa1",
+            "outcome_concept": "death",
+            "outcome": "in-hospital mortality",
+            "population": "adult ICU stays",
+            "database": "miiv",
+            "analysis_family": "descriptive_epidemiology",
+            "allow_network": True,
+            "limit": 3,
+        }
+    )
+
+    assert len(calls) == 7
+    assert '"Sepsis-3"[Title/Abstract]' in calls[-1]
+    assert '"hospital mortality"[Title/Abstract]' in calls[-1]
+    assert '"MIMIC-IV"[Title/Abstract]' in calls[-1]
+    assert "epidemiolog*[Title/Abstract]" in calls[-1]
+    assert payload["query_strata"][-1]["id"] == (
+        "typed_direct_observational_comparator"
+    )
+    assert payload["source_candidates"][0]["pmid"] == "900"
+    assert payload["source_candidates"][0]["direct_comparator_screen"][
+        "disposition"
+    ] == "include"
+    unrelated = next(
+        row for row in payload["source_candidates"] if row["pmid"] != "900"
+    )
+    assert unrelated["direct_comparator_screen"]["disposition"] == "exclude"
+
+
+def test_excluded_direct_fallback_does_not_erase_prespecified_strata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def search(query: str, limit: int = 5) -> list[str]:
+        calls.append(query)
+        return [f"10{len(calls)}"] if len(calls) <= 6 else ["900", "901"]
+
+    def article_records(
+        ids: list[str], *, focus_terms=()
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "pmid": pmid,
+                "title": "Vasopressin timing and mortality in septic shock",
+                "year": 2025,
+                "design_excerpt": (
+                    "Adult ICU patients meeting Sepsis-3 criteria received "
+                    "vasopressin; timing was associated with mortality."
+                ),
+                "publication_types": ["Observational Study"],
+            }
+            for pmid in ids
+        ]
+
+    monkeypatch.setattr(idea_mining, "_pubmed_esearch", search)
+    monkeypatch.setattr(idea_mining, "_pubmed_article_records", article_records)
+
+    payload = idea_mining.discover_literature(
+        {
+            "topic": "adult ICU Sepsis-3 hospital mortality",
+            "exposure_concept": "sep3_sofa1",
+            "outcome_concept": "death",
+            "outcome": "in-hospital mortality",
+            "population": "adult ICU stays",
+            "database": "miiv",
+            "analysis_family": "descriptive_epidemiology",
+            "allow_network": True,
+            "limit": 3,
+        }
+    )
+
+    assert len(calls) == 7
+    assert [row["pmid"] for row in payload["source_candidates"]] == [
+        "101",
+        "102",
+        "103",
+    ]
+    assert payload["query_strata"][-1]["id"] == (
+        "typed_direct_observational_comparator"
+    )
+    assert payload["query_strata"][-1]["retained_count"] == 0
+
+
+def test_literature_discovery_keeps_foundational_and_recent_comparator_strata() -> None:
+    queries = idea_mining._discovery_queries(
+        "Sepsis-3 mortality",
+        "",
+        {
+            "exposure_concept": "sep3_sofa1",
+            "outcome_concept": "death",
+            "population": "adult ICU stays",
+        },
+    )
+
+    assert len(queries) == 6
+    all_years = queries[2]
+    recent = queries[3]
+    assert "cohort[Title/Abstract]" in all_years
+    assert "Date - Publication" not in all_years
+    assert "cohort[Title/Abstract]" in recent
+    assert "Date - Publication" in recent
+
+
+def test_pubmed_metadata_retains_publication_type_and_design_excerpt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    xml = b"""<?xml version='1.0' encoding='UTF-8'?>
+    <PubmedArticleSet><PubmedArticle><MedlineCitation>
+      <PMID>12345</PMID><Article>
+        <ArticleTitle>Sepsis-3 and mortality in adult ICU patients</ArticleTitle>
+        <Abstract><AbstractText>We conducted a retrospective cohort study of adult ICU patients. Sepsis-3 was assessed at admission and hospital mortality was the outcome.</AbstractText></Abstract>
+        <Journal><JournalIssue><PubDate><Year>2025</Year></PubDate></JournalIssue><Title>Critical Care</Title></Journal>
+        <PublicationTypeList><PublicationType>Observational Study</PublicationType></PublicationTypeList>
+      </Article></MedlineCitation><PubmedData><ArticleIdList>
+        <ArticleId IdType='doi'>10.1000/example</ArticleId>
+      </ArticleIdList></PubmedData></PubmedArticle></PubmedArticleSet>"""
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self, limit: int = -1) -> bytes:
+            return xml if limit < 0 else xml[:limit]
+
+    monkeypatch.setattr(
+        idea_mining.request,
+        "urlopen",
+        lambda url, timeout=0: Response(),
+    )
+
+    row = idea_mining._pubmed_article_records(["12345"])[0]
+    assert row["publication_types"] == ["Observational Study"]
+    assert "retrospective cohort" in row["design_excerpt"]
+    assert "hospital mortality" in row["design_excerpt"]
+
+
+def test_design_excerpt_preserves_late_outcome_axis_after_exposure_synonyms() -> None:
+    excerpt = idea_mining._study_design_excerpt(
+        (
+            "SOFA-2 updates the Sequential Organ Failure Assessment score. "
+            "Sepsis-3 criteria can use SOFA-2 for organ dysfunction. "
+            "We conducted a retrospective multicenter ICU cohort. "
+            "Adults with suspected infection were included. "
+            "The primary outcome was ICU mortality; hospital mortality was a "
+            "prespecified secondary outcome."
+        ),
+        focus_terms=(
+            "SOFA-2",
+            "Sepsis-3",
+            "SOFA",
+            "Sequential Organ Failure Assessment",
+            "hospital mortality",
+        ),
+    )
+
+    assert "SOFA-2" in excerpt
+    assert "Sepsis-3" in excerpt
+    assert "hospital mortality" in excerpt
 
 
 def test_idea_mining_maps_ards_peep_pdf_excerpt_to_respiratory_concepts(

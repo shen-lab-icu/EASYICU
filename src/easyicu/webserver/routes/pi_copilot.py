@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from html import escape as html_escape
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
 
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
-from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+from easyicu.webserver.pi_copilot.contracts import (
+    PiCopilotError,
+    PiProjectBindingHandoffReceipt,
+)
 
 router = APIRouter()
 
@@ -59,6 +63,27 @@ ArtifactNameText = Annotated[
         pattern=r"^[A-Za-z0-9_.-]+\.json$",
     ),
 ]
+ResearchDocumentNameText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=20,
+        max_length=64,
+        pattern=(
+            r"^(?:manuscript_scaffold\.(?:pdf|tex|bib)|"
+            r"system_validation_report\.(?:html|pdf))$"
+        ),
+    ),
+]
+Sha256Text = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-f0-9]{64}$",
+    ),
+]
 
 
 class PiSessionCreateRequest(BaseModel):
@@ -78,10 +103,20 @@ class PiMessageRequest(BaseModel):
     project_id: ShortText
     message: MessageText
     allowed_actions: list[
-        Literal["configure", "run", "cancel", "workspace_write"]
+        Literal[
+            "configure",
+            "idea",
+            "literature",
+            "extract",
+            "run",
+            "provider_run",
+            "cancel",
+            "workspace_write",
+            "mcp_read",
+        ]
     ] = Field(
         default_factory=list,
-        max_length=4,
+        max_length=9,
     )
 
 
@@ -98,12 +133,20 @@ class PiProjectRequest(BaseModel):
     project_id: ShortText
 
 
+class PiPresentationPinRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    pinned: StrictBool = True
+
+
 class PiProjectInitializeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project_id: ShortText
     title: str = "Pi Copilot"
     confirm_initialization: StrictBool = False
+    binding_receipt: PiProjectBindingHandoffReceipt | None = None
 
 
 class PiProviderConfigRequest(BaseModel):
@@ -124,6 +167,37 @@ class PiProviderConfigRequest(BaseModel):
 
 def _raise_http(error: PiCopilotError) -> None:
     raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+def _workspace_preview_document(*, file_name: str, artifact_html: str) -> str:
+    """Keep Host provenance outside the sandboxed model-authored document."""
+
+    safe_file = html_escape(file_name, quote=True)
+    safe_srcdoc = html_escape(artifact_html, quote=True)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>EasyICU workspace preview · {safe_file}</title>
+  <style>
+    *{{box-sizing:border-box}}
+    html,body{{width:100%;height:100%;margin:0}}
+    body{{display:grid;grid-template-rows:auto minmax(0,1fr);background:#fff;color:#202124;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+    header{{display:flex;flex-wrap:wrap;gap:4px 10px;padding:10px 14px;border-bottom:1px solid #ead9aa;background:#fff9e9}}
+    header strong{{font-weight:700}}
+    header span{{color:#5f6368}}
+    iframe{{width:100%;height:100%;border:0;background:#fff}}
+  </style>
+</head>
+<body data-easyicu-workspace-preview="unvalidated">
+  <header role="note" data-easyicu-workspace-provenance>
+    <strong>Workspace artifact · Unvalidated / 工作区产物 · 未验证</strong>
+    <span>Not scientific evidence; unsupported for clinical or manuscript claims. / 不是科学证据；不支持临床或论文结论。</span>
+  </header>
+  <iframe id="easyicu-workspace-preview-content" sandbox="allow-scripts" referrerpolicy="no-referrer" title="Unvalidated workspace artifact: {safe_file}" srcdoc="{safe_srcdoc}"></iframe>
+</body>
+</html>"""
 
 
 @router.get("/api/copilot/pi/status")
@@ -170,6 +244,17 @@ def post_pi_copilot_project_initialize(
             project_id=body.project_id,
             title=body.title,
             confirm_initialization=body.confirm_initialization,
+            binding_receipt=body.binding_receipt,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.get("/api/copilot/pi/projects/{project_id}/workflow")
+def get_pi_copilot_project_workflow(project_id: ShortText) -> dict:
+    try:
+        return get_pi_copilot_service().get_project_workflow(
+            project_id=project_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)
@@ -196,25 +281,33 @@ def get_pi_copilot_workspace_file(
 def get_pi_copilot_workspace_preview(
     project_id: ShortText,
     file: WorkspaceFileText,
+    checked_sha256: Sha256Text,
 ) -> HTMLResponse:
     try:
         payload = get_pi_copilot_service().get_workspace_preview(
             project_id=project_id,
             relative_file=file,
+            checked_sha256=checked_sha256,
         )
     except PiCopilotError as exc:
         _raise_http(exc)
     artifact = payload["artifact"]
     return HTMLResponse(
-        content=str(artifact["text"]),
+        content=_workspace_preview_document(
+            file_name=str(artifact["file"]),
+            artifact_html=str(artifact["text"]),
+        ),
         headers={
             "Content-Security-Policy": (
-                "default-src 'none'; style-src 'unsafe-inline'; "
+                "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; "
                 "script-src 'unsafe-inline'; img-src data:; "
-                "connect-src 'none'; form-action 'none'; base-uri 'none'"
+                "frame-src 'self'; "
+                "connect-src 'none'; form-action 'none'; base-uri 'none'; "
+                "frame-ancestors 'self'"
             ),
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
         },
     )
 
@@ -237,15 +330,69 @@ def get_pi_copilot_research_artifact(
         _raise_http(exc)
 
 
+@router.get("/api/copilot/pi/projects/{project_id}/data-package-review")
+def get_pi_copilot_data_package_review(
+    project_id: ShortText,
+    study_revision: Annotated[int, Query(ge=0)],
+    review_sha256: Sha256Text,
+) -> dict:
+    try:
+        return get_pi_copilot_service().get_data_package_review(
+            project_id=project_id,
+            study_revision=study_revision,
+            review_sha256=review_sha256,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.get(
+    "/api/copilot/pi/projects/{project_id}/runs/{run_id}/documents/{document_name}"
+)
+def get_pi_copilot_research_document(
+    project_id: ShortText,
+    run_id: RunIdText,
+    document_name: ResearchDocumentNameText,
+) -> Response:
+    try:
+        payload = get_pi_copilot_service().get_research_document(
+            project_id=project_id,
+            run_id=run_id,
+            document_name=document_name,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+    return Response(
+        content=payload["content"],
+        media_type=str(payload["media_type"]),
+        headers={
+            "Content-Disposition": f'inline; filename="{document_name}"',
+            "Content-Security-Policy": (
+                "sandbox; default-src 'none'; style-src 'unsafe-inline'; "
+                "img-src data:; frame-ancestors 'self'"
+            ),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "SAMEORIGIN",
+            "Referrer-Policy": "no-referrer",
+            "X-EasyICU-Claim-Ceiling": str(payload["claim_ceiling"]),
+        },
+    )
+
+
 @router.get("/api/copilot/pi/sessions")
 def get_pi_copilot_sessions(
     project_id: Annotated[str, Query(min_length=1, max_length=160)],
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
+    agent_mode: Annotated[
+        str | None, Query(pattern="^(research|workspace)$")
+    ] = None,
 ) -> dict:
     try:
         return get_pi_copilot_service().list_sessions(
             project_id=project_id,
             limit=limit,
+            agent_mode=agent_mode,
         )
     except PiCopilotError as exc:
         _raise_http(exc)
@@ -255,11 +402,19 @@ def get_pi_copilot_sessions(
 def get_pi_copilot_session(
     session_id: ShortText,
     project_id: Annotated[str, Query(min_length=1, max_length=160)],
+    transcript_cursor: Annotated[str | None, Query(max_length=32)] = None,
+    transcript_limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    replay_cursor: Annotated[str | None, Query(max_length=32)] = None,
+    replay_limit: Annotated[int, Query(ge=1, le=100)] = 48,
 ) -> dict:
     try:
         return get_pi_copilot_service().get_session(
             session_id,
             project_id=project_id,
+            transcript_cursor=transcript_cursor,
+            transcript_limit=transcript_limit,
+            replay_cursor=replay_cursor,
+            replay_limit=replay_limit,
         )
     except PiCopilotError as exc:
         _raise_http(exc)
@@ -284,6 +439,37 @@ def post_pi_copilot_rebind(session_id: ShortText, body: PiProjectRequest) -> dic
         return get_pi_copilot_service().rebind_session(
             session_id,
             project_id=body.project_id,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/presentation")
+def post_pi_copilot_presentation_pin(
+    session_id: ShortText,
+    body: PiPresentationPinRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().set_presentation_pin(
+            session_id,
+            project_id=body.project_id,
+            pinned=body.pinned,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/child-jobs/{job_id}/archive")
+def post_pi_copilot_child_job_archive(
+    session_id: ShortText,
+    job_id: ShortText,
+    body: PiProjectRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().archive_child_job(
+            session_id,
+            project_id=body.project_id,
+            job_id=job_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

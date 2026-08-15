@@ -1,8 +1,8 @@
 """Pre-analysis, outcome-blind completeness QC for composite scores.
 
 Locks two invariants:
-  1. ``sofa2_score`` emits an outcome-blind ``sofa2_n_components`` count without
-     changing the standard (MIMIC-IV/ricu-faithful) score value.
+  1. ``sofa2_score`` emits explicit observed/available counts; the deprecated
+     ``sofa2_n_components`` alias remains equal to available.
   2. ``composite_score_completeness`` is GENERIC — it works on any composite
      score given its components, not just SOFA, and never looks at an outcome.
 """
@@ -49,9 +49,14 @@ def test_sofa2_score_emits_outcome_blind_component_count():
     }
     out = sofa2_score(_component_dict(vals)).set_index("stay_id")
     # completeness count (0-6), outcome-blind
-    assert out.loc[1, "sofa2_n_components"] == 6
-    assert out.loc[2, "sofa2_n_components"] == 3
-    assert out.loc[3, "sofa2_n_components"] == 0
+    for column in (
+        "sofa2_n_observed_components",
+        "sofa2_n_available_components",
+        "sofa2_n_components",
+    ):
+        assert out.loc[1, column] == 6
+        assert out.loc[2, column] == 3
+        assert out.loc[3, column] == 0
     # score value unchanged: missing -> 0 (standard), so the all-missing stay
     # collapses to 0 and is indistinguishable from a true zero by score alone
     assert out.loc[1, "sofa2"] == 3

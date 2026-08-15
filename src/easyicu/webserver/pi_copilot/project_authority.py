@@ -12,6 +12,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from .contracts import PiCopilotError, utc_now
+from .locking import exclusive_file_lock
 
 _SCHEMA_VERSION = "easyicu.pi-project-authority/1"
 _MAX_PROJECTS = 200
@@ -158,46 +159,50 @@ class ProjectAuthorityStore:
             code="pi_project_study_context_binding_required",
         )
         with self._lock:
-            rows = self._read()
-            project_binding = next(
-                (row for row in rows if row.project_id == clean_project),
-                None,
-            )
-            if project_binding:
-                if project_binding.study_context_id != clean_study:
+            with exclusive_file_lock(
+                self.path.with_name(self.path.name + ".lock"),
+                code="pi_project_authority_lock_unavailable",
+            ):
+                rows = self._read()
+                project_binding = next(
+                    (row for row in rows if row.project_id == clean_project),
+                    None,
+                )
+                if project_binding:
+                    if project_binding.study_context_id != clean_study:
+                        raise PiCopilotError(
+                            "pi_project_study_context_mismatch",
+                            "This research project is already bound to another StudyContext.",
+                            status_code=409,
+                            details={"project_id": clean_project},
+                        )
+                    return clean_study
+                context_binding = next(
+                    (row for row in rows if row.study_context_id == clean_study),
+                    None,
+                )
+                if context_binding:
                     raise PiCopilotError(
-                        "pi_project_study_context_mismatch",
-                        "This research project is already bound to another StudyContext.",
+                        "pi_study_context_project_mismatch",
+                        "This StudyContext is already owned by another research project.",
                         status_code=409,
                         details={"project_id": clean_project},
                     )
-                return clean_study
-            context_binding = next(
-                (row for row in rows if row.study_context_id == clean_study),
-                None,
-            )
-            if context_binding:
-                raise PiCopilotError(
-                    "pi_study_context_project_mismatch",
-                    "This StudyContext is already owned by another research project.",
-                    status_code=409,
-                    details={"project_id": clean_project},
+                if len(rows) >= _MAX_PROJECTS:
+                    raise PiCopilotError(
+                        "pi_project_authority_capacity_reached",
+                        "The bounded project authority store is full.",
+                        status_code=409,
+                    )
+                rows.insert(
+                    0,
+                    ProjectAuthorityBinding(
+                        project_id=clean_project,
+                        study_context_id=clean_study,
+                        migration_receipt=migration_receipt,
+                    ),
                 )
-            if len(rows) >= _MAX_PROJECTS:
-                raise PiCopilotError(
-                    "pi_project_authority_capacity_reached",
-                    "The bounded project authority store is full.",
-                    status_code=409,
-                )
-            rows.insert(
-                0,
-                ProjectAuthorityBinding(
-                    project_id=clean_project,
-                    study_context_id=clean_study,
-                    migration_receipt=migration_receipt,
-                ),
-            )
-            self._write(rows)
+                self._write(rows)
         return clean_study
 
     def assert_matches(self, project_id: str, study_context_id: Optional[str]) -> str:

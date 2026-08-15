@@ -112,16 +112,20 @@ def test_the_item_this_does_not_fix_stays_open() -> None:
 # --- the wiring ---------------------------------------------------------------
 
 
-def _write_phase_tree() -> ast.FunctionDef:
+def _phase_function_tree(name: str) -> ast.FunctionDef:
     tree = ast.parse(inspect.getsource(write_phase))
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "run_write_phase":
+        if isinstance(node, ast.FunctionDef) and node.name == name:
             return node
-    raise AssertionError("run_write_phase is gone")
+    raise AssertionError(f"{name} is gone")
+
+
+def _publication_stage_tree() -> ast.FunctionDef:
+    return _phase_function_tree("_publish_and_audit_manuscript")
 
 
 def _checklist_evidence_argument() -> str:
-    fn = _write_phase_tree()
+    fn = _publication_stage_tree()
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call):
             continue
@@ -135,7 +139,7 @@ def _checklist_evidence_argument() -> str:
 
 
 def _assignment_line(target_name: str) -> int:
-    fn = _write_phase_tree()
+    fn = _publication_stage_tree()
     for node in ast.walk(fn):
         if isinstance(node, ast.Assign) and any(
             isinstance(t, ast.Name) and t.id == target_name for t in node.targets
@@ -145,7 +149,7 @@ def _assignment_line(target_name: str) -> int:
 
 
 def _registration_line(evidence_id: str) -> int:
-    fn = _write_phase_tree()
+    fn = _publication_stage_tree()
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call):
             continue
@@ -190,7 +194,7 @@ def test_the_snapshot_is_the_same_digest_verified_kind() -> None:
     or this would trade a stale report for an unverified one.
     """
 
-    fn = _write_phase_tree()
+    fn = _publication_stage_tree()
     argument = _checklist_evidence_argument()
     for node in ast.walk(fn):
         if isinstance(node, ast.Assign) and any(
@@ -212,14 +216,22 @@ def test_the_analysis_facing_consumers_keep_the_frozen_view() -> None:
     safe; re-snapshotting for the writer is exactly what the freeze forbids.
     """
 
-    fn = _write_phase_tree()
+    draft = _phase_function_tree("_draft_manuscript")
     frozen_users = [
         node
-        for node in ast.walk(fn)
+        for node in ast.walk(draft)
         if isinstance(node, ast.Name) and node.id == "current_verified_evidence_records"
     ]
-    # One binding plus the analysis-facing readers.
-    assert len(frozen_users) >= 4, (
+    verified_snapshots = [
+        node
+        for node in ast.walk(draft)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "attr", None) == "current_verified_records"
+    ]
+    # The draft stage takes exactly one verified snapshot and hands that same
+    # named value to its analysis-facing readers and immutable stage result.
+    assert len(verified_snapshots) == 1
+    assert len(frozen_users) >= 3, (
         "the frozen analysis-facing view has lost its readers; the freeze was "
         f"widened rather than a second snapshot added ({len(frozen_users)} uses)"
     )

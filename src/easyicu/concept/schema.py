@@ -142,6 +142,12 @@ class ConceptDefinition:
     levels: Optional[List[object]] = None
     keep_components: Optional[bool] = None
     omop_id: Optional[int] = None
+    clinical_status: Optional[str] = None
+    canonical_definition: Optional[bool] = None
+    requires_explicit_opt_in: Optional[bool] = None
+    definition_source: Optional[str] = None
+    definition_version: Optional[str] = None
+    clinical_contract_id: Optional[str] = None
 
     @classmethod
     def from_name_and_payload(
@@ -197,6 +203,12 @@ class ConceptDefinition:
             levels=payload.get("levels"),
             keep_components=payload.get("keep_components"),
             omop_id=_maybe_int(payload.get("omopid")),
+            clinical_status=payload.get("clinical_status"),
+            canonical_definition=payload.get("canonical_definition"),
+            requires_explicit_opt_in=payload.get("requires_explicit_opt_in"),
+            definition_source=payload.get("definition_source"),
+            definition_version=payload.get("definition_version"),
+            clinical_contract_id=payload.get("clinical_contract_id"),
             family=payload.get("family"),
             depends_on=depends_list,
         )
@@ -249,7 +261,7 @@ class ConceptDictionary:
         return ConceptDictionary(self._concepts.copy())
 
     def update(self, other: "ConceptDictionary") -> None:
-        """Merge another dictionary into this one with per-concept granularity."""
+        """Patch concepts, merging source definitions by database key."""
         if not isinstance(other, ConceptDictionary):
             raise TypeError("Can only update from another ConceptDictionary")
 
@@ -292,8 +304,38 @@ class ConceptDictionary:
                     else current.keep_components
                 ),
                 omop_id=incoming.omop_id if incoming.omop_id is not None else current.omop_id,
+                clinical_status=(
+                    incoming.clinical_status
+                    if incoming.clinical_status is not None
+                    else current.clinical_status
+                ),
+                canonical_definition=(
+                    incoming.canonical_definition
+                    if incoming.canonical_definition is not None
+                    else current.canonical_definition
+                ),
+                requires_explicit_opt_in=(
+                    incoming.requires_explicit_opt_in
+                    if incoming.requires_explicit_opt_in is not None
+                    else current.requires_explicit_opt_in
+                ),
+                definition_source=(
+                    incoming.definition_source
+                    if incoming.definition_source is not None
+                    else current.definition_source
+                ),
+                definition_version=(
+                    incoming.definition_version
+                    if incoming.definition_version is not None
+                    else current.definition_version
+                ),
+                clinical_contract_id=(
+                    incoming.clinical_contract_id
+                    if incoming.clinical_contract_id is not None
+                    else current.clinical_contract_id
+                ),
                 family=incoming.family if incoming.family is not None else current.family,
-                depends_on=_pick(incoming.depends_on, current.depends_on, allow_empty=True),
+                depends_on=_pick(incoming.depends_on, current.depends_on),
             )
 
             self._concepts[name] = merged_definition
@@ -315,13 +357,13 @@ class ConceptDictionary:
 
     @classmethod
     def from_multiple_json(cls, file_paths: List[str | Path]) -> "ConceptDictionary":
-        """从多个 JSON 文件加载概念字典并合并
+        """Load JSON dictionaries using the same per-concept patch contract.
 
         Args:
-            file_paths: JSON 文件路径列表，后面的文件会覆盖前面的同名概念
+            file_paths: Ordered JSON paths; later definitions patch earlier ones.
 
         Returns:
-            合并后的概念字典
+            The merged concept dictionary.
 
         Examples:
             >>> dict1 = ConceptDictionary.from_multiple_json([
@@ -329,14 +371,17 @@ class ConceptDictionary:
             ...     'data/sofa2-dict.json'
             ... ])
         """
-        merged_payload = {}
+        merged: ConceptDictionary | None = None
         for file_path in file_paths:
             path = Path(file_path)
             with path.open("r", encoding="utf8") as handle:
                 raw_dict = json.load(handle)
-            # 合并，后面的覆盖前面的
-            merged_payload.update(raw_dict)
-        return cls.from_payload(merged_payload)
+            incoming = cls.from_payload(raw_dict)
+            if merged is None:
+                merged = incoming
+            else:
+                merged.update(incoming)
+        return merged if merged is not None else cls({})
 
 
 # Legacy alias kept for backward compatibility with code that imports

@@ -35,12 +35,17 @@ from ..callbacks import (
 # The legacy copies in callbacks.py predate that fix and lack the ecmo params,
 # so the dict-driven dispatcher (which passes ecmo by keyword) would TypeError.
 from ..scores.sofa2 import (
+    SOFA2_COMPONENT_NAMES,
     sofa2_renal,
     sofa2_resp,
     sofa2_coag,
     sofa2_liver,
     sofa2_cardio,
     sofa2_cns,
+    sofa2_cns_ascertainment,
+    sofa2_cns_delirium_tx_ascertainment,
+    sofa2_cns_proxy_sensitivity,
+    sofa2_component_evidence,
 )
 from ..scores.sepsis import (
     delta_cummin,
@@ -402,12 +407,12 @@ def _compose_fill_limits(
     expand_forward: bool = False,
 ) -> Optional[pd.DataFrame]:
     """Build fill_gaps limits matching ricu's collapse(x) behavior.
-    
+
     Returns the observed data range (min/max per ID) without expansion.
     This matches R ricu's collapse() function which simply computes:
     - start = min(index_var) per ID
     - end = max(index_var) per ID
-    
+
     Args:
         expand_forward: Deprecated, kept for compatibility. Should always be False.
                        R ricu's collapse() does NOT expand the time range.
@@ -1831,7 +1836,7 @@ def _callback_blood_cell_ratio(
         return _empty_icutbl(ctx)
     
     input_table = list(tables.values())[0]
-    data = input_table.df.copy()
+    data = input_table.data.copy()
     
     if data.empty:
         return input_table
@@ -1843,6 +1848,8 @@ def _callback_blood_cell_ratio(
     # Ensure numeric
     if value_column in data.columns:
         data[value_column] = pd.to_numeric(data[value_column], errors='coerce')
+    assessment_column = f"{ctx.concept_name}_assessment_reason"
+    data[assessment_column] = "missing_wbc_measurement"
     
     # Try to load WBC concept for ratio calculation
     try:
@@ -1911,28 +1918,32 @@ def _callback_blood_cell_ratio(
                     if 'wbc' in merged.columns:
                         valid_wbc = merged['wbc'].notna() & (merged['wbc'] > 0)
                         merged.loc[valid_wbc, value_column] = 100 * merged.loc[valid_wbc, value_column] / merged.loc[valid_wbc, 'wbc']
+                        merged.loc[valid_wbc, assessment_column] = "ratio_computed"
+                        merged.loc[~valid_wbc, value_column] = np.nan
+                        merged.loc[~valid_wbc, assessment_column] = "missing_wbc_measurement"
                         merged = merged.drop(columns=['wbc', '_time_numeric', '_wbc_time'], errors='ignore')
                         data = merged
             else:
-                # Fallback: merge only on patient ID (use latest WBC per patient)
-                id_col = id_columns[0]
-                wbc_latest = wbc_df.sort_values(wbc_time_col if wbc_time_col else id_col).groupby(id_col).last().reset_index()[[id_col, 'wbc']]
-                merged = pd.merge(data, wbc_latest, on=id_col, how='left')
-                
-                if 'wbc' in merged.columns:
-                    valid_wbc = merged['wbc'].notna() & (merged['wbc'] > 0)
-                    merged.loc[valid_wbc, value_column] = 100 * merged.loc[valid_wbc, value_column] / merged.loc[valid_wbc, 'wbc']
-                    merged = merged.drop(columns=['wbc'], errors='ignore')
-                    data = merged
+                # A patient-level "latest WBC" is not a valid time-aligned
+                # denominator. Preserve the row for audit, but fail closed.
+                data[value_column] = np.nan
+                data[assessment_column] = "missing_wbc_time_alignment"
                     
     except Exception as e:
-        # If WBC loading fails, just pass through the data as-is
         import logging
-        logging.debug(f"blood_cell_ratio: WBC loading failed: {e}, using passthrough")
-    
-    output_cols = list(id_columns) + ([index_column] if index_column else []) + [value_column]
+        logging.debug(f"blood_cell_ratio: WBC loading failed: {e}; failing closed")
+        data[value_column] = np.nan
+        data[assessment_column] = "wbc_load_failed"
+
+    # Never return an absolute numerator under a percentage concept. Retaining
+    # the structured reason keeps the unavailable value attributable.
+    data.loc[data[assessment_column] != "ratio_computed", value_column] = np.nan
+    output_cols = list(id_columns) + ([index_column] if index_column else []) + [
+        value_column,
+        assessment_column,
+    ]
     output_cols = [c for c in output_cols if c in data.columns]
-    result = data[output_cols].dropna(subset=[value_column]).copy()
+    result = data[output_cols].copy()
     
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
 
@@ -2534,9 +2545,23 @@ def _callback_sofa_component(
             data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
         
         if data.empty:
-            cols = id_columns + ([index_column] if index_column else []) + [ctx.concept_name]
+            cols = id_columns + ([index_column] if index_column else []) + [
+                ctx.concept_name
+            ]
+            if ctx.concept_name in SOFA2_COMPONENT_NAMES:
+                cols.extend(
+                    [
+                        f"{ctx.concept_name}_observed",
+                        f"{ctx.concept_name}_available",
+                    ]
+                )
             frame = pd.DataFrame(columns=cols)
-            return _as_icutbl(frame, id_columns=id_columns, index_column=index_column, value_column=ctx.concept_name)
+            return _as_icutbl(
+                frame,
+                id_columns=id_columns,
+                index_column=index_column,
+                value_column=ctx.concept_name,
+            )
 
         # 🚀 PERF: Skip sort here — scoring functions are per-row operations (thresholds),
         # don't depend on order. fill_gaps in _callback_sofa_score will sort later.
@@ -2580,8 +2605,27 @@ def _callback_sofa_component(
             if col_name in data.columns:
                 # Extract the column as a Series
                 col_data = data[col_name]
-                if ctx.concept_name == "sofa2_resp" and name == "ecmo_indication":
-                    kwargs[name] = col_data if isinstance(col_data, pd.Series) else pd.Series(col_data)
+                if name == "delirium_tx_evidence" and ctx.concept_name in {
+                    "sofa2_cns",
+                    "sofa2_cns_proxy_sensitivity",
+                    "sofa2_cns_ascertainment",
+                    "sofa2_cns_delirium_tx_ascertainment",
+                }:
+                    kwargs[name] = (
+                        col_data.astype("string")
+                        if isinstance(col_data, pd.Series)
+                        else pd.Series(col_data, dtype="string")
+                    )
+                    continue
+                if name == "ecmo_indication" and ctx.concept_name in {
+                    "sofa2_resp",
+                    "sofa2_cardio",
+                }:
+                    kwargs[name] = (
+                        col_data.astype("string")
+                        if isinstance(col_data, pd.Series)
+                        else pd.Series(col_data, dtype="string")
+                    )
                     continue
                 # Ensure it's a Series before converting to numeric
                 if isinstance(col_data, pd.Series):
@@ -2608,13 +2652,27 @@ def _callback_sofa_component(
                 elif ctx.concept_name == 'sofa_renal' and name == 'urine24':
                     # Optional urine24 parameter - pass None
                     kwargs[name] = None
-                elif ctx.concept_name == 'sofa2_renal' and name in ['uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'potassium', 'ph', 'bicarb']:
+                elif ctx.concept_name == 'sofa2_renal' and name in ['uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'rrt_episode_active', 'rrt_nonrenal_only', 'potassium', 'ph', 'bicarb']:
                     # SOFA-2 renal optional parameters - pass None
                     kwargs[name] = None
-                elif ctx.concept_name == 'sofa2_resp' and name in ['spo2', 'fio2', 'adv_resp', 'ecmo', 'ecmo_indication']:
+                elif ctx.concept_name == 'sofa2_resp' and name in ['spo2', 'fio2', 'adv_resp', 'ecmo', 'ecmo_indication', 'support_unavailable_or_ceiling', 'oxygenation_sustained_1h']:
                     # SOFA-2 respiratory optional parameters - pass None
                     kwargs[name] = None
-                elif ctx.concept_name == 'sofa2_cns' and name in ['delirium_tx', 'delirium_positive', 'motor_response']:
+                elif ctx.concept_name in {
+                    'sofa2_cns',
+                    'sofa2_cns_proxy_sensitivity',
+                    'sofa2_cns_ascertainment',
+                    'sofa2_cns_delirium_tx_ascertainment',
+                } and name in [
+                    'delirium_tx_proxy',
+                    'delirium_tx_evidence',
+                    'delirium_tx',
+                    'delirium_positive',
+                    'motor_response',
+                    'sedated_gcs',
+                    'pre_sedation_gcs',
+                    'sedated',
+                ]:
                     # SOFA-2 CNS optional parameters - pass None
                     kwargs[name] = None
                 else:
@@ -2646,14 +2704,17 @@ def _callback_sofa_component(
             if "unsupported operand type" in str(e) and "NoneType" in str(e):
                 # Handle the case where callback functions receive None values due to missing data sources
                 # This happens when concepts don't have mappings for the current database
+                data_source = getattr(ctx, "data_source", None)
+                config = getattr(data_source, "config", None)
                 logger.warning(
                     f"SOFA component '{ctx.concept_name}' encountered missing data for database "
-                    f"{getattr(ctx.data_source.config, 'name', 'unknown')}. Returning zeros."
+                    f"{getattr(config, 'name', 'unknown')}. Returning missing values."
                 )
 
-                # Create a result Series with zeros (same index as data if available)
+                # Missing dependencies are not evidence of a zero organ score.
                 if data is not None and not data.empty and index_column:
-                    result = pd.Series(0.0, index=data.index, name=ctx.concept_name)
+                    result = pd.Series(np.nan, index=data.index, name=ctx.concept_name)
+                    result.attrs["assessment_reason"] = "missing_callback_dependency"
                 else:
                     # Fallback: create empty series with concept name
                     result = pd.Series([], name=ctx.concept_name, dtype=float)
@@ -2664,7 +2725,7 @@ def _callback_sofa_component(
         if isinstance(result, pd.Series):
             # Align index with data
             if not result.index.equals(data.index):
-                result = result.reindex(data.index, fill_value=0.0)
+                result = result.reindex(data.index)
         
         # NOTE: ricu uses merge(all=TRUE) which produces all time points from both tables.
         # Even if urine24 values are NA, the time points are preserved in the merged result.
@@ -2682,14 +2743,22 @@ def _callback_sofa_component(
                 kwargs_no_urine = {k: v for k, v in kwargs.items() if k != 'urine24'}
                 result = func(**kwargs_no_urine)
                 if isinstance(result, pd.Series) and not result.index.equals(data.index):
-                    result = result.reindex(data.index, fill_value=0.0)
+                    result = result.reindex(data.index)
             elif isinstance(urine24_val, pd.Series) and urine24_val.isna().all():
                 # All NaN, remove from kwargs and call again
                 kwargs_no_urine = {k: v for k, v in kwargs.items() if k != 'urine24'}
                 result = func(**kwargs_no_urine)
                 if isinstance(result, pd.Series) and not result.index.equals(data.index):
-                    result = result.reindex(data.index, fill_value=0.0)
+                    result = result.reindex(data.index)
         
+        receipts = None
+        if ctx.concept_name in SOFA2_COMPONENT_NAMES:
+            receipts = sofa2_component_evidence(
+                ctx.concept_name,
+                index=data.index,
+                **kwargs,
+            )
+
         # CRITICAL: Replicate ricu_code's rm_cols behavior - remove input concept columns
         # In ricu_code: rm_cols(dat, cnc, by_ref = TRUE) removes the input concept columns
         # Keep only ID columns, time column, and the result column
@@ -2698,8 +2767,18 @@ def _callback_sofa_component(
             data = data.drop(columns=cols_to_remove)
         
         data[ctx.concept_name] = result
+        receipt_cols: list[str] = []
+        if receipts is not None:
+            receipt_cols = list(receipts.columns)
+            for receipt_col in receipt_cols:
+                data[receipt_col] = receipts[receipt_col]
         
-        cols = id_columns + ([index_column] if index_column else []) + [ctx.concept_name]
+        cols = (
+            id_columns
+            + ([index_column] if index_column else [])
+            + [ctx.concept_name]
+            + receipt_cols
+        )
         frame = data[cols]
         
         # Remove duplicate timestamps (can occur when merging tables with outer join
@@ -2711,6 +2790,79 @@ def _callback_sofa_component(
         return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=ctx.concept_name)
 
     return wrapper
+
+
+def _callback_delirium_tx_alias(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Expose the deprecated ``delirium_tx`` name without strengthening it."""
+
+    source = tables.get("delirium_tx_proxy")
+    if source is None:
+        return _as_icutbl(
+            pd.DataFrame(columns=[ctx.concept_name]),
+            id_columns=[],
+            index_column=None,
+            value_column=ctx.concept_name,
+        )
+    frame = source.data.copy()
+    value_col = source.value_column or "delirium_tx_proxy"
+    if value_col in frame.columns:
+        frame = frame.rename(columns={value_col: ctx.concept_name})
+    elif "delirium_tx_proxy" in frame.columns:
+        frame = frame.rename(columns={"delirium_tx_proxy": ctx.concept_name})
+    return _as_icutbl(
+        frame,
+        id_columns=list(source.id_columns),
+        index_column=source.index_column,
+        value_column=ctx.concept_name,
+    )
+
+
+def _callback_delirium_tx_evidence(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Derive honest evidence states from the currently mapped proxy.
+
+    Existing database mappings identify candidate medication exposure but do
+    not carry an attributable indication.  They can therefore emit only
+    ``proxy_only`` for positive rows.  A false or absent sparse event cannot be
+    upgraded to ``not_detected`` without an explicit source/time coverage
+    receipt and remains ``unavailable``.
+    """
+
+    source = tables.get("delirium_tx_proxy")
+    if source is None:
+        return _as_icutbl(
+            pd.DataFrame(columns=[ctx.concept_name]),
+            id_columns=[],
+            index_column=None,
+            value_column=ctx.concept_name,
+        )
+    frame = source.data.copy()
+    value_col = source.value_column or "delirium_tx_proxy"
+    if value_col not in frame.columns and "delirium_tx_proxy" in frame.columns:
+        value_col = "delirium_tx_proxy"
+    proxy = (
+        frame[value_col].fillna(False).astype(bool)
+        if value_col in frame.columns
+        else pd.Series(False, index=frame.index)
+    )
+    frame[ctx.concept_name] = pd.Series(
+        np.where(proxy, "proxy_only", "unavailable"),
+        index=frame.index,
+        dtype="string",
+    )
+    if value_col in frame.columns and value_col != ctx.concept_name:
+        frame = frame.drop(columns=[value_col])
+    return _as_icutbl(
+        frame,
+        id_columns=list(source.id_columns),
+        index_column=source.index_column,
+        value_column=ctx.concept_name,
+    )
 
 
 def _expand_wintbl_to_hourly(vent_df, vent_id_cols, start_col, dur_col, time_col_name):
@@ -3010,124 +3162,197 @@ def _callback_sofa2_score(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """Calculate SOFA-2 score with sliding window support.
-    
-    Similar to SOFA-1 but outputs 'sofa2' column and uses sofa2_* components.
-    
-    Args:
-        tables: Dictionary of input tables (SOFA-2 components)
-        ctx: Callback context with optional parameters:
-            - win_length: Sliding window duration (default: 24 hours)
-            - worst_val_fun: Aggregation function ('max', 'min', or callable, default: 'max')
-            - keep_components: Whether to keep individual components (default: False)
-            - full_window: Whether to require full window (default: False)
-    
-    Returns:
-        ICUTable with SOFA-2 scores
-    """
-    from ..io.ts_utils import slide, fill_gaps, hours
-    
+    """Calculate SOFA-2 and aggregate component-owned evidence receipts."""
+    from ..io.ts_utils import fill_gaps, hours, slide
+
+    required = list(SOFA2_COMPONENT_NAMES)
+    observed_columns = [f"{name}_observed" for name in required]
+    available_columns = [f"{name}_available" for name in required]
+    aggregate_columns = [
+        "sofa2",
+        "sofa2_n_observed_components",
+        "sofa2_n_available_components",
+        "sofa2_n_components",
+    ]
+    keep_components = ctx.kwargs.get("keep_components", False)
+
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
+
+    # _merge_tables intentionally retains only each ICUTable's declared value
+    # column. Re-project the sidecar receipts through the same schema-normalizing
+    # merger instead of teaching that generic boundary about SOFA-2 internals.
+    receipt_tables: dict[str, ICUTable] = {}
+    issued_observed_receipts: set[str] = set()
+    issued_available_receipts: set[str] = set()
+    for name, table in tables.items():
+        if name not in required:
+            continue
+        for suffix in ("observed", "available"):
+            receipt_name = f"{name}_{suffix}"
+            if receipt_name not in table.data:
+                continue
+            if suffix == "observed":
+                issued_observed_receipts.add(receipt_name)
+            else:
+                issued_available_receipts.add(receipt_name)
+            receipt_tables[receipt_name] = ICUTable(
+                table.data,
+                id_columns=list(table.id_columns),
+                index_column=table.index_column,
+                value_column=receipt_name,
+            )
+    if receipt_tables:
+        receipt_data, _, _ = _merge_tables(receipt_tables, ctx=ctx, how="outer")
+        if not receipt_data.empty:
+            key_columns = id_columns + ([index_column] if index_column else [])
+            data = data.merge(receipt_data, on=key_columns, how="outer")
+
     if data.empty:
-        print("   ⚠️  SOFA-2回调: _merge_tables 返回空数据")
-        cols = id_columns + ([index_column] if index_column else []) + ["sofa2"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="sofa2")
+        cols = id_columns + ([index_column] if index_column else [])
+        if keep_components:
+            cols += required + observed_columns + available_columns
+        cols += aggregate_columns
+        return _as_icutbl(
+            pd.DataFrame(columns=cols),
+            id_columns=id_columns,
+            index_column=index_column,
+            value_column="sofa2",
+        )
 
-    # Get parameters from context
-    win_length = ctx.kwargs.get('win_length', hours(24))
-    worst_val_fun = ctx.kwargs.get('worst_val_fun', 'max')
-    keep_components = ctx.kwargs.get('keep_components', False)
-    full_window = ctx.kwargs.get('full_window', False)
-    
-    # 🚀 优化：使用字符串而非函数对象
-    if worst_val_fun == 'max':
-        worst_val_fun = 'max_or_na'  # ✅ 使用字符串
-    elif worst_val_fun == 'min':
-        worst_val_fun = 'min_or_na'  # ✅ 使用字符串
-    
-    # Convert timedelta to pd.Timedelta if needed
-    if win_length is None:
-        win_length = hours(24)  # Default to 24 hours if None
-    elif hasattr(win_length, 'total_seconds'):  # datetime.timedelta
-        win_length = pd.Timedelta(win_length)
-
-    # SOFA-2 components (note the sofa2_ prefix)
-    required = ["sofa2_resp", "sofa2_coag", "sofa2_liver", "sofa2_cardio", "sofa2_cns", "sofa2_renal"]
-    
-    # Ensure all components exist
+    # Owner-issued receipts are authoritative. A legacy score-only input is an
+    # explicit assertion by its caller and keeps the pre-receipt behavior.
     for name in required:
         if name not in data:
-            data[name] = 0
-    
-    # Fill gaps and apply sliding window (same logic as SOFA-1)
+            data[name] = np.nan
+        asserted = data[name].notna().astype(int)
+        observed_name = f"{name}_observed"
+        available_name = f"{name}_available"
+        if observed_name not in issued_observed_receipts:
+            data[observed_name] = asserted
+        elif observed_name not in data:
+            data[observed_name] = 0
+        if available_name not in issued_available_receipts:
+            data[available_name] = asserted
+        elif available_name not in data:
+            data[available_name] = 0
+
+    # A component scorer can emit a missing-as-normal zero while its owner says
+    # no valid state was available. Convert only those owner-attested synthetic
+    # values to missing before LOCF. This preserves day-1 sum(skipna=True) == 0,
+    # while allowing a prior valid state to carry across auxiliary-only events.
+    for name in required:
+        available_name = f"{name}_available"
+        if available_name not in issued_available_receipts:
+            continue
+        owner_available = pd.to_numeric(
+            data[available_name], errors="coerce"
+        ).eq(1) & data[name].notna()
+        data[name] = data[name].where(owner_available)
+        data[available_name] = data[available_name].where(owner_available)
+
+    win_length = ctx.kwargs.get("win_length", hours(24))
+    worst_val_fun = ctx.kwargs.get("worst_val_fun", "max")
+    full_window = ctx.kwargs.get("full_window", False)
+    if worst_val_fun == "max":
+        worst_val_fun = "max_or_na"
+    elif worst_val_fun == "min":
+        worst_val_fun = "min_or_na"
+    if win_length is None:
+        win_length = hours(24)
+    elif hasattr(win_length, "total_seconds"):
+        win_length = pd.Timedelta(win_length)
+
     if index_column and index_column in data.columns:
         id_cols_to_group = list(id_columns) if id_columns else []
-        data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
-        
-        # 🚀 Vectorized interval inference (same optimization as SOFA-1)
+        sort_columns = id_cols_to_group + [index_column]
+        data = data.sort_values(sort_columns)
+
         if id_cols_to_group and len(data) > 1:
-            _diffs = data.groupby(id_cols_to_group, sort=False)[index_column].diff().dropna()
-            if pd.api.types.is_numeric_dtype(_diffs):
-                _pos = _diffs[_diffs > 0]
+            diffs = (
+                data.groupby(id_cols_to_group, sort=False)[index_column]
+                .diff()
+                .dropna()
+            )
+            if pd.api.types.is_numeric_dtype(diffs):
+                positive_diffs = diffs[diffs > 0]
             else:
-                _pos = _diffs[_diffs > pd.Timedelta(0)]
-            if len(_pos) > 0:
-                inferred_interval = _pos.median()
+                positive_diffs = diffs[diffs > pd.Timedelta(0)]
+            if len(positive_diffs) > 0:
+                inferred_interval = positive_diffs.median()
                 if isinstance(inferred_interval, (int, float)):
-                    interval = pd.Timedelta(hours=max(1, round(inferred_interval)))
+                    interval = pd.Timedelta(
+                        hours=max(1, round(inferred_interval))
+                    )
                 else:
-                    inferred_hours = round(inferred_interval.total_seconds() / 3600)
+                    inferred_hours = round(
+                        inferred_interval.total_seconds() / 3600
+                    )
                     interval = pd.Timedelta(hours=max(1, inferred_hours))
-                
-                limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx)
                 data = fill_gaps(
                     data,
                     id_cols=id_cols_to_group,
                     index_col=index_column,
                     interval=interval,
-                    limits=limits_df,
+                    limits=_compose_fill_limits(
+                        data,
+                        id_cols_to_group,
+                        index_column,
+                        ctx,
+                    ),
                     method="none",
                 )
-                # 🚀 fill_gaps fast path returns sorted data, skip redundant sort
-        
-        # Apply sliding window to each component
-        agg_dict = {}
-        for comp in required:
-            if comp in data.columns:
-                agg_dict[comp] = worst_val_fun
-        
-        if agg_dict:
-            data = slide(
-                data,
-                list(id_columns),
-                index_column,
-                before=win_length,
-                after=pd.Timedelta(0),
-                agg_func=agg_dict,
-                full_window=full_window,
-                _pre_sorted=True,  # 🚀 data already sorted by fill_gaps
-            )
-    
-    # Calculate total SOFA-2 score (note: output column is 'sofa2')
-    # R's na.rm=TRUE means skip NA, NOT fill with 0
-    data["sofa2"] = (
-        data[required]
-        .sum(axis=1, skipna=True)
-        .round()
-        .astype(int)
+
+        # Observation is a per-window event. Availability follows the score's
+        # legal LOCF lifecycle but can only start from an owner-issued receipt.
+        data[observed_columns] = data[observed_columns].fillna(0)
+        locf_columns = required + available_columns
+        if id_cols_to_group:
+            data[locf_columns] = data.groupby(
+                id_cols_to_group,
+                sort=False,
+                dropna=False,
+            )[locf_columns].ffill()
+        else:
+            data[locf_columns] = data[locf_columns].ffill()
+
+        agg_dict = {name: worst_val_fun for name in required}
+        agg_dict.update(
+            {
+                name: "max_or_na"
+                for name in observed_columns + available_columns
+            }
+        )
+        data = slide(
+            data,
+            list(id_columns),
+            index_column,
+            before=win_length,
+            after=pd.Timedelta(0),
+            agg_func=agg_dict,
+            full_window=full_window,
+            _pre_sorted=True,
+        )
+
+    data["sofa2_n_observed_components"] = (
+        data[observed_columns].fillna(0).sum(axis=1).astype(int)
     )
-    
-    # Select output columns
+    data["sofa2_n_available_components"] = (
+        data[available_columns].fillna(0).sum(axis=1).astype(int)
+    )
+    data["sofa2_n_components"] = data["sofa2_n_available_components"]
+    data["sofa2"] = data[required].sum(axis=1, skipna=True).round().astype(int)
+
+    cols = id_columns + ([index_column] if index_column else [])
     if keep_components:
-        cols = id_columns + ([index_column] if index_column else []) + required + ["sofa2"]
-    else:
-        cols = id_columns + ([index_column] if index_column else []) + ["sofa2"]
-    
-    # Filter to existing columns
-    cols = [c for c in cols if c in data.columns]
-    frame = data[cols]
-    
-    return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="sofa2")
+        cols += required + observed_columns + available_columns
+    cols += aggregate_columns
+    frame = data[[col for col in cols if col in data.columns]]
+    return _as_icutbl(
+        frame.reset_index(drop=True),
+        id_columns=id_columns,
+        index_column=index_column,
+        value_column="sofa2",
+    )
 
 def _callback_mews(
     tables: Dict[str, ICUTable],
@@ -3570,7 +3795,7 @@ def _match_fio2(
     fio2_col: str,  # fio2
     match_win: pd.Timedelta,
     mode: str = "match_vals",
-    fix_na_fio2: bool = True,
+    fix_na_fio2: bool = False,
     ctx: Optional[ConceptCallbackContext] = None,  # Use ConceptCallbackContext
     database: str = None,  # 数据库名称，用于FiO2单位转换
 ) -> tuple[pd.DataFrame, list[str], Optional[str]]:
@@ -3588,7 +3813,7 @@ def _match_fio2(
         fio2_col: Name of FiO2 measurement
         match_win: Time window for matching
         mode: Matching mode
-        fix_na_fio2: Fill missing FiO2 with 21% room air
+        fix_na_fio2: Explicit opt-in to assume 21% room air when FiO2 is missing
         ctx: ConceptCallbackContext for automatic ID conversion
         
     Returns:
@@ -3697,8 +3922,13 @@ def _match_fio2(
         if fio2_subset.empty:
             merged = o2_subset.copy()
             merged[fio2_col] = float('nan')
+            merged["fio2_observed"] = False
+            merged["fio2_imputed"] = False
+            merged["fio2_assessment_reason"] = "missing_fio2"
             if fix_na_fio2:
                 merged[fio2_col] = 21.0
+                merged["fio2_imputed"] = True
+                merged["fio2_assessment_reason"] = "room_air_assumption"
             return merged, id_columns, index_column
 
         # 🚀 Determine tolerance: use numeric tolerance for numeric time columns
@@ -3844,9 +4074,33 @@ def _match_fio2(
                     full_window=False
                 )
     
-    # Fix missing FiO2 with 21% room air
-    if fix_na_fio2 and fio2_col in merged.columns:
-        merged[fio2_col] = merged[fio2_col].fillna(21.0)
+    # The bidirectional as-of match can produce the same physiological pair
+    # twice when O2 and FiO2 share an exact timestamp. A ratio concept is one
+    # observation per unique matched pair, not one row per join direction.
+    dedup_columns = [
+        column
+        for column in [*id_columns, index_column, o2_col, fio2_col]
+        if column and column in merged.columns
+    ]
+    if dedup_columns:
+        merged = merged.drop_duplicates(subset=dedup_columns).reset_index(drop=True)
+
+    if fio2_col in merged.columns:
+        missing_fio2 = merged[fio2_col].isna()
+        merged["fio2_observed"] = ~missing_fio2
+        merged["fio2_imputed"] = False
+        merged["fio2_assessment_reason"] = np.where(
+            missing_fio2,
+            "missing_fio2",
+            "observed",
+        )
+        if fix_na_fio2:
+            merged.loc[missing_fio2, fio2_col] = 21.0
+            merged.loc[missing_fio2, "fio2_imputed"] = True
+            merged.loc[
+                missing_fio2,
+                "fio2_assessment_reason",
+            ] = "room_air_assumption"
     
     return merged, id_columns, index_column
 
@@ -3865,7 +4119,7 @@ def _callback_pafi(
     完整复刻 R ricu 的 pafi/safi 函数:
     - 支持3种匹配模式: match_vals, extreme_vals, fill_gaps
     - 在时间窗口内匹配 po2/o2sat 和 fio2
-    - 填充缺失的 fio2 为 21% (室内空气)
+    - 默认保留缺失 FiO2；仅在显式选择时假定 21% 室内空气
     - 过滤无效值
     
     Args:
@@ -3873,7 +4127,7 @@ def _callback_pafi(
         ctx: 回调上下文,可包含:
             - match_win: 匹配时间窗口 (默认: 2小时)
             - mode: 匹配模式 (默认: "match_vals")
-            - fix_na_fio2: 填充缺失FiO2 (默认: True)
+            - fix_na_fio2: 显式填充缺失FiO2 (默认: False)
         source_col_a: po2 或 o2sat 列名
         source_col_b: fio2 列名
         output_col: 输出列名 (pafi 或 safi)
@@ -3894,7 +4148,7 @@ def _callback_pafi(
     # Get parameters from context (with R ricu defaults)
     match_win = ctx.kwargs.get('match_win', pd.Timedelta(hours=2))
     mode = ctx.kwargs.get('mode', 'match_vals')
-    fix_na_fio2 = ctx.kwargs.get('fix_na_fio2', True)
+    fix_na_fio2 = ctx.kwargs.get('fix_na_fio2', False)
     
     # Validate mode
     if mode not in ['match_vals', 'extreme_vals', 'fill_gaps']:
@@ -3973,26 +4227,6 @@ def _callback_pafi(
         if len(non_null) > 0 and (non_null.le(1.0).mean() > 0.5):
             fio2 = fio2 * 100.0
     
-    # Filter: !is.na(po2) & !is.na(fio2) & fio2 != 0
-    valid_mask = o2.notna() & fio2.notna() & (fio2 != 0)
-    data = data[valid_mask].copy()
-    
-    if data.empty:
-        cols = id_columns + ([index_column] if index_column else []) + [output_col]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column=output_col)
-    
-    # Recalculate after filtering
-    o2 = pd.to_numeric(data[source_col_a], errors="coerce")
-    fio2 = pd.to_numeric(data[source_col_b], errors="coerce")
-    
-    # Apply the same normalization to the filtered data
-    if fio2_unit == "fraction":
-        fio2 = fio2 * 100.0
-    elif fio2_unit is None:
-        non_null = fio2.dropna()
-        if len(non_null) > 0 and (non_null.le(1.0).mean() > 0.5):
-            fio2 = fio2 * 100.0
-    
     # Physiological guards (2026-07): make P/F (and S/F) robust to per-database
     # FiO2 unit inconsistencies (AUMC/SIC/HiRID raw or mixed values) and PaO2
     # outliers. Without these the ratio has a non-physiological tail (P/F>800).
@@ -4001,12 +4235,20 @@ def _callback_pafi(
     #  3. drop non-physiological ratios (<0 or >800)
     fio2 = fio2.mask((fio2 > 0.15) & (fio2 <= 1.0), fio2 * 100.0)
     fio2 = fio2.where((fio2 >= 21) & (fio2 <= 100))
+    invalid_observed = data.get("fio2_observed", False) & fio2.isna()
+    if isinstance(invalid_observed, pd.Series):
+        data.loc[invalid_observed, "fio2_assessment_reason"] = "fio2_out_of_range"
     # Calculate ratio: pafi/safi = 100 * po2/o2sat / fio2
     ratio = 100 * o2 / fio2
     data[output_col] = ratio.where((ratio >= 0) & (ratio <= 800))
     
     # Keep only essential columns (like R's rm_cols)
-    cols = id_columns + ([index_column] if index_column else []) + [output_col]
+    provenance_cols = [
+        col
+        for col in ("fio2_observed", "fio2_imputed", "fio2_assessment_reason")
+        if col in data.columns
+    ]
+    cols = id_columns + ([index_column] if index_column else []) + [output_col] + provenance_cols
     frame = data[cols]
     
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=output_col)
@@ -8131,8 +8373,15 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "sofa2_liver": _callback_sofa_component(sofa2_liver),
     "sofa2_cardio": _callback_sofa_component(sofa2_cardio),
     "sofa2_cns": _callback_sofa_component(sofa2_cns),
+    "sofa2_cns_proxy_sensitivity": _callback_sofa_component(sofa2_cns_proxy_sensitivity),
+    "sofa2_cns_delirium_tx_ascertainment": _callback_sofa_component(
+        sofa2_cns_delirium_tx_ascertainment
+    ),
+    "sofa2_cns_ascertainment": _callback_sofa_component(sofa2_cns_ascertainment),
     "sofa2_renal": _callback_sofa_component(sofa2_renal),  # SOFA-2 version with RRT criteria
     "sofa2_score": _callback_sofa2_score,  # SOFA-2 总分计算（使用 sofa2_* 组件）
+    "delirium_tx_alias": _callback_delirium_tx_alias,
+    "delirium_tx_evidence": _callback_delirium_tx_evidence,
     # AUMC-specific callbacks
     "aumc_death": _callback_aumc_death,
     "sic_death": _callback_sic_death,

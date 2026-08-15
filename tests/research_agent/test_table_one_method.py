@@ -35,6 +35,18 @@ def _spec() -> dict:
     }
 
 
+def _repeated_unit_spec() -> dict:
+    spec = _spec()
+    spec.update(
+        schema_version="easyicu.table_one/2",
+        p_values_required=False,
+        p_value_adjustment="not_applicable_repeated_units",
+    )
+    for variable in spec["variables"]:
+        variable["test"] = "none_descriptive_smd_only"
+    return spec
+
+
 def _frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -77,6 +89,68 @@ def test_grouped_table_one_has_overall_groups_tests_and_correct_missingness():
         "sex": 1,
     }
     assert set(table["test_name"]) == {"mann_whitney_u", "fisher_exact"}
+
+
+def test_repeated_unit_table_one_reports_descriptions_and_smd_without_p_values(
+    tmp_path,
+):
+    table = build_grouped_table_one(_frame(), _repeated_unit_spec())
+
+    assert table["p_value"].isna().all()
+    assert set(table["test_name"]) == {"not_reported_repeated_units"}
+    assert table["standardized_mean_difference"].notna().all()
+    table.to_csv(tmp_path / "table_one.csv", index=False)
+    step = AnalysisStep(
+        step_id="02_table_one",
+        intent="Describe repeated ICU stays without independent-row tests.",
+        inputs=["arm", "age", "sex"],
+        expected_outputs=["table:table_one"],
+        method="table_one",
+        table_one_spec=_repeated_unit_spec(),
+    )
+    assert table_one_output_findings(step=step, out_dir=tmp_path) == []
+
+
+def test_repeated_unit_table_one_gate_rejects_a_fabricated_p_value(tmp_path):
+    table = build_grouped_table_one(_frame(), _repeated_unit_spec())
+    table.loc[table["variable"] == "age", "p_value"] = 0.04
+    table.loc[table["variable"] == "age", "test_name"] = "mann_whitney_u"
+    table.to_csv(tmp_path / "table_one.csv", index=False)
+    step = AnalysisStep(
+        step_id="02_table_one",
+        intent="Describe repeated ICU stays without independent-row tests.",
+        inputs=["arm", "age", "sex"],
+        expected_outputs=["table:table_one"],
+        method="table_one",
+        table_one_spec=_repeated_unit_spec(),
+    )
+
+    reasons = {
+        finding.detail["reason"]
+        for finding in table_one_output_findings(step=step, out_dir=tmp_path)
+    }
+    assert "table_one_p_value_invalid" in reasons
+    assert "table_one_test_mismatch" in reasons
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"schema_version": "easyicu.table_one/1"},
+        {"p_values_required": True},
+        {"variables.0.test": "mann_whitney_or_kruskal"},
+    ],
+)
+def test_repeated_unit_table_one_rejects_half_configured_test_contract(mutation):
+    spec = _repeated_unit_spec()
+    for coordinate, value in mutation.items():
+        if coordinate == "variables.0.test":
+            spec["variables"][0]["test"] = value
+        else:
+            spec[coordinate] = value
+
+    with pytest.raises(ValueError, match="Table One"):
+        build_grouped_table_one(_frame(), spec)
 
 
 def test_grouped_table_one_emits_binary_continuous_and_category_smd():

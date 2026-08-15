@@ -94,7 +94,9 @@ function fakeControl(dataset = {}) {
   return {
     dataset,
     value: '',
+    focused: false,
     addEventListener(type, handler) { handlers[type] = handler; },
+    focus() { this.focused = true; },
     fire(type, event = {}) {
       assert.equal(typeof handlers[type], 'function', `${type} handler must be bound`);
       handlers[type]({ preventDefault() {}, stopPropagation() {}, ...event });
@@ -107,11 +109,19 @@ function rootWith(mapping) {
     querySelectorAll(selector) {
       return mapping[selector] || [];
     },
+    querySelector(selector) {
+      return (mapping[selector] || [])[0] || null;
+    },
   };
 }
 
 const initial = owner.render(payload, config);
 assert.match(initial, /data-crossdb-result-tab="overview"/);
+assert.match(initial, /id="crossdb-result-tab-overview"/);
+assert.match(initial, /aria-controls="crossdb-result-panel-overview"/);
+assert.match(initial, /tabindex="0"/);
+assert.match(initial, /role="tabpanel"/);
+assert.match(initial, /aria-labelledby="crossdb-result-tab-overview"/);
 assert.match(initial, /Cross-database consistency workspace/);
 assert.match(initial, /Comparable feature profiles/);
 assert.doesNotMatch(initial, /data-crossdb-export/);
@@ -129,6 +139,23 @@ assert.match(distributions, /Heart Rate/);
 assert.match(distributions, /Oxygen Saturation/);
 assert.match(distributions, /xdb-main-chart/);
 assert.equal((distributions.match(/class="xdb-main-chart"/g) || []).length, 1);
+
+owner.reset();
+const overviewTab = fakeControl({ crossdbResultTab: 'overview' });
+const coverageKeyboardTab = fakeControl({ crossdbResultTab: 'coverage' });
+const distributionsKeyboardTab = fakeControl({ crossdbResultTab: 'distributions' });
+const qualityKeyboardTab = fakeControl({ crossdbResultTab: 'quality' });
+const keyboardTabs = [overviewTab, coverageKeyboardTab, distributionsKeyboardTab, qualityKeyboardTab];
+const keyboardRoot = rootWith({
+  '[data-crossdb-result-tab]': keyboardTabs,
+  '[data-crossdb-result-tab="coverage"]': [coverageKeyboardTab],
+});
+owner.bind(keyboardRoot, payload, config);
+overviewTab.fire('keydown', { key: 'ArrowRight' });
+assert.equal(owner.snapshot().tab, 'coverage');
+assert.equal(coverageKeyboardTab.focused, true);
+distributionsKeyboardTab.fire('click');
+assert.equal(owner.snapshot().tab, 'distributions');
 
 const coreScope = fakeControl({ crossdbScope: 'core' });
 owner.bind(rootWith({ '[data-crossdb-scope]': [coreScope] }), payload, config);
@@ -190,6 +217,7 @@ assert.deepEqual(owner.snapshot(), {
 });
 
 process.stdout.write(JSON.stringify({
+  accessible_tabs: true,
   complete_catalog_filter: true,
   partial_scope_disclosed: true,
   full_scope_handoff: true,

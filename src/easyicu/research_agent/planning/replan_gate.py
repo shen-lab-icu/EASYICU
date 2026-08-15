@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
-from ..contracts.declared_product import primary_analysis_cohort_plan_findings
+from typing import Sequence
+
+from ..contracts.primary_cohort import primary_analysis_cohort_plan_findings
 from ..contracts.runtime import ValidationFinding
-from ..plan_utils import endpoint_contract_findings, _typed_plan_dag_findings
+from ..plan_utils import (
+    endpoint_contract_findings,
+    _typed_plan_dag_findings,
+)
+from .final_plan_shape import PlanShapeValidationError, validate_final_plan_shape
+from .adjustment_authority import (
+    AdjustmentAuthorityError,
+    validate_plan_against_adjustment_authority,
+)
+from .literature_bindings import validate_literature_citation_bindings
 from ..schema import AnalysisPlan, ResearchContext
 from ..trajectory.plan_contract import trajectory_plan_dag_findings
 
@@ -13,15 +24,65 @@ def replan_candidate_contract_findings(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    allowed_literature_citation_keys: Sequence[str] = (),
+    direct_comparator_literature_keys: Sequence[str] = (),
+    owner_declaration_findings: Sequence[ValidationFinding] = (),
 ) -> list[ValidationFinding]:
-    """Return execution-blocking graph defects in one proposed revision."""
+    """Return execution-blocking graph defects in one proposed revision.
 
-    return [
+    Execution-owned selector diagnostics arrive as immutable findings instead
+    of making the planning package import the execution implementation.
+    """
+
+    findings = [
         *endpoint_contract_findings(plan, context=context, severity="error"),
         *_typed_plan_dag_findings(plan),
         *primary_analysis_cohort_plan_findings(plan=plan),
         *trajectory_plan_dag_findings(plan=plan, context=context),
+        *owner_declaration_findings,
     ]
+    try:
+        validate_literature_citation_bindings(
+            plan,
+            allowed_literature_citation_keys,
+            context=context,
+            direct_comparator_keys=direct_comparator_literature_keys,
+        )
+    except ValueError as exc:
+        findings.append(
+            ValidationFinding(
+                validator="replanner_literature_authority",
+                severity="error",
+                message=str(exc),
+                detail={"reason": "replan_literature_authority_invalid"},
+            )
+        )
+    try:
+        validate_plan_against_adjustment_authority(plan=plan, context=context)
+    except AdjustmentAuthorityError as exc:
+        findings.append(
+            ValidationFinding(
+                validator="replanner_adjustment_authority",
+                severity="error",
+                message=str(exc),
+                detail={"reason": "replan_adjustment_authority_invalid"},
+            )
+        )
+    try:
+        validate_final_plan_shape(plan)
+    except PlanShapeValidationError as exc:
+        findings.append(
+            ValidationFinding(
+                validator="replanner_final_plan_shape",
+                severity="error",
+                message=str(exc),
+                detail={
+                    "reason": exc.reason,
+                    "step_ids": list(exc.step_ids),
+                },
+            )
+        )
+    return findings
 
 
 def replan_candidate_rejection_finding(

@@ -38,12 +38,165 @@ def _mcp_roots(tmp_path, monkeypatch):
     )
 
 
+def _prepared_export(root):
+    root.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "stay_id": [101, 102],
+            "charttime": [0.0, 1.0],
+            "lact": [1.2, 2.4],
+            "sofa2": [3, 6],
+        }
+    ).to_parquet(root / "labs.parquet", index=False)
+    pd.DataFrame(
+        {"stay_id": [101, 102], "death": [0, 1]}
+    ).to_parquet(root / "outcome.parquet", index=False)
+    (root / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "database": "miiv",
+                "format": "parquet",
+                "concept_selection": {
+                    "modules": {
+                        "labs": ["lact", "sofa2"],
+                        "outcome": ["death"],
+                    }
+                },
+                "files": [
+                    {
+                        "file": "labs.parquet",
+                        "module": "labs",
+                        "concepts": 2,
+                        "concept_ids": ["lact", "sofa2"],
+                        "rows": 2,
+                    },
+                    {
+                        "file": "outcome.parquet",
+                        "module": "outcome",
+                        "concepts": 1,
+                        "concept_ids": ["death"],
+                        "rows": 2,
+                    },
+                ],
+                "feature_definitions": {"included": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
 def test_mcp_python_dispatch_remains_available(ra):
     from easyicu.research_agent.mcp_server import dispatch
 
     result = dispatch("research_agent.list_skills", {})
 
     assert "skills" in result
+
+
+def test_mcp_run_schema_and_server_reject_additional_properties(
+    ra, tmp_path, monkeypatch
+):
+    import easyicu.research_agent.mcp_server as mcp
+
+    schema = next(
+        item for item in mcp.TOOL_SCHEMAS if item["name"] == "research_agent.run"
+    )["inputSchema"]
+    assert schema["additionalProperties"] is False
+
+    constructed = []
+    monkeypatch.setattr(
+        mcp,
+        "_build_run_llm",
+        lambda _args: constructed.append(True) or (object(), None),
+    )
+    result = mcp.dispatch(
+        "research_agent.run",
+        {
+            "question": "q",
+            "cohort_path": str(tmp_path / "cohort.parquet"),
+            "model": "m",
+            "trajectory_path": "/outside/forwarded.parquet",
+        },
+    )
+
+    assert result["error_code"] == "invalid_argument"
+    assert "additional properties" in result["error"]
+    assert constructed == []
+
+
+def test_every_mcp_tool_schema_is_closed_and_direct_dispatch_rejects_unknown_args(
+    ra,
+) -> None:
+    from easyicu.research_agent.mcp_server import TOOL_SCHEMAS, dispatch
+
+    assert TOOL_SCHEMAS
+    for tool in TOOL_SCHEMAS:
+        assert tool["inputSchema"]["additionalProperties"] is False
+        result = dispatch(tool["name"], {"__undeclared__": True})
+        assert result["error_code"] == "invalid_argument", tool["name"]
+        assert "additional properties" in result["error"]
+
+
+def test_extraction_requires_explicit_patient_data_scope(
+    ra, monkeypatch
+) -> None:
+    import easyicu
+    from easyicu.research_agent.mcp_server import dispatch
+
+    calls = []
+    monkeypatch.setenv(MCP_SCOPES_ENV, "metadata")
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **_kwargs: calls.append(True),
+        raising=False,
+    )
+
+    for tool, arguments in (
+        ("research_agent.load_concepts", {"concepts": ["hr"]}),
+        ("research_agent.extract_concept", {"concept": "hr"}),
+    ):
+        result = dispatch(tool, arguments)
+        assert result["error_code"] == "scope_not_granted"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [
+        ("chunk_size", 0),
+        ("chunk_size", 10_000_001),
+        ("batch_size", 0),
+        ("batch_size", 1_000_001),
+        ("parallel_workers", 0),
+        ("parallel_workers", 65),
+        ("concept_workers", 0),
+        ("concept_workers", 65),
+    ],
+)
+def test_extraction_worker_and_chunk_arguments_are_bounded(
+    ra, monkeypatch, argument, value
+) -> None:
+    import easyicu
+    from easyicu.research_agent.mcp_server import dispatch
+
+    calls = []
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"metadata,{SCOPE_READ_PATIENT_DATA}")
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **_kwargs: calls.append(True),
+        raising=False,
+    )
+
+    result = dispatch(
+        "research_agent.load_concepts",
+        {"concepts": ["hr"], argument: value},
+    )
+
+    assert result["error_code"] == "invalid_argument"
+    assert calls == []
 
 
 def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
@@ -63,6 +216,8 @@ def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
         "research_agent.build_context",
         "research_agent.list_concepts",
         "research_agent.describe_concept",
+        "research_agent.list_export_concepts",
+        "research_agent.assess_export_coverage",
         "research_agent.audit_cohort",
         "research_agent.run_validator",
         "research_agent.load_concepts",
@@ -125,6 +280,82 @@ def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
     )
     assert availability["availability"]["creatinine"]["miiv"]["concept"] == "crea"
     assert availability["availability"]["sofa2"]["miiv"]["available"] is True
+
+
+def test_mcp_projects_pre_materialization_export_catalog_and_coverage(
+    ra, tmp_path, monkeypatch
+):
+    from easyicu.research_agent.mcp_server import dispatch
+
+    export_dir = _prepared_export(tmp_path / "prepared_export")
+    monkeypatch.setenv(MCP_SCOPES_ENV, "metadata")
+
+    catalog = dispatch(
+        "research_agent.list_export_concepts",
+        {
+            "export_dir": str(export_dir),
+            "modules": ["labs"],
+            "query": "lact",
+            "limit": 10,
+        },
+    )
+
+    assert catalog["schema_version"] == "easyicu.mcp-export-catalog/1"
+    assert catalog["catalog_concept_count"] == 3
+    assert [row["concept_id"] for row in catalog["concepts"]] == ["lact"]
+    assert catalog["concepts"][0]["module"] == "labs"
+    assert catalog["source"]["path_returned"] is False
+    assert catalog["privacy"] == {
+        "patient_rows_returned": False,
+        "host_path_returned": False,
+        "raw_sql_returned": False,
+    }
+
+    coverage = dispatch(
+        "research_agent.assess_export_coverage",
+        {
+            "export_dir": str(export_dir),
+            "concepts": ["lact", "death", "troponin"],
+        },
+    )
+
+    assert coverage["schema_version"] == "easyicu.mcp-export-coverage/1"
+    assert coverage["available"] == ["lact", "death"]
+    assert coverage["missing"] == ["troponin"]
+    assert coverage["sufficient"] is False
+    assert "re-extract" in coverage["advice"][0].casefold()
+    assert "does not establish" in coverage["claim_boundary"]
+    rendered = json.dumps({"catalog": catalog, "coverage": coverage})
+    assert str(export_dir) not in rendered
+    assert '"stay_id"' not in rendered
+    assert '"charttime"' not in rendered
+    assert '"rows"' not in rendered
+
+
+def test_mcp_export_coverage_refuses_empty_requests(ra, tmp_path):
+    from easyicu.research_agent.mcp_server import dispatch
+
+    export_dir = _prepared_export(tmp_path / "prepared_export")
+    result = dispatch(
+        "research_agent.assess_export_coverage",
+        {"export_dir": str(export_dir), "concepts": []},
+    )
+
+    assert result["error_code"] == "invalid_argument"
+    assert "at least one" in result["error"]
+
+
+def test_mcp_export_catalog_remains_confined_to_allowed_roots(
+    ra, tmp_path
+):
+    from easyicu.research_agent.mcp_server import dispatch
+
+    result = dispatch(
+        "research_agent.list_export_concepts",
+        {"export_dir": str(tmp_path.parent / "outside_export")},
+    )
+
+    assert result["error_code"] == "path_not_allowed"
 
 
 def test_mcp_load_concepts_calls_standardized_easyicu_api(ra, tmp_path, monkeypatch):
@@ -196,6 +427,7 @@ def test_mcp_load_concepts_returns_runtime_availability(ra, tmp_path, monkeypatc
         return pd.DataFrame(columns=["icustay_id", "charttime", "norepi_rate"])
 
     monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts, raising=False)
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"metadata,{SCOPE_READ_PATIENT_DATA}")
 
     result = dispatch(
         "research_agent.load_concepts",
@@ -316,9 +548,13 @@ def test_mcp_run_constructs_explicit_llm(ra, tmp_path, monkeypatch):
             seen["llm_kwargs"] = kwargs
 
     class FakePipeline:
-        def __init__(self, *, workdir, llm):
-            seen["workdir"] = workdir
-            seen["llm"] = llm
+        @classmethod
+        def from_config(cls, config, *, services):
+            seen["workdir"] = config.workdir
+            seen["llm"] = services.llm
+            seen["hard_stop"] = services.provider_hard_stop
+            seen["hard_stop_limit"] = config.max_provider_attempts_per_run
+            return cls()
 
         def run(self, *, cohort, **kwargs):
             seen["cohort"] = cohort
@@ -348,6 +584,63 @@ def test_mcp_run_constructs_explicit_llm(ra, tmp_path, monkeypatch):
     assert seen["llm_kwargs"]["model"] == "test-model"
     assert seen["cohort"] == str(cohort)
     assert seen["run_kwargs"]["question"] == "Inspect the cohort."
+    assert seen["hard_stop"].ledger.path.is_file()
+    assert seen["hard_stop_limit"] == 96
+
+
+def test_mcp_write_scope_is_checked_before_concept_extraction(
+    ra, tmp_path, monkeypatch
+):
+    import easyicu
+    import easyicu.research_agent.mcp_server as mcp
+
+    calls = []
+    monkeypatch.setenv(MCP_SCOPES_ENV, "metadata")
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **kwargs: calls.append(kwargs) or pd.DataFrame({"x": [1]}),
+        raising=False,
+    )
+
+    result = mcp.dispatch(
+        "research_agent.load_concepts",
+        {
+            "concepts": ["lact"],
+            "output_path": str(tmp_path / "must-not-exist.parquet"),
+        },
+    )
+
+    assert result["error_code"] == "scope_not_granted"
+    assert calls == []
+    assert not (tmp_path / "must-not-exist.parquet").exists()
+
+
+def test_mcp_rejects_forwarded_dictionary_paths_outside_roots_before_extraction(
+    ra, tmp_path, monkeypatch
+):
+    import easyicu
+    import easyicu.research_agent.mcp_server as mcp
+
+    calls = []
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **kwargs: calls.append(kwargs) or pd.DataFrame({"x": [1]}),
+        raising=False,
+    )
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"metadata,{SCOPE_READ_PATIENT_DATA}")
+
+    result = mcp.dispatch(
+        "research_agent.load_concepts",
+        {
+            "concepts": ["lact"],
+            "dict_path": [str(tmp_path / "allowed.json"), "/outside/dict.json"],
+        },
+    )
+
+    assert result["error_code"] == "path_not_allowed"
+    assert calls == []
 
 
 def test_mcp_run_returns_explicit_unresumable_pending(ra, tmp_path, monkeypatch):
@@ -373,8 +666,10 @@ def test_mcp_run_returns_explicit_unresumable_pending(ra, tmp_path, monkeypatch)
     )
 
     class FakePipeline:
-        def __init__(self, **_kwargs):
-            pass
+        @classmethod
+        def from_config(cls, _config, *, services):
+            assert services.provider_hard_stop is not None
+            return cls()
 
         def run(self, **_kwargs):
             return pending
@@ -442,8 +737,10 @@ def test_mcp_run_loopback_override_does_not_forward_environment_key(
             seen.update(kwargs)
 
     class FakePipeline:
-        def __init__(self, *, workdir, llm):
-            pass
+        @classmethod
+        def from_config(cls, _config, *, services):
+            assert services.provider_hard_stop is not None
+            return cls()
 
         def run(self, *, cohort, **kwargs):
             return SimpleNamespace(model_dump=lambda: {"status": "ok"})
@@ -485,6 +782,10 @@ def test_mcp_multi_concept_outputs_are_collision_safe_and_mapped(
         "load_concepts",
         lambda **_kwargs: frames,
         raising=False,
+    )
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV,
+        f"metadata,write_artifacts,bind_evidence,{SCOPE_READ_PATIENT_DATA}",
     )
 
     result = mcp.dispatch(
@@ -534,6 +835,10 @@ def test_mcp_concept_output_refuses_to_overwrite_existing_file(
         lambda **_kwargs: pd.DataFrame({"value": [1]}),
         raising=False,
     )
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV,
+        f"metadata,write_artifacts,{SCOPE_READ_PATIENT_DATA}",
+    )
     target = tmp_path / "existing.parquet"
     sentinel = b"do-not-overwrite"
     target.write_bytes(sentinel)
@@ -567,6 +872,10 @@ def test_mcp_multi_output_preflights_every_destination_before_writing(
         "load_concepts",
         lambda **_kwargs: frames,
         raising=False,
+    )
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV,
+        f"metadata,write_artifacts,{SCOPE_READ_PATIENT_DATA}",
     )
     output_dir = tmp_path / "exports"
     output_dir.mkdir()

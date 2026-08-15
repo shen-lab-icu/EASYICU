@@ -19,8 +19,9 @@ This module supplies that missing layer.  It is deliberately:
   record which methodology it planned against, and two runs of the same study
   can be shown to have seen the same guidance.
 
-Identifiers (DOI/PMID) are left unset rather than guessed.  A confidently wrong
-identifier is worse than an absent one: it looks verified.
+Identifiers remain unset unless they were verified against the primary source
+registry.  A confidently wrong identifier is worse than an absent one: it
+looks verified.
 """
 
 from __future__ import annotations
@@ -34,13 +35,14 @@ __all__ = [
     "METHOD_CARDS",
     "METHOD_LITERATURE_SCHEMA_VERSION",
     "MethodCard",
+    "method_binding_support",
     "method_cards_for_layers",
     "method_literature_citations",
     "method_literature_digest",
     "method_literature_pack",
 ]
 
-METHOD_LITERATURE_SCHEMA_VERSION = "easyicu.method_literature_pack/1"
+METHOD_LITERATURE_SCHEMA_VERSION = "easyicu.method_literature_pack/3"
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,14 @@ class MethodCard:
     source_title: str
     source_year: str
     source_venue: str = ""
+    source_pmid: str = ""
+    source_doi: str = ""
+    source_url: str = ""
+    # Exact planner design elements this *card* can govern.  A source may own
+    # several cards (STROBE currently owns reporting, repeated-unit dependence,
+    # and absolute/relative interpretation), so source-key membership alone is
+    # not evidence that every card from that paper was actually applied.
+    design_elements: tuple[str, ...] = field(default=())
     # Optional companion sources for the same requirement.
     also_see: tuple[str, ...] = field(default=())
 
@@ -74,6 +84,10 @@ class MethodCard:
             "source_title": self.source_title,
             "source_year": self.source_year,
             "source_venue": self.source_venue,
+            "source_pmid": self.source_pmid,
+            "source_doi": self.source_doi,
+            "source_url": self.source_url,
+            "design_elements": list(self.design_elements),
             "also_see": list(self.also_see),
         }
 
@@ -97,6 +111,10 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         ),
         source_year="2007",
         source_venue="Annals of Internal Medicine / BMJ / Lancet (co-published)",
+        source_pmid="17938396",
+        source_doi="10.7326/0003-4819-147-8-200710160-00010",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/17938396/",
+        design_elements=("reporting",),
     ),
     MethodCard(
         id="reporting_routinely_collected_data",
@@ -117,6 +135,10 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         ),
         source_year="2015",
         source_venue="PLoS Medicine",
+        source_pmid="26440803",
+        source_doi="10.1371/journal.pmed.1001885",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/26440803/",
+        design_elements=("reporting",),
     ),
     MethodCard(
         id="time_zero_and_immortal_time",
@@ -134,6 +156,10 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         source_title="Immortal time bias in pharmacoepidemiology.",
         source_year="2008",
         source_venue="American Journal of Epidemiology",
+        source_pmid="18056625",
+        source_doi="10.1093/aje/kwm324",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/18056625/",
+        design_elements=("time_zero", "exposure", "estimand"),
         also_see=("levesque_immortal_time_2010",),
     ),
     MethodCard(
@@ -154,6 +180,10 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         ),
         source_year="1983",
         source_venue="Journal of Clinical Oncology",
+        source_pmid="6668489",
+        source_doi="10.1200/JCO.1983.1.11.710",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/6668489/",
+        design_elements=("time_zero", "exposure", "estimand"),
     ),
     MethodCard(
         id="repeated_units_per_patient",
@@ -175,6 +205,7 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         ),
         source_year="2007",
         source_venue="Annals of Internal Medicine / BMJ / Lancet (co-published)",
+        design_elements=("dependence",),
     ),
     MethodCard(
         id="continuous_covariate_functional_form",
@@ -191,6 +222,10 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         source_title="Flexible regression models with cubic splines.",
         source_year="1989",
         source_venue="Statistics in Medicine",
+        source_pmid="2657958",
+        source_doi="10.1002/sim.4780080504",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/2657958/",
+        design_elements=("adjustment", "robustness"),
         also_see=("harrell_rms",),
     ),
     MethodCard(
@@ -212,6 +247,10 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         ),
         source_year="2009",
         source_venue="BMJ",
+        source_pmid="19564179",
+        source_doi="10.1136/bmj.b2393",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/19564179/",
+        design_elements=("missing_data", "robustness"),
         also_see=("little_rubin_missing_data",),
     ),
     MethodCard(
@@ -233,8 +272,56 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         ),
         source_year="2007",
         source_venue="Annals of Internal Medicine / BMJ / Lancet (co-published)",
+        design_elements=("outcome", "estimand"),
     ),
 )
+
+
+def method_binding_support(
+    citation_key: str,
+    design_elements: Sequence[str],
+) -> dict[str, Any]:
+    """Project one typed source binding onto exact method-card authority.
+
+    The public contract is deliberately small and dependency-neutral.  It does
+    not decide whether a topic/direct-comparator paper is relevant; it only
+    answers whether a curated *method source* has a card whose declared scope
+    overlaps each Planner-owned design element.  Unknown/non-method sources
+    remain outside this check and continue through source-excerpt review.
+    """
+
+    key = str(citation_key or "").strip()
+    declared = tuple(
+        dict.fromkeys(
+            str(value or "").strip()
+            for value in design_elements or ()
+            if str(value or "").strip()
+        )
+    )
+    cards = tuple(card for card in METHOD_CARDS if card.source_key == key)
+    if not cards:
+        return {
+            "method_source": False,
+            "matched_card_ids": [],
+            "matched_layers": [],
+            "unsupported_design_elements": [],
+        }
+    matched = tuple(
+        card
+        for card in cards
+        if set(card.design_elements).intersection(declared)
+    )
+    supported_elements = {
+        element for card in cards for element in card.design_elements
+    }
+    return {
+        "method_source": True,
+        "matched_card_ids": sorted(card.id for card in matched),
+        "matched_layers": sorted({card.layer for card in matched}),
+        "unsupported_design_elements": sorted(
+            set(declared) - supported_elements
+        ),
+    }
 
 
 def method_cards_for_layers(
@@ -268,6 +355,9 @@ def method_literature_citations() -> tuple[dict[str, Any], ...]:
             "year": card.source_year,
             "venue": card.source_venue or None,
             "relevance": f"Methodology: {card.question}",
+            "pmid": card.source_pmid or None,
+            "doi": card.source_doi or None,
+            "url": card.source_url or None,
         }
     return tuple(seen.values())
 

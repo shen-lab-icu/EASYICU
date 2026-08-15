@@ -16,6 +16,7 @@ from .evaluator.paper_rubric_v3 import (
     default_figure2_paper_rubric_path,
 )
 from .evaluator.suite import easyicu_evaluation_protocol_suite
+from .case_scientific_protocol import load_default_case_protocol
 from .e1_scientific_acceptance import (
     display_label_instruction,
     measurement_products_instruction,
@@ -47,6 +48,8 @@ class Canonical9MaterializationSpec:
     trajectory_panel_aggregate: str = "max"
     identity_mode: str = "stay"
     positive_only_event_concepts: tuple[str, ...] = ()
+    candidate_model_concepts: tuple[str, ...] = ()
+    descriptive_only_concepts: tuple[str, ...] = ()
     additional_expected_outputs: tuple[str, ...] = ()
     additional_semantic_guardrails: tuple[str, ...] = ()
     task_protocol_version: Optional[str] = None
@@ -170,11 +173,7 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         static_concepts=_STATIC_CORE,
         exposure_concept="lactate",
         operational_exposure="lact_max",
-        notes=(
-            "The operational exposure is lact_max, the maximum typed lact value "
-            "within ICU hours 0-24, in mmol/L. Audit measuredness and skew and "
-            "do not replace this with a whole-stay or mean lactate."
-        ),
+        task_protocol_version="e2_lactate_mortality/20260810-v3",
     ),
     Canonical9MaterializationSpec(
         task_id="e3_kdigo_gradient",
@@ -313,24 +312,19 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         static_concepts=(*_STATIC_CORE, "los_hosp"),
         exposure_concept="vasopressor",
         operational_exposure="vaso_ind_max",
-        positive_only_event_concepts=("vaso_ind",),
         emit_trajectory=True,
         trajectory_concepts=(*_VASOPRESSOR_CONCEPTS, "map", "lact"),
         trajectory_window=(0.0, 24.0),
-        notes=(
-            "Operationalise early vasopressor exposure as any recorded "
-            "vasopressor administration in ICU hours 0-24. Absence means no "
-            "recorded administration in this audited inputevents-derived source, "
-            "not proof that no unobserved vasopressor was given. Report positivity "
-            "and covariate balance before any bounded causal interpretation."
-        ),
+        task_protocol_version="h2_vasopressor_causal/20260810-v4",
     ),
     Canonical9MaterializationSpec(
         task_id="h3_trajectory_clustering",
         feature_concepts=("sofa2", *_SOFA2_COMPONENTS, "lact"),
+        candidate_model_concepts=(*_SOFA2_COMPONENTS, "lact"),
+        descriptive_only_concepts=("sofa2",),
         static_concepts=("age", "sex", "los_icu"),
         emit_trajectory=True,
-        trajectory_concepts=("sofa2", *_SOFA2_COMPONENTS, "lact"),
+        trajectory_concepts=(*_SOFA2_COMPONENTS, "lact"),
         trajectory_window=(0.0, 72.0),
         # THE COMMON TIME GRID THE NOTE BELOW ASKS FOR, MADE EXECUTABLE.
         #
@@ -348,11 +342,7 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         # engine hard-codes it.
         trajectory_panel_width_hours=12.0,
         trajectory_panel_aggregate="max",
-        notes=(
-            "Build fixed-anchor ICU-hour trajectories over hours 0-72 from the "
-            "typed long table. Use a common time grid, make missingness explicit, "
-            "and assess cluster-count choice and stability before interpretation."
-        ),
+        task_protocol_version="h3_trajectory_clustering/20260810-v4",
     ),
 )
 
@@ -393,6 +383,8 @@ def validate_canonical9_mimic_iv_plan() -> None:
             ("static", spec.static_concepts),
             ("outcome", spec.outcome_concepts),
             ("trajectory", spec.trajectory_concepts),
+            ("candidate model", spec.candidate_model_concepts),
+            ("descriptive only", spec.descriptive_only_concepts),
         ):
             if len(concepts) != len(set(concepts)):
                 raise ValueError(f"{spec.task_id}: {label} concepts repeat")
@@ -404,6 +396,34 @@ def validate_canonical9_mimic_iv_plan() -> None:
             raise ValueError(
                 f"{spec.task_id}: positive-only events must be unique features"
             )
+    for task_id in (
+        "e2_lactate_mortality",
+        "h2_vasopressor_causal",
+        "h3_trajectory_clustering",
+    ):
+        protocol = load_default_case_protocol(task_id)
+        spec = next(item for item in CANONICAL9_MIMIC_IV_PLAN if item.task_id == task_id)
+        if spec.task_protocol_version != protocol.protocol_version:
+            raise ValueError(f"{task_id}: case protocol version drifted")
+        if spec.additional_expected_outputs or spec.additional_semantic_guardrails:
+            raise ValueError(
+                f"{task_id}: runtime science must come from the signed projection"
+            )
+        if task_id == "h3_trajectory_clustering":
+            representation = protocol.representation
+            if spec.candidate_model_concepts != representation.features:
+                raise ValueError("H3 model concepts drifted from signed protocol")
+            if spec.descriptive_only_concepts != representation.descriptive_only_features:
+                raise ValueError("H3 descriptive-only concepts drifted from protocol")
+            if spec.trajectory_concepts != representation.features:
+                raise ValueError("H3 trajectory inputs drifted from signed protocol")
+            if (
+                spec.trajectory_window != tuple(map(float, representation.window_hours))
+                or spec.trajectory_panel_width_hours
+                != float(representation.grid_width_hours)
+                or spec.trajectory_panel_aggregate != representation.aggregation
+            ):
+                raise ValueError("H3 trajectory grid drifted from signed protocol")
 
 
 __all__ = [

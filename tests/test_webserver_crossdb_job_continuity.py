@@ -1,4 +1,4 @@
-"""Ownership and executable contracts for raw Cross-DB job reconnects."""
+"""Ownership and executable contracts for registered/raw Cross-DB reconnects."""
 
 from __future__ import annotations
 
@@ -30,9 +30,10 @@ def test_crossdb_raw_job_continuity_has_one_explicit_owner() -> None:
     viz = _read("js/screens-viz.js")
     setup = _read("js/screens-viz-crossdb-setup.js")
     owner = _read("js/screens-viz-crossdb-job-continuity.js")
+    api = _read("js/api.js")
     index = _read("index.html")
 
-    owner_src = "js/screens-viz-crossdb-job-continuity.js?v=20260802-job-404"
+    owner_src = "js/screens-viz-crossdb-job-continuity.js?v=20260812-registered-jobs"
     assert owner_src in index
     assert index.index("js/screens-viz-crossdb-setup.js?") < index.index("js/screens-viz.js?")
     assert index.index("js/screens-viz.js?") < index.index(owner_src)
@@ -40,10 +41,13 @@ def test_crossdb_raw_job_continuity_has_one_explicit_owner() -> None:
 
     for marker in (
         "window.EU_CROSSDB_JOB_CONTINUITY",
-        "easyicu_crossdb_raw_job_v1",
+        "easyicu_crossdb_job_v2",
+        "crossdb-summary",
+        "crossdb-raw-distribution",
         "loadJobSnapshot",
         "restoreIfNeeded",
         "onSourceChanged",
+        "onSelectionChanged",
         "new window.EventSource",
         "snapshot.status === 'done'",
         "snapshot.status === 'failed'",
@@ -75,9 +79,12 @@ def test_crossdb_raw_job_continuity_has_one_explicit_owner() -> None:
     ):
         assert marker in setup
 
-    assert "easyicu_crossdb_raw_job_v1" not in viz
+    assert "easyicu_crossdb_job_v2" not in viz
     assert "new EventSource('/api/jobs/' + r.job_id + '/events')" not in viz
     assert "loadJobSnapshot" not in viz
+    assert "startCrossdbReviewSummaryJob" in api
+    assert "loadCrossdbReviewSummary" not in api
+    assert "loadCrossdbSummary" not in api
 
 
 def test_crossdb_raw_job_owner_stays_route_pure_and_bounded() -> None:
@@ -86,6 +93,8 @@ def test_crossdb_raw_job_owner_stays_route_pure_and_bounded() -> None:
     assert "rawRoot.length > 4096" in owner
     assert "raw.length > 8192" in owner
     assert "sourceIdentity.length > 256" in owner
+    assert "selectionDigest.length !== 64" in owner
+    assert "Number.isFinite(deadlineAt)" in owner
     assert "JOB_ID_RE" in owner
     assert "SAMPLE_MODES" in owner
     assert "FEATURE_SCOPES" in owner
@@ -133,4 +142,6 @@ def test_crossdb_raw_job_continuity_executes_lifecycle_contract() -> None:
         "feature_scope_guard": True,
         "same_job_stale_stream": True,
         "terminal_pointer_cleared": True,
+        "registered_summary_restore": True,
+        "registered_selection_guard": True,
     }

@@ -254,15 +254,28 @@ class ConceptLoader:
         projection. I/O, corruption, permission and memory failures propagate
         unchanged. Low-memory mode never retries with a full-table read.
         """
-        # Check cache first
-        if table_name in self._table_cache:
-            return self._table_cache[table_name]
+        # A cached narrow projection is reusable only when it contains every
+        # column requested by the next concept.  Reusing by table name alone
+        # made results depend on concept order when callbacks needed extra
+        # source columns.
+        cached = self._table_cache.get(table_name)
+        requested_columns = list(dict.fromkeys(columns or []))
+        if cached is not None and (
+            not requested_columns
+            or set(requested_columns).issubset(cached.columns)
+        ):
+            return cached
 
         # 🚀 加载表并存入缓存
         df = None
-        if columns:
+        if requested_columns:
             try:
-                df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
+                df = load_table(
+                    self._src_name,
+                    table_name,
+                    columns=requested_columns,
+                    path=self.data_path,
+                )
             except Exception as exc:
                 if self._low_memory or not _is_missing_column_projection_error(exc):
                     raise
@@ -468,10 +481,15 @@ class ConceptLoader:
             # 从字典加载概念
             # 如果请求的概念中包含 SOFA-2 相关概念，自动加载 sofa2-dict
             sofa2_concepts = {'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 
-                              'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
+                              'sofa2_cardio', 'sofa2_cns',
+                              'sofa2_cns_proxy_sensitivity',
+                              'sofa2_cns_delirium_tx_ascertainment',
+                              'sofa2_cns_ascertainment',
+                              'sofa2_renal',
                               'uo_6h', 'uo_12h', 'uo_24h', 'rrt_criteria', 'rrt',
                               'adv_resp', 'ecmo', 'ecmo_indication', 'sedated_gcs',
                               'mech_circ_support', 'other_vaso', 'delirium_tx',
+                              'delirium_tx_proxy', 'delirium_tx_evidence',
                               'motor_response', 'delirium_positive'}
             include_sofa2 = any(c in sofa2_concepts for c in concepts)
             
@@ -1899,7 +1917,8 @@ class ConceptLoader:
         
         # 2. Load and filter
         for table_name, columns in table_columns.items():
-            if table_name in self._table_cache:
+            cached = self._table_cache.get(table_name)
+            if cached is not None and set(columns).issubset(cached.columns):
                 continue
             
             # 🚀 跳过需要概念特定过滤的超大表

@@ -100,6 +100,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "GET",
+        "/api/copilot/pi/projects/{project_id}/workflow",
+        "get_pi_copilot_project_workflow",
+    ),
+    (
+        "GET",
         "/api/copilot/pi/projects/{project_id}/workspace/file",
         "get_pi_copilot_workspace_file",
     ),
@@ -113,6 +118,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "/api/copilot/pi/projects/{project_id}/runs/{run_id}/artifacts/{artifact_name}",
         "get_pi_copilot_research_artifact",
     ),
+    (
+        "GET",
+        "/api/copilot/pi/projects/{project_id}/data-package-review",
+        "get_pi_copilot_data_package_review",
+    ),
+    (
+        "GET",
+        "/api/copilot/pi/projects/{project_id}/runs/{run_id}/documents/{document_name}",
+        "get_pi_copilot_research_document",
+    ),
     ("GET", "/api/copilot/pi/sessions", "get_pi_copilot_sessions"),
     ("GET", "/api/copilot/pi/sessions/{session_id}", "get_pi_copilot_session"),
     (
@@ -124,6 +139,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "POST",
         "/api/copilot/pi/sessions/{session_id}/rebind",
         "post_pi_copilot_rebind",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/presentation",
+        "post_pi_copilot_presentation_pin",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/child-jobs/{job_id}/archive",
+        "post_pi_copilot_child_job_archive",
     ),
     (
         "POST",
@@ -255,6 +280,11 @@ EXPECTED_JOB_SUBMISSION_ROUTES = [
     ("POST", "/api/jobs/extract", "jobs_extract"),
     (
         "POST",
+        "/api/jobs/crossdb-summary",
+        "jobs_crossdb_summary",
+    ),
+    (
+        "POST",
         "/api/jobs/crossdb-raw-distribution",
         "jobs_crossdb_raw_distribution",
     ),
@@ -268,6 +298,7 @@ EXPECTED_JOB_LIFECYCLE_ROUTES = [
 
 EXPECTED_AGENT_CONTROL_ROUTES = [
     ("POST", "/api/jobs/agent-run", "jobs_agent_run"),
+    ("POST", "/api/jobs/agent-run-review", "jobs_agent_run_review"),
     (
         "GET",
         "/api/agent-runs/provider-status",
@@ -543,6 +574,7 @@ def test_route_owner_boundaries() -> None:
     assert '"/api/jobs/{job_id}' not in demo_source
     assert '"/api/jobs/convert"' in jobs_source
     assert '"/api/jobs/extract"' in jobs_source
+    assert '"/api/jobs/crossdb-summary"' in jobs_source
     assert '"/api/jobs/crossdb-raw-distribution"' in jobs_source
     assert '"/api/jobs/{job_id}' in jobs_source
     assert '"/api/jobs/agent-run"' not in jobs_source

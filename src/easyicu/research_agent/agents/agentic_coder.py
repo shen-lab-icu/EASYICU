@@ -32,6 +32,10 @@ from pathlib import Path
 from typing import Any, List
 
 from ..providers.llm import cli_backend_available
+from ..providers.subprocess_env import (
+    build_provider_subprocess_env,
+    external_llm_opted_in,
+)
 from ..schema import AnalysisStep, ResearchContext
 from ..authority.coder_authority import HostCoderAuthority
 
@@ -184,6 +188,12 @@ class AgenticCoderAgent:
                 step=step,
                 **fallback_kwargs,
             )
+        if not external_llm_opted_in():
+            return self.fallback.run(
+                context=context,
+                step=step,
+                **fallback_kwargs,
+            )
 
         script = self._delegate(context, step)
         if not script:
@@ -200,7 +210,10 @@ class AgenticCoderAgent:
     def _delegate(self, context: ResearchContext, step: AnalysisStep) -> str:
         prompt = self._build_prompt(context, step)
         with tempfile.TemporaryDirectory(prefix="easyicu-agentic-coder-") as workdir:
-            env = dict(os.environ)  # pass COHORT_PARQUET et al. through unchanged
+            env = build_provider_subprocess_env(
+                self.backend,
+                required_keys=(self.cohort_env,),
+            )
             try:
                 subprocess.run(
                     self._argv(workdir),

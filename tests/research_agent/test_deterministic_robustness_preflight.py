@@ -481,6 +481,7 @@ def test_preflight_emits_renderer_contract_and_nonindependent_scalar_outcomes(
         == "sensitivity_specification_matrix.csv"
     )
     assert summary["aliases"]["primary_or"] == "primary_or.json"
+    assert summary["aliases"]["primary_effect"] == "primary_effect.json"
     assert summary["aliases"]["complete_case_n"] == "complete_case_n.json"
     assert summary["robustness_panel"]["rows"] == summary["robustness_rows"]
     # A locked sensitivity label is not enough to let the auxiliary runner
@@ -504,7 +505,13 @@ def test_preflight_emits_renderer_contract_and_nonindependent_scalar_outcomes(
     assert (out_dir / "sensitivity_specification_matrix.csv").read_bytes() == (
         out_dir / "sensitivity_specification_grid.csv"
     ).read_bytes()
-    assert json.loads((out_dir / "primary_or.json").read_text())["value"] == 1.8
+    primary_or = json.loads((out_dir / "primary_or.json").read_text())
+    primary_effect = json.loads((out_dir / "primary_effect.json").read_text())
+    assert primary_or["statistic"] == "primary_or"
+    assert primary_effect["statistic"] == "primary_effect"
+    assert primary_or["value"] == primary_effect["value"] == 1.8
+    assert summary["output_files"]["statistic:primary_or"] == "primary_or.json"
+    assert summary["output_files"]["statistic:primary_effect"] == "primary_effect.json"
     assert json.loads((out_dir / "complete_case_n.json").read_text())["value"] is None
 
 

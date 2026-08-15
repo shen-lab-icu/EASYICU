@@ -34,6 +34,11 @@ from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
 from ..contracts.capability_ids import CAPABILITY_FAMILIES
 from ..contracts.association_execution import association_execution_verdict
+from ..contracts.descriptive_execution import (
+    DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
+    EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+    exposure_outcome_distribution_execution_verdict,
+)
 from ..contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_OUTPUT,
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
@@ -98,7 +103,9 @@ class ScientificCapability:
     # ``analysis_only`` is an honest boundary: an agent may execute the
     # declared analysis, but EasyICU has no registered deterministic validator
     # for the scientific identification claim and therefore cannot promote it.
-    scientific_validation: Literal["reportable", "analysis_only"] = "reportable"
+    scientific_validation: Literal["reportable", "analysis_only"] = "analysis_only"
+    scientific_validator_owner: Optional[str] = None
+    scientific_validator_contract: Optional[str] = None
 
 
 # Backward-compatible public name.  New code should use ScientificCapability:
@@ -213,6 +220,9 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "time-origin binding",
             "proportional-hazards diagnostic when Cox is declared",
         ),
+        scientific_validation="reportable",
+        scientific_validator_owner="execution.runners.survival_primary_executor",
+        scientific_validator_contract="SurvivalPrimaryResultReceipt",
     ),
     ScientificCapability(
         family="causal_emulation",
@@ -295,6 +305,9 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "primary model contract",
             "effect/interval reconciliation",
         ),
+        scientific_validation="reportable",
+        scientific_validator_owner="execution.runners.adjusted_association_executor",
+        scientific_validator_contract="AssociationExecutionVerdict",
     ),
     ScientificCapability(
         family="association",
@@ -346,6 +359,48 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         required_diagnostics=("split/leakage", "discrimination", "calibration"),
     ),
     ScientificCapability(
+        family="prediction",
+        label="Dynamic prediction / landmark early warning",
+        primary_analysis="llm_coded",
+        primary_estimand=(
+            "Time-updated binary risks at prespecified landmarks and target "
+            "horizons using only measurements available by each prediction time"
+        ),
+        primary_runner=None,
+        primary_runner_module=None,
+        figure="deterministic",
+        figure_renderer="prediction",
+        data_contract=(
+            "longitudinal rows with patient/stay identity and measurement time",
+            "prespecified prediction landmarks, lookback windows and target horizons",
+            "event time plus follow-up/censoring time sufficient to observe each horizon",
+            "patient-level development/validation split with preprocessing fitted inside each training split",
+        ),
+        fail_closed=(
+            "Missing event/follow-up times, post-landmark feature leakage, an "
+            "unobservable target horizon, or a row-level rather than patient-level "
+            "split blocks the action. Static prediction is offered only as a "
+            "user-confirmed alternative, never as an automatic substitute."
+        ),
+        notes=(
+            "Landmark construction and metric evaluation use digest-bound reviewed "
+            "kernels and sklearn; model fitting remains Coder-generated and "
+            "analysis-only until a typed host fit/result validator is registered."
+        ),
+        capability_id="dynamic_prediction_landmark_v1",
+        result_contract=(
+            "typed scientific action + leakage-safe landmark dataset receipt + "
+            "registered per-landmark discrimination/calibration products"
+        ),
+        required_diagnostics=(
+            "prediction-time/observation-window/target-horizon separation",
+            "patient-level split and leakage audit",
+            "per-landmark discrimination, calibration and horizon observability",
+            "temporal subgroup or drift assessment when data support it",
+        ),
+        scientific_validation="analysis_only",
+    ),
+    ScientificCapability(
         family="phenotyping",
         label="Phenotyping / clustering",
         primary_analysis="llm_coded",
@@ -394,6 +449,55 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         capability_id="descriptive_measurement_v1",
         result_contract="registered summary/source-data products",
         required_diagnostics=("denominators", "measurement availability"),
+    ),
+    ScientificCapability(
+        family="descriptive",
+        label="Descriptive — typed exposure/outcome absolute risks",
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-computed exposure prevalence, outcome absolute risks and an "
+            "optional prespecified unadjusted risk difference under an exact "
+            "typed descriptive-only contract"
+        ),
+        primary_runner=EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+        primary_runner_module=(
+            "execution.runners.exposure_outcome_distribution_executor"
+        ),
+        figure="deterministic",
+        figure_renderer="base_association_skill",
+        data_contract=(
+            "one digest-bound typed cohort",
+            "ExposureOutcomeDistributionSpec/2 with closed typed levels",
+            "DescriptiveClaimContract/1 with descriptive_only ceiling",
+        ),
+        fail_closed=(
+            "The owner declines an untyped cohort, an incomplete distribution "
+            "design, any adjusted/causal owner contract, or any claim ceiling "
+            "above descriptive-only. Runtime evidence and host-derived claim "
+            "metadata must reproduce from the exact registered summary bytes."
+        ),
+        notes=(
+            "This narrow primary capability does not upgrade ordinary Table One "
+            "or measurement-audit steps in the broader descriptive family."
+        ),
+        capability_id=DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
+        result_contract=(
+            "exposure_outcome_distribution/2 summary + digest-bound "
+            "ScientificClaimRegistration"
+        ),
+        required_diagnostics=(
+            "closed exposure/outcome levels and denominators",
+            "interval/dependence contract",
+            "descriptive-only noncausal claim ceiling",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner=(
+            "execution.runners.exposure_outcome_distribution_executor"
+        ),
+        scientific_validator_contract=(
+            "exposure_outcome_distribution_result_receipt_valid + "
+            "ScientificClaimRegistration"
+        ),
     ),
 )
 
@@ -778,6 +882,20 @@ def resolve_primary_capability(
         return _verdict_for(capability, analysis_family=canonical)
 
     primary = primary_steps[0]
+    if canonical == "descriptive_epidemiology":
+        descriptive_verdict = exposure_outcome_distribution_execution_verdict(
+            primary
+        )
+        if descriptive_verdict.claimed:
+            capability = get_capability_by_id(
+                DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID
+            )
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=True,
+                owner_reason=descriptive_verdict.reason,
+            )
     declared = str(getattr(primary, "scientific_capability", "") or "").strip()
     if declared:
         declared_capability = get_capability_by_id(declared)
@@ -1120,7 +1238,12 @@ def assess_scientific_capability(
                 "required by this capability."
             ),
         )
-    if capability.scientific_validation != "reportable":
+    validator_registered = bool(
+        capability.scientific_validation == "reportable"
+        and capability.scientific_validator_owner
+        and capability.scientific_validator_contract
+    )
+    if not validator_registered:
         return ScientificCapabilityAssessment(
             capability_id=capability.capability_id,
             analysis_type=canonical,
@@ -1224,8 +1347,8 @@ def render_capability_matrix_markdown() -> str:
         "scientific validator for a publication claim. `analysis_only` is an "
         "explicit fail-closed boundary, not an error the Agent may write around.",
         "",
-        "| Capability | Result contract | Required diagnostics | Claim ceiling |",
-        "| --- | --- | --- | --- |",
+        "| Capability | Result contract | Validator owner | Required diagnostics | Claim ceiling |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for c in CAPABILITY_REGISTRY:
         status = (
@@ -1234,8 +1357,13 @@ def render_capability_matrix_markdown() -> str:
             else "analysis_only ⚠️"
         )
         diagnostics = "; ".join(c.required_diagnostics) or "—"
+        validator = (
+            f"`{c.scientific_validator_owner}` / `{c.scientific_validator_contract}`"
+            if c.scientific_validator_owner and c.scientific_validator_contract
+            else "—"
+        )
         lines.append(
-            f"| `{c.capability_id}` | {c.result_contract or '—'} | "
+            f"| `{c.capability_id}` | {c.result_contract or '—'} | {validator} | "
             f"{diagnostics} | {status} |"
         )
     lines += [
@@ -1272,4 +1400,4 @@ def render_capability_matrix_markdown() -> str:
 
 
 if __name__ == "__main__":  # pragma: no cover - manual regen
-    print(render_capability_matrix_markdown())
+    print(render_capability_matrix_markdown(), end="")

@@ -7174,6 +7174,12 @@
  "kdigo_aki": {
   "class_name": "rec_cncpt",
   "description": "KDIGO Acute Kidney Injury staging (0-3) based on creatinine and urine output",
+  "clinical_status": "validated_definition",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "KDIGO 2012 AKI guideline",
+  "definition_version": "2012",
+  "clinical_contract_id": "kdigo_aki_2012",
   "category": "renal",
   "concepts": [
    "crea",
@@ -7187,6 +7193,12 @@
  "kdigo_creat": {
   "class_name": "rec_cncpt",
   "description": "KDIGO AKI creatinine-based staging with baseline values",
+  "clinical_status": "validated_definition",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "KDIGO 2012 AKI guideline",
+  "definition_version": "2012",
+  "clinical_contract_id": "kdigo_aki_2012",
   "category": "renal",
   "concepts": [
    "crea"
@@ -7197,6 +7209,12 @@
  "kdigo_uo": {
   "class_name": "rec_cncpt",
   "description": "KDIGO AKI urine output-based staging (mL/kg/h rates)",
+  "clinical_status": "validated_definition",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "KDIGO 2012 AKI guideline",
+  "definition_version": "2012",
+  "clinical_contract_id": "kdigo_aki_2012",
   "category": "renal",
   "concepts": [
    "urine",
@@ -13475,7 +13493,14 @@
    "sofa",
    "susp_inf"
   ],
-  "description": "sepsis-3 criterion",
+  "description": "canonical Sepsis-3 criterion using the original SOFA score",
+  "outcome_type": "binary",
+  "clinical_status": "validated_definition",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "Sepsis-3 JAMA 2016",
+  "definition_version": "2016",
+  "clinical_contract_id": "sepsis3_2016",
   "omopid": 132797,
   "category": "outcome",
   "callback": "sep3",

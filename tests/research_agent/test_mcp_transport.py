@@ -22,6 +22,7 @@ from easyicu.research_agent.mcp_policy import (
     MCP_ALLOWED_ROOTS_ENV,
     MCP_PATIENT_DATA_TOKEN_ENV,
     MCP_SCOPES_ENV,
+    SCOPE_READ_PATIENT_DATA,
     granted_scopes,
 )
 from easyicu.research_agent.mcp_server import (
@@ -30,6 +31,7 @@ from easyicu.research_agent.mcp_server import (
     dispatch as application_dispatch,
 )
 from easyicu.research_agent.mcp_transport import (
+    _BoundedDispatcher,
     create_mcp_server,
     create_streamable_http_app,
     validate_http_server_config,
@@ -77,12 +79,38 @@ async def test_official_client_initializes_lists_and_calls_tools() -> None:
         "research_agent.run",
         "research_agent.list_skills",
         "research_agent.read_manifest",
+        "research_agent.list_export_concepts",
+        "research_agent.assess_export_coverage",
         "research_agent.bind_evidence",
     } <= names
     assert result.isError is False
     assert result.structuredContent is not None
     keys = {item["key"] for item in result.structuredContent["skills"]}
     assert {"association_analysis", "prediction_model", "data_quality_audit"} <= keys
+
+
+@pytest.mark.anyio
+async def test_sdk_rejects_empty_export_coverage_before_dispatch() -> None:
+    calls: list[tuple[str, dict]] = []
+    server = _server(
+        dispatcher=lambda name, arguments: (
+            calls.append((name, arguments or {})) or {"unexpected": True}
+        )
+    )
+
+    async with create_connected_server_and_client_session(
+        server,
+        raise_exceptions=True,
+    ) as session:
+        await session.initialize()
+        result = await session.call_tool(
+            "research_agent.assess_export_coverage",
+            {"export_dir": "/not/read", "concepts": []},
+        )
+
+    assert result.isError is True
+    assert "Input validation error" in result.content[0].text
+    assert calls == []
 
 
 @pytest.mark.anyio
@@ -131,15 +159,14 @@ async def test_sdk_preserves_structured_error_contract() -> None:
 
 
 @pytest.mark.anyio
-async def test_tool_timeout_returns_error_and_server_remains_usable() -> None:
-    release = threading.Event()
+async def test_tool_timeout_does_not_detach_a_started_dispatch() -> None:
     calls = 0
 
     def dispatcher(_name: str, _arguments: dict | None) -> dict:
         nonlocal calls
         calls += 1
         if calls == 1:
-            release.wait(timeout=2)
+            time.sleep(0.08)
         return {"call": calls}
 
     server = _server(
@@ -151,39 +178,31 @@ async def test_tool_timeout_returns_error_and_server_remains_usable() -> None:
         raise_exceptions=True,
     ) as session:
         await session.initialize()
-        timed_out = await session.call_tool("research_agent.list_skills", {})
-        release.set()
-        await asyncio.sleep(0.05)
+        started = time.monotonic()
+        first = await session.call_tool("research_agent.list_skills", {})
+        elapsed = time.monotonic() - started
         completed = await session.call_tool("research_agent.list_skills", {})
 
-    assert timed_out.isError is True
-    assert timed_out.structuredContent["error_code"] == "tool_timeout"
-    assert timed_out.structuredContent["dispatch_started"] is True
-    assert timed_out.structuredContent["execution_may_continue"] is True
+    assert first.isError is False
+    assert elapsed >= 0.07
     assert completed.isError is False
 
 
 @pytest.mark.anyio
-async def test_timed_out_dispatchers_hold_slots_until_workers_finish() -> None:
-    """Sequential timeouts must not turn a capacity of two into many threads.
-
-    A purely concurrent burst did not expose the bug because requests waiting
-    for a slot timed out together. Repeated calls did: each timeout released
-    AnyIO's limiter token while its abandoned worker kept running.
-    """
+async def test_queue_timeout_never_starts_a_detached_worker() -> None:
 
     lock = threading.Lock()
     release = threading.Event()
     active = 0
-    maximum = 0
     calls = 0
+    started = threading.Event()
 
     def dispatcher(_name: str, _arguments: dict | None) -> dict:
-        nonlocal active, maximum, calls
+        nonlocal active, calls
         with lock:
             calls += 1
             active += 1
-            maximum = max(maximum, active)
+            started.set()
         try:
             release.wait(timeout=2)
             return {"ok": True}
@@ -193,7 +212,7 @@ async def test_timed_out_dispatchers_hold_slots_until_workers_finish() -> None:
 
     server = _server(
         dispatcher=dispatcher,
-        max_concurrent_tool_calls=2,
+        max_concurrent_tool_calls=1,
         tool_timeout_seconds=0.03,
     )
     try:
@@ -202,21 +221,24 @@ async def test_timed_out_dispatchers_hold_slots_until_workers_finish() -> None:
             raise_exceptions=True,
         ) as session:
             await session.initialize()
-            timed_out = [
-                await session.call_tool("research_agent.list_skills", {})
-                for _ in range(8)
-            ]
+            running = asyncio.create_task(
+                session.call_tool("research_agent.list_skills", {})
+            )
+            while not started.is_set():
+                await asyncio.sleep(0.005)
+            timed_out = await session.call_tool("research_agent.list_skills", {})
 
-            assert all(result.isError for result in timed_out)
-            assert maximum == 2
-            assert calls == 2
-            assert sum(
-                bool(result.structuredContent["dispatch_started"])
-                for result in timed_out
-            ) == 2
+            assert timed_out.isError is True
+            timeout_payload = timed_out.structuredContent or json.loads(
+                timed_out.content[0].text
+            )
+            assert timeout_payload["error_code"] == "tool_timeout"
+            assert timeout_payload["dispatch_started"] is False
+            assert timeout_payload["execution_may_continue"] is False
+            assert calls == 1
 
             release.set()
-            await asyncio.sleep(0.1)
+            first = await running
             completed = await session.call_tool(
                 "research_agent.list_skills",
                 {},
@@ -224,9 +246,9 @@ async def test_timed_out_dispatchers_hold_slots_until_workers_finish() -> None:
     finally:
         release.set()
 
+    assert first.isError is False
     assert completed.isError is False
-    assert calls == 3
-    assert maximum == 2
+    assert calls == 2
 
 
 @pytest.mark.anyio
@@ -310,6 +332,50 @@ async def test_client_cancellation_retains_slot_until_worker_finishes() -> None:
 
     assert completed.isError is False
     assert calls == 2
+
+
+@pytest.mark.anyio
+async def test_cancelled_dispatch_keeps_cancellation_authoritative_over_worker_error(
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    supervisor = _BoundedDispatcher(1)
+
+    def failing_dispatcher() -> dict:
+        started.set()
+        release.wait(timeout=2)
+        raise RuntimeError("worker failed after cancellation")
+
+    running = asyncio.create_task(
+        supervisor.run(failing_dispatcher, state={"started": False})
+    )
+    assert await asyncio.to_thread(started.wait, 1)
+    running.cancel()
+    running.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert await supervisor.run(
+        lambda: {"ok": True}, state={"started": False}
+    ) == {"ok": True}
+
+
+@pytest.mark.anyio
+async def test_worker_cancelled_error_converges_without_spinning() -> None:
+    supervisor = _BoundedDispatcher(1)
+
+    def cancelled_dispatcher() -> dict:
+        raise asyncio.CancelledError
+
+    running = asyncio.create_task(
+        supervisor.run(cancelled_dispatcher, state={"started": False})
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(running, timeout=0.5)
+    assert await supervisor.run(
+        lambda: {"ok": True}, state={"started": False}
+    ) == {"ok": True}
 
 
 @pytest.mark.anyio
@@ -544,16 +610,124 @@ async def test_anonymous_loopback_http_cannot_start_pipeline(
     assert started == []
 
 
-def test_remote_http_bind_requires_an_independent_token(
+@pytest.mark.anyio
+async def test_anonymous_loopback_http_cannot_extract_patient_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import easyicu
+
+    called: list[bool] = []
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **_kwargs: called.append(True),
+        raising=False,
+    )
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"metadata,{SCOPE_READ_PATIENT_DATA}")
+    app = _http_app()
+    call = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "research_agent.load_concepts",
+            "arguments": {"concepts": ["hr"]},
+        },
+    }
+    async with app.router.lifespan_context(app):
+        async with _http_client(app) as client:
+            response = await client.post(
+                "/mcp",
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+                json=call,
+            )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "scope_not_granted"
+    assert called == []
+
+
+def test_remote_http_bind_requires_an_independent_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
+    cert = tmp_path / "server.crt"
+    key = tmp_path / "server.key"
+    cert.write_text("test certificate", encoding="utf-8")
+    key.write_text("test private key", encoding="utf-8")
 
     with pytest.raises(ValueError, match="non-loopback"):
         validate_http_server_config("0.0.0.0", None)
     with pytest.raises(ValueError, match="must not reuse OPENAI_API_KEY"):
-        validate_http_server_config("0.0.0.0", "provider-secret")
-    assert (
+        validate_http_server_config(
+            "0.0.0.0",
+            "provider-secret",
+            trusted_reverse_proxy=True,
+        )
+    with pytest.raises(ValueError, match="direct non-loopback"):
         validate_http_server_config("0.0.0.0", "independent-mcp-token")
+    assert (
+        validate_http_server_config(
+            "0.0.0.0",
+            "independent-mcp-token",
+            trusted_reverse_proxy=True,
+        )
         == "independent-mcp-token"
     )
+    assert (
+        validate_http_server_config(
+            "0.0.0.0",
+            "independent-mcp-token",
+            tls_certfile=str(cert),
+            tls_keyfile=str(key),
+        )
+        == "independent-mcp-token"
+    )
+    with pytest.raises(ValueError, match="both a certificate and private key"):
+        validate_http_server_config(
+            "0.0.0.0",
+            "independent-mcp-token",
+            tls_certfile=str(cert),
+        )
+
+
+def test_direct_remote_http_configures_uvicorn_with_tls_files(
+    tmp_path, monkeypatch
+) -> None:
+    import uvicorn
+
+    from easyicu.research_agent import mcp_transport
+
+    cert = tmp_path / "server.crt"
+    key = tmp_path / "server.key"
+    cert.write_text("test certificate", encoding="utf-8")
+    key.write_text("test private key", encoding="utf-8")
+    captured = {}
+    monkeypatch.setattr(
+        uvicorn,
+        "run",
+        lambda _app, **kwargs: captured.update(kwargs),
+    )
+
+    result = mcp_transport._run_streamable_http(
+        server=_server(),
+        host="0.0.0.0",
+        port=8765,
+        bearer_token="independent-mcp-token",
+        trusted_reverse_proxy=False,
+        tls_certfile=str(cert),
+        tls_keyfile=str(key),
+        allowed_hosts=(),
+        allowed_origins=(),
+        max_body_bytes=1024,
+    )
+
+    assert result == 0
+    assert captured["ssl_certfile"] == str(cert)
+    assert captured["ssl_keyfile"] == str(key)

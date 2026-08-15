@@ -1,13 +1,13 @@
 """Run agent-generated Python code in a constrained subprocess.
 
 The runner is the line between LLM output and real numbers. It must
-be deterministic, isolated, and fully captured.
+be deterministic, isolated, and safely captured.
 
 What it gives you:
 
 * a fresh working directory per step (``STEP_OUT_DIR``);
 * the cohort path injected as ``COHORT_PARQUET``;
-* stdout, stderr and exit-code captured into a run log;
+* bounded stdout/stderr tails and the exit code captured into a run log;
 * a hard wall-clock timeout (default 5 min) so a runaway script
   never blocks the whole pipeline;
 * a curated PYTHONPATH so the script picks up the EasyICU
@@ -31,6 +31,8 @@ Hashes live in :mod:`easyicu.research_agent.authority.evidence_store`, not here
 
 from __future__ import annotations
 
+from ..canonical_json import sha256_file as _sha256_file
+
 import ast
 import glob
 import hashlib
@@ -48,7 +50,7 @@ import threading
 import time
 import uuid
 from pathlib import Path, PurePosixPath
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .code_hygiene import reorder_forward_references
 from ..contracts.method_packages import (
@@ -57,7 +59,13 @@ from ..contracts.method_packages import (
     FINGERPRINT_ONLY_DISTRIBUTIONS,
     OPTIONAL_BASELINE_PACKAGES,
 )
-from ..contracts.runtime import RunResult
+from ..contracts.runtime import RunnerFailureCode, RunResult
+from ..authority.secret_redaction import (
+    REDACTED,
+    is_sensitive_key,
+    redact_text_secrets,
+    string_contains_secret,
+)
 from ..orchestration.profiles import is_paper_facing_profile
 from .method_capabilities import set_runtime_capability_snapshot_provider
 
@@ -84,6 +92,12 @@ _ROBUSTNESS_AUTHORITY_ENTRYPOINT = "_run_robustness_preflight_from_env"
 #: patience, not permission: collection still requires proof of absence.
 _TEARDOWN_ABSENCE_BUDGET_SECONDS = 60.0
 _TEARDOWN_ABSENCE_POLL_SECONDS = 2.0
+
+# Generated code can write forever even when its computation is otherwise
+# bounded. Drain pipes continuously and retain only this tail in host memory,
+# RunResult, and evidence logs.
+MAX_RUNNER_CAPTURE_BYTES = 1024 * 1024
+_CAPTURE_TRUNCATED_MARKER = b"[... earlier runner output truncated ...]\n"
 
 
 def _python_source_tree_sha256(root: Path) -> str:
@@ -130,8 +144,10 @@ HOST_OWNED_RUNNER_ENV_KEYS = frozenset(
         "TMP",
         "TEMP",
         "PYTHONPATH",
+        "PYTHONHOME",
         "PYTHONNOUSERSITE",
         "PYTHONDONTWRITEBYTECODE",
+        "__PYVENV_LAUNCHER__",
         "MPLBACKEND",
         "MPLCONFIGDIR",
         "XDG_CACHE_HOME",
@@ -184,6 +200,30 @@ def _validated_real_mount_source(raw_source: str, *, label: str) -> Path:
     elif stat.S_ISDIR(metadata.st_mode):
         if resolved == Path(resolved.anchor):
             raise ValueError(f"DockerRunner {label} cannot expose a filesystem root")
+        pending = [resolved]
+        while pending:
+            directory = pending.pop()
+            try:
+                entries = list(os.scandir(directory))
+            except OSError as exc:
+                raise ValueError(
+                    f"DockerRunner {label} directory cannot be inspected safely"
+                ) from exc
+            for entry in entries:
+                try:
+                    entry_metadata = entry.stat(follow_symlinks=False)
+                except OSError as exc:
+                    raise ValueError(
+                        f"DockerRunner {label} directory cannot be inspected safely"
+                    ) from exc
+                mode = entry_metadata.st_mode
+                if stat.S_ISDIR(mode):
+                    pending.append(Path(entry.path))
+                elif not stat.S_ISREG(mode) or entry_metadata.st_nlink != 1:
+                    raise ValueError(
+                        f"DockerRunner {label} directory contains an unsafe special "
+                        f"file: {Path(entry.path).relative_to(resolved)}"
+                    )
     else:
         raise ValueError(
             f"DockerRunner {label} must be a regular file or real directory"
@@ -328,14 +368,6 @@ def _canonical_json_bytes(payload: object) -> bytes:
     ).encode("utf-8")
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _sha256_directory_tree(path: Path) -> str:
     digest = hashlib.sha256()
     for item in sorted(path.rglob("*"), key=lambda value: value.as_posix()):
@@ -389,7 +421,9 @@ def _replace_regular_file_atomically(destination: Path, payload: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _terminate_process_group(proc: "subprocess.Popen") -> None:
+def _terminate_process_group(
+    proc: "subprocess.Popen", *, process_group_id: Optional[int] = None
+) -> None:
     """Best-effort SIGKILL of the child's whole process group (POSIX only).
 
     ``start_new_session=True`` makes the child a session/group leader, so its
@@ -398,20 +432,177 @@ def _terminate_process_group(proc: "subprocess.Popen") -> None:
     escape -- an inherent limit of group signalling, not specific to this code.
     """
 
-    try:
-        pgid = os.getpgid(proc.pid)
-    except (ProcessLookupError, OSError):
-        pgid = None
-    if pgid is not None:
+    pgid = process_group_id
+    if pgid is not None and pgid > 1 and pgid != os.getpgrp():
         try:
             os.killpg(pgid, signal.SIGKILL)
             return
         except (ProcessLookupError, OSError):
             pass
+    poll = getattr(proc, "poll", None)
+    if callable(poll) and poll() is not None:
+        return
     try:
         proc.kill()
     except (ProcessLookupError, OSError):
         pass
+
+
+class _BoundedCaptureTail:
+    """Thread-safe fixed-capacity byte tail for one drained process pipe."""
+
+    def __init__(self) -> None:
+        self._payload = bytearray()
+        self._truncated = False
+        self._lock = threading.Lock()
+
+    def append(self, chunk: object) -> None:
+        if not chunk:
+            return
+        data = chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8")
+        with self._lock:
+            overflow = len(self._payload) + len(data) - MAX_RUNNER_CAPTURE_BYTES
+            if overflow > 0:
+                self._truncated = True
+                if overflow >= len(self._payload):
+                    self._payload.clear()
+                else:
+                    del self._payload[:overflow]
+            self._payload.extend(data[-MAX_RUNNER_CAPTURE_BYTES:])
+            if len(self._payload) > MAX_RUNNER_CAPTURE_BYTES:
+                del self._payload[:-MAX_RUNNER_CAPTURE_BYTES]
+
+    def text(self, fallback: object = None) -> str:
+        with self._lock:
+            payload = bytes(self._payload)
+            truncated = self._truncated
+        if not payload:
+            encoded = _as_text(fallback).encode("utf-8")
+            truncated = len(encoded) > MAX_RUNNER_CAPTURE_BYTES
+            payload = encoded[-MAX_RUNNER_CAPTURE_BYTES:]
+        if truncated:
+            payload = _CAPTURE_TRUNCATED_MARKER + payload
+        return payload.decode("utf-8", errors="replace")
+
+
+def _drain_capture_stream(
+    stream: object, tail: _BoundedCaptureTail, stop: threading.Event
+) -> None:
+    try:
+        while True:
+            try:
+                chunk = stream.read(64 * 1024)  # type: ignore[attr-defined]
+            except BlockingIOError:
+                if stop.wait(0.01):
+                    return
+                continue
+            if chunk is None:
+                if stop.wait(0.01):
+                    return
+                continue
+            if not chunk:
+                return
+            tail.append(chunk)
+    except (OSError, ValueError):
+        return
+
+
+def _start_capture_drain(
+    stream: object, *, name: str
+) -> tuple[_BoundedCaptureTail, threading.Thread, threading.Event]:
+    tail = _BoundedCaptureTail()
+    stop = threading.Event()
+    try:
+        os.set_blocking(stream.fileno(), False)  # type: ignore[attr-defined]
+    except (AttributeError, OSError, ValueError):
+        pass
+    thread = threading.Thread(
+        target=_drain_capture_stream,
+        args=(stream, tail, stop),
+        name=name,
+        daemon=True,
+    )
+    thread.start()
+    return tail, thread, stop
+
+
+def _finish_capture_drain(
+    stream: object, thread: threading.Thread, stop: threading.Event
+) -> None:
+    thread.join(timeout=5.0)
+    if thread.is_alive():
+        stop.set()
+        thread.join(timeout=1.0)
+    try:
+        stream.close()  # type: ignore[attr-defined]
+    except (AttributeError, OSError, ValueError):
+        pass
+
+
+def _run_with_bounded_output(
+    cmd: Sequence[str], **kwargs: object
+) -> subprocess.CompletedProcess:
+    """Run through ``subprocess.run`` while draining bounded pipe tails.
+
+    Docker tests and integrations historically replace ``subprocess.run``;
+    retaining that call boundary keeps those controls injectable without ever
+    asking the real subprocess module for unbounded ``capture_output``.
+    """
+
+    stdout_read, stdout_write = os.pipe()
+    stderr_read, stderr_write = os.pipe()
+    stdout_stream = os.fdopen(stdout_read, "rb", buffering=0)
+    stderr_stream = os.fdopen(stderr_read, "rb", buffering=0)
+    stdout_tail, stdout_thread, stdout_stop = _start_capture_drain(
+        stdout_stream, name="easyicu-capture-stdout"
+    )
+    stderr_tail, stderr_thread, stderr_stop = _start_capture_drain(
+        stderr_stream, name="easyicu-capture-stderr"
+    )
+    proc: object = None
+    timeout_error: Optional[subprocess.TimeoutExpired] = None
+    try:
+        proc = subprocess.run(  # noqa: S603 - caller supplies reviewed argv
+            cmd,
+            stdout=stdout_write,
+            stderr=stderr_write,
+            **kwargs,
+        )
+    except subprocess.TimeoutExpired as exc:
+        timeout_error = exc
+    finally:
+        os.close(stdout_write)
+        os.close(stderr_write)
+        _finish_capture_drain(stdout_stream, stdout_thread, stdout_stop)
+        _finish_capture_drain(stderr_stream, stderr_thread, stderr_stop)
+    if timeout_error is not None:
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout_error.timeout,
+            output=stdout_tail.text(timeout_error.stdout),
+            stderr=stderr_tail.text(timeout_error.stderr),
+        ) from None
+    if proc is None:  # pragma: no cover - subprocess.run returns or raises
+        raise RuntimeError("subprocess produced no result")
+    return subprocess.CompletedProcess(
+        cmd,
+        int(proc.returncode),  # type: ignore[attr-defined]
+        stdout_tail.text(getattr(proc, "stdout", None)),
+        stderr_tail.text(getattr(proc, "stderr", None)),
+    )
+
+
+def _redact_runner_text(value: object, extra_env: Mapping[str, str]) -> str:
+    """Redact recognized and explicitly supplied credentials from diagnostics."""
+
+    text = _as_text(value)
+    for key, raw_secret in sorted(
+        extra_env.items(), key=lambda item: len(str(item[1])), reverse=True
+    ):
+        secret = str(raw_secret)
+        if secret and (is_sensitive_key(key) or string_contains_secret(secret)):
+            text = text.replace(secret, REDACTED)
+    return redact_text_secrets(text)
 
 
 def _run_capturing_with_descendant_reaping(
@@ -421,7 +612,7 @@ def _run_capturing_with_descendant_reaping(
     env: Mapping[str, str],
     timeout: float,
 ) -> subprocess.CompletedProcess:
-    """Run ``cmd`` capturing text output; on timeout kill the whole group.
+    """Run ``cmd`` with bounded streamed output and always kill descendants.
 
     ``subprocess.run(timeout=...)`` sends the timeout kill only to the direct
     child, so a background process spawned by generated code survives and can
@@ -429,33 +620,58 @@ def _run_capturing_with_descendant_reaping(
     child is launched in a new session and, on timeout, the whole process group
     is signalled before ``TimeoutExpired`` is re-raised with the captured
     partial output (so the caller's bytes-safe timeout handler is unchanged).
-    Non-POSIX platforms keep the plain ``subprocess.run`` behaviour.
+    Non-POSIX platforms use the same bounded drains but fall back to killing
+    only the direct child because POSIX process groups are unavailable.
     """
 
-    capture = dict(
+    proc = subprocess.Popen(  # noqa: S603 - configured argv, no shell
+        cmd,
         cwd=cwd,
         env=dict(env),
+        start_new_session=os.name == "posix",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
     )
-    if os.name != "posix":
-        return subprocess.run(  # noqa: S603 - configured argv, no shell
-            cmd, timeout=timeout, **capture
-        )
-
-    with subprocess.Popen(  # noqa: S603 - configured argv, no shell
-        cmd, start_new_session=True, **capture
-    ) as proc:
+    if proc.stdout is None or proc.stderr is None:  # pragma: no cover - PIPE contract
+        _terminate_process_group(proc, process_group_id=proc.pid)
+        raise RuntimeError("runner process pipes were not created")
+    stdout_tail, stdout_thread, stdout_stop = _start_capture_drain(
+        proc.stdout, name=f"easyicu-runner-{proc.pid}-stdout"
+    )
+    stderr_tail, stderr_thread, stderr_stop = _start_capture_drain(
+        proc.stderr, name=f"easyicu-runner-{proc.pid}-stderr"
+    )
+    process_group_id = proc.pid if os.name == "posix" else None
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    finally:
+        # This covers normal exit, timeout, KeyboardInterrupt/cancellation, and
+        # arbitrary wait/pipe failures. Descendants are dead before evidence is
+        # inspected, and the direct child is reaped before returning or raising.
+        _terminate_process_group(proc, process_group_id=process_group_id)
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _terminate_process_group(proc)
-            stdout, stderr = proc.communicate()
-            raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
-        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+            proc.wait(timeout=5.0)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                proc.kill()
+            except (OSError, ProcessLookupError):
+                pass
+            try:
+                proc.wait(timeout=1.0)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        _finish_capture_drain(proc.stdout, stdout_thread, stdout_stop)
+        _finish_capture_drain(proc.stderr, stderr_thread, stderr_stop)
+    stdout = stdout_tail.text()
+    stderr = stderr_tail.text()
+    if timed_out:
+        raise subprocess.TimeoutExpired(
+            cmd, timeout, output=stdout, stderr=stderr
+        ) from None
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
 def _remove_authority_snapshot(path: Path) -> None:
@@ -611,6 +827,26 @@ def _sandbox_quote(path: Path | str) -> str:
     return str(path).replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _sandbox_metadata_ancestors(paths: Iterable[Path]) -> tuple[Path, ...]:
+    """Return exact directory entries needed to traverse allowed macOS paths.
+
+    ``sandbox-exec`` does not infer metadata access to ancestors such as
+    ``/Users`` from a deep allowed subpath.  ``Path.resolve()`` walks those
+    entries before reaching the allowed run tree, so a deterministic executor
+    could read a bound file but could not verify its containment.  Metadata-only
+    grants keep file contents and sibling enumeration denied.
+    """
+
+    ancestors: set[Path] = set()
+    for path in paths:
+        cursor = Path(path).parent
+        while cursor != cursor.parent:
+            ancestors.add(cursor)
+            cursor = cursor.parent
+    ancestors.discard(Path("/"))
+    return tuple(sorted(ancestors, key=str))
+
+
 def _env_flag(name: str, *, default: bool = False) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -667,6 +903,122 @@ def macos_sandbox_permission_denied(stderr: object) -> bool:
     return "operation not permitted" in detail and (
         "sandbox_apply" in detail or "sandbox-exec: execvp()" in detail
     )
+
+
+def _linux_unshare_startup_failed(stderr: object) -> bool:
+    detail = _as_text(stderr).lower()
+    return "unshare:" in detail and "unshare failed" in detail
+
+
+def _macos_python_stdio_startup_failed(stderr: object) -> bool:
+    detail = _as_text(stderr).lower()
+    return (
+        "init_sys_streams" in detail
+        or "can't initialize sys standard streams" in detail
+    )
+
+
+def _macos_numeric_runtime_blocked(stderr: object) -> bool:
+    detail = _as_text(stderr).lower()
+    return "omp: error #179" in detail and "shm" in detail
+
+
+def _suspected_isolation_failure_kind(
+    *, command: Sequence[str], stderr: object, returncode: int
+) -> Optional[str]:
+    """Name a child-observed backend symptom that requires trusted probing.
+
+    The generated script's stderr is only a trigger to run the probe. It is
+    never sufficient to authorize host fallback or a terminal environment
+    classification because generated code can print every diagnostic below.
+    """
+
+    if returncode == 0 or not command:
+        return None
+    backend = Path(command[0]).name
+    if backend == "unshare" and _linux_unshare_startup_failed(stderr):
+        return "linux_unshare"
+    if backend != "sandbox-exec":
+        return None
+    if macos_sandbox_permission_denied(stderr):
+        return "macos_permission"
+    if _macos_python_stdio_startup_failed(stderr):
+        return "macos_stdio"
+    if _macos_numeric_runtime_blocked(stderr):
+        return "macos_numeric"
+    if returncode < 0 and not _as_text(stderr).strip():
+        return "macos_signal"
+    return None
+
+
+def _trusted_isolation_probe_command(
+    command: Sequence[str], *, failure_kind: str
+) -> Optional[List[str]]:
+    """Replace the generated script with fixed host-owned probe code.
+
+    Returns ``None`` when the argv is too short to carry an interpreter payload.
+    An empty argv is not a runnable probe: ``subprocess`` raises ``IndexError``
+    for it, which the caller's ``(OSError, TimeoutExpired)`` handler does not
+    catch, so returning ``[]`` would turn an unprobeable command into a crash
+    instead of a retained child failure.
+    """
+
+    if len(command) < 2:
+        return None
+    probe_code = (
+        "import numpy as _np; "
+        "_np.dot(_np.array([1.0]), _np.array([1.0])); "
+        "print('easyicu-isolation-probe-ok')"
+        if failure_kind == "macos_numeric"
+        else "print('easyicu-isolation-probe-ok')"
+    )
+    # CodeRunner commands always end in ``python analysis.py``. Retain the
+    # exact wrapper/profile argv and replace only its interpreter payload.
+    return [*command[:-1], "-I", "-c", probe_code]
+
+
+def _trusted_probe_confirms_isolation_failure(
+    *, failure_kind: str, stderr: object, returncode: int
+) -> bool:
+    if returncode == 0:
+        return False
+    if failure_kind == "linux_unshare":
+        return _linux_unshare_startup_failed(stderr)
+    if failure_kind == "macos_permission":
+        return macos_sandbox_permission_denied(stderr)
+    if failure_kind == "macos_stdio":
+        return _macos_python_stdio_startup_failed(stderr)
+    if failure_kind == "macos_numeric":
+        return _macos_numeric_runtime_blocked(stderr)
+    if failure_kind == "macos_signal":
+        return returncode < 0 and not _as_text(stderr).strip()
+    return False
+
+
+def _host_fallback_reason(failure_kind: str) -> tuple[str, str]:
+    messages = {
+        "linux_unshare": (
+            "unshare network isolation unavailable",
+            "unshare network namespace isolation failed",
+        ),
+        "macos_permission": (
+            "macOS sandbox-exec could not apply its profile inside the current outer sandbox",
+            "macOS sandbox-exec profile application was denied by the outer sandbox",
+        ),
+        "macos_stdio": (
+            "macOS sandbox-exec prevented Python stdio initialisation",
+            "macOS sandbox-exec blocked Python stdio initialisation",
+        ),
+        "macos_numeric": (
+            "macOS sandbox-exec blocked numeric runtime shared memory",
+            "macOS sandbox-exec blocked numeric runtime shared memory",
+        ),
+        "macos_signal": (
+            "macOS sandbox-exec terminated the Python runtime without diagnostics",
+            "macOS sandbox-exec terminated the Python runtime",
+        ),
+    }
+    return messages[failure_kind]
 
 
 class CodeRunner:
@@ -771,7 +1123,9 @@ class CodeRunner:
         if proc.returncode != 0:
             raise RuntimeError(
                 "Python execution-runtime capability probe failed before planning: "
-                + (proc.stderr.strip() or f"returncode={proc.returncode}")
+                + redact_text_secrets(
+                    proc.stderr.strip() or f"returncode={proc.returncode}"
+                )
             )
         try:
             snapshot = tuple(str(name) for name in json.loads(proc.stdout))
@@ -841,7 +1195,7 @@ class CodeRunner:
             if result.returncode != 0:
                 raise RuntimeError(
                     "CodeRunner interpreter authority probe failed: "
-                    f"{result.stderr.strip() or self.python_executable}"
+                    f"{redact_text_secrets(result.stderr.strip() or self.python_executable)}"
                 )
             try:
                 interpreter = json.loads(result.stdout)
@@ -856,7 +1210,7 @@ class CodeRunner:
                 extra_env_identity[key] = _path_bound_authority_value(value)
             python_binary = Path(self.python_executable).resolve(strict=True)
             payload = {
-                "schema": "easyicu.code_runner_authority/1",
+                "schema": "easyicu.code_runner_authority/2",
                 "interpreter": interpreter,
                 "python_entrypoint": {
                     "configured": self.python_executable,
@@ -903,6 +1257,17 @@ class CodeRunner:
             Path(self.workdir).resolve(),
             Path(self.python_executable).resolve().parent,
         }
+        configured_python = Path(self.python_executable).expanduser()
+        if configured_python.is_absolute():
+            configured_prefix = configured_python.parent.parent
+            if configured_prefix.exists():
+                read_dirs.add(configured_prefix.resolve())
+            try:
+                runtime_prefix = configured_python.resolve(strict=True).parent.parent
+            except (OSError, RuntimeError):
+                runtime_prefix = None
+            if runtime_prefix is not None and runtime_prefix.exists():
+                read_dirs.add(runtime_prefix)
         read_files = {
             # CPython/conda enumerate the filesystem root while resolving the
             # executable prefix. Granting data access to this directory entry
@@ -933,6 +1298,16 @@ class CodeRunner:
             "(allow mach-lookup)",
             "(allow ipc-posix-shm)",
         ]
+        traversal_paths = {
+            *read_dirs,
+            *read_files,
+            script_path.parent.resolve(),
+        }
+        rules.extend(
+            f'(allow file-read-metadata (literal "{_sandbox_quote(path)}"))'
+            for path in _sandbox_metadata_ancestors(traversal_paths)
+            if path.exists()
+        )
         rules.extend(
             f'(allow file-read* (subpath "{_sandbox_quote(path)}"))'
             for path in sorted(read_dirs, key=str)
@@ -950,6 +1325,38 @@ class CodeRunner:
         rules.append("(deny network*)")
         return "\n".join(rules) + "\n"
 
+    def _macos_sandbox_python_launch(self) -> tuple[str, Dict[str, str]]:
+        """Return an outer-sandbox-safe Python target and venv coordinates.
+
+        Some signed desktop sandboxes allow ``sandbox-exec`` itself but deny
+        ``execvp`` when its target is a virtualenv's final ``bin/python``
+        symlink.  Executing the symlink's real binary avoids that outer policy,
+        but doing only that would silently leave the selected virtualenv.  On
+        macOS CPython, ``__PYVENV_LAUNCHER__`` preserves the configured venv;
+        ``PYTHONHOME`` pins its base runtime so prefix discovery never falls
+        back to the interpreter's build-time path.
+
+        The two variables are host-owned and rejected from ``extra_env``.  A
+        non-venv symlink needs only the canonical executable path.
+        """
+
+        configured = Path(self.python_executable).expanduser()
+        if not configured.is_absolute():
+            return self.python_executable, {}
+        try:
+            resolved = configured.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return self.python_executable, {}
+        if resolved == configured:
+            return str(resolved), {}
+
+        launch_env: Dict[str, str] = {}
+        venv_prefix = configured.parent.parent
+        if (venv_prefix / "pyvenv.cfg").is_file():
+            launch_env["__PYVENV_LAUNCHER__"] = str(configured)
+            launch_env["PYTHONHOME"] = str(resolved.parent.parent)
+        return str(resolved), launch_env
+
     def build_command(self, *, script_path: Path) -> List[str]:
         base = [self.python_executable, str(script_path)]
         if self.network_policy not in {"none", "disabled"}:
@@ -957,6 +1364,8 @@ class CodeRunner:
         sandbox_exec = shutil.which("sandbox-exec")
         if sandbox_exec and sys.platform == "darwin":
             profile = self._macos_sandbox_profile(script_path=script_path)
+            sandbox_python, _ = self._macos_sandbox_python_launch()
+            base[0] = sandbox_python
             return [sandbox_exec, "-p", profile, *base]
         unshare = shutil.which("unshare")
         if unshare and sys.platform.startswith("linux"):
@@ -1092,8 +1501,12 @@ class CodeRunner:
         cmd = self.build_command(script_path=script_path)
         original_cmd = list(cmd)
         requested_isolation = self._isolation_backend_for_cmd(original_cmd)
+        if requested_isolation == "macos_sandbox_exec":
+            _, sandbox_launch_env = self._macos_sandbox_python_launch()
+            env.update(sandbox_launch_env)
         isolation_degraded = False
         isolation_degradation_reason: Optional[str] = None
+        runner_failure_code: Optional[RunnerFailureCode] = None
         unsafe_direct_backends = {
             "host_subprocess",
             "linux_unshare_network_namespace",
@@ -1152,6 +1565,7 @@ class CodeRunner:
                 isolation_degraded=False,
                 isolation_degradation_reason=None,
                 runner_log_path=log_path,
+                runner_failure_code=RunnerFailureCode.ISOLATION_BACKEND_UNAVAILABLE,
             )
         if requested_isolation == "host_subprocess":
             isolation_degraded = True
@@ -1179,185 +1593,91 @@ class CodeRunner:
                 timeout=self.timeout_seconds,
             )
             stdout, stderr, returncode = proc.stdout, proc.stderr, proc.returncode
-            if (
-                returncode != 0
-                and self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name == "unshare"
-                and sys.platform.startswith("linux")
-                and "unshare failed" in stderr.lower()
-            ):
-                retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(
-                    self.timeout_seconds - (time.monotonic() - started), 1.0
+            failure_kind = _suspected_isolation_failure_kind(
+                command=original_cmd,
+                stderr=stderr,
+                returncode=returncode,
+            )
+            if failure_kind is not None:
+                probe_cmd = _trusted_isolation_probe_command(
+                    original_cmd,
+                    failure_kind=failure_kind,
                 )
-                retry_proc = _run_capturing_with_descendant_reaping(
-                    retry_cmd,
-                    cwd=str(step_dir),
-                    env=env,
-                    timeout=retry_timeout,
+                probe_timeout = max(
+                    min(self.timeout_seconds - (time.monotonic() - started), 10.0),
+                    1.0,
                 )
-                stdout = retry_proc.stdout
-                stderr = (
-                    "[CodeRunner] unshare network isolation unavailable; "
-                    "retrying without Linux network namespace isolation.\n"
-                    f"[CodeRunner] original stderr:\n{stderr}\n"
-                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
+                probe_proc = None
+                probe_error: Optional[str] = None
+                if probe_cmd is None:
+                    probe_error = "ProbeCommandUnavailable"
+                else:
+                    try:
+                        probe_proc = _run_capturing_with_descendant_reaping(
+                            probe_cmd,
+                            cwd=str(step_dir),
+                            env=env,
+                            timeout=probe_timeout,
+                        )
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        # A child-controlled diagnostic may request this probe,
+                        # so probe infrastructure failure cannot replace the
+                        # child's original result or buy a different repair
+                        # route.
+                        probe_error = type(exc).__name__
+                confirmed = bool(
+                    probe_proc is not None
+                    and _trusted_probe_confirms_isolation_failure(
+                        failure_kind=failure_kind,
+                        stderr=probe_proc.stderr,
+                        returncode=probe_proc.returncode,
+                    )
                 )
-                returncode = retry_proc.returncode
-                cmd = retry_cmd
-                isolation_degraded = True
-                isolation_degradation_reason = "unshare network namespace isolation failed; retried as a host subprocess."
-            if (
-                returncode != 0
-                and self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name == "sandbox-exec"
-                and sys.platform == "darwin"
-                and macos_sandbox_permission_denied(stderr)
-            ):
-                retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(
-                    self.timeout_seconds - (time.monotonic() - started), 1.0
-                )
-                retry_proc = _run_capturing_with_descendant_reaping(
-                    retry_cmd,
-                    cwd=str(step_dir),
-                    env=env,
-                    timeout=retry_timeout,
-                )
-                stdout = retry_proc.stdout
-                stderr = (
-                    "[CodeRunner] macOS sandbox-exec could not apply its profile "
-                    "inside the current outer sandbox; retrying without sandbox-exec "
-                    "while keeping generated code under captured provenance.\n"
-                    f"[CodeRunner] original stderr:\n{stderr}\n"
-                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
-                )
-                returncode = retry_proc.returncode
-                cmd = retry_cmd
-                isolation_degraded = True
-                isolation_degradation_reason = (
-                    "macOS sandbox-exec profile application was denied by the "
-                    "outer sandbox; retried as a host subprocess."
-                )
-            if (
-                returncode != 0
-                and self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name == "sandbox-exec"
-                and sys.platform == "darwin"
-                and (
-                    "init_sys_streams" in stderr.lower()
-                    or "can't initialize sys standard streams" in stderr.lower()
-                    or "bad file descriptor" in stderr.lower()
-                )
-            ):
-                retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(
-                    self.timeout_seconds - (time.monotonic() - started), 1.0
-                )
-                retry_proc = _run_capturing_with_descendant_reaping(
-                    retry_cmd,
-                    cwd=str(step_dir),
-                    env=env,
-                    timeout=retry_timeout,
-                )
-                stdout = retry_proc.stdout
-                stderr = (
-                    "[CodeRunner] macOS sandbox-exec prevented Python stdio initialisation; "
-                    "retrying without sandbox-exec while keeping generated code under "
-                    "captured provenance.\n"
-                    f"[CodeRunner] original stderr:\n{stderr}\n"
-                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
-                )
-                returncode = retry_proc.returncode
-                cmd = retry_cmd
-                isolation_degraded = True
-                isolation_degradation_reason = (
-                    "macOS sandbox-exec blocked Python stdio initialisation; "
-                    "retried as a host subprocess."
-                )
-            if (
-                returncode != 0
-                and self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name == "sandbox-exec"
-                and sys.platform == "darwin"
-                and "omp: error #179" in stderr.lower()
-                and "shm" in stderr.lower()
-            ):
-                retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(
-                    self.timeout_seconds - (time.monotonic() - started), 1.0
-                )
-                retry_proc = _run_capturing_with_descendant_reaping(
-                    retry_cmd,
-                    cwd=str(step_dir),
-                    env=env,
-                    timeout=retry_timeout,
-                )
-                stdout = retry_proc.stdout
-                stderr = (
-                    "[CodeRunner] macOS sandbox-exec blocked numeric runtime shared memory; "
-                    "retrying without sandbox-exec while keeping network-free generated code "
-                    "under captured provenance.\n"
-                    f"[CodeRunner] original stderr:\n{stderr}\n"
-                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
-                )
-                returncode = retry_proc.returncode
-                cmd = retry_cmd
-                isolation_degraded = True
-                isolation_degradation_reason = (
-                    "macOS sandbox-exec blocked numeric runtime shared memory; "
-                    "retried as a host subprocess."
-                )
-            if (
-                returncode < 0
-                and self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name == "sandbox-exec"
-                and sys.platform == "darwin"
-                and not stderr.strip()
-            ):
-                retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(
-                    self.timeout_seconds - (time.monotonic() - started), 1.0
-                )
-                retry_proc = _run_capturing_with_descendant_reaping(
-                    retry_cmd,
-                    cwd=str(step_dir),
-                    env=env,
-                    timeout=retry_timeout,
-                )
-                stdout = retry_proc.stdout
-                stderr = (
-                    "[CodeRunner] macOS sandbox-exec terminated the Python "
-                    "runtime without diagnostics; retrying with the scrubbed "
-                    "environment but without filesystem isolation.\n"
-                    f"[CodeRunner] sandbox returncode: {returncode}\n"
-                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
-                )
-                returncode = retry_proc.returncode
-                cmd = retry_cmd
-                isolation_degraded = True
-                isolation_degradation_reason = (
-                    "macOS sandbox-exec terminated the Python runtime; retried "
-                    "as a host subprocess with a scrubbed environment."
-                )
-            if (
-                returncode != 0
-                and not self.allow_unsafe_host_fallback
-                and original_cmd
-                and Path(original_cmd[0]).name in {"sandbox-exec", "unshare"}
-            ):
-                stderr = (
-                    "[CodeRunner] isolation backend failed; fail-closed policy "
-                    "forbids retrying generated code as a host subprocess. "
-                    "Set allow_unsafe_host_fallback=True (development only) to "
-                    "opt in to degraded execution.\n"
-                    f"{stderr}"
-                )
+                if confirmed and self.allow_unsafe_host_fallback:
+                    assert probe_proc is not None
+                    retry_cmd = [self.python_executable, str(script_path)]
+                    retry_timeout = max(
+                        self.timeout_seconds - (time.monotonic() - started), 1.0
+                    )
+                    retry_proc = _run_capturing_with_descendant_reaping(
+                        retry_cmd,
+                        cwd=str(step_dir),
+                        env=env,
+                        timeout=retry_timeout,
+                    )
+                    headline, reason = _host_fallback_reason(failure_kind)
+                    stdout = retry_proc.stdout
+                    stderr = (
+                        f"[CodeRunner] {headline}; retrying without the failed "
+                        "isolation backend under explicit development-only "
+                        "fallback.\n"
+                        f"[CodeRunner] host probe stderr:\n{probe_proc.stderr}\n"
+                        f"[CodeRunner] original stderr:\n{stderr}\n"
+                        f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
+                    )
+                    returncode = retry_proc.returncode
+                    cmd = retry_cmd
+                    isolation_degraded = True
+                    isolation_degradation_reason = (
+                        f"{reason}; retried as a host subprocess."
+                    )
+                elif confirmed:
+                    assert probe_proc is not None
+                    runner_failure_code = (
+                        RunnerFailureCode.ISOLATION_BACKEND_UNAVAILABLE
+                    )
+                    stderr = (
+                        "[CodeRunner] isolation backend failed; fail-closed policy "
+                        "forbids retrying generated code as a host subprocess. "
+                        "A fixed host-owned probe reproduced the startup failure.\n"
+                        f"[CodeRunner] host probe stderr:\n{probe_proc.stderr}\n"
+                        f"[CodeRunner] original stderr:\n{stderr}"
+                    )
+                elif probe_error:
+                    stderr = (
+                        f"{stderr}\n[CodeRunner] trusted isolation probe did not "
+                        f"complete ({probe_error}); original child failure retained."
+                    )
             duration = time.monotonic() - started
         except subprocess.TimeoutExpired as exc:
             # exc.stdout/stderr may be bytes even under text mode — decode before
@@ -1371,6 +1691,13 @@ class CodeRunner:
             duration = time.monotonic() - started
             timed_out = True
 
+        stdout = _redact_runner_text(stdout, self.extra_env)
+        stderr = _redact_runner_text(stderr, self.extra_env)
+        rendered_cmd = _redact_runner_text(" ".join(cmd), self.extra_env)
+        rendered_original_cmd = _redact_runner_text(
+            " ".join(original_cmd), self.extra_env
+        )
+
         # Symlink-safe: sandboxed code may have replaced ``run.log`` with a
         # symlink during execution; the atomic writer overwrites the link with a
         # fresh regular file rather than writing through it to a host victim.
@@ -1379,8 +1706,8 @@ class CodeRunner:
             textwrap.dedent(
                 f"""
                 === step {step_id} ===
-                cmd: {' '.join(cmd)}
-                original_cmd: {' '.join(original_cmd)}
+                cmd: {rendered_cmd}
+                original_cmd: {rendered_original_cmd}
                 cwd: {step_dir}
                 cohort: {self.cohort_parquet}
                 network_policy: {self.network_policy}
@@ -1419,6 +1746,7 @@ class CodeRunner:
             isolation_degraded=isolation_degraded,
             isolation_degradation_reason=isolation_degradation_reason,
             runner_log_path=log_path,
+            runner_failure_code=runner_failure_code,
         )
 
 
@@ -1526,10 +1854,12 @@ class DockerRunner:
         # module. The defaults are the module constants.
         self.teardown_absence_budget_seconds = _TEARDOWN_ABSENCE_BUDGET_SECONDS
         self.teardown_absence_poll_seconds = _TEARDOWN_ABSENCE_POLL_SECONDS
-        self.network = network
+        self.network = str(network or "none").strip().lower()
         self.extra_mounts = self._validated_extra_mounts(extra_mounts or ())
         self.extra_env = dict(extra_env or {})
         reject_reserved_runner_env(self.extra_env, owner="DockerRunner")
+        if any("\n" in value or "\r" in value for value in self.extra_env.values()):
+            raise ValueError("DockerRunner extra_env values cannot contain newlines")
         self.pull_image = bool(pull_image)
         # Resource caps are ON by default. The timeout alone does not bound
         # damage: generated code can exhaust host memory, fork until the host
@@ -1554,6 +1884,11 @@ class DockerRunner:
         # same profile would then have run under different, unrecorded
         # ceilings. Development profiles keep the opt-out.
         if is_paper_facing_profile(submission_profile_name):
+            if self.network != "none":
+                raise ValueError(
+                    "submission profile "
+                    f"{submission_profile_name!r} requires Docker network='none'"
+                )
             disabled = [
                 name
                 for name, value in (
@@ -1786,6 +2121,7 @@ class DockerRunner:
         authority_snapshot_path: Optional[Path] = None,
         authority_snapshot_sha256: Optional[str] = None,
         authority_snapshot_error: Optional[str] = None,
+        env_file_path: Optional[Path] = None,
     ) -> List[str]:
         """Compose the ``docker run`` argv for a single step."""
         step_id = _safe_path_component(step_id, label="step_id")
@@ -1946,8 +2282,30 @@ class DockerRunner:
             env[_RUN_ARTIFACT_AUTHORITY_ERROR_ENV] = " ".join(
                 str(authority_snapshot_error).split()
             )[:1000]
-        for key, value in env.items():
-            cmd.extend(["-e", f"{key}={value}"])
+        if env_file_path is None:
+            # Inspection-only callers get a value-free argv. Production run()
+            # supplies an owner-only transient env file instead.
+            for key in env:
+                cmd.extend(["-e", key])
+        else:
+            env_file_path = Path(env_file_path)
+            if not env_file_path.is_absolute():
+                raise ValueError("DockerRunner env file path must be absolute")
+            payload = "".join(f"{key}={value}\n" for key, value in env.items())
+            descriptor = os.open(
+                env_file_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except BaseException:
+                env_file_path.unlink(missing_ok=True)
+                raise
+            cmd.extend(["--env-file", str(env_file_path)])
 
         # Production passes the immutable sha256 id captured before execution;
         # the mutable tag remains metadata only.
@@ -1973,10 +2331,9 @@ class DockerRunner:
             if not self.pull_image:
                 return
             try:
-                subprocess.run(  # noqa: S603 - argv list, no shell
+                _run_with_bounded_output(
                     [self.docker_executable, "pull", self.image],
                     check=False,
-                    capture_output=True,
                     text=True,
                     timeout=max(60.0, self.timeout_seconds),
                 )
@@ -1991,7 +2348,7 @@ class DockerRunner:
         with self._image_identity_lock:
             if self._cached_image_identity is not None:
                 return self._cached_image_identity
-            inspect_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+            inspect_proc = _run_with_bounded_output(
                 [
                     self.docker_executable,
                     "image",
@@ -1999,7 +2356,6 @@ class DockerRunner:
                     "--format={{json .}}",
                     self.image,
                 ],
-                capture_output=True,
                 text=True,
                 timeout=max(30.0, min(self.timeout_seconds, 120.0)),
                 encoding="utf-8",
@@ -2118,9 +2474,8 @@ class DockerRunner:
                     fallback_name=container_name,
                 )
                 try:
-                    capture_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                    capture_proc = _run_with_bounded_output(
                         capture_cmd,
-                        capture_output=True,
                         text=True,
                         timeout=max(15.0, min(self.timeout_seconds, 60.0)),
                         encoding="utf-8",
@@ -2421,9 +2776,8 @@ class DockerRunner:
             args: Sequence[str], *, timeout: float
         ) -> Optional[subprocess.CompletedProcess[str]]:
             try:
-                return subprocess.run(  # noqa: S603 - argv list, no shell
+                return _run_with_bounded_output(
                     [self.docker_executable, *args],
-                    capture_output=True,
                     text=True,
                     timeout=timeout,
                     encoding="utf-8",
@@ -2531,14 +2885,13 @@ class DockerRunner:
         """
 
         try:
-            inspect_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+            inspect_proc = _run_with_bounded_output(
                 [
                     self.docker_executable,
                     "container",
                     "inspect",
                     container_ref,
                 ],
-                capture_output=True,
                 text=True,
                 timeout=10.0,
                 encoding="utf-8",
@@ -2595,9 +2948,8 @@ class DockerRunner:
                         return
                     continue
                 try:
-                    top_proc = subprocess.run(  # noqa: S603 - fixed Docker argv
+                    top_proc = _run_with_bounded_output(
                         [self.docker_executable, "top", container_ref, "-eo", "pid"],
-                        capture_output=True,
                         text=True,
                         timeout=5.0,
                         encoding="utf-8",
@@ -2614,14 +2966,13 @@ class DockerRunner:
                     empty_snapshots = 0 if process_rows else empty_snapshots + 1
                     if empty_snapshots >= 2:
                         try:
-                            subprocess.run(  # noqa: S603 - fixed Docker argv
+                            _run_with_bounded_output(
                                 [
                                     self.docker_executable,
                                     "rm",
                                     "--force",
                                     container_ref,
                                 ],
-                                capture_output=True,
                                 text=True,
                                 timeout=10.0,
                                 encoding="utf-8",
@@ -2715,23 +3066,29 @@ class DockerRunner:
         # attempt-owned copy overlaid at the canonical container path; publish
         # the same bytes back to ``steps/<id>/analysis.py`` only after teardown.
         cidfile = self._docker_cidfile_path(attempt_id)
+        env_file_path = Path(tempfile.gettempdir()) / f"easyicu-docker-{attempt_id}.env"
         sentinel = self.workdir / f".docker-{step_id}-{attempt_id}.sentinel"
         control_script_path = sentinel.with_suffix(".analysis.py")
         control_log_path = sentinel.with_suffix(".run.log")
         container_name = f"easyicu-ra-{attempt_id}"
         self._write_regular_file(sentinel, f"name:{container_name}\n")
         self._write_regular_file(control_script_path, code)
-        cmd = self.build_command(
-            step_id=step_id,
-            script_path=script_path,
-            out_dir=staged_out_dir,
-            immutable_script_path=control_script_path,
-            runtime_image=str(runtime_provenance["image_id"]),
-            resolved_inputs_path=resolved_inputs_path,
-            authority_snapshot_path=authority_snapshot_path,
-            authority_snapshot_sha256=authority_snapshot_sha256,
-            authority_snapshot_error=authority_snapshot_error,
-        )
+        try:
+            cmd = self.build_command(
+                step_id=step_id,
+                script_path=script_path,
+                out_dir=staged_out_dir,
+                immutable_script_path=control_script_path,
+                runtime_image=str(runtime_provenance["image_id"]),
+                resolved_inputs_path=resolved_inputs_path,
+                authority_snapshot_path=authority_snapshot_path,
+                authority_snapshot_sha256=authority_snapshot_sha256,
+                authority_snapshot_error=authority_snapshot_error,
+                env_file_path=env_file_path,
+            )
+        except BaseException:
+            env_file_path.unlink(missing_ok=True)
+            raise
         # Keep the host-written cidfile outside the step's read-write mount so
         # generated code cannot replace the container id used for teardown.
         cmd.insert(2, f"--cidfile={cidfile}")
@@ -2740,15 +3097,18 @@ class DockerRunner:
         timed_out = False
         teardown_confirmed = False
         started = time.monotonic()
-        ghost_monitor = self._start_ghost_container_monitor(
-            cidfile=cidfile,
-            fallback_name=container_name,
-        )
         try:
-            proc = subprocess.run(  # noqa: S603 - argv list, no shell
+            ghost_monitor = self._start_ghost_container_monitor(
+                cidfile=cidfile,
+                fallback_name=container_name,
+            )
+        except BaseException:
+            env_file_path.unlink(missing_ok=True)
+            raise
+        try:
+            proc = _run_with_bounded_output(
                 cmd,
                 cwd=str(step_dir),
-                capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
                 encoding="utf-8",
@@ -2787,11 +3147,16 @@ class DockerRunner:
             returncode = -1
             timed_out = True
         finally:
+            env_file_path.unlink(missing_ok=True)
             if ghost_monitor is not None:
                 monitor_stop, monitor_thread = ghost_monitor
                 monitor_stop.set()
                 monitor_thread.join(timeout=1.0)
         duration = time.monotonic() - started
+
+        stdout = _redact_runner_text(stdout, self.extra_env)
+        stderr = _redact_runner_text(stderr, self.extra_env)
+        rendered_cmd = _redact_runner_text(" ".join(cmd), self.extra_env)
 
         log_content = textwrap.dedent(
             f"""
@@ -2801,7 +3166,7 @@ class DockerRunner:
                 repo_digests: {runtime_provenance.get("repo_digests")}
                 network: {self.network}
                 cohort: {self.cohort_parquet}
-                cmd: {' '.join(cmd)}
+                cmd: {rendered_cmd}
                 returncode: {returncode}
                 timed_out: {timed_out}
                 duration_seconds: {duration:.3f}
@@ -2891,7 +3256,7 @@ def select_safe_runner_kind(
     docker_detail = f"Docker executable {requested_executable!r} was not found"
     if resolved_docker is not None:
         try:
-            probe = subprocess.run(  # noqa: S603 - fixed Docker argv, no shell
+            probe = _run_with_bounded_output(
                 [
                     resolved_docker,
                     "image",
@@ -2899,7 +3264,6 @@ def select_safe_runner_kind(
                     runtime_image,
                     "--format={{.Id}}",
                 ],
-                capture_output=True,
                 text=True,
                 timeout=max(0.1, float(probe_timeout_seconds)),
                 check=False,

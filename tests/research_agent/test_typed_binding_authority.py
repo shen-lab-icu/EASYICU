@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from easyicu.research_agent.execution import phase as execution_phase
+from easyicu.research_agent.execution import candidate_loop, phase as execution_phase
 from easyicu.research_agent.authority import typed_binding
 from easyicu.research_agent.schema import AnalysisPlan, EvidenceRef
 
@@ -73,8 +73,8 @@ def test_execution_phase_uses_typed_binding_objects_with_identity() -> None:
 
 
 def test_standard_executors_receive_host_owned_input_receipts() -> None:
-    source = inspect.getsource(execution_phase.run_execute_phase)
-    receipt_call = "visual_step_summary = _write_host_input_binding_receipts("
+    source = inspect.getsource(candidate_loop._candidate_success_prepare_transition)
+    receipt_call = "state.visual_step_summary = _write_host_input_binding_receipts("
     receipt_index = source.index(receipt_call)
     # The guard is the shared owner rather than a hand-written condition; the
     # two spellings of that condition disagreed, and this pre-gate site was the

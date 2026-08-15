@@ -28,8 +28,9 @@ import re
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from hashlib import sha1
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -38,6 +39,8 @@ from .concept_availability import (
     normalize_concept_name,
 )
 from .gates.data_answerability import analysis_answerability_findings
+from .literature_concepts import literature_concept_identity
+from .literature_excerpt import select_source_backed_excerpt
 from .planning.method_literature import method_literature_citations
 from .providers.mocks import MockLLMClient
 from .providers.factory import authorized_complete
@@ -61,6 +64,15 @@ class CitationRecord(BaseModel):
     doi: Optional[str] = None
     url: Optional[str] = None
     pmid: Optional[str] = None
+    publication_types: List[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description=(
+            "Source-issued bibliographic publication types. These are retained "
+            "for deterministic comparator eligibility; absence is not proof of "
+            "an observational design."
+        ),
+    )
 
 
 class LiteratureSearchProvenance(BaseModel):
@@ -90,11 +102,78 @@ class LiteratureSearchProvenance(BaseModel):
         default_factory=list,
         description="Sources that actually returned at least one record.",
     )
+    search_queries: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Exact normalized search strings issued to each retrieval source. "
+            "A dated search receipt without its query is not reproducible."
+        ),
+    )
+    record_queries: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Exact retrieval query or queries that returned each citation key. "
+            "This prevents a multi-stratum search receipt from implying that "
+            "every retained record was returned by the first displayed query."
+        ),
+    )
     search_conducted: bool = Field(
         ...,
         description="True only when at least one retrieval source was enabled.",
     )
+    searched_at: Optional[str] = Field(
+        default=None,
+        description=(
+            "Timezone-aware timestamp of the retrieval attempt. Curated-only "
+            "bundles leave this unset."
+        ),
+    )
     note: str = ""
+
+
+class LiteratureAuthorityTrace(BaseModel):
+    """Host coordinates for one verified, upstream retrieval receipt.
+
+    This trace intentionally carries no screening disposition.  The exact
+    ResearchContext owns all record eligibility and evidence-role decisions.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # v2 receipts predate source StudyContext coordinates, so accepting that
+    # schema here would let a caller manufacture an apparently bound trace for
+    # authority the receipt never carried.  v2 remains load-compatible as a
+    # seed, but correctly has ``authority_trace=None``.
+    schema_version: Literal["easyicu.web-literature-authority/3"]
+    receipt_id: str = Field(pattern=r"^lit_[a-f0-9]{24}$")
+    receipt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    study_context_id: str
+    study_context_revision: int = Field(ge=0)
+    retrieval_scope_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class LiteratureScreeningDecision(BaseModel):
+    """Deterministic, inspectable eligibility decision for one retrieved record."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    citation_key: str
+    source: str
+    disposition: Literal["include", "exclude"]
+    evidence_role: Literal[
+        "direct_comparator",
+        "definition",
+        "method",
+        "database",
+        "related_context",
+    ]
+    rationale: str
+    query: Optional[str] = None
+    population_match: bool = False
+    exposure_match: bool = False
+    outcome_match: bool = False
+    design_excerpt_available: bool = False
+    publication_type_eligible: bool = True
 
 
 class LiteratureBundle(BaseModel):
@@ -115,6 +194,21 @@ class LiteratureBundle(BaseModel):
     search_provenance: Optional[LiteratureSearchProvenance] = Field(
         default=None,
         description="Which sources produced these references, and whether any ran.",
+    )
+    authority_trace: Optional[LiteratureAuthorityTrace] = Field(
+        default=None,
+        description=(
+            "Host-verified retrieval authority coordinates. These identify the "
+            "receipt that supplied candidate records; they confer no comparator, "
+            "novelty, eligibility, or scientific-screening decision."
+        ),
+    )
+    screening_decisions: List[LiteratureScreeningDecision] = Field(
+        default_factory=list,
+        description=(
+            "Record-level inclusion/exclusion and evidence-role decisions. "
+            "Retrieval alone is not evidence that a paper supports the plan."
+        ),
     )
 
 
@@ -204,7 +298,15 @@ class HypothesisBlueprintAgent:
         return HypothesisBlueprint(
             research_question=context.research_question,
             hypothesis=hypothesis,
-            hypothesis_type="confirmatory" if prior_keys else "exploratory",
+            hypothesis_type=(
+                "confirmatory"
+                if any(
+                    decision.disposition == "include"
+                    and decision.evidence_role == "direct_comparator"
+                    for decision in literature.screening_decisions
+                )
+                else "exploratory"
+            ),
             prior_literature_keys=prior_keys,
             novelty_rationale=_novelty_rationale(literature),
             feasible_variables=feasible_variables,
@@ -235,10 +337,19 @@ def render_hypothesis_blueprint_for_prompt(
             "- prior_literature_keys: " + ", ".join(blueprint.prior_literature_keys[:8])
         )
     if literature is not None:
+        direct_keys = {
+            decision.citation_key
+            for decision in literature.screening_decisions
+            if decision.disposition == "include"
+            and decision.evidence_role == "direct_comparator"
+        }
         protocol_records = [
             record
             for record in literature.citations
-            if str(record.relevance or "").startswith("Study-design excerpt:")
+            if record.key in direct_keys
+            and str(record.relevance or "").startswith(
+                ("Study-design excerpt:", "Source excerpt:")
+            )
         ][:5]
         if protocol_records:
             lines.append("- related_study_design_context:")
@@ -481,7 +592,13 @@ class PubMedLiteratureClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def search(self, query: str, *, retmax: int = 8) -> List[CitationRecord]:
+    def search(
+        self,
+        query: str,
+        *,
+        retmax: int = 8,
+        excerpt_terms: Sequence[str] = (),
+    ) -> List[CitationRecord]:
         """Search PubMed for ``query`` and return up to ``retmax`` records."""
         if not query:
             return []
@@ -489,15 +606,28 @@ class PubMedLiteratureClient:
         if not ids:
             return []
         records = self._esummary(ids)
-        excerpts = self._protocol_excerpts(ids)
+        article_metadata = self._protocol_article_metadata(
+            ids, focus_terms=excerpt_terms
+        )
         return [
             record.model_copy(
                 update={
                     "relevance": (
-                        f"Study-design excerpt: {excerpts[record.pmid]}"
-                        if record.pmid and record.pmid in excerpts
+                        "Study-design excerpt: "
+                        + str(article_metadata[record.pmid].get("excerpt") or "")
+                        if record.pmid
+                        and record.pmid in article_metadata
+                        and article_metadata[record.pmid].get("excerpt")
                         else record.relevance
-                    )
+                    ),
+                    "publication_types": (
+                        list(
+                            article_metadata[record.pmid].get("publication_types")
+                            or []
+                        )
+                        if record.pmid and record.pmid in article_metadata
+                        else record.publication_types
+                    ),
                 }
             )
             for record in records
@@ -513,6 +643,13 @@ class PubMedLiteratureClient:
         records = self.search(
             build_pubmed_protocol_query_for_context(context),
             retmax=max(int(retmax) * 3, 12),
+            excerpt_terms=(
+                _protocol_search_term(context, context.primary_exposure),
+                _protocol_search_term(context, context.target_outcome),
+                "intensive care",
+                "critical care",
+                "ICU",
+            ),
         )
         return _rank_protocol_search_results(context, records)[: int(retmax)]
 
@@ -561,7 +698,12 @@ class PubMedLiteratureClient:
             return []
         return parse_pubmed_esummary(payload)
 
-    def _protocol_excerpts(self, pmids: Sequence[str]) -> Dict[str, str]:
+    def _protocol_article_metadata(
+        self,
+        pmids: Sequence[str],
+        *,
+        focus_terms: Sequence[str] = (),
+    ) -> Dict[str, Dict[str, Any]]:
         body = self._http_get(
             "efetch.fcgi",
             self._with_etiquette(
@@ -578,17 +720,29 @@ class PubMedLiteratureClient:
             root = ET.fromstring(body)
         except Exception:
             return {}
-        excerpts: Dict[str, str] = {}
+        metadata: Dict[str, Dict[str, Any]] = {}
         for article in root.findall(".//PubmedArticle"):
             pmid = "".join(article.findtext(".//PMID", default="").split())
             abstract = " ".join(
                 " ".join("".join(node.itertext()).split())
                 for node in article.findall(".//Abstract/AbstractText")
             ).strip()
-            excerpt = _study_design_excerpt(abstract)
-            if pmid and excerpt:
-                excerpts[pmid] = excerpt
-        return excerpts
+            excerpt = _study_design_excerpt(abstract, focus_terms=focus_terms)
+            publication_types = list(
+                dict.fromkeys(
+                    " ".join("".join(node.itertext()).split())
+                    for node in article.findall(
+                        ".//PublicationTypeList/PublicationType"
+                    )
+                    if " ".join("".join(node.itertext()).split())
+                )
+            )[:20]
+            if pmid:
+                metadata[pmid] = {
+                    "excerpt": excerpt,
+                    "publication_types": publication_types,
+                }
+        return metadata
 
 
 # ---------------------------------------------------------------------------
@@ -651,12 +805,9 @@ def _protocol_search_term(context: ResearchContext, name: Optional[str]) -> str:
     candidates: List[str] = []
     if variable is not None:
         description = " ".join(str(variable.description or "").strip().split())
-        if (
-            description
-            and len(description.split()) <= 4
-            and not re.match(r"(?i)^(binary|continuous|categorical)\b", description)
-        ):
-            candidates.append(description)
+        semantic_description = _clinical_phrase_from_description(description)
+        if semantic_description:
+            candidates.append(semantic_description)
         candidates.extend([variable.source_concept or "", variable.name])
     else:
         candidates.append(name)
@@ -668,6 +819,366 @@ def _protocol_search_term(context: ResearchContext, name: Optional[str]) -> str:
         if value:
             return value
     return ""
+
+
+def _clinical_phrase_from_description(description: str) -> str:
+    """Extract one bounded human clinical term from owner-issued metadata."""
+
+    value = " ".join(str(description or "").strip().split())
+    if not value:
+        return ""
+    value = re.sub(r"(?i)^(binary|continuous|categorical)\s+", "", value)
+    patterns = (
+        r"(?i)\bcanonical\s+(.+?)\s+(?:criterion|definition|indicator|score)\b",
+        r"(?i)\b((?:in[- ]?)?hospital mortality)\b",
+        r"(?i)\b(icu mortality)\b",
+        r"(?i)\b(\d+[- ]day mortality)\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, value)
+        if match:
+            return " ".join(match.group(1).split())
+    if len(value.split()) <= 4:
+        return value
+    return ""
+
+
+def _screening_decision_for_record(
+    *,
+    context: ResearchContext,
+    record: CitationRecord,
+    source: str,
+    query: Optional[str],
+) -> LiteratureScreeningDecision:
+    """Classify a retrieved record without granting it methodological authority."""
+
+    exposure = _protocol_search_term(context, context.primary_exposure)
+    outcome = _protocol_search_term(context, context.target_outcome)
+    exposure_variable = context.variable(context.primary_exposure)
+    exposure_identity = literature_concept_identity(
+        (
+            exposure_variable.source_concept or exposure_variable.name
+            if exposure_variable is not None
+            else context.primary_exposure
+        )
+    )
+    return screen_source_backed_direct_comparator(
+        exposure=(
+            exposure_identity.screening_role_term
+            if exposure_identity is not None
+            else exposure
+        ),
+        outcome=outcome,
+        adult_required=_adult_population_required(context),
+        record=record,
+        source=source,
+        query=query,
+        exposure_required_terms=(
+            exposure_identity.screening_required_terms
+            if exposure_identity is not None
+            else ()
+        ),
+    )
+
+
+def screen_source_backed_direct_comparator(
+    *,
+    exposure: str,
+    outcome: str,
+    adult_required: bool,
+    record: CitationRecord,
+    source: str,
+    query: Optional[str],
+    exposure_required_terms: Sequence[str] = (),
+) -> LiteratureScreeningDecision:
+    """Screen one retrieved paper against an exact typed P/E/O scope.
+
+    This is the shared literature-owner boundary used both by Web retrieval to
+    decide whether a bounded comparator fallback is needed and by the sealed
+    ResearchContext screen.  Query membership is deliberately ignored: only
+    the retained title/abstract excerpt and source publication type can earn an
+    include decision.
+    """
+
+    source_excerpt = str(record.relevance or "")
+    blob = _normalise_clinical_text(" ".join([record.title, source_excerpt]))
+    exposure_match = _clinical_exposure_role_matches(
+        exposure=exposure,
+        outcome=outcome,
+        title=record.title,
+        source_excerpt=source_excerpt,
+        required_terms=exposure_required_terms,
+    )
+    outcome_match = _clinical_axis_matches(outcome, blob, axis="outcome")
+    padded_blob = f" {blob} "
+    icu_match = any(
+        token in padded_blob
+        for token in (" intensive care ", " critical care ", " icu ")
+    )
+    adult_match = (not adult_required) or any(
+        token in padded_blob for token in (" adult ", " adults ")
+    )
+    population_match = icu_match and adult_match
+    design_excerpt = str(record.relevance or "").startswith(
+        ("Study-design excerpt:", "Source excerpt:")
+    )
+    publication_type_eligible = _publication_type_comparator_eligible(record)
+    # Being returned by a focused query makes a record worth screening; it
+    # does not prove the title/abstract actually matches the declared study.
+    # Direct-comparator authority therefore requires all three P/E/O axes in
+    # the retained source-backed title/excerpt.  This is deliberately
+    # conservative: a broader record may remain related context, but cannot
+    # satisfy the publication novelty/comparator gate.
+    direct = bool(
+        exposure_match
+        and outcome_match
+        and population_match
+        and design_excerpt
+        and publication_type_eligible
+    )
+    return LiteratureScreeningDecision(
+        citation_key=record.key,
+        source=source,
+        disposition="include" if direct else "exclude",
+        evidence_role="direct_comparator" if direct else "related_context",
+        rationale=(
+            "Included as a direct-comparator candidate because the retained "
+            "source-backed title/design excerpt matches the declared ICU "
+            "population and outcome, and treats the declared exposure as the "
+            "studied variable rather than merely an eligibility label. Human "
+            "review must still "
+            "confirm time zero, estimand, and adjustment comparability."
+            if direct
+            else (
+                "Excluded from direct-comparator authority because the retained "
+                "title/source excerpt does not establish all declared ICU population, "
+                "exposure-role, and outcome axes, no source-backed abstract excerpt was "
+                "retained, or source publication type/title marks a review, guideline, "
+                "trial, or other non-observational comparator. A focused-query return "
+                "alone is not evidence that the paper supports this plan."
+            )
+        ),
+        query=query,
+        population_match=population_match,
+        exposure_match=exposure_match,
+        outcome_match=outcome_match,
+        design_excerpt_available=design_excerpt,
+        publication_type_eligible=publication_type_eligible,
+    )
+
+
+_NON_COMPARATOR_PUBLICATION_TYPES = frozenset(
+    {
+        "review",
+        "meta-analysis",
+        "guideline",
+        "practice guideline",
+        "randomized controlled trial",
+        "clinical trial",
+        "clinical trial protocol",
+        "editorial",
+        "comment",
+        "letter",
+    }
+)
+
+
+def _publication_type_comparator_eligible(record: CitationRecord) -> bool:
+    """Reject obvious non-observational records from comparator authority.
+
+    A missing publication-type field cannot prove eligibility, so the title is
+    also checked for explicit non-comparator designs. This remains a narrow
+    exclusion gate; population/exposure/outcome/design evidence still has to
+    pass independently.
+    """
+
+    types = {
+        " ".join(str(value or "").casefold().split())
+        for value in record.publication_types
+        if str(value or "").strip()
+    }
+    if types & _NON_COMPARATOR_PUBLICATION_TYPES:
+        return False
+    title = f" {re.sub(r'[^a-z0-9]+', ' ', record.title.casefold()).strip()} "
+    return not any(
+        marker in title
+        for marker in (
+            " systematic review ",
+            " scoping review ",
+            " meta analysis ",
+            " guideline ",
+            " consensus ",
+            " randomized trial ",
+            " randomised trial ",
+            " trial protocol ",
+        )
+    )
+
+
+def _normalise_clinical_text(value: str) -> str:
+    """Normalize punctuation without inventing a clinical synonym."""
+
+    return " ".join(
+        re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).split()
+    )
+
+
+def _adult_population_required(context: ResearchContext) -> bool:
+    """Return whether the owner-issued cohort explicitly restricts to adults."""
+
+    cohort = context.cohort
+    provenance = cohort.provenance if isinstance(cohort.provenance, dict) else {}
+    values = [
+        cohort.cohort_name,
+        *cohort.inclusion_criteria,
+        *[str(value) for value in list(provenance.get("inclusion_criteria") or [])],
+    ]
+    text = _normalise_clinical_text(" ".join(values))
+    return any(
+        marker in f" {text} "
+        for marker in (
+            " adult ",
+            " adults ",
+            " age 18 ",
+            " age 18 years ",
+            " age 18 or older ",
+        )
+    )
+
+
+_EXPOSURE_ROLE_MARKERS = (
+    " associated with ",
+    " association with ",
+    " association between ",
+    " relationship between ",
+    " predict ",
+    " predicts ",
+    " predictor ",
+    " prognostic ",
+    " prevalence ",
+    " incidence ",
+    " risk of ",
+    " compared with ",
+    " compared to ",
+    " versus ",
+    " stratified by ",
+    " exposure ",
+    " evaluated for ",
+)
+
+
+def _clinical_exposure_role_matches(
+    *,
+    exposure: str,
+    outcome: str,
+    title: str,
+    source_excerpt: str,
+    required_terms: Sequence[str] = (),
+) -> bool:
+    """Require the declared exposure to act as a studied variable.
+
+    Keyword co-occurrence is insufficient: a vasopressin study may mention
+    Sepsis-3 only as an eligibility definition.  A direct-comparator candidate
+    therefore needs the exposure and outcome in its title, or a source-backed
+    sentence that connects both axes with an analytic/design relationship.
+    Broader papers remain visible as related context.
+    """
+
+    normalized_exposure = _normalise_clinical_text(exposure)
+    if not normalized_exposure:
+        return False
+    normalized_title = _normalise_clinical_text(title)
+    normalized_blob = _normalise_clinical_text(" ".join((title, source_excerpt)))
+    if not all(
+        _clinical_axis_matches(term, normalized_blob, axis="exposure")
+        for term in required_terms
+        if _normalise_clinical_text(term)
+    ):
+        return False
+    if _text_assigns_studied_exposure(normalized_exposure, normalized_title):
+        return True
+
+    for sentence in re.split(r"(?<=[.!?;])\s+", str(source_excerpt or "")):
+        normalized = _normalise_clinical_text(sentence)
+        if not normalized:
+            continue
+        if _text_assigns_studied_exposure(normalized_exposure, normalized):
+            return True
+    return False
+
+
+def _text_assigns_studied_exposure(exposure: str, text: str) -> bool:
+    """Require a local analytic/design relation to the declared exposure.
+
+    Mere cohort phrases such as ``patients meeting <exposure> criteria`` do
+    not qualify.  That distinction prevents a treatment or biomarker paper
+    from becoming a comparator only because Sepsis-3 defined its population.
+    """
+
+    if not exposure or not _clinical_axis_matches(exposure, text, axis="exposure"):
+        return False
+    escaped = re.escape(exposure)
+    # Remove the narrow, source-backed phrases that use the declared exposure
+    # only to define eligibility.  Otherwise an outcome relation elsewhere in
+    # the same title (for example, "biomarker predicts mortality in patients
+    # meeting Sepsis-3 criteria") can accidentally promote the eligibility
+    # label to the studied exposure.
+    analytic_text = text
+    eligibility_patterns = (
+        rf"\b(?:patients?|participants?|subjects?|cohort)\b.{{0,40}}\b(?:meeting|met|fulfilling|satisfying)\b\s+(?:the\s+)?{escaped}(?:\s+(?:criteria|definition))?",
+        rf"\b(?:defined|diagnosed|classified)\b.{{0,30}}\b(?:according\s+to|using|by)\b\s+(?:the\s+)?{escaped}(?:\s+(?:criteria|definition))?",
+    )
+    for pattern in eligibility_patterns:
+        analytic_text = re.sub(pattern, " ", analytic_text)
+    if not _clinical_axis_matches(exposure, analytic_text, axis="exposure"):
+        return False
+    role = (
+        r"prevalence|incidence|epidemiolog(?:y|ic|ical)|application|robustness|"
+        r"validity|validation|performance|association|relationship|predict(?:s|ed|ive)?|"
+        r"primary exposure|studied exposure|risk"
+    )
+    action = r"assess(?:ed|ing)?|evaluat(?:e|ed|ing)|validat(?:e|ed|ing)|appl(?:y|ied|ication)|operationalis(?:e|ed|ing)|operationaliz(?:e|ed|ing)|compar(?:e|ed|ing)"
+    patterns = (
+        rf"\b(?:{role})\b.{{0,80}}\b{escaped}\b",
+        rf"\b(?:{action})\b.{{0,80}}\b{escaped}\b",
+        rf"\b{escaped}\b.{{0,80}}\b(?:{role})\b",
+        rf"\b{escaped}\b.{{0,80}}\b(?:{action})\b",
+    )
+    return any(re.search(pattern, analytic_text) for pattern in patterns)
+
+
+def _clinical_axis_matches(term: str, blob: str, *, axis: str) -> bool:
+    """Match one declared P/E/O axis through a small case-neutral alias set.
+
+    The query string itself is never inspected.  The aliases only normalize
+    conventional spelling variants (hyphenation and mortality/death wording);
+    they do not turn a different endpoint or exposure into a match.
+    """
+
+    normalized = _normalise_clinical_text(term)
+    if not normalized:
+        return False
+    aliases = {normalized}
+    if axis == "outcome":
+        if normalized in {"in hospital mortality", "hospital mortality"}:
+            aliases.update(
+                {
+                    "in hospital mortality",
+                    "hospital mortality",
+                    "in hospital death",
+                    "hospital death",
+                }
+            )
+        elif normalized == "icu mortality":
+            aliases.update({"icu mortality", "icu death", "intensive care mortality"})
+        elif normalized.endswith(" mortality"):
+            prefix = normalized[: -len(" mortality")].strip()
+            if prefix:
+                aliases.add(f"{prefix} death")
+        elif normalized == "mortality":
+            aliases.add("death")
+    padded = f" {blob} "
+    return any(f" {alias} " in padded for alias in aliases)
 
 
 def build_pubmed_protocol_query_for_context(context: ResearchContext) -> str:
@@ -801,20 +1312,29 @@ _PROTOCOL_SENTENCE_TERMS = (
 )
 
 
-def _study_design_excerpt(abstract: str, *, max_chars: int = 600) -> str:
-    """Select a bounded, source-backed design excerpt from an abstract."""
+def _study_design_excerpt(
+    abstract: str,
+    *,
+    focus_terms: Sequence[str] = (),
+    max_chars: int = 900,
+) -> str:
+    """Select a bounded P/E/O-aware source excerpt from an abstract.
 
-    normalized = " ".join(str(abstract or "").split())
-    if not normalized:
-        return ""
-    sentences = re.split(r"(?<=[.!?])\s+", normalized)
-    selected = [
-        sentence
-        for sentence in sentences
-        if any(term in sentence.casefold() for term in _PROTOCOL_SENTENCE_TERMS)
-    ]
-    text = " ".join(selected[:3]) or " ".join(sentences[:2])
-    return text[:max_chars].rstrip()
+    Design-only sentence selection used to discard the exposure or endpoint
+    sentence from an otherwise relevant abstract.  The later comparator screen
+    then (correctly) refused to call the record a comparator because the host
+    had thrown away the very evidence needed to establish the match.  Keep
+    design sentences plus sentences containing the exact context-derived focus
+    terms; this remains extractive and never asks a model to summarize a paper.
+    """
+
+    return select_source_backed_excerpt(
+        abstract,
+        focus_terms=focus_terms,
+        design_terms=_PROTOCOL_SENTENCE_TERMS,
+        max_sentences=5,
+        max_chars=max_chars,
+    )
 
 
 def parse_pubmed_esummary(payload: Dict[str, Any]) -> List[CitationRecord]:
@@ -1056,6 +1576,7 @@ class LiteratureAgent:
         self,
         llm: Optional[LLMClient] = None,
         *,
+        bound_seed: Optional[LiteratureBundle] = None,
         enable_pubmed: bool = False,
         pubmed_client: Optional["PubMedLiteratureClient"] = None,
         pubmed_retmax: int = 8,
@@ -1064,6 +1585,7 @@ class LiteratureAgent:
         tavily_retmax: int = 5,
     ) -> None:
         self.llm = llm
+        self.bound_seed = bound_seed
         self.enable_pubmed = bool(enable_pubmed)
         self.pubmed_client = pubmed_client
         self.pubmed_retmax = int(pubmed_retmax)
@@ -1079,34 +1601,98 @@ class LiteratureAgent:
         seen_urls = {c.url for c in merged if c.url}
 
         # O21 — PRISMA 2020 counts. We treat:
-        # * identified = every candidate record pulled from any source
-        #   (curated, PubMed, Tavily, LLM),
+        # * identified = every candidate record returned by a bibliographic
+        #   retrieval source (the preset curated pack and LLM suggestions are
+        #   not a search flow),
         # * duplicates_removed = records dropped because a key / PMID /
         #   URL already existed,
         # * screened = identified - duplicates_removed,
-        # * eligible = records that survived each source's own
-        #   relevance filter (we treat every returned record as
-        #   eligible; source-side relevance ranking is the filter),
-        # * included = records present in the final merged bundle.
-        identified = len(baseline)
+        # * eligible = retrieved records with an explicit include decision,
+        # * included = screened retrieval records accepted into the final
+        #   bundle (not the preset curated references).
+        identified = 0
         duplicates = 0
+        retrieved_included_keys: set[str] = set()
         curated_seed_count = len(baseline)
         sources_enabled: List[str] = []
         sources_returning: List[str] = []
+        search_queries: Dict[str, List[str]] = {}
+        record_queries: Dict[str, List[str]] = {}
+        screening_decisions: List[LiteratureScreeningDecision] = []
+        bound_search_timestamp: Optional[str] = None
+        live_bibliographic_retrieval_attempted = False
 
-        # 2) PubMed live (T2.2). Errors are swallowed: the bundle is
-        #    still useful even if the network is unreachable.
-        if self.enable_pubmed:
-            sources_enabled.append("pubmed")
-            client = self.pubmed_client or PubMedLiteratureClient()
-            try:
-                hits = client.search_for_context(context, retmax=self.pubmed_retmax)
-            except Exception:
-                hits = []
-            if hits:
-                sources_returning.append("pubmed")
-            identified += len(hits)
-            for rec in hits:
+        # A host may have already run an explicitly authorized literature
+        # search before the pipeline starts (for example, Web Idea Mining).
+        # Merge only its validated, config-hashed LiteratureBundle; never read
+        # an ambient file or silently repeat the network request here.
+        if self.bound_seed is not None:
+            seed_provenance = self.bound_seed.search_provenance
+            bound_search_timestamp = (
+                seed_provenance.searched_at if seed_provenance else None
+            )
+            seed_sources = list(
+                (
+                    seed_provenance.sources_enabled
+                    if seed_provenance and seed_provenance.search_conducted
+                    else []
+                )
+                or []
+            )
+            seed_returning = list(
+                (
+                    seed_provenance.sources_returning
+                    if seed_provenance and seed_provenance.search_conducted
+                    else []
+                )
+                or []
+            )
+            sources_enabled.extend(seed_sources)
+            sources_returning.extend(seed_returning)
+            if seed_provenance is not None:
+                for source, queries in seed_provenance.search_queries.items():
+                    search_queries[source] = list(queries)
+                record_queries.update(
+                    {
+                        str(key): list(queries)
+                        for key, queries in seed_provenance.record_queries.items()
+                    }
+                )
+            # Web Idea Mining screens an Idea before the exact analysis context
+            # exists.  Its result is retrieval provenance, never final
+            # direct-comparator authority.  Re-screen every bound record here
+            # against the sealed ResearchContext and ignore the upstream
+            # disposition; otherwise a generic Idea-level "related" decision
+            # either suppresses a valid comparator or promotes an irrelevant one.
+            source = (seed_returning or seed_sources or ["bound_search"])[0]
+            source_queries = (
+                seed_provenance.search_queries.get(source) or []
+                if seed_provenance is not None
+                else []
+            )
+            bound_decisions = {
+                record.key: _screening_decision_for_record(
+                    context=context,
+                    record=record,
+                    source=source,
+                    query=(
+                        " || ".join(record_queries.get(record.key) or [])
+                        or (source_queries[0] if source_queries else None)
+                    ),
+                )
+                for record in self.bound_seed.citations
+            }
+            screening_decisions.extend(bound_decisions.values())
+            seed_identified = int(
+                (self.bound_seed.prisma or {}).get("identified")
+                or len(self.bound_seed.citations)
+            )
+            identified += seed_identified
+            duplicates += int(
+                (self.bound_seed.prisma or {}).get("duplicates_removed") or 0
+            )
+            for rec in self.bound_seed.citations:
+                decision = bound_decisions[rec.key]
                 if rec.key in seen_keys or (rec.pmid and rec.pmid in seen_pmids):
                     duplicates += 1
                     continue
@@ -1116,13 +1702,53 @@ class LiteratureAgent:
                 if rec.url:
                     seen_urls.add(rec.url)
                 merged.append(rec)
+                if decision.disposition == "include":
+                    retrieved_included_keys.add(rec.key)
+
+        # 2) PubMed live (T2.2). Errors are swallowed: the bundle is
+        #    still useful even if the network is unreachable.
+        if self.enable_pubmed:
+            live_bibliographic_retrieval_attempted = True
+            sources_enabled.append("pubmed")
+            client = self.pubmed_client or PubMedLiteratureClient()
+            pubmed_query = build_pubmed_protocol_query_for_context(context)
+            search_queries["pubmed"] = [pubmed_query]
+            try:
+                hits = client.search_for_context(context, retmax=self.pubmed_retmax)
+            except Exception:
+                hits = []
+            if hits:
+                sources_returning.append("pubmed")
+            identified += len(hits)
+            for rec in hits:
+                record_queries[rec.key] = [pubmed_query]
+                decision = _screening_decision_for_record(
+                    context=context,
+                    record=rec,
+                    source="pubmed",
+                    query=pubmed_query,
+                )
+                screening_decisions.append(decision)
+                if rec.key in seen_keys or (rec.pmid and rec.pmid in seen_pmids):
+                    duplicates += 1
+                    continue
+                seen_keys.add(rec.key)
+                if rec.pmid:
+                    seen_pmids.add(rec.pmid)
+                if rec.url:
+                    seen_urls.add(rec.url)
+                merged.append(rec)
+                if decision.disposition == "include":
+                    retrieved_included_keys.add(rec.key)
 
         # 3) Tavily live (O5) for non-PubMed-indexed material. Errors
         #    are swallowed for the same reason as PubMed: literature
         #    enrichment must never break an otherwise valid analysis.
         if self.enable_tavily:
+            live_bibliographic_retrieval_attempted = True
             sources_enabled.append("tavily")
             client = self.tavily_client or TavilyLiteratureClient()
+            search_queries["tavily"] = [build_tavily_query_for_context(context)]
             try:
                 hits = client.search_for_context(
                     context, max_results=self.tavily_retmax
@@ -1133,6 +1759,14 @@ class LiteratureAgent:
                 sources_returning.append("tavily")
             identified += len(hits)
             for rec in hits:
+                record_queries[rec.key] = [search_queries["tavily"][0]]
+                decision = _screening_decision_for_record(
+                    context=context,
+                    record=rec,
+                    source="tavily",
+                    query=search_queries["tavily"][0],
+                )
+                screening_decisions.append(decision)
                 if rec.key in seen_keys or (rec.url and rec.url in seen_urls):
                     duplicates += 1
                     continue
@@ -1142,10 +1776,19 @@ class LiteratureAgent:
                 if rec.pmid:
                     seen_pmids.add(rec.pmid)
                 merged.append(rec)
+                if decision.disposition == "include":
+                    retrieved_included_keys.add(rec.key)
 
         # 4) LLM extension (only when a real client is provided).
         if self.llm is not None and not isinstance(self.llm, MockLLMClient):
+            # A language model may suggest candidate citations, but that is not
+            # a bibliographic database search.  Keep it outside search/PRISMA
+            # authority so plausible-looking model output cannot satisfy the
+            # top-journal current-literature gate.
             sources_enabled.append("llm_extension")
+            search_queries["llm_extension"] = [
+                "Bound ResearchContext question plus concepts-in-scope"
+            ]
             existing_keys = ", ".join(c.key for c in merged)
             msgs = [
                 LLMMessage(
@@ -1175,31 +1818,47 @@ class LiteratureAgent:
                 data = _parse_citation_json(raw)
             except Exception:
                 data = []
-            identified += len(data)
             if data:
                 sources_returning.append("llm_extension")
             for d in data:
                 try:
                     rec = CitationRecord.model_validate(d)
                 except Exception:
-                    duplicates += 1  # treated as filtered (schema fail ~ not eligible)
                     continue
-                if rec.key in seen_keys or (rec.pmid and rec.pmid in seen_pmids):
-                    duplicates += 1
-                    continue
-                seen_keys.add(rec.key)
-                if rec.pmid:
-                    seen_pmids.add(rec.pmid)
-                if rec.url:
-                    seen_urls.add(rec.url)
-                merged.append(rec)
+                screening_decisions.append(
+                    LiteratureScreeningDecision(
+                        citation_key=rec.key,
+                        source="llm_extension",
+                        disposition="exclude",
+                        evidence_role="related_context",
+                        rationale=(
+                            "Excluded from publication literature authority because "
+                            "an LLM suggestion is not a verified bibliographic search "
+                            "record. Verify it through PubMed or another bound source."
+                        ),
+                        query=search_queries["llm_extension"][0],
+                    )
+                )
+                continue
 
-        search_conducted = bool(sources_enabled)
+        sources_enabled = list(dict.fromkeys(sources_enabled))
+        sources_returning = list(dict.fromkeys(sources_returning))
+        bibliographic_sources = {
+            source for source in sources_enabled if source != "llm_extension"
+        }
+        search_conducted = bool(bibliographic_sources)
         provenance = LiteratureSearchProvenance(
             curated_seed_count=curated_seed_count,
             sources_enabled=sources_enabled,
             sources_returning=sources_returning,
+            search_queries=search_queries,
+            record_queries=record_queries,
             search_conducted=search_conducted,
+            searched_at=(
+                datetime.now(timezone.utc).isoformat()
+                if live_bibliographic_retrieval_attempted
+                else bound_search_timestamp
+            ),
             note=(
                 (
                     "Retrieval ran; PRISMA counts describe the records these "
@@ -1221,8 +1880,13 @@ class LiteratureAgent:
                 "identified": identified,
                 "duplicates_removed": duplicates,
                 "screened": max(0, identified - duplicates),
-                "eligible": len(merged),
-                "included": len(merged),
+                "eligible": sum(
+                    1
+                    for decision in screening_decisions
+                    if decision.source != "llm_extension"
+                    and decision.disposition == "include"
+                ),
+                "included": len(retrieved_included_keys),
             }
             if search_conducted
             else None
@@ -1232,6 +1896,13 @@ class LiteratureAgent:
             citations=merged,
             prisma=prisma,
             search_provenance=provenance,
+            authority_trace=(
+                self.bound_seed.authority_trace.model_dump(mode="json")
+                if self.bound_seed is not None
+                and self.bound_seed.authority_trace is not None
+                else None
+            ),
+            screening_decisions=screening_decisions,
         )
 
 
@@ -1245,11 +1916,13 @@ def build_preplan_literature_bundle(
     tavily_api_key: Optional[str] = None,
     tavily_retmax: int = 5,
     tavily_include_domains: Optional[Sequence[str]] = None,
+    bound_seed: Optional[LiteratureBundle] = None,
 ) -> LiteratureBundle:
     """Build the source-backed literature bundle consumed before planning."""
 
     return LiteratureAgent(
         None,
+        bound_seed=bound_seed,
         enable_pubmed=enable_pubmed,
         pubmed_client=(
             PubMedLiteratureClient(email=pubmed_email, api_key=pubmed_api_key)
@@ -1551,10 +2224,22 @@ def _blueprint_self_critique(
 def _novelty_rationale(literature: LiteratureBundle) -> Optional[str]:
     if not literature.citations:
         return None
-    keys = ", ".join(c.key for c in literature.citations[:4])
+    comparator_keys = [
+        decision.citation_key
+        for decision in literature.screening_decisions
+        if decision.disposition == "include"
+        and decision.evidence_role == "direct_comparator"
+    ]
+    if comparator_keys:
+        return (
+            "A direct-comparator candidate was retrieved and screened "
+            f"({', '.join(comparator_keys[:4])}); novelty is not established "
+            "until the population, time zero, estimand, and analysis differences "
+            "are explicitly compared and independently reviewed."
+        )
     return (
-        "Use prior work as methodological grounding while asking the planner "
-        f"to test the exact EasyICU cohort/concept instantiation ({keys})."
+        "No screened direct comparator is available. The literature pack can "
+        "ground definitions and methods, but it cannot support a novelty claim."
     )
 
 
@@ -1572,7 +2257,9 @@ def _dedupe(items: Sequence[str]) -> List[str]:
 
 __all__ = [
     "CitationRecord",
+    "LiteratureAuthorityTrace",
     "LiteratureBundle",
+    "LiteratureScreeningDecision",
     "HypothesisBlueprintAgent",
     "LiteratureAgent",
     "build_preplan_literature_bundle",

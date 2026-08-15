@@ -148,9 +148,11 @@ def test_the_planner_payload_projection_keeps_the_new_field() -> None:
 def test_the_planner_is_told_the_field_exists() -> None:
     """A contract field no prompt mentions is a field no plan will ever carry."""
 
-    from easyicu.research_agent.agents import core
+    # ``agents/core.py`` is now a compatibility facade; the Planner prompt text
+    # lives in the ``agents.planner`` owner module.
+    from easyicu.research_agent.agents import planner
 
-    source = Path(core.__file__).read_text(encoding="utf-8")
+    source = Path(planner.__file__).read_text(encoding="utf-8")
 
     assert "`covariates`" in source
     assert "not reconstruct an adjustment set from the step inputs" in source

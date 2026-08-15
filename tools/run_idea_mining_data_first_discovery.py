@@ -48,7 +48,9 @@ DEFAULT_PREPARED_COHORT = (
     / "triage"
     / "miiv_wide_idea.parquet"
 )
-DEFAULT_SOURCE_CATALOG = REPO_ROOT / "benchmark" / "source_item_catalog_miiv.json"
+DEFAULT_SOURCE_CATALOG = (
+    REPO_ROOT / "benchmarks" / "catalogs" / "source_item_catalog_miiv.json"
+)
 
 EVENT_DEFAULT_FALSE = (
     "rrt",

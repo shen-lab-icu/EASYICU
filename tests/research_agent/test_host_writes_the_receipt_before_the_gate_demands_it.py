@@ -92,6 +92,11 @@ def test_generated_code_is_not_owed_a_receipt() -> None:
 _PHASE = Path(
     __import__("easyicu.research_agent.execution.phase", fromlist=["__file__"]).__file__
 )
+_CANDIDATE_LOOP = Path(
+    __import__(
+        "easyicu.research_agent.execution.candidate_loop", fromlist=["__file__"]
+    ).__file__
+)
 
 
 def _receipt_writer_calls(tree: ast.AST) -> list[ast.Call]:
@@ -113,9 +118,13 @@ def test_the_two_general_call_sites_ask_the_owner() -> None:
     a sealed renderer repair -- so it is not counted here.
     """
 
-    tree = ast.parse(_PHASE.read_text())
+    trees = (
+        ast.parse(_PHASE.read_text()),
+        ast.parse(_CANDIDATE_LOOP.read_text()),
+    )
     owner_calls = [
         node
+        for tree in trees
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
@@ -125,7 +134,7 @@ def test_the_two_general_call_sites_ask_the_owner() -> None:
         "the pre-gate and post-execution receipt sites must both ask the owner; "
         f"found {len(owner_calls)} call(s)"
     )
-    assert len(_receipt_writer_calls(tree)) == 3
+    assert sum(len(_receipt_writer_calls(tree)) for tree in trees) == 3
 
 
 def test_no_call_site_respells_the_rule() -> None:
@@ -136,17 +145,21 @@ def test_no_call_site_respells_the_rule() -> None:
     the decision only as arguments to the owner.
     """
 
-    tree = ast.parse(_PHASE.read_text())
+    trees = (
+        ast.parse(_PHASE.read_text()),
+        ast.parse(_CANDIDATE_LOOP.read_text()),
+    )
     offenders: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.BoolOp):
-            continue
-        rendered = ast.unparse(node)
-        if (
-            "deterministic_standard_executor_used" in rendered
-            and "is_sealed_renderer_repair" in rendered
-        ):
-            offenders.append(rendered[:120])
+    for tree in trees:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.BoolOp):
+                continue
+            rendered = ast.unparse(node)
+            if (
+                "deterministic_standard_executor_used" in rendered
+                and "is_sealed_renderer_repair" in rendered
+            ):
+                offenders.append(rendered[:120])
     assert not offenders, (
         "a call site decides receipt ownership by hand instead of asking the "
         f"owner: {offenders}"

@@ -55,7 +55,6 @@ from benchmarks.figure2_canonical9.task_scope import canonical_task_scope
 
 PROMPT_PREFLIGHT_SCHEMA_VERSION = "easyicu.canonical9_prompt_preflight/1"
 
-_PLANNER_LIMIT_BYTES = 80_000
 _CODER_LIMIT_BYTES = 42_000
 _ANALYZER_LIMIT_BYTES = 48_000
 _WRITER_LIMIT_BYTES = 64_000
@@ -536,6 +535,22 @@ def _prompt_record(
     }
 
 
+def _planner_limit_bytes(planner_metrics: Mapping[str, object]) -> int:
+    """Return the production-owned Planner ceiling recorded by its builder."""
+
+    try:
+        limit_bytes = int(planner_metrics["limit_bytes"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PromptPreflightError(
+            "Planner request metrics did not declare a valid production limit"
+        ) from exc
+    if limit_bytes <= 0:
+        raise PromptPreflightError(
+            "Planner request metrics declared a non-positive production limit"
+        )
+    return limit_bytes
+
+
 def render_task_prompt_audit(row: Mapping[str, Any]) -> dict[str, object]:
     """Render all five prompt envelopes for one frozen Canonical9 task."""
 
@@ -571,6 +586,7 @@ def render_task_prompt_audit(row: Mapping[str, Any]) -> dict[str, object]:
         context,
         planning_contract_context=planning_contract_context,
     )
+    planner_limit_bytes = _planner_limit_bytes(planner_metrics)
     coder_messages = _capture_coder_messages(
         context=context,
         step=step,
@@ -606,7 +622,7 @@ def render_task_prompt_audit(row: Mapping[str, Any]) -> dict[str, object]:
             prompt_kind="planner",
             messages=planner_messages,
             required_strings=[*protocol_strings, planning_contract_context],
-            limit_bytes=_PLANNER_LIMIT_BYTES,
+            limit_bytes=planner_limit_bytes,
             stage_mode="exact_pre_execution",
         ),
         "coder": _prompt_record(
@@ -645,7 +661,7 @@ def render_task_prompt_audit(row: Mapping[str, Any]) -> dict[str, object]:
         ),
     }
     planner_record = records["planner"]
-    if int(planner_metrics["total_bytes"]) > _PLANNER_LIMIT_BYTES:
+    if int(planner_metrics["total_bytes"]) > planner_limit_bytes:
         planner_record["within_budget"] = False
     planner_record["production_request_metrics"] = planner_metrics
     planner_record["planning_contract_bytes"] = len(

@@ -20,6 +20,7 @@ from easyicu.research_agent.providers.structured_retry import (
     StructuredResponseFailure,
     annotate_with_attempt_history,
     call_llm_with_structured_retry,
+    safe_structured_attempt_metadata,
     summarise_attempt_history,
 )
 
@@ -251,6 +252,218 @@ def test_no_history_adds_no_note() -> None:
     annotate_with_attempt_history(exc, [], role="planner")
 
     assert not getattr(exc, "__notes__", [])
+
+
+def test_safe_attempt_projection_excludes_response_message_and_extra_usage() -> None:
+    secret = "sk-test-secret-response"
+    projected = safe_structured_attempt_metadata(
+        [
+            StructuredAttempt(
+                attempt=0,
+                raw_head=f'{{"prompt": "{secret}"}}',
+                raw_chars=31,
+                error_class="ValidationError",
+                error_message=f"input contained {secret}",
+                finish_reason="stop",
+                usage_summary={
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "total_tokens": 14,
+                    "actual_model": secret,
+                },
+                transport_attempts=2,
+            )
+        ]
+    )
+
+    assert projected == [
+        {
+            "attempt": 1,
+            "raw_chars": 31,
+            "error_class": "validation",
+            "finish_reason": "stop",
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 4,
+                "total_tokens": 14,
+            },
+            "transport_attempts": 2,
+        }
+    ]
+    assert secret not in str(projected)
+
+
+def test_structured_failure_captures_safe_provider_metadata_per_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        last_finish_reason = "length"
+        last_usage = {
+            "prompt_tokens": 20,
+            "completion_tokens": 8,
+            "total_tokens": 28,
+            "actual_model": "provider-private-routing-name",
+        }
+        last_transport_attempts = 2
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.providers.structured_retry.authorized_complete",
+        lambda *_args, **_kwargs: "not json",
+    )
+
+    with pytest.raises(StructuredResponseFailure) as raised:
+        call_llm_with_structured_retry(
+            _Client(),
+            [],
+            parser=lambda _raw: (_ for _ in ()).throw(ValueError("bad contract")),
+            role="planner",
+            max_retries=0,
+        )
+
+    assert safe_structured_attempt_metadata(raised.value.attempts) == [
+        {
+            "attempt": 1,
+            "raw_chars": 8,
+            "error_class": "validation",
+            "finish_reason": "length",
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 8,
+                "total_tokens": 28,
+            },
+            "transport_attempts": 2,
+            "violation_sha256": (
+                "b7b6859180b747b49401775dda829994d1f7c8ad3044110b38c51b503105785b"
+            ),
+        }
+    ]
+
+
+def test_validation_projection_records_only_closed_stage_field_paths_and_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "sk-private-field-and-message"
+
+    class _ValidationFailure(ValueError):
+        easyicu_structured_validation_stage = "schema_validation"
+
+        def errors(self):
+            return [
+                {
+                    "loc": ("steps", 2, "figure_panels", 0, "chart_type"),
+                    "type": "literal_error",
+                    "msg": secret,
+                    "input": secret,
+                },
+                {
+                    "loc": (secret,),
+                    "type": secret,
+                    "msg": secret,
+                },
+            ]
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.providers.structured_retry.authorized_complete",
+        lambda *_args, **_kwargs: '{"plan": "private"}',
+    )
+
+    with pytest.raises(StructuredResponseFailure) as raised:
+        call_llm_with_structured_retry(
+            object(),
+            [],
+            parser=lambda _raw: (_ for _ in ()).throw(_ValidationFailure(secret)),
+            role="planner",
+            max_retries=0,
+        )
+
+    projected = safe_structured_attempt_metadata(raised.value.attempts)
+    assert projected[0]["validation_stage"] == "schema_validation"
+    assert projected[0]["validation_issues"] == [
+        {
+            "location": ["steps", 2, "figure_panels", 0, "chart_type"],
+            "issue_type": "literal_error",
+        },
+        {"location": ["<other>"], "issue_type": "other"},
+    ]
+    assert len(projected[0]["violation_sha256"]) == 64
+    assert secret not in str(projected)
+
+
+def test_validation_stage_is_inferred_from_the_contract_owner_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def validate_literature_citation_bindings() -> None:
+        raise ValueError("private citation payload")
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.providers.structured_retry.authorized_complete",
+        lambda *_args, **_kwargs: "{}",
+    )
+
+    with pytest.raises(StructuredResponseFailure) as raised:
+        call_llm_with_structured_retry(
+            object(),
+            [],
+            parser=lambda _raw: validate_literature_citation_bindings(),
+            role="planner",
+            max_retries=0,
+        )
+
+    projected = safe_structured_attempt_metadata(raised.value.attempts)
+    assert projected[0]["validation_stage"] == "literature_authority"
+    assert "private citation payload" not in str(projected)
+
+
+def test_transport_failure_attaches_response_free_terminal_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("provider echoed sk-private-key")
+    failure.easyicu_transport_attempts = 2
+
+    def _raise(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.providers.structured_retry.authorized_complete",
+        _raise,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        call_llm_with_structured_retry(
+            object(), [], parser=lambda raw: raw, role="planner", max_retries=4
+        )
+
+    assert raised.value is failure
+    assert raised.value.easyicu_structured_attempt_metadata == [
+        {
+            "attempt": 1,
+            "raw_chars": 0,
+            "error_class": "error",
+            "finish_reason": None,
+            "usage": {},
+            "transport_attempts": 2,
+        }
+    ]
+    assert "sk-private-key" not in str(raised.value.easyicu_structured_attempt_metadata)
+
+
+def test_safe_attempt_projection_closes_secret_shaped_categories() -> None:
+    projected = safe_structured_attempt_metadata(
+        [
+            StructuredAttempt(
+                attempt=0,
+                raw_head="",
+                raw_chars=0,
+                error_class="sk-secret-shaped-error-class",
+                error_message=None,
+                finish_reason="sk-secret-shaped-finish-reason",
+            )
+        ]
+    )
+
+    assert projected[0]["error_class"] == "error"
+    assert projected[0]["finish_reason"] == "other"
+    assert "sk-secret" not in str(projected)
 
 
 #: The exact ValidationError rendering that killed ``e3_kdigo_gradient`` at

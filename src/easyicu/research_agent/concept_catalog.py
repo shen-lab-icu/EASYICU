@@ -438,6 +438,9 @@ def _is_binary_outcome(concept: Mapping) -> bool:
     eligibility variables, but should not automatically pass the idea-mining
     outcome gate.
     """
+    outcome_type = str(concept.get("outcome_type") or "").strip().lower()
+    if outcome_type:
+        return outcome_type == "binary"
     if any(k in concept for k in ("unit", "min", "max")):
         return False  # numeric / continuous
     desc = str(concept.get("description", "")).lower()
@@ -460,6 +463,9 @@ def _is_non_binary_determinable(concept: Mapping) -> bool:
     gated out as ``unknown``. Treatment/exposure concepts stay excluded: using
     one as an outcome is genuinely ambiguous and the conservative block is kept.
     """
+    outcome_type = str(concept.get("outcome_type") or "").strip().lower()
+    if outcome_type:
+        return outcome_type in {"continuous", "ordinal", "time_to_event"}
     desc = str(concept.get("description", "")).lower()
     if any(word in desc for word in ("administration", "infusion", "dose", " rate")):
         return False  # treatment/exposure concept; keep the conservative block

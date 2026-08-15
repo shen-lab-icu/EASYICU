@@ -5,14 +5,24 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Literal, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+
+from easyicu.extensions.contracts import (
+    EMPTY_EXTENSION_ACTIVATION,
+    ExtensionActivationSnapshot,
+)
+
+if TYPE_CHECKING:
+    from easyicu.extensions import ExtensionRegistry
+    from .workspace import ProjectWorkspace
 
 PROTOCOL_VERSION = "easyicu.pi-copilot/1"
 SESSION_SCHEMA_VERSION = "easyicu.pi-copilot-session/1"
 MAX_MESSAGE_CHARS = 12_000
 AgentMode = Literal["research", "workspace"]
+TURN_CAPABILITIES = frozenset({"workspace_write"})
 
 
 def utc_now() -> str:
@@ -63,6 +73,20 @@ class AuthorityBinding(BaseModel):
     active_job_id: Optional[str] = None
 
 
+class PiProjectBindingHandoffReceipt(BaseModel):
+    """Path-free Agent/StudyContext handoff into one Pi research project."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.pi-project-binding-handoff/1"] = (
+        "easyicu.pi-project-binding-handoff/1"
+    )
+    project_id: str = Field(min_length=1, max_length=160)
+    project_title: str = Field(min_length=1, max_length=160)
+    study_context_id: str = Field(min_length=1, max_length=160)
+    study_context_revision: int = Field(ge=0)
+
+
 class PiSessionRecord(BaseModel):
     """Bounded EasyICU metadata; Pi's JSONL remains separate UX state."""
 
@@ -86,6 +110,12 @@ class PiSessionRecord(BaseModel):
     language: Literal["en", "zh"] = "en"
     thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
     external_llm_opt_in: bool = False
+    # Installed extensions are frozen when the Pi AgentSession is created.
+    # Later registry edits affect only new sessions; old sessions retain this
+    # path-free descriptor and load exact Skill objects by content digest.
+    extension_activation: ExtensionActivationSnapshot = Field(
+        default_factory=lambda: EMPTY_EXTENSION_ACTIVATION
+    )
     binding: AuthorityBinding = Field(default_factory=AuthorityBinding)
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
@@ -93,6 +123,14 @@ class PiSessionRecord(BaseModel):
         default=None,
         validation_alias=AliasChoices("last_message_job_id", "last_job_id"),
     )
+    # Process reconciliation and retention metadata only. Browser-safe lifecycle
+    # replay lives in PiConversationReplayStore, outside this bounded index.
+    active_message_job_id: Optional[str] = None
+    last_turn_status: Optional[
+        Literal["running", "done", "failed", "cancelled", "interrupted"]
+    ] = None
+    last_turn_allowed_actions: list[str] = Field(default_factory=list, max_length=16)
+    pinned_for_presentation: bool = False
 
 
 class PiToolResult(BaseModel):
@@ -108,24 +146,53 @@ class PiToolResult(BaseModel):
     authority: Dict[str, Any] = Field(default_factory=dict)
 
 
+class WorkspaceMutationReceipt(BaseModel):
+    """Host-issued shared write/edit quota receipt for one model turn."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.workspace-mutation-receipt/1"] = (
+        "easyicu.workspace-mutation-receipt/1"
+    )
+    tool: Literal["write", "edit"]
+    ordinal: int = Field(ge=1)
+    limit: int = Field(ge=1)
+
+
+class WorkspaceMutationLimitError(RuntimeError):
+    pass
+
+
 class HostTurnGrant:
-    """Atomically consumable one-use action grants held only by the host."""
+    """Host-held one-use actions and explicitly reusable turn capabilities."""
 
     def __init__(self, remaining: Optional[Dict[str, int]] = None) -> None:
-        self._remaining = {
+        requested = {
             str(action): max(0, int(count))
             for action, count in dict(remaining or {}).items()
         }
-        self._provided = frozenset(self._remaining)
+        self._capabilities = frozenset(requested).intersection(TURN_CAPABILITIES)
+        self._remaining = {
+            action: count
+            for action, count in requested.items()
+            if action not in self._capabilities
+        }
+        self._provided = frozenset(requested)
+        self._workspace_mutations = 0
+        self._workspace_mutation_limit = 8
         self._lock = threading.Lock()
 
     @classmethod
     def from_actions(cls, actions: Iterable[str]) -> "HostTurnGrant":
         return cls({str(action): 1 for action in actions})
 
-    def consume(self, action: str) -> Literal["granted", "consumed", "missing"]:
+    def consume_once(
+        self, action: str
+    ) -> Literal["granted", "consumed", "missing", "capability"]:
         name = str(action)
         with self._lock:
+            if name in self._capabilities:
+                return "capability"
             if name not in self._provided:
                 return "missing"
             if self._remaining.get(name, 0) <= 0:
@@ -133,18 +200,48 @@ class HostTurnGrant:
             self._remaining[name] -= 1
             return "granted"
 
+    def has_capability(self, action: str) -> bool:
+        """Return whether a reusable capability was granted for this turn."""
+
+        with self._lock:
+            return str(action) in self._capabilities
+
+    def reserve_workspace_mutation(
+        self, tool: Literal["write", "edit"]
+    ) -> WorkspaceMutationReceipt:
+        """Reserve from one shared write/edit ceiling before filesystem access."""
+
+        with self._lock:
+            if "workspace_write" not in self._capabilities:
+                raise WorkspaceMutationLimitError("workspace_write_not_granted")
+            if self._workspace_mutations >= self._workspace_mutation_limit:
+                raise WorkspaceMutationLimitError("workspace_mutation_limit_reached")
+            self._workspace_mutations += 1
+            return WorkspaceMutationReceipt(
+                tool=tool,
+                ordinal=self._workspace_mutations,
+                limit=self._workspace_mutation_limit,
+            )
+
+    def was_provided(self, action: str) -> bool:
+        """Return whether the user supplied this action for the turn.
+
+        Unlike ``available_actions``, this remains true after a one-use grant
+        has been consumed.  It is used only by the host to carry the user's
+        explicit public-literature-search authorization into a subsequently
+        submitted full pipeline; it is never exposed to the model.
+        """
+
+        with self._lock:
+            return str(action) in self._provided
+
     @property
     def available_actions(self) -> frozenset[str]:
         with self._lock:
-            return frozenset(
+            one_use = frozenset(
                 action for action, count in self._remaining.items() if count > 0
             )
-
-    @property
-    def provided_actions(self) -> frozenset[str]:
-        """Actions explicitly authorized for this turn, consumed or not."""
-
-        return self._provided
+            return one_use | self._capabilities
 
 
 AuthorityValidator = Callable[[AuthorityBinding], Dict[str, Any]]
@@ -161,11 +258,17 @@ class ToolExecutionContext:
         grant: Optional[HostTurnGrant] = None,
         authority_validator: Optional[AuthorityValidator] = None,
         workspace_root: Optional[Path] = None,
+        workspace: Optional["ProjectWorkspace"] = None,
+        extension_registry: Optional["ExtensionRegistry"] = None,
     ) -> None:
         self.session = session
         self.grant = grant or HostTurnGrant.from_actions(allowed_actions)
         self.authority_validator = authority_validator
-        self.workspace_root = Path(workspace_root).resolve() if workspace_root else None
+        self.workspace_root = (
+            Path(workspace_root).expanduser().absolute() if workspace_root else None
+        )
+        self.workspace = workspace
+        self.extension_registry = extension_registry
         self._authority_invalidated_reason: Optional[str] = None
         self._lock = threading.Lock()
 
@@ -206,6 +309,7 @@ __all__ = [
     "MAX_MESSAGE_CHARS",
     "PROTOCOL_VERSION",
     "PiCopilotError",
+    "PiProjectBindingHandoffReceipt",
     "PiSessionRecord",
     "PiToolResult",
     "SESSION_SCHEMA_VERSION",

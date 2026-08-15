@@ -13,6 +13,25 @@ from easyicu.webserver.routes.request_parsing import body_bool
 router = APIRouter()
 
 
+def _product_context(context: Dict[str, Any] | None) -> bool:
+    """Return whether a context belongs on ordinary product project rails.
+
+    Evaluation contexts remain addressable by exact id for reproducibility and
+    run provenance.  Only the aggregate product list filters them; no evidence
+    or context record is deleted.
+    """
+    confirmations = (
+        context.get("confirmations") if isinstance(context, dict) else None
+    )
+    if not isinstance(confirmations, dict):
+        return True
+    return not (
+        confirmations.get("development_only") is True
+        or confirmations.get("internal_evaluation") is True
+        or confirmations.get("not_for_manuscript") is True
+    )
+
+
 def _reconcile_active_job(context: Dict[str, Any] | None) -> Dict[str, Any] | None:
     if not context or not context.get("active_job_id"):
         return context
@@ -69,7 +88,9 @@ def get_study_contexts() -> dict:
     try:
         result = context_store.list_contexts()
         result["contexts"] = [
-            _reconcile_active_job(context) for context in result["contexts"]
+            _reconcile_active_job(context)
+            for context in result["contexts"]
+            if _product_context(context)
         ]
     except context_store.StudyContextError as exc:
         _raise_context_error(exc)

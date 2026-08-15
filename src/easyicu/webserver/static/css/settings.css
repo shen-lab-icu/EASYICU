@@ -251,3 +251,79 @@
 /* Was injected from screens-settings.js alongside the shared picker CSS; it
    is not a picker rule and belongs to this route's own owner file. */
 .setting-input{height:34px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink-1);padding:0 10px;text-align:right;max-width:140px;}
+
+/* User-installed Skill/MCP manager; owned by screens-settings-extensions.js. */
+.settings-ext-manager{
+  margin-top:14px;
+  padding-top:14px;
+  border-top:1px solid var(--hair);
+}
+.settings-ext-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:10px;
+}
+.settings-ext-head>div{ min-width:0; }
+.settings-ext-head b{ display:block;color:var(--ink);font-size:13px; }
+.settings-ext-head span:not(.pill){ display:block;margin-top:4px;color:var(--ink-3);font-size:11.5px;line-height:1.5; }
+.settings-ext-list{ display:grid;gap:8px; }
+.settings-ext-card{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  padding:11px 12px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface-2);
+}
+.settings-ext-card.on{
+  border-color:color-mix(in srgb,var(--ok) 28%,var(--hair));
+  background:color-mix(in srgb,var(--ok-soft) 34%,var(--surface));
+}
+.settings-ext-card-main{ min-width:0; }
+.settings-ext-title{ display:flex;align-items:center;gap:7px; }
+.settings-ext-title b{ color:var(--ink);font-size:12.5px;overflow-wrap:anywhere; }
+.settings-ext-kind{
+  padding:2px 5px;border:1px solid var(--hair-2);border-radius:4px;
+  color:var(--ink-4);font:9px var(--font-mono);letter-spacing:.08em;
+}
+.settings-ext-card p{ margin:4px 0 0;color:var(--ink-3);font-size:11.5px;line-height:1.45; }
+.settings-ext-url{ overflow-wrap:anywhere; }
+.settings-ext-meta{ display:flex;flex-wrap:wrap;gap:5px 12px;margin-top:7px;color:var(--ink-4);font-size:10.5px; }
+.settings-ext-actions{ flex:0 0 auto;display:flex;gap:6px; }
+.settings-ext-empty,.settings-ext-status{
+  padding:12px;border:1px dashed var(--hair-2);border-radius:var(--r-2);
+  color:var(--ink-4);font-size:11.5px;text-align:center;
+}
+.settings-ext-status.error{ color:var(--danger);border-style:solid;border-color:color-mix(in srgb,var(--danger) 32%,var(--hair)); }
+.settings-ext-add{
+  margin-top:10px;border:1px solid var(--hair);border-radius:var(--r-2);background:var(--surface);
+}
+.settings-ext-add>summary{ cursor:pointer;padding:10px 12px;color:var(--ink-2);font-size:12px;font-weight:650; }
+.settings-ext-add[open]>summary{ border-bottom:1px solid var(--hair); }
+.settings-ext-form{ display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:12px; }
+.settings-ext-form label>span,.settings-ext-stages legend{ display:block;margin-bottom:5px;color:var(--ink-3);font-size:11px; }
+.settings-ext-form input[type="text"],
+.settings-ext-form input:not([type]),
+.settings-ext-form textarea{
+  width:100%;border:1px solid var(--hair-2);border-radius:var(--r-2);background:var(--surface-2);
+  color:var(--ink);padding:8px 9px;font:12px/1.45 var(--font-mono);resize:vertical;
+}
+.settings-ext-form input:not([type]){ height:36px;resize:none; }
+.settings-ext-form .wide,.settings-ext-test{ grid-column:1 / -1; }
+.settings-ext-stages{ display:flex;align-items:center;gap:12px;border:0;padding:0;margin:0; }
+.settings-ext-stages legend{ width:100%; }
+.settings-ext-stages label,.settings-ext-check{ color:var(--ink-2);font-size:11.5px; }
+.settings-ext-form-actions{ display:flex;justify-content:flex-end;gap:7px; }
+.settings-ext-test{ display:flex;flex-direction:column;gap:3px;padding:9px;border-radius:var(--r-2);background:var(--surface-2);font-size:11px; }
+.settings-ext-test.ok{ color:var(--ok);background:var(--ok-soft); }
+.settings-ext-test.error{ color:var(--danger); }
+@media (max-width:760px){
+  .settings-ext-card,.settings-ext-head{ flex-direction:column; }
+  .settings-ext-actions{ width:100%; }
+  .settings-ext-form{ grid-template-columns:1fr; }
+  .settings-ext-form .wide,.settings-ext-test{ grid-column:auto; }
+}

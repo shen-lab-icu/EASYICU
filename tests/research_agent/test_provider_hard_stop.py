@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -67,6 +68,46 @@ def _pipeline_limit_options(limits):
     }
 
 
+def _reserve_from_independent_process(
+    path,
+    limits,
+    task_id,
+    barrier,
+    results,
+):
+    from pathlib import Path
+
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopExceeded,
+        ProviderHardStopLedger,
+    )
+
+    try:
+        ledger = ProviderHardStopLedger(
+            path=Path(path),
+            task_ids=("E1", "E2"),
+            limits=limits,
+            batch_id="test-batch",
+            resume_existing=True,
+        )
+        barrier.wait(timeout=10)
+        ledger.start_task(task_id)
+        barrier.wait(timeout=10)
+        attempt_id = ledger.reserve_transport_attempt(
+            task_id=task_id,
+            role="planner",
+            model="test-model",
+            messages=[SimpleNamespace(content=task_id)],
+            max_tokens=8,
+            prior_attempt_id=None,
+        )
+        results.put((task_id, "authorized", attempt_id))
+    except ProviderHardStopExceeded as exc:
+        results.put((task_id, "blocked", exc.code))
+    except BaseException as exc:  # pragma: no cover - reported to the parent
+        results.put((task_id, "error", f"{type(exc).__name__}: {exc}"))
+
+
 def test_pipeline_requires_matching_declarative_limits_and_live_service(
     tmp_path, ra
 ):
@@ -81,15 +122,19 @@ def test_pipeline_requires_matching_declarative_limits_and_live_service(
         **_pipeline_limit_options(limits),
     )
     explicit_auditor = ScriptedMockLLMClient(["{}"])
+    explicit_vlm = ScriptedMockLLMClient(["{}"])
     pipeline = ra.ResearchAgentPipeline.from_config(
         config,
         services=PipelineServices(
             llm=ScriptedMockLLMClient(["{}"]),
+            vlm_client=explicit_vlm,
             llm_concept_auditor_client=explicit_auditor,
             provider_hard_stop=task,
         ),
     )
     assert isinstance(pipeline._llm_concept_auditor_client, HardStopClient)
+    assert isinstance(pipeline._vlm_client, HardStopClient)
+    assert pipeline._vlm_client._inner is explicit_vlm
 
     with pytest.raises(ValueError, match="supplied together"):
         ra.ResearchAgentPipeline.from_config(
@@ -128,6 +173,72 @@ def test_legacy_reviewed_client_is_reserved_before_invocation(tmp_path):
     assert call["state"] == "completed_usage_unreported"
     assert call["role"] == "planner"
     assert "hello" not in json.dumps(payload)
+
+
+def test_metadata_only_usage_cannot_release_the_transport_reservation(tmp_path):
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+
+    class MetadataOnlyUsageClient:
+        name = "metadata-only"
+
+        def complete_with_usage(self, messages, **kwargs):
+            return "ok", {"actual_model": "provider/model"}
+
+    ledger = _ledger(tmp_path)
+    task = ledger.start_task("E1")
+    response = HardStopClient(
+        MetadataOnlyUsageClient(),
+        role="planner",
+        task=task,
+    ).complete(_message(), max_tokens=32)
+
+    assert response == "ok"
+    call = ledger.snapshot()["tasks"][0]["calls"][0]
+    assert call["state"] == "completed_usage_unreported"
+    assert call["accounted_tokens"] > 0
+    assert call["accounted_estimated_cost_usd"] > 0
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_tokens": 4},
+        {"completion_tokens": 4},
+        {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        {"prompt_tokens": "invalid", "completion_tokens": 4},
+        {"prompt_tokens": True, "completion_tokens": True},
+        {"prompt_tokens": 4.9, "completion_tokens": 4},
+        {"prompt_tokens": 4, "completion_tokens": 4, "total_tokens": 2},
+        {"prompt_tokens": 100, "total_tokens": 1},
+        {"completion_tokens": 100, "total_tokens": 1},
+        {"prompt_tokens": 6, "completion_tokens": 6, "total_tokens": 10},
+    ],
+)
+def test_partial_or_zero_usage_cannot_release_the_transport_reservation(
+    tmp_path,
+    usage,
+):
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+
+    class PartialUsageClient:
+        name = "partial-usage"
+
+        def complete_with_usage(self, messages, **kwargs):
+            return "ok", usage
+
+    ledger = _ledger(tmp_path)
+    task = ledger.start_task("E1")
+    response = HardStopClient(
+        PartialUsageClient(),
+        role="planner",
+        task=task,
+    ).complete(_message(), max_tokens=32)
+
+    assert response == "ok"
+    call = ledger.snapshot()["tasks"][0]["calls"][0]
+    assert call["state"] == "completed_usage_unreported"
+    assert call["accounted_tokens"] > 0
+    assert call["accounted_estimated_cost_usd"] > 0
 
 
 def test_explicit_resume_reopens_completed_task_without_resetting_limits(
@@ -259,6 +370,136 @@ def test_batch_attempt_limit_blocks_next_task_before_client_call(tmp_path):
         second.complete(_message(), max_tokens=8)
 
     assert second_inner.calls == []
+
+
+def test_one_attempt_batch_serializes_independently_loaded_processes(tmp_path):
+    import multiprocessing
+
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        load_provider_hard_stop_ledger,
+    )
+
+    limits = _limits(
+        max_provider_attempts_per_run=1,
+        max_provider_attempts_per_batch=1,
+    )
+    ledger = _ledger(tmp_path, task_ids=("E1", "E2"), limits=limits)
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_reserve_from_independent_process,
+            args=(str(ledger.path), limits, task_id, barrier, results),
+        )
+        for task_id in ("E1", "E2")
+    ]
+
+    for process in processes:
+        process.start()
+    outcomes = [results.get(timeout=20) for _ in processes]
+    for process in processes:
+        process.join(timeout=20)
+        assert process.exitcode == 0
+    results.close()
+    results.join_thread()
+
+    assert sorted(outcome[1] for outcome in outcomes) == ["authorized", "blocked"]
+    assert [outcome[2] for outcome in outcomes if outcome[1] == "blocked"] == [
+        "BATCH_PROVIDER_ATTEMPT_LIMIT"
+    ]
+    payload = load_provider_hard_stop_ledger(ledger.path)
+    tasks = {task["task_id"]: task for task in payload["tasks"]}
+    assert {task_id: task["status"] for task_id, task in tasks.items()} == {
+        "E1": "running",
+        "E2": "running",
+    }
+    assert all(task["started_at"] is not None for task in tasks.values())
+    assert sum(len(task["calls"]) for task in tasks.values()) == 1
+    assert payload["totals"]["provider_attempts"] == 1
+
+
+def test_windows_sidecar_locks_before_initializing_first_byte(
+    tmp_path, monkeypatch
+) -> None:
+    from easyicu.research_agent.authority import provider_hard_stop as owner
+
+    events: list[str] = []
+
+    class _Msvcrt:
+        LK_LOCK = 1
+        LK_UNLCK = 2
+
+        @staticmethod
+        def locking(descriptor, operation, _length):
+            if operation == _Msvcrt.LK_LOCK:
+                assert owner.os.fstat(descriptor).st_size == 0
+                events.append("lock")
+            else:
+                events.append("unlock")
+
+    monkeypatch.setattr(owner, "fcntl", None)
+    monkeypatch.setattr(owner, "msvcrt", _Msvcrt)
+    ledger_path = (tmp_path / "windows-first-create.json").resolve()
+
+    with owner._exclusive_ledger_file_lock(ledger_path):
+        lock_path = ledger_path.parent / f".{ledger_path.name}.lock"
+        assert lock_path.read_bytes() == b"\0"
+        assert events == ["lock"]
+
+    assert events == ["lock", "unlock"]
+
+
+def test_pending_review_reconciles_a_post_resume_crash_to_the_original_pause(
+    tmp_path, monkeypatch
+):
+    from easyicu.research_agent.authority import provider_hard_stop as owner
+
+    wall = [datetime(2026, 8, 14, tzinfo=timezone.utc)]
+    monotonic = [100.0]
+
+    class _ClockDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = wall[0]
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(owner, "datetime", _ClockDateTime)
+    monkeypatch.setattr(owner.time, "monotonic", lambda: monotonic[0])
+    ledger = _ledger(tmp_path)
+    task = ledger.start_task("E1")
+    wall[0] += timedelta(seconds=5)
+    monotonic[0] += 5.0
+    checkpoint_at = wall[0].isoformat()
+    wall[0] += timedelta(seconds=2)
+    monotonic[0] += 2.0
+    task.pause()
+
+    assert ledger.snapshot()["tasks"][0]["elapsed_seconds"] == pytest.approx(7.0)
+
+    task.reconcile_review_pause(paused_at=checkpoint_at)
+    reconciled_pause = ledger.snapshot()["tasks"][0]
+    paused_elapsed = reconciled_pause["elapsed_seconds"]
+    assert paused_elapsed == pytest.approx(5.0)
+    assert reconciled_pause["paused_at"] == checkpoint_at
+    assert reconciled_pause["review_checkpoint_at"] == checkpoint_at
+    task.resume()
+    assert ledger.snapshot()["tasks"][0]["status"] == "running"
+
+    wrong_checkpoint = (wall[0] + timedelta(seconds=1)).isoformat()
+    with pytest.raises(
+        owner.ProviderHardStopLedgerError,
+        match="review checkpoint changed",
+    ):
+        task.reconcile_review_pause(paused_at=wrong_checkpoint)
+    assert ledger.snapshot()["tasks"][0]["status"] == "running"
+
+    task.reconcile_review_pause(paused_at=checkpoint_at)
+
+    recovered = ledger.snapshot()["tasks"][0]
+    assert recovered["status"] == "paused"
+    assert recovered["review_checkpoint_at"] == checkpoint_at
+    assert recovered["elapsed_seconds"] == paused_elapsed
 
 
 @pytest.mark.parametrize(
@@ -618,6 +859,336 @@ def test_provider_request_timeout_is_capped_by_task_wall_clock(
 
     assert client.complete(_message(), max_tokens=8) == "ok"
     assert 0.0 < captured["timeout"] <= 60.0
+
+
+def test_each_web_500_retry_is_charged_to_provider_hard_stop(tmp_path, monkeypatch):
+    from easyicu.research_agent.providers.factory import build_provider_client
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    class _Completions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                failure = RuntimeError("provider internal failure")
+                failure.status_code = 500
+                raise failure
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="ok"),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            )
+
+    completions = _Completions()
+    transport = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+    inner = build_provider_client(
+        provider="openai",
+        model="gpt-5.6-luna",
+        request_timeout=30.0,
+        title="Web retry hard-stop contract",
+        client_cls=OpenAIClient,
+        environment={"OPENAI_BASE_URL": "http://127.0.0.1:8317/v1"},
+        max_retries=1,
+        retryable_http_status_codes=(500, 502, 503, 504),
+        stream_enabled=False,
+        allow_environment_overrides=False,
+    )
+    ledger = _ledger(tmp_path)
+    client = HardStopClient(inner, role="planner", task=ledger.start_task("E1"))
+
+    assert client.complete(_message(), max_tokens=8) == "ok"
+    assert completions.calls == 2
+    assert ledger.snapshot()["totals"]["provider_attempts"] == 2
+
+
+def test_vision_transport_is_reserved_settled_and_stopped_before_overrun(
+    tmp_path, monkeypatch
+):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopExceeded,
+    )
+    from easyicu.research_agent.providers.factory import build_provider_client
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    class _Completions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **_kwargs):
+            self.calls += 1
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"findings": []}'),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=20,
+                    completion_tokens=4,
+                    total_tokens=24,
+                ),
+            )
+
+    completions = _Completions()
+    transport = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
+    inner = build_provider_client(
+        provider="openai",
+        model="gpt-4o",
+        request_timeout=30.0,
+        title="vision hard-stop contract",
+        client_cls=OpenAIClient,
+        environment={"OPENAI_BASE_URL": "http://127.0.0.1:8317/v1"},
+        max_retries=0,
+        stream_enabled=False,
+        allow_environment_overrides=False,
+    )
+    ledger = _ledger(
+        tmp_path,
+        limits=_limits(
+            max_provider_attempts_per_run=1,
+            max_provider_attempts_per_batch=1,
+        ),
+    )
+    client = HardStopClient(inner, role="visual_qa", task=ledger.start_task("E1"))
+    image_path = tmp_path / "figure.png"
+    image_path.write_bytes(b"not-real-image-bytes")
+
+    assert (
+        client.complete_with_images(
+            prompt="Review this figure.",
+            image_paths=[image_path],
+            max_tokens=64,
+        )
+        == '{"findings": []}'
+    )
+    first = ledger.snapshot()
+    call = first["tasks"][0]["calls"][0]
+    assert completions.calls == 1
+    assert first["totals"]["provider_attempts"] == 1
+    assert call["state"] == "completed"
+    assert call["reported_total_tokens"] == 24
+    assert call["prompt_payload_bytes"] == len("Review this figure.".encode())
+    assert str(image_path) not in json.dumps(first)
+
+    with pytest.raises(ProviderHardStopExceeded, match="RUN_PROVIDER_ATTEMPT_LIMIT"):
+        client.complete_with_images(
+            prompt="Do not send this request.",
+            image_paths=[image_path],
+            max_tokens=64,
+        )
+    assert completions.calls == 1
+
+
+def test_hard_stop_wrapper_does_not_promote_a_text_client_to_vision(
+    tmp_path,
+):
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from easyicu.research_agent.providers.llm import llm_supports_vision
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
+    client = HardStopClient(
+        ScriptedMockLLMClient(['{"findings": []}']),
+        role="visual_qa",
+        task=_ledger(tmp_path).start_task("E1"),
+    )
+
+    assert llm_supports_vision(client) is False
+
+
+def test_human_review_pause_does_not_consume_active_execution_time(
+    tmp_path, monkeypatch
+):
+    from easyicu.research_agent.authority import provider_hard_stop as owner
+
+    clock = [100.0]
+    monkeypatch.setattr(owner.time, "monotonic", lambda: clock[0])
+    ledger = _ledger(
+        tmp_path,
+        limits=_limits(max_wall_clock_seconds_per_task=60.0),
+    )
+    task = ledger.start_task("E1")
+    clock[0] = 105.0
+    task.pause()
+    paused = ledger.snapshot()["tasks"][0]
+    assert paused["status"] == "paused"
+    assert paused["elapsed_seconds"] == pytest.approx(5.0)
+    assert ledger.snapshot()["terminal"] is False
+
+    # A long human wait changes wall time but is not active Provider execution.
+    clock[0] = 10_005.0
+    task.resume()
+    clock[0] = 10_006.0
+    assert task.assert_active() == pytest.approx(54.0)
+    task.finish(error="test_finished")
+    final = ledger.snapshot()["tasks"][0]
+    assert final["status"] == "failed"
+    assert final["elapsed_seconds"] == pytest.approx(6.0)
+
+
+def test_restarted_host_attaches_to_paused_task_without_resetting_budget(
+    tmp_path,
+):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLedger,
+    )
+
+    path = tmp_path / "restarted-ledger.json"
+    limits = _limits(max_wall_clock_seconds_per_task=60.0)
+    first = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+    )
+    first.start_task("task-a").pause()
+
+    reopened = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+        resume_existing=True,
+    )
+    attached = reopened.start_task("task-a")
+    assert reopened.snapshot()["tasks"][0]["status"] == "paused"
+    attached.resume()
+    assert attached.assert_active() > 0
+
+
+def test_restart_after_pause_resume_uses_persisted_active_wall_clock_anchor(
+    tmp_path,
+    monkeypatch,
+):
+    from easyicu.research_agent.authority import provider_hard_stop as owner
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLedger,
+    )
+
+    wall = [datetime(2026, 8, 14, tzinfo=timezone.utc)]
+    monotonic = [100.0]
+
+    class _ClockDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = wall[0]
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(owner, "datetime", _ClockDateTime)
+    monkeypatch.setattr(owner.time, "monotonic", lambda: monotonic[0])
+    path = tmp_path / "resume-anchor-ledger.json"
+    limits = _limits(max_wall_clock_seconds_per_task=60.0)
+    first = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+    )
+    task = first.start_task("task-a")
+    monotonic[0] += 5.0
+    wall[0] += timedelta(seconds=5)
+    task.pause()
+
+    monotonic[0] += 10_000.0
+    wall[0] += timedelta(seconds=10_000)
+    task.resume()
+    resumed_row = first.snapshot()["tasks"][0]
+    assert resumed_row["elapsed_seconds"] == pytest.approx(5.0)
+    assert resumed_row["active_started_at"] is not None
+
+    monotonic[0] += 2.0
+    wall[0] += timedelta(seconds=2)
+    reopened = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+        resume_existing=True,
+    )
+
+    attached = reopened.start_task("task-a")
+    assert attached.assert_active() == pytest.approx(53.0)
+
+
+def test_restart_reconciles_checkpoint_pause_without_charging_downtime(
+    tmp_path,
+    monkeypatch,
+):
+    from easyicu.research_agent.authority import provider_hard_stop as owner
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLedger,
+    )
+
+    wall = [datetime(2026, 8, 14, tzinfo=timezone.utc)]
+    monotonic = [100.0]
+
+    class _ClockDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = wall[0]
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(owner, "datetime", _ClockDateTime)
+    monkeypatch.setattr(owner.time, "monotonic", lambda: monotonic[0])
+    path = tmp_path / "crash-window-ledger.json"
+    limits = _limits(max_wall_clock_seconds_per_task=60.0)
+    first = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+    )
+    first.start_task("task-a")
+    monotonic[0] += 5.0
+    wall[0] += timedelta(seconds=5)
+    checkpoint_created_at = wall[0].isoformat()
+
+    # The checkpoint reached disk, but the process died before task.pause().
+    monotonic[0] += 10_000.0
+    wall[0] += timedelta(seconds=10_000)
+    reopened = ProviderHardStopLedger(
+        path=path,
+        task_ids=("task-a",),
+        limits=limits,
+        batch_id="task-a",
+        declaration_sha256="a" * 64,
+        resume_existing=True,
+    )
+    reopened.reconcile_review_pause(
+        "task-a",
+        paused_at=checkpoint_created_at,
+    )
+
+    row = reopened.snapshot()["tasks"][0]
+    assert row["status"] == "paused"
+    assert row["elapsed_seconds"] == pytest.approx(5.0)
+    task = reopened.start_task("task-a")
+    task.resume()
+    assert task.assert_active() == pytest.approx(55.0)
 
 
 def test_wall_clock_exhaustion_is_terminal_and_persisted(tmp_path):

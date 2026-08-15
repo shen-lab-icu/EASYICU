@@ -26,7 +26,7 @@ from easyicu.concept.catalog import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "src" / "easyicu" / "data"
-BENCHMARK_DIR = REPO_ROOT / "benchmark"
+CATALOG_DIR = REPO_ROOT / "benchmarks" / "catalogs"
 STATIC_DATA_CATALOG_JS = (
     REPO_ROOT / "src" / "easyicu" / "webserver" / "static" / "js" / "data-catalog.js"
 )
@@ -78,7 +78,7 @@ def _data_source_tables() -> dict[str, dict]:
 
 
 def _miiv_source_catalog() -> set[tuple[str, int]]:
-    payload = json.loads((BENCHMARK_DIR / "source_item_catalog_miiv.json").read_text())
+    payload = json.loads((CATALOG_DIR / "source_item_catalog_miiv.json").read_text())
     catalog: set[tuple[str, int]] = set()
     for item in payload.get("items", []):
         itemid = item.get("itemid")
@@ -150,7 +150,10 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # vital and now extracts with the vitals module). 280 -> 281.
     # 2026-08-08: +7 KDIGO ascertainment-receipt outputs so stage zero can be
     # distinguished from incomplete observation. 281 -> 288.
-    assert len(CONCEPT_DICTIONARY) == 288
+    # 2026-08-09: +delirium_tx_proxy/evidence and explicit SOFA-2 CNS proxy
+    # sensitivity and clause-specific/legacy ascertainment outputs. 288 -> 293.
+    # 2026-08-12: +six nullable severe-AKI endpoint/receipt outputs. 293 -> 299.
+    assert len(CONCEPT_DICTIONARY) == 299
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)

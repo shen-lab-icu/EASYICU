@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from typing import Sequence
 
+from ..gates.typed_schema import mapping_literal_key
 from ..schema import ValidationFinding
 
 
@@ -36,23 +37,8 @@ def patch_host_schema_numeric_alias(
         return code
 
     def mapping_key(node: ast.AST, mapping_name: str) -> str | None:
-        while True:
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                node = node.func.value
-                continue
-            if isinstance(node, ast.Attribute):
-                node = node.value
-                continue
-            break
-        if not (
-            isinstance(node, ast.Subscript)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == mapping_name
-            and isinstance(node.slice, ast.Constant)
-            and isinstance(node.slice.value, str)
-        ):
-            return None
-        return node.slice.value
+        # Same matcher the gate uses; see gates.typed_schema.mapping_literal_key.
+        return mapping_literal_key(node, mapping_name=mapping_name)
 
     allclose_pairs: set[tuple[str, frozenset[str]]] = set()
     for node in ast.walk(tree):

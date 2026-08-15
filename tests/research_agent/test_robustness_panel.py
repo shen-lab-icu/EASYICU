@@ -1559,7 +1559,7 @@ def test_the_hole_is_reported_as_an_error_where_the_panel_is_built() -> None:
     import ast
     import inspect
 
-    from easyicu.research_agent.execution import phase as phase_module
+    from easyicu.research_agent.robustness import runtime_panel as phase_module
 
     tree = ast.parse(inspect.getsource(phase_module))
     calls = [

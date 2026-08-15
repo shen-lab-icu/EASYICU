@@ -7,8 +7,9 @@ table named by that contract, never a chart artist or a free-text summary.
 
 from __future__ import annotations
 
+from ..canonical_json import sha256_file as _sha256_file
+
 import csv
-import hashlib
 import json
 import math
 import re
@@ -90,14 +91,6 @@ def _materialised_path(
     if not candidate.is_file() or candidate.suffix.lower() != expected_suffix:
         return None
     return candidate
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _survival_receipt_findings(

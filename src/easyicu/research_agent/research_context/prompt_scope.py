@@ -984,6 +984,12 @@ def scoped_planner_context(
             for value in context.user_preferences.covariates
             if str(value or "").strip()
         )
+        direct_names.update(
+            str(value or "").strip().lower()
+            for spec in context.user_preferences.sensitivity_specs
+            for value in spec.execution_variables
+            if str(value or "").strip()
+        )
     question = context.research_question
     direct_names.update(
         variable.name.lower()

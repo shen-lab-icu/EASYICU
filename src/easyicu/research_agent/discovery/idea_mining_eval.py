@@ -81,7 +81,12 @@ def default_idea_quality_eval_path() -> Path:
     """Return the repo-local default fixture path."""
 
     package_file = Path(easyicu.__file__).resolve()
-    return package_file.parents[2] / "benchmark" / "idea_mining_quality_eval_set.json"
+    return (
+        package_file.parents[2]
+        / "benchmarks"
+        / "idea_mining"
+        / "quality_eval_set.json"
+    )
 
 
 def load_idea_quality_eval_set(

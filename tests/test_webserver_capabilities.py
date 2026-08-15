@@ -39,6 +39,28 @@ def test_capability_status_reflects_settings_and_tool_policy(monkeypatch) -> Non
     assert body["capabilities"]["remote_compute"]["status"] == "disabled"
 
 
+def test_publication_skill_capabilities_default_on_and_respect_each_switch(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        settings_store,
+        "load_settings",
+        lambda: _settings(
+            science_skills_enabled=True,
+            nature_figure_skill_enabled=False,
+            nature_writing_skill_enabled=True,
+        ),
+    )
+
+    body = TestClient(app).get("/api/capabilities").json()
+    publication = body["capabilities"]["publication_skills"]
+    by_id = {row["id"]: row for row in publication["items"]}
+
+    assert by_id["nature-figure"]["enabled"] is False
+    assert by_id["nature-writing"]["enabled"] is True
+    assert publication["active_skill_ids"] == ["nature-writing"]
+
+
 def test_capability_tool_check_blocks_unknown_and_external_tools(monkeypatch) -> None:
     monkeypatch.setattr(
         settings_store,

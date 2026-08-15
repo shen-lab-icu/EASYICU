@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from easyicu.research_agent.reporting.display_suite import (
+    DISPLAY_SUITE_AUDIT_SCHEMA_VERSION,
+    display_suite_audit_payload,
     summarize_display_suite_status,
 )
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
@@ -228,6 +232,17 @@ def test_display_suite_accepts_complete_primary_article_display(
         "specification_grid",
     ]
     assert status["display_suite_errors"] == []
+
+    payload = display_suite_audit_payload(status)
+    assert payload["schema_version"] == DISPLAY_SUITE_AUDIT_SCHEMA_VERSION
+    assert payload["display_suite_complete"] is True
+    assert payload["primary_publication_panel_count"] == 4
+    assert payload["chart_types"] == status["display_chart_types"]
+
+    incomplete = dict(status)
+    incomplete.pop("display_chart_types")
+    with pytest.raises(KeyError, match="display_chart_types"):
+        display_suite_audit_payload(incomplete)
 
 
 def test_article_audits_ignore_absent_and_superseded_supporting_contracts(

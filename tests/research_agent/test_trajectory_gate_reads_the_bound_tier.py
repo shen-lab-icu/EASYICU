@@ -387,10 +387,22 @@ def test_the_plan_phase_answers_the_same_question_before_the_planner_is_done():
     """
 
     import inspect
+    import textwrap
 
     from easyicu.research_agent import pipeline
 
-    source = inspect.getsource(pipeline.ResearchAgentPipeline._run_plan_phase)
+    source = "\n".join(
+        (
+            textwrap.dedent(
+                inspect.getsource(pipeline.ResearchAgentPipeline._run_plan_phase)
+            ),
+            textwrap.dedent(
+                inspect.getsource(
+                    pipeline.ResearchAgentPipeline._validate_and_persist_plan
+                )
+            ),
+        )
+    )
     assert "long_trajectory_is_bound(trajectory_binding)" in source
     for callee in ("trajectory_plan_dag_findings", "_enforce_advanced_plan_contract"):
         calls = _calls_in(source, callee)

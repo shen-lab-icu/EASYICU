@@ -30,6 +30,7 @@ from ..icu_rules import (
 )
 from ..schema import (
     AggregationRule,
+    ClinicalDefinitionReference,
     CohortDescriptor,
     ConceptDescriptor,
     EndpointSpec,
@@ -459,7 +460,12 @@ def _apply_legacy_materialization_window(
             projected.append(descriptor)
             continue
         projected.append(
-            descriptor.model_copy(update={"analysis_window": window_label})
+            descriptor.model_copy(
+                update={
+                    "analysis_window": window_label,
+                    "analysis_window_role": "outer_observation_window",
+                }
+            )
         )
     return projected
 
@@ -618,6 +624,22 @@ def build_research_context(
                     "materialized_cohort_provenance_sha256": (
                         legacy_materialization_provenance["provenance_sha256"]
                     ),
+                    **(
+                        {
+                            "replacement_row_identity": dict(
+                                legacy_materialization_provenance[
+                                    "replacement_row_identity"
+                                ]
+                            )
+                        }
+                        if isinstance(
+                            legacy_materialization_provenance.get(
+                                "replacement_row_identity"
+                            ),
+                            dict,
+                        )
+                        else {}
+                    ),
                 }
                 if legacy_materialization_provenance is not None
                 else {}
@@ -754,6 +776,8 @@ def _describe_column(
     item_ids: List[str] = []
     unit_normalization: Optional[str] = None
     analysis_window: Optional[str] = None
+    analysis_window_role: Optional[str] = None
+    clinical_definition: Optional[ClinicalDefinitionReference] = None
     temporal_resolution: Optional[str] = None
     clinical_caveats: List[str] = []
     missingness_semantics: Optional[str] = None
@@ -780,6 +804,41 @@ def _describe_column(
             if isinstance(raw_analysis_window, str) and raw_analysis_window.strip()
             else None
         )
+        raw_analysis_window_role = info.get("analysis_window_role")
+        if raw_analysis_window_role in {
+            "exposure_definition",
+            "outer_observation_window",
+        }:
+            analysis_window_role = str(raw_analysis_window_role)
+        clinical_contract_id = str(info.get("clinical_contract_id") or "").strip()
+        if clinical_contract_id:
+            try:
+                from easyicu.clinical_contracts import load_clinical_contracts
+
+                clinical_contract = load_clinical_contracts().get(
+                    clinical_contract_id
+                )
+            except Exception:
+                clinical_contract = None
+            if clinical_contract is not None:
+                clinical_definition = ClinicalDefinitionReference(
+                    contract_id=clinical_contract.contract_id,
+                    definition=clinical_contract.definition,
+                    version=clinical_contract.version,
+                    source_id=clinical_contract.source_id,
+                    definition_time_anchor=(
+                        clinical_contract.definition_time_anchor
+                    ),
+                    status=clinical_contract.status,
+                    validation_status=clinical_contract.validation_status,
+                    canonical_definition=clinical_contract.canonical_definition,
+                    ascertainment_limitations=list(
+                        clinical_contract.ascertainment_limitations
+                    ),
+                    database_conformance=dict(
+                        clinical_contract.database_conformance
+                    ),
+                )
         temporal_resolution = meta.get("temporal_resolution")
         clinical_caveats = meta.get("clinical_caveats") or []
         missingness_semantics = meta.get("missingness_semantics")
@@ -821,6 +880,8 @@ def _describe_column(
         item_ids=item_ids,
         unit_normalization=unit_normalization,
         analysis_window=analysis_window,
+        analysis_window_role=analysis_window_role,
+        clinical_definition=clinical_definition,
         temporal_resolution=temporal_resolution,
         fixed_window_trajectory=fixed_window_trajectory,
         pitfalls=list(hint.pitfalls),
@@ -841,6 +902,7 @@ def _guess_id_columns(df: pd.DataFrame) -> List[str]:
             "hadm_id",
             "stay_id",
             "subject_id",
+            "patient_stay_id",
             "patientunitstayid",
             "uniquepid",
             "admissionid",
@@ -921,7 +983,10 @@ def _infer_outcome_semantics(
                 "or unrelated follow-up horizon for this time-to-event endpoint."
             ),
         }
-    if "icu mortality" in question or outcome in {
+    if any(
+        term in question
+        for term in ("icu mortality", "icu死亡", "icu 死亡", "重症监护病房死亡")
+    ) or outcome in {
         "death_icu",
         "icu_death",
         "icu_mortality",
@@ -938,6 +1003,8 @@ def _infer_outcome_semantics(
     if (
         "in-hospital mortality" in question
         or "hospital mortality" in question
+        or "院内死亡" in question
+        or "住院死亡" in question
         or outcome in {"death_hosp", "hospital_death", "hospital_mortality"}
     ):
         return {
@@ -949,7 +1016,10 @@ def _infer_outcome_semantics(
                 f"for one another when using '{outcome_name}'."
             ),
         }
-    if "28-day mortality" in question or outcome in {"death_28d", "mortality_28d"}:
+    if any(term in question for term in ("28-day mortality", "28 day mortality", "28天死亡", "28 天死亡")) or outcome in {
+        "death_28d",
+        "mortality_28d",
+    }:
         return {
             "label": "28-day mortality",
             "description": "Binary outcome flag operationalizing 28-day mortality for this analysis.",
@@ -959,7 +1029,10 @@ def _infer_outcome_semantics(
                 f"for one another when using '{outcome_name}'."
             ),
         }
-    if "30-day mortality" in question or outcome in {"death_30d", "mortality_30d"}:
+    if any(term in question for term in ("30-day mortality", "30 day mortality", "30天死亡", "30 天死亡")) or outcome in {
+        "death_30d",
+        "mortality_30d",
+    }:
         return {
             "label": "30-day mortality",
             "description": "Binary outcome flag operationalizing 30-day mortality for this analysis.",
@@ -1034,6 +1107,47 @@ def _infer_outcome_semantics(
     return {}
 
 
+def _descriptor_endpoint_semantic_key(descriptor: ConceptDescriptor) -> Optional[str]:
+    """Project owner-issued concept metadata into one endpoint semantic key.
+
+    The concept dictionary owns the clinical meaning of a materialized column.
+    Natural-language question parsing may detect a requested endpoint, but it
+    must never silently redefine an existing physical concept.  This compact
+    projection lets the builder compare the two authorities without teaching
+    the shared prompt any benchmark-specific variable names.
+    """
+
+    text = " ".join(
+        [
+            str(descriptor.source_concept or ""),
+            str(descriptor.description or ""),
+        ]
+    ).lower()
+    if any(token in text for token in ("icu mortality", "icu death", "icu死亡")):
+        return "icu_mortality"
+    if any(
+        token in text
+        for token in (
+            "in hospital mortality",
+            "in-hospital mortality",
+            "hospital mortality",
+            "hospital death",
+            "院内死亡",
+            "住院死亡",
+        )
+    ):
+        return "hospital_mortality"
+    if any(token in text for token in ("28-day mortality", "28 day mortality", "28天死亡")):
+        return "mortality_28d"
+    if any(token in text for token in ("30-day mortality", "30 day mortality", "30天死亡")):
+        return "mortality_30d"
+    if any(token in text for token in ("length of stay", "length-of-stay")):
+        return "length_of_stay"
+    if "readmission" in text:
+        return "readmission"
+    return None
+
+
 def _enrich_target_outcome_descriptor(
     *,
     descriptors: Sequence[ConceptDescriptor],
@@ -1053,20 +1167,42 @@ def _enrich_target_outcome_descriptor(
             continue
         if descriptor.role != VariableRole.OUTCOME:
             descriptor.role = VariableRole.OUTCOME
-        if (
+        owner_semantic = _descriptor_endpoint_semantic_key(descriptor)
+        requested_semantic = semantics["source_concept"]
+        owner_metadata_present = bool(
+            descriptor.source_concept
+            and descriptor.description
+            and owner_semantic is not None
+        )
+        if not owner_metadata_present and (
             descriptor.description is None
-            or semantics["source_concept"] != "declared_primary_outcome"
+            or requested_semantic != "declared_primary_outcome"
         ):
             descriptor.description = semantics["description"]
-        if (
+        if not owner_metadata_present and (
             descriptor.source_concept is None
-            or semantics["source_concept"] != "declared_primary_outcome"
+            or requested_semantic != "declared_primary_outcome"
         ):
-            descriptor.source_concept = semantics["source_concept"]
-        explicit_note = (
-            f"For this analysis, '{target_outcome}' is explicitly treated as "
-            f"{semantics['label']} because that is what the research question asks for."
-        )
+            descriptor.source_concept = requested_semantic
+        if owner_metadata_present and owner_semantic != requested_semantic:
+            explicit_note = (
+                f"Endpoint-definition conflict: the research question requests "
+                f"{semantics['label']}, but the owner-issued concept metadata for "
+                f"'{target_outcome}' defines {descriptor.description!r}. Do not "
+                "reinterpret or execute this endpoint until the physical concept "
+                "and requested definition agree."
+            )
+        elif owner_metadata_present:
+            explicit_note = (
+                f"For this analysis, '{target_outcome}' retains its owner-issued "
+                f"clinical definition ({descriptor.description!r}), which agrees "
+                f"with the requested {semantics['label']}."
+            )
+        else:
+            explicit_note = (
+                f"For this analysis, '{target_outcome}' is explicitly treated as "
+                f"{semantics['label']} because that is what the research question asks for."
+            )
         if explicit_note not in descriptor.clinical_caveats:
             descriptor.clinical_caveats.append(explicit_note)
         harmonization_note = semantics.get(

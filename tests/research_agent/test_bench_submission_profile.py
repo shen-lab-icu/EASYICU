@@ -450,6 +450,51 @@ def test_every_profile_either_omits_or_pins_memory_off_never_on() -> None:
         assert opts.get("enable_deterministic_planner_fallback", False) is False, ref
 
 
+def test_e1_planner_canary_profile_binds_current_dictionaries_without_publication_authority() -> None:
+    from easyicu.research_agent.orchestration.profiles import (
+        E1_PLANNER_CANARY_2026_08_14,
+        is_paper_facing_profile,
+    )
+
+    profile = E1_PLANNER_CANARY_2026_08_14
+
+    assert profile.ref == "npj_dm_e1_canary_dev/20260814"
+    assert profile.requires_real_provider is True
+    assert profile.enable_memory is False
+    assert profile.enable_experience_bank is False
+    assert profile.planner_only is True
+    assert profile.pipeline_options()["planner_only"] is True
+    assert profile.expected_concept_dict_sha == (
+        "22039e19c9b499d635dce956298550cecb1fdf55059304736cca73ee42bf129a"
+    )
+    assert profile.expected_sofa2_dict_sha == (
+        "998a14c70c8a983c71ce6af2da8408fe22063cc042e8cde69f572083880bdaf8"
+    )
+    assert is_paper_facing_profile(profile.name) is False
+
+
+def test_e1_reviewed_demo_profile_executes_without_paper_authority() -> None:
+    from easyicu.research_agent.orchestration.profiles import (
+        E1_PLANNER_CANARY_2026_08_14,
+        E1_REVIEWED_DEMO_2026_08_15,
+        is_paper_facing_profile,
+    )
+
+    profile = E1_REVIEWED_DEMO_2026_08_15
+
+    assert profile.ref == "npj_dm_e1_demo_dev/20260815"
+    assert profile.planner_only is False
+    assert profile.pipeline_options()["planner_only"] is False
+    assert profile.requires_real_provider is True
+    assert profile.expected_concept_dict_sha == (
+        E1_PLANNER_CANARY_2026_08_14.expected_concept_dict_sha
+    )
+    assert profile.expected_sofa2_dict_sha == (
+        E1_PLANNER_CANARY_2026_08_14.expected_sofa2_dict_sha
+    )
+    assert is_paper_facing_profile(profile.name) is False
+
+
 def test_pre_existing_profile_to_dict_omits_memory_fields() -> None:
     # (d), not (a), at the PUBLIC-serialization layer too: to_dict() is the
     # public replay representation. Adding two Optional dataclass fields must NOT

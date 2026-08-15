@@ -68,6 +68,7 @@ from __future__ import annotations
 __all__ = [
     # Schemas
     "ResearchContext",
+    "ClinicalDefinitionReference",
     "ConceptDescriptor",
     "EndpointSpec",
     "FixedWindowTrajectoryMetadata",
@@ -285,6 +286,7 @@ __all__ = [
     "EvidenceStore",
     "EvidenceEnforcementMode",
     "EvidenceEnforcementError",
+    "ScientificClaim",
     "EasyICUCasePackage",
     "index_export_package",
     "read_exported_concept",
@@ -465,6 +467,7 @@ def __getattr__(name: str):
     """
     if name in {
         "ResearchContext",
+        "ClinicalDefinitionReference",
         "ConceptDescriptor",
         "EndpointSpec",
         "FixedWindowTrajectoryMetadata",
@@ -821,10 +824,18 @@ def __getattr__(name: str):
         from .figures import publication as _pubfig
 
         return getattr(_pubfig, name)
-    if name in {"EvidenceStore", "EvidenceEnforcementMode", "EvidenceEnforcementError"}:
+    if name in {
+        "EvidenceStore",
+        "EvidenceEnforcementMode",
+        "EvidenceEnforcementError",
+    }:
         from .authority import evidence_store as _evidence
 
         return getattr(_evidence, name)
+    if name == "ScientificClaim":
+        from .authority.scientific_claims import ScientificClaim
+
+        return ScientificClaim
     if name in {
         "EasyICUCasePackage",
         "index_export_package",

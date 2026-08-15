@@ -1,36 +1,48 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "456d2f0f15f27ba80b195649b06f64e2d61852ae71a69c9d388d4dee3fdb0e3a",
+  "tool_sha256": "140b6d79df9ddade2c301e79e6ac507d6a46e5fd3b04362813ee6804ba3840bc",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 12433,
-      "sha256": "d420bfb6620b2a8f0a26238f1f73891aed39a50c749ec7d7671f7f4141a442a2",
-      "intra_package_import_edges": 95,
+      "loc": 5944,
+      "sha256": "4e27ddba5075ad69b95fd2107cc1535e1d79a8539699b46d7765d4fb8c52d708",
+      "intra_package_import_edges": 103,
+      "shim_bypass_violations": []
+    },
+    "execution/phase_support.py": {
+      "loc": 1613,
+      "sha256": "2c2d8a269317b3549087d582defd6f09fefe51d1a7d36c3326239dc1a1ba32f1",
+      "intra_package_import_edges": 27,
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 11367,
-      "sha256": "17603ac252b8c89ac84ed71e190e31419b311fe7330d10ac78b1162bbace90e9",
-      "intra_package_import_edges": 101,
+      "loc": 8543,
+      "sha256": "c4598dcb194cf379e39717145e6f2b10845e2ab2191b9fcfc14c146e8660eb48",
+      "intra_package_import_edges": 115,
+      "shim_bypass_violations": []
+    },
+    "reporting/publication_bundles.py": {
+      "loc": 2734,
+      "sha256": "f256dbb899126e0562955d46636e1f94a963f6a40555fc29ddce91b44fe9cea1",
+      "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
-      "loc": 2815,
-      "sha256": "1e6584b0ee3e4a583203167c6a0d350ba8329bc5ed1a7236d9c8cae0671b6f05",
-      "intra_package_import_edges": 20,
+      "loc": 2789,
+      "sha256": "4945704984d3d707131cd07a60d84a13421528f5f22430ebc64f3b16105c4778",
+      "intra_package_import_edges": 25,
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
       "loc": 2217,
-      "sha256": "a2b5bfb98824761d45ef48c482db24231d395cc4a04d7ba9f5d6a129857754cf",
-      "intra_package_import_edges": 13,
+      "sha256": "de6b0ecf13e58e444c1e7e06970841c7e1a4f40578742345aa0584b70fbb6a54",
+      "intra_package_import_edges": 14,
       "shim_bypass_violations": []
     },
     "authority/plan_authority.py": {
       "loc": 389,
-      "sha256": "71b62ceeccc907bb4c2cc677366ad9faac9db5506b4cbb276f98ce64e69f8e85",
-      "intra_package_import_edges": 10,
+      "sha256": "625691b4089ad30689898fd9e5f44dbc525c988ecb7b7e1c305e6480eb988af4",
+      "intra_package_import_edges": 11,
       "shim_bypass_violations": []
     },
     "authority/typed_input_receipt.py": {
@@ -47,102 +59,198 @@
     },
     "authority/development_projection.py": {
       "loc": 190,
-      "sha256": "23998324970e91b1a459f420bc59753a064e710e7ce35ab2f985036a4af9b216",
+      "sha256": "2ccc1f78eb4b0611a798072eccecedbdd4b808830d6c1c74e1c3102250832eab",
       "intra_package_import_edges": 4,
       "shim_bypass_violations": []
     },
     "gates/preflight.py": {
-      "loc": 9044,
-      "sha256": "d3d35f19281d953cc5ed581789adb127e6c2718ca00049527228b5ef7e881f48",
-      "intra_package_import_edges": 11,
+      "loc": 6268,
+      "sha256": "32a03d4c3653377014330016b63a3b979ee9fa60ad109363b17f2be3a22cb6a1",
+      "intra_package_import_edges": 14,
+      "shim_bypass_violations": []
+    },
+    "gates/preflight_statics.py": {
+      "loc": 478,
+      "sha256": "9ec1cd0816154f47ff114fd7ab6d4ab2bce9952e2722d18172b83083a0184b36",
+      "intra_package_import_edges": 3,
+      "shim_bypass_violations": []
+    },
+    "gates/preflight_provenance.py": {
+      "loc": 357,
+      "sha256": "e205b48fedcb3bf3c36229d0086f1b4f807608860f9757d8bd2f086ff8932ba5",
+      "intra_package_import_edges": 2,
       "shim_bypass_violations": []
     },
     "gates/typed_input.py": {
-      "loc": 529,
-      "sha256": "1205379a0d3dbafc22d463156073044b32178d0c7acf992394f6d271043be7d1",
+      "loc": 507,
+      "sha256": "c8d957ec18f51ccf8662ce024ddc4315d3cd1e48499da4101688836356b33cb6",
       "intra_package_import_edges": 2,
       "shim_bypass_violations": []
     },
     "repairs/source.py": {
-      "loc": 7318,
-      "sha256": "4753dc4c8bcf456ed11d5618de2921b7b05f1ce5bc35ded4daafda76e890dd4b",
-      "intra_package_import_edges": 31,
+      "loc": 5496,
+      "sha256": "59f4d482cc6c011424faf030e8a4dd0935ce1a47e450c17abf7481480d1a3675",
+      "intra_package_import_edges": 32,
       "shim_bypass_violations": []
     },
     "repairs/typed_input.py": {
-      "loc": 976,
-      "sha256": "d5f1a049539bb89625194c1e86c55e7439fe494985eda96daff942ebfe645ab9",
-      "intra_package_import_edges": 2,
+      "loc": 957,
+      "sha256": "2dceeaec39fbc4eedd6bba06a05a67c2de7a7b2df7152556517e343d570464b4",
+      "intra_package_import_edges": 3,
       "shim_bypass_violations": []
     },
     "audits/validators.py": {
-      "loc": 13816,
-      "sha256": "b3e4d2b0d80ae16a5b8b62cc8177d5b22715766aa9a590f3ce8dd84e159fbc41",
-      "intra_package_import_edges": 14,
+      "loc": 2806,
+      "sha256": "eda551cf6a32cc56710ecec4d96609bf23577c5b093625682ad5bd6085f08ee7",
+      "intra_package_import_edges": 23,
       "shim_bypass_violations": []
     },
-    "plan_utils.py": {
-      "loc": 5106,
-      "sha256": "923b30de7fa003e1c5cf68d3cf2a972bb5d2a649c74bfa067b687ab29eaea5b9",
-      "intra_package_import_edges": 12,
+    "audits/cohort.py": {
+      "loc": 132,
+      "sha256": "0af285c496908e6fb5f293cbb7d1685d38d257aa1b6c80e6c32f83c0cfba5b2a",
+      "intra_package_import_edges": 2,
       "shim_bypass_violations": []
     },
-    "agents/core.py": {
-      "loc": 4933,
-      "sha256": "4db54beada4b929444009f01739ee539273f663f0ca4c71c0b03d9f5177a1fc2",
-      "intra_package_import_edges": 41,
-      "shim_bypass_violations": []
-    },
-    "schema.py": {
-      "loc": 3361,
-      "sha256": "b9378795911f4edb3433b1ff2b28440a365f265d86135c98ae541b35a3719474",
-      "intra_package_import_edges": 6,
-      "shim_bypass_violations": []
-    },
-    "contracts/declared_product.py": {
-      "loc": 3629,
-      "sha256": "0f9f1c7427581f5195cb33e036096cc00890e7b0f077bd43206714d340931983",
+    "audits/cross_step.py": {
+      "loc": 4316,
+      "sha256": "16896f0f85ff68749b41cd5af7f332abf2bb840e1441395bcd43ffb021e45965",
       "intra_package_import_edges": 5,
       "shim_bypass_violations": []
     },
+    "audits/statistical.py": {
+      "loc": 683,
+      "sha256": "a47025972f2fd01991b041c4343e7c4a62a860ceaa07e82033ef21ff2cc526a9",
+      "intra_package_import_edges": 3,
+      "shim_bypass_violations": []
+    },
+    "audits/figures.py": {
+      "loc": 5509,
+      "sha256": "077776071c99c266fa3e2cf8bfc3cd473f513fc60074d1607088adf2242ab4cd",
+      "intra_package_import_edges": 4,
+      "shim_bypass_violations": []
+    },
+    "audits/clinical.py": {
+      "loc": 164,
+      "sha256": "d0a6ed9c88086756e5452165053d4a99a3a8c7ae05fc7af30af839f5c8cfa9a7",
+      "intra_package_import_edges": 1,
+      "shim_bypass_violations": []
+    },
+    "audits/publication.py": {
+      "loc": 210,
+      "sha256": "13606300959f926dd35941935aaa44a26124b3f17533beda3ae1edbeacd81897",
+      "intra_package_import_edges": 2,
+      "shim_bypass_violations": []
+    },
+    "audits/_v_support.py": {
+      "loc": 209,
+      "sha256": "a24cd7db7fc54010706aaa22e4463e1d16dd852f6bc852584fe633bb4a8586f5",
+      "intra_package_import_edges": 1,
+      "shim_bypass_violations": []
+    },
+    "plan_utils.py": {
+      "loc": 5035,
+      "sha256": "32220c934b296d7460b18a558caed990be11febf18e8c3f525e1678c8642ee8f",
+      "intra_package_import_edges": 14,
+      "shim_bypass_violations": []
+    },
+    "agents/core.py": {
+      "loc": 158,
+      "sha256": "5f2a69c80beb4973c93afa275c6c0fd186911ec4c5016175275cabfc9e186096",
+      "intra_package_import_edges": 12,
+      "shim_bypass_violations": []
+    },
+    "agents/_support.py": {
+      "loc": 590,
+      "sha256": "31c0242a19555f9bb861b2aff9815db15921a0525a1d5b944f92cb4619cba782",
+      "intra_package_import_edges": 13,
+      "shim_bypass_violations": []
+    },
+    "agents/planner.py": {
+      "loc": 1652,
+      "sha256": "0b4bfec0c73d567f8dd605aed7a8e21c8eef86784545da32b9a3d48eaaed7667",
+      "intra_package_import_edges": 25,
+      "shim_bypass_violations": []
+    },
+    "agents/replanner.py": {
+      "loc": 308,
+      "sha256": "810074596ab79398321f318056a23ccfcf7fcf6104cd2863979e1bb8323eb7d9",
+      "intra_package_import_edges": 10,
+      "shim_bypass_violations": []
+    },
+    "agents/roles.py": {
+      "loc": 559,
+      "sha256": "03c55d32c591bba3c00d721208c4bde08aba2a8a9174016bd15a5097183e5ec0",
+      "intra_package_import_edges": 7,
+      "shim_bypass_violations": []
+    },
+    "agents/coder.py": {
+      "loc": 1568,
+      "sha256": "625066e808a34f3ac62a9d6ae71437a6a25628cae03b47f27529b839fd7af1e0",
+      "intra_package_import_edges": 26,
+      "shim_bypass_violations": []
+    },
+    "agents/reporting.py": {
+      "loc": 315,
+      "sha256": "abe851744938dd5b00ace5533c00e1a4e291c386579da95a57ea3a402f17a405",
+      "intra_package_import_edges": 9,
+      "shim_bypass_violations": []
+    },
+    "schema.py": {
+      "loc": 3268,
+      "sha256": "2b989ebe012ab90baee47daf68e10fb3d253d8f93b87581cc3aedb3ef35260e3",
+      "intra_package_import_edges": 17,
+      "shim_bypass_violations": []
+    },
+    "contracts/declared_product.py": {
+      "loc": 2222,
+      "sha256": "adc59923be09ed83b4e9e5f962289c1d574eaca3390dead750d9dbd4aa84be4d",
+      "intra_package_import_edges": 9,
+      "shim_bypass_violations": []
+    },
     "figures/skill.py": {
-      "loc": 3588,
-      "sha256": "d716328eafa65c14c7a5a59163d078396ceb0582fb54c009696b0a1c016a8963",
-      "intra_package_import_edges": 8,
+      "loc": 3451,
+      "sha256": "67b69b05be994b6fb97cbca069b3af67801157a3f964319e88d29d8227fad40d",
+      "intra_package_import_edges": 13,
       "shim_bypass_violations": []
     },
     "authority/evidence_store.py": {
-      "loc": 3247,
-      "sha256": "66ce83069fe0bd3595773f23e589a8f222e48c9f970a707cba26b4fedb1eacdf",
-      "intra_package_import_edges": 3,
+      "loc": 3241,
+      "sha256": "df7279f97d7b0b60bc8d1e595ce75974f3ea79d5bac1bf68f189838025168ce7",
+      "intra_package_import_edges": 7,
       "shim_bypass_violations": []
     }
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
-      "lines": 6743,
-      "line_start": 5028,
-      "direct_nested_funcs": 23,
-      "total_nested_funcs": 25,
-      "own_bound_names": 361,
+      "lines": 2919,
+      "line_start": 2477,
+      "direct_nested_funcs": 22,
+      "total_nested_funcs": 23,
+      "own_bound_names": 196,
       "own_nonlocal_names": [
         "runtime_state"
       ],
       "own_nonlocal_count": 1,
-      "callable_closure_captured_names": 33
+      "callable_closure_captured_names": 23
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 8890,
-      "line_start": 3544,
+      "lines": 4988,
+      "line_start": 957,
       "direct_nested_funcs": 15,
-      "total_nested_funcs": 45,
-      "own_bound_names": 161,
+      "total_nested_funcs": 43,
+      "own_bound_names": 156,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 79
     }
   },
-  "baseline_reason": "Remove the duplicate Planner input roster from the initial Coder binding contract; Step inputs remains authoritative and the wide-trajectory payload now passes the 42 KB transport gate without dropping coordinates.",
+  "baseline_reason": "duplicate-helper consolidation batch: 16 local _sha256_file definitions (four equivalent implementations) moved to canonical_json.sha256_file behind per-module aliases; repository-hygiene AST ratchet forbids reintroduction and freezes the current _finite upper bound. The only growth, audits/validators.py +9 loc, is the reviewed owner-metadata endpoint semantic-key fix from bfb6ff4 follow-up; it restores nonblocking outcome-ambiguity downgrades and closes a latent conflicting_labels KeyError.",
+  "baseline_accepted_growth": {
+    "audits/validators.py": {
+      "loc_was": 2797,
+      "loc_now": 2806
+    }
+  },
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -272,6 +380,36 @@
     },
     {
       "reason": "Remove the duplicate Planner input roster from the initial Coder binding contract; Step inputs remains authoritative and the wide-trajectory payload now passes the 42 KB transport gate without dropping coordinates."
+    },
+    {
+      "reason": "agents/core.py decomposition batch: the 4,933-line monolith was split into owner modules (_support/planner/replanner/roles/coder/reporting) behind a thin re-export facade; the facade keeps the historical import surface and identity contract. All six new owners are appended to TARGET_FILES so the lower-is-better ratchet gates them from day one. Deltas in other files are committed improvements from HEAD 26bdcdc..223d45c, absorbed here only because the ratchet is lower-is-better; nothing grew."
+    },
+    {
+      "reason": "audits/validators.py decomposition batch: the 13,815-line monolith split into cohort/cross_step/statistical/figures/clinical/publication owners plus _v_support, with the concept-audit owner (and the authorized_complete seam tests patch) staying in validators.py behind a thin re-export facade; figures.py keeps the mutually referencing figure validators together to preserve zero import cycles. New owners appended to TARGET_FILES. The only growth, agents/replanner.py +14 loc, is the reviewed analysis_type guard from the test-seam fix batch, not drift.",
+      "accepted_growth": {
+        "agents/replanner.py": {
+          "loc_was": 294,
+          "loc_now": 308
+        }
+      }
+    },
+    {
+      "reason": "pipeline.py decomposition batch: the publication-bundle renderer family (37 functions) moved byte-preserved to reporting/publication_bundles.py behind a facade import; renderer dispatch plus every test-patched name stayed in pipeline.py (fixpoint ejection) so monkeypatch seams keep resolving through pipeline globals. 11,273 -> 8,543 loc, no growth anywhere. Two resume-suite failures are pre-existing (verified via path-scoped stash control)."
+    },
+    {
+      "reason": "phase.py decomposition batch: 72 self-contained pre-loop helpers moved byte-preserved to execution/phase_support.py behind a facade import; fixpoint ejection kept run_execute_phase's seam-adjacent helpers (revalidation, materialized-cohort receipts, publication-figure staging, detached-figure binding) in phase.py so monkeypatch seams and source-inspection tests keep binding to phase. 7,514 -> 5,944 loc, no growth. Two suite failures are pre-existing (path-scoped stash controls)."
+    },
+    {
+      "reason": "preflight.py decomposition batch: name-resolution statics (preflight_statics.py) and provenance/exposure-authority statics (preflight_provenance.py) moved byte-preserved behind the preflight facade; fixpoint ejection kept every seam-entangled checker (branch-local unbound, provenance fail-closed, typed-dataframe erasure, reconciliation swallowing) in preflight.py. 6,982 -> 6,268 loc, no growth; new owners ratcheted from day one."
+    },
+    {
+      "reason": "duplicate-helper consolidation batch: 16 local _sha256_file definitions (four equivalent implementations) moved to canonical_json.sha256_file behind per-module aliases; repository-hygiene AST ratchet forbids reintroduction and freezes the current _finite upper bound. The only growth, audits/validators.py +9 loc, is the reviewed owner-metadata endpoint semantic-key fix from bfb6ff4 follow-up; it restores nonblocking outcome-ambiguity downgrades and closes a latent conflicting_labels KeyError.",
+      "accepted_growth": {
+        "audits/validators.py": {
+          "loc_was": 2797,
+          "loc_now": 2806
+        }
+      }
     }
   ]
 }

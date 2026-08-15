@@ -103,21 +103,27 @@ FORBIDDEN_ORCHESTRATION = {
 
 
 def test_gate_pipeline_runs_in_canonical_order():
-    order = gate_call_order(
-        pe.run_execute_phase,
-        {
-            "collect_visual_gate_result",
-            "_step_deterministic_contract_findings",
-            "_install_figure_contract_source_data_canonicalization",
-            "_post_canonicalization_figure_findings",
-        },
+    names = {
+        "collect_visual_gate_result",
+        "_step_deterministic_contract_findings",
+        "_install_figure_contract_source_data_canonicalization",
+        "_post_canonicalization_figure_findings",
+    }
+    stages = (
+        pe._candidate_success_prepare_transition,
+        pe._candidate_contract_setup_transition,
     )
+    order = {
+        name: (stage_index, line)
+        for stage_index, stage in enumerate(stages)
+        for name, line in gate_call_order(stage, names).items()
+    }
     assert set(order) == {
         "collect_visual_gate_result",
         "_step_deterministic_contract_findings",
         "_install_figure_contract_source_data_canonicalization",
         "_post_canonicalization_figure_findings",
-    }, f"a gate stage is missing from run_execute_phase: {sorted(order)}"
+    }, f"a gate stage is missing from the candidate-loop stages: {sorted(order)}"
     # Visual QA -> shared deterministic contract gate -> figure-contract
     # canonicalization repair -> post-canonicalization figure audits.
     assert (
@@ -143,7 +149,19 @@ def test_orchestrator_retains_authority_and_control_flow():
     # The primitives the components must NOT own DO live in the orchestrator
     # (run_execute_phase source includes the nested _execute_one_step). This is
     # the other half of the boundary: the gate reports, the host decides.
-    orchestrator_ids = component_identifiers(pe.run_execute_phase)
+    orchestrator_ids = set().union(
+        *(
+            component_identifiers(func)
+            for func in (
+                pe.run_execute_phase,
+                pe._run_candidate_loop,
+                pe._candidate_concept_audit_transition,
+                pe._candidate_visual_transition,
+                pe._candidate_contract_repair_transition,
+                pe._candidate_failure_transition,
+            )
+        )
+    )
     for symbol in (
         "_consume_llm_repair_budget",
         "_repair_with_capsule",

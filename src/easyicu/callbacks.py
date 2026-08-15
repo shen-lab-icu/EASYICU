@@ -15,6 +15,15 @@ import pandas as pd
 from .utils.common_utils import SeriesUtils
 from .table import IdTbl
 
+
+class UnsupportedClinicalScoreError(RuntimeError):
+    """Stable fail-closed error for a named score without a complete contract."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 # Import missing callbacks
 def _standardize_fio2_units(fio2_df: pd.DataFrame, database: str) -> pd.DataFrame:
     """将FiO2标准化为百分比形式（0-100）以实现跨数据库兼容性
@@ -498,7 +507,7 @@ def sofa_renal(
     
     return score
 
-def sofa2_renal(
+def _legacy_sofa2_renal(
     crea: pd.Series,
     rrt: Optional[pd.Series] = None,
     rrt_criteria: Optional[pd.Series] = None,
@@ -590,7 +599,7 @@ def sofa2_renal(
     
     return score
 
-def sofa2_resp(
+def _legacy_sofa2_resp(
     pafi: pd.Series,
     spo2: Optional[pd.Series] = None,
     fio2: Optional[pd.Series] = None,
@@ -729,7 +738,7 @@ def sofa2_liver(bili: pd.Series) -> pd.Series:
     
     return score
 
-def sofa2_cardio(
+def _legacy_sofa2_cardio(
     map: pd.Series,
     norepi60: Optional[pd.Series] = None,
     epi60: Optional[pd.Series] = None,
@@ -805,7 +814,7 @@ def sofa2_cardio(
     
     return score
 
-def sofa2_cns(
+def _legacy_sofa2_cns(
     gcs: pd.Series,
     delirium_tx: Optional[pd.Series] = None,
     delirium_positive: Optional[pd.Series] = None,
@@ -817,17 +826,18 @@ def sofa2_cns(
     - Score 4: GCS 3-5 (or extension/no response to pain, myoclonus)
     - Score 3: GCS 6-8 (or flexion to pain)
     - Score 2: GCS 9-12 (or withdrawal to pain)
-    - Score 1: GCS 13-14 (or localizing to pain) OR delirium treatment/positive CAM-ICU
-    - Score 0: GCS 15 (unless on delirium treatment or positive CAM-ICU)
+    - Score 1: GCS 13-14 (or localizing to pain) OR delirium treatment
+    - Score 0: GCS 15 (unless on delirium treatment)
     
     Special rules:
-    - If receiving delirium treatment OR has positive CAM-ICU and GCS=15, score 1 point
+    - If receiving delirium treatment and GCS=15, score 1 point
     - Motor response scale can substitute full GCS if unavailable
     
     Args:
         gcs: Glasgow Coma Scale (3-15)
         delirium_tx: Receiving delirium treatment (haloperidol, etc.)
-        delirium_positive: CAM-ICU assessment positive for delirium (itemid 228332)
+        delirium_positive: CAM-ICU metadata retained for sensitivity analyses;
+            it does not score without treatment
         motor_response: GCS Motor component (1-6) for alternative scoring
         
     Returns:
@@ -857,20 +867,206 @@ def sofa2_cns(
     score[valid & (g >= 3) & (g <= 5)] = 4
     
     # SOFA-2 NEW: Delirium rule
-    # If receiving delirium treatment OR has positive CAM-ICU and GCS==15, upgrade to 1pt
+    # If receiving delirium treatment and GCS==15, upgrade to 1pt.
     has_delirium = pd.Series(False, index=idx)
     
     if delirium_tx is not None:
         has_delirium = has_delirium | _is_true_safe(delirium_tx)
-    
-    if delirium_positive is not None:
-        has_delirium = has_delirium | _is_true_safe(delirium_positive)
     
     if has_delirium.any():
         mask = (g == 15) & has_delirium
         score[mask] = np.maximum(score[mask], 1)
     
     return score
+
+
+# Public SOFA-2 compatibility surface. Scientific rules live in exactly one
+# owner (`easyicu.scores.sofa2`); these wrappers preserve the historical
+# positional callback signatures without maintaining a second rule set.
+def sofa2_resp(
+    pafi: pd.Series,
+    spo2: Optional[pd.Series] = None,
+    fio2: Optional[pd.Series] = None,
+    adv_resp: Optional[pd.Series] = None,
+    ecmo: Optional[pd.Series] = None,
+    ecmo_indication: Optional[pd.Series] = None,
+    support_unavailable_or_ceiling: Optional[pd.Series] = None,
+    oxygenation_sustained_1h: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_resp as canonical
+
+    return canonical(
+        pafi,
+        spo2=spo2,
+        fio2=fio2,
+        adv_resp=adv_resp,
+        ecmo=ecmo,
+        ecmo_indication=ecmo_indication,
+        support_unavailable_or_ceiling=support_unavailable_or_ceiling,
+        oxygenation_sustained_1h=oxygenation_sustained_1h,
+    )
+
+
+def sofa2_cardio(
+    map: pd.Series,
+    norepi60: Optional[pd.Series] = None,
+    epi60: Optional[pd.Series] = None,
+    dopa60: Optional[pd.Series] = None,
+    dobu60: Optional[pd.Series] = None,
+    other_vaso: Optional[pd.Series] = None,
+    mech_circ_support: Optional[pd.Series] = None,
+    ecmo: Optional[pd.Series] = None,
+    ecmo_indication: Optional[pd.Series] = None,
+    vasopressors_unavailable: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_cardio as canonical
+
+    return canonical(
+        map,
+        norepi60=norepi60,
+        epi60=epi60,
+        dopa60=dopa60,
+        dobu60=dobu60,
+        other_vaso=other_vaso,
+        mech_circ_support=mech_circ_support,
+        ecmo=ecmo,
+        ecmo_indication=ecmo_indication,
+        vasopressors_unavailable=vasopressors_unavailable,
+    )
+
+
+def sofa2_cns(
+    gcs: pd.Series,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
+    delirium_tx: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_cns as canonical
+
+    return canonical(
+        gcs,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx_evidence=delirium_tx_evidence,
+        delirium_tx=delirium_tx,
+        delirium_positive=delirium_positive,
+        motor_response=motor_response,
+        sedated_gcs=sedated_gcs,
+        pre_sedation_gcs=pre_sedation_gcs,
+        sedated=sedated,
+    )
+
+
+def sofa2_cns_proxy_sensitivity(
+    gcs: pd.Series,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
+    delirium_tx: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_cns_proxy_sensitivity as canonical
+
+    return canonical(
+        gcs,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx_evidence=delirium_tx_evidence,
+        delirium_tx=delirium_tx,
+        delirium_positive=delirium_positive,
+        motor_response=motor_response,
+        sedated_gcs=sedated_gcs,
+        pre_sedation_gcs=pre_sedation_gcs,
+        sedated=sedated,
+    )
+
+
+def sofa2_cns_delirium_tx_ascertainment(
+    gcs: pd.Series,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
+    delirium_tx: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_cns_delirium_tx_ascertainment as canonical
+
+    return canonical(
+        gcs,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx_evidence=delirium_tx_evidence,
+        delirium_tx=delirium_tx,
+        delirium_positive=delirium_positive,
+        motor_response=motor_response,
+        sedated_gcs=sedated_gcs,
+        pre_sedation_gcs=pre_sedation_gcs,
+        sedated=sedated,
+    )
+
+
+def sofa2_cns_ascertainment(
+    gcs: pd.Series,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
+    delirium_tx: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Deprecated compatibility alias for the clause-specific receipt."""
+
+    return sofa2_cns_delirium_tx_ascertainment(
+        gcs,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx_evidence=delirium_tx_evidence,
+        delirium_tx=delirium_tx,
+        delirium_positive=delirium_positive,
+        motor_response=motor_response,
+        sedated_gcs=sedated_gcs,
+        pre_sedation_gcs=pre_sedation_gcs,
+        sedated=sedated,
+    )
+
+
+def sofa2_renal(
+    crea: pd.Series,
+    rrt: Optional[pd.Series] = None,
+    rrt_criteria: Optional[pd.Series] = None,
+    uo_6h: Optional[pd.Series] = None,
+    uo_12h: Optional[pd.Series] = None,
+    uo_24h: Optional[pd.Series] = None,
+    potassium: Optional[pd.Series] = None,
+    ph: Optional[pd.Series] = None,
+    bicarb: Optional[pd.Series] = None,
+    rrt_episode_active: Optional[pd.Series] = None,
+    rrt_nonrenal_only: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_renal as canonical
+
+    return canonical(
+        crea,
+        rrt=rrt,
+        rrt_criteria=rrt_criteria,
+        rrt_episode_active=rrt_episode_active,
+        rrt_nonrenal_only=rrt_nonrenal_only,
+        uo_6h=uo_6h,
+        uo_12h=uo_12h,
+        uo_24h=uo_24h,
+        potassium=potassium,
+        ph=ph,
+        bicarb=bicarb,
+    )
 
 def sirs_score(
     temp: pd.Series,
@@ -972,51 +1168,19 @@ def apache_ii_score(
     wbc: Optional[pd.Series] = None,
     gcs: Optional[pd.Series] = None,
 ) -> pd.Series:
-    """Calculate APACHE II score (simplified version).
+    """Fail closed until the complete APACHE II contract is implemented.
 
-    Note: This is a simplified implementation. Full APACHE II requires
-    additional chronic health and admission diagnosis information.
-
-    Args:
-        age: Age in years
-        temp: Temperature (°C)
-        map_val: Mean arterial pressure
-        hr: Heart rate
-        resp: Respiratory rate
-        pao2: PaO2 (optional)
-        ph: Arterial pH (optional)
-        na: Sodium (optional)
-        k: Potassium (optional)
-        crea: Creatinine (optional)
-        hct: Hematocrit (optional)
-        wbc: White blood cell count (optional)
-        gcs: Glasgow Coma Score (optional)
-
-    Returns:
-        Series with APACHE II scores
+    APACHE II requires all 12 acute physiology variables plus age and chronic
+    health points. The historical function implemented only age and
+    temperature, so returning that value under the APACHE II name was unsafe.
+    The signature remains import-compatible while callers receive a stable,
+    attributable error instead of a clinically invalid partial score.
     """
-    score = pd.Series(0, index=age.index, dtype=float)
-    
-    # Age points
-    score[age >= 45] += 2
-    score[age >= 55] += 3
-    score[age >= 65] += 5
-    score[age >= 75] += 6
-    
-    # Temperature
-    score[temp >= 41] += 4
-    score[(temp >= 39) & (temp < 41)] += 3
-    score[(temp >= 38.5) & (temp < 39)] += 1
-    score[(temp >= 36) & (temp < 38.5)] += 0
-    score[(temp >= 34) & (temp < 36)] += 1
-    score[(temp >= 32) & (temp < 34)] += 2
-    score[(temp >= 30) & (temp < 32)] += 3
-    score[temp < 30] += 4
-    
-    # Additional components would be added here...
-    # This is a placeholder for demonstration
-    
-    return score.astype(int)
+    raise UnsupportedClinicalScoreError(
+        "apache_ii_not_implemented",
+        "APACHE II is unavailable: the complete acute physiology, age, and "
+        "chronic health contract has not been implemented and validated.",
+    )
 
 def news_score(
     resp: pd.Series,
@@ -1259,7 +1423,7 @@ def pafi(
     fio2: pd.DataFrame,
     match_win: pd.Timedelta = pd.Timedelta(hours=2),
     mode: str = "match_vals",
-    fix_na_fio2: bool = True,
+    fix_na_fio2: bool = False,
     database: str = None,
 ) -> pd.DataFrame:
     """Calculate PaO2/FiO2 ratio (P/F ratio) from oxygen partial pressure and FiO2.
@@ -1338,9 +1502,18 @@ def pafi(
     else:
         raise ValueError(f"Unknown mode: {mode}")
     
-    # Fix missing FiO2 (assume room air = 21%)
+    result['fio2_observed'] = result['fio2'].notna()
+    result['fio2_imputed'] = False
+    result['fio2_assessment_reason'] = np.where(
+        result['fio2_observed'], 'observed', 'missing_fio2'
+    )
+
+    # Room-air imputation is an explicit opt-in and leaves durable provenance.
     if fix_na_fio2:
-        result.loc[result['fio2'].isna(), 'fio2'] = 21.0
+        missing_fio2 = result['fio2'].isna()
+        result.loc[missing_fio2, 'fio2'] = 21.0
+        result.loc[missing_fio2, 'fio2_imputed'] = True
+        result.loc[missing_fio2, 'fio2_assessment_reason'] = 'room_air_assumption'
     
     # Convert to numeric, handling None and string values
     result['po2'] = pd.to_numeric(result['po2'], errors='coerce')
@@ -1366,7 +1539,7 @@ def safi(
     fio2: pd.DataFrame,
     match_win: pd.Timedelta = pd.Timedelta(hours=2),
     mode: str = "match_vals",
-    fix_na_fio2: bool = True,
+    fix_na_fio2: bool = False,
     database: str = None,
 ) -> pd.DataFrame:
     """Calculate SaO2/FiO2 ratio (S/F ratio) from oxygen saturation and FiO2.
@@ -1444,9 +1617,18 @@ def safi(
     else:
         raise ValueError(f"Unknown mode: {mode}")
     
-    # Fix missing FiO2 (assume room air = 21%)
+    result['fio2_observed'] = result['fio2'].notna()
+    result['fio2_imputed'] = False
+    result['fio2_assessment_reason'] = np.where(
+        result['fio2_observed'], 'observed', 'missing_fio2'
+    )
+
+    # Fix missing FiO2 (assume room air = 21%) and preserve that assumption.
     if fix_na_fio2:
-        result.loc[result['fio2'].isna(), 'fio2'] = 21.0
+        missing_fio2 = result['fio2'].isna()
+        result.loc[missing_fio2, 'fio2'] = 21.0
+        result.loc[missing_fio2, 'fio2_imputed'] = True
+        result.loc[missing_fio2, 'fio2_assessment_reason'] = 'room_air_assumption'
     
     # Convert to numeric, handling None and string values
     result['o2sat'] = pd.to_numeric(result['o2sat'], errors='coerce')

@@ -103,6 +103,11 @@ _READ_COLUMNS = (
 
 ADJUSTED_ASSOCIATION_FIGURE_CAPABILITY = TypedInputCapability(
     required=frozenset({ADJUSTED_ASSOCIATION_FIGURE_INPUT}),
+    # ``one_per_role`` is still complete-table consumption: the host has
+    # verified that the bound table contains exactly one row for every role
+    # named by the Planner and no other rows.  This renderer draws every one
+    # of those verified rows; it never chooses a role itself.
+    supported_consumption_modes=frozenset({"all_rows", "one_per_role"}),
 )
 
 #: ``fit_status`` values the producer writes for a model that actually fitted.
@@ -276,9 +281,10 @@ def _load_estimates(
         or identity.get("product") != "adjusted_association_estimates"
         or identity.get("sha256") != expected_sha256
         or consumption.get("input_key") != ADJUSTED_ASSOCIATION_FIGURE_INPUT
-        # Every estimate the model registered has to be drawn: a figure showing
-        # a chosen subset would report a different analysis from the plan's.
-        or consumption.get("mode") != "all_rows"
+        # Every estimate the model registered has to be drawn. ``one_per_role``
+        # is legal only when its verified roster covers every bound row; it is
+        # not permission for this renderer to select a subset.
+        or consumption.get("mode") not in {"all_rows", "one_per_role"}
         or consumption.get("artifact_sha256") != expected_sha256
     ):
         raise ValueError("adjusted association authority binding is incomplete")
@@ -313,6 +319,31 @@ def _load_estimates(
     frame = pd.read_csv(path)
     if not set(_READ_COLUMNS).issubset(set(frame.columns)) or len(frame) != row_count:
         raise ValueError("estimates bytes disagree with the product contract")
+    if consumption.get("mode") == "one_per_role":
+        role_column = str(consumption.get("role_column") or "")
+        expected_roles = consumption.get("expected_roles")
+        verified_counts = consumption.get("verified_role_counts")
+        observed_roles = (
+            [str(value) for value in frame[role_column].tolist()]
+            if role_column in frame.columns
+            else []
+        )
+        observed_counts = {
+            str(role): observed_roles.count(str(role))
+            for role in expected_roles or ()
+        }
+        if (
+            not role_column
+            or role_column not in frame.columns
+            or not isinstance(expected_roles, list)
+            or not expected_roles
+            or not isinstance(verified_counts, dict)
+            or verified_counts != {str(role): 1 for role in expected_roles}
+            or len(expected_roles) != row_count
+            or observed_counts != {str(role): 1 for role in expected_roles}
+            or set(observed_roles) != {str(role) for role in expected_roles}
+        ):
+            raise ValueError("one-per-role association authority is incomplete")
     if _canonical_sha256(path) != expected_sha256:
         raise ValueError("estimates changed while they were being read")
     return frame, binding
@@ -544,7 +575,12 @@ def run_adjusted_association_figure(
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style(font_size=7.0)
-    height_mm = 26.0 + 7.0 * len(rows)
+    # Keep the axis label and the model declaration in separate physical
+    # bands.  The earlier 33 mm one-row canvas made those two independent text
+    # groups overlap even though both were individually legible.  The model
+    # declaration is part of the scientific contract, so dropping it is not a
+    # layout fix; reserve enough height for both instead.
+    height_mm = 42.0 + 7.0 * len(rows)
     fig, ax = plt.subplots(figsize=(120 / 25.4, height_mm / 25.4))
 
     drawn = [index for index, ok in enumerate(rows["__drawable"]) if ok]
@@ -643,31 +679,33 @@ def run_adjusted_association_figure(
     # and the caption travels separately from the image.
     adjustment = _adjustment_note(frame["covariates"].iloc[0])
     estimator = _reader_label(_text(frame["estimator_kind"].iloc[0]))
+    association_kind = "unadjusted" if adjustment.startswith("Unadjusted:") else "adjusted"
+    model_note = f"{adjustment} {estimator[:1].upper()}{estimator[1:]} model."
     fig.text(
         0.02,
-        0.035,
-        f"{adjustment} {estimator[:1].upper()}{estimator[1:]} model.",
+        0.04,
+        model_note,
         fontsize=5.9,
         color=palette["neutral"],
         ha="left",
         va="bottom",
     )
-    fig.subplots_adjust(left=0.30, right=0.72, bottom=0.30, top=0.88)
+    fig.subplots_adjust(left=0.30, right=0.72, bottom=0.36, top=0.88)
     contract = make_figure_contract(
         figure_id=figure_product,
         title=(
-            f"Adjusted association between {_reader_label(exposure)} and "
+            f"{association_kind.capitalize()} association between {_reader_label(exposure)} and "
             f"{_reader_label(outcome)}"
         ),
         core_claim=(
-            f"The adjusted {_reader_label(scale.name)} for "
+            f"The {association_kind} {_reader_label(scale.name)} for "
             f"{_reader_label(exposure)} on {_reader_label(outcome)}, with its "
             "confidence interval, as fitted and locked by the host model owner."
         ),
         panels=[
             {
                 "panel_id": "A",
-                "title": "Adjusted effect estimate",
+                "title": f"{association_kind.capitalize()} effect estimate",
                 "role": "primary_effect",
                 "claim": (
                     f"Point estimate and confidence interval on the "
@@ -677,7 +715,7 @@ def run_adjusted_association_figure(
                 ),
                 "evidence_ids": [source_path.name],
                 "metadata": {
-                    "chart_type": "forest_interval_adjusted_association",
+                    "chart_type": f"forest_interval_{association_kind}_association",
                     "source_data": [source_path.name],
                 },
             }

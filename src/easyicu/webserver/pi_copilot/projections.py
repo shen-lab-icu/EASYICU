@@ -100,6 +100,26 @@ def project_study_context(
     source = source if isinstance(source, Mapping) else {}
     cohort = context.get("cohort")
     cohort = cohort if isinstance(cohort, Mapping) else {}
+    idea_handoff = context.get("idea_handoff")
+    idea_handoff = idea_handoff if isinstance(idea_handoff, Mapping) else {}
+    literature_authority = context.get("literature_authority")
+    literature_authority = (
+        literature_authority
+        if isinstance(literature_authority, Mapping)
+        else {}
+    )
+    execution_concepts = context.get("execution_concepts")
+    execution_concepts = (
+        execution_concepts if isinstance(execution_concepts, Mapping) else {}
+    )
+    analysis_design = context.get("analysis_design")
+    analysis_design = (
+        analysis_design if isinstance(analysis_design, Mapping) else {}
+    )
+    sensitivity_specs = context.get("sensitivity_specs")
+    sensitivity_specs = (
+        sensitivity_specs if isinstance(sensitivity_specs, list) else []
+    )
     safe_cohort_keys = (
         "preset",
         "label",
@@ -144,6 +164,73 @@ def project_study_context(
                 str(item)[:120] for item in (context.get("modules") or [])
             ][:MAX_LIST_ITEMS],
             "outcome": _bounded_text(context.get("outcome"), 500),
+            "primary_exposure": _bounded_text(
+                context.get("primary_exposure"), 160
+            ),
+            "covariates": [
+                _bounded_text(item, 160)
+                for item in (context.get("covariates") or [])
+            ][:MAX_LIST_ITEMS],
+            "covariate_selection": (
+                _bounded_text(
+                    context.get("covariate_selection") or "planner_selectable",
+                    40,
+                )
+            ),
+            "execution_concepts": {
+                **(
+                    {"outcome": _bounded_text(execution_concepts.get("outcome"), 80)}
+                    if execution_concepts.get("outcome")
+                    else {}
+                ),
+                **(
+                    {
+                        "primary_exposure": _bounded_text(
+                            execution_concepts.get("primary_exposure"), 80
+                        )
+                    }
+                    if execution_concepts.get("primary_exposure")
+                    else {}
+                ),
+                "covariates": [
+                    _bounded_text(item, 80)
+                    for item in (execution_concepts.get("covariates") or [])
+                ][:MAX_LIST_ITEMS],
+            },
+            "analysis_design": {
+                key: _bounded_text(analysis_design.get(key), 80)
+                for key in (
+                    "analysis_family",
+                    "analysis_unit",
+                    "variance_estimator",
+                    "cluster_unit",
+                )
+                if analysis_design.get(key)
+            },
+            "sensitivity_specs": [
+                {
+                    key: (
+                        [
+                            _bounded_text(item, 80)
+                            for item in (spec.get(key) or [])
+                        ][:16]
+                        if key == "execution_variables"
+                        else spec.get(key)
+                    )
+                    for key in (
+                        "spec_id",
+                        "axis",
+                        "strategy",
+                        "execution_variables",
+                        "landmark_hours",
+                        "require_alive_at_landmark",
+                        "exclude_negative_event_times",
+                    )
+                    if spec.get(key) is not None
+                }
+                for spec in sensitivity_specs[:16]
+                if isinstance(spec, Mapping)
+            ],
             "time_window": dict(context.get("time_window") or {}),
             "comparator": _bounded_text(context.get("comparator"), 500),
             "export_format": _bounded_text(context.get("export_format"), 40),
@@ -152,6 +239,33 @@ def project_study_context(
             "last_route": context.get("last_route"),
             "active_job_id": context.get("active_job_id"),
             "confirmations": dict(context.get("confirmations") or {}),
+            "idea_handoff": {
+                key: idea_handoff.get(key)
+                for key in (
+                    "schema_version",
+                    "run_id",
+                    "idea_id",
+                    "canonical_handoff_sha256",
+                    "status",
+                    "accepted_at",
+                    "go_no_go",
+                    "go_no_go_reason",
+                )
+                if idea_handoff.get(key) is not None
+            },
+            "literature_authority": {
+                key: literature_authority.get(key)
+                for key in (
+                    "schema_version",
+                    "receipt_id",
+                    "receipt_sha256",
+                    "status",
+                    "result_count",
+                    "searched_at",
+                    "study_configuration_sha256",
+                )
+                if literature_authority.get(key) is not None
+            },
         }
     )
 
@@ -165,6 +279,12 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     for event in events[-20:]:
         if not isinstance(event, Mapping):
             continue
+        label = _bounded_text(event.get("label"), 240)
+        if label:
+            try:
+                reject_sensitive_message(label)
+            except PiCopilotError:
+                label = ""
         progress.append(
             {
                 key: event.get(key)
@@ -179,21 +299,243 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 if event.get(key) is not None
             }
             | {
+                **({"label": label} if label else {}),
                 "reason_code": stable_code(event.get("reason"))
             }
         )
+    result = snapshot.get("result")
+    result = result if isinstance(result, Mapping) else {}
+    run_id = stable_code(result.get("run_id"))
+    artifacts = result.get("artifacts")
+    artifacts = artifacts if isinstance(artifacts, list) else []
+    artifact_refs = []
+    for row in artifacts[:80]:
+        if not isinstance(row, Mapping):
+            continue
+        name = _bounded_text(row.get("name"), 160)
+        digest = _bounded_text(row.get("sha256"), 64).lower()
+        if (
+            not run_id
+            or not name
+            or Path(name).name != name
+            or not re.fullmatch(r"[a-f0-9]{64}", digest)
+        ):
+            continue
+        artifact_refs.append(
+            {
+                "kind": (
+                    "system_validation_document"
+                    if name in {
+                        "system_validation_report.html",
+                        "system_validation_report.pdf",
+                    }
+                    else "research_document"
+                    if name in {
+                        "manuscript_scaffold.pdf",
+                        "manuscript_scaffold.tex",
+                        "manuscript_scaffold.bib",
+                    }
+                    else "research_artifact"
+                ),
+                "run_id": run_id,
+                "artifact": name,
+                "label": name,
+                "sha256": digest,
+                **(
+                    {"size": int(row.get("size") or row.get("bytes"))}
+                    if isinstance(row.get("size") or row.get("bytes"), int)
+                    else {}
+                ),
+            }
+        )
+    gate = result.get("gate")
+    gate = gate if isinstance(gate, Mapping) else {}
     return ensure_safe_projection(
         {
             "present": True,
             "job_id": snapshot.get("id"),
             "kind": snapshot.get("kind"),
             "status": snapshot.get("status"),
+            "created_at_epoch": snapshot.get("created"),
+            "finished_at_epoch": snapshot.get("finished"),
             "cancel_requested": bool(snapshot.get("cancel_requested")),
             "cancel_reason_code": stable_code(snapshot.get("cancel_reason")),
             "error_code": _safe_error_code(snapshot.get("error")),
             "progress": progress,
+            "run_id": run_id,
+            "artifact_refs": artifact_refs,
+            "gate_status": stable_code(gate.get("status")),
+            "gate_reason_code": stable_code(gate.get("reason")),
+            "reportable": bool(gate.get("reportable")),
+            "human_review_pending": bool(result.get("human_review_pending")),
         }
     )
+
+
+def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
+    """Keep only reopenable, path-free references from a normalized Pi event."""
+
+    if not isinstance(value, Mapping):
+        return None
+    kind = str(value.get("kind") or "").strip()
+    if kind == "literature_source":
+        url = _bounded_text(value.get("url"), 500)
+        if not re.fullmatch(
+            r"(?:https://pubmed\.ncbi\.nlm\.nih\.gov/[0-9]{1,12}/|"
+            r"https://doi\.org/10\.[0-9]{4,9}/[A-Za-z0-9._;()/:+\-]+)",
+            url,
+        ):
+            return None
+        return {
+            "kind": kind,
+            "url": url,
+            "label": _bounded_text(value.get("label"), 160),
+            "title": _bounded_text(value.get("title"), 500),
+            "year": _bounded_text(value.get("year"), 16),
+            "venue": _bounded_text(value.get("venue"), 240),
+            "doi": _bounded_text(value.get("doi"), 240),
+            "pmid": _bounded_text(value.get("pmid"), 32),
+            "authority_class": stable_code(value.get("authority_class")),
+        }
+    if kind in {
+        "research_artifact",
+        "research_document",
+        "system_validation_document",
+    }:
+        run_id = stable_code(value.get("run_id"))
+        artifact = _bounded_text(value.get("artifact"), 160)
+        digest = _bounded_text(value.get("sha256"), 64).lower()
+        if (
+            not run_id
+            or not artifact
+            or Path(artifact).name != artifact
+            or not re.fullmatch(r"[a-f0-9]{64}", digest)
+        ):
+            return None
+        return {
+            "kind": kind,
+            "run_id": run_id,
+            "artifact": artifact,
+            "label": _bounded_text(value.get("label") or artifact, 160),
+            "media_type": _bounded_text(value.get("media_type"), 120),
+            "sha256": digest,
+        }
+    if kind == "data_package_review":
+        study_id = stable_code(value.get("study_context_id"))
+        digest = _bounded_text(value.get("review_sha256"), 64).lower()
+        revision = value.get("study_revision")
+        if (
+            not study_id
+            or not isinstance(revision, int)
+            or revision < 0
+            or not re.fullmatch(r"[a-f0-9]{64}", digest)
+        ):
+            return None
+        return {
+            "kind": kind,
+            "study_context_id": study_id,
+            "study_revision": revision,
+            "review_sha256": digest,
+            "label": _bounded_text(value.get("label"), 160),
+            "media_type": "application/json",
+        }
+    if kind in {"file", "webpage"}:
+        file_name = _bounded_text(value.get("file"), 240).replace("\\", "/")
+        parts = file_name.split("/")
+        if (
+            not file_name
+            or file_name.startswith("/")
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
+            return None
+        digest = _bounded_text(value.get("sha256"), 64).lower()
+        checked_digest = _bounded_text(value.get("checked_sha256"), 64).lower()
+        if kind == "webpage" and not re.fullmatch(r"[a-f0-9]{64}", checked_digest):
+            return None
+        return {
+            "kind": kind,
+            "file": file_name,
+            "label": _bounded_text(value.get("label") or parts[-1], 160),
+            "media_type": _bounded_text(value.get("media_type"), 120),
+            **(
+                {"sha256": digest}
+                if re.fullmatch(r"[a-f0-9]{64}", digest)
+                else {}
+            ),
+            **({"checked_sha256": checked_digest} if kind == "webpage" else {}),
+        }
+    return None
+
+
+def project_pi_replay_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return one bounded UX replay event without text deltas or tool arguments."""
+
+    event_type = stable_code(event.get("type"))
+    if event_type not in {
+        "run_start",
+        "turn_start",
+        "assistant_start",
+        "tool_start",
+        "tool_progress",
+        "tool_end",
+        "message_end",
+        "turn_end",
+        "agent_cycle_end",
+        "run_end",
+        "compaction_start",
+        "compaction_end",
+        "retry",
+    }:
+        return None
+    payload: Dict[str, Any] = {
+        "type": event_type,
+        "at": _bounded_text(event.get("at"), 64),
+    }
+    for key in (
+        "turn_index",
+        "phase",
+        "attempt",
+        "max_attempts",
+        "tool_call_id",
+        "tool_name",
+        "status",
+        "code",
+        "owner",
+        "stop_reason",
+        "error_code",
+        "job_id",
+    ):
+        value = event.get(key)
+        if value is None or isinstance(value, (dict, list)):
+            continue
+        if key in {"turn_index", "phase", "attempt", "max_attempts"}:
+            try:
+                payload[key] = int(value)
+            except (TypeError, ValueError):
+                continue
+        else:
+            payload[key] = _bounded_text(value, 240)
+    if event.get("reason") is not None:
+        payload["reason_code"] = stable_code(event.get("reason"))
+    if event.get("is_error") is not None:
+        payload["is_error"] = bool(event.get("is_error"))
+    if event.get("will_retry") is not None:
+        payload["will_retry"] = bool(event.get("will_retry"))
+    if event.get("aborted") is not None:
+        payload["aborted"] = bool(event.get("aborted"))
+    resource = _project_replay_resource(event.get("resource"))
+    if resource is not None:
+        payload["resource"] = resource
+    resources = [
+        projected
+        for raw in (
+            event.get("resources") if isinstance(event.get("resources"), list) else []
+        )[:80]
+        if (projected := _project_replay_resource(raw)) is not None
+    ]
+    if resources:
+        payload["resources"] = resources
+    return ensure_safe_projection(payload)
 
 
 def project_capabilities(payload: Mapping[str, Any]) -> Dict[str, Any]:
@@ -220,15 +562,29 @@ def project_capabilities(payload: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
-    return ensure_safe_projection(
-        {
+    pending_review_reason_codes = [
+        stable_code(item)
+        for item in (row.get("pending_review_reason_codes") or [])
+        if stable_code(item)
+    ][:16]
+    waiting_for_plan_review = (
+        str(row.get("run_status") or "") == "human_review_pending"
+        and bool(
+            {"operator_plan_approval_required", "plan_scientific_changes_required"}
+            & set(pending_review_reason_codes)
+        )
+    )
+    projected = {
             key: row.get(key)
             for key in (
                 "run_id",
                 "study_id",
+                "scientific_configuration_sha256",
                 "mode",
                 "run_type",
+                "engine",
                 "gate_status",
+                "run_status",
                 "readiness_status",
                 "signed",
                 "signoff_stale",
@@ -238,10 +594,32 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
                 "artifact_count",
                 "artifact_names",
                 "updated_at",
+                "plan_approval_allowed",
+                "scientific_plan_review_status",
+                "scientific_plan_review_score",
             )
             if row.get(key) is not None
         }
-    )
+    if pending_review_reason_codes:
+        projected["pending_review_reason_codes"] = pending_review_reason_codes
+    if waiting_for_plan_review:
+        # Result/manuscript files are intentionally emitted as governed
+        # placeholders at the plan stage.  Make the execution state explicit
+        # so a conversational model cannot infer that analysis ran merely from
+        # those filenames.
+        projected.update(
+            {
+                "execution_phase": "plan_review",
+                "human_plan_review_pending": True,
+                "plan_approval_allowed": bool(
+                    row.get("plan_approval_allowed") is not False
+                ),
+                "analysis_executed": False,
+                "scientific_results_available": False,
+                "artifact_semantics": "plan_stage_placeholders_not_analysis_results",
+            }
+        )
+    return ensure_safe_projection(projected)
 
 
 def project_artifacts(rows: Iterable[Mapping[str, Any]]) -> list[Dict[str, Any]]:

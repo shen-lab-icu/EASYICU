@@ -29,7 +29,10 @@ import pyarrow.parquet as pq
 
 DEFAULT_DB = Path("/Volumes/外置硬盘/databases/mimiciv")
 DEFAULT_OUT = (
-    Path(__file__).resolve().parents[1] / "benchmark" / "source_item_catalog_miiv.json"
+    Path(__file__).resolve().parents[1]
+    / "benchmarks"
+    / "catalogs"
+    / "source_item_catalog_miiv.json"
 )
 
 

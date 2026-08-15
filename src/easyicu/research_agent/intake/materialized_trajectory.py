@@ -57,6 +57,9 @@ TRAJECTORY_COLUMNS = (
     "concept",
     "value_num",
     "value_str",
+    "evidence_state",
+    "owner_observed",
+    "owner_available",
 )
 TRAJECTORY_SCHEMA = pa.schema(
     (
@@ -65,6 +68,9 @@ TRAJECTORY_SCHEMA = pa.schema(
         pa.field("concept", pa.string(), nullable=False),
         pa.field("value_num", pa.float64(), nullable=True),
         pa.field("value_str", pa.string(), nullable=False),
+        pa.field("evidence_state", pa.string(), nullable=False),
+        pa.field("owner_observed", pa.int8(), nullable=False),
+        pa.field("owner_available", pa.int8(), nullable=False),
     )
 )
 
@@ -896,6 +902,30 @@ def _canonical_frame(frame: pd.DataFrame) -> pa.Table:
     data["value_str"] = data["value_str"].astype("string")
     if data[["value_num", "value_str"]].isna().all(axis=1).any():
         raise MaterializedTrajectoryError("trajectory row has no recorded value")
+    allowed_states = {"direct_observed", "owner_locf_available"}
+    if data["evidence_state"].isna().any() or not set(
+        data["evidence_state"].astype(str)
+    ).issubset(allowed_states):
+        raise MaterializedTrajectoryError("trajectory evidence_state is invalid")
+    data["evidence_state"] = data["evidence_state"].astype("string")
+    for column in ("owner_observed", "owner_available"):
+        numeric = pd.to_numeric(data[column], errors="raise")
+        if numeric.isna().any() or not numeric.isin([0, 1]).all():
+            raise MaterializedTrajectoryError(
+                f"trajectory {column} must be binary and non-null"
+            )
+        data[column] = numeric.astype("int8")
+    if (data["owner_available"] != 1).any():
+        raise MaterializedTrajectoryError(
+            "trajectory may not publish an owner-unavailable value"
+        )
+    expected_state = data["owner_observed"].map(
+        {1: "direct_observed", 0: "owner_locf_available"}
+    )
+    if not data["evidence_state"].astype(str).eq(expected_state).all():
+        raise MaterializedTrajectoryError(
+            "trajectory evidence_state disagrees with owner receipts"
+        )
     data = data.sort_values(
         list(TRAJECTORY_COLUMNS), kind="mergesort", na_position="last"
     ).reset_index(drop=True)

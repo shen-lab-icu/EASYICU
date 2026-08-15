@@ -53,6 +53,16 @@ from easyicu.research_agent.intake.materialized_trajectory import (
 )
 
 
+def _direct_receipts(frame: pd.DataFrame) -> pd.DataFrame:
+    """Give a hand-built test trajectory the current owner-evidence contract."""
+
+    out = frame.copy()
+    out["evidence_state"] = "direct_observed"
+    out["owner_observed"] = 1
+    out["owner_available"] = 1
+    return out.loc[:, TRAJECTORY_COLUMNS]
+
+
 def _resign_selected_trajectory_authority(
     trajectory_path: Path,
     mutate,
@@ -387,7 +397,7 @@ def test_final_cohort_filter_reclassifies_materialized_concept_as_unobserved(
 def test_invalid_trajectory_frame_is_rejected_before_publication(tmp_path, mutator):
     paths, cohort, _trajectory = _bundle(tmp_path)
     target = paths["parquet"].parent / "invalid_trajectory.parquet"
-    base = pd.DataFrame(
+    base = _direct_receipts(pd.DataFrame(
         {
             "stay_id": [1],
             "charttime": [1.0],
@@ -395,7 +405,7 @@ def test_invalid_trajectory_frame_is_rejected_before_publication(tmp_path, mutat
             "value_num": [1.0],
             "value_str": ["1.0"],
         }
-    )
+    ))
 
     with pytest.raises(MaterializedTrajectoryError):
         publish_materialized_trajectory_authority(
@@ -419,7 +429,7 @@ def test_invalid_trajectory_frame_is_rejected_before_publication(tmp_path, mutat
 def test_trajectory_rejects_identity_outside_bound_universe(tmp_path):
     paths, cohort, _trajectory = _bundle(tmp_path)
     target = paths["parquet"].parent / "foreign_trajectory.parquet"
-    frame = pd.DataFrame(
+    frame = _direct_receipts(pd.DataFrame(
         {
             "stay_id": [999],
             "charttime": [1.0],
@@ -427,7 +437,7 @@ def test_trajectory_rejects_identity_outside_bound_universe(tmp_path):
             "value_num": [1.0],
             "value_str": ["1.0"],
         }
-    )
+    ))
 
     with pytest.raises(MaterializedTrajectoryError, match="outside"):
         publish_materialized_trajectory_authority(
@@ -464,7 +474,7 @@ def test_trajectory_target_symlink_never_touches_victim(tmp_path):
     victim.write_bytes(b"sentinel")
     target = paths["parquet"].parent / "linked_trajectory.parquet"
     target.symlink_to(victim)
-    frame = pd.DataFrame(
+    frame = _direct_receipts(pd.DataFrame(
         {
             "stay_id": [1],
             "charttime": [1.0],
@@ -472,7 +482,7 @@ def test_trajectory_target_symlink_never_touches_victim(tmp_path):
             "value_num": [1.0],
             "value_str": ["1.0"],
         }
-    )
+    ))
 
     with pytest.raises(MaterializedTrajectoryError):
         publish_materialized_trajectory_authority(
@@ -599,7 +609,7 @@ def test_trajectory_publication_root_swap_cannot_write_victim(tmp_path, monkeypa
     victim_root.mkdir()
     (victim_root / "sentinel").write_text("safe", encoding="utf-8")
     target = original_root / "swapped_trajectory.parquet"
-    frame = pd.DataFrame(
+    frame = _direct_receipts(pd.DataFrame(
         {
             "stay_id": [1],
             "charttime": [1.0],
@@ -607,7 +617,7 @@ def test_trajectory_publication_root_swap_cannot_write_victim(tmp_path, monkeypa
             "value_num": [1.0],
             "value_str": ["1.0"],
         }
-    )
+    ))
     original = AnchoredDirectory.require_absent
     swapped = False
 

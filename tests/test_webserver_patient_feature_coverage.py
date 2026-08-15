@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
+from easyicu import concept_catalog
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.app import app
@@ -198,7 +200,9 @@ def test_feature_coverage_separates_observed_all_null_and_unsupported(
         for row in module["features"]
     }
 
-    assert payload["summary"]["definitions"] == 288
+    assert payload["summary"]["definitions"] == len(
+        concept_catalog.CONCEPT_DICTIONARY
+    )
     assert payload["summary"]["modules"] == 19
     assert rows["hr"]["status"] == "observed"
     assert rows["hr"]["non_null_count"] == 4
@@ -215,6 +219,32 @@ def test_feature_coverage_separates_observed_all_null_and_unsupported(
     assert payload["provenance"]["patient_rows_returned"] is False
 
 
+def test_feature_coverage_cache_invalidates_same_size_restored_mtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export = tmp_path / "export"
+    export.mkdir()
+    source = export / "vitals.parquet"
+    source.write_bytes(b"old-content")
+    original = source.stat()
+    description = {"files": [{"file": source.name, "module": "vitals"}]}
+    calls: list[int] = []
+
+    def fake_build(_root: Path, _description: Any) -> dict[str, Any]:
+        calls.append(len(calls) + 1)
+        return {"call": calls[-1]}
+
+    monkeypatch.setattr(coverage, "_build_feature_coverage", fake_build)
+    assert coverage.build_feature_coverage(export, description)["call"] == 1
+
+    source.write_bytes(b"new-content")
+    os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    assert coverage.build_feature_coverage(export, description)["call"] == 2
+    assert len(calls) == 2
+
+
 def test_drilldown_summary_uses_export_wide_catalog_coverage(
     tmp_path: Path,
 ) -> None:
@@ -222,7 +252,7 @@ def test_drilldown_summary_uses_export_wide_catalog_coverage(
     payload = TestClient(app).post("/api/patient-review/drilldown", json={}).json()
 
     loaded = payload["data_tables"]["loaded_summary"]
-    assert loaded["review_features"] == 288
+    assert loaded["review_features"] == len(concept_catalog.CONCEPT_DICTIONARY)
     assert loaded["module_count"] == 19
     assert loaded["observed_features"] == 5
     modules = {row["module"]: row for row in payload["data_tables"]["modules"]}

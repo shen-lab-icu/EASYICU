@@ -19,6 +19,7 @@ method. The pipeline never imports a specific provider.
 from __future__ import annotations
 
 import base64
+from contextvars import ContextVar
 import json
 import math
 import mimetypes
@@ -28,7 +29,7 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..authority.provider_budget import (
     consume_active_provider_handoff,
@@ -38,12 +39,82 @@ from ..authority.secret_redaction import (
     debug_capture_enabled,
     redact_debug_value,
 )
+from .capabilities import llm_supports_vision, model_looks_vision_capable
 from .protocol import LLMClient, LLMMessage
 
 #: Per-field ceiling for the optional LLM debug dump. A full prompt is tens of
 #: kilobytes, and an unbounded per-call dump fills the disk of a machine that
 #: is already tight on space during a long run.
 LLM_DEBUG_FIELD_CHARS = 4000
+
+
+_CLOSED_PROVIDER_FINISH_REASONS = frozenset(
+    {
+        "stop",
+        "length",
+        "tool_calls",
+        "function_call",
+        "content_filter",
+        "cancelled",
+        "error",
+    }
+)
+
+
+def safe_provider_finish_reason(value: Any) -> Optional[str]:
+    """Return a closed diagnostic category, never a provider-supplied token."""
+
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    return normalized if normalized in _CLOSED_PROVIDER_FINISH_REASONS else "other"
+
+
+@dataclass(frozen=True)
+class ProviderCallReceipt:
+    """Call-scoped, response-free metadata for the just-finished transport."""
+
+    finish_reason: Optional[str]
+    usage_summary: Tuple[Tuple[str, int], ...]
+    transport_attempts: int
+
+
+_PROVIDER_CALL_RECEIPT: ContextVar[Optional[ProviderCallReceipt]] = ContextVar(
+    "easyicu_provider_call_receipt",
+    default=None,
+)
+
+
+def clear_provider_call_receipt() -> None:
+    """Clear the current call context before invoking another provider."""
+
+    _PROVIDER_CALL_RECEIPT.set(None)
+
+
+def current_provider_call_receipt() -> Optional[ProviderCallReceipt]:
+    """Return metadata from this context's most recent provider call only."""
+
+    return _PROVIDER_CALL_RECEIPT.get()
+
+
+def _record_provider_call_receipt(
+    *,
+    finish_reason: Any,
+    usage: Optional[Dict[str, Any]],
+    transport_attempts: int,
+) -> None:
+    safe_usage: list[tuple[str, int]] = []
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = (usage or {}).get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            safe_usage.append((key, int(value)))
+    _PROVIDER_CALL_RECEIPT.set(
+        ProviderCallReceipt(
+            finish_reason=safe_provider_finish_reason(finish_reason),
+            usage_summary=tuple(safe_usage),
+            transport_attempts=max(1, int(transport_attempts)),
+        )
+    )
 
 
 def _truncated_debug_text(value: Any) -> str:
@@ -131,15 +202,10 @@ _TRANSIENT_HTTP_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
 def _provider_http_status_code(exc: Exception) -> Optional[int]:
     """Return a provider HTTP status without depending on one SDK class."""
 
-    for candidate in (exc, getattr(exc, "response", None)):
-        if candidate is None:
-            continue
-        value = getattr(candidate, "status_code", None)
-        try:
-            if value is not None:
-                return int(value)
-        except (TypeError, ValueError):
-            pass
+    status_code = _structured_provider_http_status_code(exc)
+    if status_code is not None:
+        return status_code
+
     match = re.search(
         r"\b(?:http(?:\s+status)?|status(?:\s+code)?|error\s+code)"
         r"\s*[:=]?\s*(408|409|429|500|502|503|504)\b",
@@ -147,6 +213,34 @@ def _provider_http_status_code(exc: Exception) -> Optional[int]:
         flags=re.I,
     )
     return int(match.group(1)) if match else None
+
+
+def _structured_provider_http_status_code(exc: Exception) -> Optional[int]:
+    """Read an HTTP status only from typed exception/response attributes.
+
+    A strict host retry policy must never promote arbitrary exception text into
+    transport authority: validator text, provider echoes, and even user input
+    can contain strings such as ``status code 500``.
+    """
+
+    try:
+        response = getattr(exc, "response", None)
+    except Exception:
+        response = None
+    for candidate in (exc, response):
+        if candidate is None:
+            continue
+        try:
+            value = getattr(candidate, "status_code", None)
+            if (
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and 100 <= value <= 599
+            ):
+                return value
+        except Exception:
+            pass
+    return None
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -358,6 +452,7 @@ class OpenAIClient:
         base_url: Optional[str] = None,
         request_timeout: float = 120.0,
         max_retries: int = 8,
+        retryable_http_status_codes: Optional[Sequence[int]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
         supports_vision: Optional[bool] = None,
@@ -368,7 +463,7 @@ class OpenAIClient:
         # cli-proxy-api / Codex Tools instance that intermittently rotates its key
         # or drops the connection) can be given a longer per-call timeout and a
         # bigger retry budget without a code change:
-        #   EASYICU_LLM_TIMEOUT=<seconds>   EASYICU_LLM_MAX_RETRIES=<attempts>
+        #   EASYICU_LLM_TIMEOUT=<seconds>   EASYICU_LLM_MAX_RETRIES=<retries>
         if allow_environment_overrides:
             request_timeout = float(
                 os.environ.get("EASYICU_LLM_TIMEOUT") or request_timeout
@@ -444,6 +539,13 @@ class OpenAIClient:
         # to the SDK as default headers when supplied.
         if extra_headers:
             kwargs["default_headers"] = dict(extra_headers)
+        self._provider_auth_header_mode = (
+            "x-api-key"
+            if any(
+                str(key).strip().lower() == "x-api-key" for key in (extra_headers or {})
+            )
+            else "authorization"
+        )
         # Stash the params needed to REBUILD the client with a fresh httpx
         # connection pool on a transient proxy-401 (see _rebuild_openai_client):
         # the shared :8787 proxy rotates its upstream key, and a POOLED httpx
@@ -471,14 +573,32 @@ class OpenAIClient:
         self._model = model
         self._completion_token_parameter = _completion_token_parameter_name(model)
         self._timeout = request_timeout
-        self._max_retries = int(max_retries)
+        # ``max_retries`` means retries *after* the initial request, matching
+        # both its public name and the structured-response retry contract.  A
+        # historical implementation treated it as total attempts, which made
+        # ``max_retries=1`` issue only one request and forced callers to encode
+        # an off-by-one workaround.  Keep one explicit total-attempt variable
+        # in the loop below instead of letting the two meanings drift again.
+        self._max_retries = max(0, int(max_retries))
+        if retryable_http_status_codes is None:
+            self._retryable_http_status_codes = None
+        else:
+            normalized_statuses: set[int] = set()
+            for raw_code in retryable_http_status_codes:
+                if not isinstance(raw_code, int) or isinstance(raw_code, bool):
+                    raise ValueError("retryable HTTP statuses must be integers")
+                code = raw_code
+                if code < 100 or code > 599:
+                    raise ValueError("retryable HTTP statuses must be in 100..599")
+                normalized_statuses.add(code)
+            self._retryable_http_status_codes = frozenset(normalized_statuses)
         self._stream_enabled = bool(stream_enabled)
         self._allow_environment_overrides = bool(allow_environment_overrides)
         self._extra_body = dict(extra_body or {})
         self.supports_vision = (
             bool(supports_vision)
             if supports_vision is not None
-            else _model_looks_vision_capable(model)
+            else model_looks_vision_capable(model)
         )
         if _model_looks_like_qwen3(model):
             self._extra_body.setdefault("enable_thinking", False)
@@ -630,6 +750,16 @@ class OpenAIClient:
         The tuple is call-scoped: concurrent callers never have to read the
         shared compatibility attribute ``last_usage`` to attribute cost.
         """
+        # Clear compatibility and call-scoped metadata before authorization/
+        # transport so a failed call can never inherit the preceding call's
+        # receipt, usage, or finish reason.
+        clear_provider_call_receipt()
+        # Clear compatibility metadata before authorization/transport so a
+        # failed call can never inherit the preceding successful call's usage
+        # or finish reason in a diagnostic projection.
+        self.last_usage = None
+        self.last_finish_reason = None
+        self.last_transport_attempts = 0
         self._require_outbound_authorization()
         chat_messages = [{"role": m.role, "content": m.content} for m in messages]
         create_kwargs: Dict[str, Any] = {
@@ -727,18 +857,37 @@ class OpenAIClient:
                 )
             return resp
 
-        # 🔧 2026-05-17: bump retry budget from 4 → 8 attempts so persistent
+        # 🔧 2026-05-17: bump retry budget from 4 → 8 retries (up to 9 total
+        # attempts) so persistent
         # free-tier upstream rate-limit storms (Venice provider for llama-3.3-70b
         # observed ~30s Retry-After headers repeating) can't tip the run into
         # uncaught RateLimitError. Also honor the provider's Retry-After when
         # present in the exception body.
-        # ``_max_retries`` is the manual attempt budget used by this outer
-        # provider-recovery loop.  Honour explicit small budgets (notably the
-        # experiment setting ``EASYICU_LLM_MAX_RETRIES=0``) instead of silently
-        # restoring the historical eight-attempt floor.  Even a zero budget
-        # must issue the initial request once; it simply disables another
-        # manual attempt after a transient failure.
-        manual_attempts = max(1, int(getattr(self, "_max_retries", 8)))
+        # The public value is an *additional retry* count.  Total attempts are
+        # therefore initial request + retries.  A zero budget still issues the
+        # initial request exactly once.
+        manual_attempts = 1 + max(0, int(getattr(self, "_max_retries", 8)))
+
+        def _record_transport_failure(exc: BaseException, attempts: int) -> None:
+            self.last_transport_attempts = int(attempts)
+            # The structured-retry owner may receive this exception instead of
+            # a response.  Attach only a count -- never request/response data.
+            try:
+                setattr(exc, "easyicu_transport_attempts", int(attempts))
+            except Exception:
+                pass
+
+        def _retryable_for_this_client(exc: Exception) -> bool:
+            # When a caller supplies a status allowlist (the Web Research Agent
+            # does), it is the whole retry policy: connection errors, malformed
+            # envelopes, 408/409/429, and message-text guesses do not get an
+            # implicit retry.  The default preserves the broader CLI policy.
+            if self._retryable_http_status_codes is not None:
+                return (
+                    _structured_provider_http_status_code(exc)
+                    in self._retryable_http_status_codes
+                )
+            return _is_retryable_transport_error(exc)
 
         def _sleep_before_retry(seconds: float, attempt_index: int) -> None:
             # Only the attempt count decides. This also consulted the step
@@ -751,6 +900,7 @@ class OpenAIClient:
                 _time.sleep(seconds)
 
         for attempt in range(manual_attempts):
+            self.last_transport_attempts = attempt + 1
             try:
                 resp = _do_call()
                 break
@@ -761,16 +911,22 @@ class OpenAIClient:
                 # as transient: short backoff, retry. Pilot run
                 # run_20260516T123840_cc32d5 lost step 08_model_validation to
                 # exactly this.
+                _record_transport_failure(exc, attempt + 1)
+                if self._retryable_http_status_codes is not None:
+                    raise
                 last_exc = exc
                 _sleep_before_retry(2.0 * (attempt + 1), attempt)
                 continue
             except Exception as exc:  # noqa: BLE001
+                _record_transport_failure(exc, attempt + 1)
                 msg = str(exc).lower()
                 transient_proxy_auth = "invalid proxy api key" in msg or (
                     "401" in msg and "proxy" in msg
                 )
                 transient_connection = _is_transient_connection_error(exc)
-                if _is_retryable_transport_error(exc) or transient_proxy_auth:
+                if _retryable_for_this_client(exc) or (
+                    self._retryable_http_status_codes is None and transient_proxy_auth
+                ):
                     last_exc = exc
                     if transient_connection or transient_proxy_auth:
                         # A fresh connection pool is required when the local
@@ -792,13 +948,15 @@ class OpenAIClient:
                 # exception classes (e.g. APIError). Catch by message text
                 # as a safety net so we still get the backoff path.
                 msg = str(exc).lower()
-                if "expecting value" in msg or "json" in msg and "decode" in msg:
+                if self._retryable_http_status_codes is None and (
+                    "expecting value" in msg or "json" in msg and "decode" in msg
+                ):
                     last_exc = exc
                     _sleep_before_retry(2.0 * (attempt + 1), attempt)
                     continue
                 # Our own LLM_TRANSIENT_* envelope failures from _do_call
                 # (null choices / null message) are retryable too.
-                if (
+                if self._retryable_http_status_codes is None and (
                     "llm_transient_no_choices" in msg
                     or "llm_transient_no_message" in msg
                 ):
@@ -959,6 +1117,11 @@ class OpenAIClient:
             except Exception:
                 pass
 
+        _record_provider_call_receipt(
+            finish_reason=self.last_finish_reason,
+            usage=call_usage,
+            transport_attempts=self.last_transport_attempts,
+        )
         return content, call_usage
 
     def complete_with_images(
@@ -977,6 +1140,10 @@ class OpenAIClient:
         Lives on OpenAIClient (not FallbackLLMClient) because it needs
         ``self._client`` / ``self._model`` / ``self._timeout`` / ``self._extra_body``.
         """
+        clear_provider_call_receipt()
+        self.last_usage = None
+        self.last_finish_reason = None
+        self.last_transport_attempts = 0
         self._require_outbound_authorization()
         content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
         for path in image_paths:
@@ -998,6 +1165,13 @@ class OpenAIClient:
         create_kwargs[self._completion_token_parameter] = int(max_tokens)
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
+        hard_stop_remaining = consume_active_transport_attempt()
+        if hard_stop_remaining is not None:
+            create_kwargs["timeout"] = min(
+                float(create_kwargs["timeout"]),
+                float(hard_stop_remaining),
+            )
+        self.last_transport_attempts = 1
         resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
         try:
             usage = getattr(resp, "usage", None)
@@ -1015,6 +1189,11 @@ class OpenAIClient:
             self.last_usage = None
         choice = resp.choices[0]
         self.last_finish_reason = getattr(choice, "finish_reason", None)
+        _record_provider_call_receipt(
+            finish_reason=self.last_finish_reason,
+            usage=self.last_usage,
+            transport_attempts=self.last_transport_attempts,
+        )
         msg = choice.message
         return _strip_reasoning_blocks((getattr(msg, "content", None) or "").strip())
 
@@ -1037,37 +1216,6 @@ def _completion_token_parameter_name(model: str) -> str:
     if leaf.startswith("gpt-5") or re.match(r"^o[134](?:-|$)", leaf):
         return "max_completion_tokens"
     return "max_tokens"
-
-
-def _model_looks_vision_capable(model: str) -> bool:
-    lowered = (model or "").strip().lower()
-    if not lowered:
-        return False
-    positive_tokens = (
-        "gpt-4o",
-        "omni",
-        "vision",
-        "gemini",
-        "qwen-vl",
-        "qwen2.5-vl",
-        "vl-",
-        "pixtral",
-        "llava",
-        "molmo",
-        "internvl",
-    )
-    negative_tokens = (
-        "coder",
-        "instruct",
-        "reasoner",
-        "embedding",
-        "rerank",
-        "whisper",
-        "audio",
-    )
-    if any(token in lowered for token in negative_tokens):
-        return False
-    return any(token in lowered for token in positive_tokens)
 
 
 def openrouter_reasoning_extra_body(model: str) -> Optional[Dict[str, Any]]:
@@ -1271,6 +1419,8 @@ class FallbackLLMClient:
         """
         for client in self._clients:
             if client is not self and hasattr(client, "complete_with_images"):
+                if not client_counts_transport_attempts(client):
+                    consume_active_provider_handoff()
                 return client.complete_with_images(
                     prompt=prompt,
                     image_paths=image_paths,
@@ -1594,6 +1744,18 @@ class CLIAgentLLMClient:
             argv += ["-m", model]
         return argv
 
+    def _require_outbound_authorization(self) -> None:
+        """Reject direct/unmanaged CLI transports before process launch."""
+
+        from .factory import require_provider_client_authorization
+
+        try:
+            require_provider_client_authorization(self)
+        except Exception as exc:
+            raise PermissionError(
+                "external CLI calls require factory-minted provider authorization"
+            ) from exc
+
     def complete(
         self,
         messages: Sequence[LLMMessage],
@@ -1608,6 +1770,9 @@ class CLIAgentLLMClient:
         import subprocess
         import tempfile
 
+        from .subprocess_env import build_provider_subprocess_env
+
+        self._require_outbound_authorization()
         if not shutil.which(self._command):
             raise RuntimeError(
                 f"The '{self._command}' CLI is not installed or not on PATH."
@@ -1630,6 +1795,7 @@ class CLIAgentLLMClient:
                     text=True,
                     timeout=self._timeout,
                     cwd=cwd,
+                    env=build_provider_subprocess_env(self._backend),
                 )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(
@@ -1848,45 +2014,6 @@ def resolve_role_client(llm: Any, role: str) -> Any:
     if hasattr(llm, "for_role"):
         return llm.for_role(role)
     return llm
-
-
-def llm_supports_vision(client: Any) -> bool:
-    """Best-effort capability probe for optional figure-VLM review.
-
-    The pipeline uses this only to decide whether vision-based QA
-    should be enabled automatically. It stays intentionally
-    conservative: unknown clients default to ``False`` unless they
-    explicitly advertise ``supports_vision`` or expose a
-    ``complete_with_images`` method without a contradicting model
-    heuristic.
-    """
-
-    if client is None:
-        return False
-    if hasattr(client, "supports_vision"):
-        advertised = getattr(client, "supports_vision")
-        try:
-            return bool(advertised() if callable(advertised) else advertised)
-        except Exception:
-            return False
-    if hasattr(client, "for_role"):
-        try:
-            analyzer_client = client.for_role("analyzer")
-        except Exception:
-            analyzer_client = None
-        if analyzer_client is not None:
-            return llm_supports_vision(analyzer_client)
-    if hasattr(client, "iter_clients"):
-        try:
-            return any(llm_supports_vision(child) for child in client.iter_clients())
-        except Exception:
-            return False
-    if hasattr(client, "complete_with_images"):
-        model = getattr(client, "_model", None)
-        if model is None:
-            return True
-        return _model_looks_vision_capable(str(model))
-    return False
 
 
 def llm_is_mockish(client: Any) -> bool:

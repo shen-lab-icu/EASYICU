@@ -13,6 +13,7 @@ import pytest
 
 from easyicu.research_agent.execution import phase as execution_phase
 from easyicu.research_agent.authority import plan_scope
+from easyicu.research_agent.contracts.figure_plan import PlannedFigurePanelSpec
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 _PHASE_PLAN_SCOPE_NAMES = {
@@ -70,6 +71,51 @@ def test_every_public_plan_field_has_exactly_one_authority_class() -> None:
     flattened = [field for fields in classes for field in fields]
     assert set(flattened) == set(AnalysisPlan.model_fields)
     assert len(flattened) == len(set(flattened))
+
+
+def test_every_public_step_field_has_exactly_one_authority_class() -> None:
+    classes = (
+        plan_scope._ANALYSIS_STEP_CORE_SCIENTIFIC_AUTHORITY_FIELDS,
+        plan_scope._ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
+        plan_scope._ANALYSIS_STEP_PRESENTATION_ONLY_FIELDS,
+        plan_scope._ANALYSIS_STEP_RUNTIME_ONLY_FIELDS,
+    )
+    flattened = [field for fields in classes for field in fields]
+    assert set(flattened) == set(AnalysisStep.model_fields)
+    assert len(flattened) == len(set(flattened))
+
+
+def test_typed_figure_panel_is_part_of_scientific_plan_authority() -> None:
+    base = AnalysisStep(
+        step_id="06_figure",
+        intent="Render the prespecified descriptive panel.",
+        method="visualization",
+        planned_analysis_role="auxiliary",
+        inputs=["table:exposure_outcome_distribution"],
+        expected_outputs=["figure:descriptive_overview"],
+        figure_panels=[
+            PlannedFigurePanelSpec(
+                panel_id="absolute_risk",
+                figure_output="figure:descriptive_overview",
+                article_role="distribution",
+                chart_type="point_interval",
+                source_products=["table:exposure_outcome_distribution"],
+            )
+        ],
+    )
+    changed = base.model_copy(
+        update={
+            "figure_panels": [
+                base.figure_panels[0].model_copy(
+                    update={"article_role": "data_quality"}
+                )
+            ]
+        }
+    )
+
+    assert plan_scope._step_scientific_signature(base) != (
+        plan_scope._step_scientific_signature(changed)
+    )
 
 
 def test_scientific_signature_uses_typed_role_not_intent_role_words() -> None:

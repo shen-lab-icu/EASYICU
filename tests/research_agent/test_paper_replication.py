@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from easyicu.research_agent.replication.paper import canonical_outcome_name
+
 
 def _mock_association_paper() -> str:
     return """Title: Admission SOFA-2 score and ICU mortality in a retrospective cohort
@@ -31,6 +33,13 @@ def test_parse_paper_profile_extracts_supported_design_and_claims(ra):
     assert profile.primary_analysis_method
     assert profile.key_claims
     assert any(claim.metric == "OR" for claim in profile.key_claims)
+
+
+def test_paper_outcome_mapping_preserves_fixed_mortality_horizons() -> None:
+    assert canonical_outcome_name("28-day mortality") == "mort_28d"
+    assert canonical_outcome_name("mortality at day 90") == "mort_90d"
+    assert canonical_outcome_name("one-year death") == "mort_365d"
+    assert canonical_outcome_name("hospital mortality") == "death"
 
 
 def test_build_replication_spec_flags_unsupported_design(ra):

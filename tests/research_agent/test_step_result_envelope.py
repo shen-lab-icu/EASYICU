@@ -18,6 +18,7 @@ from easyicu.research_agent.audits.envelope_shadow import (
     compare_validator_shadow_inputs,
 )
 from easyicu.research_agent.audits.envelope_consumers import (
+    RegisteredOutputAuthorityError,
     RegisteredOutputEnvelopeConsumer,
     StepSummaryFractionEnvelopeDualReader,
 )
@@ -43,6 +44,9 @@ from easyicu.research_agent.contracts.result_envelope import (
 )
 from easyicu.research_agent.contracts import result_envelope as result_envelope_module
 from easyicu.research_agent.schema import AnalysisStep
+from easyicu.research_agent.reporting.writer_evidence import (
+    _render_writer_evidence_digest,
+)
 
 
 def _issue_codes(envelope: StepResultEnvelope) -> set[str]:
@@ -720,7 +724,7 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     assert "absolute_unbound_path" in _issue_codes(rejected_envelope)
 
 
-def test_sealed_envelope_wires_only_the_final_validation_consumer() -> None:
+def test_sealed_envelope_wires_live_final_validation_consumer() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     pipeline_source = (repo_root / "src/easyicu/research_agent/pipeline.py").read_text(
         encoding="utf-8"
@@ -740,11 +744,10 @@ def test_sealed_envelope_wires_only_the_final_validation_consumer() -> None:
     assert final_validation_source.count("compile_sealed_step_result_shadow(") == 1
     assert final_validation_source.count("StepSummaryFractionEnvelopeDualReader()") == 1
     assert final_validation_source.count("final_fraction_envelope_validator=") == 1
-    # M8-B1 lands the envelope-authoritative RegisteredOutputEnvelopeConsumer as
-    # a pure, fully-tested unit; the live final-gate wiring is the separate B2
-    # slice.  Until B2, the consumer must NOT appear in the phase orchestration.
-    assert "RegisteredOutputEnvelopeConsumer" not in phase_source
-    assert "RegisteredOutputEnvelopeConsumer" not in final_validation_source
+    # The phase remains orchestration-only; final validation owns the live
+    # envelope-authoritative registered-output consumer.
+    assert "RegisteredOutputEnvelopeConsumer()" not in phase_source
+    assert final_validation_source.count("RegisteredOutputEnvelopeConsumer()") == 1
 
 
 def test_registered_tables_compile_typed_population_missingness_and_estimate(
@@ -1178,8 +1181,32 @@ def _modern_upstream_record(
         "attempt_id": attempt_id,
         "review_checkpoint_id": checkpoint_id,
         "script_evidence_id": script_evidence_id,
-        "step_summary": {"status": status},
+        "step_summary": {
+            "status": status,
+            "output_files": {
+                "table:exposure_outcome_summary": "exposure_outcome_summary.csv"
+            },
+        },
     }
+
+
+def _register_upstream_table(
+    store: EvidenceStore,
+    source: Path,
+    *,
+    evidence_id: str = "table_exposure_outcome_summary_8368e5ab",
+    script_evidence_id: str = "code_04_risk",
+):
+    return store.register_file(
+        kind="table",
+        description="Registered upstream table fixture.",
+        source_path=source,
+        produced_by_step=_UPSTREAM_STEP,
+        script_evidence_id=script_evidence_id,
+        evidence_id=evidence_id,
+        producer="runner",
+        publish_aliases=False,
+    )
 
 
 def _consumer_step() -> AnalysisStep:
@@ -1313,6 +1340,238 @@ def test_registered_output_consumer_fails_closed_on_tampered_sidecar(
     assert (
         findings[0].detail["sidecar_unavailable_reason"] == "artifact_path_unverified"
     )
+
+
+def test_registered_output_consumer_fails_closed_on_legacy_summary_disagreement(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+    record["step_summary"] = {"status": "ok", "output_files": {}}
+
+    findings = RegisteredOutputEnvelopeConsumer().audit(
+        step=_consumer_step(),
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[record],
+        evidence_store=store,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["registered_output_authority_disagreement"] is True
+    assert "canonical_source_digest_mismatch" in findings[0].detail["mismatch_codes"]
+
+
+def test_writer_records_are_rebuilt_from_verified_envelope_authority(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    _register_upstream_table(store, tmp_path / "exposure_outcome_summary.csv")
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+        [record], evidence_store=store
+    )
+
+    assert projected[0]["step_summary"]["status"] == "ok"
+    assert projected[0]["writer_result_envelope_evidence_id"] == sidecar_id
+    assert projected[0]["writer_artifact_bindings"] == {
+        "table:exposure_outcome_summary": {
+            "product_id": "table:exposure_outcome_summary",
+            "kind": "table",
+            "envelope_relative_path": "exposure_outcome_summary.csv",
+            "sha256": envelope.artifacts[0].sha256,
+            "byte_size": envelope.artifacts[0].byte_size,
+            "evidence_id": "table_exposure_outcome_summary_8368e5ab",
+            "evidence_relative_path": next(
+                record.relative_path
+                for record in store.records()
+                if record.evidence_id
+                == "table_exposure_outcome_summary_8368e5ab"
+            ),
+        }
+    }
+    record["step_summary"] = {"status": "ok", "hazard_ratio": 1.42}
+    with pytest.raises(RegisteredOutputAuthorityError):
+        RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+            [record], evidence_store=store
+        )
+
+
+def test_writer_records_exclude_the_host_deterministic_probe(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    authority_ids = {}
+    for field, kind, filename, content in (
+        (
+            "probe_summary_evidence_id",
+            "statistic",
+            "probe_summary.json",
+            '{"n_rows":800,"n_columns":11}',
+        ),
+        (
+            "probe_table_evidence_id",
+            "table",
+            "probe_variable_profile.csv",
+            "variable,missing\nage,0\n",
+        ),
+    ):
+        source = tmp_path / filename
+        source.write_text(content, encoding="utf-8")
+        evidence_record = store.register_file(
+            kind=kind,
+            description="Host probe authority.",
+            source_path=source,
+            produced_by_step="00_probe",
+            producer="pipeline",
+            generation_mode="deterministic_probe",
+        )
+        authority_ids[field] = evidence_record.evidence_id
+    probe = {
+        "step_id": "00_probe",
+        "status": "ok",
+        "generation_mode": "deterministic_probe",
+        "step_authority_kind": "host_deterministic_probe",
+        "step_summary": {"n_rows": 800, "n_columns": 11},
+        "evidence_ids": list(authority_ids.values()),
+        **authority_ids,
+    }
+
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+        [probe], evidence_store=store
+    )
+
+    assert projected == []
+
+
+def test_writer_probe_exclusion_requires_verified_host_evidence(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    probe = {
+        "step_id": "00_probe",
+        "status": "ok",
+        "generation_mode": "deterministic_probe",
+        "step_authority_kind": "host_deterministic_probe",
+        "step_summary": {"n_rows": 800, "n_columns": 11},
+        "evidence_ids": ["missing_summary", "missing_table"],
+        "probe_summary_evidence_id": "missing_summary",
+        "probe_table_evidence_id": "missing_table",
+    }
+
+    with pytest.raises(RegisteredOutputAuthorityError, match="missing_summary"):
+        RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+            [probe], evidence_store=store
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("step_id", "01_analysis"),
+        ("generation_mode", "model_generated"),
+        ("step_authority_kind", "planner_authorized"),
+    ],
+)
+def test_writer_probe_exclusion_requires_the_exact_reserved_identity(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    record = {
+        "step_id": "00_probe",
+        "status": "ok",
+        "generation_mode": "deterministic_probe",
+        "step_authority_kind": "host_deterministic_probe",
+        "step_summary": {"n_rows": 800, "n_columns": 11},
+        "evidence_ids": ["statistic_probe_summary"],
+    }
+    record[field] = value
+
+    with pytest.raises(RegisteredOutputAuthorityError, match="no live"):
+        RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+            [record], evidence_store=store
+        )
+
+
+def test_writer_primary_table_reads_immutable_envelope_product_after_raw_mutation(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    output_dir = run_dir / "steps" / _UPSTREAM_STEP / "outputs"
+    output_dir.mkdir(parents=True)
+    raw_table = output_dir / "primary_association.csv"
+    raw_table.write_text(
+        "term,odds_ratio,or_lower,or_upper,p_value\n"
+        "exposure,1.25,1.10,1.42,0.004\n",
+        encoding="utf-8",
+    )
+    summary = {
+        "status": "ok",
+        "primary_association_path": raw_table.name,
+        "output_files": {"table:primary_association": raw_table.name},
+    }
+    envelope = normalize_step_result_shadow(
+        step_id=_UPSTREAM_STEP,
+        step_summary=summary,
+        output_dir=output_dir,
+        status="ok",
+    )
+    store = EvidenceStore(run_dir)
+    artifact = _register_upstream_table(
+        store,
+        raw_table,
+        evidence_id="table_primary_association_fixture",
+    )
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+    record["evidence_ids"] = [artifact.evidence_id, sidecar_id]
+    record["step_summary"] = summary
+
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+        [record], evidence_store=store
+    )
+    raw_table.write_text(
+        "term,odds_ratio,or_lower,or_upper,p_value\n"
+        "tampered_label,999,998,1000,0.999\n",
+        encoding="utf-8",
+    )
+
+    digest = _render_writer_evidence_digest(
+        projected,
+        run_dir=run_dir,
+        evidence=store,
+    )
+
+    assert '"exposure_or": 1.25' in digest
+    assert '"exposure_p_value": 0.004' in digest
+    assert "tampered_label" not in digest
+    assert "999" not in digest
+
+
+@pytest.mark.parametrize("tamper", ["replace", "remove"])
+def test_writer_primary_table_fails_before_prompt_when_immutable_copy_is_lost(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    artifact = _register_upstream_table(
+        store, tmp_path / "exposure_outcome_summary.csv"
+    )
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+    target = store.root / artifact.relative_path
+    if tamper == "replace":
+        target.write_text("group,n\ntampered,999\n", encoding="utf-8")
+    else:
+        target.unlink()
+
+    with pytest.raises(RegisteredOutputAuthorityError):
+        RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+            [record], evidence_store=store
+        )
 
 
 def test_registered_output_consumer_ignores_failed_upstream_step(

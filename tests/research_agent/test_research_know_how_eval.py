@@ -214,9 +214,35 @@ def test_canonical9_review_packet_is_bound_to_exact_card_content(
     assert packet["card_id"] == card_id
     assert packet["card_version"] == card_payload["version"]
     assert packet["authorization"] is False
-    assert packet["status"].endswith("formal_attestation_pending")
+    assert packet["status"] == "unsigned_targeted_adjudication_repairs_complete"
     assert packet["reviewed_content_sha256"] == reviewable_card_content_sha256(
         card_payload
+    )
+    task_by_card = {
+        "early_peak_lactate_association": "e2_lactate_mortality",
+        "vasopressor_comparative_effectiveness": "h2_vasopressor_causal",
+        "longitudinal_icu_phenotyping": "h3_trajectory_clustering",
+    }
+    from benchmarks.figure2_canonical9.case_scientific_protocol import (
+        build_runtime_scientific_projection,
+        case_protocol_content_sha256,
+        load_case_scientific_protocol,
+    )
+
+    protocol_path = repo_root / packet["case_protocol_path"]
+    protocol = load_case_scientific_protocol(
+        protocol_path,
+        expected_task_id=task_by_card[card_id],
+    )
+    assert packet["case_protocol_content_sha256"] == case_protocol_content_sha256(
+        protocol
+    )
+    projection = build_runtime_scientific_projection(protocol)
+    assert packet["runtime_scientific_projection_sha256"] == (
+        projection.runtime_projection_sha256
+    )
+    assert packet["deterministic_execution_contract_sha256"] == (
+        projection.deterministic_execution_contract["execution_contract_sha256"]
     )
     assert packet["attestation_fields_required_after_signoff"] == [
         "reviewer_owner",
@@ -225,6 +251,8 @@ def test_canonical9_review_packet_is_bound_to_exact_card_content(
         "literature_search_cutoff",
         "clinical_reviewed",
         "methods_reviewed",
+        "protocol_content_sha256",
+        "runtime_projection_sha256",
     ]
     cited = {
         citation_id

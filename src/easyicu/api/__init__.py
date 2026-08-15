@@ -11,7 +11,12 @@ from typing import Dict, List, Optional, Union
 
 import pandas as pd
 
-from ..base import BaseICULoader, detect_database_type, get_default_data_path
+from ..base import (
+    BaseICULoader,
+    DatabaseDetectionError,
+    detect_database_type,
+    get_default_data_path,
+)
 from ..config import DATABASE_ID_CONFIG
 from .cache import (
     data_path_fingerprint as _data_path_fingerprint_impl,
@@ -160,6 +165,7 @@ __all__ = [
     "get_id_col_for_database",
     "get_patient_table_for_database",
     "get_all_patient_ids",
+    "DatabaseDetectionError",
     "PatientIdDiscoveryError",
     # Full-database extraction
     "get_smart_parallel_config",
@@ -198,11 +204,15 @@ def load_concept_cached(
     merge: bool = True,
     align_time: bool = False,
     verbose: bool = True,
-    use_pickle: bool = True,
+    use_pickle: bool = False,
     n_patients: Optional[int] = None,
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
-    """Load ICU concept data with dataset-isolated caching."""
+    """Load ICU concept data with a safe Parquet cache by default.
+
+    ``use_pickle=True`` is a trusted-local compatibility opt-in and must not be
+    used with cache files supplied by another user or process boundary.
+    """
     return _load_concept_cached_impl(
         concepts,
         source,

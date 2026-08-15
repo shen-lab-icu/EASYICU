@@ -21,4 +21,10 @@ def validate_closed_scalar_levels(values: Sequence[Any], *, label: str) -> list[
     return list(values)
 
 
-__all__ = ["validate_closed_scalar_levels"]
+def typed_level_key(value: Any) -> tuple[str, str]:
+    """Return the stable type-and-value identity of one closed scalar level."""
+
+    return (type(value).__name__, repr(value))
+
+
+__all__ = ["typed_level_key", "validate_closed_scalar_levels"]

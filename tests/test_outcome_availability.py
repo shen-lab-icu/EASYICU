@@ -15,13 +15,20 @@ def test_database_specific_outcome_support_is_directional() -> None:
     eicu_vfd = structural_outcome_unavailability("vent_free_days_28", "eicu_demo")
     eicu_mortality = structural_outcome_unavailability("mort_28d", "eicu_demo")
     mimic_mortality = structural_outcome_unavailability("mort_28d", "miiv")
+    mimic_icu_free = structural_outcome_unavailability("icu_free_days_28", "miiv")
+    mimic_readmission = structural_outcome_unavailability("icu_readmission", "mimic")
 
     assert mimic_vfd is not None
     assert mimic_vfd.reason_code == "outcome_concept_structurally_unavailable"
-    assert mimic_vfd.supported_databases == ("eicu", "eicu_demo")
-    assert eicu_vfd is None
+    assert mimic_vfd.supported_databases == ()
+    assert eicu_vfd is not None
+    assert eicu_vfd.supported_databases == ()
     assert eicu_mortality is not None
     assert mimic_mortality is None
+    assert mimic_icu_free is not None
+    assert mimic_icu_free.supported_databases == ()
+    assert mimic_readmission is not None
+    assert mimic_readmission.supported_databases == ()
 
 
 def test_non_outcome_concepts_are_not_reclassified() -> None:

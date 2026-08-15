@@ -19,6 +19,19 @@ class FakeService:
     def initialize_project(self, **kwargs) -> dict:
         return {"ok": True, "status": "ready", "received": kwargs}
 
+    def get_project_workflow(self, **kwargs) -> dict:
+        return {
+            "ok": True,
+            "workflow": {
+                "schema_version": "easyicu.pi-research-workflow/1",
+                "current_stage": "setup",
+                "completed_required_stages": 1,
+                "required_stage_count": 7,
+                "stages": [],
+            },
+            "received": kwargs,
+        }
+
     def get_workspace_file(self, **kwargs) -> dict:
         return {
             "ok": True,
@@ -34,6 +47,7 @@ class FakeService:
             "ok": True,
             "artifact": {
                 "file": kwargs["relative_file"],
+                "checked_sha256": kwargs["checked_sha256"],
                 "media_type": "text/html",
                 "text": "<h1>Sandboxed preview</h1><script>document.title='demo'</script>",
             },
@@ -48,6 +62,21 @@ class FakeService:
                 "media_type": "application/json",
             },
             "payload": {"status": "ready"},
+            "governance": {
+                "authority_class": "easyicu_run_artifact",
+                "gate_status": "analysis_only",
+                "readiness_status": "awaiting_human_signoff",
+                "human_signoff": "required",
+                "reportable": False,
+                "claim_ceiling": "analysis_only",
+            },
+        }
+
+    def get_research_document(self, **kwargs) -> dict:
+        return {
+            "content": b"<!doctype html><title>System validation</title>",
+            "media_type": "text/html",
+            "claim_ceiling": "engineering_validation_only",
         }
 
     def configure_provider(self, **kwargs) -> dict:
@@ -72,6 +101,12 @@ class FakeService:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
     def rebind_session(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
+    def set_presentation_pin(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
+    def archive_child_job(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
     def abort_session(self, session_id: str, **kwargs) -> dict:
@@ -128,6 +163,7 @@ def test_session_queries_are_scoped_to_one_research_project(monkeypatch) -> None
     assert listed.json()["received"] == {
         "project_id": "guided-project-2",
         "limit": 7,
+        "agent_mode": None,
     }
 
     assert client.get("/api/copilot/pi/sessions/pi-test").status_code == 422
@@ -160,6 +196,7 @@ def test_project_initialization_is_an_explicit_typed_mutation(monkeypatch) -> No
         "project_id": "guided-project-2",
         "title": "Existing study",
         "confirm_initialization": False,
+        "binding_receipt": None,
     }
     assert (
         client.post(
@@ -187,14 +224,25 @@ def test_project_workspace_file_and_preview_routes_are_bounded(monkeypatch) -> N
 
     preview = client.get(
         "/api/copilot/pi/projects/guided-project-2/workspace/preview",
-        params={"file": "prototype/index.html"},
+        params={
+            "file": "prototype/index.html",
+            "checked_sha256": "a" * 64,
+        },
     )
     assert preview.status_code == 200
-    assert "Sandboxed preview" in preview.text
+    assert "Workspace artifact · Unvalidated" in preview.text
+    assert "Not scientific evidence" in preview.text
+    assert 'id="easyicu-workspace-preview-content"' in preview.text
+    assert "&lt;h1&gt;Sandboxed preview&lt;/h1&gt;" in preview.text
+    assert "<h1>Sandboxed preview</h1>" not in preview.text
     assert preview.headers["cache-control"] == "no-store"
     assert preview.headers["x-content-type-options"] == "nosniff"
-    assert "default-src 'none'" in preview.headers["content-security-policy"]
-    assert "connect-src 'none'" in preview.headers["content-security-policy"]
+    policy = preview.headers["content-security-policy"]
+    assert policy.startswith("sandbox allow-scripts;")
+    assert "default-src 'none'" in policy
+    assert "connect-src 'none'" in policy
+    assert "frame-ancestors 'self'" in policy
+    assert preview.headers["referrer-policy"] == "no-referrer"
 
     assert (
         client.get(
@@ -202,6 +250,49 @@ def test_project_workspace_file_and_preview_routes_are_bounded(monkeypatch) -> N
         ).status_code
         == 422
     )
+    assert (
+        client.get(
+            "/api/copilot/pi/projects/guided-project-2/workspace/preview",
+            params={"file": "prototype/index.html"},
+        ).status_code
+        == 422
+    )
+
+
+def test_workspace_preview_surfaces_stale_checked_bytes_as_conflict(monkeypatch) -> None:
+    class StalePreviewService(FakeService):
+        def get_workspace_preview(self, **kwargs) -> dict:
+            raise PiCopilotError(
+                "pi_workspace_preview_check_stale",
+                "The file changed after its static check.",
+                status_code=409,
+            )
+
+    monkeypatch.setattr(
+        route_module,
+        "get_pi_copilot_service",
+        lambda: StalePreviewService(),
+    )
+    response = TestClient(app).get(
+        "/api/copilot/pi/projects/guided-project-2/workspace/preview",
+        params={
+            "file": "prototype/index.html",
+            "checked_sha256": "a" * 64,
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "pi_workspace_preview_check_stale"
+
+
+def test_project_workflow_route_is_project_scoped(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    response = client.get("/api/copilot/pi/projects/guided-project-2/workflow")
+    assert response.status_code == 200
+    assert response.json()["received"] == {"project_id": "guided-project-2"}
+    assert response.json()["workflow"]["current_stage"] == "setup"
 
 
 def test_project_research_artifact_route_uses_path_free_identity(monkeypatch) -> None:
@@ -215,12 +306,47 @@ def test_project_research_artifact_route_uses_path_free_identity(monkeypatch) ->
     assert response.status_code == 200
     assert response.json()["run_id"] == "run_20260808"
     assert response.json()["artifact"]["name"] == "table1_summary.json"
+    assert response.json()["governance"] == {
+        "authority_class": "easyicu_run_artifact",
+        "gate_status": "analysis_only",
+        "readiness_status": "awaiting_human_signoff",
+        "human_signoff": "required",
+        "reportable": False,
+        "claim_ceiling": "analysis_only",
+    }
     assert "project_dir" not in response.text
 
     invalid = client.get(
         "/api/copilot/pi/projects/guided-project-2/runs/run_20260808/artifacts/not-json.txt"
     )
     assert invalid.status_code == 422
+
+
+def test_system_validation_document_route_is_fixed_and_engineering_only(
+    monkeypatch,
+) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/copilot/pi/projects/guided-project-2/runs/run_20260808/"
+        "documents/system_validation_report.html"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-easyicu-claim-ceiling"] == (
+        "engineering_validation_only"
+    )
+    assert "style-src 'unsafe-inline'" in response.headers["content-security-policy"]
+    assert "img-src data:" in response.headers["content-security-policy"]
+    assert (
+        client.get(
+            "/api/copilot/pi/projects/guided-project-2/runs/run_20260808/"
+            "documents/system_validation_report.txt"
+        ).status_code
+        == 422
+    )
 
 
 def test_provider_setup_route_is_typed_and_never_returns_secret(monkeypatch) -> None:
@@ -354,6 +480,36 @@ def test_all_session_mutations_require_project_scope(monkeypatch) -> None:
     assert aborted.json()["received"] == {
         "project_id": "guided-project-1",
         "message_job_id": "job-1",
+    }
+
+
+def test_presentation_and_child_replay_routes_are_project_scoped(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    pin_path = "/api/copilot/pi/sessions/pi-test/presentation"
+    child_path = "/api/copilot/pi/sessions/pi-test/child-jobs/job-child-1/archive"
+    assert client.post(pin_path, json={"pinned": True}).status_code == 422
+    assert client.post(child_path, json={}).status_code == 422
+
+    pinned = client.post(
+        pin_path,
+        json={"project_id": "guided-project-2", "pinned": True},
+    )
+    archived = client.post(
+        child_path,
+        json={"project_id": "guided-project-2"},
+    )
+    assert pinned.status_code == 200
+    assert pinned.json()["received"] == {
+        "project_id": "guided-project-2",
+        "pinned": True,
+    }
+    assert archived.status_code == 200
+    assert archived.json()["received"] == {
+        "project_id": "guided-project-2",
+        "job_id": "job-child-1",
     }
 
 

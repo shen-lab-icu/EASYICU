@@ -130,6 +130,7 @@ def _trajectory_plan() -> dict[str, Any]:
                     "manifest:candidate_cluster_solution_schema",
                 ],
                 "method": "latent_class_trajectory_clustering",
+                "scientific_action_id": "phenotyping.trajectory_feature_clustering",
                 "icu_rule_refs": [],
                 "model_requirements": [],
                 "trajectory_stability_spec": None,
@@ -157,6 +158,7 @@ def _trajectory_plan() -> dict[str, Any]:
                     "table:descriptive_result",
                 ],
                 "method": "descriptive_cluster_characterization",
+                "scientific_action_id": "phenotyping.cluster_sizes",
                 "icu_rule_refs": [],
                 "model_requirements": [],
                 "trajectory_stability_spec": None,
@@ -174,6 +176,7 @@ def _trajectory_plan() -> dict[str, Any]:
                     "statistic:robustness_summary",
                 ],
                 "method": "robustness_sensitivity",
+                "scientific_action_id": "phenotyping.trajectory_cluster_stability",
                 "icu_rule_refs": [],
                 "model_requirements": [],
                 "trajectory_stability_spec": None,
@@ -305,7 +308,7 @@ class _HybridTrajectoryRunner:
         self._write_json(
             out_dir / "trajectory_representation_schema.json",
             {
-                "schema_version": "easyicu.trajectory_representation_schema/1",
+                "schema_version": "easyicu.trajectory_representation_schema/2",
                 "id_column": "opaque_id",
                 "representation_columns": ["coordinate_a", "coordinate_b"],
                 "frozen_population_n": len(representation),
@@ -326,6 +329,19 @@ class _HybridTrajectoryRunner:
                     "zero_imputation": False,
                     "eligibility_uses_observed_window_count": True,
                     "profile_summaries_ignore_missing": True,
+                },
+                "coordinate_scaling": {
+                    "method": "pooled_coordinate_wise_z_score",
+                    "ddof": 0,
+                    "observed_value_policy": "direct_or_owner_locf_available",
+                    "missing_value_policy": "preserve_missing_exclude_from_likelihood",
+                    "zero_variance_action": "fail_closed",
+                },
+                "evidence_state_policy": {
+                    "direct_observed": "include",
+                    "owner_locf_available": "include_and_audit",
+                    "unavailable": "exclude",
+                    "additional_clustering_stage_imputation": "none",
                 },
                 "representation_sha256": representation_sha,
             },
@@ -433,6 +449,9 @@ class _HybridTrajectoryRunner:
                     bindings["manifest:trajectory_representation_schema"]["sha256"]
                 ),
                 "candidate_assignments_sha256": assignment_sha,
+                "coordinate_scaling": representation_schema[
+                    "coordinate_scaling"
+                ],
             },
         )
         self._write_json(

@@ -77,6 +77,78 @@ _AUDIT_DISPLAY_CATEGORIES = {
     "robustness",
 }
 
+DISPLAY_SUITE_AUDIT_SCHEMA_VERSION = "easyicu.display_suite_audit/2"
+DISPLAY_SUITE_AUDIT_REGISTRATION = (
+    "display_suite_audit",
+    "statistic",
+    "Article display-suite coverage audit for publication gating.",
+)
+
+
+def display_suite_audit_payload(gates: Mapping[str, Any]) -> Dict[str, Any]:
+    """Project readiness gates into the canonical display-suite artifact.
+
+    The display-suite owner defines this persisted schema.  Reporting hosts may
+    write and register the returned value, but must not duplicate its fields.
+    Required readiness keys are indexed deliberately so an incomplete host
+    projection fails closed instead of producing a partial audit.
+    """
+
+    return {
+        "schema_version": DISPLAY_SUITE_AUDIT_SCHEMA_VERSION,
+        "display_suite_complete": gates["display_suite_complete"],
+        "table_count": gates["display_table_count"],
+        "figure_contract_count": gates["display_figure_contract_count"],
+        "result_figure_contract_count": gates["display_result_figure_contract_count"],
+        "primary_publication_figure_contract_count": gates[
+            "display_primary_publication_figure_contract_count"
+        ],
+        "supporting_figure_contract_count": gates[
+            "display_supporting_figure_contract_count"
+        ],
+        "other_figure_contract_count": gates["display_other_figure_contract_count"],
+        "primary_publication_contract_paths": gates[
+            "display_primary_publication_contract_paths"
+        ],
+        "supporting_figure_contract_paths": gates[
+            "display_supporting_figure_contract_paths"
+        ],
+        "other_figure_contract_paths": gates["display_other_figure_contract_paths"],
+        "contract_panel_count": gates["display_contract_panel_count"],
+        "primary_publication_panel_count": gates[
+            "display_primary_publication_panel_count"
+        ],
+        "supporting_panel_count": gates["display_supporting_panel_count"],
+        "contract_role_count": gates["display_contract_role_count"],
+        "primary_publication_role_count": gates[
+            "display_primary_publication_role_count"
+        ],
+        "supporting_role_count": gates["display_supporting_role_count"],
+        "chart_types": gates["display_chart_types"],
+        "primary_publication_chart_types": gates[
+            "display_primary_publication_chart_types"
+        ],
+        "supporting_chart_types": gates["display_supporting_chart_types"],
+        "absolute_risk_visual_present": gates["display_absolute_risk_visual_present"],
+        "primary_publication_absolute_risk_visual_present": gates[
+            "display_primary_publication_absolute_risk_visual_present"
+        ],
+        "supporting_absolute_risk_visual_present": gates[
+            "display_supporting_absolute_risk_visual_present"
+        ],
+        "primary_publication_result_figure_contract_count": gates[
+            "display_primary_publication_result_figure_contract_count"
+        ],
+        "supporting_result_figure_contract_count": gates[
+            "display_supporting_result_figure_contract_count"
+        ],
+        "categories": gates["display_categories"],
+        "table_one_expected": gates["display_table_one_expected"],
+        "table_one_present": gates["display_table_one_present"],
+        "audit_context_present": gates["display_audit_context_present"],
+        "errors": gates["display_suite_errors"],
+    }
+
 
 def _display_table_key(relative_path: str) -> str:
     return Path(str(relative_path or "")).name.split("__", 1)[-1]

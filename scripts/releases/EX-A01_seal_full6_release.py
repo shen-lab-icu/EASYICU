@@ -48,10 +48,10 @@ MODULES = (
     "sepsis3_sofa2",
 )
 NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
-CONTRACT_REVISION = "native_v2_row_grain_sha256_size_20260803"
-RELEASE_SCHEMA_VERSION = "easyicu_full6_release_v1"
-RELEASE_GATE_CONTRACT = "easyicu_harmonized_semantics_release_gate_v2"
-MINIMUM_HARMONIZED_EASYICU_COMMIT = "af21256ab54926abc705a5baa586519f95399358"
+CONTRACT_REVISION = "native_v2_clinical_contract_provenance_20260812"
+RELEASE_SCHEMA_VERSION = "easyicu_full6_release_v3"
+RELEASE_GATE_CONTRACT = "easyicu_harmonized_semantics_release_gate_v4"
+MINIMUM_HARMONIZED_EASYICU_COMMIT = "187c6123ea59b4d904a2594d755de4186dc249b5"
 REQUIRED_HARMONIZED_CORRECTIONS = (
     "aumc_relative_time_bucketed_before_admission_alignment",
     "eicu_susp_inf_uses_antibiotic_event_time",
@@ -59,7 +59,31 @@ REQUIRED_HARMONIZED_CORRECTIONS = (
     "interval_total_volume_allocated_by_icu_hour_overlap",
     "cumulative_fluid_balance_starts_at_icu_hour_zero",
     "cross_database_samp_means_specimen_collection",
+    "aumc_rrt_derived_from_processitem_treatment_intervals",
     "single_clean_easyicu_commit_for_all_six_databases",
+)
+FOUNDATION_PROVENANCE_FIELDS = (
+    "concept_dictionary_sha256",
+    "sofa2_dictionary_sha256",
+    "clinical_contracts_sha256",
+    "clinical_contract_validator_sha256",
+    "data_sources_sha256",
+)
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+FOUNDATION_RESOURCE_PATHS = {
+    "concept_dictionary_sha256": _REPOSITORY_ROOT
+    / "src/easyicu/data/concept-dict.json",
+    "sofa2_dictionary_sha256": _REPOSITORY_ROOT
+    / "src/easyicu/data/sofa2-dict.json",
+    "clinical_contracts_sha256": _REPOSITORY_ROOT
+    / "src/easyicu/data/clinical-contracts.json",
+    "clinical_contract_validator_sha256": _REPOSITORY_ROOT
+    / "src/easyicu/clinical_contracts.py",
+    "data_sources_sha256": _REPOSITORY_ROOT
+    / "src/easyicu/data/data-sources.json",
+}
+FOUNDATION_LOCK_PATH = (
+    _REPOSITORY_ROOT / "src/easyicu/data/concept-dict.LOCK.json"
 )
 EXPECTED_PARQUET_COUNT = len(DATABASES) * len(MODULES)
 SPECIAL_SHARED_TIMING_MODULES = frozenset(("sepsis3_sofa1", "sepsis3_sofa2"))
@@ -76,7 +100,34 @@ CORRECTIONS = (
     "interval_total_input_volume_overlap_allocated_to_icu_hours",
     "cumulative_fluid_balance_excludes_preadmission_baseline",
     "per_parquet_sha256_and_byte_size_receipts",
+    "aumc_rrt_uses_processitem_treatment_intervals",
+    "foundation_resources_are_content_addressed",
+    "clinical_contract_registry_and_validator_are_content_addressed",
 )
+OWNER_RECEIPT_SUFFIXES = ("_observed", "_available")
+
+
+def _physical_columns_from_manifest_concepts(
+    primary_key: list[str], physical_concepts: list[str]
+) -> list[str]:
+    """Expand owner-issued receipt companions exactly as native-v2 does.
+
+    SOFA-2 observed/available receipts are physical columns owned by their
+    public value concept, not independently selectable concepts.  The native
+    publisher therefore lists the public concepts in ``physical_concept_ids``
+    while placing the receipt companions immediately after each SOFA-2 value.
+    The release gate must validate that deterministic expansion rather than
+    reject a package merely because it preserved owner receipts.
+    """
+
+    columns = list(primary_key)
+    for concept in physical_concepts:
+        columns.append(concept)
+        if concept.startswith("sofa2"):
+            columns.extend(
+                f"{concept}{suffix}" for suffix in OWNER_RECEIPT_SUFFIXES
+            )
+    return list(dict.fromkeys(columns))
 
 
 # Only these admission-level values may occupy a longitudinal row whose
@@ -204,6 +255,61 @@ def _read_json_object(path: Path, *, label: str) -> tuple[dict[str, Any], bytes]
     if not isinstance(value, dict):
         raise ReleaseValidationError(f"{label} must contain one JSON object: {path}")
     return value, raw
+
+
+def _validate_foundation_lock() -> dict[str, Any]:
+    """Require one finalized, content-addressed data-foundation contract."""
+
+    if FOUNDATION_LOCK_PATH.is_symlink():
+        raise ReleaseValidationError(
+            "concept foundation lock must be a regular file"
+        )
+    lock, raw_lock = _read_json_object(
+        FOUNDATION_LOCK_PATH,
+        label="concept foundation lock",
+    )
+    if lock.get("finalized") is not True:
+        raise ReleaseValidationError(
+            "concept foundation lock is not finalized; regenerate, QC and "
+            "finalize the dictionaries before sealing a six-database release"
+        )
+
+    resource_hashes: dict[str, str] = {}
+    for field in FOUNDATION_PROVENANCE_FIELDS:
+        path = FOUNDATION_RESOURCE_PATHS[field]
+        if not path.is_file() or path.is_symlink():
+            raise ReleaseValidationError(
+                f"foundation resource for {field} must be a regular file: {path}"
+            )
+        resource_hashes[field] = _sha256_file(path)
+
+    for field, lock_field in (
+        ("concept_dictionary_sha256", "concept_dict_sha256"),
+        ("sofa2_dictionary_sha256", "sofa2_dict_sha256"),
+    ):
+        declared = lock.get(lock_field)
+        if not isinstance(declared, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", declared
+        ):
+            raise ReleaseValidationError(
+                f"concept foundation lock has invalid {lock_field}"
+            )
+        if declared != resource_hashes[field]:
+            raise ReleaseValidationError(
+                f"{field} does not match the finalized concept foundation lock"
+            )
+
+    locked_run = lock.get("locked_for_extraction_run")
+    if not isinstance(locked_run, str) or not locked_run.strip():
+        raise ReleaseValidationError(
+            "finalized concept foundation lock must name locked_for_extraction_run"
+        )
+    return {
+        "lock_finalized": True,
+        "locked_for_extraction_run": locked_run.strip(),
+        "lock_sha256": hashlib.sha256(raw_lock).hexdigest(),
+        **resource_hashes,
+    }
 
 
 def _expected_grain(module: str) -> tuple[list[str], str, str]:
@@ -477,7 +583,9 @@ def _validate_file_entry(
         raise ReleaseValidationError(
             f"{label}: physical_concept_ids must be a non-empty string list"
         )
-    expected_columns = [*primary_key, *physical_concepts]
+    expected_columns = _physical_columns_from_manifest_concepts(
+        primary_key, physical_concepts
+    )
     if list(actual_schema) != expected_columns:
         raise ReleaseValidationError(
             f"{label}: Parquet columns do not follow primary-key + concept order"
@@ -503,6 +611,7 @@ def validate_release(run_root: Path) -> dict[str, Any]:
     """Validate ``run_root/exports`` without writing inside ``run_root``."""
 
     run_root = run_root.resolve()
+    foundation = _validate_foundation_lock()
     export_root = run_root / "exports"
     if not export_root.is_dir():
         raise ReleaseValidationError(f"Missing export root: {export_root}")
@@ -576,6 +685,12 @@ def validate_release(run_root: Path) -> dict[str, Any]:
                     raise ReleaseValidationError(
                         f"{database}: extraction runtime was not a clean Git checkout"
                     )
+                for field in FOUNDATION_PROVENANCE_FIELDS:
+                    if provenance.get(field) != foundation[field]:
+                        raise ReleaseValidationError(
+                            f"{database}: foundation provenance field {field} does "
+                            "not match the finalized release foundation"
+                        )
                 database_commits[database] = commit
                 runtime_provenance[database] = provenance
 
@@ -706,6 +821,7 @@ def validate_release(run_root: Path) -> dict[str, Any]:
     easyicu_commit = _validate_harmonized_commit_ancestry(database_commits)
 
     return {
+        "foundation": foundation,
         "database_commits": database_commits,
         "easyicu_commit": easyicu_commit,
         "runtime_provenance": runtime_provenance,
@@ -823,6 +939,7 @@ def build_run_metadata(
                 database: validation["database_commits"][database]
                 for database in DATABASES
             },
+            "foundation": validation["foundation"],
         },
         "extraction_execution": {
             "profile": execution_profile,

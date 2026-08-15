@@ -842,6 +842,18 @@ def merge_concepts_r_style(
         keep_cols = ["id", "time"]
         if name in df.columns:
             keep_cols.append(name)
+        # Some clinical concept owners emit evidence receipts beside the
+        # public value.  They are part of that value's meaning, not separate
+        # selectable concepts.  The R-style merger previously projected only
+        # ``name`` and silently discarded these sidecars before the native-v2
+        # Arrow writer could preserve them.  Keep only the closed owner-issued
+        # receipt contract here; arbitrary callback helper columns remain
+        # excluded.
+        keep_cols.extend(
+            column
+            for column in (f"{name}_observed", f"{name}_available")
+            if column in df.columns
+        )
         keep_cols = [c for c in keep_cols if c in df.columns]
         if len(keep_cols) <= 2:
             continue

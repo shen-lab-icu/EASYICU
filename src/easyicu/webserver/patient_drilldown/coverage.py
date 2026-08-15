@@ -338,12 +338,19 @@ def _source_signature(
     return tuple(signature)
 
 
-def _file_signature(path: Path) -> tuple[str, int | None, int | None]:
+def _file_signature(path: Path) -> tuple[Any, ...]:
     try:
         stat = path.stat()
-        return (path.name, int(stat.st_mtime_ns), int(stat.st_size))
+        return (
+            path.name,
+            int(stat.st_size),
+            int(stat.st_mtime_ns),
+            int(stat.st_ctime_ns),
+            int(stat.st_dev),
+            int(stat.st_ino),
+        )
     except OSError:
-        return (path.name, None, None)
+        return (path.name, None, None, None, None, None)
 
 
 __all__ = [

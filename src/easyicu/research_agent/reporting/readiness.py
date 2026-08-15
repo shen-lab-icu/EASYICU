@@ -46,7 +46,12 @@ from .article_contract import (
     article_contract_audit_payload,
     summarize_article_contract_coverage,
 )
-from .display_suite import summarize_display_suite_status
+from .administrative_authority import load_manuscript_administrative_authority
+from .display_suite import (
+    DISPLAY_SUITE_AUDIT_REGISTRATION,
+    display_suite_audit_payload,
+    summarize_display_suite_status,
+)
 from .completion import (
     count_missing_evidence_markers as _count_missing_evidence_markers,
     count_writer_attempts,
@@ -56,11 +61,22 @@ from .completion import (
     run_completion_axes,
     step_completion_projection,
 )
-from ..authority.evidence_store import EvidenceStore, sha256_of_file
+from ..authority.evidence_store import (
+    EvidenceStore,
+    sha256_of_file,
+)
+from ..authority.source_fingerprints import (
+    registered_source_fingerprints_match as _source_fingerprints_match,
+)
 from ..authority.step_recovery import StepRecoverySignature
+from ..contracts.descriptive_execution import (
+    EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+    exposure_outcome_distribution_result_receipt_valid,
+)
 from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
+from ..gates.visual import _is_cosmetic_visual_finding
 from ..planning.capability_registry import (
     assess_scientific_capability,
     get_capability_by_id,
@@ -74,6 +90,12 @@ from .review_artifacts import build_review_artifact_payloads
 from .result_integrity import (
     primary_result_plausibility_errors,
     primary_survival_estimate_integrity_errors,
+)
+from .scientific_maturity import (
+    SCIENTIFIC_MATURITY_AUDIT_REGISTRATION,
+    build_scientific_maturity_audit,
+    scientific_maturity_audit_from_gates,
+    scientific_maturity_readiness_gates,
 )
 from .step_summaries import (
     authoritative_step_summaries as _authoritative_step_summaries,
@@ -89,6 +111,7 @@ from ..authority.runtime_artifacts import (
     current_successful_step_records,
     load_run_artifact_authority,
     verified_run_evidence_path,
+    write_json_artifact,
 )
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 
@@ -585,29 +608,6 @@ def _record_artifact_basename(record: Any) -> str:
     return Path(str(record.relative_path)).name.split("__", 1)[-1]
 
 
-def _source_fingerprints_match(
-    evidence: EvidenceStore, metadata: Dict[str, Any]
-) -> bool:
-    source_ids = metadata.get("source_evidence_ids")
-    if isinstance(source_ids, str):
-        ids = [source_ids]
-    elif isinstance(source_ids, (list, tuple, set)):
-        ids = [str(eid) for eid in source_ids if str(eid)]
-    else:
-        ids = []
-    single = metadata.get("source_evidence_id")
-    if single and str(single) not in ids:
-        ids.append(str(single))
-    fingerprints = metadata.get("source_evidence_sha256")
-    if not ids or not isinstance(fingerprints, dict) or not fingerprints:
-        return False
-    for evidence_id in ids:
-        source = evidence.get(evidence_id)
-        if source is None or fingerprints.get(evidence_id) != source.sha256:
-            return False
-    return True
-
-
 def _publication_figure_policy_matches(metadata: Dict[str, Any]) -> bool:
     return (
         metadata.get("figure_skill_policy_version")
@@ -626,41 +626,19 @@ _PUBLICATION_FIGURE_VISUAL_ERROR_VALIDATORS = {
     "visual_qa",
     "vlm_visual_qa",
 }
-_COSMETIC_VISUAL_REASON = "svg_text_overlap_spacing"
-_LEGACY_COSMETIC_VISUAL_MESSAGE = re.compile(
-    r"^svg figure '[^']+' has overlapping text elements; "
-    r"multi-panel labels, annotations or axis text need more spacing\.?$",
-    re.IGNORECASE,
-)
-_HARD_VISUAL_MESSAGE = re.compile(
-    r"\b(?:blank|clip(?:ped|ping)?|crop(?:ped|ping)?|missing|absent|"
-    r"unreadable|overflow|truncat(?:ed|ion)|numeric|mismatch|disagree)\b",
-    re.IGNORECASE,
-)
-
-
-def _is_cosmetic_visual_error(finding: ValidationFinding) -> bool:
-    """A deterministic SVG text-overlap spacing warning is cosmetic, not a
-    manuscript blocker.
-
-    Mirrors ``execution.phase._is_cosmetic_visual_finding`` at the readiness
-    layer: the step-level demotion runs during execution, but this exact finding
-    is re-generated when the FINAL manuscript SVG is audited, after that pass, so
-    it leaks into ``analysis_errors`` / the figure-bundle gate and blocks a run
-    whose analysis and evidence are sound. A minor
-    multi-panel label/annotation overlap is demoted; genuine visual_qa errors
-    (blank/absent figure, wrong content) still block because they do not carry
-    the deterministic "overlapping text elements … spacing" signature.
-    """
-    if finding.severity != "error" or finding.validator != "visual_qa":
-        return False
-    message = str(finding.message or "").strip()
-    if _HARD_VISUAL_MESSAGE.search(message):
-        return False
-    detail = finding.detail if isinstance(finding.detail, Mapping) else {}
-    if str(detail.get("reason") or "").strip() == _COSMETIC_VISUAL_REASON:
-        return True
-    return _LEGACY_COSMETIC_VISUAL_MESSAGE.fullmatch(message) is not None
+# The cosmetic-demotion predicate is a scientific gate rule with exactly one
+# owner: ``gates.visual``.  Readiness needs it because the same finding is
+# re-generated when the FINAL manuscript SVG is audited -- after the step-level
+# demotion has already run -- so without it a run whose analysis and evidence
+# are sound is blocked by a multi-panel label overlap.
+#
+# It used to be re-implemented here, together with byte-identical copies of the
+# reason literal and both regexes.  Two owners for one gate is how the rule
+# drifts, and the copy's docstring already pointed at ``execution.phase``, a
+# location the predicate left in 60284da.  Import the owner instead; the
+# historical private name is kept because ``reporting.write_phase`` and the
+# governance tests bind to it.
+_is_cosmetic_visual_error = _is_cosmetic_visual_finding
 
 
 def _publication_figure_bundle_ready(
@@ -1457,12 +1435,28 @@ def _partition_findings_by_supersession(
 
 # Exact primary owners that may bind a deterministic headline result.
 _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
-    {ADJUSTED_ASSOCIATION_ANALYSIS_KIND, SURVIVAL_PRIMARY_ANALYSIS_KIND}
+    {
+        ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+        EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+        SURVIVAL_PRIMARY_ANALYSIS_KIND,
+    }
 )
 
 
 def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
     """Require a complete primary effect emitted by a currently registered owner."""
+
+    for record in per_step_records or []:
+        if not isinstance(record, dict):
+            continue
+        if record.get("deterministic_standard_analysis") != (
+            EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND
+        ):
+            continue
+        if exposure_outcome_distribution_result_receipt_valid(
+            record.get("step_summary")
+        ):
+            return True
     from ..robustness.primary_effect import (
         _extract_primary_effect_payload_from_records,
     )
@@ -1941,25 +1935,43 @@ def _compute_readiness_gates(
             else None
         ),
     )
+    scientific_maturity = build_scientific_maturity_audit(
+        context=context,
+        plan=plan,
+        run_dir=run_dir,
+        display_suite=display_suite,
+        publication_bundle=publication,
+    )
+    scientific_maturity_gates = scientific_maturity_readiness_gates(
+        scientific_maturity
+    )
     # Read the FULL findings list, not `active_findings`: supersession retires a
     # finding when its step later succeeds, and a dropped step never ran, so no
     # later success can speak for it. What *can* speak for it is a later plan
     # revision that declares the product again — which is why the final plan is
     # passed in rather than the question being answered from findings alone.
     plan_truncation = _plan_truncation_status(findings, plan=plan)
-    publication_ready = publication_authorized(
-        manuscript_ready=manuscript_ready,
-        publication_figure_bundle_ready=publication["publication_figure_bundle_ready"],
-        publication_provenance_ready=publication_provenance[
-            "publication_provenance_ready"
-        ],
-        display_suite_complete=display_suite["display_suite_complete"],
-        article_contract_complete=article_contract["article_contract_complete"],
-        article_figure_strategy_complete=figure_strategy[
-            "article_figure_strategy_complete"
-        ],
-        plan_not_truncated=not plan_truncation["plan_truncated"],
+    publication_ready = (
+        publication_authorized(
+            manuscript_ready=manuscript_ready,
+            publication_figure_bundle_ready=publication[
+                "publication_figure_bundle_ready"
+            ],
+            publication_provenance_ready=publication_provenance[
+                "publication_provenance_ready"
+            ],
+            display_suite_complete=display_suite["display_suite_complete"],
+            article_contract_complete=article_contract["article_contract_complete"],
+            article_figure_strategy_complete=figure_strategy[
+                "article_figure_strategy_complete"
+            ],
+            plan_not_truncated=not plan_truncation["plan_truncated"],
+        )
+        and scientific_maturity_gates["scientific_maturity_article_grade"]
     )
+    administrative_authority = load_manuscript_administrative_authority(run_dir)
+    administrative_metadata_verified = administrative_authority is not None
+    submission_ready = publication_ready and administrative_metadata_verified
     return {
         **execution,
         **run_completion_axes(
@@ -1981,6 +1993,14 @@ def _compute_readiness_gates(
         "replan_budget_hit": replan_budget_hit,
         "replan_budget_advisory": replan_budget_hit and not replan_budget_exhausted,
         "publication_ready": publication_ready,
+        "administrative_metadata_verified": administrative_metadata_verified,
+        "administrative_authority_sha256": (
+            administrative_authority.authority_sha256
+            if administrative_authority is not None
+            else None
+        ),
+        "submission_ready": submission_ready,
+        **scientific_maturity_gates,
         "manuscript_generated": manuscript_generated,
         **manuscript_text_gate,
         "writer_probe_mode": bool(writer_probe_mode),
@@ -2063,7 +2083,14 @@ def write_readiness_artifacts(
     )
     gates["publication_artifacts_ready"] = publication_artifacts_ready
     gates["execution_paper_eligible"] = bool(execution_paper_eligible)
-    gates.update(paper_authority_gates(publication_artifacts_ready, execution_paper_eligible, plan_authority_verified, plan_authority_sha256))
+    gates.update(
+        paper_authority_gates(
+            publication_artifacts_ready,
+            execution_paper_eligible,
+            plan_authority_verified,
+            plan_authority_sha256,
+        )
+    )
 
     artifact_paths: Dict[str, str] = {}
 
@@ -2124,66 +2151,18 @@ def write_readiness_artifacts(
     )
     artifact_paths["numeric_audit"] = str(numeric_audit_path.relative_to(run_dir))
 
-    display_suite_path = run_dir / "display_suite_audit.json"
-    display_suite_payload = {
-        "schema_version": "easyicu.display_suite_audit/2",
-        "display_suite_complete": gates["display_suite_complete"],
-        "table_count": gates["display_table_count"],
-        "figure_contract_count": gates["display_figure_contract_count"],
-        "result_figure_contract_count": gates["display_result_figure_contract_count"],
-        "primary_publication_figure_contract_count": gates[
-            "display_primary_publication_figure_contract_count"
-        ],
-        "supporting_figure_contract_count": gates[
-            "display_supporting_figure_contract_count"
-        ],
-        "other_figure_contract_count": gates["display_other_figure_contract_count"],
-        "primary_publication_contract_paths": gates[
-            "display_primary_publication_contract_paths"
-        ],
-        "supporting_figure_contract_paths": gates[
-            "display_supporting_figure_contract_paths"
-        ],
-        "other_figure_contract_paths": gates["display_other_figure_contract_paths"],
-        "contract_panel_count": gates["display_contract_panel_count"],
-        "primary_publication_panel_count": gates[
-            "display_primary_publication_panel_count"
-        ],
-        "supporting_panel_count": gates["display_supporting_panel_count"],
-        "contract_role_count": gates["display_contract_role_count"],
-        "primary_publication_role_count": gates[
-            "display_primary_publication_role_count"
-        ],
-        "supporting_role_count": gates["display_supporting_role_count"],
-        "chart_types": gates["display_chart_types"],
-        "primary_publication_chart_types": gates[
-            "display_primary_publication_chart_types"
-        ],
-        "supporting_chart_types": gates["display_supporting_chart_types"],
-        "absolute_risk_visual_present": gates["display_absolute_risk_visual_present"],
-        "primary_publication_absolute_risk_visual_present": gates[
-            "display_primary_publication_absolute_risk_visual_present"
-        ],
-        "supporting_absolute_risk_visual_present": gates[
-            "display_supporting_absolute_risk_visual_present"
-        ],
-        "primary_publication_result_figure_contract_count": gates[
-            "display_primary_publication_result_figure_contract_count"
-        ],
-        "supporting_result_figure_contract_count": gates[
-            "display_supporting_result_figure_contract_count"
-        ],
-        "categories": gates["display_categories"],
-        "table_one_expected": gates["display_table_one_expected"],
-        "table_one_present": gates["display_table_one_present"],
-        "audit_context_present": gates["display_audit_context_present"],
-        "errors": gates["display_suite_errors"],
-    }
-    display_suite_path.write_text(
-        json.dumps(display_suite_payload, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
+    display_suite_path = write_json_artifact(
+        run_dir / "display_suite_audit.json", display_suite_audit_payload(gates)
     )
     artifact_paths["display_suite_audit"] = str(display_suite_path.relative_to(run_dir))
+
+    scientific_maturity_path = write_json_artifact(
+        run_dir / "scientific_maturity_audit.json",
+        scientific_maturity_audit_from_gates(gates),
+    )
+    artifact_paths["scientific_maturity_audit"] = str(
+        scientific_maturity_path.relative_to(run_dir)
+    )
 
     article_contract_path = run_dir / "article_contract_audit.json"
     article_contract_payload = article_contract_audit_payload(gates)
@@ -2341,12 +2320,8 @@ def write_readiness_artifacts(
             "Numeric-claim audit for manuscript gating.",
             numeric_audit_path,
         ),
-        (
-            "display_suite_audit",
-            "statistic",
-            "Article display-suite coverage audit for publication gating.",
-            display_suite_path,
-        ),
+        (*DISPLAY_SUITE_AUDIT_REGISTRATION, display_suite_path),
+        (*SCIENTIFIC_MATURITY_AUDIT_REGISTRATION, scientific_maturity_path),
         (
             "claim_ledger",
             "table",
@@ -2567,6 +2542,9 @@ def _render_author_review_note(
         "- supporting_figure_contracts: "
         f"`{gates.get('display_supporting_figure_contract_count')}`",
         f"- publication_ready: `{gates['publication_ready']}`",
+        "- administrative_metadata_verified: "
+        f"`{gates.get('administrative_metadata_verified')}`",
+        f"- submission_ready: `{gates.get('submission_ready')}`",
         "",
     ]
     superseded_error_keys = {

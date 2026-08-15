@@ -16,8 +16,20 @@ import os
 import re
 import stat
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional
 
+if TYPE_CHECKING:
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLimits,
+    )
+
+from easyicu.provider_auth import (
+    OPENAI_AUTH_HEADER_ENV,
+    OpenAIAuthHeader,
+    ProviderAuthContractError,
+    credential_headers,
+    normalize_openai_auth_header,
+)
 from easyicu.webserver import agent_outputs
 from easyicu.webserver.provider_url_security import (
     ProviderUrlSecurityError,
@@ -29,6 +41,25 @@ _DEFAULT_MAX_OUTPUT_TOKENS = 1200
 _MIN_MAX_OUTPUT_TOKENS = 128
 _ABSOLUTE_MAX_OUTPUT_TOKENS = 4000
 _DEFAULT_PROVIDER_ENV_FILE = Path.home() / ".easyicu" / "provider.env"
+_DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT = 240.0
+_LOOPBACK_RESEARCH_AGENT_REQUEST_TIMEOUT = 480.0
+_WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES = (500, 502, 503, 504)
+_WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS = 192
+_WEB_RESEARCH_AGENT_MAX_TOTAL_TOKENS = 2_000_000
+_WEB_RESEARCH_AGENT_MAX_ESTIMATED_COST_USD = 100.0
+_WEB_RESEARCH_AGENT_MAX_WALL_CLOCK_SECONDS = 21_600.0
+_WEB_RESEARCH_AGENT_INPUT_COST_PER_MILLION = 10.0
+_WEB_RESEARCH_AGENT_OUTPUT_COST_PER_MILLION = 30.0
+# One acquisition request plus the Planner's five bounded structured attempts.
+# The local OpenAI-compatible Provider exposes a 128k output ceiling, so each
+# transport must reserve that ceiling before it can start even though actual
+# completions are much smaller. These aggregate ceilings fund exactly those six
+# worst-case reservations; the old 24/250k/$10 tuple advertised attempts that
+# its token and cost stops made impossible after two Planner responses.
+_WEB_PLANNER_CANARY_MAX_PROVIDER_ATTEMPTS = 6
+_WEB_PLANNER_CANARY_MAX_TOTAL_TOKENS = 1_200_000
+_WEB_PLANNER_CANARY_MAX_ESTIMATED_COST_USD = 30.0
+_WEB_PLANNER_CANARY_MAX_WALL_CLOCK_SECONDS = 1_800.0
 
 
 class ProviderAdapterError(ValueError):
@@ -37,6 +68,44 @@ class ProviderAdapterError(ValueError):
     def __init__(self, detail: Dict[str, Any]) -> None:
         super().__init__(str(detail.get("error") or "provider_adapter_error"))
         self.detail = detail
+
+
+def web_research_agent_hard_stop_limits(
+    mode: str = "full_reviewed",
+) -> "ProviderHardStopLimits":
+    """Return the explicit reviewed stop-loss for one Web pipeline launch mode."""
+
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLimits,
+    )
+
+    selected = str(mode or "").strip().lower()
+    if selected == "planner_canary":
+        attempts = _WEB_PLANNER_CANARY_MAX_PROVIDER_ATTEMPTS
+        tokens = _WEB_PLANNER_CANARY_MAX_TOTAL_TOKENS
+        cost = _WEB_PLANNER_CANARY_MAX_ESTIMATED_COST_USD
+        wall_clock = _WEB_PLANNER_CANARY_MAX_WALL_CLOCK_SECONDS
+    elif selected == "full_reviewed":
+        attempts = _WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS
+        tokens = _WEB_RESEARCH_AGENT_MAX_TOTAL_TOKENS
+        cost = _WEB_RESEARCH_AGENT_MAX_ESTIMATED_COST_USD
+        wall_clock = _WEB_RESEARCH_AGENT_MAX_WALL_CLOCK_SECONDS
+    else:
+        raise ValueError(f"Unknown Web Research Agent budget mode: {mode!r}")
+    return ProviderHardStopLimits(
+        max_provider_attempts_per_run=attempts,
+        max_provider_attempts_per_batch=attempts,
+        max_total_tokens_per_run=tokens,
+        max_total_tokens_per_batch=tokens,
+        max_estimated_cost_usd_per_batch=cost,
+        max_wall_clock_seconds_per_task=wall_clock,
+        input_cost_usd_per_million_tokens=(
+            _WEB_RESEARCH_AGENT_INPUT_COST_PER_MILLION
+        ),
+        output_cost_usd_per_million_tokens=(
+            _WEB_RESEARCH_AGENT_OUTPUT_COST_PER_MILLION
+        ),
+    )
 
 
 def require_external_credentials(
@@ -58,6 +127,130 @@ def require_external_credentials(
     updated["provider_gate"] = "external_provider_credentials_ready"
     updated.setdefault("provider_gate_order", []).append("credentials_loaded")
     return updated
+
+
+def build_research_agent_provider_client(
+    provider_meta: Dict[str, Any],
+    *,
+    request_timeout: Optional[float] = None,
+    environ: Optional[Mapping[str, str]] = None,
+) -> tuple[Any, Dict[str, Any]]:
+    """Construct the governed Research Agent client without exposing a key.
+
+    The native Web provider file and the Research Agent provider factory have
+    deliberately separate responsibilities.  This adapter is their only
+    bridge: it revalidates the private credential and endpoint, passes them
+    directly to the factory in memory, and returns only the live client plus
+    non-secret provenance metadata.  Callers must never serialize the client.
+    """
+
+    if not provider_meta.get("external"):
+        raise ProviderAdapterError(
+            {
+                "error": "research_agent_external_provider_required",
+                "secrets_returned": False,
+            }
+        )
+    credentials = _load_external_credentials(
+        str(provider_meta.get("provider") or ""), environ=environ
+    )
+    provider = str(credentials.get("provider") or "").strip().lower()
+    if provider not in {"openai", "openrouter"}:
+        raise ProviderAdapterError(
+            {
+                "error": "research_agent_provider_unsupported",
+                "provider": provider,
+                "secrets_returned": False,
+            }
+        )
+    endpoint = str(credentials["base_url"])
+    suffix = "/chat/completions"
+    base_url = endpoint[: -len(suffix)] if endpoint.endswith(suffix) else endpoint
+    if provider == "openai":
+        key_name = "OPENAI_API_KEY"
+        base_name = "OPENAI_BASE_URL"
+    else:
+        key_name = "OPENROUTER_API_KEY"
+        base_name = "OPENROUTER_BASE_URL"
+    provider_environment = {
+        key_name: credentials["api_key"],
+        base_name: base_url,
+        "EASYICU_ALLOW_EXTERNAL_LLM": "1",
+    }
+    try:
+        from easyicu.research_agent.providers import build_provider_client
+        from easyicu.research_agent.providers.factory import (
+            TRUST_LOOPBACK_PROXY_KEY_ENV,
+            is_loopback_openai_base_url,
+        )
+        from easyicu.research_agent.providers.llm import OpenAIClient
+
+        loopback = provider == "openai" and is_loopback_openai_base_url(base_url)
+        if loopback:
+            # The endpoint and credential were both loaded from the server-owned
+            # provider configuration after explicit Web opt-in. Tell the shared
+            # factory this one configured loopback proxy is allowed to receive
+            # its own authentication token rather than the no-auth dummy key.
+            provider_environment[TRUST_LOOPBACK_PROXY_KEY_ENV] = "1"
+        provider_environment[OPENAI_AUTH_HEADER_ENV] = str(
+            credentials.get("auth_header") or OpenAIAuthHeader.AUTHORIZATION.value
+        )
+        effective_timeout = (
+            float(request_timeout)
+            if request_timeout is not None
+            else (
+                _LOOPBACK_RESEARCH_AGENT_REQUEST_TIMEOUT
+                if loopback
+                else _DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT
+            )
+        )
+        client = build_provider_client(
+            provider=provider,
+            model=credentials["model"],
+            request_timeout=effective_timeout,
+            title="EasyICU Web Research Agent",
+            client_cls=OpenAIClient,
+            environment=provider_environment,
+            # One extra transport attempt, hence two total requests.  Freeze
+            # environment overrides so EASYICU_LLM_MAX_RETRIES cannot silently
+            # widen the Web job's reviewed bound.  This allowlist is the whole
+            # Web retry policy: non-HTTP failures and other status codes fail
+            # closed without a transport replay.
+            max_retries=1,
+            retryable_http_status_codes=(
+                _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES
+            ),
+            allow_environment_overrides=False,
+        )
+    except Exception as exc:
+        raise ProviderAdapterError(
+            {
+                "error": "research_agent_provider_client_failed",
+                "provider": provider,
+                "reason": type(exc).__name__,
+                "secrets_returned": False,
+            }
+        ) from exc
+    public = dict(provider_meta)
+    public.update(_credential_public_metadata(credentials))
+    public.update(
+        {
+            "client": "easyicu.research_agent.providers.OpenAIClient",
+            "client_constructed": True,
+            "provider_gate": "research_agent_provider_ready",
+            "request_timeout_seconds": effective_timeout,
+            "transport_max_attempts": 2,
+            "retryable_http_status_codes": list(
+                _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES
+            ),
+            "provider_hard_stop": {
+                "required": True,
+                "schema_version": "easyicu.web-provider-hard-stop-policy/1",
+            },
+            "secrets_returned": False,
+        }
+    )
+    return client, public
 
 
 def generate_bound_provider_payload(
@@ -94,8 +287,26 @@ def generate_bound_provider_payload(
         max_output_tokens=max_output_tokens,
         json_format_style=json_format_style,
     )
+    auth_header = normalize_openai_auth_header(credentials.get("auth_header"))
+    if auth_header is OpenAIAuthHeader.X_API_KEY:
+        from easyicu.research_agent.providers.factory import (
+            is_loopback_openai_base_url,
+        )
+
+        endpoint = str(credentials.get("base_url") or "")
+        suffix = "/chat/completions"
+        auth_base_url = (
+            endpoint[: -len(suffix)] if endpoint.endswith(suffix) else endpoint
+        )
+        if not is_loopback_openai_base_url(auth_base_url):
+            raise ProviderAdapterError(
+                {
+                    "error": "provider_x_api_key_requires_loopback",
+                    "secrets_returned": False,
+                }
+            )
     headers = {
-        "Authorization": f"Bearer {credentials['api_key']}",
+        **credential_headers(credentials["api_key"], mode=auth_header),
         "Content-Type": "application/json",
     }
     if transport is None:
@@ -155,7 +366,9 @@ def provider_readiness(
     default_base = _default_base_url(provider_text)
     model_name, model = _first_env(env, model_names)
     has_base_url = bool(base_url or default_base)
-    base_url_validation = "provider_default" if default_base and not base_url else "missing"
+    base_url_validation = (
+        "provider_default" if default_base and not base_url else "missing"
+    )
     base_url_rejection_reason: Optional[str] = None
     if base_url:
         try:
@@ -340,6 +553,16 @@ def _load_external_credentials(
         validate_provider_base_url(base_url)
         base_url = _chat_completions_url(base_url)
     model_name, model = _first_env(env, _model_env_names(provider))
+    try:
+        auth_header = normalize_openai_auth_header(env.get(OPENAI_AUTH_HEADER_ENV))
+    except ProviderAuthContractError as exc:
+        raise ProviderAdapterError(
+            {
+                "error": exc.code,
+                "blocked_by": "external_provider_credentials",
+                "secrets_returned": False,
+            }
+        ) from exc
     attempted = {
         "credentials_attempted": True,
         "credentials_loaded": False,
@@ -389,6 +612,7 @@ def _load_external_credentials(
         "base_url_env": base_name or "provider_default",
         "model": model,
         "model_env": model_name,
+        "auth_header": auth_header.value,
     }
 
 
@@ -398,11 +622,15 @@ def _credential_public_metadata(credentials: Dict[str, str]) -> Dict[str, Any]:
         "credentials_loaded": True,
         "credential_source": credentials["api_key_env"],
         "credential_fingerprint": _fingerprint(credentials["api_key"]),
+        "endpoint_fingerprint": _fingerprint(credentials["base_url"]),
         "base_url_configured": True,
         "base_url_endpoint": "chat_completions",
         "base_url_source": credentials["base_url_env"],
         "model": credentials["model"],
         "model_source": credentials["model_env"],
+        "credential_header": str(
+            credentials.get("auth_header") or OpenAIAuthHeader.AUTHORIZATION.value
+        ),
         "client_constructed": False,
     }
 

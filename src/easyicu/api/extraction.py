@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Sequence, Union
 
 import pandas as pd
 
@@ -689,7 +689,7 @@ def _enforce_concept_bounds(df, concept_name):
 
 def _module_parquet_columns(columns, concepts, *, include_missing=False):
     """Return stable context + catalog column order without touching payloads."""
-    requested = list(dict.fromkeys(concepts))
+    requested = _native_export_physical_value_columns(concepts)
     requested_set = set(requested)
     context_columns = [column for column in columns if column not in requested_set]
     concept_columns = (
@@ -731,7 +731,7 @@ def _module_arrow_table(
 ):
     """Create a stable module table, adding structural nulls only in Arrow."""
     table = pyarrow_module.Table.from_pandas(frame, preserve_index=False)
-    requested = list(dict.fromkeys(concepts))
+    requested = _native_export_physical_value_columns(concepts)
     requested_set = set(requested)
 
     # Every non-demographics module is longitudinal in the native-v2 physical
@@ -2126,10 +2126,41 @@ _NATIVE_EXPORT_ID_COLUMNS = (
     "CaseID",
 )
 
+_NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES = ("_observed", "_available")
+
+
+def _native_export_physical_value_columns(
+    requested_concepts: Sequence[str],
+) -> List[str]:
+    """Return public values plus owner-issued physical receipt companions.
+
+    SOFA-2 owns the distinction between directly observed, owner-LOCF
+    available, and unavailable component values.  Native-v2 must preserve
+    those receipts as physical companion columns even though they are not
+    independently selectable public concepts.
+    """
+
+    columns: List[str] = []
+    for raw_concept in requested_concepts:
+        concept = str(raw_concept)
+        columns.append(concept)
+        if concept.startswith("sofa2"):
+            columns.extend(
+                f"{concept}{suffix}"
+                for suffix in _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES
+            )
+    return list(dict.fromkeys(columns))
+
 
 def _native_export_storage_kind(concept_id: str, dictionary) -> str:
     """Return the deterministic physical type family for one public concept."""
     from ..concept.catalog import CONCEPT_DICTIONARY
+
+    if any(
+        str(concept_id).endswith(suffix)
+        for suffix in _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES
+    ):
+        return "boolean"
 
     definition = dictionary.get(concept_id)
     raw_class_name = getattr(definition, "class_name", None)
@@ -2148,7 +2179,7 @@ def _native_export_storage_kind(concept_id: str, dictionary) -> str:
         return "boolean"
     if (
         class_names.intersection({"fct_cncpt", "chr_cncpt"})
-        or str(catalog_unit).strip().lower() == "category"
+        or str(catalog_unit).strip().lower() in {"category", "state"}
         or concept_id == "avpu"
     ):
         return "string"
@@ -2209,7 +2240,7 @@ def _canonicalise_native_export_frame(
                 np.nan, index=frame.index, dtype="float64"
             )
 
-    for concept in requested_concepts:
+    for concept in _native_export_physical_value_columns(requested_concepts):
         kind = _native_export_storage_kind(concept, dictionary)
         if concept not in frame:
             if kind == "boolean":
@@ -2270,7 +2301,7 @@ def _restore_native_export_storage_dtypes(
         frame["charttime"] = pd.to_numeric(
             frame["charttime"], errors="coerce"
         ).astype("float64")
-    for concept in requested_concepts:
+    for concept in _native_export_physical_value_columns(requested_concepts):
         kind = _native_export_storage_kind(concept, dictionary)
         if kind == "boolean":
             frame[concept] = frame[concept].astype("boolean")
@@ -2354,7 +2385,7 @@ def _consolidate_native_export_row_grain(
         )
         consolidated = first_stays.reset_index(drop=True)
         conflict_groups: Dict[str, int] = {}
-        for concept in requested_concepts:
+        for concept in _native_export_physical_value_columns(requested_concepts):
             if concept == "bmi":
                 continue
             candidates = pd.DataFrame(
@@ -2417,9 +2448,10 @@ def _consolidate_native_export_row_grain(
                 recomputed_bmi_rows = int(bmi.notna().sum())
             consolidated["bmi"] = bmi
 
-        consolidated = consolidated[
-            ["stay_id", *requested_concepts]
-        ].reset_index(drop=True)
+        physical_values = _native_export_physical_value_columns(requested_concepts)
+        consolidated = consolidated[["stay_id", *physical_values]].reset_index(
+            drop=True
+        )
         consolidated = _restore_native_export_storage_dtypes(
             consolidated,
             requested_concepts=requested_concepts,
@@ -2477,9 +2509,22 @@ def _consolidate_native_export_row_grain(
                 "charttime": group["charttime"].iloc[0],
                 "_row_order": int(group.index.min()),
             }
-            for concept in requested_concepts:
-                values = group[concept].dropna()
+            for concept in _native_export_physical_value_columns(
+                requested_concepts
+            ):
                 kind = _native_export_storage_kind(concept, dictionary)
+                available_column = f"{concept}_available"
+                if (
+                    concept in requested_concepts
+                    and concept.startswith("sofa2")
+                    and available_column in group
+                ):
+                    owner_available = (
+                        group[available_column].astype("boolean").fillna(False)
+                    )
+                    values = group.loc[owner_available, concept].dropna()
+                else:
+                    values = group[concept].dropna()
                 if values.empty:
                     record[concept] = (
                         pd.NA if kind in {"boolean", "string"} else np.nan
@@ -2515,8 +2560,9 @@ def _consolidate_native_export_row_grain(
     else:
         consolidated = working
 
+    physical_values = _native_export_physical_value_columns(requested_concepts)
     consolidated = consolidated[
-        ["stay_id", "charttime", *requested_concepts]
+        ["stay_id", "charttime", *physical_values]
     ].reset_index(drop=True)
     consolidated = _restore_native_export_storage_dtypes(
         consolidated,
@@ -2546,6 +2592,9 @@ def _consolidate_native_export_row_grain(
         "aggregation_policy": {
             "boolean": "any_non_null_preserving_all_null",
             "numeric": "median_non_null_preserving_all_null",
+            "owner_receipted_numeric": (
+                "median_owner_available_non_null_preserving_all_unavailable"
+            ),
             "string": "single_non_null_value_or_fail_on_conflict",
         },
     }
@@ -2588,7 +2637,7 @@ def _native_export_empty_schema_frame(
     columns = {"stay_id": pd.Series([], dtype="int64")}
     if module != "demographics":
         columns["charttime"] = pd.Series([], dtype="float64")
-    for concept in requested_concepts:
+    for concept in _native_export_physical_value_columns(requested_concepts):
         kind = _native_export_storage_kind(concept, dictionary)
         if kind == "boolean":
             columns[concept] = pd.Series([], dtype="boolean")
@@ -2850,6 +2899,9 @@ def _native_export_arrow_row_grain_audit(
         "aggregation_policy": {
             "boolean": "any_non_null_preserving_all_null",
             "numeric": "median_non_null_preserving_all_null",
+            "owner_receipted_numeric": (
+                "median_owner_available_non_null_preserving_all_unavailable"
+            ),
             "string": "single_non_null_value_or_fail_on_conflict",
         },
         "publication_backend": "pyarrow_record_batches",
@@ -2895,13 +2947,14 @@ def _native_export_duckdb_consolidate_row_grain(
                 f"native_export_v2 refuses stale consolidation file: {candidate}"
             )
 
+    physical_values = _native_export_physical_value_columns(requested_concepts)
     string_concepts = [
         concept
-        for concept in requested_concepts
+        for concept in physical_values
         if _native_export_storage_kind(concept, dictionary) == "string"
     ]
     aggregate_expressions = []
-    for concept in requested_concepts:
+    for concept in physical_values:
         column = quote_identifier(concept)
         alias = quote_identifier(concept)
         kind = _native_export_storage_kind(concept, dictionary)
@@ -2912,17 +2965,23 @@ def _native_export_duckdb_consolidate_row_grain(
                 f"first({column} ORDER BY _row_order) "
                 f"FILTER (WHERE {column} IS NOT NULL)::VARCHAR AS {alias}"
             )
+        elif concept in requested_concepts and concept.startswith("sofa2"):
+            available = quote_identifier(f"{concept}_available")
+            expression = (
+                f"(median({column}) FILTER (WHERE {available} IS TRUE))"
+                f"::DOUBLE AS {alias}"
+            )
         else:
             expression = f"median({column})::DOUBLE AS {alias}"
         aggregate_expressions.append(expression)
 
     source_columns = ", ".join(
         quote_identifier(column)
-        for column in ("stay_id", "charttime", *requested_concepts)
+        for column in ("stay_id", "charttime", *physical_values)
     )
     output_columns = ", ".join(
         quote_identifier(column)
-        for column in ("stay_id", "charttime", *requested_concepts)
+        for column in ("stay_id", "charttime", *physical_values)
     )
     aggregate_sql = ",\n                        ".join(aggregate_expressions)
 
@@ -3150,7 +3209,9 @@ def _try_publish_native_export_arrow_fast_path(
                 *(("charttime",) if "charttime" in source_schema.names else ()),
                 *(
                     concept
-                    for concept in requested_concepts
+                    for concept in _native_export_physical_value_columns(
+                        requested_concepts
+                    )
                     if concept in source_schema.names
                 ),
             ]
@@ -3530,12 +3591,27 @@ def _native_export_runtime_provenance() -> Dict[str, object]:
 
     package_root = Path(__file__).resolve().parents[1]
     repository_root = package_root.parents[1]
-    catalog_files = [
-        package_root / "data" / "concept-dict.json",
-        package_root / "data" / "sofa2-dict.json",
-    ]
+    foundation_files = {
+        "concept_dictionary_sha256": package_root
+        / "data"
+        / "concept-dict.json",
+        "sofa2_dictionary_sha256": package_root / "data" / "sofa2-dict.json",
+        "clinical_contracts_sha256": package_root
+        / "data"
+        / "clinical-contracts.json",
+        "clinical_contract_validator_sha256": package_root
+        / "clinical_contracts.py",
+        "data_sources_sha256": package_root / "data" / "data-sources.json",
+    }
+    foundation_sha256 = {
+        field: hashlib.sha256(path.read_bytes()).hexdigest()
+        for field, path in foundation_files.items()
+    }
     digest = hashlib.sha256()
-    for path in catalog_files:
+    for path in (
+        foundation_files["concept_dictionary_sha256"],
+        foundation_files["sofa2_dictionary_sha256"],
+    ):
         if path.is_file():
             digest.update(path.name.encode("utf-8"))
             digest.update(path.read_bytes())
@@ -3582,6 +3658,7 @@ def _native_export_runtime_provenance() -> Dict[str, object]:
         "easyicu_git_diff_sha256": git_diff_sha256,
         "easyicu_import_path": str(package_root),
         "concept_catalog_sha256": digest.hexdigest(),
+        **foundation_sha256,
         "python_version": platform.python_version(),
         "python_executable": sys.executable,
         "platform": platform.platform(),
@@ -4053,7 +4130,7 @@ def _publish_native_export_v2(
     }
     manifest = {
         "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
-        "contract_revision": "native_v2_row_grain_sha256_size_20260803",
+        "contract_revision": "native_v2_clinical_contract_provenance_20260812",
         "database": normalized_database,
         "data_path": str(data_path),
         "format": "parquet",

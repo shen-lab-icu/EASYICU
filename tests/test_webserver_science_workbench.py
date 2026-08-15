@@ -126,6 +126,8 @@ def test_science_workbench_returns_four_claude_science_inspired_objects(
     assert payload["feature_alignment"]["items"]
     assert payload["reviewer_gate"]["checks"]
     assert payload["reusable_protocols"]
+    protocol_ids = {row["id"] for row in payload["reusable_protocols"]}
+    assert {"nature-figure", "nature-writing"} <= protocol_ids
     assert payload["native_renderers"]
     assert payload["privacy"]["patient_rows_returned"] is False
     assert payload["reviewer_gate"]["reportable"] is False
@@ -201,6 +203,29 @@ def test_science_workbench_capability_policy_controls_protocol_registry(
     alignment = {row["id"]: row for row in payload["feature_alignment"]["items"]}
     assert alignment["reusable_protocols"]["status"] == "unavailable"
     assert "Settings 已关闭 Skills" in alignment["reusable_protocols"]["evidence"]
+
+
+def test_science_workbench_filters_individual_publication_skills(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _isolate_idea_mining(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        settings_store,
+        "load_settings",
+        lambda: {
+            **settings_store.DEFAULTS,
+            "nature_figure_skill_enabled": True,
+            "nature_writing_skill_enabled": False,
+        },
+    )
+
+    payload = TestClient(app).post(
+        "/api/agent-runs/science-workbench", json={}
+    ).json()
+    protocol_ids = {row["id"] for row in payload["reusable_protocols"]}
+
+    assert "nature-figure" in protocol_ids
+    assert "nature-writing" not in protocol_ids
 
 
 def test_science_workbench_reads_latest_idea_mining_pipeline(

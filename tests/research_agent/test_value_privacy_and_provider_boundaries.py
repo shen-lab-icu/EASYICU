@@ -32,6 +32,8 @@ def _pin_provider_test_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     addresses = {
         "169.254.169.254": "169.254.169.254",
         "10.0.0.5": "10.0.0.5",
+        "100.64.0.1": "100.64.0.1",
+        "0.0.0.0": "0.0.0.0",
         "example.com": "93.184.216.34",
         "api.openai.com": "104.18.33.45",
         "127.0.0.1": "127.0.0.1",
@@ -434,6 +436,58 @@ def test_official_https_provider_allows_local_proxy_fake_ip(monkeypatch) -> None
     with pytest.raises(ProviderUrlSecurityError) as caught:
         validate_credential_endpoint("https://untrusted.example/v1")
     assert caught.value.reason == "private_address"
+
+
+@pytest.mark.parametrize(
+    ("address", "reason"),
+    [("100.64.0.1", "non_global_address"), ("0.0.0.0", "private_address")],
+)
+def test_non_global_non_loopback_provider_addresses_are_refused(
+    address, reason, monkeypatch
+) -> None:
+    _pin_provider_test_dns(monkeypatch)
+    from easyicu.webserver.provider_url_security import (
+        ProviderUrlSecurityError,
+        validate_credential_endpoint,
+    )
+
+    with pytest.raises(ProviderUrlSecurityError) as caught:
+        validate_credential_endpoint(f"https://{address}/v1")
+    assert caught.value.reason == reason
+
+
+def test_provider_hostname_with_public_and_loopback_answers_is_refused(
+    monkeypatch,
+) -> None:
+    from easyicu.webserver.provider_url_security import (
+        ProviderUrlSecurityError,
+        validate_credential_endpoint,
+    )
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("93.184.216.34", 443),
+            ),
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("127.0.0.1", 443),
+            ),
+        ],
+    )
+
+    with pytest.raises(ProviderUrlSecurityError) as caught:
+        validate_credential_endpoint("https://mixed.example/v1")
+    assert caught.value.reason == "mixed_address_scope"
 
 
 @pytest.mark.parametrize(

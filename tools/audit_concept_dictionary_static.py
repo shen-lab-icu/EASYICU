@@ -270,7 +270,7 @@ def check_high_risk_units() -> list[dict[str, Any]]:
 
 
 def _load_miiv_catalog() -> dict[tuple[str, int], dict[str, Any]]:
-    path = REPO_ROOT / "benchmark" / "source_item_catalog_miiv.json"
+    path = REPO_ROOT / "benchmarks" / "catalogs" / "source_item_catalog_miiv.json"
     if not path.exists():
         return {}
     payload = _load_json(path)
@@ -302,7 +302,7 @@ def check_miiv_catalog_labels() -> list[dict[str, Any]]:
                 "concept": "",
                 "dataset": "miiv",
                 "table": "",
-                "source": "benchmark/source_item_catalog_miiv.json",
+                "source": "benchmarks/catalogs/source_item_catalog_miiv.json",
                 "detail": "MIIV source catalog is unavailable",
             }
         ]
@@ -358,7 +358,7 @@ def check_miiv_catalog_labels() -> list[dict[str, Any]]:
                 "concept": "",
                 "dataset": "miiv",
                 "table": "",
-                "source": "benchmark/source_item_catalog_miiv.json",
+                "source": "benchmarks/catalogs/source_item_catalog_miiv.json",
                 "detail": "all MIIV chartevents/labevents itemids exist in packaged source catalog",
             }
         )

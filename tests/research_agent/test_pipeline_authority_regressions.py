@@ -236,6 +236,7 @@ def _patch_load_concepts(monkeypatch, frame):
 def test_p1_1_audit_is_written_without_a_caller_supplied_workdir(tmp_path, monkeypatch):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"{SCOPE_METADATA},{SCOPE_READ_PATIENT_DATA}")
     _patch_load_concepts(monkeypatch, pd.DataFrame({"sofa2": range(30)}))
 
     dispatch(
@@ -298,6 +299,7 @@ def test_p1_1_rows_are_withheld_when_the_audit_cannot_be_written(tmp_path, monke
 def test_p1_1_access_intent_exists_before_the_loader_runs(tmp_path, monkeypatch):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"{SCOPE_METADATA},{SCOPE_READ_PATIENT_DATA}")
     audit_root = tmp_path / "audit" / ".easyicu_mcp_audit"
 
     def _load(**kwargs):
@@ -809,14 +811,67 @@ def test_p1_2_egress_receipt_is_persisted_even_when_nothing_was_uploaded(ra, tmp
         (tmp_path / "figure_egress_receipt.json").read_text(encoding="utf-8")
     )
     # Schema moved to /2 on 2026-07-27 when the receipt became two-phase (an
-    # intent record before upload, a completed record after), and to /3 on
+    # intent record before upload, a completed record after), to /3 on
     # 2026-07-28 when each entry gained its own transport outcome — an
-    # authorized upload and a delivered one are different facts.
-    assert payload["schema"] == "easyicu.figure_egress_receipt/3"
+    # authorized upload and a delivered one are different facts — and to /4 on
+    # 2026-08-13 when refusals became rows: a refused image never becomes an
+    # upload, so before /4 this receipt read identically whether the gate saw
+    # nothing or turned images away.
+    assert payload["schema"] == "easyicu.figure_egress_receipt/4"
     assert payload["phase"] == "completed"
     assert payload["authorized_count"] == 0
     assert payload["transport_counts"] == {}
+    assert payload["refused_count"] == 0
+    assert payload["refused"] == []
     assert store.get("figure_egress_receipt") is not None
+
+
+def test_a_refused_figure_leaves_a_row_in_the_egress_ledger(ra, tmp_path):
+    """The refusal is the event the ledger exists to record.
+
+    ``VLMVisualQAAdapter`` catches ``FigureEgressError``, demotes it to a
+    warning and re-runs visual QA on metadata only. That is a defensible run
+    decision, but it used to leave the receipt with ``authorized_count: 0`` and
+    nothing else — indistinguishable from a run where no figure was ever
+    considered for upload.
+    """
+
+    import json
+
+    from easyicu.research_agent.gates.figure_egress import (
+        FigureEgressError,
+        FigureEgressPolicy,
+        authorize_figure_upload,
+        register_figure_egress_receipt,
+    )
+
+    store = ra.EvidenceStore(tmp_path)
+    stray = tmp_path / "unregistered.png"
+    stray.write_bytes(b"\x89PNG\r\n\x1a\n not a registered artefact")
+    policy = FigureEgressPolicy(
+        allow_external_upload=True, evidence=store, run_dir=tmp_path
+    )
+
+    with pytest.raises(FigureEgressError):
+        authorize_figure_upload(
+            [stray], policy=policy, destination="https://provider.example/v1"
+        )
+
+    assert len(policy.refused) == 1
+    refusal = policy.refused[0]
+    assert refusal["path"].endswith("unregistered.png")
+    assert refusal["destination"] == "https://provider.example/v1"
+    assert "not a registered evidence artefact" in refusal["reason"]
+    # Nothing was authorized, so the refusal must not be mistaken for an upload.
+    assert policy.uploaded == []
+
+    register_figure_egress_receipt(policy=policy, evidence=store, run_dir=tmp_path)
+    payload = json.loads(
+        (tmp_path / "figure_egress_receipt.json").read_text(encoding="utf-8")
+    )
+    assert payload["authorized_count"] == 0
+    assert payload["refused_count"] == 1
+    assert payload["refused"][0]["refusal_id"] == "0001"
 
 
 def test_p1_2_profile_can_pin_external_figure_upload():

@@ -36,10 +36,12 @@ import pytest
 
 from easyicu.research_agent.agents.core import (
     PlannerAgent,
+    ReplannerAgent,
     _build_planner_user_prompt,
     _host_executed_cohort_step_sentence,
     _planner_retry_response_projection,
 )
+from easyicu.research_agent.agents.plan_payload import planner_science_retry_guide
 from easyicu.research_agent.authority.run_input import (
     _declares_host_cohort_products,
 )
@@ -207,6 +209,100 @@ def test_the_retry_format_reminder_lists_the_optional_spec():
     roster = source[source.index(marker) :][:900]
 
     assert "cohort_definition_spec" in roster
+
+
+def test_the_retry_format_reminder_publishes_exact_model_term_shape():
+    """A rejected model roster must be repairable without guessing aliases."""
+
+    source = inspect.getsource(PlannerAgent.run)
+    assert "_payload.planner_science_retry_guide()" in source
+    assert "_payload.planner_science_retry_guide()" in inspect.getsource(
+        ReplannerAgent.run
+    )
+
+    from easyicu.research_agent.planning.primary_result_contract import (
+        model_terms_retry_guide,
+    )
+
+    reminder = model_terms_retry_guide()
+    for required in (
+        "`name`",
+        "`role`",
+        "`coding`",
+        "`levels`",
+        "`reference_level`",
+        "`transform`",
+        "treatment_contrast",
+        "declared_level_index",
+        "exposure_source",
+        "covariates",
+    ):
+        assert required in reminder
+    assert "`variable`" in reminder
+    assert "`binary_indicator`" in reminder
+
+
+def test_the_retry_reminder_publishes_primary_contract_applicability():
+    reminder = planner_science_retry_guide()
+
+    assert "`causal_inference`" in reminder
+    assert "`survival`" in reminder
+    assert "`association_study` must omit" in reminder
+    assert "`model_requirements`" in reminder
+    assert "`know_how_decisions`" in reminder
+    assert "never `null`" in reminder
+
+
+def test_the_retry_reminder_closes_common_representation_seams():
+    reminder = planner_science_retry_guide()
+
+    assert "`report:<name>`" in reminder
+    assert "`protocol` is not a product kind" in reminder
+    assert "`report_missing_by_group`" in reminder
+    assert "exact exposure and outcome" in reminder
+    assert "JSON numbers remain numbers" in reminder
+    assert "required `robustness_specs`" in reminder
+
+
+def test_the_retry_reminder_publishes_table_one_inputs_and_descriptive_ceiling():
+    reminder = planner_science_retry_guide()
+
+    assert "`group_by` and every `variables[*].name`" in reminder
+    assert '"unresolved_limitations"' in reminder
+    assert '"post_baseline_exposure_opportunity_unresolved"' in reminder
+    assert "do not rename it to a singular `limitation`" in reminder
+
+
+def test_the_initial_directive_publishes_table_one_inputs_and_descriptive_ceiling(
+    directive,
+):
+    assert "every `variables[*].name`" in directive
+    assert '"unresolved_limitations"' in directive
+    assert '"post_baseline_exposure_opportunity_unresolved"' in directive
+    assert '{"input_key":"table:exact_product","mode":"all_rows"}' in directive
+    assert "never rename them to `input` and `cardinality`" in directive
+
+
+def test_the_retry_reminder_publishes_exact_nested_contract_shapes():
+    reminder = planner_science_retry_guide()
+
+    assert '`{"input_key": "table:exact_product", "mode": "all_rows"}`' in reminder
+    assert "never rename `input_key` to `input`" in reminder
+    assert "`all_rows`, `single_row`, and `one_per_role`" in reminder
+    assert "must be JSON strings" in reminder
+    assert '`["0", "1"]`' in reminder
+    assert "preserve their source scalar types" in reminder
+    assert "non-empty `spec_id`, `axis`, and `description`" in reminder
+
+
+def test_the_retry_reminder_keeps_citations_and_model_rosters_on_their_owner():
+    reminder = planner_science_retry_guide()
+
+    assert "must also appear in that same step's `literature_citation_keys`" in reminder
+    assert "update both fields together" in reminder
+    assert "method is exactly `adjusted_association_models`" in reminder
+    assert "`table:adjusted_association_estimates`" in reminder
+    assert "every other step emits `model_requirements: []`" in reminder
 
 
 # ---------------------------------------------------------------------------

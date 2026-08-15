@@ -368,12 +368,16 @@
   }
 
   function renderClinicalLanes(lanes, helpers) {
+    const totalCatalogFeatures = (lanes || []).reduce(
+      (total, lane) => total + ((lane && lane.features) || []).length,
+      0,
+    );
     return `
       <div class="pt-series-panel" data-patient-series-panel="lanes">
         <div class="pt-series-panel-head">
           <div>
             <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Module overview', '模块总览'))}</div>
-            <h2>${hEsc(helpers, hT(helpers, 'Complete feature catalog grouped by clinical module', '288 个特征，按临床模块组织'))}</h2>
+            <h2>${hEsc(helpers, hT(helpers, `Complete feature catalog grouped by clinical module (${hFmtInt(helpers, totalCatalogFeatures)} features)`, `${hFmtInt(helpers, totalCatalogFeatures)} 个特征，按临床模块组织`))}</h2>
             <p>${hEsc(helpers, hT(helpers, 'Every catalog concept remains discoverable. Features with bounded observations receive a chart; metadata-only concepts stay explicit instead of receiving fabricated demo values.', '所有目录概念均可查找；有有界观测的特征显示图表，仅有元数据的概念保持明确标识，不会为了演示而伪造数值。'))}</p>
           </div>
           <span class="pill ok">${hEsc(helpers, hT(helpers, 'single entity', '单实体'))}</span>

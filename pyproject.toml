@@ -26,6 +26,7 @@ dependencies = [
   "scipy>=1.10",
   "scikit-learn>=1.3",
   "statsmodels>=0.14",
+  "patsy>=0.5.6",
   "packaging>=23.0",
   "typing-extensions>=4.8"
 ]
@@ -127,6 +128,7 @@ easyicu = ["data/*.json", "data/research_know_how/*.json"]
   "static/THIRD_PARTY_NOTICES.md",
   "static/css/*.css",
   "static/js/*.js",
+  "static/assets/demo/*.png",
   "static/vendor/echarts/*",
   "pi_copilot/node_app/package.json",
   "pi_copilot/node_app/package-lock.json",

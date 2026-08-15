@@ -48,12 +48,23 @@ Optional variables:
 - `EASYICU_PI_API` (`openai-completions` or `openai-responses`)
 - `EASYICU_PI_CONTEXT_WINDOW` (default `200000`)
 - `EASYICU_PI_MAX_TOKENS` (default `16384`)
-- `EASYICU_PI_SESSION_TOKEN_BUDGET` (default `1000000`; hard session stop)
+- `EASYICU_PI_SESSION_TOKEN_BUDGET` (default: the greater of `1000000` or 20 configured context windows; provider-call checked cumulative ceiling)
 - `EASYICU_PI_CWD` (normally a private empty workspace supplied by the host)
-- `EASYICU_PI_SESSION_TOKEN_BUDGET` (provider-call checked cumulative ceiling)
 - `EASYICU_PI_MAX_PROVIDER_CALLS_PER_MESSAGE` (default `8`)
 - `EASYICU_PI_MAX_PROVIDER_CALLS_PER_SESSION` (default `128`)
+- `EASYICU_PI_INPUT_PRICE_USD_PER_1M_TOKENS`
+- `EASYICU_PI_OUTPUT_PRICE_USD_PER_1M_TOKENS`
+- `EASYICU_PI_MAX_COST_USD_PER_MESSAGE`
+- `EASYICU_PI_MAX_COST_USD_PER_SESSION`
 - `EASYICU_PI_SESSION_DIR` (normally supplied by the Python host)
+
+The four pricing/cost variables are an all-or-none contract. When a provider
+publishes reliable prices, the shell conservatively reserves the maximum input
+and output cost before every call, persists the cumulative reservation, and
+fails closed at either cost ceiling. Existing sessions cannot silently adopt a
+new or changed pricing contract. Local proxies that do not publish trustworthy
+pricing leave all four unset; the token and call ceilings remain the hard-stop
+fallback and the UI reports that dollar pricing is unavailable.
 
 The shell provider is independent of any provider selected for an EasyICU
 scientific run. The child receives only a strict runtime/`EASYICU_PI_*`
@@ -66,8 +77,9 @@ The shell registers fifteen EasyICU research tools. Study setup can be collected
 and saved inside the conversation with a one-message Configure grant; the
 existing typed StudyContext store remains authoritative. Workspace mode adds
 seven governed artifact tools plus the packaged `web-prototype` skill. Writes
-require a one-turn host grant and remain inside the project-specific private
-workspace. Generic Pi filesystem, network, and shell tools stay disabled. The
+require a reusable host-held capability for that message and remain inside the
+project-specific private workspace. Generic Pi filesystem, network, and shell
+tools stay disabled. The
 private path is the AgentSession's logical workspace; it is not an
 operating-system sandbox for the Node process itself.
 Raw model reasoning is forced off and is not streamed or returned in session

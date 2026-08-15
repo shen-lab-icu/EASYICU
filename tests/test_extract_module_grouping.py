@@ -258,6 +258,12 @@ def test_renal_module_exports_kdigo_ascertainment_receipt():
     renal = set(EXTRACT_MODULES["renal"])
     assert {
         "aki_stage",
+        "aki_severe",
+        "aki_severe_creat",
+        "aki_severe_uo",
+        "aki_severe_rrt",
+        "aki_severe_assessable",
+        "aki_severe_ascertainment",
         "aki_assessable",
         "aki_ascertainment",
         "observation_window_coverage",

@@ -24,6 +24,7 @@ from easyicu.research_agent.authority.step_capsule import (
     read_verified_content,
     seal_step_authority_capsule,
 )
+from easyicu.research_agent.contracts.execution_result import RunnerFailureCode
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
@@ -127,6 +128,22 @@ def _execution(
     }
     payload["execution_identity_sha256"] = execution_seal_identity_sha256(payload)
     return ExecutionSeal.model_validate(payload)
+
+
+def test_runner_failure_code_preserves_v1_identity_when_absent() -> None:
+    legacy = {"returncode": 1, "timed_out": False}
+    explicit_none = {**legacy, "runner_failure_code": None}
+    typed = {
+        **legacy,
+        "runner_failure_code": RunnerFailureCode.ISOLATION_BACKEND_UNAVAILABLE,
+    }
+
+    assert execution_seal_identity_sha256(legacy) == execution_seal_identity_sha256(
+        explicit_none
+    )
+    assert execution_seal_identity_sha256(typed) != execution_seal_identity_sha256(
+        legacy
+    )
 
 
 def _audit(

@@ -109,6 +109,22 @@
 .gpi-mode-switch button:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
 .gpi-head-meta>span{padding:3px 7px;border:1px solid var(--line);border-radius:5px;color:var(--ink-4);font:500 10.5px/1.4 var(--mono)}
 .gpi-head-meta .gpi-link{font-size:12.5px}
+.gpi-workflow{
+  flex:0 0 auto;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:16px;
+  padding:8px 20px;border-bottom:1px solid var(--line);background:var(--paper)
+}
+.gpi-workflow-meta{display:flex;align-items:center;gap:7px;white-space:nowrap;color:var(--ink-3);font-size:10.5px}
+.gpi-workflow-meta span{padding:1px 5px;border-radius:99px;background:var(--wash);color:var(--ink-4);font:600 9.5px/1.5 var(--mono)}
+.gpi-workflow ol{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:5px;margin:0;padding:0;list-style:none}
+.gpi-workflow li{min-width:0;display:flex;align-items:center;gap:5px;color:var(--ink-4);font-size:10px;white-space:nowrap}
+.gpi-workflow li i{width:7px;height:7px;flex:0 0 auto;border:1px solid var(--line);border-radius:99px;background:var(--paper)}
+.gpi-workflow li span{overflow:hidden;text-overflow:ellipsis}
+.gpi-workflow li.complete i{border-color:#2d8a62;background:#2d8a62}
+.gpi-workflow li.running i{border-color:var(--accent);background:var(--accent);animation:gpi-status-pulse 1.35s ease-in-out infinite}
+.gpi-workflow li.ready i,.gpi-workflow li.optional i{border-color:var(--accent-border);background:var(--accent-soft)}
+.gpi-workflow li.review_required{color:var(--ink-2);font-weight:650}
+.gpi-workflow li.review_required i{border-color:#b68538;background:#b68538}
+.gpi-workflow li[aria-current="step"]{color:var(--ink-1);font-weight:700}
 .gpi-stale{
   display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;
   flex:0 0 auto;
@@ -133,6 +149,22 @@
 .gpi-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.65}
 .gpi-text strong{font-weight:650;color:var(--ink-1)}
 .gpi-text code{padding:1px 4px;border-radius:4px;background:var(--wash);font:500 .88em/1.4 var(--mono)}
+.gpi-model-error{padding:12px 14px;border:1px solid #e8c4c0;border-radius:10px;background:#fff7f5;color:#8f342e}
+.gpi-confirmation{
+  max-width:768px;margin:8px auto 22px;padding:13px 14px;display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:11px;
+  border:1px solid color-mix(in srgb,#b68538 36%,var(--line));border-radius:12px;
+  background:color-mix(in srgb,#b68538 7%,var(--paper));color:var(--ink-2)
+}
+.gpi-confirmation-icon{width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:9px;background:color-mix(in srgb,#b68538 12%,var(--paper));color:#8a642a}
+.gpi-confirmation strong,.gpi-confirmation small{display:block}
+.gpi-confirmation strong{font-size:13px;line-height:1.4}
+.gpi-confirmation small{margin-top:3px;color:var(--ink-4);font-size:10.5px;line-height:1.45}
+.gpi-confirmation-resources{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}
+.gpi-confirmation-scorecard{margin-top:8px;padding:8px 10px;border:1px solid var(--hair-2);border-radius:9px;background:color-mix(in srgb,var(--paper) 90%,#f2eadc)}
+.gpi-confirmation-scorecard strong{font-size:11px}.gpi-confirmation-scorecard span{display:block;margin-top:3px;color:var(--ink-4);font-size:9.5px;line-height:1.5}
+.gpi-confirmation-questions{margin:8px 0 0;padding-left:18px;color:var(--ink-3);font-size:10.5px;line-height:1.5}
+.gpi-confirmation-actions{display:flex;align-items:center;gap:7px}
 
 /* Timeline structure adapted from pi-gui's MIT-licensed timeline-item/timeline.css.
    EasyICU keeps its own event projection, receipt fields, and shared icon catalog. */
@@ -184,6 +216,9 @@
 .gpi-resource-link:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:2px;border-radius:2px}
 .gpi-resource-list{display:flex;flex-wrap:wrap;gap:5px 10px;margin:5px 0 3px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:color-mix(in srgb,var(--wash) 72%,var(--paper))}
 .gpi-resource-list .gpi-resource-link{font-size:11.5px}
+.gpi-message-resources{margin-top:16px;padding-top:10px;border-top:1px solid var(--line)}
+.gpi-message-resources>span{display:block;color:var(--ink-4);font-size:10.5px;font-weight:650;letter-spacing:.02em}
+.gpi-message-resources .gpi-resource-list{margin-top:6px}
 .gpi-activity-step-copy>span{color:var(--ink-3);font-size:11.5px;line-height:1.45}
 .gpi-activity-step-copy small{color:var(--ink-4);font:500 10.5px/1.4 var(--mono);overflow-wrap:anywhere}
 .gpi-activity li>.gpi-status-pip{margin-top:6px}
@@ -207,16 +242,35 @@
   box-shadow:0 8px 24px rgba(14,17,22,.06);font:inherit;font-size:15px;line-height:1.5
 }
 .gpi-compose textarea:disabled{background:var(--wash);color:var(--ink-4)}
-.gpi-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;width:min(820px,100%);margin:9px auto 0}
-.gpi-grants{display:flex;align-items:center;gap:14px;flex-wrap:wrap;color:var(--ink-4);font-size:11.5px}
-.gpi-grants label{display:flex;align-items:center;gap:4px;cursor:pointer}
-.gpi-grants label.workspace{color:var(--ink-2);font-weight:650}
-.gpi-grants input{accent-color:var(--accent)}
-.gpi-foot{width:min(820px,100%);margin:8px auto 0;text-align:center;color:var(--ink-4);font-size:10.5px}
+.gpi-actions{position:relative;display:flex;align-items:center;justify-content:space-between;gap:12px;width:min(820px,100%);margin:9px auto 0}
+.gpi-access-menu{position:relative;color:var(--ink-3);font-size:11.5px}
+.gpi-access-menu>summary{
+  min-height:31px;display:inline-flex;align-items:center;gap:6px;padding:0 9px;border:1px solid var(--line);
+  border-radius:8px;background:var(--paper);color:var(--ink-3);cursor:pointer;list-style:none;font-weight:600
+}
+.gpi-access-menu>summary::-webkit-details-marker{display:none}
+.gpi-access-menu>summary:focus-visible,.gpi-access-popover button:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);outline-offset:2px}
+.gpi-access-chevron{display:inline-flex;color:var(--ink-4);transition:transform .14s ease}
+.gpi-access-menu[open] .gpi-access-chevron{transform:rotate(90deg)}
+.gpi-access-popover{
+  position:absolute;z-index:12;left:0;bottom:calc(100% + 7px);width:min(360px,calc(100vw - 42px));padding:6px;
+  border:1px solid var(--line);border-radius:11px;background:var(--paper);box-shadow:0 16px 38px rgba(14,17,22,.14)
+}
+.gpi-access-popover button{
+  width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;
+  border:0;border-radius:8px;background:transparent;color:var(--ink-2);font:inherit;text-align:left;cursor:pointer
+}
+.gpi-access-popover button:hover,.gpi-access-popover button[aria-pressed="true"]{background:var(--wash)}
+.gpi-access-popover button>span{display:block;min-width:0}
+.gpi-access-popover strong,.gpi-access-popover small{display:block}
+.gpi-access-popover strong{font-size:12px;line-height:1.35}
+.gpi-access-popover small{margin-top:2px;color:var(--ink-4);font-size:10.5px;line-height:1.4}
+.gpi-access-popover>p{margin:5px 8px 3px;color:var(--ink-4);font-size:9.5px;line-height:1.45}
 
 @media (max-width:1100px){
   .gpi-head{align-items:flex-start}
   .gpi-head-meta{max-width:55%}
+  .gpi-workflow{grid-template-columns:1fr;gap:5px}
   .gpi-stale{grid-template-columns:1fr}
 }
 @media (max-width:720px){
@@ -225,4 +279,6 @@
   .gpi-setup-actions{align-items:stretch;flex-direction:column-reverse}
   .gpi-setup-actions .btn,.gpi-setup-actions .gpi-link{width:100%;justify-content:center;text-align:center}
   .gpi-mode-picker{grid-template-columns:1fr}
+  .gpi-confirmation{grid-template-columns:auto 1fr}
+  .gpi-confirmation-actions{grid-column:1/-1;justify-content:flex-end}
 }

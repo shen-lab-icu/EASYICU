@@ -22,6 +22,8 @@ import ast
 from pathlib import Path
 
 import easyicu.research_agent as research_agent
+from easyicu.research_agent.agents import plan_payload
+from easyicu.research_agent.planning import literature_bindings
 
 PACKAGE_ROOT = Path(research_agent.__file__).resolve().parent
 PACKAGE_NAME = "easyicu.research_agent"
@@ -166,6 +168,24 @@ def test_read_only_gates_do_not_import_action_layers() -> None:
     )
 
 
+def test_planning_does_not_import_agent_or_action_layers() -> None:
+    """Planning contracts must be reusable without loading their adapters."""
+
+    edges = _package_edges()
+    planning_targets = edges.get("planning", set())
+    forbidden = sorted(
+        planning_targets & {"agents", "execution", "orchestration", "pipeline"}
+    )
+    assert forbidden == [], (
+        "planning/ must own dependency-neutral contracts instead of importing "
+        f"agent adapters or action layers; violations: {forbidden}"
+    )
+    assert (
+        plan_payload.validate_literature_citation_bindings
+        is literature_bindings.validate_literature_citation_bindings
+    )
+
+
 def test_methods_package_stays_a_leaf() -> None:
     edges = _package_edges()
     method_targets = edges.get("methods", set())
@@ -176,3 +196,72 @@ def test_methods_package_stays_a_leaf() -> None:
     assert (
         forbidden == []
     ), f"methods/ is a deterministic-kernel leaf; it must not import {forbidden}."
+
+
+#: The one gate module allowed to write evidence, and why.
+#:
+#: ``gates/`` is declared read-only: it emits findings and must not mutate
+#: authority. ``figure_egress`` is the documented exception -- it records which
+#: rendered figures were authorized to leave the host, and a run that cannot say
+#: what it sent has a worse problem than a gate that wrote a receipt. The
+#: exception is narrow on purpose: an egress ledger, not general write access.
+_GATE_EVIDENCE_WRITERS = {"figure_egress.py"}
+_EVIDENCE_WRITE_CALLS = (
+    "register_file",
+    "register_json",
+    "register_bytes",
+    "put_content_blob",
+    "register_numeric_claim",
+    "register_scientific_claim",
+)
+
+
+def test_only_the_egress_ledger_may_write_evidence_from_a_gate() -> None:
+    """Read-only gates: pinned on writes, not only on imports.
+
+    ``test_read_only_gates_do_not_import_action_layers`` pins the import
+    direction, which is what stops a gate from *calling* the execution layer. It
+    says nothing about a gate that already holds an ``EvidenceStore`` and
+    registers a record with it -- the evidence store is a leaf contract, so
+    importing it is legal and nothing observed the write. This closes that half.
+
+    Adding a module here is a real decision: it makes a read-only gate a writer.
+    """
+
+    gates_dir = Path(research_agent.__file__).resolve().parent / "gates"
+    writers: dict[str, set[str]] = {}
+    for path in sorted(gates_dir.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute):
+                continue
+            if func.attr not in _EVIDENCE_WRITE_CALLS:
+                continue
+            # ``self.<x>.register_json`` on a gate's own buffer is not an
+            # evidence write; only calls on a name/attribute spelled
+            # ``evidence`` reach the run's authority store.
+            target = func.value
+            base = (
+                target.id
+                if isinstance(target, ast.Name)
+                else target.attr if isinstance(target, ast.Attribute) else ""
+            )
+            if base != "evidence":
+                continue
+            writers.setdefault(path.name, set()).add(func.attr)
+
+    unexpected = sorted(set(writers) - _GATE_EVIDENCE_WRITERS)
+    assert unexpected == [], (
+        "gates/ is read-only apart from the egress ledger; these modules write "
+        f"evidence: {unexpected}. Move the write to its owning action layer, or "
+        "add the module to _GATE_EVIDENCE_WRITERS with the reason it must write."
+    )
+    # The exception must stay an exception: if the egress ledger stops writing,
+    # this list is stale and the next writer inherits an unexamined allowance.
+    assert set(writers) == _GATE_EVIDENCE_WRITERS, (
+        "_GATE_EVIDENCE_WRITERS lists a module that no longer writes evidence: "
+        f"{sorted(_GATE_EVIDENCE_WRITERS - set(writers))}"
+    )

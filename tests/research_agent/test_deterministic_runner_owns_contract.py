@@ -69,6 +69,34 @@ def test_core_estimate_non_primary_runner_is_never_owned():
     )
 
 
+def test_typed_descriptive_owner_requires_its_exact_noncausal_receipt() -> None:
+    summary = {
+        "status": "ok",
+        "adjusted_effect": None,
+        "interpretation_class": "exposure_outcome_distribution",
+        "analysis_role": "primary",
+        "analysis_set": "bound_typed_cohort",
+        "interpretation_ceiling": "descriptive_unadjusted_not_causal",
+        "descriptive_estimates": {
+            "schema_version": "easyicu.exposure_outcome_descriptive_estimates/1",
+            "analysis_role": "primary",
+            "analysis_set": "bound_typed_cohort",
+            "interpretation_ceiling": "descriptive_unadjusted_not_causal",
+            "exposure_prevalence": [{"level": 0, "estimate_pct": 60.0}],
+            "outcome_absolute_risks": [{"level": 0, "estimate_pct": 8.0}],
+            "risk_difference": None,
+        },
+    }
+
+    assert _primary_runner_core_estimate_present(
+        "exposure_outcome_distribution", summary
+    )
+    summary["descriptive_estimates"]["interpretation_ceiling"] = "associated"
+    assert not _primary_runner_core_estimate_present(
+        "exposure_outcome_distribution", summary
+    )
+
+
 # --- demotion behaviour -----------------------------------------------------
 
 

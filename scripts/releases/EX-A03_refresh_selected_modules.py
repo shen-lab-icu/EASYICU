@@ -8,9 +8,12 @@ EasyICU checkout.  Thus unchanged module bytes remain immutable in the source
 run, while the derived candidate has one consistent runtime provenance and can
 be sealed by ``EX-A01_seal_full6_release.py``.
 
-At present only ``renal`` is allowlisted.  This keeps the command's claim
-precise: it is the audited KDIGO/urine/RRT refresh path, not a generic way to
-bypass the full extraction controller.
+Only correctness modules and their declared downstream closure are allowlisted.
+``renal`` has ascertainment-aware KDIGO outputs. ``respiratory`` removes
+implicit room-air FiO2 imputation and therefore expands to ``sofa1_score`` and
+``sofa2_score``, the shared infection evidence required at execution time, and
+the two Sepsis-SOFA labels that consume those scores. This is not a generic way
+to bypass the full extraction controller.
 """
 
 from __future__ import annotations
@@ -50,7 +53,26 @@ def _load_republisher():
 REPUBLICATION = _load_republisher()
 DATABASES: tuple[str, ...] = tuple(REPUBLICATION.DATABASES)
 MODULES: tuple[str, ...] = tuple(REPUBLICATION.MODULES)
-REFRESHABLE_MODULES = frozenset({"renal"})
+DIRECT_REFRESHABLE_MODULES = frozenset({"renal", "respiratory", "sofa2_score"})
+MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
+    "renal": ("renal",),
+    "respiratory": (
+        "respiratory",
+        "sepsis_shared",
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    ),
+    # Targeted repair path for owner-issued SOFA-2 receipt companions. The
+    # parent candidate must already contain a raw-refreshed respiratory input;
+    # downstream M1 validates that parent provenance before using the child.
+    "sofa2_score": (
+        "sepsis_shared",
+        "sofa2_score",
+        "sepsis3_sofa2",
+    ),
+}
 SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v1"
 
 
@@ -114,13 +136,26 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
     unknown = set(selected) - set(MODULES)
     if unknown:
         raise ModuleRefreshError(f"Unknown extraction modules: {sorted(unknown)}")
-    disallowed = set(selected) - REFRESHABLE_MODULES
+    disallowed = set(selected) - DIRECT_REFRESHABLE_MODULES
     if disallowed:
         raise ModuleRefreshError(
-            "This audited refresh entry point currently allows only renal; "
+            "This audited refresh entry point currently allows only renal, "
+            "respiratory and sofa2_score; "
             f"got disallowed modules: {sorted(disallowed)}"
         )
     return selected
+
+
+def _expand_module_dependency_closure(modules: Sequence[str]) -> tuple[str, ...]:
+    """Return requested correctness modules with every derived consumer."""
+
+    requested = _validate_modules(modules)
+    required = {
+        module
+        for requested_module in requested
+        for module in MODULE_DEPENDENCY_CLOSURE[requested_module]
+    }
+    return tuple(module for module in MODULES if module in required)
 
 
 def _require_regular_file(path: Path, *, label: str) -> None:
@@ -162,6 +197,32 @@ def _module_is_canonical_refresh(
             return False
         if "stay_id" not in columns or not set(EXTRACT_MODULES[module]).issubset(columns):
             return False
+    return True
+
+
+def _module_files_are_detached_from_source(
+    source_database_root: Path,
+    candidate_database_root: Path,
+    modules: Sequence[str],
+) -> bool:
+    """Prove atomic replacement, not merely a schema-matching source clone."""
+
+    for module in modules:
+        for suffix in (".parquet", ".manifest.json"):
+            source = source_database_root / f"{module}{suffix}"
+            candidate = candidate_database_root / f"{module}{suffix}"
+            if (
+                source.is_symlink()
+                or candidate.is_symlink()
+                or not source.is_file()
+                or not candidate.is_file()
+            ):
+                return False
+            try:
+                if os.path.samefile(source, candidate):
+                    return False
+            except OSError:
+                return False
     return True
 
 
@@ -222,6 +283,7 @@ def _refresh_one_database(
     *,
     database: str,
     data_path: str,
+    source_database_root: Path,
     candidate_root: Path,
     modules: Sequence[str],
     batch_size: int | None,
@@ -229,12 +291,16 @@ def _refresh_one_database(
 ) -> dict[str, Any]:
     staging_root = candidate_root / ".module_refresh_staging" / database
     destination_database_root = candidate_root / "exports" / database
-    # A newly cloned candidate deliberately starts with the source package's
-    # canonical files.  Their schema alone is not evidence that this checkout
-    # has re-read the selected raw module.  Reuse is permissible only on an
-    # explicit ``--resume`` invocation after an interrupted refresh.
-    if reuse_completed_export and _module_is_canonical_refresh(
-        destination_database_root, modules
+    # A cloned candidate deliberately starts with canonical source files, so
+    # schema alone can never prove that raw data were re-read. Explicit resume
+    # may reuse only a complete package whose selected Parquet and producer
+    # manifests have all been atomically detached from their source hard links.
+    if (
+        reuse_completed_export
+        and _module_is_canonical_refresh(destination_database_root, modules)
+        and _module_files_are_detached_from_source(
+            source_database_root, destination_database_root, modules
+        )
     ):
         return {
             "database": database,
@@ -245,7 +311,9 @@ def _refresh_one_database(
             "modules": _metrics_from_module_manifests(
                 destination_database_root, modules
             ),
-            "recovery_mode": "candidate_export_already_refreshed",
+            "recovery_mode": (
+                "explicit_resume_of_complete_files_detached_from_source_clone"
+            ),
         }
     if staging_root.exists() or staging_root.is_symlink():
         if _module_is_canonical_refresh(staging_root, modules):
@@ -329,7 +397,8 @@ def refresh_candidate(
     destination = output_root.expanduser().absolute()
     if source == destination:
         raise ModuleRefreshError("Source and destination run roots must differ")
-    selected_modules = _validate_modules(modules)
+    requested_modules = _validate_modules(modules)
+    selected_modules = _expand_module_dependency_closure(requested_modules)
     publication_commit = REPUBLICATION._require_clean_checkout()
     source_run_manifest = REPUBLICATION._validate_source(source)
     data_paths = _resolve_data_paths(source_run_manifest, data_path_overrides)
@@ -367,6 +436,7 @@ def refresh_candidate(
             refreshed[database] = _refresh_one_database(
                 database=database,
                 data_path=data_paths[database],
+                source_database_root=source / "exports" / database,
                 candidate_root=destination,
                 modules=selected_modules,
                 batch_size=batch_size,
@@ -413,6 +483,8 @@ def refresh_candidate(
             "publication_easyicu_git_dirty": False,
             "refresher": str(Path(__file__).relative_to(REPOSITORY_ROOT)),
             "refreshed_modules": list(selected_modules),
+            "requested_modules": list(requested_modules),
+            "dependency_closure_applied": list(selected_modules),
             "raw_database_reread": True,
             "raw_data_paths": data_paths,
             "per_database_runtime": refreshed,
@@ -450,7 +522,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--module",
         action="append",
         default=[],
-        help="Raw-derived module to refresh (currently only renal); repeatable.",
+        help=(
+            "Raw-derived module to refresh (renal, respiratory or sofa2_score); repeatable."
+        ),
     )
     parser.add_argument(
         "--data-path",

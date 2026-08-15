@@ -12,8 +12,9 @@ This module must remain below orchestration.  In particular, it must not import
 
 from __future__ import annotations
 
+from ..canonical_json import sha256_file as _sha256_file
+
 from dataclasses import dataclass
-import hashlib
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -32,14 +33,6 @@ from ..intake.materialized_trajectory import (
     verify_materialized_trajectory_envelope,
 )
 from ..schema import ValidationFinding
-
-
-def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        while chunk := handle.read(chunk_size):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 @dataclass(slots=True)

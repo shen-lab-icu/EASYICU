@@ -1,0 +1,11 @@
+{
+  "source": "SOFA-2 Table 2 respiratory thresholds and footnotes f/h/i, DOI:10.1001/jama.2025.20516",
+  "inputs": {
+    "pafi": [350, 250, 200, 140, 70, 70, 400],
+    "adv_resp": [false, false, false, true, false, false, false],
+    "ecmo": [false, false, false, false, false, false, true],
+    "support_unavailable_or_ceiling": [false, false, false, false, true, true, false],
+    "oxygenation_sustained_1h": [true, true, true, true, true, false, false]
+  },
+  "expected": [0, 1, 2, 3, 4, 0, 4]
+}

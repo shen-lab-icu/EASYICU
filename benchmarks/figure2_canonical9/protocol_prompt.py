@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
+from .case_scientific_protocol import load_runtime_scientific_projection
+
 TASK_PROTOCOL_PROMPT_SCHEMA_VERSION = "easyicu.canonical9_task_prompt/1"
 
 _SECTION_NAMES = ("task_notes", "required_outputs", "semantic_guardrails")
@@ -152,24 +154,60 @@ def render_task_protocol_preferences(
 def task_protocol_note_for_item(item: object) -> str:
     """Render one imported benchmark item without exposing evaluator answers."""
 
+    notes, outputs, guardrails = _prompt_fields_for_item(item)
+
     return render_task_protocol_note(
         task_id=str(getattr(item, "key", "") or ""),
         task_kind=str(getattr(item, "kind", "") or ""),
-        task_notes=getattr(item, "notes", None),
-        required_outputs=getattr(item, "expected_outputs", None),
-        semantic_guardrails=getattr(item, "semantic_guardrails", None),
+        task_notes=notes,
+        required_outputs=outputs,
+        semantic_guardrails=guardrails,
     )
 
 
 def task_protocol_preferences_for_item(item: object) -> dict[str, str]:
     """Return outbound-safe structured preferences for one benchmark item."""
 
+    notes, outputs, guardrails = _prompt_fields_for_item(item)
+
     return render_task_protocol_preferences(
         task_id=str(getattr(item, "key", "") or ""),
         task_kind=str(getattr(item, "kind", "") or ""),
-        task_notes=getattr(item, "notes", None),
-        required_outputs=getattr(item, "expected_outputs", None),
-        semantic_guardrails=getattr(item, "semantic_guardrails", None),
+        task_notes=notes,
+        required_outputs=outputs,
+        semantic_guardrails=guardrails,
+    )
+
+
+def _prompt_fields_for_item(
+    item: object,
+) -> tuple[str | None, Sequence[object] | None, Sequence[object] | None]:
+    """Use the signed runtime projection when one is present on the item."""
+
+    raw = getattr(item, "runtime_scientific_projection", None)
+    if raw is None:
+        return (
+            getattr(item, "notes", None),
+            getattr(item, "expected_outputs", None),
+            getattr(item, "semantic_guardrails", None),
+        )
+    projection = load_runtime_scientific_projection(raw)
+    task_id = str(getattr(item, "key", "") or "")
+    declared_digest = str(
+        getattr(item, "runtime_scientific_projection_sha256", "") or ""
+    )
+    if projection.task_id != task_id:
+        raise ValueError("runtime scientific projection task mismatch")
+    if declared_digest != projection.runtime_projection_sha256:
+        raise ValueError("runtime scientific projection declared digest mismatch")
+    if str(getattr(item, "case_scientific_protocol_sha256", "") or "") != (
+        projection.protocol_content_sha256
+    ):
+        raise ValueError("runtime projection and case protocol digest mismatch")
+    return (
+        projection.canonical_protocol_json,
+        projection.agent_visible_required_outputs,
+        projection.agent_visible_guardrails,
     )
 
 

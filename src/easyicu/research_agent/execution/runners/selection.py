@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
+from ...authority.current_case_scientific_runtime import (
+    LandmarkSplineRuntimeAuthority,
+    SourceFeasibilityRuntimeAuthority,
+    load_current_case_scientific_runtime_authority,
+)
 from ...contracts.ownership_verdict import OwnershipVerdict
 from .deterministic_robustness import (
     ROBUSTNESS_REPLAY_ANALYSIS_KIND,
@@ -19,6 +24,7 @@ from .adjusted_association_executor import (
 )
 from .exposure_outcome_distribution_render import (
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT,
+    exposure_outcome_distribution_figure_declaration_verdict,
     exposure_outcome_distribution_figure_code,
     exposure_outcome_distribution_figure_owns_step,
 )
@@ -43,6 +49,8 @@ from .deterministic_missingness import (
 from .missingness_measurement_figure_executor import (
     missingness_measurement_figure_declaration_verdict,
     MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
+    measurement_missingness_figure_executor_code,
+    measurement_missingness_figure_executor_owns_step,
     missingness_measurement_figure_executor_code,
     missingness_measurement_figure_executor_owns_step,
 )
@@ -55,6 +63,29 @@ from .adjusted_association_figure_executor import (
     ADJUSTED_ASSOCIATION_FIGURE_INPUT,
     adjusted_association_figure_executor_code,
     adjusted_association_figure_executor_owns_step,
+)
+from .audit_panel_executor import (
+    audit_panel_executor_code,
+    audit_panel_executor_owns_step,
+)
+from .cohort_flow_figure_executor import (
+    COHORT_FLOW_INPUT,
+    cohort_flow_figure_executor_code,
+    cohort_flow_figure_executor_owns_step,
+)
+from .descriptive_result_figure_executor import (
+    descriptive_result_figure_executor_code,
+    descriptive_result_figure_executor_owns_step,
+)
+from .descriptive_distribution_executor import (
+    DESCRIPTIVE_DISTRIBUTION_ANALYSIS_KIND,
+    descriptive_distribution_executor_code,
+    descriptive_distribution_executor_owns_step,
+)
+from .descriptive_association_executor import (
+    DESCRIPTIVE_ASSOCIATION_ANALYSIS_KIND,
+    descriptive_association_executor_code,
+    descriptive_association_executor_owns_step,
 )
 from .prevalence_outcome_figure_executor import (
     PREVALENCE_OUTCOME_FIGURE_INPUT,
@@ -77,7 +108,32 @@ from .trajectory_stability_executor import (
     trajectory_stability_executor_code,
     trajectory_stability_executor_owns_step,
 )
+from .trajectory_scientific_candidate_executor import (
+    SCIENTIFIC_CANDIDATE_INPUTS,
+    trajectory_scientific_candidate_executor_code,
+    trajectory_scientific_candidate_executor_owns_step,
+)
+from .trajectory_scientific_representation_executor import (
+    trajectory_scientific_representation_executor_code,
+    trajectory_scientific_representation_executor_owns_step,
+)
 from .typed_input_binding import sole_typed_cohort_input
+from .landmark_spline_executor import (
+    LANDMARK_SPLINE_ANALYSIS_KIND,
+    landmark_spline_executor_code,
+    landmark_spline_executor_owns_step,
+)
+from .source_feasibility_executor import (
+    SOURCE_FEASIBILITY_ANALYSIS_KIND,
+    source_feasibility_executor_code,
+    source_feasibility_executor_owns_step,
+)
+from .feasibility_protocol_executor import (
+    FEASIBILITY_PROTOCOL_ANALYSIS_KIND,
+    feasibility_protocol_consumed_input_keys,
+    feasibility_protocol_executor_code,
+    feasibility_protocol_executor_owns_step,
+)
 
 
 def _consumed_typed_cohort_inputs(step: AnalysisStep) -> tuple[str, ...]:
@@ -124,6 +180,13 @@ class StandardExecutorSelection:
     progress_message: str
     code: str
     consumed_input_keys: tuple[str, ...]
+    # Rendering-only host adapters already embody the reviewed scientific
+    # result and figure contract.  Visual QA may reject their output, but must
+    # never hand their source to a model for an unauthorised rewrite.  This
+    # grants the host-code digest/no-rewrite policy only; repair-registry
+    # renderers separately carry the legacy repair-id, parent-snapshot and
+    # product-slot receipt bundle.
+    host_sealed_renderer: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +217,9 @@ def select_standard_executor(
     plan: AnalysisPlan,
     plausibility_scope: FlagOnlyPlausibilityScope | None = None,
     resolved_bindings: Mapping[str, Any] | None = None,
+    trajectory_scientific_runtime_authority: Mapping[str, Any] | None = None,
+    current_case_scientific_runtime_authority: Mapping[str, Any] | None = None,
+    scientific_runtime_projection_sha256: str | None = None,
     trace: list[StandardExecutorCandidate] | None = None,
 ) -> StandardExecutorSelection | None:
     """Select by exact typed contract, never by prose or benchmark identity.
@@ -229,6 +295,77 @@ def select_standard_executor(
         _note(owner_key or selection.analysis_kind, True, "selected")
         return selection
 
+    if current_case_scientific_runtime_authority is not None:
+        sealed_current = load_current_case_scientific_runtime_authority(
+            current_case_scientific_runtime_authority
+        )
+        projection_digest = str(scientific_runtime_projection_sha256 or "")
+        if isinstance(sealed_current, LandmarkSplineRuntimeAuthority):
+            if landmark_spline_executor_owns_step(
+                step,
+                plan=plan,
+                authority=sealed_current,
+            ):
+                return _selected(
+                    StandardExecutorSelection(
+                        analysis_kind=LANDMARK_SPLINE_ANALYSIS_KIND,
+                        selection_reason=(
+                            "signed_landmark_spline_contract_preflight"
+                        ),
+                        progress_message=(
+                            "Using signed landmark spline executor"
+                        ),
+                        code=landmark_spline_executor_code(
+                            step,
+                            authority=sealed_current,
+                            runtime_projection_sha256=projection_digest,
+                            plausibility_scope=plausibility_scope,
+                        ),
+                        consumed_input_keys=_consumed_typed_cohort_inputs(step),
+                    )
+                )
+            _missed(LANDMARK_SPLINE_ANALYSIS_KIND)
+        elif isinstance(sealed_current, SourceFeasibilityRuntimeAuthority):
+            if source_feasibility_executor_owns_step(
+                step,
+                plan=plan,
+                authority=sealed_current,
+            ):
+                return _selected(
+                    StandardExecutorSelection(
+                        analysis_kind=SOURCE_FEASIBILITY_ANALYSIS_KIND,
+                        selection_reason=(
+                            "signed_source_feasibility_contract_preflight"
+                        ),
+                        progress_message=(
+                            "Using signed source-feasibility executor"
+                        ),
+                        code=source_feasibility_executor_code(
+                            authority=sealed_current,
+                            runtime_projection_sha256=projection_digest,
+                        ),
+                        consumed_input_keys=(),
+                    )
+                )
+            _missed(SOURCE_FEASIBILITY_ANALYSIS_KIND)
+
+    if feasibility_protocol_executor_owns_step(step):
+        if receipt_required:
+            _receipt_declined(FEASIBILITY_PROTOCOL_ANALYSIS_KIND)
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=FEASIBILITY_PROTOCOL_ANALYSIS_KIND,
+                selection_reason="planner_declared_feasibility_protocol",
+                progress_message=(
+                    "Recording the Planner-declared non-executable protocol"
+                ),
+                code=feasibility_protocol_executor_code(step),
+                consumed_input_keys=feasibility_protocol_consumed_input_keys(step),
+            )
+        )
+    _missed(FEASIBILITY_PROTOCOL_ANALYSIS_KIND)
+
     if cohort_summary_executor_owns_step(step):
         # This executor emits the flag-only receipt itself, so a receipt
         # obligation no longer sends a step the host can compute exactly to
@@ -248,11 +385,6 @@ def select_standard_executor(
         )
     _missed("descriptive_cohort_summary")
     if exposure_outcome_distribution_executor_owns_step(step):
-        if receipt_required:
-            # This owner emits no flag-only receipt, so it declines rather than
-            # claiming a step whose obligation it cannot discharge.
-            _receipt_declined("exposure_outcome_distribution")
-            return None
         typed_cohort_inputs = _consumed_typed_cohort_inputs(step)
         return _selected(
             StandardExecutorSelection(
@@ -261,7 +393,10 @@ def select_standard_executor(
                 progress_message=(
                     "Using planner-declared exposure/outcome distribution executor"
                 ),
-                code=exposure_outcome_distribution_executor_code(step),
+                code=exposure_outcome_distribution_executor_code(
+                    step,
+                    plausibility_scope=plausibility_scope,
+                ),
                 consumed_input_keys=typed_cohort_inputs,
             )
         )
@@ -298,9 +433,16 @@ def select_standard_executor(
                     display_labels=plan.display_labels,
                 ),
                 consumed_input_keys=(EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT,),
+                host_sealed_renderer=True,
             )
         )
-    _missed("exposure_outcome_distribution_figure")
+    distribution_figure_verdict = (
+        exposure_outcome_distribution_figure_declaration_verdict(step)
+    )
+    if distribution_figure_verdict.missing_declarations:
+        _declined(distribution_figure_verdict)
+    else:
+        _missed("exposure_outcome_distribution_figure")
     if prevalence_outcome_figure_executor_owns_step(step):
         if receipt_required:
             _receipt_declined("prevalence_outcome_figure")
@@ -314,6 +456,7 @@ def select_standard_executor(
                 ),
                 code=prevalence_outcome_figure_executor_code(step),
                 consumed_input_keys=(PREVALENCE_OUTCOME_FIGURE_INPUT,),
+                host_sealed_renderer=True,
             )
         )
     _missed("prevalence_outcome_figure")
@@ -336,6 +479,7 @@ def select_standard_executor(
                 consumed_input_keys=robustness_figure_consumed_input_keys(
                     resolved_bindings
                 ),
+                host_sealed_renderer=True,
             )
         )
     _missed("robustness_figure")
@@ -354,9 +498,46 @@ def select_standard_executor(
                 ),
                 code=adjusted_association_figure_executor_code(step),
                 consumed_input_keys=(ADJUSTED_ASSOCIATION_FIGURE_INPUT,),
+                host_sealed_renderer=True,
             )
         )
     _missed("adjusted_association_figure")
+    if cohort_flow_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined("cohort_flow_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="cohort_flow_figure",
+                selection_reason="cohort_flow_figure_contract_preflight",
+                progress_message="Using digest-bound cohort-flow renderer",
+                code=cohort_flow_figure_executor_code(step),
+                consumed_input_keys=(COHORT_FLOW_INPUT,),
+                host_sealed_renderer=True,
+            )
+        )
+    _missed("cohort_flow_figure")
+    if descriptive_result_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined("descriptive_result_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="descriptive_result_figure",
+                selection_reason="descriptive_result_figure_contract_preflight",
+                progress_message=(
+                    "Using digest-bound descriptive result renderer"
+                ),
+                code=descriptive_result_figure_executor_code(step),
+                consumed_input_keys=(step.inputs[0],),
+                host_sealed_renderer=True,
+            )
+        )
+    _missed("descriptive_result_figure")
     if prevalence_mortality_figure_executor_owns_step(step):
         if receipt_required:
             _receipt_declined("prevalence_mortality_figure")
@@ -373,9 +554,29 @@ def select_standard_executor(
                     display_labels=plan.display_labels,
                 ),
                 consumed_input_keys=PREVALENCE_MORTALITY_FIGURE_INPUTS,
+                host_sealed_renderer=True,
             )
         )
     _missed("prevalence_mortality_figure")
+    if measurement_missingness_figure_executor_owns_step(
+        step, plan=plan, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined("measurement_missingness_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="measurement_missingness_figure",
+                selection_reason="measurement_missingness_figure_contract_preflight",
+                progress_message=(
+                    "Using digest-bound measurement-missingness figure renderer"
+                ),
+                code=measurement_missingness_figure_executor_code(step, plan=plan),
+                consumed_input_keys=(str(step.inputs[0]),),
+                host_sealed_renderer=True,
+            )
+        )
+    _missed("measurement_missingness_figure")
     if missingness_measurement_figure_executor_owns_step(
         step, resolved_bindings=resolved_bindings
     ):
@@ -391,6 +592,7 @@ def select_standard_executor(
                 ),
                 code=missingness_measurement_figure_executor_code(step),
                 consumed_input_keys=MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
+                host_sealed_renderer=True,
             )
         )
     # Not a bare miss when one string is the only thing between the plan and a
@@ -408,6 +610,53 @@ def select_standard_executor(
         _declined(missingness_declaration_verdict)
     else:
         _missed("missingness_measurement_figure")
+    if audit_panel_executor_owns_step(step):
+        if receipt_required:
+            _receipt_declined("audit_panel")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="audit_panel",
+                selection_reason="framework_audit_panel_contract_preflight",
+                progress_message="Using deterministic audit-panel renderer",
+                code=audit_panel_executor_code(step),
+                consumed_input_keys=(),
+                host_sealed_renderer=True,
+            )
+        )
+    _missed("audit_panel")
+    if descriptive_distribution_executor_owns_step(step):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=DESCRIPTIVE_DISTRIBUTION_ANALYSIS_KIND,
+                selection_reason="grouped_descriptive_distribution_contract_preflight",
+                progress_message=(
+                    "Using planner-scoped grouped descriptive distribution executor"
+                ),
+                code=descriptive_distribution_executor_code(
+                    step,
+                    plausibility_scope=plausibility_scope,
+                ),
+                consumed_input_keys=_consumed_typed_cohort_inputs(step),
+            )
+        )
+    _missed(DESCRIPTIVE_DISTRIBUTION_ANALYSIS_KIND)
+    if descriptive_association_executor_owns_step(step):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=DESCRIPTIVE_ASSOCIATION_ANALYSIS_KIND,
+                selection_reason="descriptive_association_contract_preflight",
+                progress_message=(
+                    "Using planner-scoped descriptive association executor"
+                ),
+                code=descriptive_association_executor_code(
+                    step,
+                    plausibility_scope=plausibility_scope,
+                ),
+                consumed_input_keys=_consumed_typed_cohort_inputs(step),
+            )
+        )
+    _missed(DESCRIPTIVE_ASSOCIATION_ANALYSIS_KIND)
     if table_one_executor_owns_step(step):
         typed_cohort_inputs = _consumed_typed_cohort_inputs(step)
         return _selected(
@@ -472,6 +721,46 @@ def select_standard_executor(
         )
         return _selected(selection, "missingness_audit")
     _missed("missingness_audit")
+    if trajectory_scientific_representation_executor_owns_step(
+        step,
+        plan=plan,
+        authority=trajectory_scientific_runtime_authority,
+    ):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="trajectory_signed_representation",
+                selection_reason="signed_trajectory_representation_authority",
+                progress_message="Using signed trajectory representation executor",
+                code=trajectory_scientific_representation_executor_code(
+                    authority=trajectory_scientific_runtime_authority,
+                    runtime_projection_sha256=str(
+                        scientific_runtime_projection_sha256 or ""
+                    ),
+                ),
+                consumed_input_keys=(),
+            )
+        )
+    _missed("trajectory_signed_representation")
+    if trajectory_scientific_candidate_executor_owns_step(
+        step,
+        plan=plan,
+        authority=trajectory_scientific_runtime_authority,
+    ):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="trajectory_signed_candidate_selection",
+                selection_reason="signed_trajectory_candidate_authority",
+                progress_message="Using signed trajectory candidate selector",
+                code=trajectory_scientific_candidate_executor_code(
+                    authority=trajectory_scientific_runtime_authority,
+                    runtime_projection_sha256=str(
+                        scientific_runtime_projection_sha256 or ""
+                    ),
+                ),
+                consumed_input_keys=tuple(sorted(SCIENTIFIC_CANDIDATE_INPUTS)),
+            )
+        )
+    _missed("trajectory_signed_candidate_selection")
     if trajectory_stability_executor_owns_step(step, plan=plan):
         if receipt_required:
             _receipt_declined("trajectory_cluster_stability")
@@ -483,7 +772,16 @@ def select_standard_executor(
                 progress_message=(
                     "Using planner-specified trajectory stability executor"
                 ),
-                code=trajectory_stability_executor_code(step, plan=plan),
+                code=trajectory_stability_executor_code(
+                    step,
+                    plan=plan,
+                    scientific_runtime_authority=(
+                        trajectory_scientific_runtime_authority
+                    ),
+                    runtime_projection_sha256=(
+                        scientific_runtime_projection_sha256
+                    ),
+                ),
                 consumed_input_keys=tuple(sorted(STABILITY_EXECUTOR_INPUTS)),
             )
         )

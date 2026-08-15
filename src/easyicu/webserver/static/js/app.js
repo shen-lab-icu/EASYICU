@@ -1,6 +1,11 @@
 /* App shell controller */
 (function () {
   const app = document.getElementById('app');
+  const routeAnnouncer = document.createElement('div');
+  routeAnnouncer.className = 'shell-sr-only';
+  routeAnnouncer.setAttribute('aria-live', 'polite');
+  routeAnnouncer.setAttribute('aria-atomic', 'true');
+  document.body.appendChild(routeAnnouncer);
   /* Route normalization: Copilot merge + folded Review destinations.
      Coverage Audit / SOFA Reclassification are now tabs inside Cohort Statistics;
      ICD Cohort Filter is folded into the extraction cohort filter. Old deep
@@ -122,6 +127,33 @@
     'Workspace States': ['Workspace States', '工作区状态'],
   };
   const crumbLabel = (c) => L(CRUMB_LABELS[c] || c);
+  function routeTitleOf(scr) {
+    const heading = app.querySelector('h1');
+    const headingText = heading && String(heading.textContent || '').trim();
+    if (headingText) return headingText;
+    const crumbs = scr && Array.isArray(scr.crumbs) ? scr.crumbs : [];
+    return crumbs.length ? crumbLabel(crumbs[crumbs.length - 1]) : 'EasyICU';
+  }
+  function routeDocumentTitle(title) {
+    return title === 'EasyICU' ? title : `${title} — EasyICU`;
+  }
+  function focusRouteContent() {
+    const main = app.querySelector('main') || app;
+    main.setAttribute('tabindex', '-1');
+    const heading = main.querySelector && main.querySelector('h1');
+    const target = heading || main;
+    if (heading) heading.setAttribute('tabindex', '-1');
+    if (target && typeof target.focus === 'function') {
+      try { target.focus({ preventScroll: true }); }
+      catch (_) { target.focus(); }
+    }
+  }
+  function announceRoute(title) {
+    routeAnnouncer.textContent = '';
+    const publish = () => { routeAnnouncer.textContent = title; };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(publish);
+    else setTimeout(publish, 0);
+  }
   const actionHtmlOf = (scr) => {
     if (!scr) return '';
     return typeof scr.actionHtml === 'function' ? scr.actionHtml() : (scr.actionHtml || '');
@@ -320,6 +352,12 @@
   function render(opts = {}) {
     const resetScroll = !!opts.resetScroll;
     const priorContent = app.querySelector('.content');
+    const priorMain = app.querySelector('main');
+    const priorActive = document.activeElement;
+    const preserveRouteFocus = !!(
+      priorMain && priorActive && priorMain.contains(priorActive)
+      && (priorActive === priorMain || priorActive.tagName === 'H1')
+    );
     const scrollState = {
       x: window.scrollX || 0,
       y: window.scrollY || 0,
@@ -343,13 +381,18 @@
     }
     if (scr.afterRender) scr.afterRender(app);
     syncShellAccessibility(app, !!scr.full);
+    const title = routeTitleOf(scr);
+    document.title = routeDocumentTitle(title);
     const c = app.querySelector('.content');
     if (resetScroll) {
       if (c) c.scrollTop = 0;
       window.scrollTo(0, 0);
+      focusRouteContent();
+      announceRoute(title);
     } else {
       if (c) c.scrollTop = scrollState.contentTop;
       window.scrollTo(scrollState.x, scrollState.y);
+      if (preserveRouteFocus) focusRouteContent();
     }
   }
 

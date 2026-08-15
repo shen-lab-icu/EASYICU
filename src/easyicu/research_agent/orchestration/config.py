@@ -30,6 +30,96 @@ from ..planning.cohort_contract import CohortSelectionMode
 from ..providers.prompt_budget import DEFAULT_MAX_PROMPT_TOKENS
 
 
+class PipelineConfigRecoveryError(ValueError):
+    """A pipeline configuration cannot be persisted for exact recovery."""
+
+
+_RECOVERY_BLOCKED_FIELDS = frozenset(
+    {
+        "pubmed_api_key",
+        "tavily_api_key",
+        # Runner kwargs are deliberately opaque and may carry headers,
+        # connection strings, mounts, or other live-host details.  A host that
+        # needs durable review recovery must keep them out of the declarative
+        # checkpoint rather than guessing which nested values are safe.
+        "runner_kwargs",
+    }
+)
+
+_RECOVERY_SECRET_KEY_PARTS = (
+    "api_key",
+    "authorization",
+    "client_secret",
+    "connection_string",
+    "cookie",
+    "database_url",
+    "dsn",
+    "password",
+    "private_key",
+    "proxy_authorization",
+    "refresh_token",
+    "access_token",
+)
+
+
+def _recovery_key_is_secret(key: str) -> bool:
+    normalized = str(key).strip().lower().replace("-", "_")
+    return any(part in normalized for part in _RECOVERY_SECRET_KEY_PARTS)
+
+
+def _render_recovery_value(value: Any, *, path: str) -> Any:
+    """Render one config value losslessly or reject unsafe opaque state.
+
+    This is intentionally distinct from :meth:`canonical_payload`.  The
+    canonical payload is a provenance projection and hashes values below any
+    key named ``key``; that is correct for broad log redaction but not
+    reversible (literature citation keys are ordinary scientific identities).
+    Durable recovery instead preserves schema-owned identities and refuses
+    actual credential-shaped values outright.
+    """
+
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        if string_contains_secret(value):
+            raise PipelineConfigRecoveryError(
+                f"pipeline_config_recovery_secret_value:{path}"
+            )
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        rendered: Dict[str, Any] = {}
+        for raw_key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
+            key = str(raw_key)
+            item_path = f"{path}.{key}" if path else key
+            if _recovery_key_is_secret(key) and item not in (None, "", (), [], {}):
+                raise PipelineConfigRecoveryError(
+                    f"pipeline_config_recovery_secret_field:{item_path}"
+                )
+            rendered[key] = _render_recovery_value(item, path=item_path)
+        return rendered
+    if isinstance(value, (list, tuple)):
+        return [
+            _render_recovery_value(item, path=f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, (set, frozenset)):
+        rendered = [
+            _render_recovery_value(item, path=f"{path}[]") for item in value
+        ]
+        return sorted(
+            rendered,
+            key=lambda item: json.dumps(
+                item, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ),
+        )
+    raise PipelineConfigRecoveryError(
+        "pipeline_config_recovery_unsupported_value:"
+        f"{path}:{type(value).__module__}.{type(value).__qualname__}"
+    )
+
+
 def step_provider_call_entitlement(
     *,
     max_code_repair_attempts: int,
@@ -176,7 +266,17 @@ class PipelineConfig:
     # --- feature toggles -------------------------------------------------
     enable_literature: bool = True
     enable_visual_qa: bool = True
+    # Nature Figure is the public skill contract over the existing claim-first,
+    # code-backed publication renderer. Keep the legacy field name as the
+    # stable API used by CLI and benchmark callers.
     enable_publication_figure_skill: bool = True
+    # Nature Writing is an independent publication skill so a host can unplug
+    # its prose policy without weakening evidence/numeric audits.
+    enable_nature_writing_skill: bool = True
+    # Optional host-compiled, content-digest-bound user extension snapshot.
+    # Only the writing advisory is consumed by the pipeline; MCP tools remain
+    # in the receipt and are never promoted into scientific evidence here.
+    extension_activation: Optional[Dict[str, Any]] = None
     enable_vlm_visual_qa: Optional[bool] = None
     # Uploading a rendered figure is a separate decision from authorizing the
     # provider: the image can carry per-patient marks, small-cell strata or
@@ -185,6 +285,19 @@ class PipelineConfig:
     enable_llm_concept_audit: Optional[bool] = None
     enable_memory: bool = True
     enable_latex: bool = True
+    # Interactive hosts can require an explicit, digest-bound operator review
+    # of every generated plan even when no scientific validator emitted an
+    # error.  The default remains non-interactive for CLI/benchmark callers;
+    # the Guided Web Copilot enables this because its product contract is
+    # plan -> user confirmation -> execution.
+    require_human_plan_review: bool = False
+    # A diagnostic Planner-only run may persist and expose the exact review
+    # checkpoint, but no caller may resume it into Execute.
+    planner_only: bool = False
+    # Formal interactive runs must not spend execution budget on a capability
+    # whose registered scientific ceiling is analysis-only. Diagnostic callers
+    # may leave this disabled and retain the honest lower claim ceiling.
+    require_reportable_scientific_capability: bool = False
 
     # --- evidence enforcement -------------------------------------------
     # "soft" (default): unsupported sentences are filtered and unresolved
@@ -193,6 +306,10 @@ class PipelineConfig:
     # run, so CI / final submission cannot ship a silently repaired manuscript.
     evidence_enforcement_mode: str = "soft"
     latex_venue_template: str = "article"
+    # Interactive previews are deliberately marked as drafts. CLI and formal
+    # benchmark callers keep the historical unmarked scaffold unless their
+    # host opts in explicitly.
+    latex_draft_watermark: bool = False
     manuscript_language: str = "en"
 
     # --- context / ablation knobs ---------------------------------------
@@ -256,6 +373,17 @@ class PipelineConfig:
     enable_pubmed: bool = False
     pubmed_email: Optional[str] = None
     pubmed_api_key: Optional[str] = None
+    # Optional digest-verified literature metadata supplied by an outer host
+    # that already performed an explicitly authorized search.  The complete
+    # payload is frozen and hashed into run authority; the pipeline validates
+    # it as a LiteratureBundle before exposing any citation key to Planner.
+    bound_preplan_literature: Optional[Dict[str, Any]] = None
+    # Optional host-compiled instructions from an exact prior scientific plan
+    # review. This is an immutable string rather than a mutable old plan: the
+    # new run remains fresh, the value is hashed into run configuration, and
+    # the host must prove the StudyContext digest has not changed before
+    # supplying it. Only plan-owned findings may appear here.
+    bound_plan_revision_contract: Optional[str] = None
     enable_tavily: bool = False
     tavily_api_key: Optional[str] = None
     tavily_retmax: int = 5
@@ -304,6 +432,16 @@ class PipelineConfig:
     # Optional caller-owned population contract. The shared pipeline enforces
     # the generic typed mode; the caller decides which mode a task requires.
     required_primary_cohort_selection_mode: Optional[CohortSelectionMode] = None
+    # Optional caller-reviewed trajectory execution projection. It remains
+    # case-neutral in the shared engine: the caller supplies exact concepts and
+    # numerical rules, while plan validation and deterministic executors bind
+    # them to this immutable, run-hashed configuration.
+    trajectory_scientific_runtime_authority: Optional[Dict[str, Any]] = None
+    # Optional caller-reviewed current-run authority for non-trajectory cases.
+    # It is mutually exclusive with the trajectory authority and is consumed
+    # by a typed plan gate plus its deterministic owner runner.
+    current_case_scientific_runtime_authority: Optional[Dict[str, Any]] = None
+    scientific_runtime_projection_sha256: Optional[str] = None
     enable_reviewer_round: bool = True
     enable_fairness_subgroups: bool = False
     enable_hypothesis_generator: bool = False
@@ -456,6 +594,14 @@ class PipelineConfig:
             frozen = _deep_freeze(value)
             if frozen is not value:
                 object.__setattr__(self, field_def.name, frozen)
+        if (
+            self.require_reportable_scientific_capability
+            and not self.require_human_plan_review
+        ):
+            raise ValueError(
+                "require_reportable_scientific_capability requires "
+                "require_human_plan_review so the pre-execution gate cannot be skipped"
+            )
         assert_step_provider_budget_funds_its_repairs(
             max_step_provider_calls=self.max_step_provider_calls,
             max_code_repair_attempts=self.max_code_repair_attempts,
@@ -499,6 +645,49 @@ class PipelineConfig:
                 "required_primary_cohort_selection_mode must be "
                 "'predicate_filtered', 'all_input_rows', or None"
             )
+        authority_count = sum(
+            value is not None
+            for value in (
+                self.trajectory_scientific_runtime_authority,
+                self.current_case_scientific_runtime_authority,
+            )
+        )
+        if authority_count > 1:
+            raise ValueError(
+                "trajectory and current-case scientific authorities are mutually "
+                "exclusive"
+            )
+        if (authority_count == 0) != (
+            self.scientific_runtime_projection_sha256 is None
+        ):
+            raise ValueError(
+                "scientific authority and runtime projection digest must be "
+                "configured together"
+            )
+        if self.trajectory_scientific_runtime_authority is not None:
+            from ..trajectory.scientific_runtime_authority import (
+                load_trajectory_scientific_runtime_authority,
+            )
+
+            load_trajectory_scientific_runtime_authority(
+                self.trajectory_scientific_runtime_authority
+            )
+        if self.current_case_scientific_runtime_authority is not None:
+            from ..authority.current_case_scientific_runtime import (
+                load_current_case_scientific_runtime_authority,
+            )
+
+            load_current_case_scientific_runtime_authority(
+                self.current_case_scientific_runtime_authority
+            )
+        if authority_count:
+            digest = str(self.scientific_runtime_projection_sha256 or "")
+            if len(digest) != 64 or any(
+                character not in "0123456789abcdef" for character in digest
+            ):
+                raise ValueError(
+                    "scientific_runtime_projection_sha256 must be a SHA-256 digest"
+                )
 
     def with_overrides(self, **overrides: Any) -> "PipelineConfig":
         """Return a new :class:`PipelineConfig` with the given fields
@@ -551,6 +740,62 @@ class PipelineConfig:
             for key, value in sorted(self._field_values().items())
         }
 
+    def recovery_payload(self) -> Dict[str, Any]:
+        """Return a lossless, credential-free payload for durable resume.
+
+        ``canonical_payload`` is intentionally one-way: it hashes anything
+        below a broadly sensitive key name so provenance can be written even
+        for opaque caller mappings.  Reconstructing a live configuration from
+        that projection changes ordinary schema-owned identities such as a
+        literature citation ``key``.  Recovery therefore has its own contract:
+        preserve all supported declarative values exactly, and refuse fields
+        that may carry credentials or opaque runner state.
+        """
+
+        values = self._field_values()
+        for field_name in sorted(_RECOVERY_BLOCKED_FIELDS):
+            value = values.get(field_name)
+            if value not in (None, "", (), [], {}):
+                raise PipelineConfigRecoveryError(
+                    f"pipeline_config_recovery_field_not_persistable:{field_name}"
+                )
+        return {
+            key: _render_recovery_value(value, path=key)
+            for key, value in sorted(values.items())
+        }
+
+    @classmethod
+    def from_recovery_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        expected_digest: str,
+    ) -> "PipelineConfig":
+        """Reconstruct and bind one persisted config to its original digest."""
+
+        if not isinstance(payload, Mapping):
+            raise PipelineConfigRecoveryError(
+                "pipeline_config_recovery_payload_not_mapping"
+            )
+        digest = str(expected_digest or "")
+        if len(digest) != 64 or any(
+            character not in "0123456789abcdef" for character in digest
+        ):
+            raise PipelineConfigRecoveryError(
+                "pipeline_config_recovery_digest_invalid"
+            )
+        try:
+            config = cls(**dict(payload))
+        except (TypeError, ValueError) as exc:
+            raise PipelineConfigRecoveryError(
+                "pipeline_config_recovery_payload_invalid"
+            ) from exc
+        if config.canonical_digest() != digest:
+            raise PipelineConfigRecoveryError(
+                "pipeline_config_recovery_digest_mismatch"
+            )
+        return config
+
     def canonical_digest(self) -> str:
         """SHA-256 over :meth:`canonical_payload`, for run provenance."""
 
@@ -561,6 +806,7 @@ class PipelineConfig:
 
 
 __all__ = [
+    "PipelineConfigRecoveryError",
     "PipelineConfig",
     "assert_step_provider_budget_funds_its_repairs",
     "step_provider_call_entitlement",

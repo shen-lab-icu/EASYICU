@@ -10,11 +10,155 @@ import pandas as pd
 import pytest
 
 from easyicu.api import extraction as api
+from easyicu.research_agent.cohort import materializer as cohort_materializer
 from easyicu.research_agent.intake.export_package import open_export_package
 
 
 def _completed_result(module: str = "demographics") -> dict[str, object]:
     return {"modules": {module: {"errors": []}}}
+
+
+def test_native_sofa2_receipts_survive_producer_to_trajectory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"sofa2_score": ["sofa2_resp"]},
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 12.0, 24.0],
+            "sofa2_resp": [0.0, 2.0, 2.0],
+            "sofa2_resp_observed": [0, 1, 0],
+            "sofa2_resp_available": [0, 1, 1],
+        }
+    ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sofa2_score"],
+        max_patients=None,
+        result=_completed_result("sofa2_score"),
+    )
+
+    published = pd.read_parquet(tmp_path / "sofa2_score.parquet")
+    assert list(published.columns) == [
+        "stay_id",
+        "charttime",
+        "sofa2_resp",
+        "sofa2_resp_observed",
+        "sofa2_resp_available",
+    ]
+    with open_export_package(tmp_path) as package:
+        assert package.column_metadata_by_file["sofa2_score.parquet"].columns[
+            "sofa2_resp_observed"
+        ].representation_transform == "owner_observed_status"
+
+    trajectory, provenance = cohort_materializer.build_trajectory_long(
+        data_path=tmp_path,
+        database="miiv",
+        concepts=["sofa2_resp"],
+        window=(0.0, 24.0),
+    )
+    assert trajectory["charttime"].tolist() == [12.0, 24.0]
+    assert trajectory["evidence_state"].tolist() == [
+        "direct_observed",
+        "owner_locf_available",
+    ]
+    assert provenance["unavailable_value_rows_excluded"] == {"sofa2_resp": 1}
+
+
+def test_native_sofa2_missing_receipt_fails_closed_after_real_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"sofa2_score": ["sofa2_resp"]},
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sofa2_resp": [0.0],
+            "sofa2_resp_observed": [0],
+        }
+    ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sofa2_score"],
+        max_patients=None,
+        result=_completed_result("sofa2_score"),
+    )
+
+    with pytest.raises(
+        cohort_materializer.MaterializedMetadataError,
+        match="owner.*receipt|finite numeric",
+    ):
+        cohort_materializer.build_trajectory_long(
+            data_path=tmp_path,
+            database="miiv",
+            concepts=["sofa2_resp"],
+            window=(0.0, 24.0),
+        )
+
+
+@pytest.mark.parametrize("pandas_fallback_max_rows", [1, 1_000_000])
+def test_native_sofa2_duplicate_consolidation_keeps_value_receipt_paired(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pandas_fallback_max_rows: int,
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"sofa2_score": ["sofa2_resp"]},
+    )
+    monkeypatch.setattr(
+        api,
+        "_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS",
+        pandas_fallback_max_rows,
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 0.0],
+            # The synthetic unavailable zero must not enter the aggregate paired
+            # with the observed receipt from the second row.
+            "sofa2_resp": [0.0, 4.0],
+            "sofa2_resp_observed": [0, 1],
+            "sofa2_resp_available": [0, 1],
+        }
+    ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sofa2_score"],
+        max_patients=None,
+        result=_completed_result("sofa2_score"),
+    )
+
+    published = pd.read_parquet(tmp_path / "sofa2_score.parquet")
+    assert published["sofa2_resp"].tolist() == [4.0]
+    assert published["sofa2_resp_observed"].tolist() == [True]
+    assert published["sofa2_resp_available"].tolist() == [True]
+    trajectory, _ = cohort_materializer.build_trajectory_long(
+        data_path=tmp_path,
+        database="miiv",
+        concepts=["sofa2_resp"],
+        window=(0.0, 24.0),
+    )
+    assert trajectory["value_num"].tolist() == [4.0]
+    assert trajectory["evidence_state"].tolist() == ["direct_observed"]
 
 
 def test_native_time_axis_uses_los_and_normalises_stay_level_outcomes() -> None:
@@ -212,6 +356,16 @@ def test_grouped_output_is_sealed_without_accessing_the_raw_data_path(
         assert manifest["runtime_provenance"]["easyicu_git_diff_sha256"]
     else:
         assert manifest["runtime_provenance"]["easyicu_git_diff_sha256"] is None
+    for field in (
+        "concept_dictionary_sha256",
+        "sofa2_dictionary_sha256",
+        "clinical_contracts_sha256",
+        "clinical_contract_validator_sha256",
+        "data_sources_sha256",
+    ):
+        value = manifest["runtime_provenance"][field]
+        assert len(value) == 64
+        int(value, 16)
     assert list(pd.read_parquet(tmp_path / "demographics.parquet").columns) == [
         "stay_id",
         "age",
@@ -462,6 +616,56 @@ def test_native_schema_preserves_numeric_logical_and_categorical_families() -> N
     assert str(canonical["ecmo_indication"].dtype) == "string"
 
 
+def test_native_schema_preserves_state_valued_sofa2_ascertainment() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    concept = "sofa2_cns_delirium_tx_ascertainment"
+    canonical = api._canonicalise_native_export_frame(
+        pd.DataFrame(
+            {
+                "stay_id": [101, 102],
+                "charttime": [0.0, 1.0],
+                concept: ["complete", "proxy_only"],
+            }
+        ),
+        module="sofa2_score",
+        requested_concepts=[concept],
+        dictionary=dictionary,
+    )
+
+    assert str(canonical[concept].dtype) == "string"
+    assert canonical[concept].tolist() == ["complete", "proxy_only"]
+
+
+def test_stream_arrow_table_keeps_sofa2_owner_receipt_companions() -> None:
+    import pyarrow as pa
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": [101, 102],
+            "charttime": [0.0, 1.0],
+            "sofa2_resp": [2.0, 0.0],
+            "sofa2_resp_observed": [1, 0],
+            "sofa2_resp_available": [1, 0],
+        }
+    )
+    table = api._module_arrow_table(
+        frame,
+        ["sofa2_resp"],
+        pa,
+        module="sofa2_score",
+    )
+
+    assert table.column_names == [
+        "stay_id",
+        "charttime",
+        "sofa2_resp",
+        "sofa2_resp_observed",
+        "sofa2_resp_available",
+    ]
+    assert table.column("sofa2_resp_observed").to_pylist() == [1, 0]
+    assert table.column("sofa2_resp_available").to_pylist() == [1, 0]
+
+
 def test_native_arrow_schema_normalises_backend_large_strings() -> None:
     import pyarrow as pa
 
@@ -479,6 +683,12 @@ def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
     dictionary = api.load_dictionary(include_sofa2=True)
     receipt_columns = [
         "aki_assessable",
+        "aki_severe",
+        "aki_severe_creat",
+        "aki_severe_uo",
+        "aki_severe_rrt",
+        "aki_severe_assessable",
+        "aki_severe_ascertainment",
         "aki_ascertainment",
         "aki_assessment_reason",
         "observation_window_coverage",
@@ -491,6 +701,12 @@ def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
             "stay_id": [101, 102],
             "charttime": [0.0, 1.0],
             "aki_assessable": [1, 0],
+            "aki_severe": [1, None],
+            "aki_severe_creat": [1, 0],
+            "aki_severe_uo": [0, None],
+            "aki_severe_rrt": [0, None],
+            "aki_severe_assessable": [1, 0],
+            "aki_severe_ascertainment": ["positive", "indeterminate"],
             "aki_ascertainment": ["positive", "indeterminate"],
             "aki_assessment_reason": ["positive", "indeterminate"],
             "observation_window_coverage": ["complete", "partial"],
@@ -507,8 +723,25 @@ def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
         dictionary=dictionary,
     )
 
-    assert str(canonical["aki_assessable"].dtype) == "boolean"
-    assert all(str(canonical[column].dtype) == "string" for column in receipt_columns[1:])
+    boolean_columns = [
+        "aki_assessable",
+        "aki_severe",
+        "aki_severe_creat",
+        "aki_severe_uo",
+        "aki_severe_rrt",
+        "aki_severe_assessable",
+    ]
+    category_columns = [
+        "aki_severe_ascertainment",
+        "aki_ascertainment",
+        "aki_assessment_reason",
+        "observation_window_coverage",
+        "creatinine_ascertainment",
+        "urine_ascertainment",
+        "rrt_ascertainment",
+    ]
+    assert all(str(canonical[column].dtype) == "boolean" for column in boolean_columns)
+    assert all(str(canonical[column].dtype) == "string" for column in category_columns)
 
 
 def test_native_schema_accepts_multi_class_numeric_concept() -> None:
@@ -697,7 +930,8 @@ def test_native_bounds_survive_sofa2_overlay_redefinition(
 ) -> None:
     monkeypatch.setattr(api, "_CONCEPT_BOUNDS_CACHE", None)
     dictionary = api.load_dictionary(include_sofa2=True)
-    assert dictionary["uo_6h"].minimum is None
+    assert dictionary["uo_6h"].minimum == 0.0
+    assert dictionary["uo_6h"].maximum == 20.0
     assert api._load_concept_bounds_map()["uo_6h"] == (0.0, 20.0)
     frame = pd.DataFrame({"uo_6h": [0.0, 1.5, 20.0, 20.1, 1886.0]})
 
