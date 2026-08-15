@@ -427,12 +427,20 @@ def _record_from_seed_path(path: Path, *, root: Path) -> list[WebReviewRecoveryR
         return []
 
     records: list[WebReviewRecoveryRecord] = []
+    run_dirs: list[Path] = []
     try:
-        run_dirs = pipeline_root.iterdir()
+        # ``Path.iterdir`` is lazy: creating the iterator succeeds even when a
+        # stale recovery seed points at a directory that has since disappeared.
+        # Materialize only the reviewed bound inside the exception boundary so
+        # one obsolete test/run seed cannot prevent the whole Web app starting.
+        for index, run_dir in enumerate(pipeline_root.iterdir()):
+            if index >= _MAX_RUN_DIRS_PER_CANDIDATE:
+                break
+            run_dirs.append(run_dir)
     except OSError:
         return []
-    for index, run_dir in enumerate(run_dirs):
-        if index >= _MAX_RUN_DIRS_PER_CANDIDATE or len(records) >= 4:
+    for run_dir in run_dirs:
+        if len(records) >= 4:
             break
         if not run_dir.is_dir() or run_dir.is_symlink():
             continue
