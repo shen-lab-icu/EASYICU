@@ -11,6 +11,11 @@ except ModuleNotFoundError:  # Python 3.9/3.10 test runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
+
+
+def _workflow_paths() -> list[Path]:
+    return sorted([*WORKFLOW_DIR.glob("*.yml"), *WORKFLOW_DIR.glob("*.yaml")])
 
 
 def test_pyproject_authors_do_not_use_placeholder_contact() -> None:
@@ -60,6 +65,7 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "static/THIRD_PARTY_NOTICES.md",
         "static/css/*.css",
         "static/js/*.js",
+        "static/assets/demo/*.png",
         "static/vendor/echarts/*",
         "pi_copilot/node_app/package.json",
         "pi_copilot/node_app/package-lock.json",
@@ -79,6 +85,7 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "src/easyicu/webserver/static/js/screens-viz-demo-drilldown.js",
         "src/easyicu/webserver/static/js/screens-viz-patient-features.js",
         "src/easyicu/webserver/static/css/app.css",
+        "src/easyicu/webserver/static/assets/demo/e1-publication-figure.png",
         "src/easyicu/webserver/static/vendor/echarts/echarts.common.min.js",
         "src/easyicu/webserver/static/vendor/echarts/LICENSE",
         "src/easyicu/webserver/static/vendor/echarts/NOTICE",
@@ -120,6 +127,55 @@ def test_repository_includes_contribution_guide() -> None:
     assert (REPO_ROOT / "CONTRIBUTING.md").exists()
 
 
+def test_repository_security_policy_is_private_and_data_safe() -> None:
+    security_path = REPO_ROOT / "SECURITY.md"
+
+    assert security_path.exists()
+    security = security_path.read_text(encoding="utf-8")
+    assert "/security/advisories/new" in security
+    assert "Do not include patient-level data" in security
+    assert "not a strong security sandbox" in security
+    assert "Current default branch" in security
+
+
+def test_pull_request_template_requires_scope_evidence_and_review() -> None:
+    template_path = REPO_ROOT / ".github" / "pull_request_template.md"
+
+    assert template_path.exists()
+    template = template_path.read_text(encoding="utf-8")
+    for required in (
+        "Primary owner/workstream",
+        "Out of scope",
+        "Evidence class and claim ceiling",
+        "Exact commands and results",
+        "Independent domain review",
+        "The PR author is not the independent reviewer",
+        "docs/release_checklist.md",
+    ):
+        assert required in template
+
+
+def test_release_checklist_preserves_formal_evidence_boundaries() -> None:
+    checklist_path = REPO_ROOT / "docs" / "release_checklist.md"
+
+    assert checklist_path.exists()
+    checklist = checklist_path.read_text(encoding="utf-8")
+    for required in (
+        "full exact-head CI",
+        "mapping_only",
+        "independent clinical reviewer",
+        "validated dependency snapshot",
+        "vulnerability audit",
+        "SBOM",
+        "artifact provenance",
+        "Tier 1",
+        "Tier 2",
+        "Tier 3",
+        "release remains blocked",
+    ):
+        assert required in checklist
+
+
 def test_repository_includes_ci_workflow() -> None:
     assert (REPO_ROOT / ".github" / "workflows" / "ci.yml").exists()
 
@@ -131,6 +187,62 @@ def test_ci_workflow_runs_supported_python_matrix() -> None:
     assert "python-version: ${{ matrix.python-version }}" in workflow
     assert "ruff check src tests" in workflow
     assert "pytest -q" in workflow
+
+
+def test_external_workflow_actions_are_immutable() -> None:
+    violations = []
+    action_ref = re.compile(r"\buses:\s*([^@\s]+)@([^\s#]+)")
+    commit_sha = re.compile(r"[0-9a-f]{40}")
+    image_digest = re.compile(r"sha256:[0-9a-f]{64}")
+
+    workflow_paths = _workflow_paths()
+    assert workflow_paths, "Expected at least one GitHub Actions workflow."
+    for workflow_path in workflow_paths:
+        for line_number, line in enumerate(
+            workflow_path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            match = action_ref.search(line)
+            if match is None:
+                continue
+            action, ref = match.groups()
+            if action.startswith("./"):
+                continue
+            if commit_sha.fullmatch(ref) or image_digest.fullmatch(ref):
+                continue
+            violations.append(f"{workflow_path.name}:{line_number}: {action}@{ref}")
+
+    assert not violations, "External workflow actions must use immutable refs:\n" + "\n".join(
+        violations
+    )
+
+
+def test_workflows_default_to_read_only_repository_access() -> None:
+    violations = []
+    write_permission = re.compile(r"(?m)^\s+[a-z-]+:\s*write\s*(?:#.*)?$")
+    workflow_paths = _workflow_paths()
+    assert workflow_paths, "Expected at least one GitHub Actions workflow."
+    for workflow_path in workflow_paths:
+        workflow = workflow_path.read_text(encoding="utf-8")
+        top_level = workflow.split("\njobs:", maxsplit=1)[0]
+        if "\npermissions:\n  contents: read\n" not in f"\n{top_level}\n":
+            violations.append(workflow_path.name)
+        if write_permission.search(workflow):
+            violations.append(f"{workflow_path.name} declares a write permission")
+
+    assert not violations, (
+        "Workflows must declare top-level read-only repository access: "
+        + ", ".join(violations)
+    )
+
+
+def test_dependabot_tracks_pinned_github_actions() -> None:
+    dependabot = (REPO_ROOT / ".github" / "dependabot.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'package-ecosystem: "github-actions"' in dependabot
+    assert 'directory: "/"' in dependabot
+    assert 'interval: "weekly"' in dependabot
 
 
 def test_repository_includes_citation_metadata() -> None:
@@ -229,7 +341,7 @@ def test_research_agent_readme_example_scripts_exist() -> None:
     assert not missing, f"research_agent README references missing examples: {missing}"
 
 
-def test_repository_does_not_ignore_tests_or_contributing_guide() -> None:
+def test_repository_does_not_ignore_contract_tests_or_governance_docs() -> None:
     ignored = subprocess.run(
         [
             "git",
@@ -237,6 +349,9 @@ def test_repository_does_not_ignore_tests_or_contributing_guide() -> None:
             str(REPO_ROOT),
             "check-ignore",
             "CONTRIBUTING.md",
+            "SECURITY.md",
+            ".github/pull_request_template.md",
+            "docs/release_checklist.md",
             "tests/test_repository_contract.py",
         ],
         capture_output=True,

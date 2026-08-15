@@ -156,12 +156,15 @@ pilot_runs/
 !README.md
 !README_zh.md
 !CONTRIBUTING.md
+!SECURITY.md
+!.github/pull_request_template.md
 !baselines/REGISTRY.md
 !docs/architecture_glossary.md
 !docs/capability_matrix.md
 !docs/analysis_method_suite.md
 !docs/deprecation_policy.md
 !docs/pi_copilot_integration_architecture.md
+!docs/release_checklist.md
 !docs/repository_layout.md
 !docs/research_agent_capability_inventory.md
 !docs/qa/
