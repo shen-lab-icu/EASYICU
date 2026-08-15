@@ -58,6 +58,7 @@ from ..research_context.prompt_scope import (
     planner_variable_catalog,
     scoped_planner_context,
 )
+from ..research_context.prompt_variables import opaque_level_tokens
 from ..schema import (
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,
@@ -234,6 +235,13 @@ def _build_planner_user_prompt(
             "context are:\n" + "\n".join(rows) + "\n\n"
         )
 
+    opaque_binary_levels = list(opaque_level_tokens(2))
+    opaque_binary_json = json.dumps(
+        opaque_binary_levels, ensure_ascii=True, separators=(",", ":")
+    )
+    opaque_level_1_json = json.dumps(opaque_binary_levels[0], ensure_ascii=True)
+    opaque_level_2_json = json.dumps(opaque_binary_levels[1], ensure_ascii=True)
+
     prompt = (
         "Produce an ICU-AWARE RESEARCH PLAN as JSON matching the "
         "AnalysisPlan schema. First infer the EHR analysis type, "
@@ -272,7 +280,10 @@ def _build_planner_user_prompt(
         "When the variable catalog withholds categorical literals and supplies "
         "`opaque_levels`, copy those exact opaque tokens into group_levels or a "
         "categorical variable's levels. The host will bind them locally to the "
-        "digest-verified observed values; never guess a hidden label. "
+        "digest-verified observed values; never guess a hidden label. For a "
+        f"two-level field the exact token array is `{opaque_binary_json}`; use "
+        "those same tokens for scalar selectors such as an event value or a "
+        "reference/comparison level. "
         "Report per-group missing n (%), one variable-appropriate P value, "
         "and the test name. Declare `missing_group_policy`: 'fail_closed' "
         "stops the step if any row's group_by value is missing, and "
@@ -673,7 +684,11 @@ def _build_planner_user_prompt(
         "anything outside that fence will be discarded.\n\n"
         "Required JSON shape (truncated example):\n"
         "The example values are illustrative only; do not prefer SOFA or "
-        "any example concept unless the ResearchContext supports it.\n"
+        "any example concept unless the ResearchContext supports it. The "
+        "distribution example is secondary so it cannot accidentally become a "
+        "second headline; change it to primary only when it is the plan's sole "
+        "headline estimand. Across the complete plan, at most one step is "
+        "primary.\n"
         "{\n"
         '  "research_question": "<copy from context>",\n'
         '  "display_labels": {"<exact variable or spec id>": "<human-facing label>"},\n'
@@ -731,7 +746,7 @@ def _build_planner_user_prompt(
         '      "input_consumption_contracts": [],\n'
         '      "table_one_spec": {\n'
         '        "group_by": "<declared grouping variable>",\n'
-        '        "group_levels": ["<closed level 1>", "<closed level 2>"],\n'
+        '        "group_levels": ' + opaque_binary_json + ",\n"
         '        "variables": [\n'
         "          {\n"
         '            "name": "<declared row variable>",\n'
@@ -756,7 +771,7 @@ def _build_planner_user_prompt(
         # already does.
         "    {\n"
         '      "step_id": "03_exposure_outcome_distribution",\n'
-        '      "planned_analysis_role": "primary",\n'
+        '      "planned_analysis_role": "secondary",\n'
         '      "intent": "<one sentence>",\n'
         # Exactly one typed input (the cohort artifact, which carries the
         # digest and product contract), plus the exposure and outcome column
@@ -774,16 +789,16 @@ def _build_planner_user_prompt(
         '      "trajectory_stability_spec": null,\n'
         '      "exposure_outcome_distribution_spec": {\n'
         '        "exposure": "<declared exposure column name>",\n'
-        '        "exposure_levels": ["<closed level 1>", "<closed level 2>"],\n'
+        '        "exposure_levels": ' + opaque_binary_json + ",\n"
         '        "outcome": "<declared outcome column name>",\n'
-        '        "outcome_levels": ["<closed level 1>", "<closed level 2>"],\n'
-        '        "outcome_positive_value": "<exactly one of outcome_levels>",\n'
+        '        "outcome_levels": ' + opaque_binary_json + ",\n"
+        '        "outcome_positive_value": ' + opaque_level_2_json + ",\n"
         '        "level_match_policy": "exact_typed",\n'
         '        "denominator_policy": "all_declared_rows",\n'
         '        "missing_outcome_policy": "structural_absence_is_non_event",\n'
         '        "risk_difference_contrast": {\n'
-        '          "reference_exposure_level": "<closed level 1>",\n'
-        '          "comparison_exposure_level": "<closed level 2>",\n'
+        '          "reference_exposure_level": ' + opaque_level_1_json + ",\n"
+        '          "comparison_exposure_level": ' + opaque_level_2_json + ",\n"
         '          "effect_measure": "risk_difference",\n'
         '          "interval_method": "linear_probability_wald"\n'
         "        },\n"
@@ -1352,6 +1367,11 @@ class PlannerAgent:
                     ),
                 )
                 + _payload.planner_science_retry_guide()
+                + "\n\n"
+                + _scientific_actions.planner_scientific_action_guide(
+                    infer_analysis_type(context).key,
+                    detail="names_only",
+                )
             ),
         )
 

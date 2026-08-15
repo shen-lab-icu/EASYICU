@@ -34,11 +34,14 @@ from ..schema import (
     AnalysisPlan,
     AnalysisStep,
     ArtifactConsumptionContract,
+    ExposureOutcomeDistributionSpec,
+    ExposureOutcomeRiskDifferenceContrast,
     PlannedFigurePanelSpec,
     PlannedModelRequirement,
     TableOneSpec,
     TableOneVariableSpec,
 )
+from ..research_context.prompt_variables import opaque_level_tokens
 
 
 def planner_descriptive_method_guidance(analysis_type: str) -> str:
@@ -469,6 +472,13 @@ def figure_panel_shape_guide() -> str:
 def planner_science_retry_guide() -> str:
     """Return schema-owned retry guidance outside the Planner god module."""
 
+    def exact_keys(model: type) -> str:
+        return ", ".join(f"`{name}`" for name in sorted(_declared_field_names(model)))
+
+    opaque_binary = json.dumps(
+        list(opaque_level_tokens(2)), ensure_ascii=True, separators=(",", ":")
+    )
+
     optional_fields = (
         "Contract applicability is exact: `family_primary_result_requirement` is "
         "legal only on the primary step when `analysis_type` is `causal_inference` "
@@ -498,8 +508,11 @@ def planner_science_retry_guide() -> str:
     model_representation_fields = (
         "Within `model_requirements`, categorical `exposure_levels`, "
         "`exposure_reference_level`, and `primary_contrast_level` are symbolic "
-        "model-term labels and therefore must be JSON strings, for example "
-        "`[\"0\", \"1\"]`, `\"0\"`, and `\"1\"`. This is deliberately "
+        "model-term labels and therefore must be JSON strings. When the "
+        "variable catalog publishes `opaque_levels`, copy those exact strings "
+        "instead of guessing labels; for a two-level field the published form "
+        f'is `{opaque_binary}`. Otherwise examples such as `["0", "1"]`, '
+        '`"0"`, and `"1"` show the string representation only. This is deliberately '
         "different from `exposure_outcome_distribution_spec`, whose closed "
         "observed values preserve their source scalar types. Every "
         "`robustness_specs` item must include non-empty `spec_id`, `axis`, and "
@@ -522,6 +535,23 @@ def planner_science_retry_guide() -> str:
         "error by dropping an already-satisfied requirement. "
         + descriptive_claim_shape_guide()
     )
+    exact_scientific_object_fields = (
+        "Closed scientific objects accept only their schema-declared keys. "
+        "`TableOneSpec` keys are: "
+        + exact_keys(TableOneSpec)
+        + ". `TableOneVariableSpec` keys are: "
+        + exact_keys(TableOneVariableSpec)
+        + ". `ExposureOutcomeDistributionSpec` keys are: "
+        + exact_keys(ExposureOutcomeDistributionSpec)
+        + ". Its `risk_difference_contrast` keys are: "
+        + exact_keys(ExposureOutcomeRiskDifferenceContrast)
+        + ". Standardized differences are selected by the declared "
+        "`standardized_difference_mode`; do not add a second reporting switch "
+        "or any explanatory key inside these closed objects. When a variable "
+        "catalog publishes `opaque_levels`, every corresponding level array "
+        "and scalar selector must copy those exact tokens. Do not translate "
+        "them to yes/no labels or quoted numeric codes."
+    )
     return (
         "\n\n"
         + model_terms_retry_guide()
@@ -533,6 +563,8 @@ def planner_science_retry_guide() -> str:
         + model_representation_fields
         + "\n\n"
         + representation_fields
+        + "\n\n"
+        + exact_scientific_object_fields
     )
 
 
