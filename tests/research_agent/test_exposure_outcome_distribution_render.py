@@ -195,6 +195,35 @@ def _tampered(tmp_path: Path, monkeypatch, mutate) -> tuple[Path, dict]:
     return _bound(tmp_path, table)
 
 
+def test_counts_only_table_renders_without_error_bars(
+    tmp_path: Path, monkeypatch
+) -> None:
+    table = _produced_table(
+        tmp_path,
+        monkeypatch,
+        spec_updates={
+            "schema_version": "easyicu.exposure_outcome_distribution/3",
+            "interval_method": "none_counts_only",
+            "repeated_unit_interval_method": None,
+            "confidence_level": None,
+        },
+    )
+    frame = pd.read_csv(table)
+    assert frame["ci_low_pct"].isna().all()
+    assert frame["ci_high_pct"].isna().all()
+    run_dir, manifest = _bound(tmp_path, table)
+
+    summary = _render(run_dir, manifest, tmp_path / "figure")
+    contract = json.loads(
+        (tmp_path / "figure" / summary["figure_contract"]).read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert contract["panels"][1]["metadata"]["chart_type"] == "point_absolute_risk"
+    assert "no uncertainty is computed" in contract["statistics_note"]
+
+
 # --------------------------------------------------------------------------
 # Ownership
 # --------------------------------------------------------------------------

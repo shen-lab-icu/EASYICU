@@ -77,6 +77,51 @@ _SPEC = {
 }
 
 
+def test_counts_only_spec_emits_no_uncertainty() -> None:
+    spec = ExposureOutcomeDistributionSpec.model_validate(
+        {
+            **_SPEC,
+            "schema_version": "easyicu.exposure_outcome_distribution/3",
+            "interval_method": "none_counts_only",
+            "repeated_unit_interval_method": None,
+            "confidence_level": None,
+        }
+    )
+    rows = _distribution_rows(
+        pd.DataFrame(
+            {
+                EXPOSURE: [0, 0, 1, 1],
+                OUTCOME: [0, 1, 0, 1],
+            }
+        ),
+        spec=spec,
+    )
+    step = _step(
+        spec={
+            "schema_version": "easyicu.exposure_outcome_distribution/3",
+            "interval_method": "none_counts_only",
+            "repeated_unit_interval_method": None,
+            "confidence_level": None,
+        }
+    )
+    assert exposure_outcome_distribution_executor_owns_step(step)
+    assert select_standard_executor(
+        step, plan=AnalysisPlan(research_question="Test", steps=[step])
+    ) is not None
+
+    for row in rows:
+        assert row["interval_method"] == "none_counts_only"
+        assert row["confidence_level"] is None
+        assert row["exposure_ci_low_pct"] is None
+        assert row["exposure_ci_high_pct"] is None
+        assert row["exposure_standard_error_pct"] is None
+        assert row["outcome_standard_error_pct"] is None
+        assert row["ci_low_pct"] is None
+        assert row["ci_high_pct"] is None
+        assert row["exposure_interval_covariance"] == "none_counts_only"
+        assert row["outcome_interval_covariance"] == "none_counts_only"
+
+
 def _step(**updates) -> AnalysisStep:
     spec = {**_SPEC, **updates.pop("spec", {})}
     payload = {

@@ -299,6 +299,39 @@ def test_primary_result_figure_is_added_even_when_secondary_figure_exists() -> N
     assert panel_findings[0].detail["reason"] == ("deterministic_figure_panels_bound")
 
 
+def test_counts_only_primary_figure_has_no_interval_panel() -> None:
+    primary = AnalysisStep.model_validate(
+        {
+            "step_id": "03_primary_distribution",
+            "planned_analysis_role": "primary",
+            "intent": "Report counts and observed proportions only.",
+            "method": "descriptive",
+            "inputs": ["artifact:analysis_cohort", "exposure", "outcome"],
+            "expected_outputs": ["table:exposure_outcome_distribution"],
+            "exposure_outcome_distribution_spec": {
+                "schema_version": "easyicu.exposure_outcome_distribution/3",
+                "exposure": "exposure",
+                "exposure_levels": [0, 1],
+                "outcome": "outcome",
+                "outcome_levels": [0, 1],
+                "outcome_positive_value": 1,
+                "level_match_policy": "exact_typed",
+                "denominator_policy": "all_declared_rows",
+                "missing_outcome_policy": "structural_absence_is_non_event",
+                "interval_method": "none_counts_only",
+                "repeated_unit_interval_method": None,
+                "confidence_level": None,
+            },
+        }
+    )
+    plan = AnalysisPlan(research_question="Describe counts.", steps=[primary])
+
+    shaped, _ = ensure_primary_result_figure_step(plan=plan)
+    shaped, _ = bind_deterministic_figure_panels(plan=shaped)
+
+    assert shaped.steps[-1].figure_panels[1].chart_type == "point_absolute_risk"
+
+
 def test_typed_measurement_alias_is_normalized_to_availability_panel() -> None:
     producer = AnalysisStep(
         step_id="05_measurement_missingness_audit",

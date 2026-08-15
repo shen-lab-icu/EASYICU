@@ -49,12 +49,13 @@ def exposure_outcome_distribution_execution_verdict(step: Any) -> OwnershipVerdi
             EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
             reason="the step has no typed exposure/outcome distribution specification",
         )
-    if str(getattr(spec, "schema_version", "") or "") != (
-        "easyicu.exposure_outcome_distribution/2"
-    ):
+    if str(getattr(spec, "schema_version", "") or "") not in {
+        "easyicu.exposure_outcome_distribution/2",
+        "easyicu.exposure_outcome_distribution/3",
+    }:
         return OwnershipVerdict.wrong_shape(
             EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
-            reason="the step does not declare exposure_outcome_distribution/2",
+            reason="the step does not declare a supported exposure/outcome distribution",
         )
     if method not in {"descriptive", "distribution"} or not (
         role == "auxiliary" or primary_is_descriptive
@@ -94,7 +95,7 @@ def exposure_outcome_distribution_execution_verdict(step: Any) -> OwnershipVerdi
     return OwnershipVerdict.claim(
         EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
         reason=(
-            "the exact typed cohort, exposure/outcome distribution/2 design and "
+            "the exact typed cohort, exposure/outcome distribution design and "
             "descriptive-only claim ceiling are host executable"
         ),
     )

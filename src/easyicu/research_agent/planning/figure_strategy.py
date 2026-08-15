@@ -410,6 +410,7 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
                     "ridge",
                     "point_range",
                     "prevalence_panel",
+                    "point_absolute_risk",
                     "dot_interval_absolute_risk",
                 ),
                 search_terms=("distribution", "prevalence", "density", "histogram"),

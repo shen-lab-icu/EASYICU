@@ -3,14 +3,15 @@
 Every scientific choice is read from the Planner's
 ``exposure_outcome_distribution_spec``: which column is the exposure, which
 levels of it are reported, which column is the outcome, which observed value
-counts as the event, whose rows form each denominator, and how the interval is
-built. This module decides none of them. In particular it never infers the
+counts as the event, whose rows form each denominator, and whether/how
+uncertainty is built. This module decides none of them. In particular it never infers the
 exposure from column names, from the order of ``inputs``, or from the intent
 text -- a study's exposure and outcome are its design, and an engine that
 picks them has taken the investigator's decision.
 
 The product is deliberately **self-contained**: each row carries its own
-denominator, its missing count, its event count and its rate with an interval,
+denominator, its missing count, its event count and its rate, with uncertainty
+only when the typed design authorizes it,
 *and* the design that produced them -- the exposure and outcome columns, the
 closed level sets, the event value, the denominator, missing-data and matching
 policies, the interval method and its confidence level.  When requested, it
@@ -67,6 +68,7 @@ __all__ = [
     "EXPOSURE_OUTCOME_DISTRIBUTION_CONTRAST_COLUMNS",
     "EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS",
     "EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT",
+    "COUNTS_ONLY_COVARIANCE",
     "STRUCTURAL_TOTAL_COVARIANCE",
     "exposure_outcome_distribution_declaration_verdict",
     "exposure_outcome_distribution_executor_code",
@@ -160,6 +162,7 @@ EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS = (
 _OVERALL_ROLE = "overall"
 _LEVEL_ROLE = "exposure_level"
 STRUCTURAL_TOTAL_COVARIANCE = "structural_identity_no_interval"
+COUNTS_ONLY_COVARIANCE = "none_counts_only"
 
 
 def _typed_cohort_input(step: AnalysisStep) -> str:
@@ -649,6 +652,15 @@ def _proportion_interval(
             "marginal proportion has no analysed rows in its declared denominator"
         )
     estimate_pct = percentage(numerator, denominator)
+    if spec.schema_version == "easyicu.exposure_outcome_distribution/3":
+        return {
+            "estimate_pct": estimate_pct,
+            "standard_error_pct": None,
+            "ci_low_pct": None,
+            "ci_high_pct": None,
+            "covariance": COUNTS_ONLY_COVARIANCE,
+            "cluster_count": None,
+        }
     if structural_total:
         if numerator != denominator:
             raise RuntimeError(
@@ -663,6 +675,7 @@ def _proportion_interval(
             "cluster_count": None,
         }
     if spec.dependence is None:
+        assert spec.confidence_level is not None
         low, high = wilson_interval(
             numerator,
             denominator,
@@ -722,6 +735,7 @@ def _proportion_interval(
             "patient-cluster marginal point estimate is not its published count "
             "over denominator"
         )
+    assert spec.confidence_level is not None
     critical = statistics.NormalDist().inv_cdf(
         1.0 - (1.0 - spec.confidence_level) / 2.0
     )
@@ -820,6 +834,7 @@ def _risk_difference_result(
             "identity-link risk-difference coefficient is not the difference "
             "of the two published absolute risks"
         )
+    assert spec.confidence_level is not None
     critical = statistics.NormalDist().inv_cdf(
         1.0 - (1.0 - spec.confidence_level) / 2.0
     )
@@ -1052,8 +1067,12 @@ def _verify_product(
         )
     total = overall[0]
     contrast = spec.risk_difference_contrast
-    critical = statistics.NormalDist().inv_cdf(
-        1.0 - (1.0 - spec.confidence_level) / 2.0
+    critical = (
+        statistics.NormalDist().inv_cdf(
+            1.0 - (1.0 - spec.confidence_level) / 2.0
+        )
+        if spec.confidence_level is not None
+        else None
     )
 
     def verify_interval(
@@ -1073,6 +1092,18 @@ def _verify_product(
         estimate = percentage(numerator, denominator)
         if row[estimate_key] != estimate:
             raise RuntimeError(f"{label} percentage is not its own counts")
+        if spec.schema_version == "easyicu.exposure_outcome_distribution/3":
+            if (
+                row[standard_error_key] is not None
+                or row[low_key] is not None
+                or row[high_key] is not None
+                or row[covariance_key] != COUNTS_ONLY_COVARIANCE
+                or row[cluster_count_key] is not None
+            ):
+                raise RuntimeError(
+                    f"{label} counts-only result carries inferential uncertainty"
+                )
+            return
         if structural_total:
             if (
                 denominator <= 0
@@ -1088,6 +1119,7 @@ def _verify_product(
                 )
             return
         if spec.dependence is None:
+            assert spec.confidence_level is not None
             proportion = numerator / denominator
             expected_standard_error = round(
                 100.0 * math.sqrt(proportion * (1.0 - proportion) / denominator),
@@ -1117,6 +1149,7 @@ def _verify_product(
         standard_error = _finite(row[standard_error_key])
         if standard_error is None or standard_error <= 0.0:
             raise RuntimeError(f"{label} patient-cluster standard error is invalid")
+        assert critical is not None
         expected_low = round(max(0.0, float(estimate) - critical * standard_error), 6)
         expected_high = round(
             min(100.0, float(estimate) + critical * standard_error), 6
@@ -1244,6 +1277,7 @@ def _verify_product(
     standard_error = _finite(rows[0]["risk_difference_standard_error_pct"])
     if standard_error is None or standard_error <= 0.0:
         raise RuntimeError("risk difference has invalid standard error")
+    assert critical is not None
     expected_low = round(expected_difference - critical * standard_error, 6)
     expected_high = round(expected_difference + critical * standard_error, 6)
     if (

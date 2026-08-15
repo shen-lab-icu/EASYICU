@@ -94,7 +94,10 @@ class ExposureOutcomeDistributionSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["easyicu.exposure_outcome_distribution/2"] = (
+    schema_version: Literal[
+        "easyicu.exposure_outcome_distribution/2",
+        "easyicu.exposure_outcome_distribution/3",
+    ] = (
         "easyicu.exposure_outcome_distribution/2"
     )
     exposure: str
@@ -154,17 +157,20 @@ class ExposureOutcomeDistributionSpec(BaseModel):
         ),
     )
     undeclared_outcome_policy: Literal["fail_closed"] = "fail_closed"
-    interval_method: Literal["wilson"] = Field(
+    interval_method: Literal["wilson", "none_counts_only"] = Field(
         default="wilson",
         description=(
-            "Marginal proportion interval for independent rows. If the host "
+            "Marginal proportion interval for independent rows, or the typed "
+            "counts-only declaration that computes no uncertainty. If the host "
             "binds a patient-cluster dependence authority, execution "
             "deterministically replaces Wilson with patient-cluster-robust "
             "Wald intervals for exposure prevalence and all absolute risks; "
             "the effective method and covariance travel in the result."
         ),
     )
-    repeated_unit_interval_method: Literal["patient_cluster_robust_wald"] = Field(
+    repeated_unit_interval_method: Optional[
+        Literal["patient_cluster_robust_wald"]
+    ] = Field(
         default="patient_cluster_robust_wald",
         description=(
             "Typed effective marginal-interval projection used exactly when "
@@ -195,13 +201,12 @@ class ExposureOutcomeDistributionSpec(BaseModel):
             "from free text, column names, or duplicated-looking values."
         ),
     )
-    confidence_level: float = Field(
-        gt=0.5,
-        lt=1.0,
+    confidence_level: Optional[float] = Field(
         description=(
             "Planner-owned two-sided confidence level for every interval in "
-            "the product. Declared rather than defaulted so the executor never "
-            "hard-codes a coverage the study did not choose."
+            "the product, or null for schema /3 counts-only output. Declared "
+            "rather than defaulted so the executor never hard-codes a coverage "
+            "the study did not choose."
         ),
     )
 
@@ -228,12 +233,19 @@ class ExposureOutcomeDistributionSpec(BaseModel):
 
     @field_validator("confidence_level")
     @classmethod
-    def _finite_confidence_level(cls, value: float) -> float:
+    def _finite_confidence_level(cls, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
         if not math.isfinite(float(value)):
             raise ValueError(
                 "exposure_outcome_distribution confidence_level must be finite"
             )
-        return float(value)
+        parsed = float(value)
+        if not 0.5 < parsed < 1.0:
+            raise ValueError(
+                "exposure_outcome_distribution confidence_level must be between 0.5 and 1"
+            )
+        return parsed
 
     @model_validator(mode="after")
     def _closed_design(self) -> "ExposureOutcomeDistributionSpec":
@@ -246,6 +258,26 @@ class ExposureOutcomeDistributionSpec(BaseModel):
         if self.exposure == self.outcome:
             raise ValueError(
                 "exposure_outcome_distribution exposure and outcome must differ"
+            )
+        if self.schema_version == "easyicu.exposure_outcome_distribution/3":
+            if (
+                self.interval_method != "none_counts_only"
+                or self.repeated_unit_interval_method is not None
+                or self.confidence_level is not None
+                or self.risk_difference_contrast is not None
+                or self.dependence is not None
+            ):
+                raise ValueError(
+                    "Exposure/outcome distribution /3 is counts-only and must not "
+                    "declare intervals, contrasts, confidence, or dependence"
+                )
+        elif (
+            self.interval_method != "wilson"
+            or self.repeated_unit_interval_method != "patient_cluster_robust_wald"
+            or self.confidence_level is None
+        ):
+            raise ValueError(
+                "Exposure/outcome distribution /2 requires its closed interval design"
             )
         declared = {typed_level_key(value) for value in self.outcome_levels}
         if typed_level_key(self.outcome_positive_value) not in declared:

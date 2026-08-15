@@ -420,6 +420,22 @@ def descriptive_claim_shape_guide() -> str:
     )
 
 
+def counts_only_distribution_guide() -> str:
+    """Publish the no-uncertainty projection selected by typed study authority."""
+
+    return (
+        "If the typed analysis_design declares variance_estimator="
+        "'none_counts_only', use schema_version "
+        "'easyicu.exposure_outcome_distribution/3', interval_method="
+        "'none_counts_only', repeated_unit_interval_method=null, "
+        "confidence_level=null, risk_difference_contrast=null, and dependence=null; "
+        "do not declare any model, inferential capability, table_one_spec, or "
+        "table:distribution_prevalence step. Only cohort accounting, the typed "
+        "exposure/outcome distribution, measurement audit, and figures bound to "
+        "those typed products are permitted."
+    )
+
+
 def descriptive_claim_example_fragment() -> str:
     """Render the worked-example fragment from the claim schema owner."""
 

@@ -869,7 +869,7 @@ def test_host_turns_repeated_unit_table_one_into_descriptive_smd_only() -> None:
     plan = AnalysisPlan(
         research_question=context.research_question,
         analysis_type="descriptive_study",
-        steps=[_traditional_table_one_step(), _absolute_risk_distribution_step()],
+        steps=[_traditional_table_one_step()],
     )
 
     bound = bind_context_dependence_authority(plan=plan, context=context)
@@ -957,6 +957,175 @@ def test_independent_unit_table_one_keeps_its_declared_tests() -> None:
 
     assert unchanged.steps[0].table_one_spec == plan.steps[0].table_one_spec
     assert unchanged.steps[0].table_one_spec.p_values_required is True
+
+
+def test_counts_only_authority_removes_all_uncertainty_before_review() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "variance_estimator": "none_counts_only",
+                        }
+                    }
+                )
+            )
+        }
+    )
+    distribution_step = _absolute_risk_distribution_step()
+    distribution_spec = distribution_step.exposure_outcome_distribution_spec
+    assert distribution_spec is not None
+    distribution_step = distribution_step.model_copy(
+        update={
+            "exposure_outcome_distribution_spec": distribution_spec.model_copy(
+                update={"risk_difference_contrast": None}
+            )
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_study",
+        steps=[distribution_step],
+    )
+
+    bound = bind_context_dependence_authority(plan=plan, context=context)
+
+    distribution = bound.steps[0].exposure_outcome_distribution_spec
+    assert distribution is not None
+    assert distribution.schema_version == "easyicu.exposure_outcome_distribution/3"
+    assert distribution.interval_method == "none_counts_only"
+    assert distribution.repeated_unit_interval_method is None
+    assert distribution.confidence_level is None
+    assert distribution.dependence is None
+    assert repeated_unit_design_closed(context, bound) is True
+
+
+def test_counts_only_authority_rejects_table_one_summaries() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "variance_estimator": "none_counts_only",
+                        }
+                    }
+                )
+            )
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_study",
+        steps=[_traditional_table_one_step()],
+    )
+
+    with pytest.raises(DependenceAuthorityError, match="forbids Table One"):
+        bind_context_dependence_authority(plan=plan, context=context)
+
+
+def test_counts_only_authority_rejects_untyped_descriptive_summaries() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "variance_estimator": "none_counts_only",
+                        }
+                    }
+                )
+            )
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_study",
+        steps=[
+            AnalysisStep(
+                step_id="age_distribution",
+                planned_analysis_role="auxiliary",
+                intent="Summarize age by exposure.",
+                method="descriptive_distribution",
+                inputs=["artifact:analysis_cohort", "exposure", "age"],
+                expected_outputs=["table:distribution_prevalence"],
+            )
+        ],
+    )
+
+    with pytest.raises(DependenceAuthorityError, match="permits only"):
+        bind_context_dependence_authority(plan=plan, context=context)
+
+
+def test_counts_only_spec_cannot_launder_a_p_value_output() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "variance_estimator": "none_counts_only",
+                        }
+                    }
+                )
+            )
+        }
+    )
+    distribution = _absolute_risk_distribution_step().exposure_outcome_distribution_spec
+    assert distribution is not None
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_study",
+        steps=[
+            AnalysisStep(
+                step_id="laundered_test",
+                planned_analysis_role="auxiliary",
+                intent="Run a prohibited hypothesis test.",
+                method="chi_square_test",
+                inputs=["artifact:analysis_cohort", "exposure", "death"],
+                expected_outputs=[
+                    "table:exposure_outcome_distribution",
+                    "statistic:p_value",
+                ],
+                exposure_outcome_distribution_spec=distribution.model_copy(
+                    update={"risk_difference_contrast": None}
+                ),
+            )
+        ],
+    )
+
+    with pytest.raises(DependenceAuthorityError, match="permits only"):
+        bind_context_dependence_authority(plan=plan, context=context)
+
+
+def test_counts_only_authority_rejects_a_risk_difference() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "variance_estimator": "none_counts_only",
+                        }
+                    }
+                )
+            )
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_study",
+        steps=[_absolute_risk_distribution_step()],
+    )
+
+    with pytest.raises(DependenceAuthorityError, match="forbids risk-difference"):
+        bind_context_dependence_authority(plan=plan, context=context)
 
 
 def test_host_binds_dependence_for_marginal_risks_even_without_a_contrast() -> None:
