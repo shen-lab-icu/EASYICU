@@ -917,12 +917,12 @@ _PLANNER_PROMPT_BYTE_LIMIT = int(
     DEFAULT_MAX_PROMPT_TOKENS * CONSERVATIVE_BYTES_PER_TOKEN
 )
 _PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 9_000
-# The Planner emits a complete typed DAG rather than a short answer.  A real
-# Web E1 run produced otherwise-valid 10k+ character objects that were cut off
-# twice at the former 4096-token response ceiling, so the JSON parser never had
-# a complete contract to judge.  This matches the already-proven Coder envelope
-# and remains bounded independently from the five-attempt retry budget.
-_PLANNER_MAX_TOKENS = 8192
+# The Planner emits a complete typed DAG rather than a short answer. A real Web
+# E1 run first proved 4096 too small; a later DeepSeek canary then exhausted all
+# five attempts at exactly 8192 tokens with 36k-38k character responses and
+# ``finish_reason=length``. Give the contract one bounded 16k response envelope.
+# The independent five-attempt and Provider task/batch stops still cap spend.
+_PLANNER_MAX_TOKENS = 16384
 
 
 def _planner_prompt_within_budget(
