@@ -302,6 +302,13 @@ def test_planner_only_pipeline_allows_rejection_to_terminalize(
     )
     run_dir = tmp_path / "paused-run"
     _install_resume_runtime_stubs(monkeypatch, pipeline, run_dir)
+    monkeypatch.setattr(
+        pipeline,
+        "_heartbeat_wall_clock_remaining",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("rejection must not inspect Provider state")
+        ),
+    )
     pipeline._pending_human_review = {
         "workflow": _RejectingWorkflow(),
         "pending": _Pending(run_id="paused-run", run_dir=run_dir),
@@ -310,6 +317,9 @@ def test_planner_only_pipeline_allows_rejection_to_terminalize(
     }
 
     class _ProviderStop:
+        def assert_active(self) -> None:
+            raise AssertionError("rejection must not inspect Provider state")
+
         def reconcile_review_pause(self, **_kwargs) -> None:
             raise AssertionError("rejection must not reconcile Provider state")
 

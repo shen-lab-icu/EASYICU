@@ -336,6 +336,28 @@ E1_PLANNER_CANARY_2026_08_14 = SubmissionProfile(
     planner_only=True,
 )
 
+E1_REVIEWED_DEMO_2026_08_15 = SubmissionProfile(
+    name="npj_dm_e1_demo_dev",
+    version="20260815",
+    locked_at="2026-08-15T04:45:00Z",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Server-internal development execution only. This profile can consume an
+    # exact reviewed Plan, but its *_dev name keeps every paper-facing gate off
+    # and the public Web route has no selector for it.
+    expected_concept_dict_sha="22039e19c9b499d635dce956298550cecb1fdf55059304736cca73ee42bf129a",
+    expected_sofa2_dict_sha="998a14c70c8a983c71ce6af2da8408fe22063cc042e8cde69f572083880bdaf8",
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=False,
+)
+
 NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(
     name="npj_dm_know_how_dev",
     version="20260721",
@@ -436,6 +458,7 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_07_18.ref: NPJ_DM_2026_07_18,
     NPJ_DM_2026_07_19.ref: NPJ_DM_2026_07_19,
     E1_PLANNER_CANARY_2026_08_14.ref: E1_PLANNER_CANARY_2026_08_14,
+    E1_REVIEWED_DEMO_2026_08_15.ref: E1_REVIEWED_DEMO_2026_08_15,
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
     NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV.ref: (
@@ -577,6 +600,7 @@ __all__ = [
     "NPJ_DM_2026_07_18",
     "NPJ_DM_2026_07_19",
     "E1_PLANNER_CANARY_2026_08_14",
+    "E1_REVIEWED_DEMO_2026_08_15",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",

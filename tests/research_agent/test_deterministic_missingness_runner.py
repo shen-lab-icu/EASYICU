@@ -1079,6 +1079,9 @@ def test_typed_positive_only_event_absence_is_not_missingness(
     assert row["event_absent_n"] == 2
     assert row["measured_one_n"] == len(cohort)
     assert row["value_missing_n"] == 0
+    assert row["applicable_pct"] == 100.0
+    assert row["available_within_applicable_pct"] == 100.0
+    assert row["event_present_pct"] == 60.0
     assert summary["observation_semantics_audit"]["susp_inf_first"][
         "event_absent_n"
     ] == 2
@@ -1129,6 +1132,10 @@ def test_typed_conditional_event_time_uses_event_positive_denominator(
     assert row["not_applicable_n"] == 2
     assert row["raw_value_missing_n"] == 3
     assert row["value_missing_n"] == 1
+    assert row["applicable_pct"] == 60.0
+    assert row["available_within_applicable_pct"] == pytest.approx(200.0 / 3.0)
+    assert row["missing_within_applicable_pct"] == pytest.approx(100.0 / 3.0)
+    assert row["event_present_pct"] == 60.0
     assert missingness["missing_pct"] == pytest.approx(100.0 / 3.0)
     assert observed["n_complete"] == 4
 

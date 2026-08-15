@@ -57,6 +57,8 @@ _RUN_ARTIFACT_NAMES = [
     "workflow_graph.json",
     "figure_gallery.json",
     "result_tables.json",
+    "system_validation_report.json",
+    "system_validation_report_receipt.json",
     "source_run_manifest.json",
     "evidence_ledger.json",
     "human_signoff.json",
@@ -77,6 +79,14 @@ _RUN_DOCUMENT_SPECS = {
     "manuscript_scaffold.bib": {
         "media_type": "application/x-bibtex; charset=utf-8",
         "max_bytes": 2 * 1024 * 1024,
+    },
+    "system_validation_report.html": {
+        "media_type": "text/html; charset=utf-8",
+        "max_bytes": 8 * 1024 * 1024,
+    },
+    "system_validation_report.pdf": {
+        "media_type": "application/pdf",
+        "max_bytes": 16 * 1024 * 1024,
     },
 }
 
@@ -516,6 +526,27 @@ def project_artifact_governance(
         artifact_integrity = _signed_artifact_integrity(review.get("signoff"), artifact)
         if signed and artifact_integrity != "verified":
             signoff_stale = True
+    artifact_name = str((artifact or {}).get("name") or "")
+    if artifact_name in {
+        "system_validation_report.json",
+        "system_validation_report_receipt.json",
+        "system_validation_report.html",
+        "system_validation_report.pdf",
+    }:
+        return {
+            "ok": True,
+            "authority_class": "easyicu_system_validation_report",
+            "gate_status": gate.get("status"),
+            "readiness_status": readiness_status,
+            "human_signoff": "not_signable",
+            "reportable": False,
+            "claim_ceiling": "engineering_validation_only",
+            **(
+                {"artifact_integrity": artifact_integrity}
+                if artifact_integrity is not None
+                else {}
+            ),
+        }
     reportable = bool(readiness.get("reportable"))
     if signoff_stale:
         human_signoff = "stale"
@@ -1586,6 +1617,8 @@ def _public_review_payloads(
         "workflow_graph.json",
         "figure_gallery.json",
         "result_tables.json",
+        "system_validation_report.json",
+        "system_validation_report_receipt.json",
         "source_run_manifest.json",
     ):
         if name in payloads:

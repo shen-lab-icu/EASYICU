@@ -111,12 +111,14 @@ def _is_safe_figure_product_id(value: Any) -> bool:
 # re-derived rather than trusted.
 _AUDIT_COLUMNS = (
     "variable",
+    "label",
     "n_total",
     "eligible_n",
     "not_applicable_n",
     "measured_one_n",
     "value_missing_n",
     "value_missing_pct",
+    "indicator_semantics",
 )
 _PROCESS_COLUMNS = (
     "variable",
@@ -664,10 +666,10 @@ def _validate_audit_rows(frame: pd.DataFrame) -> dict[str, dict[str, Any]]:
     silently picked one would mislabel the other: ``eligible_n`` and
     ``not_applicable_n`` partition the cohort, and within the eligible stays
     ``measured_one_n`` and ``value_missing_n`` partition again.  The published
-    ``value_missing_pct`` is stated against the *cohort*, so a variable that
-    applies to only part of the cohort can report a small missing share while
-    being unobservable for most stays; that is preserved and reported rather
-    than rescaled here, and the panel marks it.
+    ``value_missing_pct`` is stated against the *cohort*, while reader-facing
+    missingness must use the eligible denominator.  Conditional fields are
+    therefore rendered as available, eligible-but-missing, and not applicable
+    rather than allowing event prevalence to masquerade as measurement rate.
     """
 
     per_variable: dict[str, dict[str, Any]] = {}
@@ -711,15 +713,27 @@ def _validate_audit_rows(frame: pd.DataFrame) -> dict[str, dict[str, Any]]:
                 f"variable {variable!r} missing percentage does not reconcile "
                 "against the cohort it is stated over"
             )
+        semantics = _text(row["indicator_semantics"])
+        if counts["not_applicable_n"] and semantics != "conditional_event_time":
+            raise ValueError(
+                f"variable {variable!r} has not-applicable stays without "
+                "conditional event-time semantics"
+            )
+        eligible = counts["eligible_n"]
         per_variable[variable] = {
             "denominator": cohort,
-            "eligible": counts["eligible_n"],
+            "eligible": eligible,
             "not_applicable": counts["not_applicable_n"],
             "missing": counts["value_missing_n"],
             "missing_pct": 100.0 * counts["value_missing_n"] / cohort,
+            "missing_within_applicable_pct": (
+                100.0 * counts["value_missing_n"] / eligible if eligible else 0.0
+            ),
             "available": counts["measured_one_n"],
             "available_pct": 100.0 * counts["measured_one_n"] / cohort,
-            "conditional": counts["not_applicable_n"] > 0,
+            "not_applicable_pct": 100.0 * counts["not_applicable_n"] / cohort,
+            "conditional": semantics == "conditional_event_time",
+            "indicator_semantics": semantics,
         }
     if not per_variable:
         raise ValueError("the missingness audit table audits no variable")
@@ -843,17 +857,21 @@ def run_measurement_missingness_figure(
     palette = apply_publication_style(font_size=7.0)
     display = audit_frame.copy()
     display["_missing_pct"] = [
-        per_variable[_text(value)]["missing_pct"] for value in display["variable"]
+        per_variable[_text(value)]["missing_within_applicable_pct"]
+        for value in display["variable"]
     ]
     display = display.sort_values("_missing_pct", ascending=True)
     variables = [_text(value) for value in display["variable"]]
     labels = [
         _reader_label(_text(label) or variable)
-        + (" †" if per_variable[variable]["conditional"] else "")
+        + (" (conditional)" if per_variable[variable]["conditional"] else "")
         for variable, label in zip(variables, display["label"])
     ]
     missing_pct = [per_variable[name]["missing_pct"] for name in variables]
     available_pct = [per_variable[name]["available_pct"] for name in variables]
+    not_applicable_pct = [
+        per_variable[name]["not_applicable_pct"] for name in variables
+    ]
     height_mm = max(82.0, 31.0 + 7.0 * len(variables))
     panel_template = measurement_availability_figure_panels(input_key)[0]
     fig, ax = plt.subplots(figsize=(183 / 25.4, height_mm / 25.4))
@@ -862,47 +880,70 @@ def run_measurement_missingness_figure(
         positions,
         available_pct,
         color=palette["blue_soft"],
-        label="Source value available",
+        label="Value available",
         height=0.62,
     )
     ax.barh(
         positions,
         missing_pct,
         left=available_pct,
+        color=palette["orange"],
+        label="Missing among applicable stays",
+        height=0.62,
+    )
+    ax.barh(
+        positions,
+        not_applicable_pct,
+        left=[available + missing for available, missing in zip(available_pct, missing_pct)],
         color=palette["neutral_light"],
-        label="No source value",
+        label="Not applicable",
         height=0.62,
     )
     ax.set_yticks(positions)
     ax.set_yticklabels(labels)
     ax.set_xlim(0, 100)
     ax.set_xlabel("Share of the declared cohort (%)")
-    ax.set_title("Measurement availability", loc="left", pad=4)
+    ax.set_title("Data availability and applicability", loc="left", pad=4)
     ax.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
-    ax.legend(frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2)
-    for y, available, missing in zip(positions, available_pct, missing_pct):
+    ax.legend(
+        frameon=False,
+        loc="lower center",
+        bbox_to_anchor=(0.58, 1.10),
+        ncol=3,
+        fontsize=6.2,
+        columnspacing=1.2,
+    )
+    for y, name in zip(positions, variables):
+        entry = per_variable[name]
+        if entry["conditional"]:
+            annotation = (
+                f"{entry['eligible']:,} applicable; "
+                f"{entry['missing']:,}/{entry['eligible']:,} missing"
+            )
+        else:
+            annotation = f"{entry['missing']:,}/{entry['eligible']:,} missing"
         ax.text(
-            min(max(float(available), 2.0), 98.0),
+            98.0,
             y,
-            f"{float(missing):.1f}% missing",
+            annotation,
             va="center",
-            ha="right" if available > 12 else "left",
-            fontsize=6.1,
+            ha="right",
+            fontsize=5.9,
             color=palette["blue"],
         )
     if any(entry["conditional"] for entry in per_variable.values()):
         ax.set_xlabel(
             "Share of the declared cohort (%)\n"
-            "† applies to only part of the cohort"
+            "Conditional event times are applicable only when the event occurs"
         )
     add_panel_label(ax, "A", x=-0.20, y=1.02)
-    fig.subplots_adjust(left=0.24, right=0.96, bottom=0.20, top=0.82)
+    fig.subplots_adjust(left=0.24, right=0.96, bottom=0.20, top=0.76)
 
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
-            "Measurement availability and missingness are rendered from every "
-            "row of one digest-verified parent audit table."
+            "Availability, eligible-stay missingness, and non-applicability are "
+            "rendered separately from every row of one digest-verified audit table."
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
@@ -910,11 +951,12 @@ def run_measurement_missingness_figure(
         panels=[
             {
                 "panel_id": panel_template.panel_id,
-                "title": "Measurement availability",
+                "title": "Data availability and applicability",
                 "role": "data_quality",
                 "claim": (
-                    "For every audited variable, available and missing stays are "
-                    "reconciled against the parent table's declared denominator."
+                    "For every audited variable, available and missing stays "
+                    "partition the applicable denominator; non-applicable stays "
+                    "remain a separate cohort partition."
                 ),
                 "evidence_ids": [source_path.name],
                 "metadata": {

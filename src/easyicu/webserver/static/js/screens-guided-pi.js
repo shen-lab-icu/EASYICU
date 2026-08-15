@@ -172,8 +172,9 @@
     if (!resource) return '';
     if (resource.kind === 'literature_source') return `literature:${resource.pmid || resource.doi || resource.url || ''}`;
     if (resource.kind === 'demo_artifact') return `demo:${resource.artifact || ''}`;
+    if (resource.kind === 'demo_document') return `demo-document:${resource.artifact || ''}`;
     if (resource.kind === 'data_package_review') return `data-package:${resource.study_context_id || ''}:${resource.study_revision || 0}:${resource.review_sha256 || ''}`;
-    return resource.kind === 'research_artifact' || resource.kind === 'research_document'
+    return resource.kind === 'research_artifact' || resource.kind === 'research_document' || resource.kind === 'system_validation_document'
       ? `research:${resource.run_id || ''}:${resource.artifact || ''}`
       : `${resource.kind || 'file'}:${resource.file || ''}`;
   }
@@ -189,7 +190,7 @@
   }
   function resourceButton(resource, label) {
     if (!resource) return '';
-    const kind = resource.kind === 'demo_artifact' ? 'demo_artifact' : (resource.kind === 'data_package_review' ? 'data_package_review' : (resource.kind === 'research_document' ? 'research_document' : (resource.kind === 'research_artifact' ? 'research_artifact' : (resource.kind === 'literature_source' ? 'literature_source' : (resource.kind === 'webpage' ? 'webpage' : 'file')))));
+    const kind = resource.kind === 'demo_document' ? 'demo_document' : (resource.kind === 'demo_artifact' ? 'demo_artifact' : (resource.kind === 'data_package_review' ? 'data_package_review' : (resource.kind === 'system_validation_document' ? 'system_validation_document' : (resource.kind === 'research_document' ? 'research_document' : (resource.kind === 'research_artifact' ? 'research_artifact' : (resource.kind === 'literature_source' ? 'literature_source' : (resource.kind === 'webpage' ? 'webpage' : 'file')))))));
     return `<button class="gpi-resource-link" type="button"
       data-gpi-resource-kind="${esc(kind)}"
       data-gpi-resource-file="${esc(resource.file || '')}"
@@ -206,7 +207,7 @@
       data-gpi-resource-pmid="${esc(resource.pmid || '')}"
       data-gpi-resource-study="${esc(resource.study_context_id || '')}"
       data-gpi-resource-revision="${esc(resource.study_revision == null ? '' : resource.study_revision)}"
-      data-gpi-resource-digest="${esc(resource.review_sha256 || resource.sha256 || '')}">${esc(label || resourceLabel(resource))}</button>`;
+      data-gpi-resource-digest="${esc(resource.review_sha256 || resource.checked_sha256 || resource.sha256 || '')}">${esc(label || resourceLabel(resource))}</button>`;
   }
   function toolLabel(name, resource) {
     const labels = {
@@ -654,7 +655,8 @@
     }
     const cls = row.role === 'user' ? 'user' : 'assistant';
     const preferredArtifacts = [
-      'result_tables.json', 'figure_gallery.json', 'manuscript_scaffold.pdf',
+      'system_validation_report.html', 'system_validation_report.pdf',
+      'system_validation_report.json', 'result_tables.json', 'figure_gallery.json', 'manuscript_scaffold.pdf',
       'manuscript_draft.json', 'agent_plan.json', 'literature_evidence.json',
       'evidence_ledger.json', 'quality_gate.json',
     ];
@@ -679,14 +681,17 @@
     const workflow = workflowOverride || state.workflow || {};
     const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
     if (!stages.length) return '';
+    const reviewerDemo = workflow.kind === 'reviewer_validation_demo';
     const names = {
-      question: tr('Question', '问题'), idea: tr('Ideas + literature', '选题与文献'),
-      setup: tr('Study design', '研究设计'), extraction: tr('Extract + review', '提取与审阅'),
+      question: reviewerDemo ? tr('Protocol', '审稿协议') : tr('Question', '问题'),
+      idea: reviewerDemo ? tr('Validation scope', '验证范围') : tr('Ideas + literature', '选题与文献'),
+      setup: reviewerDemo ? tr('Data contract', '数据合同') : tr('Study design', '研究设计'),
+      extraction: reviewerDemo ? tr('Projection', '安全投影') : tr('Extract + review', '提取与审阅'),
       plan: tr('Plan + evidence', '计划与证据'), analysis: tr('Analyze + figures', '分析与图表'),
-      interpretation: tr('Interpret', '结果解读'), manuscript: tr('Paper', '论文'),
+      interpretation: tr('Interpret', '结果解读'), manuscript: reviewerDemo ? tr('Dossier', '审稿报告') : tr('Paper', '论文'),
     };
     return `<nav class="gpi-workflow" aria-label="${tr('EasyICU research workflow', 'EasyICU 科研流程')}">
-      <div class="gpi-workflow-meta"><strong>${tr('Research workflow', '科研流程')}</strong><span>${esc(workflow.completed_required_stages || 0)}/${esc(workflow.required_stage_count || 7)}</span></div>
+      <div class="gpi-workflow-meta"><strong>${reviewerDemo ? tr('Reviewer workflow', '审稿流程') : tr('Research workflow', '科研流程')}</strong><span>${esc(workflow.completed_required_stages || 0)}/${esc(workflow.required_stage_count || 7)}</span></div>
       <ol>${stages.map(stage => `<li class="${esc(stage.status || 'blocked')}" title="${esc(stage.reason_code || '')}" aria-current="${stage.id === workflow.current_stage ? 'step' : 'false'}"><i></i><span>${esc(names[stage.id] || stage.label || stage.id)}</span></li>`).join('')}</ol>
     </nav>`;
   }
@@ -875,15 +880,16 @@
     }
     const messages = demo.messages().map(messageHtml).join('');
     const workflow = demo.workflow();
+    const reviewResources = typeof demo.reviewResources === 'function' ? demo.reviewResources() : [];
     return `<div class="gpi-panel gpi-demo-panel">
       <header class="gpi-head">
-        <div><div class="gpi-kicker">PI COPILOT · COMPLETE RESEARCH WORKFLOW</div><div class="gpi-title">${tr('Complete research workflow demo', '完整科研流程演示')} <span class="gpi-live">${tr('read-only', '只读')}</span></div></div>
-        <div class="gpi-head-meta"><span>${tr('Experimental SOFA-2 sensitivity · MIMIC-IV', '实验性 SOFA-2 敏感性 · MIMIC-IV')}</span><button class="gpi-link" type="button" data-gpi-demo-exit>${tr('Back to my project', '返回我的项目')}</button></div>
+        <div><div class="gpi-kicker">PI COPILOT · REVIEWER DEMONSTRATION</div><div class="gpi-title">${tr('Complete governed workflow', '完整受治理科研流程')} <span class="gpi-live">${tr('complete', '已完成')}</span></div></div>
+        <div class="gpi-head-meta"><span>${tr('Registered source run · 94,458 ICU stays', '登记 source run · 94,458 ICU stays')}</span><button class="gpi-link" type="button" data-gpi-demo-exit>${tr('Back to my project', '返回我的项目')}</button></div>
       </header>
       ${workflowHtml(workflow)}
-      <div class="gpi-demo-note" role="note">${iconHtml('shield', 16)}<span><strong>${tr('Interactive product demo.', '可交互产品演示。')}</strong> ${tr('The transcript is read-only. Numeric artifacts come from a real historical E1 engineering canary using the experimental sep3_sofa2_max sensitivity indicator—not standard Sepsis-3—and are not formal paper evidence. Current live projects map generic Sepsis-3 to SOFA-1 and use SOFA-2 only when explicitly requested.', '对话为只读演示。数值产物来自真实历史 E1 工程试跑，使用的是实验性 sep3_sofa2_max 敏感性指标，而不是标准 Sepsis-3；这些内容不是正式论文证据。当前真实项目会把通用 Sepsis-3 映射到 SOFA-1，只有用户明确要求时才使用 SOFA-2。')}</span></div>
+      <div class="gpi-demo-note" role="note">${iconHtml('shield', 16)}<span><strong>${tr('Read-only reviewer walkthrough.', '只读审稿人演示。')}</strong> ${tr('The transcript and dossier are a bounded projection derived from one registered source run, not live artifact transport. Aggregate results use the explicitly requested experimental first-24-hour SOFA-2 phenotype and a descriptive-only claim ceiling; they are not a clinical manuscript.', '对话与报告是从同一个登记 source run 派生的有界投影，不是 live artifact transport。聚合结果使用用户明确要求的入 ICU 后 24 小时实验性 SOFA-2 表型，结论上限为仅描述；它们不是临床论文。')}</span></div>
       <div class="gpi-log" data-gpi-log>${messages}</div>
-      <footer class="gpi-demo-footer"><span>${tr('Open any underlined article or artifact in the conversation to inspect it on the right.', '点击对话中带下划线的文章或产物，可在右侧直接审阅。')}</span><button class="btn primary" type="button" data-gpi-demo-exit>${tr('Start my own research', '开始我自己的研究')}</button></footer>
+      <footer class="gpi-demo-footer"><span>${tr('The reviewer dossier opens automatically. Select any underlined receipt to inspect its bounded source view.', '审稿报告会自动打开；点击任意带下划线的回执可检查其有界来源视图。')}</span><button class="btn primary" type="button" data-gpi-demo-exit>${tr('Start my own research', '开始我自己的研究')}</button></footer>
     </div>`;
   }
 
@@ -895,6 +901,10 @@
     state.demoScrollTopPending = true;
     state.error = '';
     setShell('pi');
+    const primary = typeof demo.primaryDocument === 'function' ? demo.primaryDocument() : null;
+    if (primary && window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
+      window.EU_GUIDED_PI_PREVIEW.open(primary, projectId());
+    }
   }
   function closeDemo() {
     state.demoMode = false;
@@ -922,11 +932,14 @@
       return;
     }
     const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
+    const reviewerDemo = workflow.kind === 'reviewer_validation_demo';
     const names = {
-      question: tr('Scientific question', '科学问题'), idea: tr('Idea mining', '想法发掘'),
-      setup: tr('Study setup', '研究配置'), extraction: tr('Feature extraction', '特征提取'),
+      question: reviewerDemo ? tr('Reviewer protocol', '审稿协议') : tr('Scientific question', '科学问题'),
+      idea: reviewerDemo ? tr('Validation scope', '验证范围') : tr('Idea mining', '想法发掘'),
+      setup: reviewerDemo ? tr('Data contract', '数据合同') : tr('Study setup', '研究配置'),
+      extraction: reviewerDemo ? tr('Safe projection', '安全投影') : tr('Feature extraction', '特征提取'),
       plan: tr('Analysis plan', '分析计划'), analysis: tr('Analysis and validation', '分析与验证'),
-      interpretation: tr('Result interpretation', '结果解读'), manuscript: tr('Manuscript', '稿件'),
+      interpretation: tr('Result interpretation', '结果解读'), manuscript: reviewerDemo ? tr('Reviewer dossier', '审稿报告') : tr('Manuscript', '稿件'),
     };
     const reasons = {
       question_bound: tr('Question is bound to this project', '科学问题已绑定到当前项目'),
@@ -954,6 +967,14 @@
       publication_analysis_incomplete: tr('The executable plan is not a complete publication analysis', '可执行计划不是完整投稿分析'),
       paper_authority_not_granted: tr('Draft generated; publication authority was not granted', '初稿已生成；未授予论文发表权限'),
       full_agent_manuscript_required: tr('A governed Agent manuscript is required', '需要由受治理的 Agent 生成稿件'),
+      reviewer_protocol_bound: tr('Six reviewer criteria were bound before results', '已在查看结果前绑定 6 项审稿标准'),
+      bounded_validation_objective_selected: tr('The systems-validation objective is explicit', '系统验证目标已明确'),
+      prepared_data_contract_verified: tr('The prepared-data and descriptive claim contracts are verified', '准备后数据与描述性结论合同已核验'),
+      aggregate_projection_verified: tr('The aggregate-only browser projection passed', '仅聚合浏览器投影已通过'),
+      exact_plan_reviewed: tr('The exact six-step plan was reviewed', '精确六步计划已审阅'),
+      six_of_six_steps_complete: tr('All six required steps completed', '6 个必需步骤全部完成'),
+      descriptive_ceiling_preserved: tr('Interpretation stayed within the descriptive ceiling', '结果解读保持在描述性上限内'),
+      reviewer_dossier_complete: tr('The reviewer HTML and PDF dossier are complete', '审稿 HTML 与 PDF 报告已完整生成'),
     };
     const reasonText = stage => reasons[stage && stage.reason_code]
       || tr('Waiting for the preceding governed stage', '等待前一受治理阶段完成');
@@ -962,7 +983,7 @@
     const pct = Math.max(0, Math.min(100, Math.round(done / total * 100)));
     const current = stages.find(stage => stage.id === workflow.current_stage)
       || stages.find(stage => stage.status !== 'complete') || stages[stages.length - 1];
-    head.innerHTML = `<div class="eyebrow">${tr('One EasyICU workflow', '统一 EasyICU 科研流程')}</div><div class="at">${state.demoMode ? tr('Product demo', '产品演示') : tr('Project authority', '项目权威状态')}</div><div class="asub">${state.demoMode ? tr('Read-only walkthrough backed by aggregate engineering-canary artifacts.', '由工程试跑聚合产物支撑的只读流程演示。') : tr('Conversation, extraction, analysis, and evidence share this projection.', '对话、提取、分析与证据共用这一份状态。')}</div>`;
+    head.innerHTML = `<div class="eyebrow">${tr('One EasyICU workflow', '统一 EasyICU 科研流程')}</div><div class="at">${state.demoMode ? tr('Reviewer demonstration', '审稿人演示') : tr('Project authority', '项目权威状态')}</div><div class="asub">${state.demoMode ? tr('Bounded read-only projection derived from one registered source run.', '从一个登记 source run 派生的有界只读投影。') : tr('Conversation, extraction, analysis, and evidence share this projection.', '对话、提取、分析与证据共用这一份状态。')}</div>`;
     body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
       <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Current stage', '当前阶段')}</div><strong>${esc(names[current && current.id] || (current && current.label) || tr('Ready', '就绪'))}</strong><div class="gd-pipeline-value">${esc(reasonText(current))}</div></div></div>
       <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
@@ -1145,15 +1166,40 @@
     if (state.busy || next === agentMode()) return;
     closeSource();
     closeChildSource();
-    state.agentMode = next;
-    state.session = null;
-    state.messages = [];
     state.error = '';
     state.pendingAuthorityRebind = false;
-    rememberSession('');
     if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) {
       window.EU_GUIDED_PI_PREVIEW.close();
     }
+    const replayOwner = window.EU_GUIDED_PI_REPLAY;
+    let existingSessionId = replayOwner && typeof replayOwner.preferredSessionId === 'function'
+      ? replayOwner.preferredSessionId(state.sessions, '', next)
+      : String(state.sessions.find(row => (row.agent_mode || 'research') === next)?.session_id || '');
+    if (!existingSessionId && projectId()) {
+      try {
+        const listed = await api().loadPiCopilotSessions(100, projectId(), next);
+        const matching = Array.isArray(listed && listed.sessions) ? listed.sessions : [];
+        if (matching.length) {
+          const matchingIds = new Set(matching.map(row => row.session_id));
+          state.sessions = matching.concat(state.sessions.filter(row => !matchingIds.has(row.session_id)));
+          existingSessionId = replayOwner && typeof replayOwner.preferredSessionId === 'function'
+            ? replayOwner.preferredSessionId(matching, '', next)
+            : String(matching[0].session_id || '');
+        }
+      } catch (error) {
+        state.error = errorText(error);
+        render();
+        return;
+      }
+    }
+    if (existingSessionId) {
+      await openSession(existingSessionId);
+      return;
+    }
+    state.agentMode = next;
+    state.session = null;
+    state.messages = [];
+    rememberSession('');
     await createSession();
   }
   function handlePiEvent(event) {
@@ -1404,17 +1450,17 @@
   async function loadProjectSessions() {
     const expectedProjectId = projectId();
     if (!runtimeReady() || !expectedProjectId) return;
-    const listed = await api().loadPiCopilotSessions(30, expectedProjectId);
+    const listed = await api().loadPiCopilotSessions(100, expectedProjectId);
     if (expectedProjectId !== projectId()) return;
     state.sessions = (listed && listed.sessions) || [];
     const remembered = rememberedSession();
-    if (remembered && state.sessions.some(row => row.session_id === remembered)) {
-      await openSession(remembered);
-    } else if (state.sessions.length) {
-      // Recover the latest project conversation even on another browser/device
-      // where no local navigation hint exists.
-      await openSession(state.sessions[0].session_id);
-    }
+    const replayOwner = window.EU_GUIDED_PI_REPLAY;
+    const preferred = replayOwner && typeof replayOwner.preferredSessionId === 'function'
+      ? replayOwner.preferredSessionId(state.sessions, remembered)
+      : (remembered && state.sessions.some(row => row.session_id === remembered)
+        ? remembered
+        : String(state.sessions[0] && state.sessions[0].session_id || ''));
+    if (preferred) await openSession(preferred);
   }
 
   async function loadWorkflow() {
@@ -1693,6 +1739,7 @@
             study_context_id: resource.dataset.gpiResourceStudy,
             study_revision: resource.dataset.gpiResourceRevision,
             review_sha256: resource.dataset.gpiResourceDigest,
+            checked_sha256: resource.dataset.gpiResourceDigest,
             sha256: resource.dataset.gpiResourceDigest,
           }, projectId());
         }

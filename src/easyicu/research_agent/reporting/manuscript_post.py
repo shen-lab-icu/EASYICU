@@ -1540,7 +1540,11 @@ def _prose_effect_scale(
     context = text[context_start:context_end]
     local_prefix = text[max(context_start, start - 24) : start]
     local_suffix = text[end : min(context_end, end + 32)]
-    if re.search(r"\bp\s*[<=>]\s*$", local_prefix, re.I) or re.match(
+    if re.search(
+        r"\b(?:p|SE|standard\s+error)\s*[<=>:]?\s*$",
+        local_prefix,
+        re.I,
+    ) or re.match(
         r"\s*(?:patients?|stays?|admissions?|observations?|rows?|groups?)\b",
         local_suffix,
         re.I,

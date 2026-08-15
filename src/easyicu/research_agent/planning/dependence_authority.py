@@ -114,6 +114,12 @@ def _counts_only_design(context: ResearchContext) -> bool:
     return parsed.variance_estimator == "none_counts_only"
 
 
+def context_counts_only_authority(context: ResearchContext) -> bool:
+    """Return whether the typed StudyContext forbids all uncertainty outputs."""
+
+    return _counts_only_design(context)
+
+
 def _counts_only_step_is_typed(step: object) -> bool:
     method = str(getattr(step, "method", "") or "").strip().casefold()
     outputs = [
@@ -124,9 +130,28 @@ def _counts_only_step_is_typed(step: object) -> bool:
         return exposure_outcome_distribution_execution_verdict(step).claimed
     audit = getattr(step, "measurement_audit_spec", None)
     if audit is not None:
+        reserved_result_tokens = (
+            "baseline",
+            "confidence",
+            "distribution",
+            "effect",
+            "event_rate",
+            "incidence",
+            "interval",
+            "outcome",
+            "p_value",
+            "prevalence",
+            "risk",
+            "table_one",
+        )
         return bool(
             outputs
             and len(outputs) == len(audit.products)
+            and not any(
+                token in output.casefold()
+                for output in outputs
+                for token in reserved_result_tokens
+            )
             and all(
                 output.startswith("table:")
                 and audit.audit_for(output.partition(":")[2]) is not None
@@ -263,7 +288,8 @@ def bind_context_dependence_authority(
             raise DependenceAuthorityError(
                 "counts-only analysis_design permits only cohort accounting, the "
                 "typed exposure/outcome distribution, measurement audit, and "
-                "rendering steps"
+                "rendering steps; audit product names cannot claim reserved "
+                "baseline, distribution, outcome, risk, effect, or inference roles"
             )
         requirements = []
         for requirement in step.model_requirements:
@@ -320,6 +346,7 @@ def bind_context_dependence_authority(
 __all__ = [
     "DependenceAuthorityError",
     "bind_context_dependence_authority",
+    "context_counts_only_authority",
     "context_dependence_authority",
     "context_patient_group_authority",
     "dependence_matches_context",

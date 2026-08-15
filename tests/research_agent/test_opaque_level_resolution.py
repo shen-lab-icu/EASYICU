@@ -544,9 +544,10 @@ def _rebind_sites() -> list[tuple[str, ast.AST]]:
     root = Path(package.__file__).parent
     sites: list[tuple[str, ast.AST]] = []
     for relative in (
-        "agents/core.py",
+        "agents/planner.py",
         "authority/plan_authority.py",
         "execution/phase.py",
+        "orchestration/human_review_restore.py",
         "pipeline.py",
     ):
         tree = ast.parse((root / relative).read_text(encoding="utf-8"))
@@ -577,7 +578,7 @@ def test_every_table_one_rebind_also_rebinds_the_declared_levels() -> None:
 
     sites = _rebind_sites()
 
-    assert len(sites) == 4, [name for name, _ in sites]
+    assert len(sites) == 5, [name for name, _ in sites]
     for relative, calls in sites:
         assert "bind_step_declared_levels" in calls, relative
 

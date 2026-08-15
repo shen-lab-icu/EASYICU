@@ -69,7 +69,10 @@ ResearchDocumentNameText = Annotated[
         strip_whitespace=True,
         min_length=20,
         max_length=64,
-        pattern=r"^manuscript_scaffold\.(?:pdf|tex|bib)$",
+        pattern=(
+            r"^(?:manuscript_scaffold\.(?:pdf|tex|bib)|"
+            r"system_validation_report\.(?:html|pdf))$"
+        ),
     ),
 ]
 Sha256Text = Annotated[
@@ -364,7 +367,10 @@ def get_pi_copilot_research_document(
         media_type=str(payload["media_type"]),
         headers={
             "Content-Disposition": f'inline; filename="{document_name}"',
-            "Content-Security-Policy": "sandbox; default-src 'none'; frame-ancestors 'self'",
+            "Content-Security-Policy": (
+                "sandbox; default-src 'none'; style-src 'unsafe-inline'; "
+                "img-src data:; frame-ancestors 'self'"
+            ),
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "SAMEORIGIN",
@@ -378,11 +384,15 @@ def get_pi_copilot_research_document(
 def get_pi_copilot_sessions(
     project_id: Annotated[str, Query(min_length=1, max_length=160)],
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
+    agent_mode: Annotated[
+        str | None, Query(pattern="^(research|workspace)$")
+    ] = None,
 ) -> dict:
     try:
         return get_pi_copilot_service().list_sessions(
             project_id=project_id,
             limit=limit,
+            agent_mode=agent_mode,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

@@ -72,6 +72,13 @@ class FakeService:
             },
         }
 
+    def get_research_document(self, **kwargs) -> dict:
+        return {
+            "content": b"<!doctype html><title>System validation</title>",
+            "media_type": "text/html",
+            "claim_ceiling": "engineering_validation_only",
+        }
+
     def configure_provider(self, **kwargs) -> dict:
         assert kwargs["api_key"] == "route-private-key"
         return {
@@ -156,6 +163,7 @@ def test_session_queries_are_scoped_to_one_research_project(monkeypatch) -> None
     assert listed.json()["received"] == {
         "project_id": "guided-project-2",
         "limit": 7,
+        "agent_mode": None,
     }
 
     assert client.get("/api/copilot/pi/sessions/pi-test").status_code == 422
@@ -312,6 +320,33 @@ def test_project_research_artifact_route_uses_path_free_identity(monkeypatch) ->
         "/api/copilot/pi/projects/guided-project-2/runs/run_20260808/artifacts/not-json.txt"
     )
     assert invalid.status_code == 422
+
+
+def test_system_validation_document_route_is_fixed_and_engineering_only(
+    monkeypatch,
+) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/copilot/pi/projects/guided-project-2/runs/run_20260808/"
+        "documents/system_validation_report.html"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-easyicu-claim-ceiling"] == (
+        "engineering_validation_only"
+    )
+    assert "style-src 'unsafe-inline'" in response.headers["content-security-policy"]
+    assert "img-src data:" in response.headers["content-security-policy"]
+    assert (
+        client.get(
+            "/api/copilot/pi/projects/guided-project-2/runs/run_20260808/"
+            "documents/system_validation_report.txt"
+        ).status_code
+        == 422
+    )
 
 
 def test_provider_setup_route_is_typed_and_never_returns_secret(monkeypatch) -> None:

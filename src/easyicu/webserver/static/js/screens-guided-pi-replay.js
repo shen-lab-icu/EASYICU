@@ -6,6 +6,32 @@
   function rows(value) { return Array.isArray(value) ? value : []; }
   function page(value) { return value && typeof value === 'object' ? value : {}; }
 
+  function sessionHasHistory(session) {
+    if (!session || typeof session !== 'object') return false;
+    return Number(session.message_count || 0) > 0
+      || Boolean(String(session.last_message_job_id || '').trim())
+      || Boolean(String(session.active_message_job_id || '').trim());
+  }
+
+  function preferredSessionId(sessions, rememberedSessionId, requestedAgentMode) {
+    const requestedMode = requestedAgentMode === 'workspace'
+      ? 'workspace'
+      : (requestedAgentMode === 'research' ? 'research' : '');
+    const saved = rows(sessions).filter(session => {
+      if (!requestedMode) return true;
+      const sessionMode = session && session.agent_mode === 'workspace' ? 'workspace' : 'research';
+      return sessionMode === requestedMode;
+    });
+    const remembered = String(rememberedSessionId || '').trim();
+    const rememberedRow = saved.find(row => String(row && row.session_id || '') === remembered);
+    const historicalRow = saved.find(sessionHasHistory);
+    if (rememberedRow && (sessionHasHistory(rememberedRow) || !historicalRow)) return remembered;
+    if (historicalRow) return String(historicalRow.session_id || '');
+    return rememberedRow
+      ? String(rememberedRow.session_id || '')
+      : String(saved[0] && saved[0].session_id || '');
+  }
+
   async function hydrate(api, session, projectId) {
     if (!api || typeof api.loadPiCopilotSession !== 'function' || !session) return session;
     const sessionId = String(session.session_id || '').trim();
@@ -91,5 +117,10 @@
     };
   }
 
-  window.EU_GUIDED_PI_REPLAY = { hydrate, lifecycleTurns, childJobPresentation };
+  window.EU_GUIDED_PI_REPLAY = {
+    hydrate,
+    lifecycleTurns,
+    childJobPresentation,
+    preferredSessionId,
+  };
 })();

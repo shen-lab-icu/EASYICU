@@ -23,7 +23,10 @@ from easyicu.research_agent.authority.result_envelope_sidecar import (
 from easyicu.research_agent.authority.runtime_artifacts import (
     verified_run_evidence_path,
 )
-from easyicu.research_agent.authority.run_input import _host_probe_authority_error
+from easyicu.research_agent.authority.run_input import (
+    _host_cohort_materializer_authority_error,
+    _host_probe_authority_error,
+)
 from easyicu.research_agent.contracts.result_envelope import (
     StepResultEnvelope,
     rebuild_observed_scalar_tree,
@@ -409,6 +412,32 @@ class RegisteredOutputEnvelopeConsumer(CrossStepRegisteredOutputValidator):
                 if probe_error is not None:
                     raise RegisteredOutputAuthorityError(
                         f"host deterministic probe authority is invalid: {probe_error}"
+                    )
+                continue
+            if (
+                record.get("generation_mode") == "deterministic_cohort_materializer"
+                and record.get("step_authority_kind")
+                == "host_deterministic_cohort_materializer"
+            ):
+                # The host cohort owner is sealed by its dedicated cohort and
+                # attrition-ledger authority, not by a Coder attempt. Reverify
+                # that complete authority before omitting its non-result record
+                # from Writer; ordinary analysis steps still require sidecars.
+                evidence_records = {
+                    item.evidence_id: item.model_dump(mode="json")
+                    for item in evidence_store.records()
+                }
+                cohort_error = _host_cohort_materializer_authority_error(
+                    record=record,
+                    evidence_ids=record.get("evidence_ids") or [],
+                    step_id=str(record.get("step_id") or ""),
+                    run_dir=Path(evidence_store.root),
+                    records=evidence_records,
+                )
+                if cohort_error is not None:
+                    raise RegisteredOutputAuthorityError(
+                        "host deterministic cohort authority is invalid: "
+                        f"{cohort_error}"
                     )
                 continue
             status = str(record.get("status") or "").strip().lower()

@@ -26,6 +26,8 @@ from ..authority.run_input import (
     build_environment_identity,
     load_verified_run_input_capsule,
 )
+from ..authority.declared_levels import bind_step_declared_levels
+from ..authority.table_one_binding import bind_table_one_execution_spec
 from ..authority.runtime_artifacts import AuditLogger
 from ..authority.plan_lifecycle import approve_normalized_plan_for_execution
 from ..canonical_json import canonical_sha256
@@ -386,6 +388,7 @@ def restore_durable_human_review_pause(
     progress_callback: Optional[Callable[[Dict[str, Any]], None]],
     plan_result_factory: Callable[..., Any],
     load_resume_state: Callable[[Path], Optional[Dict[str, Any]]],
+    rejection_only: bool = False,
 ) -> Dict[str, Any]:
     """Restore one verified pause without repeating Plan or provider calls."""
 
@@ -409,68 +412,83 @@ def restore_durable_human_review_pause(
         raise HumanReviewCheckpointError(
             "durable human-review checkpoint belongs to a different run"
         )
-    if checkpoint.pipeline_config_sha256 != pipeline._config.canonical_digest():
+    if (
+        not rejection_only
+        and checkpoint.pipeline_config_sha256 != pipeline._config.canonical_digest()
+    ):
         raise HumanReviewCheckpointError(
             "pipeline configuration changed after human review was requested"
         )
-    llm = pipeline._llm
-    if llm is None:
+    if rejection_only and checkpoint.state != "pending":
         raise HumanReviewCheckpointError(
-            "durable human-review resume requires the configured provider"
+            f"checkpoint state {checkpoint.state!r} cannot accept a new rejection"
         )
-    llm_signature = pipeline._llm_signature(llm)
-    if canonical_sha256(llm_signature) != checkpoint.llm_signature_sha256:
-        raise HumanReviewCheckpointError(
-            "model provider identity changed after human review was requested"
+    if not rejection_only:
+        llm = pipeline._llm
+        if llm is None:
+            raise HumanReviewCheckpointError(
+                "durable human-review resume requires the configured provider"
+            )
+        llm_signature = pipeline._llm_signature(llm)
+        if canonical_sha256(llm_signature) != checkpoint.llm_signature_sha256:
+            raise HumanReviewCheckpointError(
+                "model provider identity changed after human review was requested"
+            )
+        if build_environment_identity(llm_signature=llm_signature) != (
+            checkpoint.environment_identity
+        ):
+            raise HumanReviewCheckpointError(
+                "execution environment changed after human review was requested"
+            )
+        activation_sha256 = canonical_sha256(
+            pipeline._capability_runtime.activation.model_dump(mode="json")
+            if pipeline._capability_runtime.activation is not None
+            else None
         )
-    if build_environment_identity(llm_signature=llm_signature) != (
-        checkpoint.environment_identity
-    ):
-        raise HumanReviewCheckpointError(
-            "execution environment changed after human review was requested"
-        )
-    activation_sha256 = canonical_sha256(
-        pipeline._capability_runtime.activation.model_dump(mode="json")
-        if pipeline._capability_runtime.activation is not None
-        else None
-    )
-    if activation_sha256 != checkpoint.capability_activation_sha256:
-        raise HumanReviewCheckpointError(
-            "capability activation changed after human review was requested"
+        if activation_sha256 != checkpoint.capability_activation_sha256:
+            raise HumanReviewCheckpointError(
+                "capability activation changed after human review was requested"
+            )
+        pipeline._approved_capability_resources = (
+            pipeline._capability_runtime.approved_resources
         )
 
     execution = dict(checkpoint.execution_coordinates)
     scientific_identity = dict(execution.get("scientific_identity") or {})
-    authority = load_verified_run_input_capsule(
-        run_dir=run_dir,
-        scientific_identity=scientific_identity,
-    )
-    capsule_record = authority.evidence_records.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
-    if (
-        not isinstance(capsule_record, Mapping)
-        or str(capsule_record.get("sha256") or "")
-        != checkpoint.run_input_capsule_sha256
-    ):
-        raise HumanReviewCheckpointError(
-            "run-input capsule no longer matches the reviewed execution"
-        )
-    cohort_path = run_dir / authority.capsule.cohort_relative_path
     target_outcome = execution.get("target_outcome")
-    runtime_capabilities = pipeline._preflight_execution_runtime(
-        run_dir=run_dir,
-        cohort_path=cohort_path,
-        target_outcome=str(target_outcome) if target_outcome else None,
-    )
-    if tuple(runtime_capabilities) != checkpoint.runtime_capabilities:
-        raise HumanReviewCheckpointError(
-            "runtime capability set changed after human review was requested"
+    cohort_path = run_dir
+    runtime_capabilities: Sequence[str] = ()
+    if not rejection_only:
+        authority = load_verified_run_input_capsule(
+            run_dir=run_dir,
+            scientific_identity=scientific_identity,
         )
-    if canonical_sha256(pipeline._validated_runtime_bundle) != (
-        checkpoint.runtime_bundle_sha256
-    ):
-        raise HumanReviewCheckpointError(
-            "runtime capability bundle changed after human review was requested"
+        capsule_record = authority.evidence_records.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
+        if (
+            not isinstance(capsule_record, Mapping)
+            or str(capsule_record.get("sha256") or "")
+            != checkpoint.run_input_capsule_sha256
+        ):
+            raise HumanReviewCheckpointError(
+                "run-input capsule no longer matches the reviewed execution"
+            )
+        cohort_path = run_dir / authority.capsule.cohort_relative_path
+        runtime_capabilities = pipeline._preflight_execution_runtime(
+            run_dir=run_dir,
+            cohort_path=cohort_path,
+            target_outcome=str(target_outcome) if target_outcome else None,
+            cap_provider_timeout=False,
         )
+        if tuple(runtime_capabilities) != checkpoint.runtime_capabilities:
+            raise HumanReviewCheckpointError(
+                "runtime capability set changed after human review was requested"
+            )
+        if canonical_sha256(pipeline._validated_runtime_bundle) != (
+            checkpoint.runtime_bundle_sha256
+        ):
+            raise HumanReviewCheckpointError(
+                "runtime capability bundle changed after human review was requested"
+            )
 
     handoff = dict(checkpoint.plan_handoff)
     try:
@@ -507,16 +525,26 @@ def restore_durable_human_review_pause(
         raise HumanReviewCheckpointError(
             "reviewed context or plan artifact changed after the pause"
         ) from exc
+    for step in plan.steps:
+        bind_table_one_execution_spec(step, agent_context)
+        bind_step_declared_levels(step, agent_context)
 
-    role_resolver, cost_meter, repro_envelope = pipeline._restore_role_handoff(
-        run_id=str(run_id),
-        run_dir=run_dir,
-        repro_payload=(
-            handoff.get("repro_envelope")
-            if isinstance(handoff.get("repro_envelope"), Mapping)
-            else None
-        ),
-    )
+    if rejection_only:
+        def role_resolver(_role: str) -> Any:
+            raise RuntimeError("a rejection-only restore cannot invoke the provider")
+
+        cost_meter = None
+        repro_envelope = None
+    else:
+        role_resolver, cost_meter, repro_envelope = pipeline._restore_role_handoff(
+            run_id=str(run_id),
+            run_dir=run_dir,
+            repro_payload=(
+                handoff.get("repro_envelope")
+                if isinstance(handoff.get("repro_envelope"), Mapping)
+                else None
+            ),
+        )
     evidence = EvidenceStore(
         run_dir, enforcement_mode=pipeline._evidence_enforcement_mode
     )
@@ -552,7 +580,7 @@ def restore_durable_human_review_pause(
 
     trajectory_binding = None
     trajectory_payload = execution.get("trajectory_binding")
-    if isinstance(trajectory_payload, Mapping):
+    if not rejection_only and isinstance(trajectory_payload, Mapping):
         trajectory_path = pipeline._checkpoint_run_path(
             run_dir=run_dir, relative_path=trajectory_payload.get("path")
         )
@@ -589,16 +617,20 @@ def restore_durable_human_review_pause(
     progress_channel.bind_audit_logger(audit_logger)
     emit_progress = progress_channel.emit
     skill_key = str(execution.get("skill_key") or "").strip()
-    skill_obj = get_skill(skill_key) if skill_key else None
+    skill_obj = get_skill(skill_key) if skill_key and not rejection_only else None
     stop_after_step_id = execution.get("stop_after_step_id")
     stop_after_analysis = bool(execution.get("stop_after_analysis"))
     manuscript_authors = tuple(
         str(item) for item in list(execution.get("manuscript_authors") or ())
     )
-    experiment_spec_path = pipeline._checkpoint_run_path(
-        run_dir=run_dir,
-        relative_path=execution.get("experiment_spec_path"),
-        required=False,
+    experiment_spec_path = (
+        pipeline._checkpoint_run_path(
+            run_dir=run_dir,
+            relative_path=execution.get("experiment_spec_path"),
+            required=False,
+        )
+        if not rejection_only
+        else None
     )
     cache_key = execution.get("cache_key")
 
@@ -766,7 +798,11 @@ def restore_durable_human_review_pause(
         "workflow": workflow,
         "pending": pending,
         "runtime_capabilities": tuple(runtime_capabilities),
-        "runtime_bundle": deepcopy(pipeline._validated_runtime_bundle),
+        "runtime_bundle": (
+            deepcopy(pipeline._validated_runtime_bundle)
+            if not rejection_only
+            else None
+        ),
         "progress_sink": progress_channel,
         "checkpoint_commit": checkpoint_commit,
     }

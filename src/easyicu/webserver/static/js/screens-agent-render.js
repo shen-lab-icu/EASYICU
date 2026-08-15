@@ -337,6 +337,8 @@
       'workflow_graph.json': t('Workflow graph', '工作流图谱'),
       'figure_gallery.json': t('Figure gallery', '图件画廊'),
       'result_tables.json': t('Research result tables', '科研结果表'),
+      'system_validation_report.json': t('System validation dossier', '系统验证报告'),
+      'system_validation_report_receipt.json': t('System validation receipt', '系统验证回执'),
       'source_run_manifest.json': t('Source run manifest', '原始运行清单'),
       'human_signoff.json': t('Human sign-off', '人工签署'),
     };
@@ -347,6 +349,7 @@
     const n = String(name || '').toLowerCase();
     if (n === 'figure_gallery.json') return t('Figures', '图件');
     if (n === 'result_tables.json') return t('Result tables', '结果表');
+    if (n === 'system_validation_report.json') return t('System validation', '系统验证');
     if (n.includes('scorecard')) return t('Scorecard', '记分卡');
     if (n.includes('workflow')) return t('Workflow', '流程');
     if (n.includes('ledger')) return t('Evidence', '证据');
@@ -364,6 +367,8 @@
     const labels = {
       'figure_gallery.json': t('Task-specific figures rendered from this completed run.', '这道问题已渲染出的任务特异图件。'),
       'result_tables.json': t('Bounded aggregate table previews from registered Research Agent evidence.', '来自 Research Agent 已登记证据的有界聚合表格预览。'),
+      'system_validation_report.json': t('Source-bound engineering validation; explicitly not a clinical manuscript.', '源绑定的工程验证报告；明确不是临床论文。'),
+      'system_validation_report_receipt.json': t('Digest receipt for the engineering-only report and rendered document.', '仅限工程用途的报告及渲染文档摘要回执。'),
       'benchmark_scorecard.json': t('Plan, code, evidence binding, and safety scores for this research run.', '本次研究运行的计划、代码、证据绑定与安全评分。'),
       'workflow_graph.json': t('Agent steps and handoffs from question to evidence review.', '从研究问题到证据审阅的 Agent 步骤与交接。'),
       'evidence_ledger.json': t('Artifact hashes, evidence ids, and privacy-audit status.', '产物哈希、证据 ID 与隐私审计状态。'),
@@ -380,6 +385,7 @@
   }
   function artifactRank(name) {
     const order = [
+      'system_validation_report.json',
       'figure_gallery.json',
       'result_tables.json',
       'benchmark_scorecard.json',
@@ -400,7 +406,8 @@
   function defaultArtifactName(artifacts) {
     const rows = Array.isArray(artifacts) ? artifacts : [];
     const names = rows.map(a => a && (a.name || a.relative_path || '')).filter(Boolean);
-    return names.find(n => n === 'figure_gallery.json')
+    return names.find(n => n === 'system_validation_report.json')
+      || names.find(n => n === 'figure_gallery.json')
       || names.find(n => n === 'benchmark_scorecard.json')
       || names[0]
       || null;
@@ -639,6 +646,33 @@
           row.interpretation || row.reason_code || '',
         ]),
         t('No execution concepts were configured.', '尚未配置执行概念。')
+      ));
+    }
+    if (String(p.schema_version || '') === 'easyicu.system-validation-report/1') {
+      sections.push(artifactTable(
+        t('Engineering validation boundary', '工程验证边界'),
+        [t('Item', '项目'), t('Value', '值')],
+        [
+          [t('Status', '状态'), p.status || ''],
+          [t('Authority', '权限'), p.authority_class || ''],
+          [t('Claim ceiling', '结论上限'), p.claim_ceiling || ''],
+          [t('Publication authorized', '发表授权'), p.publication_authorized ? t('yes', '是') : t('no', '否')],
+        ]
+      ));
+      sections.push(artifactTable(
+        t('Measured run facts', '运行实测事实'),
+        [t('Metric', '指标'), t('Value', '值'), t('Interpretation', '解释')],
+        (Array.isArray(p.metrics) ? p.metrics : []).map(row => [row.label || '', row.value || '', row.detail || ''])
+      ));
+      sections.push(artifactTable(
+        t('Authority-aware lifecycle', '权限感知生命周期'),
+        [t('Stage', '阶段'), t('Status', '状态'), t('Meaning', '含义')],
+        (Array.isArray(p.lifecycle) ? p.lifecycle : []).map(row => [row.label || row.stage || '', row.status || '', row.summary || ''])
+      ));
+      sections.push(artifactTable(
+        t('Scientific blockers retained', '保留的科学阻断项'),
+        [t('Severity', '级别'), t('Finding', '问题'), t('Why it matters', '影响')],
+        (Array.isArray(p.scientific_findings) ? p.scientific_findings : []).slice(0, 12).map(row => [row.severity || '', row.code || '', row.message || ''])
       ));
     }
     if (n.includes('figure_gallery')) {

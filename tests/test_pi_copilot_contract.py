@@ -1182,6 +1182,40 @@ def test_pi_conversations_are_immutably_scoped_to_one_project(
         alpha.project_id = "project-beta"
 
 
+def test_pi_conversation_mode_filter_runs_before_the_list_limit(tmp_path: Path) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    service.project_store.bind("project-alpha", "study-alpha")
+    research = [
+        PiSessionRecord(
+            session_id=f"pi-research-{index}",
+            project_id="project-alpha",
+            agent_mode="research",
+            binding=AuthorityBinding(study_context_id="study-alpha"),
+        )
+        for index in range(35)
+    ]
+    workspace = PiSessionRecord(
+        session_id="pi-workspace-existing",
+        project_id="project-alpha",
+        agent_mode="workspace",
+        binding=AuthorityBinding(study_context_id="study-alpha"),
+    )
+    service._write_records([*research, workspace])
+
+    listed = service.list_sessions(
+        project_id="project-alpha",
+        limit=1,
+        agent_mode="workspace",
+    )
+
+    assert [row["session_id"] for row in listed["sessions"]] == [
+        "pi-workspace-existing"
+    ]
+
+
 def test_project_authority_resolves_context_without_global_active_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3311,6 +3345,73 @@ def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
             artifact_name="table1_summary.json",
         )
     assert privacy_blocked.value.code == "pi_research_artifact_privacy_blocked"
+
+
+def test_project_document_preview_requires_the_current_ledger_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    service.project_store.bind("project-a", "study-a")
+    document = b"<!doctype html><title>Bound report</title>"
+    digest = hashlib.sha256(document).hexdigest()
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "list_run_history",
+        lambda **_kwargs: {
+            "runs": [{"run_id": "run_20260808", "project_dir": "/private/run-a"}]
+        },
+    )
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "read_run_artifact_bytes",
+        lambda _project_dir, name: {
+            "ok": True,
+            "name": name,
+            "content": document,
+            "media_type": "text/html; charset=utf-8",
+        },
+    )
+    review = {
+        "ok": True,
+        "gate": {"status": "blocked"},
+        "readiness": {"status": "blocked", "reportable": False},
+        "artifacts": [{"name": "system_validation_report.html", "sha256": digest}],
+        "artifact_payloads": {
+            "evidence_ledger.json": {
+                "artifacts": [
+                    {"name": "system_validation_report.html", "sha256": digest}
+                ]
+            }
+        },
+    }
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "read_run_review",
+        lambda _project_dir: review,
+    )
+
+    loaded = service.get_research_document(
+        project_id="project-a",
+        run_id="run_20260808",
+        document_name="system_validation_report.html",
+    )
+    assert loaded["content"] == document
+    assert loaded["claim_ceiling"] == "engineering_validation_only"
+
+    review["artifact_payloads"]["evidence_ledger.json"]["artifacts"][0][
+        "sha256"
+    ] = "0" * 64
+    with pytest.raises(PiCopilotError) as mismatch:
+        service.get_research_document(
+            project_id="project-a",
+            run_id="run_20260808",
+            document_name="system_validation_report.html",
+        )
+    assert mismatch.value.code == "pi_research_document_digest_mismatch"
 
 
 def test_project_data_package_preview_is_revision_and_digest_bound(

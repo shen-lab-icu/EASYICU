@@ -424,15 +424,19 @@ def counts_only_distribution_guide() -> str:
     """Publish the no-uncertainty projection selected by typed study authority."""
 
     return (
-        "If the typed analysis_design declares variance_estimator="
-        "'none_counts_only', use schema_version "
-        "'easyicu.exposure_outcome_distribution/3', interval_method="
-        "'none_counts_only', repeated_unit_interval_method=null, "
-        "confidence_level=null, risk_difference_contrast=null, and dependence=null; "
-        "do not declare any model, inferential capability, table_one_spec, or "
-        "table:distribution_prevalence step. Only cohort accounting, the typed "
-        "exposure/outcome distribution, measurement audit, and figures bound to "
-        "those typed products are permitted."
+        "For variance_estimator='none_counts_only', use one primary descriptive "
+        "step outputting only table:exposure_outcome_distribution, "
+        "and uses schema /3 with interval_method='none_counts_only'. Set repeated "
+        "unit method, confidence, contrast, and dependence to null. No models, "
+        "Table One, extra result tables, or mislabeled audits. Keep as siblings: "
+        '{"descriptive_claim":{"claim_ceiling":"descriptive_only",'
+        '"unresolved_limitations":'
+        '["post_baseline_exposure_opportunity_unresolved"]},'
+        '"exposure_outcome_distribution_spec":{'
+        '"schema_version":"easyicu.exposure_outcome_distribution/3",'
+        '"interval_method":"none_counts_only",'
+        '"repeated_unit_interval_method":null,"risk_difference_contrast":null,'
+        '"dependence":null,"confidence_level":null}}.'
     )
 
 

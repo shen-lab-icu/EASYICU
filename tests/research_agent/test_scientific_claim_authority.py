@@ -413,6 +413,76 @@ def test_host_derives_only_descriptive_absolute_risks_and_risk_difference() -> N
     assert all(word not in rendered for word in ("associated", "independent", "caused"))
 
 
+def test_host_derives_counts_only_claims_without_inventing_intervals() -> None:
+    from easyicu.research_agent.authority.scientific_claims import (
+        derive_scientific_claim_drafts,
+    )
+
+    summary = _descriptive_distribution_summary()
+    estimates = summary["descriptive_estimates"]
+    estimates["dependence"] = None
+    estimates["risk_difference"] = None
+    for risk in estimates["outcome_absolute_risks"]:
+        risk.update(
+            {
+                "standard_error_pct": None,
+                "ci_low_pct": None,
+                "ci_high_pct": None,
+                "confidence_level": None,
+                "interval_method": "none_counts_only",
+                "covariance": "none_counts_only",
+                "cluster_count": None,
+            }
+        )
+
+    drafts = derive_scientific_claim_drafts(summary)
+
+    assert [claim.claim_type for claim in drafts] == [
+        "descriptive_absolute_risk",
+        "descriptive_absolute_risk",
+    ]
+    assert "10/100 (10 percent; counts only, no confidence interval)" in (
+        drafts[0].estimand
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("standard_error_pct", 0.0, "must be null for counts-only"),
+        ("ci_low_pct", 1.0, "must be null for counts-only"),
+        ("covariance", "binomial_independent", "counts-only authority drifted"),
+    ],
+)
+def test_counts_only_claims_reject_interval_laundering(
+    field: str, value: object, message: str
+) -> None:
+    from easyicu.research_agent.authority.scientific_claims import (
+        derive_scientific_claim_drafts,
+    )
+
+    summary = _descriptive_distribution_summary()
+    estimates = summary["descriptive_estimates"]
+    estimates["dependence"] = None
+    estimates["risk_difference"] = None
+    for risk in estimates["outcome_absolute_risks"]:
+        risk.update(
+            {
+                "standard_error_pct": None,
+                "ci_low_pct": None,
+                "ci_high_pct": None,
+                "confidence_level": None,
+                "interval_method": "none_counts_only",
+                "covariance": "none_counts_only",
+                "cluster_count": None,
+            }
+        )
+    estimates["outcome_absolute_risks"][0][field] = value
+
+    with pytest.raises(ValueError, match=message):
+        derive_scientific_claim_drafts(summary)
+
+
 def test_descriptive_claim_compiler_fails_closed_on_ceiling_or_level_drift() -> None:
     from easyicu.research_agent.authority.scientific_claims import (
         derive_scientific_claim_drafts,

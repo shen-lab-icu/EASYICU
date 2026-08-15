@@ -68,6 +68,11 @@ function safeResearchDocumentName(value) {
   return /^manuscript_scaffold\.(pdf|tex|bib)$/.test(name) ? name : "";
 }
 
+function safeSystemValidationDocumentName(value) {
+  const name = boundedText(value, 80).trim();
+  return /^system_validation_report\.(html|pdf)$/.test(name) ? name : "";
+}
+
 function safeSha256(value) {
   const text = boundedText(value, 64).trim().toLowerCase();
   return /^[a-f0-9]{64}$/.test(text) ? text : "";
@@ -116,13 +121,16 @@ function projectedResource(value) {
       ...(sha256 ? { sha256 } : {}),
     };
   }
-  if (value.kind === "research_document") {
+  if (value.kind === "research_document" || value.kind === "system_validation_document") {
     const runId = safeStableId(value.run_id);
-    const artifact = safeResearchDocumentName(value.artifact);
+    const systemValidation = value.kind === "system_validation_document";
+    const artifact = systemValidation
+      ? safeSystemValidationDocumentName(value.artifact)
+      : safeResearchDocumentName(value.artifact);
     if (!runId || !artifact) return undefined;
     const sha256 = safeSha256(value.sha256);
     return {
-      kind: "research_document",
+      kind: systemValidation ? "system_validation_document" : "research_document",
       run_id: runId,
       artifact,
       label: boundedText(value.label || artifact, 160),

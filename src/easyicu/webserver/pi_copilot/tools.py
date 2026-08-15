@@ -351,17 +351,25 @@ def _document_resource(
         "manuscript_scaffold.pdf": "Rendered manuscript draft (PDF)",
         "manuscript_scaffold.tex": "LaTeX manuscript source",
         "manuscript_scaffold.bib": "BibTeX bibliography",
+        "system_validation_report.html": "System validation dossier (HTML)",
+        "system_validation_report.pdf": "System validation dossier (PDF)",
     }
     media_types = {
         "manuscript_scaffold.pdf": "application/pdf",
         "manuscript_scaffold.tex": "text/x-tex",
         "manuscript_scaffold.bib": "application/x-bibtex",
+        "system_validation_report.html": "text/html",
+        "system_validation_report.pdf": "application/pdf",
     }
     if clean_run is None or clean_name not in labels:
         return None
     digest = str(sha256 or "").strip().lower()
     return {
-        "kind": "research_document",
+        "kind": (
+            "system_validation_document"
+            if clean_name.startswith("system_validation_report.")
+            else "research_document"
+        ),
         "run_id": clean_run,
         "artifact": clean_name,
         "label": labels[clean_name],
