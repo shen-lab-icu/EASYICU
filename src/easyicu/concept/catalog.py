@@ -23,7 +23,7 @@ CONCEPT_DICTIONARY = {
     'resp': ('Respiratory Rate', '呼吸频率', 'breaths/min'),
 
     # 呼吸系统
-    'pafi': ('PaO2/FiO2 Ratio', '氧合指数', 'mmHg'),
+    'pafi': ('PaO2/FiO2 Ratio', '氧合指数', 'ratio'),
     'safi': ('SpO2/FiO2 Ratio', '脉氧/吸氧比', ''),
     'supp_o2': ('Supplemental Oxygen', '辅助吸氧', 'boolean'),
     'vent_ind': ('Ventilation Duration Windows', '机械通气时间窗', 'boolean'),

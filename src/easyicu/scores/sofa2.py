@@ -6,7 +6,7 @@ callback style.
 
 Components implemented (0-4 each):
 - Respiratory (PaO2/FiO2 or SpO2/FiO2 + advanced support/ECMO)
-  * SOFA-2 thresholds: ≤300/225/150/75 mmHg (vs SOFA-1: >400/300-400/200-299/100-199/<100)
+  * SOFA-2 ratio thresholds: ≤300/225/150/75 (vs SOFA-1: >400/300-400/200-299/100-199/<100)
   * Any ECMO → respiratory auto 4pt
   * Advanced support includes: IMV, NIV, HFNC, CPAP, BiPAP, home ventilation
   
@@ -46,24 +46,32 @@ Notes:
 - Inputs are pandas Series aligned on the same index. Missing values are
   handled similarly to SOFA-1 implementation (treated as normal unless a
   threshold is met by another provided variable).
-- 24-hour window scoring: each organ's maximum score within 24h is summed
-- Missing data handling:
-  * Day 1: score as 0 (assume normal)
-  * After day 1: carry forward last observation (assume stability)
+- ``sofa2_score`` aggregates one observation/day-1 record only. The production
+  concept callback owns 24-hour worst-value windows and post-day-1 LOCF using
+  component-issued observed/available receipts.
 - Drug requirements: continuous IV infusion ≥1 hour for vasopressors/inotropes
 - Transient changes (<1 hour, e.g., post-suction hypoxemia) should not be scored
 
 References:
 - Moreno et al. (2025). SOFA-2 Consensus Statement. JAMA Network Open.
+- JAMA Network Open (2026). Errors in Tables. doi:10.1001/jamanetworkopen.2025.60466.
 - Vincent et al. (1996). Original SOFA score. Intensive Care Medicine.
 """
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Optional
 
 import numpy as np
 import pandas as pd
+
+from .sofa2_aggregate import SOFA2_COMPONENT_NAMES, sofa2_score
+from .sofa2_validation import (
+    SOFA2InputError,
+    normalize_fio2_input,
+    validate_aligned_input,
+    validate_numeric_input,
+)
 
 
 def _is_true(series: pd.Series) -> pd.Series:
@@ -77,16 +85,6 @@ def _coalesce_series(*series_list: Optional[pd.Series]) -> Optional[pd.Series]:
         if series is not None:
             return series
     return None
-
-
-SOFA2_COMPONENT_NAMES = (
-    "sofa2_resp",
-    "sofa2_coag",
-    "sofa2_liver",
-    "sofa2_cardio",
-    "sofa2_cns",
-    "sofa2_renal",
-)
 
 
 def sofa2_component_evidence(
@@ -234,7 +232,7 @@ def sofa2_resp(
     Priority of oxygenation metric: use PaO2/FiO2 if available; otherwise
     derive SpO2/FiO2 when both are present (only when SpO2 < 98%).
     
-    SOFA-2 thresholds for P/F (mmHg) vs SOFA-1:
+    SOFA-2 thresholds for the P/F ratio vs SOFA-1:
     ┌────────┬─────────────┬───────────────┬─────────────────────┐
     │ Score  │ SOFA-1 P/F  │ SOFA-2 P/F    │ SOFA-2 Requirements │
     ├────────┼─────────────┼───────────────┼─────────────────────┤
@@ -256,7 +254,7 @@ def sofa2_resp(
     - ECMO for cardiovascular indication → additionally score cardiovascular
     
     Args:
-        pafi: PaO2/FiO2 ratio (mmHg)
+        pafi: PaO2/FiO2 ratio (unitless ratio; see the 2026 correction)
         spo2: Oxygen saturation (%)
         fio2: Fraction of inspired oxygen (0.21-1.0 or 21-100)
         adv_resp: Boolean - advanced respiratory support active
@@ -271,21 +269,56 @@ def sofa2_resp(
     Returns:
         Series of respiratory SOFA-2 scores (0-4)
     """
-    # Determine index from available inputs
+    # Determine and validate the shared component index.
     if pafi is not None:
-        idx = pafi.index
+        idx = validate_aligned_input(
+            pafi, component="sofa2_resp", field="pafi"
+        ).index
     elif spo2 is not None:
-        idx = spo2.index
+        idx = validate_aligned_input(
+            spo2, component="sofa2_resp", field="spo2"
+        ).index
     elif fio2 is not None:
-        idx = fio2.index
+        idx = validate_aligned_input(
+            fio2, component="sofa2_resp", field="fio2"
+        ).index
     else:
         raise ValueError("sofa2_resp requires at least one of: pafi, spo2, or fio2")
     
     # Build support/ECMO masks
-    support = _is_true(adv_resp) if adv_resp is not None else pd.Series(False, index=idx)
-    on_ecmo = _is_true(ecmo) if ecmo is not None else pd.Series(False, index=idx)
+    support = (
+        _is_true(
+            validate_aligned_input(
+                adv_resp,
+                component="sofa2_resp",
+                field="adv_resp",
+                index=idx,
+            )
+        )
+        if adv_resp is not None
+        else pd.Series(False, index=idx)
+    )
+    on_ecmo = (
+        _is_true(
+            validate_aligned_input(
+                ecmo,
+                component="sofa2_resp",
+                field="ecmo",
+                index=idx,
+            )
+        )
+        if ecmo is not None
+        else pd.Series(False, index=idx)
+    )
     support_exception = (
-        _is_true(support_unavailable_or_ceiling)
+        _is_true(
+            validate_aligned_input(
+                support_unavailable_or_ceiling,
+                component="sofa2_resp",
+                field="support_unavailable_or_ceiling",
+                index=idx,
+            )
+        )
         if support_unavailable_or_ceiling is not None
         else pd.Series(False, index=idx)
     )
@@ -297,7 +330,12 @@ def sofa2_resp(
     if oxygenation_sustained_1h is None:
         ratio_eligible = pd.Series(True, index=idx)
     else:
-        persistence = pd.Series(oxygenation_sustained_1h, index=idx)
+        persistence = validate_aligned_input(
+            oxygenation_sustained_1h,
+            component="sofa2_resp",
+            field="oxygenation_sustained_1h",
+            index=idx,
+        )
         explicitly_transient = persistence.notna() & ~_is_true(persistence)
         ratio_eligible = ~explicitly_transient
     severe_ratio_eligible = ratio_eligible & (support | support_exception)
@@ -306,7 +344,18 @@ def sofa2_resp(
     score = pd.Series(0, index=idx, dtype=int)
     
     # Prepare P/F ratio (per-row availability check)
-    pf = pd.to_numeric(pafi, errors="coerce") if pafi is not None else pd.Series(np.nan, index=idx)
+    pf = (
+        validate_numeric_input(
+            pafi,
+            component="sofa2_resp",
+            field="pafi",
+            index=idx,
+            minimum=0,
+            minimum_inclusive=False,
+        )
+        if pafi is not None
+        else pd.Series(np.nan, index=idx)
+    )
     pf_available = pf.notna()
     
     # Prepare S/F ratio (only applicable when SpO2 < 98%)
@@ -314,11 +363,29 @@ def sofa2_resp(
     sf_applicable = pd.Series(False, index=idx)
     
     if spo2 is not None and fio2 is not None:
-        s = pd.to_numeric(spo2, errors="coerce")
-        f = pd.to_numeric(fio2, errors="coerce")
-        # Convert fio2 percent to fraction if looks like 21-100
-        f_adj = f.where(~((f >= 21) & (f <= 100)), f / 100.0)
+        s = validate_numeric_input(
+            spo2,
+            component="sofa2_resp",
+            field="spo2",
+            index=idx,
+            minimum=0,
+            maximum=100,
+        )
+        f_adj = normalize_fio2_input(fio2, index=idx).values
+    else:
+        if spo2 is not None:
+            validate_numeric_input(
+                spo2,
+                component="sofa2_resp",
+                field="spo2",
+                index=idx,
+                minimum=0,
+                maximum=100,
+            )
+        if fio2 is not None:
+            normalize_fio2_input(fio2, index=idx)
         
+    if spo2 is not None and fio2 is not None:
         with np.errstate(invalid="ignore", divide="ignore"):
             sf = s / f_adj
         
@@ -386,7 +453,12 @@ def sofa2_coag(
     platelet_series = _coalesce_series(plt, platelets)
     if platelet_series is None:
         raise ValueError("sofa2_coag requires `plt` or `platelets`")
-    p = pd.to_numeric(platelet_series, errors="coerce")
+    p = validate_numeric_input(
+        platelet_series,
+        component="sofa2_coag",
+        field="platelets",
+        minimum=0,
+    )
     score = pd.Series(0, index=platelet_series.index, dtype=int)
     score[p <= 150] = 1
     score[p <= 100] = 2
@@ -432,7 +504,12 @@ def sofa2_liver(
     bilirubin_series = _coalesce_series(bili, bilirubin)
     if bilirubin_series is None:
         raise ValueError("sofa2_liver requires `bili` or `bilirubin`")
-    b = pd.to_numeric(bilirubin_series, errors="coerce")
+    b = validate_numeric_input(
+        bilirubin_series,
+        component="sofa2_liver",
+        field="bilirubin",
+        minimum=0,
+    )
     score = pd.Series(0, index=bilirubin_series.index, dtype=int)
 
     # Apply thresholds according to SOFA-2 table (using upper bounds)
@@ -510,37 +587,144 @@ def sofa2_cardio(
     Returns:
         Series of cardiovascular SOFA-2 scores (0-4)
     """
-    idx = map.index
+    map_val = validate_numeric_input(
+        map,
+        component="sofa2_cardio",
+        field="map",
+        minimum=0,
+    )
+    idx = map_val.index
     dopamine = _coalesce_series(dopa60, dopamine60)
     dobutamine = _coalesce_series(dobu60, dobutamine60)
     norepi_series = _coalesce_series(norepi60, norepi)
     epi_series = _coalesce_series(epi60, epi)
-    ne = pd.to_numeric(norepi_series, errors="coerce") if norepi_series is not None else pd.Series(0.0, index=idx)
-    ep = pd.to_numeric(epi_series, errors="coerce") if epi_series is not None else pd.Series(0.0, index=idx)
-    da = pd.to_numeric(dopamine, errors="coerce") if dopamine is not None else pd.Series(0.0, index=idx)
-    db = pd.to_numeric(dobutamine, errors="coerce") if dobutamine is not None else pd.Series(0.0, index=idx)
-    others = _is_true(other_vaso) if other_vaso is not None else pd.Series(False, index=idx)
-    mech = _is_true(mech_circ_support) if mech_circ_support is not None else pd.Series(False, index=idx)
-    vaso_unavail = _is_true(vasopressors_unavailable) if vasopressors_unavailable is not None else pd.Series(False, index=idx)
+    ne = (
+        validate_numeric_input(
+            norepi_series,
+            component="sofa2_cardio",
+            field="norepi",
+            index=idx,
+            minimum=0,
+        )
+        if norepi_series is not None
+        else pd.Series(0.0, index=idx)
+    )
+    ep = (
+        validate_numeric_input(
+            epi_series,
+            component="sofa2_cardio",
+            field="epi",
+            index=idx,
+            minimum=0,
+        )
+        if epi_series is not None
+        else pd.Series(0.0, index=idx)
+    )
+    da = (
+        validate_numeric_input(
+            dopamine,
+            component="sofa2_cardio",
+            field="dopamine",
+            index=idx,
+            minimum=0,
+        )
+        if dopamine is not None
+        else pd.Series(0.0, index=idx)
+    )
+    db = (
+        validate_numeric_input(
+            dobutamine,
+            component="sofa2_cardio",
+            field="dobutamine",
+            index=idx,
+            minimum=0,
+        )
+        if dobutamine is not None
+        else pd.Series(0.0, index=idx)
+    )
+    others = (
+        _is_true(
+            validate_aligned_input(
+                other_vaso,
+                component="sofa2_cardio",
+                field="other_vaso",
+                index=idx,
+            )
+        )
+        if other_vaso is not None
+        else pd.Series(False, index=idx)
+    )
+    mech = (
+        _is_true(
+            validate_aligned_input(
+                mech_circ_support,
+                component="sofa2_cardio",
+                field="mech_circ_support",
+                index=idx,
+            )
+        )
+        if mech_circ_support is not None
+        else pd.Series(False, index=idx)
+    )
+    vaso_unavail = (
+        _is_true(
+            validate_aligned_input(
+                vasopressors_unavailable,
+                component="sofa2_cardio",
+                field="vasopressors_unavailable",
+                index=idx,
+            )
+        )
+        if vasopressors_unavailable is not None
+        else pd.Series(False, index=idx)
+    )
 
     # SOFA-2 footnote (i)+(n): ECMO used for a cardiovascular indication (VA-ECMO)
     # is a form of mechanical circulatory support and is scored 4 on the
     # cardiovascular component (in addition to the respiratory 4 handled in
     # `sofa2_resp`). Respiratory-indication (VV) ECMO is NOT scored here. Where the
     # indication is unknown, no cardiovascular point is added (conservative).
-    on_ecmo = _is_true(ecmo) if ecmo is not None else pd.Series(False, index=idx)
+    on_ecmo = (
+        _is_true(
+            validate_aligned_input(
+                ecmo,
+                component="sofa2_cardio",
+                field="ecmo",
+                index=idx,
+            )
+        )
+        if ecmo is not None
+        else pd.Series(False, index=idx)
+    )
     cardiac_ecmo = pd.Series(False, index=idx)
     if ecmo is not None and ecmo_indication is not None:
-        cardiac_ecmo = on_ecmo & (ecmo_indication.astype("string") == "cardiovascular")
+        indication = validate_aligned_input(
+            ecmo_indication,
+            component="sofa2_cardio",
+            field="ecmo_indication",
+            index=idx,
+        )
+        cardiac_ecmo = on_ecmo & (indication.astype("string") == "cardiovascular")
 
     # KEY SOFA-2 CHANGE: Combined norepinephrine + epinephrine
     total = ne.fillna(0) + ep.fillna(0)
-    map_val = pd.to_numeric(map, errors="coerce")
 
     score = pd.Series(0, index=idx, dtype=int)
 
     # Check if any vasopressors/inotropes are being used
     any_vaso = (total > 0) | (da > 0) | (db > 0) | others
+    contradiction = vaso_unavail & any_vaso
+    if contradiction.any():
+        raise SOFA2InputError(
+            component="sofa2_cardio",
+            field="vasopressors_unavailable",
+            reason_code="sofa2_cardio_vasopressor_state_conflict",
+            message=(
+                "MAP fallback cannot be combined with an observed positive "
+                "vasopressor or inotrope state"
+            ),
+            invalid_count=int(contradiction.sum()),
+        )
 
     # Primary scoring: MAP when no vasopressors/inotropes
     no_vaso_mask = ~any_vaso
@@ -610,18 +794,44 @@ def _normalize_delirium_tx_evidence(
 
     evidence = pd.Series("unavailable", index=index, dtype="string")
     if delirium_tx_evidence is not None:
-        raw = pd.Series(delirium_tx_evidence, index=index, dtype="string")
-        normalized = raw.str.strip().str.lower()
-        evidence = normalized.where(
-            normalized.isin(DELIRIUM_TX_EVIDENCE_STATES),
-            "unavailable",
+        aligned = validate_aligned_input(
+            delirium_tx_evidence,
+            component="sofa2_cns",
+            field="delirium_tx_evidence",
+            index=index,
         )
+        raw = aligned.astype("string")
+        normalized = raw.str.strip().str.lower()
+        invalid = raw.notna() & ~normalized.isin(DELIRIUM_TX_EVIDENCE_STATES)
+        if invalid.any():
+            raise SOFA2InputError(
+                component="sofa2_cns",
+                field="delirium_tx_evidence",
+                reason_code="sofa2_cns_delirium_tx_evidence_invalid",
+                message="Unknown delirium-treatment evidence state",
+                invalid_count=int(invalid.sum()),
+            )
+        evidence = normalized.fillna("unavailable")
 
     proxy = pd.Series(False, index=index, dtype=bool)
     if delirium_tx_proxy is not None:
-        proxy = _is_true(pd.Series(delirium_tx_proxy, index=index))
+        proxy = _is_true(
+            validate_aligned_input(
+                delirium_tx_proxy,
+                component="sofa2_cns",
+                field="delirium_tx_proxy",
+                index=index,
+            )
+        )
     if delirium_tx is not None:
-        legacy_proxy = _is_true(pd.Series(delirium_tx, index=index))
+        legacy_proxy = _is_true(
+            validate_aligned_input(
+                delirium_tx,
+                component="sofa2_cns",
+                field="delirium_tx",
+                index=index,
+            )
+        )
         proxy = proxy | legacy_proxy
 
     # Only fill an otherwise unavailable state from exposure evidence.  An
@@ -695,13 +905,37 @@ def _sofa2_cns_assessment(
     - Motor alternatives allow scoring in intubated/non-verbal patients
     - When GCS 3 domains cannot be assessed, use best motor scale domain score
     """
-    g = pd.to_numeric(gcs, errors="coerce")
+    g = validate_numeric_input(
+        gcs,
+        component="sofa2_cns",
+        field="gcs",
+        minimum=3,
+        maximum=15,
+        integer=True,
+    )
     pre_sedation = _coalesce_series(sedated_gcs, pre_sedation_gcs)
     sedated_mask = (
-        _is_true(sedated) if sedated is not None else pd.Series(False, index=g.index)
+        _is_true(
+            validate_aligned_input(
+                sedated,
+                component="sofa2_cns",
+                field="sedated",
+                index=g.index,
+            )
+        )
+        if sedated is not None
+        else pd.Series(False, index=g.index)
     )
     if pre_sedation is not None:
-        pre = pd.to_numeric(pre_sedation, errors="coerce")
+        pre = validate_numeric_input(
+            pre_sedation,
+            component="sofa2_cns",
+            field="pre_sedation_gcs",
+            index=g.index,
+            minimum=3,
+            maximum=15,
+            integer=True,
+        )
         # A recorded pre-sedation GCS is the authoritative value. This also
         # supports databases that expose the value without a separate status.
         recorded_pre = pre.notna()
@@ -711,7 +945,15 @@ def _sofa2_cns_assessment(
     unknown_pre_sedation = pd.Series(False, index=g.index)
     if sedated is not None:
         pre = (
-            pd.to_numeric(pre_sedation, errors="coerce")
+            validate_numeric_input(
+                pre_sedation,
+                component="sofa2_cns",
+                field="pre_sedation_gcs",
+                index=g.index,
+                minimum=3,
+                maximum=15,
+                integer=True,
+            )
             if pre_sedation is not None
             else pd.Series(np.nan, index=g.index)
         )
@@ -723,7 +965,15 @@ def _sofa2_cns_assessment(
 
     # Use motor response if GCS cannot be fully assessed
     if motor_response is not None:
-        m = pd.to_numeric(motor_response, errors="coerce")
+        m = validate_numeric_input(
+            motor_response,
+            component="sofa2_cns",
+            field="motor_response",
+            index=g.index,
+            minimum=1,
+            maximum=6,
+            integer=True,
+        )
         # Map motor response to equivalent GCS scores
         # 6=obeys commands / behavioral command response (~GCS 15),
         # 5=localizing (~GCS 13-14), 4=withdrawal (~GCS 9-12),
@@ -987,26 +1237,79 @@ def sofa2_renal(
     creatinine_series = _coalesce_series(crea, creatinine)
     if creatinine_series is None:
         raise ValueError("sofa2_renal requires `crea` or `creatinine`")
-    c = pd.to_numeric(creatinine_series, errors="coerce")
+    c = validate_numeric_input(
+        creatinine_series,
+        component="sofa2_renal",
+        field="creatinine",
+        minimum=0,
+    )
     idx = c.index
     score = pd.Series(0, index=idx, dtype=int)
     bicarbonate_series = _coalesce_series(bicarb, bicarbonate)
+
+    def renal_numeric(
+        value: Optional[pd.Series],
+        field: str,
+        *,
+        minimum: float = 0,
+        maximum: float | None = None,
+    ) -> pd.Series:
+        if value is None:
+            return pd.Series(np.nan, index=idx)
+        return validate_numeric_input(
+            value,
+            component="sofa2_renal",
+            field=field,
+            index=idx,
+            minimum=minimum,
+            maximum=maximum,
+        )
+
+    u6 = renal_numeric(uo_6h, "uo_6h")
+    u12 = renal_numeric(uo_12h, "uo_12h")
+    u24 = renal_numeric(uo_24h, "uo_24h")
+    urine_rate = renal_numeric(urine_mlkgph, "urine_mlkgph")
+    urine_duration = renal_numeric(urine_duration_h, "urine_duration_h")
+    potassium_value = renal_numeric(potassium, "potassium")
+    ph_value = renal_numeric(ph, "ph", maximum=14)
+    bicarbonate_value = renal_numeric(bicarbonate_series, "bicarbonate")
 
     # Table 2 footnotes o/q: an episode remains active between intermittent
     # sessions until termination; therapy solely for a non-renal indication is
     # excluded. Raw treatment-event evidence alone cannot manufacture off-days,
     # so callers must pass the explicit episode state when they have it.
     treatment_state = pd.Series(False, index=idx)
-    for candidate in (rrt, rrt_episode_active):
+    for field, candidate in (("rrt", rrt), ("rrt_episode_active", rrt_episode_active)):
         if candidate is not None:
-            treatment_state = treatment_state | _is_true(candidate)
+            treatment_state = treatment_state | _is_true(
+                validate_aligned_input(
+                    candidate,
+                    component="sofa2_renal",
+                    field=field,
+                    index=idx,
+                )
+            )
     criteria_state = (
-        _is_true(rrt_criteria)
+        _is_true(
+            validate_aligned_input(
+                rrt_criteria,
+                component="sofa2_renal",
+                field="rrt_criteria",
+                index=idx,
+            )
+        )
         if rrt_criteria is not None
         else pd.Series(False, index=idx)
     )
     nonrenal_only = (
-        _is_true(rrt_nonrenal_only)
+        _is_true(
+            validate_aligned_input(
+                rrt_nonrenal_only,
+                component="sofa2_renal",
+                field="rrt_nonrenal_only",
+                index=idx,
+            )
+        )
         if rrt_nonrenal_only is not None
         else pd.Series(False, index=idx)
     )
@@ -1016,31 +1319,21 @@ def sofa2_renal(
 
     # EasyICU runtime-aligned path: use windowed urine concepts when available.
     if any(series is not None for series in (uo_6h, uo_12h, uo_24h)):
-        u6 = pd.to_numeric(uo_6h, errors="coerce") if uo_6h is not None else pd.Series(np.nan, index=idx)
-        u12 = pd.to_numeric(uo_12h, errors="coerce") if uo_12h is not None else pd.Series(np.nan, index=idx)
-        u24 = pd.to_numeric(uo_24h, errors="coerce") if uo_24h is not None else pd.Series(np.nan, index=idx)
-
         score[(c > 1.20) | ((u6 < 0.5) & ~(u12 < 0.5))] = np.maximum(score[(c > 1.20) | ((u6 < 0.5) & ~(u12 < 0.5))], 1)
         score[(c > 2.0) | (u12 < 0.5)] = np.maximum(score[(c > 2.0) | (u12 < 0.5)], 2)
         score[(c > 3.50) | (u24 < 0.3) | (u12 == 0)] = np.maximum(score[(c > 3.50) | (u24 < 0.3) | (u12 == 0)], 3)
 
         if (potassium is not None) and (ph is not None) and (bicarbonate_series is not None):
-            k = pd.to_numeric(potassium, errors="coerce")
-            ph_val = pd.to_numeric(ph, errors="coerce")
-            hco3 = pd.to_numeric(bicarbonate_series, errors="coerce")
             base_injury = (c > 1.2) | (u6 < 0.3)
-            metabolic_crisis = (k >= 6.0) | ((ph_val <= 7.20) & (hco3 <= 12))
+            metabolic_crisis = (potassium_value >= 6.0) | (
+                (ph_value <= 7.20) & (bicarbonate_value <= 12)
+            )
             score[base_injury & metabolic_crisis] = 4
 
         return score
 
     # Check if patient meets RRT criteria but not receiving RRT (e.g., ceiling of care)
     if (potassium is not None) and (ph is not None) and (bicarbonate_series is not None) and (urine_mlkgph is not None):
-        k = pd.to_numeric(potassium, errors="coerce")
-        ph_val = pd.to_numeric(ph, errors="coerce")
-        hco3 = pd.to_numeric(bicarbonate_series, errors="coerce")
-        u = pd.to_numeric(urine_mlkgph, errors="coerce")
-
         # SOFA-2 footnote (p): a patient NOT on RRT scores 4 if they meet RRT
         # criteria, i.e. (creatinine >1.2 mg/dL OR oliguria <0.3 mL/kg/h for >6 h)
         # AND (K ≥6.0 mmol/L OR (pH ≤7.20 AND HCO3 ≤12 mmol/L)).
@@ -1049,9 +1342,12 @@ def sofa2_renal(
         # path above already implements footnote (p) with OR and the 6 h window via
         # the u6 concept. This fallback is for direct API callers; aligned here for
         # consistency.
-        dur = pd.to_numeric(urine_duration_h, errors="coerce") if urine_duration_h is not None else pd.Series(np.nan, index=idx)
-        oliguria = (u < 0.3) & (dur > 6)  # <0.3 mL/kg/h sustained for >6 h
-        metabolic_crisis = (k >= 6.0) | ((ph_val <= 7.20) & (hco3 <= 12))
+        oliguria = (urine_rate < 0.3) & (
+            urine_duration > 6
+        )  # <0.3 mL/kg/h sustained for >6 h
+        metabolic_crisis = (potassium_value >= 6.0) | (
+            (ph_value <= 7.20) & (bicarbonate_value <= 12)
+        )
         rrt_criteria = ((c > 1.2) | oliguria) & metabolic_crisis
 
         # Score 4pt if meets RRT criteria but not receiving RRT
@@ -1059,21 +1355,18 @@ def sofa2_renal(
 
     # Urine output criteria (body weight standardized)
     if urine_mlkgph is not None:
-        u = pd.to_numeric(urine_mlkgph, errors="coerce")
-        dur = pd.to_numeric(urine_duration_h, errors="coerce") if urine_duration_h is not None else pd.Series(np.nan, index=idx)
-        
         # Anuria (0 mL for ≥12h) → 3pt
-        anuria = (u == 0) & (dur >= 12)
+        anuria = (urine_rate == 0) & (urine_duration >= 12)
         score[anuria] = np.maximum(score[anuria], 3)
         
         # <0.3 mL/kg/h for ≥24h → 3pt
-        score[(u < 0.3) & (dur >= 24)] = np.maximum(score[(u < 0.3) & (dur >= 24)], 3)
+        score[(urine_rate < 0.3) & (urine_duration >= 24)] = np.maximum(score[(urine_rate < 0.3) & (urine_duration >= 24)], 3)
         
         # <0.5 mL/kg/h for ≥12h → 2pt
-        score[(u < 0.5) & (dur >= 12) & (score < 3)] = np.maximum(score[(u < 0.5) & (dur >= 12) & (score < 3)], 2)
+        score[(urine_rate < 0.5) & (urine_duration >= 12) & (score < 3)] = np.maximum(score[(urine_rate < 0.5) & (urine_duration >= 12) & (score < 3)], 2)
         
         # <0.5 mL/kg/h for 6-12h → 1pt
-        score[(u < 0.5) & (dur >= 6) & (dur < 12) & (score < 2)] = np.maximum(score[(u < 0.5) & (dur >= 6) & (dur < 12) & (score < 2)], 1)
+        score[(urine_rate < 0.5) & (urine_duration >= 6) & (urine_duration < 12) & (score < 2)] = np.maximum(score[(urine_rate < 0.5) & (urine_duration >= 6) & (urine_duration < 12) & (score < 2)], 1)
 
     # Creatinine thresholds according to SOFA-2 table
     # Note: Table shows ≤1.20/≤2.0/≤3.50/>3.50, meaning boundaries at these values
@@ -1082,70 +1375,6 @@ def sofa2_renal(
     score[c > 3.50] = np.maximum(score[c > 3.50], 3)
 
     return score
-
-def sofa2_score(
-    data_dict: Dict[str, pd.DataFrame], *, keep_components: bool = False
-) -> pd.DataFrame:
-    """Aggregate the database operationalization of SOFA-2.
-
-    Expected component keys in data_dict:
-    - sofa2_resp, sofa2_coag, sofa2_liver, sofa2_cardio, sofa2_cns, sofa2_renal
-
-    Component tables may include owner-issued ``*_observed`` and
-    ``*_available`` receipts.  Direct callers that provide only a component
-    score are explicitly asserting that score as an observation.  Production
-    callbacks always provide receipts derived from raw component inputs.
-
-    Returns ``sofa2`` plus explicit observed/available component counts. The
-    deprecated ``sofa2_n_components`` field aliases available components.
-    """
-    required = list(SOFA2_COMPONENT_NAMES)
-
-    result = None
-    for comp in required:
-        if comp not in data_dict:
-            raise ValueError(f"Missing required component: {comp}")
-        df = data_dict[comp].copy()
-        asserted = df[comp].notna().astype("int8")
-        if f"{comp}_observed" not in df:
-            df[f"{comp}_observed"] = asserted
-        if f"{comp}_available" not in df:
-            df[f"{comp}_available"] = asserted
-        if result is None:
-            result = df
-        else:
-            value_columns = {
-                comp,
-                f"{comp}_observed",
-                f"{comp}_available",
-            }
-            id_cols = [
-                col
-                for col in df.columns
-                if col in result.columns and col not in value_columns
-            ]
-            result = pd.merge(result, df, on=id_cols, how="outer")
-
-    # Score value: faithful to MIMIC-IV official / ricu (missing component -> 0).
-    result["sofa2"] = result[required].fillna(0).sum(axis=1).astype(int)
-    observed_columns = [f"{comp}_observed" for comp in required]
-    available_columns = [f"{comp}_available" for comp in required]
-    result["sofa2_n_observed_components"] = (
-        result[observed_columns].fillna(0).sum(axis=1).astype(int)
-    )
-    result["sofa2_n_available_components"] = (
-        result[available_columns].fillna(0).sum(axis=1).astype(int)
-    )
-    result["sofa2_n_components"] = result["sofa2_n_available_components"]
-
-    if keep_components:
-        for comp in required:
-            result[f"{comp}_comp"] = result[comp]
-    else:
-        result = result.drop(columns=required + observed_columns + available_columns)
-
-    return result
-
 
 # Alias matching the EasyICU concept name used in the subset dictionary.
 sofa2 = sofa2_score

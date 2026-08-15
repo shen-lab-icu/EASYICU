@@ -2,23 +2,31 @@
 
 # EasyICU
 
-> A reproducible infrastructure for cross-database ICU research: standardized concept extraction, clinician-friendly web workflows, scriptable Python APIs, and an **evidence-bound research agent** that keeps every reported number traceable and holds back claims it cannot verify.
+> A reproducible infrastructure for cross-database ICU research: standardized concept extraction, clinician-friendly web workflows, scriptable Python APIs, and an **evidence-bound research agent** that traces covered registered claims and holds back claims it cannot verify.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
+[![Clinical mappings](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
 
 EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to the supported public ICU databases, automated extraction of hundreds of standardized clinical concepts, and a **web-based interface** for cohort definition, feature review, visualization, and export. Exact current counts are generated from the shipped registries in [the catalog summary](docs/catalog_summary.md), rather than copied into prose.
+
+> **Clinical evidence status:** version `1.0.0` is a software/API release label,
+> not a claim of database-specific clinical validation. The six supported
+> database mappings currently remain `mapping_only`; independent clinical
+> review and cross-database output-comparability validation are pending. The
+> SOFA-2 implementation has algorithm-level golden and fail-closed boundary
+> tests, which do not validate each database mapping.
 
 ## Why EasyICU
 
 EasyICU has two layers that answer the two halves of one question — *how trustworthy is a reported ICU result?* The **concept layer** governs the clinical definition that produces a number; the **evidence-bound agent layer** governs the trail that records it.
 
-- **One concept layer across six public ICU databases**: EasyICU uses clinical concepts rather than database-specific variable lists, making cross-database analysis easier to write, review, and reuse. The unit of cross-database analysis is the *concept* (`hr`, `crea`, `sofa2`…), not a database's private field name.
+- **One mapped concept layer across six public ICU databases**: EasyICU uses clinical concepts rather than database-specific variable lists, making cross-database analysis easier to write, review, and reuse. The unit of cross-database analysis is the *concept* (`hr`, `crea`, `sofa2`…), not a database's private field name. Mapping coverage does not by itself establish database-specific clinical equivalence or cross-database comparability.
 - **Reproducible from both code and UI**: the same prepared data can be used in the web app and in Python scripts or notebooks.
-- **Evidence-bound, auditable analysis agent**: an optional research-agent layer turns a question + cohort into analysis where every produced artefact (script, log, table, statistic, figure) is hashed into a SHA-256 evidence store, and every reported number is checked against the value it was registered with. Claims that cannot be verified are **held back at the manuscript boundary** rather than published — a *fail-closed* design.
+- **Evidence-bound, auditable analysis agent**: an optional research-agent layer turns a question + cohort into analysis where produced artefacts (script, log, table, statistic, figure) are hashed into a SHA-256 evidence store. For the structured artefact types and registered numeric claims covered by deterministic validators, mismatches are checked and unverifiable claims are **held back at the manuscript boundary** rather than published — a *fail-closed* design, not a general proof of arbitrary analysis code.
 - **Cross-database replication for reliability**: the same research question can be re-run across databases as a replication protocol, so a conclusion's robustness can be *inspected* rather than assumed.
-- **Validated on clinically meaningful use cases**: the framework includes automated computation of **SOFA-2**, alongside standardized concepts, domain-specific loaders, and cohort analytics.
+- **Tested on clinically meaningful use cases**: the framework includes an operational **SOFA-2** implementation with algorithm-level golden and negative tests. Database-specific SOFA-2 mappings remain `mapping_only` pending independent clinical validation.
 
 ## Who This Repository Is For
 
@@ -109,6 +117,10 @@ Swap the extra in brackets for what you actually need:
 | Research-agent HTTP/PDF/image helpers | `easyicu[agentic]` |
 | Official MCP SDK server transports | `easyicu[mcp]` |
 | Current active extras above | `easyicu[all]` |
+
+`easyicu[all]` intentionally excludes `easyicu[scientific-adapters]`. Those
+optional causal/survival validation adapters require a separate, explicit
+installation and do not acquire scientific authority merely by being installed.
 
 The **core install (`easyicu`) already bundles the research-agent's analytical
 stack** (`scikit-learn`, `statsmodels`), so the Python API and the deterministic
@@ -239,8 +251,8 @@ component-completeness checks on composite scores, and confuse ICU with
 hospital mortality. EasyICU closes that gap with four layers:
 
 1. **ICU Data Foundation** — the concept dictionary above, reused as the
-   agent's only view of the data (it never sees raw rows through the
-   prompt, so it cannot invent variables or invalid aggregations).
+   agent's prompt-level view of the data (raw rows are not placed in the
+   prompt; catalog and deterministic validators constrain variable use).
 2. **Safe Analytical Runtime** — a SHA-256 `EvidenceStore`, a numeric
    claim registry, deterministic validators, and execution replay.
 3. **Agent Orchestration** — planner / replanner / coder / analyzer /
@@ -251,9 +263,9 @@ hospital mortality. EasyICU closes that gap with four layers:
 **Fail-closed, not free-running.** A `ResearchContext` carries each
 variable's role, units, allowed aggregations, time windows, missingness
 semantics and ICU pitfalls into the agent loop *and* into the
-validators. Every artefact is hashed into the evidence store; every
-reported number is registered as a numeric claim and re-checked against
-its source. Four readiness gates — **execution-complete /
+validators. Pipeline artefacts are hashed into the evidence store; numeric
+claims that enter the registered claim pathway are re-checked against their
+source. Four readiness gates — **execution-complete /
 evidence-complete / numeric-verified / analysis-validated** — are
 computed mechanically (anyone can recompute the same label) and sort the
 output into three states: **gate-reportable**, **analysis-only**, or

@@ -244,6 +244,7 @@ _EXPORT_GROUPS: Final[dict[str, tuple[str, ...]]] = {
     ),
     "easyicu.scores.sepsis_sofa2": ("sep3_sofa2", "label_sep3_sofa2"),
     "easyicu.scores.sofa2": (
+        "SOFA2InputError",
         "sofa2_score",
         "sofa2_resp",
         "sofa2_coag",

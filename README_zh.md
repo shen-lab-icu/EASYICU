@@ -2,23 +2,29 @@
 
 # EasyICU
 
-> 面向跨公开 ICU 数据库研究的可复现基础设施：标准化临床概念提取、面向临床用户的 Web 工作流、可编程的 Python API，以及一个**证据绑定研究 Agent**——让每个被报告的数字都可追溯，并把无法核验的声明在稿件边界拦下。
+> 面向跨公开 ICU 数据库研究的可复现基础设施：标准化临床概念提取、面向临床用户的 Web 工作流、可编程的 Python API，以及一个**证据绑定研究 Agent**——追踪已覆盖、已注册的数值声明，并把无法核验的声明在稿件边界拦下。
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
+[![临床映射状态](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
 
 EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入支持的公开 ICU 数据库，支持数百种标准化临床概念的自动提取，并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。当前精确数量由已发布 registry 自动生成，见[目录摘要](docs/catalog_summary.md)，不再在说明文字里手工复制。
+
+> **临床证据状态：**`1.0.0` 是软件/API 发布版本，不代表数据库特异性
+> 临床验证已经完成。当前六个支持数据库的映射仍均为 `mapping_only`；
+> 独立临床复核与跨库输出可比性验证尚未完成。SOFA-2 已有算法级 golden
+> 与失败关闭边界测试，但这些测试不能替代逐数据库映射验证。
 
 ## 为什么是 EasyICU
 
 EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 结果有多可信？* **概念层**约束「产生这个数字的临床定义」，**证据绑定 Agent 层**约束「记录这个数字的证据链」。
 
-- **用一套临床概念层覆盖六个公开 ICU 数据库**：EasyICU 以临床概念而不是数据库专属变量表作为核心抽象，更适合跨数据库研究、复用和同行审阅。跨库分析的单位是「概念」（`hr`、`crea`、`sofa2`…），而不是某个数据库的私有字段名。
+- **用一套已映射的临床概念层覆盖六个公开 ICU 数据库**：EasyICU 以临床概念而不是数据库专属变量表作为核心抽象，更适合跨数据库研究、复用和同行审阅。跨库分析的单位是「概念」（`hr`、`crea`、`sofa2`…），而不是某个数据库的私有字段名。映射存在本身不等于数据库特异性临床等价，也不证明跨库输出已经可比。
 - **同时支持代码与图形界面的可复现工作流**：同一份准备完成的数据既可用于 Web 界面，也可用于 Python 脚本和 notebook。
-- **证据绑定、可审计的分析 Agent**：可选的 research-agent 层把「问题 + 队列」变成可审计的分析——每个产物（脚本、日志、表格、统计量、图形）都以 SHA-256 登记进证据库，每个被报告的数字都会和其登记值比对。无法核验的声明会在**稿件边界被拦下**而不是直接发表——即 *fail-closed* 设计。
+- **证据绑定、可审计的分析 Agent**：可选的 research-agent 层把「问题 + 队列」变成可审计的分析——产物（脚本、日志、表格、统计量、图形）会以 SHA-256 登记进证据库。对于确定性验证器已覆盖的结构化产物和已注册数值声明，系统会核对不一致并在**稿件边界拦下**无法核验的声明；这是一种 *fail-closed* 设计，不是对任意分析代码的通用形式化证明。
 - **用跨库复制验证可靠性**：同一个研究问题可作为 replication protocol 在多个数据库上各跑一遍，让一个结论的稳健性可以被*检查*，而不是被假定。
-- **围绕有临床意义的研究任务设计**：框架内置 **SOFA-2** 自动计算，并提供标准化概念提取、专业模块和队列分析能力。
+- **围绕有临床意义的研究任务测试**：框架内置 **SOFA-2** 操作化实现，并有算法级 golden 与负向边界测试；各数据库 SOFA-2 映射仍为 `mapping_only`，尚待独立临床验证。
 
 ## 这个仓库适合谁
 
@@ -102,6 +108,9 @@ pip install "easyicu[webapp] @ git+https://github.com/shen-lab-icu/easyicu.git"
 | 托管 research-agent 的 LLM 代理 | `easyicu[llmserver]` |
 | 可选的 LangGraph agent graph | `easyicu[agentic]` |
 | 当前 active extras | `easyicu[all]` |
+
+`easyicu[all]` 有意不包含 `easyicu[scientific-adapters]`。因果/生存分析
+验证适配器需要单独、显式安装；安装本身不会赋予其科学结论权限。
 
 **核心安装（`easyicu`）已内置 research-agent 的分析栈**（`scikit-learn`、`statsmodels`），
 所以 Python API 和确定性 agent 路径开箱即用。research-agent CLI 另需一个 LLM 客户端
@@ -215,12 +224,12 @@ Research Agent 把"问题 + EasyICU 准备好的数据"通过 4 阶段流水线 
 
 **为什么它不只是「编排」。** 通用分析 agent 擅长规划和写代码，但弱于 ICU 语义——会把有序的 SOFA 子分当连续量平均、把缺失的 PaO₂ 静默填补、掉进 `SOFA==0` 高死亡率假象、把 ICU 死亡和院内死亡混用。EasyICU 用四层来补这个缺口：
 
-1. **ICU 数据底座** —— 复用上面的概念字典，作为 agent 对数据的*唯一*视图（它不通过 prompt 看到原始行，因此无法发明变量或非法聚合）。
+1. **ICU 数据底座** —— 复用上面的概念字典，作为 agent 的 prompt 级数据视图（原始行不进入 prompt；变量使用由目录与确定性验证器约束）。
 2. **安全分析运行时** —— SHA-256 `EvidenceStore`、数值声明注册表、确定性验证器、执行回放。
 3. **Agent 编排** —— planner / replanner / coder / analyzer / writer / critic，每个 LLM 步骤之间都有确定性门。
 4. **候选假设排序** —— 一个有界、人工策展的预规划阶段（**不是**自主「科学发现」系统）。
 
-**Fail-closed，而非放任自流。** `ResearchContext` 把每个变量的角色、单位、允许聚合、时间窗、缺失语义和 ICU 陷阱同时带进 agent 循环*和*验证器。每个产物被哈希登记；每个被报告的数字被注册为数值声明并与来源重新核对。四道 readiness gate ——**execution-complete / evidence-complete / numeric-verified / analysis-validated**——由代码机械计算（任何人复算得同一标签），把输出分成三态：**gate-reportable**、**analysis-only**、**diagnostic-only**。一个无法核验的声明（例如草稿里 `AUROC 0.8` 与登记的 `0.842` 不符）会在稿件边界被拦下，按类型路由到 rewrite / 代码重跑 / 人工复核——**重过同一套门**才能进入可报告稿件。
+**Fail-closed，而非放任自流。** `ResearchContext` 把每个变量的角色、单位、允许聚合、时间窗、缺失语义和 ICU 陷阱同时带进 agent 循环*和*验证器。流水线产物被哈希登记；进入数值声明注册路径的数字会与其来源重新核对。四道 readiness gate ——**execution-complete / evidence-complete / numeric-verified / analysis-validated**——由代码机械计算（任何人复算得同一标签），把输出分成三态：**gate-reportable**、**analysis-only**、**diagnostic-only**。一个无法核验的声明（例如草稿里 `AUROC 0.8` 与登记的 `0.842` 不符）会在稿件边界被拦下，按类型路由到 rewrite / 代码重跑 / 人工复核——**重过同一套门**才能进入可报告稿件。
 
 **用跨库复制验证可靠性。** 跨数据库工作默认走 replication protocol：同一问题在其它支持的数据库上重跑（`cross_database_validation=["eicu", "hirid"]`），让一个结论在 case-mix、覆盖度和缺失模式上的稳健性可被检查——而不是声称哪个库「更好」。
 
