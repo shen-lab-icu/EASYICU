@@ -95,6 +95,7 @@ def change_interval(
     fill_method: str = "none",
     copy: bool = True,
     is_window_concept: bool = False,
+    time_unit: Optional[str] = None,
 ) -> ICUTable | pd.DataFrame:
     """Change the time resolution of a time series table.
     
@@ -110,6 +111,8 @@ def change_interval(
         aggregation: Aggregation method ('mean', 'median', 'first', 'last', etc.)
         fill_gaps: Whether to fill missing time points (default True, matches R ricu)
         copy: Whether to copy the input data (default True). Set to False for performance if input can be modified.
+        time_unit: Explicit unit for a numeric relative-time axis. Numeric
+            times fail closed when this is omitted.
 
     Returns:
         New ICUTable or DataFrame with adjusted time resolution
@@ -144,7 +147,9 @@ def change_interval(
     def _round_time_columns(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
         for col in cols:
             if col in df.columns:
-                df[col] = round_to_interval(df[col], target_interval)
+                df[col] = round_to_interval(
+                    df[col], target_interval, time_unit=time_unit
+                )
         return df
 
     # Handle DataFrame input
@@ -2975,8 +2980,10 @@ def fill_gaps_table(
 def round_to_interval(
     times: Union[pd.Series, pd.Index, pd.Timestamp, pd.Timedelta, timedelta, float, int],
     interval: timedelta,
+    *,
+    time_unit: Optional[str] = None,
 ) -> Union[pd.Series, pd.Index, pd.Timestamp, pd.Timedelta, float, int]:
-    """Floor timestamps/durations/numerics to the nearest interval (ricu ``re_time``)."""
+    """Floor times to an interval, requiring a unit for numeric coordinates."""
 
     if interval is None:
         return times
@@ -2991,11 +2998,35 @@ def round_to_interval(
         return (int_values // step_ns) * step_ns
 
     def _floor_numeric(values: pd.Series) -> pd.Series:
-        raise ValueError(
-            "round_to_interval does not accept bare numeric times: the unit "
-            "(hours/minutes/seconds) is ambiguous. Convert to timedelta or "
-            "datetime first."
-        )
+        if time_unit is None:
+            raise ValueError(
+                "round_to_interval does not accept bare numeric times: the unit "
+                "(hours/minutes/seconds) is ambiguous. Pass time_unit explicitly "
+                "or convert to timedelta/datetime first."
+            )
+        normalized_unit = {
+            "h": "h",
+            "hour": "h",
+            "hours": "h",
+            "m": "min",
+            "min": "min",
+            "minute": "min",
+            "minutes": "min",
+            "s": "s",
+            "second": "s",
+            "seconds": "s",
+        }.get(str(time_unit).strip().lower())
+        if normalized_unit is None:
+            raise ValueError(
+                f"unsupported numeric time_unit {time_unit!r}; expected hours, "
+                "minutes, or seconds"
+            )
+        step = interval_td / pd.Timedelta(1, unit=normalized_unit)
+        numeric = pd.to_numeric(values, errors="coerce")
+        floored = np.floor(numeric / step) * step
+        result = pd.Series(floored, index=values.index, name=values.name)
+        result[numeric.isna()] = np.nan
+        return result
 
     def _series_from(values: np.ndarray, template: pd.Series, converter) -> pd.Series:
         series = converter(values)
@@ -3033,7 +3064,8 @@ def round_to_interval(
         return times
 
     if isinstance(times, pd.Index) and pd.api.types.is_numeric_dtype(times.dtype):
-        return _floor_numeric(pd.Series(times))
+        floored = _floor_numeric(pd.Series(times))
+        return pd.Index(floored, name=times.name)
 
     if isinstance(times, pd.DatetimeIndex):
         floored = _floor_ns(times.astype("int64", copy=False))
@@ -3051,7 +3083,7 @@ def round_to_interval(
         return pd.to_timedelta(_floor_ns(np.array([td.value]))[0], unit="ns")
 
     if isinstance(times, (float, int)):
-        return _floor_numeric(pd.Series([times]))
+        return float(_floor_numeric(pd.Series([times])).iloc[0])
 
     return times
 
