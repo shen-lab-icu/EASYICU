@@ -5082,38 +5082,7 @@ class ResearchAgentPipeline:
         )
 
         def _plan_invoker():
-            return self._run_plan_phase(
-                question=question,
-                cohort_path=cohort_path,
-                cohort_name=cohort_name,
-                database=database,
-                target_outcome=target_outcome,
-                endpoint=endpoint,
-                primary_exposure=primary_exposure,
-                cross_database_validation=cross_database_validation,
-                inclusion_criteria=inclusion_criteria,
-                exclusion_criteria=exclusion_criteria,
-                id_columns=id_columns,
-                time_columns=time_columns,
-                outcome_columns=outcome_columns,
-                time_windows=time_windows,
-                concept_descriptions=concept_descriptions,
-                user_preferences=user_preferences,
-                notes=notes,
-                skill_obj=skill_obj,
-                llm=llm,
-                run_dir=run_dir,
-                run_id=run_id,
-                run_language=run_language,
-                experiment_spec_path=experiment_spec_path,
-                resume_state=resume_state,
-                resume_context_evidence_path=resume_context_evidence_path,
-                trajectory_binding=staged_trajectory_binding,
-                run_scientific_identity=run_scientific_identity,
-                run_environment_identity=run_environment_identity,
-                resume_from_step_id=resume_from_step_id,
-                emit_progress=_emit_progress,
-            )
+            return _pipeline_run___plan_invoker(_emit_progress=_emit_progress, cohort_name=cohort_name, cohort_path=cohort_path, concept_descriptions=concept_descriptions, cross_database_validation=cross_database_validation, database=database, endpoint=endpoint, exclusion_criteria=exclusion_criteria, experiment_spec_path=experiment_spec_path, id_columns=id_columns, inclusion_criteria=inclusion_criteria, llm=llm, notes=notes, outcome_columns=outcome_columns, primary_exposure=primary_exposure, question=question, resume_context_evidence_path=resume_context_evidence_path, resume_from_step_id=resume_from_step_id, resume_state=resume_state, run_dir=run_dir, run_environment_identity=run_environment_identity, run_id=run_id, run_language=run_language, run_scientific_identity=run_scientific_identity, self=self, skill_obj=skill_obj, staged_trajectory_binding=staged_trajectory_binding, target_outcome=target_outcome, time_columns=time_columns, time_windows=time_windows, user_preferences=user_preferences)
 
         from .orchestration.workflow import orchestration_runtime_receipt
 
@@ -5125,151 +5094,16 @@ class ResearchAgentPipeline:
         )
 
         def _provenance_hook(plan_result):
-            # O27 — Raw EHR provenance. Hash the cohort parquet and any
-            # user-supplied source files and register as evidence so the
-            # manuscript's provenance chain goes: raw EHR -> cohort ->
-            # analysis artefacts -> manuscript. Only runs after the plan
-            # phase succeeded.
-            try:
-                provenance = build_provenance_bundle(
-                    cohort_path=cohort_path,
-                    source_files=source_files,
-                )
-                provenance_path = run_dir / "provenance_sources.json"
-                provenance.to_disk(provenance_path)
-                if plan_result.evidence.get("provenance_sources") is None:
-                    plan_result.evidence.register_file(
-                        kind="log",
-                        description=(
-                            "Raw EHR and cohort provenance hashes (O27): "
-                            "sha256 + size + mtime for every source file "
-                            "and the materialised cohort parquet."
-                        ),
-                        source_path=provenance_path,
-                        evidence_id="provenance_sources",
-                        producer="pipeline",
-                        generation_mode="system",
-                    )
-            except Exception as exc:
-                # A paper-facing profile claims the full raw EHR → cohort →
-                # analysis → manuscript chain. If the first link cannot be
-                # hashed, that claim is unsupported, so the run stops instead
-                # of finishing with a warning nobody reads. Development runs
-                # keep the warning: they make no provenance claim.
-                from .orchestration.profiles import is_paper_facing_profile
-
-                paper_facing = is_paper_facing_profile(self._submission_profile_name)
-                plan_result.findings.append(
-                    ValidationFinding(
-                        validator="provenance",
-                        severity="error" if paper_facing else "warning",
-                        message=(
-                            f"Failed to compute raw-EHR provenance bundle: "
-                            f"{type(exc).__name__}: {exc}"
-                        ),
-                        detail={
-                            "reason": "raw_ehr_provenance_unavailable",
-                            "submission_profile_name": self._submission_profile_name,
-                        },
-                    )
-                )
-                if paper_facing:
-                    raise RuntimeError(
-                        "raw-EHR provenance could not be computed under submission "
-                        f"profile {self._submission_profile_name!r}; the "
-                        "manuscript's provenance chain would be incomplete"
-                    ) from exc
-            if plan_result.evidence.get("orchestration_runtime") is None:
-                plan_result.evidence.register_file(
-                    kind="log",
-                    description=(
-                        "Non-scientific phase-dispatch runtime identity; EasyICU "
-                        "receipts/capsules/checkpoints remain authoritative."
-                    ),
-                    source_path=orchestration_receipt_path,
-                    evidence_id="orchestration_runtime",
-                    producer="pipeline",
-                    generation_mode="system",
-                )
+            return _pipeline_run___provenance_hook(plan_result, cohort_path=cohort_path, orchestration_receipt_path=orchestration_receipt_path, run_dir=run_dir, self=self, source_files=source_files)
 
         def _execute_invoker(plan_result):
-            return self._run_execute_phase(
-                plan_result=plan_result,
-                cohort_path=cohort_path,
-                trajectory_binding=staged_trajectory_binding,
-                run_dir=run_dir,
-                run_id=run_id,
-                skill_obj=skill_obj,
-                notes=notes,
-                emit_progress=_emit_progress,
-                resume_from_step_id=resume_from_step_id,
-                stop_after_step_id=stop_after_step_id,
-            )
+            return _pipeline_run___execute_invoker(plan_result, _emit_progress=_emit_progress, cohort_path=cohort_path, notes=notes, resume_from_step_id=resume_from_step_id, run_dir=run_dir, run_id=run_id, self=self, skill_obj=skill_obj, staged_trajectory_binding=staged_trajectory_binding, stop_after_step_id=stop_after_step_id)
 
         def _write_invoker(plan_result, execute_result):
-            try:
-                return self._run_write_phase(
-                    plan_result=plan_result,
-                    execute_result=execute_result,
-                    run_dir=run_dir,
-                    run_id=run_id,
-                    stop_after_analysis=stop_after_analysis,
-                    manuscript_title=manuscript_title,
-                    manuscript_authors=manuscript_authors,
-                    run_language=run_language,
-                    emit_progress=_emit_progress,
-                    force_writer_probe=force_writer_probe,
-                )
-            except EvidenceEnforcementError as exc:
-                validator = (
-                    "manuscript_numeric_auditor"
-                    if "untraced" in getattr(exc, "detail", {})
-                    else "evidence_bound_writer"
-                )
-                plan_result.findings.append(
-                    ValidationFinding(
-                        validator=validator,
-                        severity="error",
-                        message=(
-                            "STRICT evidence enforcement blocked manuscript "
-                            f"generation: {exc}"
-                        ),
-                        detail=getattr(exc, "detail", {}) or None,
-                    )
-                )
-                bound_path = run_dir / "manuscript_scaffold_bound.md"
-                bound_path.write_text(
-                    "# Manuscript scaffold not generated\n\n"
-                    "STRICT evidence enforcement failed before final binding.\n\n"
-                    f"Error: {exc}\n",
-                    encoding="utf-8",
-                )
-                _emit_progress(
-                    "writer",
-                    "STRICT evidence enforcement blocked manuscript generation.",
-                    status="error",
-                    run_id=run_id,
-                )
-                return _WritePhaseResult(literature=None, bound_path=bound_path)
+            return _pipeline_run___write_invoker(plan_result, execute_result, _emit_progress=_emit_progress, force_writer_probe=force_writer_probe, manuscript_authors=manuscript_authors, manuscript_title=manuscript_title, run_dir=run_dir, run_id=run_id, run_language=run_language, self=self, stop_after_analysis=stop_after_analysis)
 
         def _finalise_invoker(plan_result, execute_result, write_result):
-            return self._finalise_success(
-                plan_result=plan_result,
-                execute_result=execute_result,
-                write_result=write_result,
-                run_id=run_id,
-                run_dir=run_dir,
-                cohort_path=cohort_path,
-                notes=notes,
-                database=database,
-                target_outcome=target_outcome,
-                stop_after_analysis=stop_after_analysis,
-                cache_key=cache_key,
-                scientific_identity=run_scientific_identity,
-                experiment_spec_path=experiment_spec_path,
-                audit_logger=audit_logger,
-                emit_progress=_emit_progress,
-            )
+            return _pipeline_run___finalise_invoker(plan_result, execute_result, write_result, _emit_progress=_emit_progress, audit_logger=audit_logger, cache_key=cache_key, cohort_path=cohort_path, database=database, experiment_spec_path=experiment_spec_path, notes=notes, run_dir=run_dir, run_id=run_id, run_scientific_identity=run_scientific_identity, self=self, stop_after_analysis=stop_after_analysis, target_outcome=target_outcome)
 
         # The recorder needs this run's own EvidenceStore, which lives on the
         # plan result rather than in ``run()``'s locals. Keep the live handoff
@@ -5279,66 +5113,13 @@ class ResearchAgentPipeline:
         reviewed_plan: List[Any] = []
 
         def _review_evidence_store():
-            if reviewed_plan:
-                return reviewed_plan[-1].evidence
-            return EvidenceStore(
-                run_dir, enforcement_mode=self._evidence_enforcement_mode
-            )
+            return _pipeline_run___review_evidence_store(reviewed_plan=reviewed_plan, run_dir=run_dir, self=self)
 
         def _human_review_invoker(plan_result):
-            from .orchestration.workflow import human_review_requests_for_plan
-
-            reviewed_plan.append(plan_result)
-            plan_evidence = getattr(plan_result, "evidence", None)
-            capsule_record = (
-                plan_evidence.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
-                if plan_evidence is not None
-                else None
-            )
-            if capsule_record is None:
-                requests_without_execution = human_review_requests_for_plan(
-                    findings=plan_result.findings,
-                    plan=plan_result.plan,
-                    evidence=plan_evidence,
-                    require_plan_review=self._config.require_human_plan_review,
-                )
-                if not requests_without_execution:
-                    return requests_without_execution
-                raise RuntimeError(
-                    "human review cannot bind execution identity because the "
-                    "run input capsule is absent"
-                )
-            submission_profile_ref = (
-                self._submission_profile_ref
-                if self._submission_profile_name and self._submission_profile_version
-                else None
-            )
-            execution_authority = ReviewExecutionAuthority(
-                pipeline_config_sha256=self._config.canonical_digest(),
-                submission_profile_ref=submission_profile_ref,
-                capability_activation_sha256=canonical_sha256(
-                    self._capability_runtime.activation.model_dump(mode="json")
-                    if self._capability_runtime.activation is not None
-                    else None
-                ),
-                run_input_capsule_sha256=str(capsule_record.sha256),
-            )
-            requests = human_review_requests_for_plan(
-                findings=plan_result.findings,
-                plan=plan_result.plan,
-                evidence=plan_evidence,
-                execution_authority=execution_authority,
-                require_plan_review=self._config.require_human_plan_review,
-            )
-            return requests
+            return _pipeline_run___human_review_invoker(plan_result, reviewed_plan=reviewed_plan, self=self)
 
         def _human_review_recorder(records):
-            self._record_human_review_records(
-                records,
-                run_id=run_id,
-                run_dir=run_dir,
-                evidence=_review_evidence_store(),
-            )
+            return _pipeline_run___human_review_recorder(records, _review_evidence_store=_review_evidence_store, run_dir=run_dir, run_id=run_id, self=self)
 
         gate = self._human_review_gate
         from .orchestration.workflow import WorkflowPaused, build_pipeline_workflow
@@ -5349,54 +5130,20 @@ class ResearchAgentPipeline:
             "decision_payloads": None,
         }
 
-        def _prepare_human_review_execution(
-            decision_records: Sequence[Mapping[str, Any]],
-        ) -> None:
-            path = checkpoint_commit.get("path")
-            if path is None:
-                return
-            prepare_human_review_decision(
-                checkpoint_file=Path(path),
-                decision_payloads=checkpoint_commit.get("decision_payloads") or (),
-                decision_records=decision_records,
-                decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
-            )
+        def _prepare_human_review_execution(decision_records: Sequence[Mapping[str, Any]]):
+            return _pipeline_run___prepare_human_review_execution(decision_records, checkpoint_commit=checkpoint_commit)
 
-        def _commit_human_review_execution(
-            decision_records: Sequence[Mapping[str, Any]],
-        ) -> None:
-            path = checkpoint_commit.get("path")
-            if path is None:
-                return
-            if not reviewed_plan:
-                raise HumanReviewCheckpointError(
-                    "approved execution has no restored typed plan handoff"
-                )
-            commit_human_review_decision(
-                checkpoint_file=Path(path),
-                run_dir=run_dir,
-                evidence=reviewed_plan[-1].evidence,
-                plan_revision=reviewed_plan[-1].plan.revision,
-                decision_payloads=checkpoint_commit.get("decision_payloads") or (),
-                decision_records=decision_records,
-                decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
-            )
+        def _commit_human_review_execution(decision_records: Sequence[Mapping[str, Any]]):
+            return _pipeline_run___commit_human_review_execution(decision_records, checkpoint_commit=checkpoint_commit, reviewed_plan=reviewed_plan, run_dir=run_dir)
 
-        def _commit_human_review_execution_start() -> None:
-            path = checkpoint_commit.get("path")
-            if path is None:
-                return
-            mark_human_review_execution_started(Path(path))
+        def _commit_human_review_execution_start():
+            return _pipeline_run___commit_human_review_execution_start(checkpoint_commit=checkpoint_commit)
 
-        def _commit_human_review_write_start() -> None:
-            path = checkpoint_commit.get("path")
-            if path is not None:
-                mark_human_review_execution_phase(Path(path), "write_in_progress")
+        def _commit_human_review_write_start():
+            return _pipeline_run___commit_human_review_write_start(checkpoint_commit=checkpoint_commit)
 
-        def _commit_human_review_finalize_start() -> None:
-            path = checkpoint_commit.get("path")
-            if path is not None:
-                mark_human_review_execution_phase(Path(path), "finalize_in_progress")
+        def _commit_human_review_finalize_start():
+            return _pipeline_run___commit_human_review_finalize_start(checkpoint_commit=checkpoint_commit)
 
         workflow = build_pipeline_workflow(
             plan_invoker=_plan_invoker,
@@ -8617,3 +8364,300 @@ def _step_summary_has_any_key(path: Path, keys: Sequence[str]) -> bool:
 
 
 __all__ = ["ResearchAgentPipeline"]
+
+def _pipeline_run___plan_invoker(*, _emit_progress: Any, cohort_name: Any, cohort_path: Any, concept_descriptions: Any, cross_database_validation: Any, database: Any, endpoint: Any, exclusion_criteria: Any, experiment_spec_path: Any, id_columns: Any, inclusion_criteria: Any, llm: Any, notes: Any, outcome_columns: Any, primary_exposure: Any, question: Any, resume_context_evidence_path: Any, resume_from_step_id: Any, resume_state: Any, run_dir: Any, run_environment_identity: Any, run_id: Any, run_language: Any, run_scientific_identity: Any, self: Any, skill_obj: Any, staged_trajectory_binding: Any, target_outcome: Any, time_columns: Any, time_windows: Any, user_preferences: Any):
+    return self._run_plan_phase(
+        question=question,
+        cohort_path=cohort_path,
+        cohort_name=cohort_name,
+        database=database,
+        target_outcome=target_outcome,
+        endpoint=endpoint,
+        primary_exposure=primary_exposure,
+        cross_database_validation=cross_database_validation,
+        inclusion_criteria=inclusion_criteria,
+        exclusion_criteria=exclusion_criteria,
+        id_columns=id_columns,
+        time_columns=time_columns,
+        outcome_columns=outcome_columns,
+        time_windows=time_windows,
+        concept_descriptions=concept_descriptions,
+        user_preferences=user_preferences,
+        notes=notes,
+        skill_obj=skill_obj,
+        llm=llm,
+        run_dir=run_dir,
+        run_id=run_id,
+        run_language=run_language,
+        experiment_spec_path=experiment_spec_path,
+        resume_state=resume_state,
+        resume_context_evidence_path=resume_context_evidence_path,
+        trajectory_binding=staged_trajectory_binding,
+        run_scientific_identity=run_scientific_identity,
+        run_environment_identity=run_environment_identity,
+        resume_from_step_id=resume_from_step_id,
+        emit_progress=_emit_progress,
+    )
+
+
+def _pipeline_run___provenance_hook(plan_result, *, cohort_path: Any, orchestration_receipt_path: Any, run_dir: Any, self: Any, source_files: Any):
+    try:
+        provenance = build_provenance_bundle(
+            cohort_path=cohort_path,
+            source_files=source_files,
+        )
+        provenance_path = run_dir / "provenance_sources.json"
+        provenance.to_disk(provenance_path)
+        if plan_result.evidence.get("provenance_sources") is None:
+            plan_result.evidence.register_file(
+                kind="log",
+                description=(
+                    "Raw EHR and cohort provenance hashes (O27): "
+                    "sha256 + size + mtime for every source file "
+                    "and the materialised cohort parquet."
+                ),
+                source_path=provenance_path,
+                evidence_id="provenance_sources",
+                producer="pipeline",
+                generation_mode="system",
+            )
+    except Exception as exc:
+        # A paper-facing profile claims the full raw EHR → cohort →
+        # analysis → manuscript chain. If the first link cannot be
+        # hashed, that claim is unsupported, so the run stops instead
+        # of finishing with a warning nobody reads. Development runs
+        # keep the warning: they make no provenance claim.
+        from .orchestration.profiles import is_paper_facing_profile
+
+        paper_facing = is_paper_facing_profile(self._submission_profile_name)
+        plan_result.findings.append(
+            ValidationFinding(
+                validator="provenance",
+                severity="error" if paper_facing else "warning",
+                message=(
+                    f"Failed to compute raw-EHR provenance bundle: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+                detail={
+                    "reason": "raw_ehr_provenance_unavailable",
+                    "submission_profile_name": self._submission_profile_name,
+                },
+            )
+        )
+        if paper_facing:
+            raise RuntimeError(
+                "raw-EHR provenance could not be computed under submission "
+                f"profile {self._submission_profile_name!r}; the "
+                "manuscript's provenance chain would be incomplete"
+            ) from exc
+    if plan_result.evidence.get("orchestration_runtime") is None:
+        plan_result.evidence.register_file(
+            kind="log",
+            description=(
+                "Non-scientific phase-dispatch runtime identity; EasyICU "
+                "receipts/capsules/checkpoints remain authoritative."
+            ),
+            source_path=orchestration_receipt_path,
+            evidence_id="orchestration_runtime",
+            producer="pipeline",
+            generation_mode="system",
+        )
+
+
+def _pipeline_run___execute_invoker(plan_result, *, _emit_progress: Any, cohort_path: Any, notes: Any, resume_from_step_id: Any, run_dir: Any, run_id: Any, self: Any, skill_obj: Any, staged_trajectory_binding: Any, stop_after_step_id: Any):
+    return self._run_execute_phase(
+        plan_result=plan_result,
+        cohort_path=cohort_path,
+        trajectory_binding=staged_trajectory_binding,
+        run_dir=run_dir,
+        run_id=run_id,
+        skill_obj=skill_obj,
+        notes=notes,
+        emit_progress=_emit_progress,
+        resume_from_step_id=resume_from_step_id,
+        stop_after_step_id=stop_after_step_id,
+    )
+
+
+def _pipeline_run___write_invoker(plan_result, execute_result, *, _emit_progress: Any, force_writer_probe: Any, manuscript_authors: Any, manuscript_title: Any, run_dir: Any, run_id: Any, run_language: Any, self: Any, stop_after_analysis: Any):
+    try:
+        return self._run_write_phase(
+            plan_result=plan_result,
+            execute_result=execute_result,
+            run_dir=run_dir,
+            run_id=run_id,
+            stop_after_analysis=stop_after_analysis,
+            manuscript_title=manuscript_title,
+            manuscript_authors=manuscript_authors,
+            run_language=run_language,
+            emit_progress=_emit_progress,
+            force_writer_probe=force_writer_probe,
+        )
+    except EvidenceEnforcementError as exc:
+        validator = (
+            "manuscript_numeric_auditor"
+            if "untraced" in getattr(exc, "detail", {})
+            else "evidence_bound_writer"
+        )
+        plan_result.findings.append(
+            ValidationFinding(
+                validator=validator,
+                severity="error",
+                message=(
+                    "STRICT evidence enforcement blocked manuscript "
+                    f"generation: {exc}"
+                ),
+                detail=getattr(exc, "detail", {}) or None,
+            )
+        )
+        bound_path = run_dir / "manuscript_scaffold_bound.md"
+        bound_path.write_text(
+            "# Manuscript scaffold not generated\n\n"
+            "STRICT evidence enforcement failed before final binding.\n\n"
+            f"Error: {exc}\n",
+            encoding="utf-8",
+        )
+        _emit_progress(
+            "writer",
+            "STRICT evidence enforcement blocked manuscript generation.",
+            status="error",
+            run_id=run_id,
+        )
+        return _WritePhaseResult(literature=None, bound_path=bound_path)
+
+
+def _pipeline_run___finalise_invoker(plan_result, execute_result, write_result, *, _emit_progress: Any, audit_logger: Any, cache_key: Any, cohort_path: Any, database: Any, experiment_spec_path: Any, notes: Any, run_dir: Any, run_id: Any, run_scientific_identity: Any, self: Any, stop_after_analysis: Any, target_outcome: Any):
+    return self._finalise_success(
+        plan_result=plan_result,
+        execute_result=execute_result,
+        write_result=write_result,
+        run_id=run_id,
+        run_dir=run_dir,
+        cohort_path=cohort_path,
+        notes=notes,
+        database=database,
+        target_outcome=target_outcome,
+        stop_after_analysis=stop_after_analysis,
+        cache_key=cache_key,
+        scientific_identity=run_scientific_identity,
+        experiment_spec_path=experiment_spec_path,
+        audit_logger=audit_logger,
+        emit_progress=_emit_progress,
+    )
+
+
+def _pipeline_run___review_evidence_store(*, reviewed_plan: Any, run_dir: Any, self: Any):
+    if reviewed_plan:
+        return reviewed_plan[-1].evidence
+    return EvidenceStore(
+        run_dir, enforcement_mode=self._evidence_enforcement_mode
+    )
+
+
+def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any):
+    from .orchestration.workflow import human_review_requests_for_plan
+
+    reviewed_plan.append(plan_result)
+    plan_evidence = getattr(plan_result, "evidence", None)
+    capsule_record = (
+        plan_evidence.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
+        if plan_evidence is not None
+        else None
+    )
+    if capsule_record is None:
+        requests_without_execution = human_review_requests_for_plan(
+            findings=plan_result.findings,
+            plan=plan_result.plan,
+            evidence=plan_evidence,
+            require_plan_review=self._config.require_human_plan_review,
+        )
+        if not requests_without_execution:
+            return requests_without_execution
+        raise RuntimeError(
+            "human review cannot bind execution identity because the "
+            "run input capsule is absent"
+        )
+    submission_profile_ref = (
+        self._submission_profile_ref
+        if self._submission_profile_name and self._submission_profile_version
+        else None
+    )
+    execution_authority = ReviewExecutionAuthority(
+        pipeline_config_sha256=self._config.canonical_digest(),
+        submission_profile_ref=submission_profile_ref,
+        capability_activation_sha256=canonical_sha256(
+            self._capability_runtime.activation.model_dump(mode="json")
+            if self._capability_runtime.activation is not None
+            else None
+        ),
+        run_input_capsule_sha256=str(capsule_record.sha256),
+    )
+    requests = human_review_requests_for_plan(
+        findings=plan_result.findings,
+        plan=plan_result.plan,
+        evidence=plan_evidence,
+        execution_authority=execution_authority,
+        require_plan_review=self._config.require_human_plan_review,
+    )
+    return requests
+
+
+def _pipeline_run___human_review_recorder(records, *, _review_evidence_store: Any, run_dir: Any, run_id: Any, self: Any):
+    self._record_human_review_records(
+        records,
+        run_id=run_id,
+        run_dir=run_dir,
+        evidence=_review_evidence_store(),
+    )
+
+
+def _pipeline_run___prepare_human_review_execution(decision_records: Sequence[Mapping[str, Any]], *, checkpoint_commit: Any) -> None:
+    path = checkpoint_commit.get("path")
+    if path is None:
+        return
+    prepare_human_review_decision(
+        checkpoint_file=Path(path),
+        decision_payloads=checkpoint_commit.get("decision_payloads") or (),
+        decision_records=decision_records,
+        decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
+    )
+
+
+def _pipeline_run___commit_human_review_execution(decision_records: Sequence[Mapping[str, Any]], *, checkpoint_commit: Any, reviewed_plan: Any, run_dir: Any) -> None:
+    path = checkpoint_commit.get("path")
+    if path is None:
+        return
+    if not reviewed_plan:
+        raise HumanReviewCheckpointError(
+            "approved execution has no restored typed plan handoff"
+        )
+    commit_human_review_decision(
+        checkpoint_file=Path(path),
+        run_dir=run_dir,
+        evidence=reviewed_plan[-1].evidence,
+        plan_revision=reviewed_plan[-1].plan.revision,
+        decision_payloads=checkpoint_commit.get("decision_payloads") or (),
+        decision_records=decision_records,
+        decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
+    )
+
+
+def _pipeline_run___commit_human_review_execution_start(*, checkpoint_commit: Any) -> None:
+    path = checkpoint_commit.get("path")
+    if path is None:
+        return
+    mark_human_review_execution_started(Path(path))
+
+
+def _pipeline_run___commit_human_review_write_start(*, checkpoint_commit: Any) -> None:
+    path = checkpoint_commit.get("path")
+    if path is not None:
+        mark_human_review_execution_phase(Path(path), "write_in_progress")
+
+
+def _pipeline_run___commit_human_review_finalize_start(*, checkpoint_commit: Any) -> None:
+    path = checkpoint_commit.get("path")
+    if path is not None:
+        mark_human_review_execution_phase(Path(path), "finalize_in_progress")
+
+

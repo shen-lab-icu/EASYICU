@@ -15,7 +15,7 @@ from typing import Any, Optional, Union
 from .pipeline import ResearchAgentPipeline
 from .providers.mocks import MockLLMClient
 
-__all__ = ["go"]
+__all__ = ["go", "replicate", "resume_human_review"]
 
 
 def go(
@@ -64,4 +64,55 @@ def go(
         stop_after_analysis=stop_after_analysis,
         progress_callback=progress_callback,
         **run_kwargs,
+    )
+
+
+def replicate(
+    *,
+    cohorts: dict[str, Union[str, Path, Any]],
+    llm: Optional[Any] = None,
+    workdir: Optional[Union[str, Path]] = None,
+    question: Optional[str] = None,
+    target_outcome: Optional[str] = None,
+    cohort_name_prefix: str = "cohort",
+    stop_after_analysis: bool = True,
+    notes: Optional[str] = None,
+    manuscript_language: Optional[str] = None,
+    **replicate_kwargs: Any,
+) -> Any:
+    """Run the same question across cohorts/databases, facade-style.
+
+    Mirrors :meth:`ResearchAgentPipeline.replicate` with the same fail-closed
+    default client (offline mock unless ``llm`` is supplied by a caller that
+    already satisfied the opt-in gate).
+    """
+    client = llm if llm is not None else MockLLMClient()
+    pipeline = ResearchAgentPipeline(workdir=workdir, llm=client)
+    return pipeline.replicate(
+        cohorts=cohorts,
+        question=question,
+        target_outcome=target_outcome,
+        cohort_name_prefix=cohort_name_prefix,
+        stop_after_analysis=stop_after_analysis,
+        notes=notes,
+        manuscript_language=manuscript_language,
+        **replicate_kwargs,
+    )
+
+
+def resume_human_review(
+    decisions: list[Any],
+    *,
+    llm: Optional[Any] = None,
+    workdir: Optional[Union[str, Path]] = None,
+    run_id: Optional[str] = None,
+    progress_callback: Optional[Any] = None,
+) -> Any:
+    """Answer a durable human-review pause through the same thin surface."""
+    client = llm if llm is not None else MockLLMClient()
+    pipeline = ResearchAgentPipeline(workdir=workdir, llm=client)
+    return pipeline.resume_human_review(
+        decisions,
+        run_id=run_id,
+        progress_callback=progress_callback,
     )

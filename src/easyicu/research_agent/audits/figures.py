@@ -2554,87 +2554,11 @@ class FigureSourceDataValidator:
             figure: set() for figure in required_figure_obligations
         }
 
-        def credit_table_source(
-            source_path: Path,
-            source_frame: pd.DataFrame,
-            table_paths: Set[Path],
-        ) -> None:
-            for table_path in table_paths:
-                resolved = table_path.resolve()
-                product = table_products.get(resolved, f"table:{table_path.stem}")
-                frame = table_frames.get(resolved)
-                if frame is None:
-                    try:
-                        frame = self._read_tabular(resolved)
-                    except Exception:
-                        continue
-                    table_frames[resolved] = frame
-                semantic_product = self._contract_scoped_effect_product(
-                    product=product,
-                    source_frame=source_frame,
-                    upstream_frame=frame,
-                    upstream_step_id=self._table_step_id(table_path, run_dir=run_dir),
-                    completed_step_records=completed_step_records,
-                )
-                for figure in source_figure_products.get(source_path.resolve(), set()):
-                    if figure not in required_figure_obligations:
-                        continue
-                    family = self._figure_result_family(
-                        step=step,
-                        figure_product=figure,
-                    )
-                    if family == "prediction":
-                        matched_figure_obligations[figure].update(
-                            required_figure_obligations[figure]
-                            & self._prediction_source_obligations(
-                                product=product,
-                                frame=frame,
-                            )
-                        )
-                    elif self._source_supports_figures(
-                        step=step,
-                        product=semantic_product,
-                        frame=frame,
-                        figure_products=[figure],
-                        require_all=True,
-                    ):
-                        matched_figure_obligations[figure].update(
-                            required_figure_obligations[figure]
-                        )
+        def credit_table_source(source_path: Path, source_frame: pd.DataFrame, table_paths: Set[Path]):
+            return _figure_audit__credit_table_source(source_path, source_frame, table_paths, completed_step_records=completed_step_records, matched_figure_obligations=matched_figure_obligations, required_figure_obligations=required_figure_obligations, run_dir=run_dir, self=self, source_figure_products=source_figure_products, step=step, table_frames=table_frames, table_products=table_products)
 
-        def credit_statistic_source(
-            source_path: Path,
-            statistic_ids: Set[str],
-        ) -> None:
-            for statistic_id in statistic_ids:
-                product_name, expected = required_statistics[statistic_id]
-                product = f"statistic:{product_name}"
-                for figure in source_figure_products.get(source_path.resolve(), set()):
-                    if figure not in required_figure_obligations:
-                        continue
-                    family = self._figure_result_family(
-                        step=step,
-                        figure_product=figure,
-                    )
-                    if family == "prediction":
-                        matched_figure_obligations[figure].update(
-                            required_figure_obligations[figure]
-                            & self._prediction_source_obligations(
-                                product=product,
-                                frame=None,
-                                statistic_value=expected,
-                            )
-                        )
-                    elif self._source_supports_figures(
-                        step=step,
-                        product=product,
-                        frame=None,
-                        figure_products=[figure],
-                        require_all=True,
-                    ):
-                        matched_figure_obligations[figure].update(
-                            required_figure_obligations[figure]
-                        )
+        def credit_statistic_source(source_path: Path, statistic_ids: Set[str]):
+            return _figure_audit__credit_statistic_source(source_path, statistic_ids, matched_figure_obligations=matched_figure_obligations, required_figure_obligations=required_figure_obligations, required_statistics=required_statistics, self=self, source_figure_products=source_figure_products, step=step)
 
         for source_path in source_tables:
             if not self._safe_regular_run_file(source_path, run_dir=run_dir):
@@ -5534,5 +5458,81 @@ def _figure_source_compare___derived_matches(source_col: str, expected_vectors: 
         if comparable.any() and (matched | ~left_present).all():
             return True
     return False
+
+def _figure_audit__credit_table_source(source_path: Path, source_frame: pd.DataFrame, table_paths: Set[Path], *, completed_step_records: Any, matched_figure_obligations: Any, required_figure_obligations: Any, run_dir: Any, self: Any, source_figure_products: Any, step: Any, table_frames: Any, table_products: Any) -> None:
+    for table_path in table_paths:
+        resolved = table_path.resolve()
+        product = table_products.get(resolved, f"table:{table_path.stem}")
+        frame = table_frames.get(resolved)
+        if frame is None:
+            try:
+                frame = self._read_tabular(resolved)
+            except Exception:
+                continue
+            table_frames[resolved] = frame
+        semantic_product = self._contract_scoped_effect_product(
+            product=product,
+            source_frame=source_frame,
+            upstream_frame=frame,
+            upstream_step_id=self._table_step_id(table_path, run_dir=run_dir),
+            completed_step_records=completed_step_records,
+        )
+        for figure in source_figure_products.get(source_path.resolve(), set()):
+            if figure not in required_figure_obligations:
+                continue
+            family = self._figure_result_family(
+                step=step,
+                figure_product=figure,
+            )
+            if family == "prediction":
+                matched_figure_obligations[figure].update(
+                    required_figure_obligations[figure]
+                    & self._prediction_source_obligations(
+                        product=product,
+                        frame=frame,
+                    )
+                )
+            elif self._source_supports_figures(
+                step=step,
+                product=semantic_product,
+                frame=frame,
+                figure_products=[figure],
+                require_all=True,
+            ):
+                matched_figure_obligations[figure].update(
+                    required_figure_obligations[figure]
+                )
+
+
+def _figure_audit__credit_statistic_source(source_path: Path, statistic_ids: Set[str], *, matched_figure_obligations: Any, required_figure_obligations: Any, required_statistics: Any, self: Any, source_figure_products: Any, step: Any) -> None:
+    for statistic_id in statistic_ids:
+        product_name, expected = required_statistics[statistic_id]
+        product = f"statistic:{product_name}"
+        for figure in source_figure_products.get(source_path.resolve(), set()):
+            if figure not in required_figure_obligations:
+                continue
+            family = self._figure_result_family(
+                step=step,
+                figure_product=figure,
+            )
+            if family == "prediction":
+                matched_figure_obligations[figure].update(
+                    required_figure_obligations[figure]
+                    & self._prediction_source_obligations(
+                        product=product,
+                        frame=None,
+                        statistic_value=expected,
+                    )
+                )
+            elif self._source_supports_figures(
+                step=step,
+                product=product,
+                frame=None,
+                figure_products=[figure],
+                require_all=True,
+            ):
+                matched_figure_obligations[figure].update(
+                    required_figure_obligations[figure]
+                )
 
 

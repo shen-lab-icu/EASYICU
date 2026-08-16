@@ -50,3 +50,33 @@ def test_go_does_not_expose_publication_authority_toggles() -> None:
     assert "question" in params  # the one Biomni-style positional request
     assert "llm" in params
     assert "cohort" in params
+
+
+def test_replicate_and_resume_are_thin_fail_closed_wrappers(monkeypatch) -> None:
+    sentinel = object()
+
+    def fake_replicate(self, **kwargs):
+        assert kwargs["cohorts"] == {"miiv": "cohort.csv"}
+        return sentinel
+
+    def fake_resume(self, decisions, **kwargs):
+        assert decisions == [{"decision": "approved"}]
+        return sentinel
+
+    captured = {}
+
+    def fake_init(self, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(facade.ResearchAgentPipeline, "replicate", fake_replicate)
+    monkeypatch.setattr(facade.ResearchAgentPipeline, "resume_human_review", fake_resume)
+    monkeypatch.setattr(facade.ResearchAgentPipeline, "__init__", fake_init)
+
+    assert facade.replicate(cohorts={"miiv": "cohort.csv"}) is sentinel
+    assert isinstance(captured["llm"], MockLLMClient)
+
+    captured.clear()
+    assert (
+        facade.resume_human_review([{"decision": "approved"}]) is sentinel
+    )
+    assert isinstance(captured["llm"], MockLLMClient)
