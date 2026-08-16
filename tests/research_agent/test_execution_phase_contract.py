@@ -963,14 +963,19 @@ def test_locked_measurement_preflight_runs_before_every_coder_repair():
         StepCandidateRecovery,
     )
 
-    source = inspect.getsource(pipeline_execute._execute_step) + "\n".join(
-        inspect.getsource(stage)
-        for stage in (
-            pipeline_execute._candidate_concept_audit_transition,
-            pipeline_execute._candidate_execute_transition,
-            pipeline_execute._candidate_visual_transition,
-            pipeline_execute._candidate_contract_repair_transition,
-            pipeline_execute._candidate_failure_transition,
+    source = (
+        inspect.getsource(pipeline_execute._step_prepare_execution_authority)
+        + "\n"
+        + inspect.getsource(pipeline_execute._execute_step)
+        + "\n".join(
+            inspect.getsource(stage)
+            for stage in (
+                pipeline_execute._candidate_concept_audit_transition,
+                pipeline_execute._candidate_execute_transition,
+                pipeline_execute._candidate_visual_transition,
+                pipeline_execute._candidate_contract_repair_transition,
+                pipeline_execute._candidate_failure_transition,
+            )
         )
     )
     preflight = source.index("audit_locked_measurement_data_quality(")
@@ -1023,7 +1028,11 @@ def test_stability_standard_executor_supersedes_stale_resume_capsule():
     from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.execution.runners import selection
 
-    source = inspect.getsource(pipeline_execute._execute_step)
+    source = (
+        inspect.getsource(pipeline_execute._step_settle_initial_code)
+        + "\n"
+        + inspect.getsource(pipeline_execute._execute_step)
+    )
     assignment = source[source.index("standard_executor = select_standard_executor(") :]
     assignment = assignment[: assignment.index("preflight_figure_code =")]
     selector_source = inspect.getsource(selection.select_standard_executor)
@@ -1122,7 +1131,11 @@ def test_publication_figure_gate_accepts_structural_figure_contracts(
 def test_execute_phase_mandatory_publication_gate_uses_structural_predicate():
     from easyicu.research_agent.execution import phase as pipeline_execute
 
-    source = inspect.getsource(pipeline_execute._execute_step)
+    source = (
+        inspect.getsource(pipeline_execute._step_prepare_post_candidate_figures)
+        + "\n"
+        + inspect.getsource(pipeline_execute._execute_step)
+    )
     gate_start = source.index("publication_step =")
     gate_end = source.index("figure_role =", gate_start)
     gate_source = source[gate_start:gate_end]
@@ -1320,7 +1333,11 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
     from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.execution import phase_support as pipeline_execute_support
 
-    source = inspect.getsource(pipeline_execute._execute_step)
+    source = (
+        inspect.getsource(pipeline_execute._step_prepare_post_candidate_figures)
+        + "\n"
+        + inspect.getsource(pipeline_execute._execute_step)
+    )
     finalize_source = inspect.getsource(pipeline_execute._step_finalize_step)
     helper_source = inspect.getsource(
         pipeline_execute_support._step_register_run_artifacts
@@ -1363,9 +1380,13 @@ def test_execute_phase_deterministically_requires_typed_exposure_consumption():
     shared_source = inspect.getsource(
         pipeline_execute._deterministic_code_gate_findings
     )
-    execute_source = inspect.getsource(
-        pipeline_execute._execute_step
-    ) + inspect.getsource(pipeline_execute._candidate_concept_audit_transition)
+    execute_source = (
+        inspect.getsource(pipeline_execute._execute_step)
+        + "\n"
+        + inspect.getsource(pipeline_execute._step_run_concept_repair_phase)
+        + "\n"
+        + inspect.getsource(pipeline_execute._candidate_concept_audit_transition)
+    )
     concept_execution_source = inspect.getsource(
         concept_audit_execution.ConceptAuditCoordinator.findings_for_code
     )
@@ -1996,6 +2017,8 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
         + inspect.getsource(pipeline_execute._step_resolve_run_transition)
         + "\n"
         + inspect.getsource(pipeline_execute._execute_step)
+        + "\n"
+        + inspect.getsource(pipeline_execute._step_prepare_execution_authority)
         + "\n"
         + candidate_source
     )

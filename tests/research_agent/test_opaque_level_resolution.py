@@ -546,7 +546,7 @@ def _rebind_sites() -> list[tuple[str, ast.AST]]:
     for relative in (
         "agents/planner.py",
         "authority/plan_authority.py",
-        "execution/phase.py",
+        "execution/phase_support.py",
         "orchestration/human_review_restore.py",
         "pipeline.py",
     ):

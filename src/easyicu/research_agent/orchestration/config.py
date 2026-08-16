@@ -536,7 +536,7 @@ class PipelineConfig:
     # the writer via auto-generated hypertargets; our writer was being
     # given the narrower ``preferred_keys`` subset. Widening parity-
     # tests as the "primary" subset, plus a "secondary" block, is the
-    # Phase-1 step toward the more autonomous writer namespace.
+    # Phase-1 step toward the wider writer namespace.
     writer_digest_widened: bool = False
     writer_digest_secondary_cap_per_step: int = 20
 

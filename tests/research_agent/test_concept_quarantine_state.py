@@ -15,14 +15,15 @@ from easyicu.research_agent.execution.concept_reaudit import (
 from easyicu.research_agent.schema import ValidationFinding
 
 
-def _execute_one_step_node() -> ast.FunctionDef | ast.AsyncFunctionDef:
-    tree = ast.parse(inspect.getsource(pipeline_execute._execute_step))
-    return next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "_execute_step"
+def _execute_one_step_node() -> ast.Module:
+    source = (
+        inspect.getsource(pipeline_execute._execute_step)
+        + "\n"
+        + inspect.getsource(pipeline_execute._step_prepare_execution_authority)
+        + "\n"
+        + inspect.getsource(pipeline_execute._step_run_concept_repair_phase)
     )
+    return ast.parse(source)
 
 
 def test_quarantine_state_defaults_are_step_local() -> None:
