@@ -5,6 +5,8 @@ import pandas as pd
 import pytest
 
 from easyicu import SOFA2InputError as PublicSOFA2InputError
+from easyicu.io.ts_utils import change_interval
+from easyicu.resources import load_dictionary
 from easyicu.scores.sofa2 import (
     SOFA2_COMPONENT_NAMES,
     SOFA2InputError,
@@ -16,6 +18,7 @@ from easyicu.scores.sofa2 import (
     sofa2_resp,
     sofa2_score,
 )
+from easyicu.table import ICUTable
 
 
 def _assert_reason(
@@ -40,6 +43,33 @@ def _component_frames(*, rows: int = 1) -> dict[str, pd.DataFrame]:
 
 def test_sofa2_input_error_is_public() -> None:
     assert PublicSOFA2InputError is SOFA2InputError
+
+
+def test_motor_response_hourly_aggregation_preserves_ordinal_domain() -> None:
+    definition = load_dictionary(include_sofa2=True).get("motor_response")
+    assert definition is not None
+    assert definition.aggregate == "min"
+    table = ICUTable(
+        data=pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": [0.1, 0.8],
+                "motor_response": [5.0, 4.0],
+            }
+        ),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column="motor_response",
+    )
+
+    result = change_interval(
+        table,
+        interval=pd.Timedelta(hours=1),
+        aggregation=definition.aggregate,
+        time_unit="hours",
+    ).data
+
+    assert result["motor_response"].tolist() == [4.0]
 
 
 @pytest.mark.clinical_conformance
