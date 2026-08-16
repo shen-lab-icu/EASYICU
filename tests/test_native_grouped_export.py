@@ -54,9 +54,12 @@ def test_native_sofa2_receipts_survive_producer_to_trajectory(
         "sofa2_resp_available",
     ]
     with open_export_package(tmp_path) as package:
-        assert package.column_metadata_by_file["sofa2_score.parquet"].columns[
-            "sofa2_resp_observed"
-        ].representation_transform == "owner_observed_status"
+        assert (
+            package.column_metadata_by_file["sofa2_score.parquet"]
+            .columns["sofa2_resp_observed"]
+            .representation_transform
+            == "owner_observed_status"
+        )
 
     trajectory, provenance = cohort_materializer.build_trajectory_long(
         data_path=tmp_path,
@@ -201,6 +204,70 @@ def test_native_time_axis_uses_los_and_normalises_stay_level_outcomes() -> None:
     assert stay_audit["normalized_stay_level_rows"] == 2
 
 
+def test_native_outcome_preserves_death_time_before_normalising_charttime() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    source = pd.DataFrame(
+        {
+            "admissionid": [1, 2, 3],
+            "charttime": [12.0, None, -4.0],
+            "death": [1, None, True],
+            "los_icu": [1.0, 2.0, 0.5],
+        }
+    )
+
+    canonical = api._canonicalise_native_export_frame(
+        source,
+        module="outcome",
+        requested_concepts=["death", "los_icu"],
+        dictionary=dictionary,
+        database="aumc",
+    )
+    assert list(canonical.columns) == [
+        "stay_id",
+        "charttime",
+        "death",
+        "death_time",
+        "los_icu",
+    ]
+    assert canonical.loc[0, "death_time"] == 12.0
+    assert pd.isna(canonical.loc[1, "death_time"])
+    assert canonical.loc[2, "death_time"] == -4.0
+
+    published, audit = api._enforce_native_export_time_axis(
+        canonical,
+        module="outcome",
+        stay_time_upper_bounds={},
+        database="aumc",
+    )
+    assert published["charttime"].tolist() == [0.0, 0.0, 0.0]
+    assert published.loc[0, "death_time"] == 12.0
+    assert published.loc[2, "death_time"] == -4.0
+    assert audit["event_rows"] == 2
+    assert audit["timed_event_rows"] == 2
+    assert audit["event_time_missing_rows"] == 0
+    assert audit["negative_event_time_rows"] == 1
+    assert audit["event_time_semantics"].startswith("recorded_dateofdeath")
+
+
+def test_eicu_hospital_death_does_not_claim_icu_discharge_is_death_time() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    canonical = api._canonicalise_native_export_frame(
+        pd.DataFrame(
+            {
+                "patientunitstayid": [1, 2],
+                "charttime": [8.0, 12.0],
+                "death": [True, None],
+            }
+        ),
+        module="outcome",
+        requested_concepts=["death"],
+        dictionary=dictionary,
+        database="eicu",
+    )
+
+    assert canonical["death_time"].isna().all()
+
+
 def test_native_renal_publication_drops_untimed_negative_rrt_merge_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -235,9 +302,7 @@ def test_native_renal_publication_drops_untimed_negative_rrt_merge_artifact(
     audit = manifest["files"][0]["time_axis_audit"]
     assert audit["excluded_untimed_negative_rrt_criteria_rows"] == 1
     assert audit["excluded_untimed_empty_rows"] == 1
-    assert manifest["files"][0]["row_grain_audit"][
-        "null_charttime_rows_after"
-    ] == 0
+    assert manifest["files"][0]["row_grain_audit"]["null_charttime_rows_after"] == 0
 
 
 def test_native_renal_publication_rejects_positive_untimed_rrt_criteria(
@@ -339,19 +404,19 @@ def test_grouped_output_is_sealed_without_accessing_the_raw_data_path(
     assert manifest["files"][0]["file"] == "demographics.parquet"
     assert manifest["files"][0]["primary_key"] == ["stay_id"]
     assert manifest["files"][0]["row_grain"] == "one_row_per_icu_stay"
-    assert manifest["files"][0]["parquet_sha256"] == hashlib.sha256(
-        (tmp_path / "demographics.parquet").read_bytes()
-    ).hexdigest()
-    assert manifest["files"][0]["parquet_bytes"] == (
-        tmp_path / "demographics.parquet"
-    ).stat().st_size
+    assert (
+        manifest["files"][0]["parquet_sha256"]
+        == hashlib.sha256((tmp_path / "demographics.parquet").read_bytes()).hexdigest()
+    )
+    assert (
+        manifest["files"][0]["parquet_bytes"]
+        == (tmp_path / "demographics.parquet").stat().st_size
+    )
     assert manifest["canonical_physical_schema"]["identity_column"] == "stay_id"
     assert manifest["runtime_provenance"]["easyicu_import_path"].endswith(
         "/src/easyicu"
     )
-    assert isinstance(
-        manifest["runtime_provenance"]["easyicu_git_dirty"], bool
-    )
+    assert isinstance(manifest["runtime_provenance"]["easyicu_git_dirty"], bool)
     if manifest["runtime_provenance"]["easyicu_git_dirty"]:
         assert manifest["runtime_provenance"]["easyicu_git_diff_sha256"]
     else:
@@ -472,11 +537,12 @@ def test_grouped_export_records_structural_unavailability_without_selecting_it(
 
     republished = json.loads((tmp_path / "_manifest.json").read_text())
     assert republished["unavailable_modules"] == manifest["unavailable_modules"]
-    assert next(
-        file
-        for file in republished["files"]
-        if file["module"] == "sepsis_shared"
-    )["availability"] == "structurally_unavailable"
+    assert (
+        next(
+            file for file in republished["files"] if file["module"] == "sepsis_shared"
+        )["availability"]
+        == "structurally_unavailable"
+    )
     with open_export_package(tmp_path) as package:
         assert set(package.concept_index) == {"age"}
 
@@ -553,16 +619,12 @@ def test_grouped_export_records_missing_concept_inside_physical_module(
 def test_grouped_export_normalises_source_identity_and_categorical_placeholder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        api, "EXTRACT_MODULES", {"demographics": ["age", "sex"]}
-    )
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"demographics": ["age", "sex"]})
     pd.DataFrame({"patientunitstayid": [11], "age": [63]}).to_parquet(
         tmp_path / "demographics.parquet", index=False
     )
     (tmp_path / "demographics.manifest.json").write_text(
-        json.dumps(
-            {"saved": {"demographics": {"concepts": ["age"]}}}
-        ),
+        json.dumps({"saved": {"demographics": {"concepts": ["age"]}}}),
         encoding="utf-8",
     )
 
@@ -896,9 +958,7 @@ def test_longitudinal_null_time_boolean_conflicts_use_any_and_are_unique(
     assert audit["null_charttime_rows_after"] == 2
     assert audit["duplicate_key_groups_before"] == 1
     assert audit["rows_consolidated"] == 1
-    assert manifest["files"][0]["time_axis_audit"][
-        "excluded_untimed_empty_rows"
-    ] == 1
+    assert manifest["files"][0]["time_axis_audit"]["excluded_untimed_empty_rows"] == 1
 
 
 def test_longitudinal_conflicting_strings_fail_closed() -> None:
@@ -1033,12 +1093,11 @@ def test_unique_longitudinal_publication_never_materialises_full_pandas_frame(
         "delirium_positive": "bool",
         "avpu": "string",
     }
-    assert entry["parquet_sha256"] == hashlib.sha256(
-        (tmp_path / "neurological.parquet").read_bytes()
-    ).hexdigest()
-    assert entry["parquet_bytes"] == (
-        tmp_path / "neurological.parquet"
-    ).stat().st_size
+    assert (
+        entry["parquet_sha256"]
+        == hashlib.sha256((tmp_path / "neurological.parquet").read_bytes()).hexdigest()
+    )
+    assert entry["parquet_bytes"] == (tmp_path / "neurological.parquet").stat().st_size
 
 
 def test_arrow_publication_matches_legacy_canonical_values_order_and_schema(
@@ -1107,8 +1166,7 @@ def test_arrow_publication_matches_legacy_canonical_values_order_and_schema(
     entry = manifest["files"][0]
     assert entry["time_axis_audit"] == expected_time_audit
     assert {
-        key: entry["row_grain_audit"][key]
-        for key in expected_grain_audit
+        key: entry["row_grain_audit"][key] for key in expected_grain_audit
     } == expected_grain_audit
     assert {
         concept: {
@@ -1162,12 +1220,8 @@ def test_large_duplicate_grain_uses_bounded_duckdb_consolidation(
         "duckdb_bounded_spillable_row_grain_consolidation"
     )
     assert not (tmp_path / ".sepsis_shared.native-v2.tmp.parquet").exists()
-    assert not (
-        tmp_path / ".sepsis_shared.native-v2.duckdb.tmp.parquet"
-    ).exists()
-    assert not (
-        tmp_path / ".sepsis_shared.native-v2.arrow.tmp.parquet"
-    ).exists()
+    assert not (tmp_path / ".sepsis_shared.native-v2.duckdb.tmp.parquet").exists()
+    assert not (tmp_path / ".sepsis_shared.native-v2.arrow.tmp.parquet").exists()
 
 
 def test_duckdb_consolidation_matches_pandas_type_family_semantics(
@@ -1300,9 +1354,5 @@ def test_large_duplicate_grain_duckdb_path_rejects_string_conflicts(
     assert hashlib.sha256(path.read_bytes()).hexdigest() == original_digest
     assert not (tmp_path / "_manifest.json").exists()
     assert not (tmp_path / ".neurological.native-v2.tmp.parquet").exists()
-    assert not (
-        tmp_path / ".neurological.native-v2.duckdb.tmp.parquet"
-    ).exists()
-    assert not (
-        tmp_path / ".neurological.native-v2.arrow.tmp.parquet"
-    ).exists()
+    assert not (tmp_path / ".neurological.native-v2.duckdb.tmp.parquet").exists()
+    assert not (tmp_path / ".neurological.native-v2.arrow.tmp.parquet").exists()

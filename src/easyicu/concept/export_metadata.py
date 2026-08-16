@@ -82,12 +82,8 @@ def concept_declares_event_status(concept_id: str, definition: Any = None) -> bo
     """
 
     class_name = getattr(definition, "class_name", None)
-    return (
-        class_name == "lgl_cncpt"
-        or (
-            class_name != "fct_cncpt"
-            and _catalog_declares_event_semantics(concept_id)
-        )
+    return class_name == "lgl_cncpt" or (
+        class_name != "fct_cncpt" and _catalog_declares_event_semantics(concept_id)
     )
 
 
@@ -168,7 +164,7 @@ def _companion_projection(
 
     escaped = re.escape(concept)
     match = re.fullmatch(
-        rf"{escaped}_(first_time|last_time|measured|observed|available|count|n|max|min|mean|median|first|last)"
+        rf"{escaped}_(first_time|last_time|time|measured|observed|available|count|n|max|min|mean|median|first|last)"
         r"(?:_([0-9]+(?:\.[0-9]+)?h))?",
         column,
     )
@@ -198,6 +194,10 @@ def _companion_projection(
             else ConceptColumnRole.LAST_OBSERVATION_TIME
         )
         return role, window, "observation_time"
+    if kind == "time":
+        if not logical_concept or window is not None:
+            return None
+        return ConceptColumnRole.EVENT_TIME, None, "source_event_time"
     numeric = bool(
         getattr(series, "dtype", None) is not None
         and (
@@ -241,6 +241,7 @@ def _validate_metadata_series_domain(
         ConceptColumnRole.COUNT,
         ConceptColumnRole.FIRST_OBSERVATION_TIME,
         ConceptColumnRole.LAST_OBSERVATION_TIME,
+        ConceptColumnRole.EVENT_TIME,
     }
     if role not in checked_roles:
         return
@@ -248,6 +249,7 @@ def _validate_metadata_series_domain(
         ConceptColumnRole.COUNT,
         ConceptColumnRole.FIRST_OBSERVATION_TIME,
         ConceptColumnRole.LAST_OBSERVATION_TIME,
+        ConceptColumnRole.EVENT_TIME,
     } and pd.api.types.is_bool_dtype(getattr(series, "dtype", None)):
         raise ExportMetadataError(
             "column_metadata_value_domain_invalid",
@@ -354,9 +356,7 @@ def build_export_file_metadata_binding(
         if concept in unresolved_columns:
             definition = _metadata_definition_for_export(concept, module, dictionary)
             physical_is_bool = pd.api.types.is_bool_dtype(frame[concept])
-            concept_is_logical = concept_declares_event_status(
-                concept, definition
-            )
+            concept_is_logical = concept_declares_event_status(concept, definition)
             categorical_boolean = (
                 physical_is_bool and definition.class_name == "fct_cncpt"
             )
@@ -389,9 +389,7 @@ def build_export_file_metadata_binding(
                 concept=concept,
                 column=column,
                 series=frame[column],
-                logical_concept=concept_declares_event_status(
-                    concept, definition
-                ),
+                logical_concept=concept_declares_event_status(concept, definition),
             )
             if projected is None:
                 continue
@@ -425,6 +423,7 @@ def build_export_file_metadata_binding(
         if role in {
             ConceptColumnRole.FIRST_OBSERVATION_TIME,
             ConceptColumnRole.LAST_OBSERVATION_TIME,
+            ConceptColumnRole.EVENT_TIME,
         }:
             spec_kwargs.update(time_origin="icu_admission", time_unit="h")
         metadata = project_concept_column_metadata(
