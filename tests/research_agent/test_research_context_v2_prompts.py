@@ -172,7 +172,7 @@ def _wide_context_with_late_primary(context: ResearchContextV2) -> ResearchConte
         age.model_copy(update={"name": primary}).model_dump(mode="python")
     )
     payload["primary_exposure"] = primary
-    return ResearchContextV2.model_validate(payload)
+    return type(context).model_validate(payload)
 
 
 def test_planner_and_replanner_use_unified_outbound_safe_projection(

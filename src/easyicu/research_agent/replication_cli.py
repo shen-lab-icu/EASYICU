@@ -52,6 +52,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Model name when --llm openai is used.",
     )
     parser.add_argument(
+        "--external-llm-opt-in",
+        action="store_true",
+        help=(
+            "Explicitly authorize this run to send prompts to an external LLM. "
+            "Required with --llm openai."
+        ),
+    )
+    parser.add_argument(
         "--target",
         action="append",
         default=[],
@@ -150,6 +158,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             raise SystemExit("--paper mode requires --cohort and --database.")
         if args.llm is None:
             raise SystemExit("Choose an explicit --llm backend (`mock` or `openai`) for --paper mode.")
+        if args.llm == "openai":
+            from easyicu import ai_optin
+
+            try:
+                ai_optin.check_external_llm_opt_in(
+                    args.llm,
+                    ai_enabled=args.external_llm_opt_in,
+                    language="en",
+                )
+            except ai_optin.AIOptInError as exc:
+                raise SystemExit(str(exc)) from exc
         from .providers.factory import build_provider_client
         from .providers.llm import OpenAIClient
         from .providers.mocks import MockLLMClient

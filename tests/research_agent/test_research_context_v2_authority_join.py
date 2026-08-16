@@ -276,7 +276,7 @@ def test_resume_join_rejects_redundant_facts_despite_unchanged_authority_refs(
     )
     payload = context.model_dump(mode="python")
     tamper(payload)
-    tampered_context = ResearchContextV2.model_validate(payload)
+    tampered_context = type(context).model_validate(payload)
 
     with pytest.raises(
         RunInputIdentityError,
@@ -401,7 +401,7 @@ def test_resume_keeps_explicit_sidecar_range_exact(tmp_path: Path) -> None:
         if variable["name"] == "age":
             variable["valid_range"] = None
             break
-    explicit_context = ResearchContextV2.model_validate(payload)
+    explicit_context = type(context).model_validate(payload)
 
     _validate_v2_context_input_authority(
         explicit_context,
@@ -415,7 +415,7 @@ def test_resume_keeps_explicit_sidecar_range_exact(tmp_path: Path) -> None:
     tampered_payload["materialized_inputs"]["cohort"]["column_bindings"]["age"][
         "analysis_plausibility_range"
     ] = {"minimum": 999.0, "maximum": None}
-    tampered_context = ResearchContextV2.model_validate(tampered_payload)
+    tampered_context = type(explicit_context).model_validate(tampered_payload)
 
     with pytest.raises(
         RunInputIdentityError,
@@ -487,7 +487,7 @@ def test_v2_rejects_legacy_descriptor_physical_fact_tampering(
     age[field] = forged
 
     with pytest.raises(ValueError, match="descriptor physical field"):
-        ResearchContextV2.model_validate(payload)
+        type(context).model_validate(payload)
 
 
 def test_v2_rejects_duplicate_unknown_and_missing_full_variable_rosters(
@@ -498,17 +498,17 @@ def test_v2_rejects_duplicate_unknown_and_missing_full_variable_rosters(
     duplicate = context.model_dump(mode="python")
     duplicate["variables"].append(dict(duplicate["variables"][0]))
     with pytest.raises(ValueError, match="variable names must be unique"):
-        ResearchContextV2.model_validate(duplicate)
+        type(context).model_validate(duplicate)
 
     unknown = context.model_dump(mode="python")
     unknown["variables"][0]["name"] = "forged_unknown"
     with pytest.raises(ValueError, match="absent from the cohort"):
-        ResearchContextV2.model_validate(unknown)
+        type(context).model_validate(unknown)
 
     missing = context.model_dump(mode="python")
     missing["variables"].pop()
     with pytest.raises(ValueError, match="does not cover the cohort columns"):
-        ResearchContextV2.model_validate(missing)
+        type(context).model_validate(missing)
 
 
 def test_v2_descriptor_closure_does_not_claim_scientific_role_ownership(
@@ -519,7 +519,7 @@ def test_v2_descriptor_closure_does_not_claim_scientific_role_ownership(
     age = next(item for item in payload["variables"] if item["name"] == "age")
     age["role"] = "other"
 
-    parsed = ResearchContextV2.model_validate(payload)
+    parsed = type(context).model_validate(payload)
 
     assert parsed.variable("age").role.value == "other"
 
@@ -532,4 +532,4 @@ def test_v2_rejects_incomplete_trajectory_range_map(tmp_path: Path) -> None:
     ].pop("lact")
 
     with pytest.raises(ValueError, match="plausibility ranges do not match"):
-        ResearchContextV2.model_validate(payload)
+        type(context).model_validate(payload)
