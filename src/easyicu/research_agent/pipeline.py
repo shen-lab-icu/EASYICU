@@ -1517,6 +1517,216 @@ def _resume_compatible_plan(
 
 
 
+def _run_preplan_literature_and_hypothesis(
+    self: "ResearchAgentPipeline",
+    *,
+    skill_obj: Any,
+    emit_progress: Any,
+    run_id: str,
+    agent_context: Any,
+    run_dir: Path,
+    evidence: Any,
+    findings: Any,
+    context: Any,
+    context_path: Path,
+    llm: Any,
+    resume_state: Any,
+) -> Tuple[Optional[Any], Any, list[str], list[str], Any]:
+    allowed_literature_citation_keys: list[str] = []
+    direct_comparator_literature_keys: list[str] = []
+    preplan_literature: Optional[LiteratureBundle] = None
+    if self._enable_literature and skill_obj is None:
+        try:
+            emit_progress(
+                "hypothesis",
+                "Building pre-plan literature and hypothesis blueprint.",
+                run_id=run_id,
+            )
+            preplan_literature = prepare_preplan_literature(
+                context=agent_context,
+                run_dir=run_dir,
+                evidence=evidence,
+                enable_pubmed=self._enable_pubmed,
+                pubmed_email=self._pubmed_email,
+                pubmed_api_key=self._pubmed_api_key,
+                enable_tavily=self._enable_tavily,
+                tavily_api_key=self._tavily_api_key,
+                tavily_retmax=self._tavily_retmax,
+                tavily_include_domains=self._tavily_include_domains,
+                bound_seed=self._bound_preplan_literature,
+            )
+            allowed_literature_citation_keys = [
+                citation.key for citation in preplan_literature.citations
+            ]
+            direct_comparator_literature_keys = [
+                decision.citation_key
+                for decision in preplan_literature.screening_decisions
+                if decision.disposition == "include"
+                and decision.evidence_role == "direct_comparator"
+            ]
+            # O17 — Front-door hypothesis generation. Opt-in; writes
+            # ``hypothesis_candidates.json`` + ``.md`` so the paper
+            # Methods section can quote "Out of N candidates we
+            # preregistered Q" rather than "we picked Q".
+            if self._enable_hypothesis_generator:
+                try:
+                    hg_result = generate_hypotheses(
+                        context=agent_context,
+                        citations=list(preplan_literature.citations),
+                        top_k=self._hypothesis_generator_top_k,
+                    )
+                    hg_json = run_dir / "hypothesis_candidates.json"
+                    hg_md = run_dir / "hypothesis_candidates.md"
+                    hg_json.write_text(
+                        json.dumps(hg_result.to_json(), indent=2, default=str),
+                        encoding="utf-8",
+                    )
+                    hg_md.write_text(hg_result.to_markdown(), encoding="utf-8")
+                    if evidence.get("hypothesis_candidates") is None:
+                        evidence.register_file(
+                            kind="log",
+                            description=(
+                                "Ranked front-door hypothesis candidates "
+                                "(predictor × outcome) with coverage, "
+                                "literature-saturation and ICU-gate scores (O17)."
+                            ),
+                            source_path=hg_json,
+                            evidence_id="hypothesis_candidates",
+                            producer="hypothesis_generator",
+                            generation_mode="deterministic_skill",
+                        )
+                    if evidence.get("hypothesis_candidates_summary") is None:
+                        evidence.register_file(
+                            kind="log",
+                            description=(
+                                "Human-readable hypothesis-candidate table (O17)."
+                            ),
+                            source_path=hg_md,
+                            evidence_id="hypothesis_candidates_summary",
+                            producer="hypothesis_generator",
+                            generation_mode="deterministic_skill",
+                        )
+                    findings.append(
+                        ValidationFinding(
+                            validator="hypothesis_generator",
+                            severity="info",
+                            message=(
+                                f"Ranked {len(hg_result.candidates)} candidate "
+                                f"hypotheses; top={hg_result.candidates[0].question if hg_result.candidates else 'n/a'}"
+                            ),
+                            evidence_ids=["hypothesis_candidates"],
+                        )
+                    )
+                except Exception as exc:
+                    findings.append(
+                        ValidationFinding(
+                            validator="hypothesis_generator",
+                            severity="warning",
+                            message=(
+                                f"Hypothesis generator failed: "
+                                f"{type(exc).__name__}: {exc}"
+                            ),
+                        )
+                    )
+            blueprint = HypothesisBlueprintAgent().run(
+                context=agent_context,
+                literature=preplan_literature,
+            )
+            blueprint_path = run_dir / "hypothesis_blueprint.json"
+            blueprint_path.write_text(
+                blueprint.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            if evidence.get("hypothesis_blueprint") is None:
+                evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Literature-aware hypothesis, feasibility critique, "
+                        "and recommended plan skeleton fed to the planner."
+                    ),
+                    source_path=blueprint_path,
+                    evidence_id="hypothesis_blueprint",
+                    producer="hypothesis_blueprint",
+                    generation_mode="deterministic_skill",
+                )
+            if blueprint.feasibility_status == "blocked":
+                findings.append(
+                    ValidationFinding(
+                        validator="hypothesis_blueprint",
+                        severity="error",
+                        message=(
+                            "Hypothesis blueprint marked this request as blocked; "
+                            "pipeline stopped before planning executable analysis steps."
+                        ),
+                        evidence_ids=["hypothesis_blueprint"],
+                    )
+                )
+                emit_progress(
+                    "hypothesis",
+                    "Hypothesis blueprint is blocked; aborting before planner execution.",
+                    status="error",
+                    run_id=run_id,
+                )
+                aborted = self._finalise_aborted(
+                    run_id=run_id,
+                    run_dir=run_dir,
+                    context=context,
+                    context_path=context_path,
+                    evidence=evidence,
+                    findings=findings,
+                    reason="hypothesis_blueprint_blocked",
+                )
+                return _PlanPhaseResult(
+                    context=context,
+                    agent_context=agent_context,
+                    context_path=context_path,
+                    evidence=evidence,
+                    findings=findings,
+                    plan=AnalysisPlan(
+                        research_question=context.research_question,
+                        steps=[],
+                    ),
+                    plan_path=run_dir / "analysis_plan.json",
+                    llm_signature=self._llm_signature(llm),
+                    used_mock_llm=any(True for _ in self._iter_mock_clients(llm)),
+                    prompt_version=PROMPT_PACK_VERSION,
+                    prompt_files=prompt_pack_files(),
+                    role_resolver=lambda _role: resolve_role_client(llm, _role),
+                    cost_meter=None,
+                    repro_envelope=None,
+                    started_at=datetime.now(timezone.utc),
+                    resume_state=resume_state,
+                    aborted_result=aborted,
+                )
+            note = render_hypothesis_blueprint_for_prompt(
+                blueprint,
+                literature=preplan_literature,
+            )
+            agent_notes = (
+                f"{agent_context.notes}\n\n{note}" if agent_context.notes else note
+            )
+            agent_context = agent_context.model_copy(update={"notes": agent_notes})
+        except Exception as exc:
+            findings.append(
+                ValidationFinding(
+                    validator="hypothesis_blueprint",
+                    severity="warning",
+                    message=(
+                        "Hypothesis blueprint failed; planner will use "
+                        f"context only: {exc}"
+                    ),
+                )
+            )
+    return (
+        None,
+        agent_context,
+        allowed_literature_citation_keys,
+        direct_comparator_literature_keys,
+        preplan_literature,
+    )
+
+
+
 class ResearchAgentPipeline:
     """One-shot orchestration. Construct, call :meth:`run`, read the result."""
 
@@ -3484,188 +3694,28 @@ class ResearchAgentPipeline:
         allowed_literature_citation_keys: list[str] = []
         direct_comparator_literature_keys: list[str] = []
         preplan_literature: Optional[LiteratureBundle] = None
-        if self._enable_literature and skill_obj is None:
-            try:
-                emit_progress(
-                    "hypothesis",
-                    "Building pre-plan literature and hypothesis blueprint.",
-                    run_id=run_id,
-                )
-                preplan_literature = prepare_preplan_literature(
-                    context=agent_context,
-                    run_dir=run_dir,
-                    evidence=evidence,
-                    enable_pubmed=self._enable_pubmed,
-                    pubmed_email=self._pubmed_email,
-                    pubmed_api_key=self._pubmed_api_key,
-                    enable_tavily=self._enable_tavily,
-                    tavily_api_key=self._tavily_api_key,
-                    tavily_retmax=self._tavily_retmax,
-                    tavily_include_domains=self._tavily_include_domains,
-                    bound_seed=self._bound_preplan_literature,
-                )
-                allowed_literature_citation_keys = [
-                    citation.key for citation in preplan_literature.citations
-                ]
-                direct_comparator_literature_keys = [
-                    decision.citation_key
-                    for decision in preplan_literature.screening_decisions
-                    if decision.disposition == "include"
-                    and decision.evidence_role == "direct_comparator"
-                ]
-                # O17 — Front-door hypothesis generation. Opt-in; writes
-                # ``hypothesis_candidates.json`` + ``.md`` so the paper
-                # Methods section can quote "Out of N candidates we
-                # preregistered Q" rather than "we picked Q".
-                if self._enable_hypothesis_generator:
-                    try:
-                        hg_result = generate_hypotheses(
-                            context=agent_context,
-                            citations=list(preplan_literature.citations),
-                            top_k=self._hypothesis_generator_top_k,
-                        )
-                        hg_json = run_dir / "hypothesis_candidates.json"
-                        hg_md = run_dir / "hypothesis_candidates.md"
-                        hg_json.write_text(
-                            json.dumps(hg_result.to_json(), indent=2, default=str),
-                            encoding="utf-8",
-                        )
-                        hg_md.write_text(hg_result.to_markdown(), encoding="utf-8")
-                        if evidence.get("hypothesis_candidates") is None:
-                            evidence.register_file(
-                                kind="log",
-                                description=(
-                                    "Ranked front-door hypothesis candidates "
-                                    "(predictor × outcome) with coverage, "
-                                    "literature-saturation and ICU-gate scores (O17)."
-                                ),
-                                source_path=hg_json,
-                                evidence_id="hypothesis_candidates",
-                                producer="hypothesis_generator",
-                                generation_mode="deterministic_skill",
-                            )
-                        if evidence.get("hypothesis_candidates_summary") is None:
-                            evidence.register_file(
-                                kind="log",
-                                description=(
-                                    "Human-readable hypothesis-candidate table (O17)."
-                                ),
-                                source_path=hg_md,
-                                evidence_id="hypothesis_candidates_summary",
-                                producer="hypothesis_generator",
-                                generation_mode="deterministic_skill",
-                            )
-                        findings.append(
-                            ValidationFinding(
-                                validator="hypothesis_generator",
-                                severity="info",
-                                message=(
-                                    f"Ranked {len(hg_result.candidates)} candidate "
-                                    f"hypotheses; top={hg_result.candidates[0].question if hg_result.candidates else 'n/a'}"
-                                ),
-                                evidence_ids=["hypothesis_candidates"],
-                            )
-                        )
-                    except Exception as exc:
-                        findings.append(
-                            ValidationFinding(
-                                validator="hypothesis_generator",
-                                severity="warning",
-                                message=(
-                                    f"Hypothesis generator failed: "
-                                    f"{type(exc).__name__}: {exc}"
-                                ),
-                            )
-                        )
-                blueprint = HypothesisBlueprintAgent().run(
-                    context=agent_context,
-                    literature=preplan_literature,
-                )
-                blueprint_path = run_dir / "hypothesis_blueprint.json"
-                blueprint_path.write_text(
-                    blueprint.model_dump_json(indent=2),
-                    encoding="utf-8",
-                )
-                if evidence.get("hypothesis_blueprint") is None:
-                    evidence.register_file(
-                        kind="log",
-                        description=(
-                            "Literature-aware hypothesis, feasibility critique, "
-                            "and recommended plan skeleton fed to the planner."
-                        ),
-                        source_path=blueprint_path,
-                        evidence_id="hypothesis_blueprint",
-                        producer="hypothesis_blueprint",
-                        generation_mode="deterministic_skill",
-                    )
-                if blueprint.feasibility_status == "blocked":
-                    findings.append(
-                        ValidationFinding(
-                            validator="hypothesis_blueprint",
-                            severity="error",
-                            message=(
-                                "Hypothesis blueprint marked this request as blocked; "
-                                "pipeline stopped before planning executable analysis steps."
-                            ),
-                            evidence_ids=["hypothesis_blueprint"],
-                        )
-                    )
-                    emit_progress(
-                        "hypothesis",
-                        "Hypothesis blueprint is blocked; aborting before planner execution.",
-                        status="error",
-                        run_id=run_id,
-                    )
-                    aborted = self._finalise_aborted(
-                        run_id=run_id,
-                        run_dir=run_dir,
-                        context=context,
-                        context_path=context_path,
-                        evidence=evidence,
-                        findings=findings,
-                        reason="hypothesis_blueprint_blocked",
-                    )
-                    return _PlanPhaseResult(
-                        context=context,
-                        agent_context=agent_context,
-                        context_path=context_path,
-                        evidence=evidence,
-                        findings=findings,
-                        plan=AnalysisPlan(
-                            research_question=context.research_question,
-                            steps=[],
-                        ),
-                        plan_path=run_dir / "analysis_plan.json",
-                        llm_signature=self._llm_signature(llm),
-                        used_mock_llm=any(True for _ in self._iter_mock_clients(llm)),
-                        prompt_version=PROMPT_PACK_VERSION,
-                        prompt_files=prompt_pack_files(),
-                        role_resolver=lambda _role: resolve_role_client(llm, _role),
-                        cost_meter=None,
-                        repro_envelope=None,
-                        started_at=datetime.now(timezone.utc),
-                        resume_state=resume_state,
-                        aborted_result=aborted,
-                    )
-                note = render_hypothesis_blueprint_for_prompt(
-                    blueprint,
-                    literature=preplan_literature,
-                )
-                agent_notes = (
-                    f"{agent_context.notes}\n\n{note}" if agent_context.notes else note
-                )
-                agent_context = agent_context.model_copy(update={"notes": agent_notes})
-            except Exception as exc:
-                findings.append(
-                    ValidationFinding(
-                        validator="hypothesis_blueprint",
-                        severity="warning",
-                        message=(
-                            "Hypothesis blueprint failed; planner will use "
-                            f"context only: {exc}"
-                        ),
-                    )
-                )
+        (
+            preplan_terminal_result,
+            agent_context,
+            allowed_literature_citation_keys,
+            direct_comparator_literature_keys,
+            preplan_literature,
+        ) = _run_preplan_literature_and_hypothesis(
+            self,
+            skill_obj=skill_obj,
+            emit_progress=emit_progress,
+            run_id=run_id,
+            agent_context=agent_context,
+            run_dir=run_dir,
+            evidence=evidence,
+            findings=findings,
+            context=context,
+            context_path=context_path,
+            llm=llm,
+            resume_state=resume_state,
+        )
+        if preplan_terminal_result is not None:
+            return preplan_terminal_result
 
         planner_prompt_metrics: Optional[Dict[str, Any]] = None
         know_how_binding = PlannerKnowHowBinding()

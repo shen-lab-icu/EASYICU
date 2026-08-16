@@ -1,6 +1,6 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "f83e7dcf1dec0a0ba8e035e6b98a7ab64c603e05a9d2db52963b87c5996f18c2",
+  "tool_sha256": "30fb21239a7e2e06787b1f5514f4f3177d2240b739fe75859df81d53ad1c1c7f",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
@@ -16,8 +16,8 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8700,
-      "sha256": "11ee8e975ed251881663479eeebbc011fb072e223db5ecbd98537faf151f4590",
+      "loc": 8750,
+      "sha256": "4469c305d9f23f68a7db2852357e7e3848aea7d75532826da3f1f37bbd57b0df",
       "intra_package_import_edges": 118,
       "shim_bypass_violations": []
     },
@@ -275,7 +275,7 @@
     },
     "pipeline.py::run": {
       "lines": 672,
-      "line_start": 4578,
+      "line_start": 4628,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
       "own_bound_names": 107,
@@ -285,16 +285,32 @@
     },
     "pipeline.py::_generate_or_resume_plan": {
       "lines": 449,
-      "line_start": 2325,
+      "line_start": 2535,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 50,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 0
+    },
+    "pipeline.py::_run_plan_phase": {
+      "lines": 623,
+      "line_start": 3424,
+      "direct_nested_funcs": 0,
+      "total_nested_funcs": 5,
+      "own_bound_names": 83,
+      "own_nonlocal_names": [],
+      "own_nonlocal_count": 0,
+      "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Add _prepare_execute_phase_authority, _compare_source_to_upstream, pipeline.run and _generate_or_resume_plan to the function ratchet; preflight.py split into preflight_support.py moved 24 leaf helpers.",
+  "baseline_reason": "Initialize literature/hypothesis locals inside the extracted helper (fixes _enable_literature=False path); pipeline.py +3 is the guard initialization.",
+  "baseline_accepted_growth": {
+    "pipeline.py": {
+      "loc_was": 8747,
+      "loc_now": 8750
+    }
+  },
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -544,6 +560,24 @@
     },
     {
       "reason": "Add _prepare_execute_phase_authority, _compare_source_to_upstream, pipeline.run and _generate_or_resume_plan to the function ratchet; preflight.py split into preflight_support.py moved 24 leaf helpers."
+    },
+    {
+      "reason": "Extracted _run_preplan_literature_and_hypothesis from _run_plan_phase (783->623 lines) and added _run_plan_phase to the function ratchet; pipeline.py +47 is module-level signature/glue for the same code.",
+      "accepted_growth": {
+        "pipeline.py": {
+          "loc_was": 8700,
+          "loc_now": 8747
+        }
+      }
+    },
+    {
+      "reason": "Initialize literature/hypothesis locals inside the extracted helper (fixes _enable_literature=False path); pipeline.py +3 is the guard initialization.",
+      "accepted_growth": {
+        "pipeline.py": {
+          "loc_was": 8747,
+          "loc_now": 8750
+        }
+      }
     }
   ]
 }
