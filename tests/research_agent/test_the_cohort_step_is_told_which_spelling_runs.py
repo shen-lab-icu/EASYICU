@@ -268,6 +268,10 @@ def test_the_retry_reminder_closes_common_representation_seams():
     assert "do not add a second reporting switch" in reminder
     assert "`report_standardized_mean_differences`" not in reminder
     assert '["__easyicu_level_1__","__easyicu_level_2__"]' in reminder
+    assert "schema_version='easyicu.exposure_outcome_distribution/2'" in reminder
+    assert "interval_method='wilson'" in reminder
+    assert "repeated_unit_interval_method='patient_cluster_robust_wald'" in reminder
+    assert "even while dependence is null before host binding" in reminder
 
 
 def test_the_retry_reminder_derives_closed_scientific_keys_from_schema():

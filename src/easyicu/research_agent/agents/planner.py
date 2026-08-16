@@ -328,7 +328,8 @@ def _build_planner_user_prompt(
         "count that left travels in the table) -- check the catalog's "
         "missingness for the exposure column, because 'fail_closed' on a "
         "column derived from measurements ends the step with no result; and a "
-        "confidence_level. " + _payload.counts_only_distribution_guide() + " Close outcome_levels "
+        "confidence_level. " + _payload.counts_only_distribution_guide()
+        + " Close outcome_levels "
         "over every value the source can actually hold: any other observed "
         "value stops the step, because an undeclared value would otherwise be "
         "counted as a non-event and silently deflate every rate. Which "
@@ -669,7 +670,7 @@ def _build_planner_user_prompt(
         "Required JSON shape (truncated example):\n"
         "The example values are illustrative only; do not prefer SOFA or "
         "any example concept unless the ResearchContext supports it. The "
-        "distribution example is secondary so it cannot accidentally become a "
+        "distribution example is auxiliary so it cannot accidentally become a "
         "second headline; change it to primary only when it is the plan's sole "
         "headline estimand. Across the complete plan, at most one step is "
         "primary.\n"
@@ -755,7 +756,7 @@ def _build_planner_user_prompt(
         # already does.
         "    {\n"
         '      "step_id": "03_exposure_outcome_distribution",\n'
-        '      "planned_analysis_role": "secondary",\n'
+        '      "planned_analysis_role": "auxiliary",\n'
         '      "intent": "<one sentence>",\n'
         # Exactly one typed input (the cohort artifact, which carries the
         # digest and product contract), plus the exposure and outcome column
@@ -902,6 +903,8 @@ def _build_planner_user_prompt(
                 "closed exposure/outcome levels, the positive outcome value, "
                 "level matching, denominator and both missingness policies, and "
                 "confidence level; the host infers none of them. "
+                + _payload.interval_bearing_distribution_guide()
+                + " "
                 + _payload.counts_only_distribution_guide()
                 + " Close outcome levels over every observed value, preserve "
                 "scalar types, and choose missingness policies from the sealed "

@@ -715,6 +715,20 @@ def counts_only_distribution_guide() -> str:
     )
 
 
+def interval_bearing_distribution_guide() -> str:
+    """Publish the coupled /2 interval fields the transport enum cannot express."""
+
+    return (
+        "For interval-bearing schema /2, the closed design is exact: use "
+        "schema_version='easyicu.exposure_outcome_distribution/2', "
+        "interval_method='wilson', "
+        "repeated_unit_interval_method='patient_cluster_robust_wald', and a "
+        "non-null confidence_level. Keep the repeated-unit interval method "
+        "declared even while dependence is null before host binding; it does "
+        "not invent or authorize a grouping source."
+    )
+
+
 def descriptive_claim_example_fragment() -> str:
     """Render the worked-example fragment from the claim schema owner."""
 
@@ -802,6 +816,8 @@ def planner_science_retry_guide() -> str:
         "step must list its exact exposure and outcome in `inputs`. "
         "A `table_one_spec` step must list its `group_by` and every "
         "`variables[*].name` in that same step's `inputs`. "
+        + interval_bearing_distribution_guide()
+        + " "
         "Preserve observed scalar types (JSON numbers remain numbers). On retry retain "
         "every article role and required `robustness_specs`; do not fix one "
         "error by dropping an already-satisfied requirement. "

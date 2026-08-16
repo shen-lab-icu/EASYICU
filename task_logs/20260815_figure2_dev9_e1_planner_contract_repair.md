@@ -196,3 +196,44 @@ image, and start E1 from a fresh `dev07` root. Never resume or reuse `dev06`.
 
 Commit the lossless projection repair, build a new exact-source image, and
 start E1 from a fresh `dev08` root. Never resume or reuse `dev07`.
+
+## Dev08 result
+
+- Source commit: `3b794c3`; exact image:
+  `easyicu-research-agent:3b794c3-dev`, image id
+  `sha256:24840004d3c30984fb255649a9b0868857e01a7c92aec6509501c75b7b1ced97`.
+- Runtime/source validation passed under `network=none` with all 11 method
+  capabilities.
+- Run root: `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260815_3b794c3_e1_dev08`.
+- All five Planner calls stayed inside the reviewed transport envelope. Their
+  total request sizes, including the 26,007-byte strict schema, were 107,853,
+  112,987, 113,590, 113,607, and 114,021 bytes.
+- The calls accounted for 128,673 prompt and 33,947 completion tokens (162,620
+  total; estimated cost USD 2.30514). No generated analysis code executed.
+- Attempt 1 had six host-validation findings, attempt 2 had three, and attempts
+  3--5 converged on one identical finding: the schema-/2 distribution declared
+  an incomplete closed interval tuple. This confirms the lossless retry ledger
+  worked and isolates the remaining defect from transport or coordinate loss.
+
+## Dev08 interval-contract repair
+
+- The distribution owner now diagnoses every member of the coupled schema-/2
+  tuple and reports the received values: `wilson`,
+  `patient_cluster_robust_wald`, and non-null confidence must be present
+  together.
+- The strict initial Planner directive and the retry guide now publish that
+  coupled invariant explicitly. The repeated-unit interval method remains
+  declared while dependence is null before host binding; it does not authorize
+  the Planner to invent grouping authority.
+- The ordinary worked distribution example was also restored to its executable
+  auxiliary role, and its regression now checks the host-owned opaque level
+  tokens rather than obsolete literal 0/1 values.
+- Ninety-one focused distribution-owner, Planner strict-schema, retry-guide,
+  prompt-example, and prompt-budget tests passed. Ruff and `git diff --check`
+  passed.
+
+## Next
+
+Commit the general interval-contract repair, build and validate a new
+exact-source image, and start E1 from a fresh `dev09` root. Never resume or
+reuse `dev08`.

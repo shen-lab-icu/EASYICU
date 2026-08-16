@@ -34,6 +34,7 @@ from easyicu.research_agent.execution.runners.exposure_outcome_distribution_exec
     exposure_outcome_distribution_executor_owns_step,
 )
 from easyicu.research_agent.planning.robustness_contract import RobustnessSpec
+from easyicu.research_agent.research_context.prompt_variables import opaque_level_tokens
 from easyicu.research_agent.schema import (
     AnalysisStep,
     CohortDescriptor,
@@ -184,8 +185,9 @@ def test_the_example_spec_validates_on_its_own() -> None:
     assert isinstance(spec, dict)
     parsed = ExposureOutcomeDistributionSpec.model_validate(spec)
     assert parsed.risk_difference_contrast is not None
-    assert parsed.risk_difference_contrast.reference_exposure_level == 0
-    assert parsed.risk_difference_contrast.comparison_exposure_level == 1
+    opaque_levels = opaque_level_tokens(2)
+    assert parsed.risk_difference_contrast.reference_exposure_level == opaque_levels[0]
+    assert parsed.risk_difference_contrast.comparison_exposure_level == opaque_levels[1]
     # The Planner chooses contrast direction but never fabricates host grouping.
     assert parsed.dependence is None
 
