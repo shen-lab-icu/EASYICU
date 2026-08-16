@@ -15,17 +15,10 @@
    This file MUST load before screens-agent.js in index.html.
    ============================================================ */
 (function () {
+  const { esc, escAttr } = window.EU_HTML;
   const t = window.t;
   const icon = window.icon;
 
-  function esc(value) {
-    return String(value == null ? '' : value).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  }
-  function escAttr(value) {
-    return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c]));
-  }
   function boundedPngDataUrl(value) {
     const source = String(value || '');
     return /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(source) ? source : '';
