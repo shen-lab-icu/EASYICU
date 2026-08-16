@@ -495,7 +495,7 @@ def test_shipped_sofa2_aggregate_resolver_graph_uses_component_receipts() -> Non
         concept_workers=1,
     )["sofa2"].data
 
-    assert loaded["sofa2"].tolist() == [0]
+    assert pd.isna(loaded.loc[0, "sofa2"])
     assert loaded["sofa2_n_observed_components"].tolist() == [5]
     assert loaded["sofa2_n_available_components"].tolist() == [5]
     assert loaded["sofa2_n_components"].tolist() == [5]
