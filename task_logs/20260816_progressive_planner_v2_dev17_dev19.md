@@ -280,3 +280,42 @@ contract.
 Commit and push this owner fix, build an exact-source image, and run a fresh E1
 Dev28. Do not start E2 until E1 completes the full analysis, audit, figure, and
 report workflow under development authority.
+
+### Dev28
+
+Root:
+`/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_dd8ac11_e1_dev28`
+
+The exact `dd8ac11` image completed four Planner calls. Transport receipts
+record 53,708 prompt tokens and 11,047 completion tokens (64,755 total), for an
+estimated USD 0.86849 under the configured USD 10/30 per-million price table.
+The sealed STROBE reporting-layer failure from Dev27 did not recur. The run
+still did not enter Execute: a robustness replay step promised two distinct
+products for the same `robustness_matrix` answer, and the existing
+`RobustnessReplaySpec` correctly rejected that ambiguity.
+
+The scientific refusal was correct, but its raw Pydantic `ValidationError`
+escaped `_compile_robustness_spec`, so the Progressive Planner could not turn
+it into an attributable suffix observation. The same containment gap existed
+at the parallel `MeasurementAuditSpec` compiler boundary. A first launch using
+a relative development receipt was separately refused before data load,
+pipeline construction, or Provider access; the root above is the only Dev28
+scientific run.
+
+## Repair after Dev28
+
+- Progressive robustness and measurement spec materialization now preserve the
+  exact lower-level contract message while wrapping it in a typed
+  `ProgressivePlanCompileError` with owner, step index/id, `outputs` path, and
+  stable reason code.
+- Duplicate semantic answers are not silently dropped or renamed. The unlocked
+  suffix must remove the duplicate promise or choose a genuinely different
+  supported output; final typed specs remain authoritative.
+- Direct negative tests reproduce both escaped boundaries. The progressive,
+  measurement-audit, robustness-declaration, and deterministic robustness
+  neighborhood passes 92 tests; Ruff and `git diff --check` are clean.
+
+## Next gate
+
+Commit and push this containment fix, build an exact-source image, and run E1
+Dev29. E2 remains blocked until E1 completes analysis, audit, figure, and report.
