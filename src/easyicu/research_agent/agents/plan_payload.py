@@ -1014,6 +1014,138 @@ def _require_runtime_supported_product_kinds(
             )
 
 
+def _compile_mixed_figure_panel_steps(
+    raw_steps: object,
+) -> Tuple[object, List[str]]:
+    """Move an exact mixed-step panel contract to a rendering-only child.
+
+    This is structural compilation, not figure selection. It fires only when
+    every declared figure is covered by a panel, every panel names an exact
+    uniquely produced table/statistic source, and the analytic parent retains
+    at least one non-figure output. Any ambiguous shape is left untouched for
+    the schema to reject.
+    """
+
+    if not isinstance(raw_steps, list):
+        return raw_steps, []
+    output_owners: Dict[str, List[int]] = {}
+    occupied_step_ids = {
+        step.get("step_id")
+        for step in raw_steps
+        if isinstance(step, dict)
+        and isinstance(step.get("step_id"), str)
+        and step.get("step_id")
+    }
+    for index, step in enumerate(raw_steps):
+        if not isinstance(step, dict):
+            continue
+        raw_outputs = step.get("expected_outputs")
+        if not isinstance(raw_outputs, list):
+            continue
+        for output in raw_outputs:
+            if isinstance(output, str):
+                output_owners.setdefault(output, []).append(index)
+
+    compiled_steps: List[object] = []
+    normalizations: List[str] = []
+    for step_index, step in enumerate(raw_steps):
+        if not isinstance(step, dict):
+            compiled_steps.append(step)
+            continue
+        raw_method = step.get("method")
+        method_head = (
+            raw_method.strip().casefold().split(" with ", 1)[0]
+            if isinstance(raw_method, str)
+            else ""
+        )
+        panels = step.get("figure_panels")
+        outputs = step.get("expected_outputs")
+        if (
+            not method_head
+            or method_head == "visualization"
+            or not isinstance(panels, list)
+            or not panels
+            or not isinstance(outputs, list)
+            or not all(isinstance(output, str) for output in outputs)
+        ):
+            compiled_steps.append(step)
+            continue
+        figure_outputs = [
+            output
+            for output in outputs
+            if isinstance(output, str)
+            and (_canonical_typed_product(output) or (None, None))[0] == "figure"
+        ]
+        non_figure_outputs = [output for output in outputs if output not in figure_outputs]
+        if not figure_outputs or not non_figure_outputs or not all(
+            isinstance(panel, dict) for panel in panels
+        ):
+            compiled_steps.append(step)
+            continue
+        raw_panel_outputs = [panel.get("figure_output") for panel in panels]
+        if not all(isinstance(output, str) for output in raw_panel_outputs):
+            compiled_steps.append(step)
+            continue
+        panel_outputs = list(dict.fromkeys(raw_panel_outputs))
+        if set(panel_outputs) != set(figure_outputs):
+            compiled_steps.append(step)
+            continue
+        raw_source_lists = [panel.get("source_products") for panel in panels]
+        if not all(
+            isinstance(sources, list)
+            and sources
+            and all(isinstance(source, str) for source in sources)
+            for sources in raw_source_lists
+        ):
+            compiled_steps.append(step)
+            continue
+        source_products = list(
+            dict.fromkeys(source for sources in raw_source_lists for source in sources)
+        )
+        if not source_products or any(
+            (_canonical_typed_product(source) or (None, None))[0]
+            not in {"table", "statistic"}
+            or len(output_owners.get(source, [])) != 1
+            or output_owners[source][0] > step_index
+            for source in source_products
+        ):
+            compiled_steps.append(step)
+            continue
+        raw_step_id = step.get("step_id")
+        step_id = raw_step_id.strip() if isinstance(raw_step_id, str) else ""
+        child_id = f"{step_id}_figure"
+        if not step_id or child_id in occupied_step_ids:
+            compiled_steps.append(step)
+            continue
+        occupied_step_ids.add(child_id)
+        parent = copy.deepcopy(step)
+        parent["expected_outputs"] = non_figure_outputs
+        parent["figure_panels"] = []
+        child = {
+            "step_id": child_id,
+            "planned_analysis_role": "auxiliary",
+            "intent": (
+                "Render the Planner-declared panels from their exact typed "
+                f"source products for step {step_id}."
+            ),
+            "inputs": source_products,
+            "expected_outputs": figure_outputs,
+            "method": "visualization",
+            "icu_rule_refs": ["visualization_rule"],
+            "input_consumption_contracts": [
+                {"input_key": source, "mode": "all_rows"}
+                for source in source_products
+                if (_canonical_typed_product(source) or (None, None))[0] == "table"
+            ],
+            "figure_panels": copy.deepcopy(panels),
+        }
+        compiled_steps.extend((parent, child))
+        normalizations.append(
+            f"{step_id}:mixed_figure_panels_compiled_to:{child_id}"
+        )
+    return compiled_steps, normalizations
+
+
 def _normalise_plan_payload(
     data: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
@@ -1035,9 +1167,13 @@ def _normalise_plan_payload(
         "figure_panels": [],
         "table_one_spec": [],
         "robustness_specs": [],
+        "normalizations": [],
     }
     out = {key: value for key, value in data.items() if key in allowed_plan}
     dropped["top_level"] = [str(key) for key in data if key not in allowed_plan]
+    out["steps"], dropped["normalizations"] = _compile_mixed_figure_panel_steps(
+        out.get("steps")
+    )
     steps = []
     for idx, raw_step in enumerate(out.get("steps", []) or []):
         if not isinstance(raw_step, dict):

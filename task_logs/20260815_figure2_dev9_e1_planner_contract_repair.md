@@ -275,3 +275,51 @@ reuse `dev08`.
 
 Commit the literature-coordinate compiler, build and validate a new exact-source
 image, and start E1 from a fresh `dev10` root. Never resume or reuse `dev09`.
+
+## Dev10 result
+
+- Source commit: `46e84d8`; exact image:
+  `easyicu-research-agent:46e84d8-dev`, image id
+  `sha256:22868cc83727aa076c5b24bad00c279bda5f66c4afae144a19e5467b48cf5eda`.
+- Runtime/source validation passed under `network=none` with all 11 method
+  capabilities and requirements SHA-256
+  `c9157dc822f5354a161550356e5ac731f8dc362eed0d6dc58e54be8cf5a26af1`.
+- Run root:
+  `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_46e84d8_e1_dev10`.
+- Five completed Planner calls accounted for 128,726 prompt and 33,809
+  completion tokens (162,535 total; estimated cost USD 2.30153). No generated
+  analysis code executed.
+- The Dev09 literature-roster mismatch did not recur. The five drafts failed
+  in five distinct ways; the final draft reached two instances of one
+  structural defect: steps that declared both a typed analytic result and its
+  exact figure-panel contract were rejected because `figure_panels` was
+  validated before the existing mixed-output splitter could run.
+
+## Dev10 mixed-panel compiler repair
+
+- Owner: `agents/plan_payload.py`, the boundary from untrusted Planner JSON to
+  the strict `AnalysisPlan`. It now compiles a mixed non-visual step into its
+  unchanged analytic parent plus an auxiliary visualization child before
+  Pydantic validation.
+- The compiler does not choose a chart or result. It fires only when every
+  figure output is covered by the Planner's panel records, every panel source
+  is an exact typed table/statistic product with one producer available at that
+  point in the DAG, the parent retains a non-figure output, and the child id is
+  unused. It copies the panel records and binds `all_rows` consumption for
+  exact table sources.
+- Missing, malformed, ambiguous, duplicate-owner, future-produced, or
+  otherwise unprovable sources are left untouched so the original schema gate
+  fails closed. Direct `AnalysisStep` construction still rejects panels on a
+  non-visual method.
+- `pipeline.py` emits a structured warning with reason code
+  `planner_mixed_figure_panels_compiled` and the exact parent-to-child
+  normalization roster. The existing post-parse splitter remains responsible
+  for legacy mixed outputs that do not carry Planner-authored panel contracts.
+- 153 focused parser/projection, strict transport, literature, prompt-budget,
+  primary-estimand, display, artifact-consumption, trajectory-DAG, and legacy
+  splitter tests passed. Ruff and `git diff --check` passed.
+
+## Next
+
+Commit the guarded structural compiler, build and validate a new exact-source
+image, and start E1 from a fresh `dev11` root. Never resume or reuse `dev10`.
