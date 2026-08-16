@@ -20,6 +20,7 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     typed_product as _canonical_typed_product,
 )
+from ..contracts.product_identity import CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN
 from ..contracts.capability_ids import CAPABILITY_FAMILIES
 from ..planning.method_literature import METHOD_CARDS
 from ..planning.literature_bindings import (
@@ -115,10 +116,12 @@ def _artifact_consumption_transport_schema(
         role_column: Dict[str, Any],
         expected_roles: Dict[str, Any],
     ) -> Dict[str, Any]:
+        input_key = copy.deepcopy(properties["input_key"])
+        input_key["pattern"] = CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN
         return _closed_object_schema(
             {
                 "schema_version": copy.deepcopy(properties["schema_version"]),
-                "input_key": copy.deepcopy(properties["input_key"]),
+                "input_key": input_key,
                 "mode": {"type": "string", "const": mode},
                 "role_column": role_column,
                 "expected_roles": expected_roles,
@@ -852,7 +855,8 @@ def artifact_consumption_contract_shape_guide() -> str:
         "Each `input_consumption_contracts` item has exactly "
         "`schema_version`, `input_key`, `mode`, `role_column`, and "
         "`expected_roles`; use schema version "
-        "`easyicu.artifact_consumption/1`. For `all_rows`/`single_row`, set "
+        "`easyicu.artifact_consumption/1` and an exact lowercase "
+        "`kind:product` input key. For `all_rows`/`single_row`, set "
         "`role_column:null`, `expected_roles:[]`. For `one_per_role`, both "
         "role fields must be non-empty and `expected_roles` complete and unique."
     )

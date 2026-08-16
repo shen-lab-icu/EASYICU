@@ -12,6 +12,9 @@ from easyicu.research_agent.agents.plan_payload import (
     planner_structured_output_request,
 )
 from easyicu.research_agent.contracts.capability_ids import CAPABILITY_FAMILIES
+from easyicu.research_agent.contracts.product_identity import (
+    CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN,
+)
 from easyicu.research_agent.agents.core import PlannerAgent
 from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 
@@ -75,6 +78,10 @@ def test_planner_transport_schema_is_closed_compact_and_deterministic():
     assert set(branches) == {"all_rows", "single_row", "one_per_role"}
     for mode in ("all_rows", "single_row"):
         properties = branches[mode]["properties"]
+        assert (
+            properties["input_key"]["pattern"]
+            == CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN
+        )
         assert properties["role_column"] == {"type": "null"}
         assert properties["expected_roles"]["maxItems"] == 0
     role_properties = branches["one_per_role"]["properties"]

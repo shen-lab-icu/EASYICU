@@ -413,3 +413,46 @@ image, and start E1 from a fresh `dev12` root. Never resume or reuse `dev11`.
 
 Commit the denser lossless ledger, build and validate a new exact-source image,
 and start E1 from a fresh `dev13` root. Never resume or reuse `dev12`.
+
+## Dev13 result
+
+- Source commit: `d9c23f2`; exact image:
+  `easyicu-research-agent:d9c23f2-dev`, image id
+  `sha256:bf559379d3ba5c7d8e6f3171bffa708dc0f4b89691e7382f72d429461b1c6f4d`.
+- Runtime/source validation passed under `network=none` with all 11 method
+  capabilities and requirements SHA-256
+  `470b4676ed627e376844db03139f56e333d34dd6e1a7c1d682d3eb8607b00950`.
+- Run root:
+  `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_d9c23f2_e1_dev13`.
+- All five Planner retries executed, confirming that the Dev12 projection
+  failure is closed without raising the 4,500-byte limit. The calls accounted
+  for 128,444 prompt and 35,295 completion tokens (163,739 total; estimated
+  cost USD 2.34329); payloads were 82,316--88,181 bytes. No generated analysis
+  code executed.
+- The drafts failed in five distinct ways and the final draft converged to one
+  representation error: an `input_consumption_contracts.input_key` value did
+  not use the canonical lowercase `kind:product` grammar. The host already
+  rejected it, but the strict provider schema exposed only an unconstrained
+  string.
+
+## Dev13 canonical product-key repair
+
+- Owner: `contracts/product_identity.py` now publishes the canonical typed
+  product token pattern and predicate. `ArtifactConsumptionContract` and both
+  figure-panel contracts consume that shared owner rather than carrying local
+  duplicate regexes.
+- The strict Planner transport applies the same owner pattern to every
+  consumption `input_key`, so a response with a filename, label, missing kind,
+  or non-lowercase product is rejected at generation time. This is a wire
+  grammar constraint; it does not select which product the Planner consumes.
+- Initial/retry guidance now states the exact lowercase `kind:product` shape.
+  The schema remains under budget at 26,937 bytes with authority SHA-256
+  `b63e2709c279aedcf0f9c8993ca059359af26cf50baf7b2491d3a480003580bf`.
+- 47 focused product-identity, consumption, figure-binding, display, strict
+  transport, and recorded-prompt tests passed. Ruff and `git diff --check`
+  passed.
+
+## Next
+
+Commit the single-owner product grammar, build and validate a new exact-source
+image, and start E1 from a fresh `dev14` root. Never resume or reuse `dev13`.

@@ -8,10 +8,11 @@ or reporting owners.
 
 from __future__ import annotations
 
-import re
 from typing import List, Literal, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from .product_identity import is_canonical_typed_product_token
 
 
 class PlannedFigurePanelSpec(BaseModel):
@@ -34,10 +35,7 @@ class PlannedFigurePanelSpec(BaseModel):
         cls, values: List[str]
     ) -> List[str]:
         cleaned = [str(value or "").strip() for value in values]
-        if any(
-            not re.fullmatch(r"[a-z][a-z0-9_]*:[a-z][a-z0-9_]*", value)
-            for value in cleaned
-        ):
+        if any(not is_canonical_typed_product_token(value) for value in cleaned):
             raise ValueError(
                 "source_products must contain canonical typed kind:product inputs"
             )
@@ -62,10 +60,7 @@ class DeterministicFigurePanelTemplate(BaseModel):
         cls, values: Tuple[str, ...]
     ) -> Tuple[str, ...]:
         cleaned = tuple(str(value or "").strip() for value in values)
-        if any(
-            not re.fullmatch(r"[a-z][a-z0-9_]*:[a-z][a-z0-9_]*", value)
-            for value in cleaned
-        ):
+        if any(not is_canonical_typed_product_token(value) for value in cleaned):
             raise ValueError(
                 "source_products must contain canonical typed kind:product inputs"
             )
