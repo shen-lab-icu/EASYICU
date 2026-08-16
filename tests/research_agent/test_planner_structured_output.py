@@ -67,6 +67,21 @@ def test_planner_transport_schema_is_closed_compact_and_deterministic():
         ]
     }
 
+    consumption = schema["$defs"]["ArtifactConsumptionContract"]
+    branches = {
+        branch["properties"]["mode"]["const"]: branch
+        for branch in consumption["anyOf"]
+    }
+    assert set(branches) == {"all_rows", "single_row", "one_per_role"}
+    for mode in ("all_rows", "single_row"):
+        properties = branches[mode]["properties"]
+        assert properties["role_column"] == {"type": "null"}
+        assert properties["expected_roles"]["maxItems"] == 0
+    role_properties = branches["one_per_role"]["properties"]
+    assert role_properties["role_column"]["minLength"] == 1
+    assert role_properties["expected_roles"]["minItems"] == 1
+    assert "uniqueItems" not in role_properties["expected_roles"]
+
     # Callers receive a fresh wire mapping; mutation cannot alter authority.
     first = request.to_openai_response_format()
     first["json_schema"]["schema"]["properties"].clear()

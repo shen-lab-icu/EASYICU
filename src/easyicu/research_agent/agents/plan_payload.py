@@ -91,6 +91,66 @@ def _closed_object_schema(properties: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _artifact_consumption_transport_schema(
+    definition: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Compile the host's mode-dependent consumption contract for transport."""
+
+    properties = definition.get("properties")
+    expected = {
+        "schema_version",
+        "input_key",
+        "mode",
+        "role_column",
+        "expected_roles",
+    }
+    if not isinstance(properties, dict) or set(properties) != expected:
+        raise PlannerStructuredOutputSchemaError(
+            "ArtifactConsumptionContract schema drifted from its wire compiler"
+        )
+
+    def branch(
+        mode: str,
+        *,
+        role_column: Dict[str, Any],
+        expected_roles: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return _closed_object_schema(
+            {
+                "schema_version": copy.deepcopy(properties["schema_version"]),
+                "input_key": copy.deepcopy(properties["input_key"]),
+                "mode": {"type": "string", "const": mode},
+                "role_column": role_column,
+                "expected_roles": expected_roles,
+            }
+        )
+
+    empty_roles = {"type": "array", "items": {"type": "string"}, "maxItems": 0}
+    return {
+        "anyOf": [
+            branch(
+                "all_rows",
+                role_column={"type": "null"},
+                expected_roles=copy.deepcopy(empty_roles),
+            ),
+            branch(
+                "single_row",
+                role_column={"type": "null"},
+                expected_roles=copy.deepcopy(empty_roles),
+            ),
+            branch(
+                "one_per_role",
+                role_column={"type": "string", "minLength": 1},
+                expected_roles={
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1,
+                },
+            ),
+        ]
+    }
+
+
 def _strictify_planner_transport_schema(node: Any) -> None:
     """Mutate a Pydantic schema into the provider's strict JSON subset."""
 
@@ -261,6 +321,11 @@ def _planner_transport_schema() -> Dict[str, Any]:
                 {"type": "null"},
             ]
         }
+        definitions["ArtifactConsumptionContract"] = (
+            _artifact_consumption_transport_schema(
+                definitions["ArtifactConsumptionContract"]
+            )
+        )
     except (KeyError, TypeError) as exc:
         raise PlannerStructuredOutputSchemaError(
             "AnalysisPlan schema shape changed; review the transport projection"
@@ -780,6 +845,19 @@ def figure_panel_shape_guide() -> str:
     )
 
 
+def artifact_consumption_contract_shape_guide() -> str:
+    """Publish the mode-dependent wire contract without choosing cardinality."""
+
+    return (
+        "Each `input_consumption_contracts` item has exactly "
+        "`schema_version`, `input_key`, `mode`, `role_column`, and "
+        "`expected_roles`; use schema version "
+        "`easyicu.artifact_consumption/1`. For `all_rows`/`single_row`, set "
+        "`role_column:null`, `expected_roles:[]`. For `one_per_role`, both "
+        "role fields must be non-empty and `expected_roles` complete and unique."
+    )
+
+
 def planner_science_retry_guide() -> str:
     """Return schema-owned retry guidance outside the Planner god module."""
 
@@ -796,12 +874,8 @@ def planner_science_retry_guide() -> str:
         "or `survival`. An `association_study` must omit that field and declare its "
         "supported adjusted model through `model_requirements`. Optional "
         "collections such as `know_how_decisions` use JSON arrays, never `null`. "
-        "Every `input_consumption_contracts` item has this exact shape: "
-        "`{\"input_key\": \"table:exact_product\", \"mode\": \"all_rows\"}`. "
-        "The only modes are `all_rows`, `single_row`, and `one_per_role`; never "
-        "rename `input_key` to `input` or `mode` to `cardinality`. Only "
-        "`one_per_role` also declares `role_column` and `expected_roles`; "
-        "`schema_version` is optional. "
+        + artifact_consumption_contract_shape_guide()
+        + " "
         + figure_panel_shape_guide()
         + " "
         "Omit `AnalysisPlan.endpoint` or emit null."
