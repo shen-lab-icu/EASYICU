@@ -729,30 +729,58 @@ def _compile_adjusted_association(
 
 def _compile_measurement_spec(
     outputs: Sequence[tuple[str, str]],
+    *,
+    step: ProgressiveSkeletonStep,
+    step_index: int,
 ) -> MeasurementAuditSpec:
-    return MeasurementAuditSpec(
-        products=[
-            MeasurementAuditProduct(
-                product_id=product_id.split(":", 1)[1],
-                audit=role,
-            )
-            for product_id, role in outputs
-        ]
-    )
+    try:
+        return MeasurementAuditSpec(
+            products=[
+                MeasurementAuditProduct(
+                    product_id=product_id.split(":", 1)[1],
+                    audit=role,
+                )
+                for product_id, role in outputs
+            ]
+        )
+    except ValidationError as exc:
+        finding = exc.errors(include_input=False)[0]
+        raise _fail(
+            "progressive_measurement_audit_spec_invalid",
+            "compiled measurement audit violates its typed contract: "
+            f"{finding['msg']}",
+            step=step,
+            step_index=step_index,
+            path="outputs",
+        ) from exc
 
 
 def _compile_robustness_spec(
     outputs: Sequence[tuple[str, str]],
+    *,
+    step: ProgressiveSkeletonStep,
+    step_index: int,
 ) -> RobustnessReplaySpec:
-    return RobustnessReplaySpec(
-        products=[
-            RobustnessReplayProduct(
-                product_id=product_id.split(":", 1)[1],
-                output=role,
-            )
-            for product_id, role in outputs
-        ]
-    )
+    try:
+        return RobustnessReplaySpec(
+            products=[
+                RobustnessReplayProduct(
+                    product_id=product_id.split(":", 1)[1],
+                    output=role,
+                )
+                for product_id, role in outputs
+            ]
+        )
+    except ValidationError as exc:
+        finding = exc.errors(include_input=False)[0]
+        raise _fail(
+            "progressive_robustness_replay_spec_invalid",
+            "compiled robustness replay violates its typed contract: "
+            f"{finding['msg']}",
+            step=step,
+            step_index=step_index,
+            path="outputs",
+        ) from exc
 
 
 def _compile_inputs(
@@ -981,7 +1009,11 @@ def _compile_one_step(
         kwargs["scientific_capability"] = "descriptive_exposure_outcome_distribution_v1"
         kwargs["inputs"] = list(dict.fromkeys([*inputs, spec.exposure, spec.outcome]))
     elif step.module_id == "measurement_audit":
-        kwargs["measurement_audit_spec"] = _compile_measurement_spec(output_pairs)
+        kwargs["measurement_audit_spec"] = _compile_measurement_spec(
+            output_pairs,
+            step=step,
+            step_index=step_index,
+        )
     elif step.module_id == "adjusted_association":
         kwargs["model_requirements"] = _compile_adjusted_association(
             variables=variables,
@@ -1000,7 +1032,11 @@ def _compile_one_step(
             )
         )
     elif step.module_id == "robustness_replay":
-        kwargs["robustness_replay_spec"] = _compile_robustness_spec(output_pairs)
+        kwargs["robustness_replay_spec"] = _compile_robustness_spec(
+            output_pairs,
+            step=step,
+            step_index=step_index,
+        )
     try:
         compiled = AnalysisStep.model_validate(kwargs)
     except ValidationError as exc:

@@ -595,6 +595,61 @@ def test_compiler_materializes_the_locked_robustness_replay_bundle() -> None:
     assert robustness_replay_spec_is_emittable(step)
 
 
+def test_compiler_contains_duplicate_robustness_output_contract() -> None:
+    payload = _payload()
+    replay = payload["steps"][5]
+    replay.update(
+        {
+            "step_id": "06_robustness",
+            "module_id": "robustness_replay",
+            "objective": "Replay the locked robustness grid without changing it.",
+            "product_inputs": [
+                {
+                    "producer_step_id": "05_primary",
+                    "product_id": "table:adjusted_association_estimates",
+                }
+            ],
+            "outputs": [
+                {
+                    "product_id": "table:sensitivity_comparison",
+                    "semantic_role": "robustness_matrix",
+                }
+            ],
+            "scientific_action_id": None,
+            "custom_method": None,
+            "sensitivity_spec_ids": ["complete_case"],
+        }
+    )
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=skeleton, context=_context())
+
+    assert caught.value.reason_code == "progressive_robustness_replay_spec_invalid"
+    assert caught.value.step_id == "06_robustness"
+    assert caught.value.path == "outputs"
+    assert "one answer promised twice" in str(caught.value)
+
+
+def test_compiler_contains_duplicate_measurement_output_contract() -> None:
+    payload = _payload()
+    payload["steps"][3]["outputs"].append(
+        {
+            "product_id": "table:measurement_missingness_alias",
+            "semantic_role": "measurement_missingness",
+        }
+    )
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=skeleton, context=_context())
+
+    assert caught.value.reason_code == "progressive_measurement_audit_spec_invalid"
+    assert caught.value.step_id == "04_measurement"
+    assert caught.value.path == "outputs"
+    assert "one answer promised twice" in str(caught.value)
+
+
 def test_compiler_reports_attributable_unknown_variable() -> None:
     payload = _payload()
     payload["steps"][4]["model_terms"][1]["name"] = "invented_covariate"
