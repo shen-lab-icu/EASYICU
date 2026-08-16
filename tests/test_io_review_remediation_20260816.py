@@ -77,6 +77,17 @@ def test_round_to_interval_rejects_all_bare_numeric_axes(times) -> None:
         round_to_interval(times, pd.Timedelta(hours=1))
 
 
+def test_round_to_interval_accepts_numeric_axis_with_explicit_unit() -> None:
+    times = pd.Series([0.0, 59.0, 60.0, 119.0], name="charttime")
+
+    result = round_to_interval(
+        times, pd.Timedelta(hours=1), time_unit="minutes"
+    )
+
+    assert result.tolist() == [0.0, 0.0, 60.0, 60.0]
+    assert result.name == "charttime"
+
+
 def test_hirid_archive_completeness_checks_exact_member_size(tmp_path: Path) -> None:
     data_dir = tmp_path / "hirid"
     data_dir.mkdir()
