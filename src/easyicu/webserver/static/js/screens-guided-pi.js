@@ -3,6 +3,7 @@
    remain in their existing EasyICU owners. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
@@ -21,11 +22,6 @@
   });
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
-  function esc(value) {
-    return String(value == null ? '' : value)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
   function assistantTextHtml(value) {
     const renderer = window.EU_GUIDED_PI_MARKDOWN;
     return renderer && typeof renderer.render === 'function'
@@ -505,10 +501,12 @@
     const runtime = state.runtime || {};
     const config = runtime.configuration || {};
     const blockers = runtime.blockers || [];
-    const runtimeMissing = blockers.filter(code => [
-      'node_available', 'node_version_supported', 'entrypoint_available',
-      'dependency_installed', 'lockfile_present', 'base_url_configured',
-    ].includes(code));
+    /* screens-guided-pi-blockers.js owns which codes are runtime problems,
+       what each one means in plain language, and what fixes it. This file
+       only lays the result out. */
+    const runtimeMissing = window.EU_PI_BLOCKERS
+      ? window.EU_PI_BLOCKERS.describe(blockers, runtime)
+      : [];
     const savedCredential = !!config.credential_present;
     const canCancel = runtimeReady();
     const staticPreview = isStaticPreview();
@@ -532,7 +530,16 @@
           <div class="gpi-config-note">${tr('Pi supports many provider brands. Service type selects the provider; compatibility protocol selects its wire API. For CLIProxyAPI on port 8317, use OpenAI Chat Completions.', 'Pi 支持很多模型提供方。“服务类型”表示接入对象，“兼容协议”表示实际通信格式；CLIProxyAPI 的 8317 端口请选择 OpenAI Chat Completions。')}</div>
           ${state.availableModels.length ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Models reported by this service:', '该服务返回的可用模型：')} ${esc(state.availableModels.slice(0, 12).join(', '))}</div>` : ''}
           ${savedCredential ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('A private credential is saved, but a newly entered credential is still required to verify or change this connection.', '本机已有私有凭据；为验证或更换连接，仍需重新输入一次凭据。')}</div>` : ''}
-          ${runtimeMissing.length ? `<div class="gpi-config-note warn">${tr('The Pi runtime also needs attention before chat can open:', '聊天开放前还需要处理 Pi 运行环境：')} ${esc(runtimeMissing.join(', '))}</div>` : ''}
+          ${runtimeMissing.length ? `<div class="gpi-config-note warn gpi-blockers">
+            <div class="gpi-blocker-lead">${tr('Fix these before the conversation can open:', '对话开放前需要先解决：')}</div>
+            <ol class="gpi-blocker-list">
+              ${runtimeMissing.map(b => `<li>
+                <span class="gpi-blocker-title">${esc(b.title)}</span>
+                ${b.fix ? `<span class="gpi-blocker-fix">${esc(b.fix)}</span>` : ''}
+                <span class="gpi-blocker-code mono" title="${esc(tr('Diagnostic code reported by the Pi runtime', 'Pi 运行环境上报的诊断码'))}">${esc(b.code)}</span>
+              </li>`).join('')}
+            </ol>
+          </div>` : ''}
           ${staticPreview ? `<div class="gpi-config-note warn"><strong>${tr('Static preview only.', '当前只是静态预览。')}</strong>&nbsp;${tr('Start EasyICU, then open http://127.0.0.1:8765/#guided. This file:// page cannot verify any credential.', '请启动 EasyICU，再打开 http://127.0.0.1:8765/#guided；当前 file:// 页面无法验证任何凭据。')}</div>` : ''}
           <label class="gpi-optin"><input name="enable_ai" type="checkbox" required> <span>${tr('I authorize this verification request and external AI use for Pi Copilot. Chat text, PHI-safe summaries, and workspace file contents may be sent to this configured service. Do not place PHI, patient rows, credentials, or private clinical data in the workspace.', '我授权本次连接验证，并允许 Pi Copilot 使用外部 AI；对话文字、经 PHI 安全投影的摘要和工作区文件内容可能发送到所配置的服务。请勿在工作区放置 PHI、患者行级数据、凭据或私密临床数据。')}</span></label>
           ${state.error ? `<div class="gpi-error inline">${esc(state.error)}</div>` : ''}
