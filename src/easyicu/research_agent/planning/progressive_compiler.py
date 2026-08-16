@@ -47,6 +47,7 @@ from .analysis_types import (
 )
 from .cohort_contract import CohortDefinition, ConceptPredicate, TimeWindow
 from .literature_contract import LiteratureDesignBinding
+from .method_literature import method_binding_support
 from .progressive_contract import (
     ProgressiveCompiledStepReceipt,
     ProgressiveLiteratureBinding,
@@ -817,10 +818,27 @@ def _compile_literature(
     *,
     allowed_citations: frozenset[str],
     step_index: int,
+    host_reporting_source_key: str | None = None,
 ) -> tuple[list[str], list[LiteratureDesignBinding]]:
     bindings_by_key: dict[str, list[ProgressiveLiteratureBinding]] = {}
     for item in step.literature_bindings:
         bindings_by_key.setdefault(item.citation_key, []).append(item)
+    if host_reporting_source_key is not None and not any(
+        item.citation_key == host_reporting_source_key
+        and "reporting" in item.design_elements
+        for item in step.literature_bindings
+    ):
+        bindings_by_key.setdefault(host_reporting_source_key, []).append(
+            ProgressiveLiteratureBinding(
+                citation_key=host_reporting_source_key,
+                design_elements=["reporting"],
+                application=(
+                    "Apply the host-sealed article reporting standard to this "
+                    "study's methods and results."
+                ),
+                divergence=None,
+            )
+        )
     keys = list(bindings_by_key)
     unknown = sorted(set(keys) - allowed_citations)
     if unknown:
@@ -886,6 +904,7 @@ def _compile_one_step(
     allowed_citations: frozenset[str],
     producers: Mapping[str, str],
     outputs_by_step: Mapping[str, Sequence[str]],
+    host_reporting_source_key: str | None = None,
 ) -> _CompiledStep:
     try:
         output_pairs = _canonical_outputs(step)
@@ -909,6 +928,7 @@ def _compile_one_step(
         step,
         allowed_citations=allowed_citations,
         step_index=step_index,
+        host_reporting_source_key=host_reporting_source_key,
     )
     method = step.custom_method or _METHOD_BY_MODULE[step.module_id]
     kwargs: dict[str, Any] = {
@@ -1170,6 +1190,7 @@ def compile_progressive_plan(
     context: ResearchContext,
     allowed_literature_citation_keys: Sequence[str] = (),
     allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
+    host_reporting_method_source_keys: Sequence[str] = (),
 ) -> tuple[AnalysisPlan, ProgressivePlanCompileReceipt]:
     """Compile and validate one skeleton without weakening final plan gates."""
 
@@ -1191,6 +1212,50 @@ def compile_progressive_plan(
     variables = _variable_index(context)
     allowed_citations = frozenset(
         str(value).strip() for value in allowed_literature_citation_keys
+    )
+    host_reporting_keys = tuple(
+        dict.fromkeys(
+            str(value or "").strip()
+            for value in host_reporting_method_source_keys
+            if str(value or "").strip()
+        )
+    )
+    host_reporting_target = next(
+        (
+            (index, step)
+            for index, step in enumerate(skeleton.steps)
+            if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
+        ),
+        (None, None),
+    )
+    target_index, target_step = host_reporting_target
+    unavailable = sorted(set(host_reporting_keys) - allowed_citations)
+    if unavailable:
+        raise _fail(
+            "progressive_host_reporting_source_unavailable",
+            "article reporting source keys are outside the sealed run roster: "
+            f"{unavailable!r}",
+            step=target_step,
+            step_index=target_index,
+            path="host_reporting_method_source_keys",
+        )
+    invalid = sorted(
+        key
+        for key in host_reporting_keys
+        if "reporting_standard"
+        not in method_binding_support(key, ["reporting"])["matched_layers"]
+    )
+    if invalid:
+        raise _fail(
+            "progressive_host_reporting_source_invalid",
+            "article reporting source keys lack reporting method-card authority: "
+            f"{invalid!r}",
+            step=target_step,
+            step_index=target_index,
+            path="host_reporting_method_source_keys",
+        )
+    host_reporting_source_key = (
+        host_reporting_keys[0] if len(host_reporting_keys) == 1 else None
     )
     _preflight_step_findings(
         skeleton=skeleton,
@@ -1228,6 +1293,9 @@ def compile_progressive_plan(
             allowed_citations=allowed_citations,
             producers=producers,
             outputs_by_step=outputs_by_step,
+            host_reporting_source_key=(
+                host_reporting_source_key if index == target_index else None
+            ),
         )
         for product in compiled.outputs:
             prior = producers.get(product)

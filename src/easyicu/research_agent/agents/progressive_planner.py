@@ -18,6 +18,9 @@ from ..planning.analysis_types import (
     validate_host_authorized_analysis_family,
 )
 from ..planning.literature_bindings import validate_literature_citation_bindings
+from ..planning.method_literature import (
+    reporting_method_source_keys_for_guidelines,
+)
 from ..planning.planner_output_contract import (
     validate_fresh_planner_typed_product_specs,
 )
@@ -337,6 +340,23 @@ def _step_index_from_error(plan: AnalysisPlan, message: str) -> int:
     return _primary_or_first_step_index(plan)
 
 
+def _article_reporting_source_keys(
+    *,
+    article_context: ResearchContext,
+    analysis_type: str,
+    enforce_article_contract: bool,
+) -> tuple[str, ...]:
+    if not enforce_article_contract:
+        return ()
+    contract = build_article_analysis_contract(
+        article_context,
+        analysis_type=analysis_type,
+    )
+    return reporting_method_source_keys_for_guidelines(
+        contract.reporting_guidelines
+    )
+
+
 def _accept_compiled_plan(
     *,
     plan: AnalysisPlan,
@@ -609,11 +629,17 @@ class ProgressivePlannerAgent:
         allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None,
         enforce_article_contract: bool,
     ) -> tuple[AnalysisPlan, ProgressivePlanCompileReceipt]:
+        reporting_source_keys = _article_reporting_source_keys(
+            article_context=article_context,
+            analysis_type=skeleton.analysis_type,
+            enforce_article_contract=enforce_article_contract,
+        )
         plan, receipt = compile_progressive_plan(
             skeleton=skeleton,
             context=agent_context,
             allowed_literature_citation_keys=allowed_literature_citation_keys,
             allowed_know_how_decisions=allowed_know_how_decisions,
+            host_reporting_method_source_keys=reporting_source_keys,
         )
         _accept_compiled_plan(
             plan=plan,
@@ -809,11 +835,17 @@ class ProgressivePlannerAgent:
                             "steps": [item.model_dump(mode="json") for item in prefix],
                         }
                     )
+                    reporting_source_keys = _article_reporting_source_keys(
+                        article_context=article_context,
+                        analysis_type=current.analysis_type,
+                        enforce_article_contract=enforce_article_contract,
+                    )
                     _prefix_plan, prior_receipt = compile_progressive_plan(
                         skeleton=prefix_skeleton,
                         context=context,
                         allowed_literature_citation_keys=allowed_citations,
                         allowed_know_how_decisions=allowed_know_how_decisions,
+                        host_reporting_method_source_keys=reporting_source_keys,
                     )
                 suffix_schema = None
                 if structured_output is not None:

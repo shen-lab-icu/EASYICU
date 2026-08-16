@@ -646,6 +646,61 @@ def test_compiler_coalesces_repeated_source_without_losing_design_intent() -> No
     assert binding.divergence == "Do not adopt the source population restriction."
 
 
+def test_compiler_materializes_one_host_sealed_reporting_standard() -> None:
+    plan, _receipt = compile_progressive_plan(
+        skeleton=_skeleton(),
+        context=_context(),
+        allowed_literature_citation_keys=["strobe_2007", "record_2015"],
+        host_reporting_method_source_keys=["strobe_2007"],
+    )
+
+    first_scientific = next(
+        step
+        for step in plan.steps
+        if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
+    )
+    assert first_scientific.literature_citation_keys == ["strobe_2007"]
+    assert [
+        binding.model_dump(mode="json")
+        for binding in first_scientific.literature_design_bindings
+    ] == [
+        {
+            "citation_key": "strobe_2007",
+            "design_elements": ["reporting"],
+            "application": (
+                "Apply the host-sealed article reporting standard to this "
+                "study's methods and results."
+            ),
+            "divergence": None,
+        }
+    ]
+
+
+def test_compiler_does_not_guess_between_multiple_reporting_standards() -> None:
+    plan, _receipt = compile_progressive_plan(
+        skeleton=_skeleton(),
+        context=_context(),
+        allowed_literature_citation_keys=["strobe_2007", "record_2015"],
+        host_reporting_method_source_keys=["strobe_2007", "record_2015"],
+    )
+
+    assert all(not step.literature_citation_keys for step in plan.steps)
+
+
+def test_compiler_refuses_host_reporting_source_outside_run_roster() -> None:
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=_skeleton(),
+            context=_context(),
+            allowed_literature_citation_keys=["record_2015"],
+            host_reporting_method_source_keys=["strobe_2007"],
+        )
+
+    assert caught.value.reason_code == "progressive_host_reporting_source_unavailable"
+    assert caught.value.step_id == "03_distribution"
+    assert caught.value.path == "host_reporting_method_source_keys"
+
+
 def test_compiler_refuses_lossy_repeated_source_coalescing() -> None:
     payload = _payload()
     payload["steps"][4]["literature_bindings"] = [
