@@ -372,3 +372,44 @@ image, and start E1 from a fresh `dev11` root. Never resume or reuse `dev10`.
 
 Commit the mode-dependent wire schema, build and validate a new exact-source
 image, and start E1 from a fresh `dev12` root. Never resume or reuse `dev11`.
+
+## Dev12 result
+
+- Source commit: `e7137f1`; exact image:
+  `easyicu-research-agent:e7137f1-dev`, image id
+  `sha256:ebd390438d7722b2c0391fe59a5f5facaab756fe85258653a4e4bdb219aa26e5`.
+- Runtime/source validation passed under `network=none` with all 11 method
+  capabilities and requirements SHA-256
+  `93deef72a6ca1ec722e9360f8795ab758f4650dea8b52d97d7858fc27826b63b`.
+- Run root:
+  `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_e7137f1_e1_dev12`.
+- The first Planner call used 24,624 prompt and 7,836 completion tokens (32,460
+  total; estimated cost USD 0.48132) with an 82,316-byte message payload. Its
+  five host findings included invalid Table One inference, unprovable mixed
+  panels, a binary-term transform, and a binary endpoint event coordinate.
+- Before spending a second provider call, the retry projector failed closed:
+  the complete prior-coordinate ledger was 5,104 bytes, above its 4,500-byte
+  envelope. No coordinate was discarded and no generated analysis code ran.
+
+## Dev12 lossless retry-ledger repair
+
+- The coordinate ledger keeps the existing 4,500-byte limit and the same
+  scientific fields. Its repeated string references are now bare non-negative
+  string-table indexes instead of two-element tagged arrays.
+- To keep the codec unambiguous for malformed/non-strict responses, any literal
+  numeric scalar inside `step_coordinates` is encoded as `["n", value]`.
+  Nulls and booleans remain their native JSON types; top-level cohort/endpoint
+  numbers remain literal because the projection note scopes the codec to
+  `step_coordinates`.
+- The pressure regression now round-trips action, capability, output, citation,
+  design-binding, sensitivity, and an intentionally invalid numeric scalar.
+  Its 11-step coordinate ledger is 2,261 bytes, leaving substantial headroom
+  without removing authority or raising the boundary.
+- 35 parser/projection tests and 83 structured-retry, catalog-budget,
+  know-how-budget, and recorded-prompt tests passed. Ruff and
+  `git diff --check` passed.
+
+## Next
+
+Commit the denser lossless ledger, build and validate a new exact-source image,
+and start E1 from a fresh `dev13` root. Never resume or reuse `dev12`.
