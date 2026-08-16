@@ -413,7 +413,7 @@ def load_production_input_authority(
 # Canonical execution config — every run-semantics knob folded into ONE digest
 # ---------------------------------------------------------------------------
 
-CANONICAL_EXECUTION_CONFIG_SCHEMA = "easyicu.figure2_canonical_execution_config/2"
+CANONICAL_EXECUTION_CONFIG_SCHEMA = "easyicu.figure2_canonical_execution_config/3"
 
 
 class CanonicalExecutionConfig(_StrictFrozenModel):
@@ -425,7 +425,7 @@ class CanonicalExecutionConfig(_StrictFrozenModel):
     A canonical run must have ``stop_after_step_id is None``.
     """
 
-    schema_version: Literal["easyicu.figure2_canonical_execution_config/2"]
+    schema_version: Literal["easyicu.figure2_canonical_execution_config/3"]
     stop_after_step_id: Optional[str]
     seed: int
     llm_seed: Optional[int]
@@ -458,6 +458,7 @@ class CanonicalExecutionConfig(_StrictFrozenModel):
     development_sample_seed: int
     models: tuple[str, ...]
     reasoning_effort_profile: Literal["provider_default", "adaptive_v1"]
+    planner_strategy: Literal["monolithic_v1", "progressive_v2"]
 
     def digest(self) -> str:
         return hashlib.sha256(
@@ -496,6 +497,7 @@ def build_canonical_execution_config(
     development_sample_seed: int = 20260719,
     models: Sequence[str] = (),
     reasoning_effort_profile: str = "provider_default",
+    planner_strategy: str = "monolithic_v1",
     transport_max_attempts: int = 1,
     provider_base_url: str = "https://openrouter.ai/api/v1",
     llm_stream_enabled: bool = False,
@@ -521,9 +523,7 @@ def build_canonical_execution_config(
         max_provider_attempts_per_batch=int(max_provider_attempts_per_batch),
         max_total_tokens_per_run=int(max_total_tokens_per_run),
         max_total_tokens_per_batch=int(max_total_tokens_per_batch),
-        max_estimated_cost_usd_per_batch=float(
-            max_estimated_cost_usd_per_batch
-        ),
+        max_estimated_cost_usd_per_batch=float(max_estimated_cost_usd_per_batch),
         max_wall_clock_seconds_per_task=float(max_wall_clock_seconds_per_task),
         provider_input_cost_usd_per_million_tokens=float(
             provider_input_cost_usd_per_million_tokens
@@ -547,6 +547,7 @@ def build_canonical_execution_config(
         development_sample_seed=int(development_sample_seed),
         models=tuple(str(model) for model in (models or ())),
         reasoning_effort_profile=str(reasoning_effort_profile),
+        planner_strategy=str(planner_strategy),
     )
 
 
@@ -904,9 +905,7 @@ def _verify_invocation_binding(
             max_provider_attempts_per_batch=config.max_provider_attempts_per_batch,
             max_total_tokens_per_run=config.max_total_tokens_per_run,
             max_total_tokens_per_batch=config.max_total_tokens_per_batch,
-            max_estimated_cost_usd_per_batch=(
-                config.max_estimated_cost_usd_per_batch
-            ),
+            max_estimated_cost_usd_per_batch=(config.max_estimated_cost_usd_per_batch),
             max_wall_clock_seconds_per_task=config.max_wall_clock_seconds_per_task,
             input_cost_usd_per_million_tokens=(
                 config.provider_input_cost_usd_per_million_tokens
@@ -1158,10 +1157,8 @@ def _verify_production_input_authority(
                         f"{task.task_id} runtime scientific projection differs from human review"
                     )
                 if (
-                    row.expected_outputs
-                    != projection.agent_visible_required_outputs
-                    or row.semantic_guardrails
-                    != projection.agent_visible_guardrails
+                    row.expected_outputs != projection.agent_visible_required_outputs
+                    or row.semantic_guardrails != projection.agent_visible_guardrails
                     or row.notes != projection.canonical_protocol_json
                 ):
                     raise ValueError(
@@ -1182,13 +1179,17 @@ def _verify_scientific_protocol_authority(
     """Verify E2/H2/H3 review authority before any cohort bytes are read."""
 
     if request.scientific_protocol_authority_path is None:
-        return [
-            _issue(
-                "SCIENTIFIC_PROTOCOL_AUTHORITY_ABSENT",
-                "no digest-bound, dual-reviewed E2/H2/H3 protocol authority was "
-                "supplied; formal Canonical9 execution remains blocked",
-            )
-        ], None, None
+        return (
+            [
+                _issue(
+                    "SCIENTIFIC_PROTOCOL_AUTHORITY_ABSENT",
+                    "no digest-bound, dual-reviewed E2/H2/H3 protocol authority was "
+                    "supplied; formal Canonical9 execution remains blocked",
+                )
+            ],
+            None,
+            None,
+        )
     try:
         from .scientific_protocol_authority import (
             load_verified_scientific_protocol_authority,
@@ -1206,12 +1207,16 @@ def _verify_scientific_protocol_authority(
             )
         return [], authority.authority_digest, authority
     except Exception as exc:  # noqa: BLE001
-        return [
-            _issue(
-                "SCIENTIFIC_PROTOCOL_AUTHORITY_INVALID",
-                f"{type(exc).__name__}: {exc}",
-            )
-        ], None, None
+        return (
+            [
+                _issue(
+                    "SCIENTIFIC_PROTOCOL_AUTHORITY_INVALID",
+                    f"{type(exc).__name__}: {exc}",
+                )
+            ],
+            None,
+            None,
+        )
 
 
 def verify_realrun_authorization(
@@ -1338,8 +1343,7 @@ def verify_realrun_authorization(
                 not isinstance(client, Mapping)
                 or str(client.get("provider") or "") != declaration.provider
                 or str(client.get("model") or "") != declaration.model
-                or str(client.get("base_url") or "").rstrip("/")
-                != expected_base_url
+                or str(client.get("base_url") or "").rstrip("/") != expected_base_url
             ):
                 raise ValueError(
                     "execution identity Provider/model/base URL differs from "
@@ -1856,9 +1860,7 @@ def _cli(argv: Optional[Sequence[str]] = None) -> int:
             if args.production_input_authority
             else None
         ),
-        scientific_protocol_authority_path=Path(
-            args.scientific_protocol_authority
-        ),
+        scientific_protocol_authority_path=Path(args.scientific_protocol_authority),
     )
     authorization = verify_realrun_authorization(request)
     if args.receipt_out:

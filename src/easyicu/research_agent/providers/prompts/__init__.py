@@ -7,14 +7,15 @@ from pathlib import Path
 from typing import Dict
 
 
-PROMPT_PACK_VERSION = "easyicu-research-agent-prompts/v1"
-_PROMPT_ROOT = Path(__file__).resolve().parent / "v1"
+PROMPT_PACK_VERSION = "easyicu-research-agent-prompts/v2"
+_PROMPT_ROOT = Path(__file__).resolve().parent
 _PROMPT_FILES = {
-    "system": "system.txt",
-    "coder": "coder.txt",
-    "replanner": "replanner.txt",
-    "writer": "writer.txt",
-    "nature_writing": "nature_writing.txt",
+    "system": "v1/system.txt",
+    "coder": "v1/coder.txt",
+    "replanner": "v1/replanner.txt",
+    "writer": "v1/writer.txt",
+    "nature_writing": "v1/nature_writing.txt",
+    "progressive_planner": "v2/progressive_planner.txt",
 }
 
 

@@ -71,6 +71,7 @@ from .agents.core import (
     StatisticalAnalysisAgent,
     VisualizationAgent,
 )
+from .agents.progressive_planner import ProgressivePlannerAgent
 from .architecture import architecture_profile_markdown, default_architecture_profile
 from .authority.parent_artifact import (
     _resolve_upstream_manifest_analysis_request,
@@ -1648,6 +1649,7 @@ class ResearchAgentPipeline:
         self._enable_deterministic_planner_fallback = bool(
             config.enable_deterministic_planner_fallback
         )
+        self._planner_strategy = config.planner_strategy
         self._enable_deterministic_runner_repair = bool(
             config.enable_deterministic_runner_repair
         )
@@ -2482,8 +2484,10 @@ class ResearchAgentPipeline:
                 )
             plan = skill_obj.plan(context)
         else:
-            plan_generation_mode = "llm"
-            planner = PlannerAgent(
+            progressive = self._planner_strategy == "progressive_v2"
+            plan_generation_mode = "llm_progressive_v2" if progressive else "llm"
+            planner_class = ProgressivePlannerAgent if progressive else PlannerAgent
+            planner = planner_class(
                 budgeted_role_client(
                     role_resolver,
                     "planner",
@@ -2514,6 +2518,51 @@ class ResearchAgentPipeline:
                     agent_context,
                     planning_contract_context=planning_contract_context,
                 )
+                if progressive:
+                    skeleton = planner.last_skeleton
+                    compile_receipt = planner.last_compile_receipt
+                    if skeleton is None or compile_receipt is None:
+                        raise RuntimeError(
+                            "Progressive Planner returned without its skeleton/receipt"
+                        )
+                    skeleton_path = run_dir / "progressive_plan_skeleton.json"
+                    skeleton_path.write_text(
+                        skeleton.model_dump_json(indent=2),
+                        encoding="utf-8",
+                    )
+                    if evidence.get("progressive_plan_skeleton") is None:
+                        evidence.register_file(
+                            kind="log",
+                            description=(
+                                "Planner-owned compact scientific skeleton before "
+                                "host contract compilation."
+                            ),
+                            source_path=skeleton_path,
+                            evidence_id="progressive_plan_skeleton",
+                            inputs=["research_context"],
+                            producer="progressive_planner",
+                            generation_mode="llm",
+                            prompt_pack_version=prompt_version,
+                        )
+                    receipt_path = run_dir / "progressive_plan_compile_receipt.json"
+                    receipt_path.write_text(
+                        compile_receipt.model_dump_json(indent=2),
+                        encoding="utf-8",
+                    )
+                    if evidence.get("progressive_plan_compile_receipt") is None:
+                        evidence.register_file(
+                            kind="log",
+                            description=(
+                                "Host-derived immutable-prefix and AnalysisPlan "
+                                "compilation receipt for Progressive Planner v2."
+                            ),
+                            source_path=receipt_path,
+                            evidence_id="progressive_plan_compile_receipt",
+                            inputs=["progressive_plan_skeleton", "research_context"],
+                            producer="progressive_plan_compiler",
+                            generation_mode="deterministic_skill",
+                            prompt_pack_version=prompt_version,
+                        )
             except PlannerArticleContractError:
                 raise
             except Exception as exc:
@@ -6208,6 +6257,7 @@ class ResearchAgentPipeline:
             "enable_deterministic_planner_fallback": bool(
                 self._enable_deterministic_planner_fallback
             ),
+            "planner_strategy": self._planner_strategy,
             "enable_deterministic_runner_repair": bool(
                 self._enable_deterministic_runner_repair
             ),

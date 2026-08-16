@@ -35,6 +35,11 @@ from ..planning.robustness_contract import (
     RobustnessSpec,
 )
 from ..providers.protocol import StructuredOutputRequest
+from ..providers.strict_json_schema import (
+    StrictJsonSchemaError,
+    assert_closed_json_schema,
+    strictify_json_schema,
+)
 from ..planning.scientific_review import (
     required_method_layers_for_context,
     required_method_layers_for_plan,
@@ -279,79 +284,16 @@ def _bind_literature_transport_authority(
 
 
 def _strictify_planner_transport_schema(node: Any) -> None:
-    """Mutate a Pydantic schema into the provider's strict JSON subset."""
+    """Compatibility wrapper over the provider-neutral strict-schema owner."""
 
-    if not isinstance(node, dict):
-        return
-    # Descriptions/titles are already present in the Planner directive.
-    # Removing them keeps the provider request inside the same reviewed
-    # prompt envelope without weakening keys, types, enums, or bounds. Do not
-    # recurse into the properties mapping itself as though it were a schema: a
-    # real field may legitimately be named ``description`` or ``default``.
-    for key in ("default", "description", "examples", "title"):
-        node.pop(key, None)
-    properties = node.get("properties")
-    if isinstance(properties, dict):
-        node["required"] = list(properties)
-        node["additionalProperties"] = False
-        for property_schema in properties.values():
-            _strictify_planner_transport_schema(property_schema)
-    definitions = node.get("$defs")
-    if isinstance(definitions, dict):
-        for definition_schema in definitions.values():
-            _strictify_planner_transport_schema(definition_schema)
-    for key in ("items", "additionalProperties", "not", "if", "then", "else"):
-        value = node.get(key)
-        if isinstance(value, dict):
-            _strictify_planner_transport_schema(value)
-    for key in ("allOf", "anyOf", "oneOf", "prefixItems"):
-        values = node.get(key)
-        if isinstance(values, list):
-            for value in values:
-                _strictify_planner_transport_schema(value)
+    strictify_json_schema(node)
 
 
 def _assert_closed_planner_transport_schema(node: Any, *, path: str = "$") -> None:
-    if not isinstance(node, dict):
-        return
-    if not node:
-        raise PlannerStructuredOutputSchemaError(f"unconstrained JSON schema at {path}")
-    properties = node.get("properties")
-    if isinstance(properties, dict):
-        if set(node.get("required") or ()) != set(properties):
-            raise PlannerStructuredOutputSchemaError(
-                f"strict object does not require every property at {path}"
-            )
-        if node.get("additionalProperties") is not False:
-            raise PlannerStructuredOutputSchemaError(
-                f"strict object permits additional properties at {path}"
-            )
-        for key, value in properties.items():
-            _assert_closed_planner_transport_schema(
-                value, path=f"{path}/properties/{key}"
-            )
-    definitions = node.get("$defs")
-    if isinstance(definitions, dict):
-        for key, value in definitions.items():
-            _assert_closed_planner_transport_schema(
-                value, path=f"{path}/$defs/{key}"
-            )
-    additional = node.get("additionalProperties", False)
-    if additional is not False:
-        raise PlannerStructuredOutputSchemaError(
-            f"open mapping is not permitted at {path}"
-        )
-    for key in ("items", "not", "if", "then", "else"):
-        value = node.get(key)
-        if isinstance(value, dict):
-            _assert_closed_planner_transport_schema(value, path=f"{path}/{key}")
-    for key in ("allOf", "anyOf", "oneOf", "prefixItems"):
-        values = node.get(key)
-        if isinstance(values, list):
-            for index, value in enumerate(values):
-                _assert_closed_planner_transport_schema(
-                    value, path=f"{path}/{key}/{index}"
-                )
+    try:
+        assert_closed_json_schema(node, path=path)
+    except StrictJsonSchemaError as exc:
+        raise PlannerStructuredOutputSchemaError(str(exc)) from exc
 
 
 def _planner_transport_schema(
