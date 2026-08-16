@@ -86,6 +86,29 @@ def validate_numeric_input(
         field=field,
         index=index,
     )
+    # ``pd.to_numeric`` silently turns temporal dtypes into epoch/duration
+    # integers, so a mis-wired datetime column would score as an enormous but
+    # perfectly "valid" physiological value. Allow-list the dtype families a
+    # SOFA-2 input may legitimately arrive in instead: numeric (including the
+    # nullable and boolean extensions), object/string (parsed below), and
+    # categorical (the receipt/coverage encoding used elsewhere in the
+    # package). Anything else fails closed rather than being coerced.
+    if not (
+        pd.api.types.is_numeric_dtype(raw)
+        or pd.api.types.is_object_dtype(raw)
+        or pd.api.types.is_string_dtype(raw)
+        or isinstance(raw.dtype, pd.CategoricalDtype)
+    ):
+        raise SOFA2InputError(
+            component=component,
+            field=field,
+            reason_code=f"{component}_{field}_numeric_dtype_invalid",
+            message=(
+                "SOFA-2 numeric input must be numeric, string or categorical, "
+                f"not {raw.dtype}"
+            ),
+            invalid_count=len(raw),
+        )
     numeric = pd.to_numeric(raw, errors="coerce")
     bad_encoding = raw.notna() & numeric.isna()
     if bad_encoding.any():
@@ -145,6 +168,14 @@ def normalize_fio2_input(
 
     Valid non-missing inputs are either fractions in ``[0.21, 1.0]`` or
     percentages in ``[21, 100]``. A single Series cannot mix the two domains.
+
+    The two domains are disjoint, so the *returned fractions* are independent
+    of how the caller partitioned its rows. The mixed-unit rejection, however,
+    can only see the rows in this call: a source that encodes units
+    inconsistently fails closed when the inconsistent rows arrive together and
+    passes when a chunk happens to be homogeneous. Treat it as a per-call data
+    hygiene gate, not a cohort-level invariant -- a cohort-wide guarantee needs
+    the unit declared once at the owning extraction layer.
     """
 
     numeric = validate_numeric_input(
@@ -180,4 +211,10 @@ def normalize_fio2_input(
     return NormalizedFiO2(values=numeric, source_unit="unavailable")
 
 
-__all__ = ["SOFA2InputError"]
+__all__ = [
+    "NormalizedFiO2",
+    "SOFA2InputError",
+    "normalize_fio2_input",
+    "validate_aligned_input",
+    "validate_numeric_input",
+]

@@ -254,7 +254,10 @@ def sofa2_resp(
     - ECMO for cardiovascular indication → additionally score cardiovascular
     
     Args:
-        pafi: PaO2/FiO2 ratio (unitless ratio; see the 2026 correction)
+        pafi: PaO2/FiO2 ratio (unitless ratio; see the 2026 correction).
+            Accepted domain [20, 3000]; the six canonical exports span
+            [40, 800] over 4.3M observations, so the bound only fires on a
+            unit error, not on real physiology.
         spo2: Oxygen saturation (%)
         fio2: Fraction of inspired oxygen (0.21-1.0 or 21-100)
         adv_resp: Boolean - advanced respiratory support active
@@ -350,8 +353,13 @@ def sofa2_resp(
             component="sofa2_resp",
             field="pafi",
             index=idx,
-            minimum=0,
-            minimum_inclusive=False,
+            # The dictionary bounds po2 [40, 600] mmHg and fio2 [21, 100] %
+            # make every derivable P/F fall in [40, 2857]. Bounding the field
+            # here catches the classic 100x unit error (FiO2 passed as 21-100
+            # instead of 0.21-1.0), which otherwise lands in the single digits
+            # and scores a maximal 4 without any other input disagreeing.
+            minimum=20,
+            maximum=3000,
         )
         if pafi is not None
         else pd.Series(np.nan, index=idx)
@@ -362,8 +370,10 @@ def sofa2_resp(
     sf = pd.Series(np.nan, index=idx)
     sf_applicable = pd.Series(False, index=idx)
     
-    if spo2 is not None and fio2 is not None:
-        s = validate_numeric_input(
+    # Validate whatever was supplied even when the pair is incomplete, so a
+    # malformed SpO2/FiO2 column still fails closed instead of being ignored.
+    s = (
+        validate_numeric_input(
             spo2,
             component="sofa2_resp",
             field="spo2",
@@ -371,24 +381,15 @@ def sofa2_resp(
             minimum=0,
             maximum=100,
         )
-        f_adj = normalize_fio2_input(fio2, index=idx).values
-    else:
-        if spo2 is not None:
-            validate_numeric_input(
-                spo2,
-                component="sofa2_resp",
-                field="spo2",
-                index=idx,
-                minimum=0,
-                maximum=100,
-            )
-        if fio2 is not None:
-            normalize_fio2_input(fio2, index=idx)
-        
-    if spo2 is not None and fio2 is not None:
+        if spo2 is not None
+        else None
+    )
+    f_adj = normalize_fio2_input(fio2, index=idx).values if fio2 is not None else None
+
+    if s is not None and f_adj is not None:
         with np.errstate(invalid="ignore", divide="ignore"):
             sf = s / f_adj
-        
+
         # S/F only applicable when SpO2 < 98% (per SOFA-2 definition)
         sf_applicable = (s < 98) & sf.notna()
     
@@ -713,7 +714,15 @@ def sofa2_cardio(
 
     # Check if any vasopressors/inotropes are being used
     any_vaso = (total > 0) | (da > 0) | (db > 0) | others
-    contradiction = vaso_unavail & any_vaso
+
+    # Footnote (m) governs the MAP fallback when *vasopressors* are unavailable.
+    # Dobutamine is an unambiguous inotrope, so "vasopressors unavailable while
+    # dobutamine runs" is a real ceiling-of-care combination, not a contradiction,
+    # and must not abort the whole component for the cohort. `other_vaso` stays in
+    # the conflict because that flag mixes vasopressors and inotropes in one
+    # boolean and cannot be resolved to the inotrope-only case.
+    vasopressor_exposure = (total > 0) | (da > 0) | others
+    contradiction = vaso_unavail & vasopressor_exposure
     if contradiction.any():
         raise SOFA2InputError(
             component="sofa2_cardio",
@@ -721,7 +730,7 @@ def sofa2_cardio(
             reason_code="sofa2_cardio_vasopressor_state_conflict",
             message=(
                 "MAP fallback cannot be combined with an observed positive "
-                "vasopressor or inotrope state"
+                "vasopressor state"
             ),
             invalid_count=int(contradiction.sum()),
         )
@@ -752,13 +761,18 @@ def sofa2_cardio(
     score[dopamine_only & (da > 20) & (da <= 40)] = 3
     score[dopamine_only & (da > 40)] = 4
 
-    # MAP-only fallback when vasopressors unavailable (ceiling of care)
-    if vaso_unavail.any():
-        score[vaso_unavail & (map_val >= 70)] = 0
-        score[vaso_unavail & (map_val >= 60) & (map_val < 70)] = 1
-        score[vaso_unavail & (map_val >= 50) & (map_val < 60)] = 2
-        score[vaso_unavail & (map_val >= 40) & (map_val < 50)] = 3
-        score[vaso_unavail & (map_val < 40)] = 4
+    # MAP-only fallback when vasopressors unavailable (ceiling of care).
+    # Restricted to rows with no vasoactive exposure at all: after the conflict
+    # gate above the only surviving overlap is inotrope-only, and overwriting
+    # that row's adjunct score with a MAP cutoff would discard the drug that was
+    # actually given.
+    map_fallback = vaso_unavail & ~any_vaso
+    if map_fallback.any():
+        score[map_fallback & (map_val >= 70)] = 0
+        score[map_fallback & (map_val >= 60) & (map_val < 70)] = 1
+        score[map_fallback & (map_val >= 50) & (map_val < 60)] = 2
+        score[map_fallback & (map_val >= 40) & (map_val < 50)] = 3
+        score[map_fallback & (map_val < 40)] = 4
 
     # Mechanical circulatory support (IABP / LVAD / Impella, SOFA-2 footnote n) and
     # cardiovascular-indication ECMO (VA-ECMO, footnotes i+n) are an automatic
