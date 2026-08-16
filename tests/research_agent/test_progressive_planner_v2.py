@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -1193,7 +1194,11 @@ class _RecordingEvidence:
 
     def register_file(self, **kwargs: object) -> object:
         evidence_id = str(kwargs["evidence_id"])
-        self.records[evidence_id] = dict(kwargs)
+        source_path = Path(str(kwargs["source_path"]))
+        self.records[evidence_id] = {
+            **dict(kwargs),
+            "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        }
         return self.records[evidence_id]
 
 
@@ -1283,6 +1288,59 @@ def test_progressive_artifacts_fail_closed_on_schema_authority_drift(
     assert caught.value.reason_code == (
         "progressive_step_schema_authority_count_mismatch"
     )
+
+
+def test_progressive_artifacts_do_not_overwrite_existing_evidence_identity(
+    tmp_path: Path,
+) -> None:
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            *[json.dumps(item) for item in _materialization_payloads()],
+        ]
+    )
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+    agent.run(_context())
+    assert agent.last_outline is not None
+    assert agent.last_skeleton is not None
+    assert agent.last_compile_receipt is not None
+    evidence = _RecordingEvidence()
+    paths = persist_progressive_planning_artifacts(
+        run_dir=tmp_path,
+        evidence=evidence,
+        outline=agent.last_outline,
+        materializations=agent.last_materializations,
+        skeleton=agent.last_skeleton,
+        compile_receipt=agent.last_compile_receipt,
+        prompt_metrics=agent.last_prompt_metrics,
+        prompt_pack_version="test",
+    )
+    original_ledger = paths.materializations.read_bytes()
+    changed_step = agent.last_materializations[0].step.model_copy(
+        update={"objective": "A different unreviewed objective."}
+    )
+    changed_materializations = [
+        agent.last_materializations[0].model_copy(update={"step": changed_step}),
+        *agent.last_materializations[1:],
+    ]
+
+    with pytest.raises(ProgressivePlanningArtifactError) as caught:
+        persist_progressive_planning_artifacts(
+            run_dir=tmp_path,
+            evidence=evidence,
+            outline=agent.last_outline,
+            materializations=changed_materializations,
+            skeleton=agent.last_skeleton,
+            compile_receipt=agent.last_compile_receipt,
+            prompt_metrics=agent.last_prompt_metrics,
+            prompt_pack_version="test",
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_existing_evidence_identity_mismatch"
+    )
+    assert paths.materializations.read_bytes() == original_ledger
 
 
 def test_agent_rejects_materialization_coordinate_drift_without_full_rewrite() -> None:

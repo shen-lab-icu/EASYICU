@@ -7,6 +7,7 @@ does not plan, compile, execute, or infer authority from mutable pipeline state.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,9 +63,20 @@ def _authority_digest(value: object, *, field: str) -> str | None:
     return digest
 
 
-def _register_once(
+def _record_sha256(record: object) -> str | None:
+    raw = (
+        record.get("sha256")
+        if isinstance(record, Mapping)
+        else getattr(record, "sha256", None)
+    )
+    digest = str(raw or "").strip().lower()
+    return digest if _SHA256_RE.fullmatch(digest) else None
+
+
+def _write_and_register_once(
     evidence: ProgressiveEvidenceRegistrar,
     *,
+    content: str,
     evidence_id: str,
     description: str,
     source_path: Path,
@@ -73,8 +85,18 @@ def _register_once(
     generation_mode: str,
     prompt_pack_version: str,
 ) -> None:
-    if evidence.get(evidence_id) is not None:
+    content_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    existing = evidence.get(evidence_id)
+    if existing is not None:
+        existing_sha256 = _record_sha256(existing)
+        if existing_sha256 != content_sha256:
+            raise ProgressivePlanningArtifactError(
+                "progressive_existing_evidence_identity_mismatch",
+                f"{evidence_id} already identifies different content",
+            )
+        source_path.write_text(content, encoding="utf-8")
         return
+    source_path.write_text(content, encoding="utf-8")
     evidence.register_file(
         kind="log",
         description=description,
@@ -137,9 +159,9 @@ def persist_progressive_planning_artifacts(
     )
 
     outline_path = run_dir / "progressive_plan_outline.json"
-    outline_path.write_text(outline.model_dump_json(indent=2), encoding="utf-8")
-    _register_once(
+    _write_and_register_once(
         evidence,
+        content=outline.model_dump_json(indent=2),
         evidence_id="progressive_plan_outline",
         description=(
             "Retrieval-informed high-level scientific outline before any "
@@ -153,7 +175,7 @@ def persist_progressive_planning_artifacts(
     )
 
     materializations_path = run_dir / "progressive_step_materializations.json"
-    materializations_path.write_text(
+    materializations_content = (
         json.dumps(
             {
                 "schema_version": (
@@ -178,11 +200,11 @@ def persist_progressive_planning_artifacts(
             indent=2,
             sort_keys=True,
         )
-        + "\n",
-        encoding="utf-8",
+        + "\n"
     )
-    _register_once(
+    _write_and_register_once(
         evidence,
+        content=materializations_content,
         evidence_id="progressive_step_materializations",
         description=(
             "Ordered current-step strict materializations with their run-bound "
@@ -196,9 +218,9 @@ def persist_progressive_planning_artifacts(
     )
 
     skeleton_path = run_dir / "progressive_plan_skeleton.json"
-    skeleton_path.write_text(skeleton.model_dump_json(indent=2), encoding="utf-8")
-    _register_once(
+    _write_and_register_once(
         evidence,
+        content=skeleton.model_dump_json(indent=2),
         evidence_id="progressive_plan_skeleton",
         description=(
             "Host-assembled scientific skeleton produced from coordinate-bound "
@@ -216,12 +238,9 @@ def persist_progressive_planning_artifacts(
     )
 
     receipt_path = run_dir / "progressive_plan_compile_receipt.json"
-    receipt_path.write_text(
-        compile_receipt.model_dump_json(indent=2),
-        encoding="utf-8",
-    )
-    _register_once(
+    _write_and_register_once(
         evidence,
+        content=compile_receipt.model_dump_json(indent=2),
         evidence_id="progressive_plan_compile_receipt",
         description=(
             "Host-derived immutable-prefix and AnalysisPlan compilation receipt "
