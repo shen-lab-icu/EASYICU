@@ -24,14 +24,14 @@ import os
 import sys
 import threading
 import time
-from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
 import easyicu
+from easyicu.webserver import state_paths
 from easyicu.webserver.host_security import local_access_policy
 from easyicu.webserver.input_validation import parse_bool
 
-_CONFIG_DIR = Path.home() / ".easyicu"
+_CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_settings.json"
 _LOCK = threading.RLock()
 

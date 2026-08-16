@@ -63,6 +63,17 @@
 .gpi-config-note.ok{background:color-mix(in srgb,#2d8a62 8%,var(--paper));color:#23704f}
 .gpi-config-note.warn{background:color-mix(in srgb,#c58a22 9%,var(--paper));color:#805d22}
 .gpi-config-note .gpi-dot{margin-top:4px}
+/* Runtime blockers render as an ordered fix-list, so this variant opts out of
+   the shared note's flex row. Content comes from screens-guided-pi-blockers.js;
+   the raw gateway code stays visible but demoted, so a support conversation can
+   still quote it without the code being the headline. */
+.gpi-config-note.gpi-blockers{display:block}
+.gpi-blocker-lead{font-weight:600;margin-bottom:6px}
+.gpi-blocker-list{margin:0;padding-left:16px;display:grid;gap:7px}
+.gpi-blocker-list li{padding-left:2px}
+.gpi-blocker-title{display:block;font-weight:600}
+.gpi-blocker-fix{display:block;margin-top:2px;opacity:.85}
+.gpi-blocker-code{display:inline-block;margin-top:3px;font-size:9.5px;letter-spacing:.02em;opacity:.6}
 .gpi-optin{display:flex;align-items:flex-start;gap:8px;margin-top:18px;color:var(--ink-3);font-size:10.5px;line-height:1.55}
 .gpi-optin input{margin-top:2px;accent-color:var(--accent)}
 .gpi-error.inline{margin-top:12px;border:1px solid color-mix(in srgb,#ba463d 30%,var(--line));border-radius:8px}

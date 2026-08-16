@@ -7,6 +7,7 @@
    back to Outputs. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
   const state = {
     projectDir: null,
@@ -20,9 +21,6 @@
     saved: {},
   };
 
-  function esc(v) {
-    return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  }
   function icon(name, size) {
     return window.icon ? window.icon(name, size || 13) : '';
   }

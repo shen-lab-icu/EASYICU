@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from easyicu.webserver import state_paths
 from easyicu.webserver import agent_outputs
 from easyicu.webserver import dataio
 from easyicu.webserver import numeric_evidence_audit
@@ -136,7 +137,7 @@ def make_agent_run_runner(
         root = (
             Path(project_root).expanduser()
             if project_root
-            else Path.home() / "easyicu" / "projects"
+            else state_paths.projects_root()
         )
         run_dir = root / safe_study / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -723,7 +724,7 @@ def list_run_history(
     root = (
         Path(project_root).expanduser()
         if project_root
-        else Path.home() / "easyicu" / "projects"
+        else state_paths.projects_root()
     )
     root = root.resolve()
     if not root.exists() or not root.is_dir():

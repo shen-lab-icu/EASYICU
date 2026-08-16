@@ -3,7 +3,7 @@
    already-large screens-agent.js route module. This module is pure: the route
    passes immutable state and rendering helpers; no shared mutable closure
    state is copied across files. */
-(() => {
+(function () {
   'use strict';
 
   const PROVIDERS = Object.freeze([

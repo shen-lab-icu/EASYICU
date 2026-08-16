@@ -69,16 +69,28 @@
     const ic = (n, s) => (window.icon ? window.icon(n, s || 18) : '');
     const priorFocus = document.activeElement;
     const modalId = 'euConfirm-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    /* This helper builds HTML, so everything caller-supplied must be escaped.
+       `opts.body` is the one documented exception: it is trusted HTML owned by
+       the caller (translated strings with <b> emphasis), never raw user input. */
+    const esc = (value) => {
+      const owner = window.EU_HTML;
+      if (owner && typeof owner.esc === 'function') return owner.esc(value);
+      return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    };
+    const tone = ({ ok: 'ok', warn: 'warn', bad: 'bad', info: 'info' })[opts.tone] || '';
+    const title = esc(opts.title || '');
+    const cancelText = esc(opts.cancel || window.t('Cancel', '取消'));
+    const okText = esc(opts.ok || window.t('Continue', '继续'));
     const ov = document.createElement('div');
     ov.className = 'eu-modal-ov';
     ov.innerHTML =
       '<div class="eu-modal" role="dialog" aria-modal="true" aria-labelledby="' + modalId + '-title" aria-describedby="' + modalId + '-body">' +
-        '<div class="em-ico ' + (opts.tone || '') + '">' + ic(opts.icon || 'refresh') + '</div>' +
-        '<div class="em-t" id="' + modalId + '-title">' + (opts.title || '') + '</div>' +
+        '<div class="em-ico ' + tone + '">' + ic(opts.icon || 'refresh') + '</div>' +
+        '<div class="em-t" id="' + modalId + '-title">' + title + '</div>' +
         '<div class="em-d" id="' + modalId + '-body">' + (opts.body || '') + '</div>' +
         '<div class="em-actions">' +
-          '<button type="button" class="btn sm" data-em-cancel>' + (opts.cancel || window.t('Cancel', '取消')) + '</button>' +
-          '<button type="button" class="btn primary sm" data-em-ok>' + (opts.ok || window.t('Continue', '继续')) + '</button>' +
+          '<button type="button" class="btn sm" data-em-cancel>' + cancelText + '</button>' +
+          '<button type="button" class="btn primary sm" data-em-ok>' + okText + '</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(ov);

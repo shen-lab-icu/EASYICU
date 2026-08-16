@@ -20,6 +20,7 @@ import threading
 from typing import Any, Dict, Iterable, Mapping
 
 from easyicu.concept import catalog as concept_catalog
+from easyicu.webserver import review_labels
 
 
 SCHEMA_VERSION = "easyicu.patient_feature_coverage/1"
@@ -245,17 +246,7 @@ def _feature_summary(features: Iterable[Mapping[str, Any]]) -> Dict[str, int]:
 
 
 def _module_label(module: str, index: int) -> str:
-    labels = concept_catalog.CONCEPT_GROUP_NAMES.get(module) or (module, module)
-    if index < len(labels) and labels[index]:
-        return _plain_label(str(labels[index]))
-    return _plain_label(str(labels[0] if labels else module))
-
-
-def _plain_label(value: str) -> str:
-    text = value.strip()
-    while text and not (text[0].isalnum() or "\u4e00" <= text[0] <= "\u9fff"):
-        text = text[1:].lstrip()
-    return text or value
+    return review_labels.module_label(module, "zh" if index else "en")
 
 
 def _structurally_unavailable(root: Path) -> Dict[str, Dict[str, Any]]:

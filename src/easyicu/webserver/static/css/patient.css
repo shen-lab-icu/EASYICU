@@ -13,7 +13,11 @@
   gap:12px;
   margin-bottom:12px;
 }
+/* Rendered as <h2> so the loaded workspace has a heading under the route's
+   h1. There is no global heading reset, so the UA margins are cleared here
+   rather than inline at the call site. */
 .patient-flow-title{
+  margin:0;
   font-size:13.5px;
   font-weight:650;
   color:var(--ink);

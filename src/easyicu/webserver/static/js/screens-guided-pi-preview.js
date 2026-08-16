@@ -3,6 +3,7 @@
    path-free Research Agent artifact reference. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
   const state = {
     host: null,
@@ -18,11 +19,6 @@
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
-  function esc(value) {
-    return String(value == null ? '' : value)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
   function icon(name, size) {
     return typeof window.icon === 'function' ? window.icon(name, size || 16, 1.55) : '';
   }

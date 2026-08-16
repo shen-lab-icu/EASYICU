@@ -2,6 +2,7 @@
    Local-first Stage67: user-supplied metadata/excerpt -> idea ledger ->
    dictionary/export feasibility assessment -> Agent handoff plan. */
 (function () {
+  const { esc } = window.EU_HTML;
   const S = (window.SCREENS = window.SCREENS || {});
 
   let srcType = 'manual';
@@ -34,9 +35,6 @@
   let literatureScan = null;
   let zoteroWidget = null;
 
-  function esc(v) {
-    return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  }
   function fmt(v) {
     if (v == null || v === '') return '—';
     if (typeof v === 'number') return Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -60,9 +58,12 @@
   }
   function activeSourceLine() {
     const src = window.EU_SOURCES && window.EU_SOURCES.activeSource ? window.EU_SOURCES.activeSource() : null;
-    if (!src) return 'No active export selected';
+    /* Same sentence as screens-viz.js, which already wraps it in t(). It was
+       raw here — the duplication is what let the two drift. */
+    if (!src) return t('No active export selected', '尚未选择 active 导出');
     const s = src.summary || {};
-    return `${src.label || src.database || 'Local export'} · ${fmt(s.stays)} entities · ${fmt(s.modules)} modules`;
+    const label = src.label || src.database || t('Local export', '本地导出');
+    return `${label} · ${fmt(s.stays)} ${t('entities', '实体')} · ${fmt(s.modules)} ${t('modules', '模块')}`;
   }
   function activeSourceShortLine() {
     const src = window.EU_SOURCES && window.EU_SOURCES.activeSource ? window.EU_SOURCES.activeSource() : null;
@@ -1487,7 +1488,9 @@
           <div class="row" style="justify-content:space-between;align-items:flex-start;gap:16px;">
             <div>
               <div class="eyebrow">${t('DISCOVERY · IDEA MINING · FEASIBILITY', '发现 · IDEA 挖掘 · 可行性')}</div>
-              <h1 style="margin-top:6px;">${t('Idea Mining', 'Idea 挖掘')}</h1>
+              <!-- zh name must match the sidebar entry and CRUMB_LABELS in
+                   app.js; this h1 also becomes the document title. -->
+              <h1 style="margin-top:6px;">${t('Idea Mining', '想法挖掘')}</h1>
               <p class="lead">${t('A workspace for turning papers, review themes, or raw hunches into an auditable idea ledger and an Agent-ready seed.', '把文章、review 主题或研究直觉转成可审计 idea 台账和研究项目可接手的种子。')}</p>
               <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Separated from Research Projects: mining decides what is worth running; Agent Projects runs confirmed analyses.', '已和研究项目拆分：Idea 挖掘判断什么值得做；研究项目只运行确认后的分析。')}</div>
             </div>

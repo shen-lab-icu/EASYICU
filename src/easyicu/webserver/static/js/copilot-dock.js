@@ -4,6 +4,7 @@
    the full conversational Copilot; longer study planning belongs in Guided
    Copilot. Body-level so it survives route re-renders. */
 (function () {
+  const { esc } = window.EU_HTML;
   let dock, fab, backdrop, scroll, suggestEl, input;
   let thread = [];
   let busy = false;
@@ -262,7 +263,6 @@
       return `<button class="suggest-chip ${cls}" data-cp-action="${action}">${esc(chipText(chip))}</button>`;
     }).join('');
   }
-  function esc(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 
   function botSay(html, chips) {
     busy = true; thread.push({ typing: true }); render();

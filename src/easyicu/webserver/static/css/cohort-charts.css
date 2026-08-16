@@ -53,3 +53,71 @@
 .cohort-heat-legend i.down{
   background:rgba(42,111,178,0.50);
 }
+
+/* Number-at-risk strip under the Kaplan-Meier plot.
+
+   The columns are absolutely positioned at their fraction of the x range and
+   the strip inherits the chart's grid insets, so each number sits under the
+   axis tick it labels. It stays a real <table> — the numbers are selectable
+   and a screen reader can walk them by row/column header, which a second
+   ECharts grid would not allow. */
+.km-risk{
+  margin:2px 0 4px;
+  /* Not overflow-x:auto — per CSS, a non-visible value on one axis computes
+     the other to auto, and the reserved vertical scrollbar gutter shrank the
+     content box by 15px, pushing every column left of its axis tick. The
+     columns are positioned as a fraction of the axis and the row headers
+     ellipsise, so nothing here can overflow. */
+  overflow:hidden;
+  padding-left:var(--km-inset-left,58px);
+  padding-right:var(--km-inset-right,22px);
+}
+.km-risk-table{
+  border-collapse:collapse;
+  font-size:11px;
+  line-height:1.5;
+  min-width:100%;
+  table-layout:fixed;
+  width:100%;
+}
+.km-risk-table caption{
+  caption-side:top;
+  color:var(--ink-4);
+  font-size:10.5px;
+  letter-spacing:.04em;
+  padding-bottom:3px;
+  text-align:left;
+  text-transform:uppercase;
+}
+.km-risk-table tr{
+  display:block;
+  position:relative;
+  height:17px;
+}
+/* Row header sits in the axis gutter, mirroring the y-axis labels. */
+.km-risk-table th[scope="row"],
+.km-risk-table .km-risk-corner{
+  color:var(--ink-3);
+  font-weight:600;
+  left:0;
+  max-width:var(--km-inset-left,58px);
+  overflow:hidden;
+  position:absolute;
+  text-align:left;
+  text-overflow:ellipsis;
+  transform:translateX(calc(-1 * var(--km-inset-left,58px)));
+  white-space:nowrap;
+}
+.km-risk-table th[scope="col"]:not(.km-risk-corner),
+.km-risk-table td{
+  color:var(--ink-2);
+  font-variant-numeric:tabular-nums;
+  position:absolute;
+  text-align:center;
+  transform:translateX(-50%);
+  white-space:nowrap;
+}
+.km-risk-table th[scope="col"]:not(.km-risk-corner){
+  color:var(--ink-4);
+  font-weight:500;
+}
