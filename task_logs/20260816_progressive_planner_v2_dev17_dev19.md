@@ -1,4 +1,4 @@
-# Progressive Planner v2: Dev17 decision gate through Dev24
+# Progressive Planner v2: Dev17 decision gate through Dev25
 
 Date: 2026-08-16
 Task: `FIG2-DEV9-HELDOUT27`
@@ -173,8 +173,36 @@ progressive compiler and therefore could not drive typed suffix repair.
 - The progressive Planner and adjacent Table 1 contract/ordinal sets passed
   50 tests. Ruff and `git diff --check` are clean.
 
+### Dev25
+
+Root:
+`/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_5423027_e1_dev25`
+
+The source tree used by this run is byte-identical to pushed
+`0a01108^{tree}`. Seven Planner calls used 88,664 tokens and an estimated USD
+1.21394. The Dev23 literature and Dev24 Table 1 findings did not recur. The
+run stopped before Execute with three output findings, but preflight reported
+all three as `progressive_conflicting_output_role` even though they arose from
+the typed `_validate_outputs` boundary.
+
+The attribution bug was an exception-order defect: because
+`ProgressivePlanCompileError` subclasses `ValueError`, the broad `ValueError`
+handler caught and relabelled already-specific compiler findings before the
+specific handler could preserve them.
+
+## Repair after Dev25
+
+- Progressive preflight now catches `ProgressivePlanCompileError` before raw
+  `ValueError`. True canonical-output conflicts retain
+  `progressive_conflicting_output_role`; typed role/kind/materializability
+  findings retain their original owner codes and coordinates.
+- A focused regression proves that a measurement output using the figure role
+  remains `progressive_output_role_mismatch` rather than being relabelled.
+  The complete progressive Planner file passed 15 tests; Ruff and scoped
+  `git diff --check` are clean.
+
 ## Next gate
 
-Build an exact-source image from the repair commit and run a fresh E1 Dev25.
+Build an exact-source image from the repair commit and run a fresh E1 Dev26.
 Do not start E2 until E1 completes the full analysis, audit, figure, and report
 workflow under development authority.

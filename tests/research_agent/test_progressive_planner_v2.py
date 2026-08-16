@@ -699,6 +699,19 @@ def test_preflight_batches_independent_suffix_findings() -> None:
     }
 
 
+def test_preflight_preserves_specific_output_finding() -> None:
+    payload = _payload()
+    payload["steps"][3]["outputs"][0]["semantic_role"] = "figure"
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=skeleton, context=_context())
+
+    assert caught.value.reason_code == "progressive_output_role_mismatch"
+    assert caught.value.step_id == "04_measurement"
+    assert caught.value.path == "outputs"
+
+
 def test_run_bound_schema_closes_runtime_rosters_under_twelve_kib() -> None:
     request = progressive_structured_output_request(
         analysis_types=["association_study"],
