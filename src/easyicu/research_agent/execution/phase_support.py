@@ -1720,6 +1720,7 @@ def _step_maybe_replan(
             direct_comparator_literature_keys=(
                 plan_result.direct_comparator_literature_keys
             ),
+            suffix_only=(pipeline._planner_strategy == "progressive_v2"),
         )
     except Exception as exc:
         findings.append(
@@ -2712,15 +2713,22 @@ _SUCCESS_REPLAN_REQUEST_FIELDS = (
     "replan_requested",
     "plan_revision_requested",
 )
-def _successful_step_requests_replan(record: Mapping[str, Any]) -> bool:
+
+
+def _successful_step_requests_replan(
+    record: Mapping[str, Any],
+    *,
+    progressive_observation_loop: bool = False,
+) -> bool:
     """Return whether a clean agent step explicitly requests plan adaptation.
 
     The deterministic probe already receives one automatic replan and failed
     model steps have their own bounded directed-replan path. Calling the LLM
-    replanner after every ordinary successful step adds latency and usually
-    produces a no-op. Preserve adaptive agent behavior through exact boolean
-    declarations in either the outer record or ``step_summary``; strings and
-    other truthy values are intentionally not accepted.
+    replanner after every ordinary legacy step adds latency and usually
+    produces a no-op, so those paths still require an exact boolean request.
+    Progressive v2 explicitly runs an observation loop and therefore opts in
+    after each successful step with a remaining suffix. Strings and other
+    truthy values are intentionally not accepted as explicit requests.
     """
 
     if str(record.get("status") or "") != "ok":
@@ -2729,11 +2737,14 @@ def _successful_step_requests_replan(record: Mapping[str, Any]) -> bool:
     summary = record.get("step_summary")
     if isinstance(summary, Mapping):
         containers.append(summary)
-    return any(
+    explicit_request = any(
         container.get(field) is True
         for container in containers
         for field in _SUCCESS_REPLAN_REQUEST_FIELDS
     )
+    return explicit_request or progressive_observation_loop
+
+
 def _step_status_from_contract_findings(
     *,
     contract_findings: Sequence[ValidationFinding],
