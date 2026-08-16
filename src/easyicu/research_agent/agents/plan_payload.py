@@ -283,7 +283,7 @@ def planner_structured_output_request() -> StructuredOutputRequest:
 
 
 def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
-    """Undo representation-only transport adaptations before validation."""
+    """Compile the Planner wire representation before authority validation."""
 
     decoded: Dict[str, Any] = copy.deepcopy(dict(data))
     raw_labels = decoded.get("display_labels")
@@ -313,6 +313,29 @@ def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
                     continue
                 compact = {key: value for key, value in override.items() if value is not None}
                 raw_spec[field] = compact or None
+
+    # A typed design binding already declares which sealed source governs the
+    # step.  ``literature_citation_keys`` is the flat roster consumed by later
+    # validators and signatures, not a second scientific choice.  Compile the
+    # binding coordinate into that roster while retaining every explicitly
+    # cited key; an extra citation with no binding still fails downstream.
+    raw_steps = decoded.get("steps")
+    if isinstance(raw_steps, list):
+        for raw_step in raw_steps:
+            if not isinstance(raw_step, dict):
+                continue
+            citations = raw_step.get("literature_citation_keys")
+            bindings = raw_step.get("literature_design_bindings")
+            if not isinstance(citations, list) or not isinstance(bindings, list):
+                continue
+            compiled = list(citations)
+            for binding in bindings:
+                if not isinstance(binding, dict) or "citation_key" not in binding:
+                    continue
+                citation_key = binding["citation_key"]
+                if citation_key not in compiled:
+                    compiled.append(citation_key)
+            raw_step["literature_citation_keys"] = compiled
     return decoded
 
 
@@ -511,11 +534,13 @@ def bind_literature_citation_authority(
             if direct_keys
             else "\n- screened_direct_comparator_keys: []"
         )
-        + "\n- Every primary, secondary, and sensitivity step MUST bind one or "
-        "more exact values from this list in literature_citation_keys. Do not cite "
-        "an evidence artifact, analysis contract, study-design brief, or invented "
-        "semantic label in that field. Auxiliary steps may use an empty list."
-        + " Every scientific step MUST also emit literature_design_bindings. "
+        + "\n- Every primary, secondary, and sensitivity step MUST choose one or "
+        "more exact values from this list through literature_design_bindings. "
+        "The host compiles each binding's citation_key into that step's "
+        "literature_citation_keys roster. Do not cite an evidence artifact, "
+        "analysis contract, study-design brief, or invented semantic label. "
+        "A citation with no matching design binding remains invalid; auxiliary "
+        "steps may leave both arrays empty. "
         + literature_design_binding_shape_guide()
         + " Do not invent or copy a source quotation; the host joins the sealed "
         "excerpt."
@@ -672,7 +697,7 @@ def literature_design_binding_shape_guide() -> str:
 
     return (
         "Each record must use exactly this JSON shape: "
-        '{"citation_key":"<same exact bound key>",'
+        '{"citation_key":"<exact allowed key>",'
         '"design_elements":["<one or more exact allowed elements>"],'
         '"application":"<how the source shapes this step>",'
         '"divergence":null}. '
@@ -782,10 +807,10 @@ def planner_science_retry_guide() -> str:
         "Omit `AnalysisPlan.endpoint` or emit null."
     )
     binding_fields = (
-        "A `literature_design_bindings` record never cites a source by itself: "
-        "its `citation_key` must also appear in that same step's "
-        "`literature_citation_keys`. Adding or changing a design binding must "
-        "therefore update both fields together. `model_requirements` is legal "
+        "A `literature_design_bindings` record is the source authority: the "
+        "host compiles its `citation_key` into that same step's "
+        "`literature_citation_keys` roster. A citation with no matching design "
+        "binding remains invalid. `model_requirements` is legal "
         "only on a step whose method is exactly "
         "`adjusted_association_models` and whose expected outputs include "
         "`table:adjusted_association_estimates`; every other step emits "

@@ -99,6 +99,14 @@ def test_transport_projection_only_decodes_labels_and_null_placeholders():
                 },
             }
         ],
+        "steps": [
+            {
+                "literature_citation_keys": ["strobe_2007"],
+                "literature_design_bindings": [
+                    {"citation_key": "sterne_missing_data_2009"}
+                ],
+            }
+        ],
     }
 
     decoded = decode_planner_transport_payload(source)
@@ -109,7 +117,12 @@ def test_transport_projection_only_decodes_labels_and_null_placeholders():
         "variables": ["x", "y"],
     }
     assert decoded["robustness_specs"][0]["outcome_override"] is None
+    assert decoded["steps"][0]["literature_citation_keys"] == [
+        "strobe_2007",
+        "sterne_missing_data_2009",
+    ]
     assert isinstance(source["display_labels"], list), "input must not be mutated"
+    assert source["steps"][0]["literature_citation_keys"] == ["strobe_2007"]
 
 
 def test_transport_projection_rejects_duplicate_display_label_keys():

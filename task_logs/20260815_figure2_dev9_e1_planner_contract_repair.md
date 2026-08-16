@@ -237,3 +237,41 @@ start E1 from a fresh `dev08` root. Never resume or reuse `dev07`.
 Commit the general interval-contract repair, build and validate a new
 exact-source image, and start E1 from a fresh `dev09` root. Never resume or
 reuse `dev08`.
+
+## Dev09 result
+
+- Source commit: `f1a47d1`; exact image:
+  `easyicu-research-agent:f1a47d1-dev`, image id
+  `sha256:93e46e9033ee6f42f815596fab1eeecd4e9ca7d848ad2e78926ce70ef2041d9b`.
+- Runtime/source validation passed under `network=none` with all 11 method
+  capabilities.
+- Run root: `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260815_f1a47d1_e1_dev09`.
+- All five Planner calls remained under 120,000 bytes. The calls accounted for
+  129,380 prompt and 36,032 completion tokens (165,412 total; estimated cost
+  USD 2.37476). No generated analysis code executed.
+- The schema-/2 interval finding did not recur. The five drafts instead failed
+  in five distinct ways and converged from six findings to one. The final
+  response already bound `sterne_missing_data_2009` as the step's typed design
+  source but omitted the same key from the redundant flat
+  `literature_citation_keys` roster.
+
+## Dev09 literature-coordinate repair
+
+- Planner transport now compiles each typed design binding's `citation_key`
+  into the same step's flat citation roster before `AnalysisPlan` validation.
+  The binding remains the scientific source decision; the flat roster is a
+  deterministic downstream index, not a second choice for the model to copy.
+- Every explicit citation is retained. An extra citation without a matching
+  design binding still fails, an invented binding key is still rejected against
+  the sealed run bundle, and directly loaded/recorded plans with an uncompiled
+  mismatch still fail closed under `AnalysisStep` validation.
+- Initial and retry guidance now describe this single-owner compilation rather
+  than requiring two model-authored fields to be updated in lockstep.
+- 165 focused Planner transport/parser, literature authority, scientific
+  review, endpoint, and prompt-budget tests passed. Ruff and `git diff --check`
+  passed.
+
+## Next
+
+Commit the literature-coordinate compiler, build and validate a new exact-source
+image, and start E1 from a fresh `dev10` root. Never resume or reuse `dev09`.
