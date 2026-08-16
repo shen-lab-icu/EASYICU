@@ -234,3 +234,49 @@ still did not enter Execute.
 Build an exact-source image from the repair commit and run a fresh E1 Dev27.
 Do not start E2 until E1 completes the full analysis, audit, figure, and report
 workflow under development authority.
+
+### Dev27
+
+Root:
+`/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_5ca239e_e1_dev27`
+
+The exact `5ca239e` image completed five Planner calls. The transport receipts
+record 41,861 prompt tokens and 5,326 completion tokens (47,187 total), for an
+estimated USD 0.57839 under the configured USD 10/30 per-million price table.
+The initial skeleton passed transport and compilation on its first call; the
+four suffix prompts themselves were 4,943--5,587 bytes (about 20--21 KiB after
+adding the strict suffix schema). The Dev26 output-role and product-owner
+findings did not recur. The run still stopped before Execute because the final
+plan did not bind the `reporting_standard` method layer.
+
+The sealed run artifacts make this coordinate deterministic rather than a new
+Planner choice. `article_analysis_contract.json` requires
+`STROBE-style descriptive observational reporting`, and `strobe_2007` is an
+exact citation in this run's pre-plan roster. `record_2015` is also present,
+but its separate RECORD card is not the standard named by this article
+contract.
+
+## Repair after Dev27
+
+- The method-literature owner now resolves reporting sources only from exact
+  standard names already selected by the sealed article contract. It does not
+  infer a guideline from question text, database names, or benchmark identity.
+- The progressive compiler materializes a reporting binding only when that
+  contract resolves to one exact method-card source. It attaches the binding
+  to the first result-bearing step so prefix receipts remain stable. A
+  multi-standard contract such as `STROBE/RECORD` remains a Planner choice;
+  the host does not silently select one.
+- Every host-resolved source is checked against both the current run's sealed
+  citation roster and the reporting method-card layer. Missing or invalid
+  authority fails with stable codes
+  `progressive_host_reporting_source_unavailable` or
+  `progressive_host_reporting_source_invalid`.
+- The direct and adjacent progressive Planner, literature authority,
+  manuscript citation, article-family switch, and dependency-direction set
+  passes 81 tests. Ruff and `git diff --check` are clean.
+
+## Next gate
+
+Commit and push this owner fix, build an exact-source image, and run a fresh E1
+Dev28. Do not start E2 until E1 completes the full analysis, audit, figure, and
+report workflow under development authority.

@@ -30,6 +30,7 @@ from easyicu.research_agent.planning.method_literature import (
     method_literature_digest,
     method_literature_pack,
     method_binding_support,
+    reporting_method_source_keys_for_guidelines,
 )
 from easyicu.research_agent.schema import ResearchContext
 
@@ -415,6 +416,18 @@ def test_method_card_support_is_exact_per_design_element() -> None:
     assert dependence["matched_layers"] == ["dependence"]
     assert unsupported["matched_layers"] == []
     assert unsupported["unsupported_design_elements"] == ["adjustment"]
+
+
+def test_reporting_guidelines_resolve_only_explicit_named_standards() -> None:
+    assert reporting_method_source_keys_for_guidelines(
+        ["STROBE-style descriptive observational reporting"]
+    ) == ("strobe_2007",)
+    assert reporting_method_source_keys_for_guidelines(
+        ["STROBE/RECORD-style observational reporting"]
+    ) == ("strobe_2007", "record_2015")
+    assert reporting_method_source_keys_for_guidelines(
+        ["Transparent prediction-model reporting"]
+    ) == ()
 
 
 def test_method_card_is_immutable() -> None:
