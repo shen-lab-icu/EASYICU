@@ -29,6 +29,7 @@ from ..planning.literature_bindings import (
     validate_literature_citation_bindings,
 )
 from ..planning.primary_result_contract import model_terms_retry_guide
+from ..planning.runtime_suffix import RuntimePlanSuffixRevision
 from ..planning.robustness_contract import (
     PLANNER_MISSING_OVERRIDE_FIELDS,
     PLANNER_OUTCOME_OVERRIDE_FIELDS,
@@ -444,6 +445,132 @@ def planner_structured_output_request(
         )
     )
     return _planner_structured_output_request_cached(normalized)
+
+
+@lru_cache(maxsize=64)
+def _runtime_suffix_structured_output_request_cached(
+    allowed_literature_citation_keys: tuple[str, ...],
+    replace_from_step_id: str,
+    planned_analysis_role: str,
+    allowed_inputs: tuple[str, ...],
+    expected_outputs: tuple[str, ...],
+    scientific_action_ids: tuple[str, ...],
+) -> StructuredOutputRequest:
+    """Compile one strict, coordinate-bound runtime step response schema."""
+
+    plan_schema = _planner_transport_schema(allowed_literature_citation_keys)
+    definitions = plan_schema.get("$defs")
+    if not isinstance(definitions, dict):  # pragma: no cover - owner assertion
+        raise PlannerStructuredOutputSchemaError(
+            "runtime suffix plan schema has no definitions"
+        )
+    analysis_step = definitions.get("AnalysisStep")
+    if not isinstance(analysis_step, dict) or not isinstance(
+        analysis_step.get("properties"), dict
+    ):
+        raise PlannerStructuredOutputSchemaError(
+            "runtime suffix AnalysisStep schema is unavailable"
+        )
+    step_properties = analysis_step["properties"]
+    step_properties["step_id"] = {
+        "type": "string",
+        "const": replace_from_step_id,
+    }
+    step_properties["planned_analysis_role"] = {
+        "type": "string",
+        "const": planned_analysis_role,
+    }
+    if allowed_inputs:
+        step_properties["inputs"]["items"] = {
+            "type": "string",
+            "enum": list(allowed_inputs),
+        }
+    else:
+        step_properties["inputs"]["maxItems"] = 0
+    step_properties["expected_outputs"] = {
+        "type": "array",
+        "prefixItems": [
+            {"type": "string", "const": value} for value in expected_outputs
+        ],
+        "minItems": len(expected_outputs),
+        "maxItems": len(expected_outputs),
+    }
+    step_properties["scientific_action_id"] = (
+        {
+            "anyOf": [
+                {
+                    "type": "string",
+                    "enum": list(scientific_action_ids),
+                },
+                {"type": "null"},
+            ]
+        }
+        if scientific_action_ids
+        else {"type": "null"}
+    )
+
+    schema = copy.deepcopy(
+        RuntimePlanSuffixRevision.model_json_schema(mode="validation")
+    )
+    schema["$defs"] = definitions
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):  # pragma: no cover - owner assertion
+        raise PlannerStructuredOutputSchemaError(
+            "runtime suffix root schema has no properties"
+        )
+    properties["replace_from_step_id"] = {
+        "type": "string",
+        "const": replace_from_step_id,
+    }
+    properties["replacement_step"] = {"$ref": "#/$defs/AnalysisStep"}
+    _strictify_planner_transport_schema(schema)
+    _assert_closed_planner_transport_schema(schema)
+    return StructuredOutputRequest.from_schema(
+        name="easyicu_runtime_plan_suffix_revision_v1",
+        schema=schema,
+        strict=True,
+    )
+
+
+def runtime_suffix_structured_output_request(
+    *,
+    allowed_literature_citation_keys: Sequence[str],
+    replace_from_step_id: str,
+    planned_analysis_role: str,
+    allowed_inputs: Sequence[str],
+    expected_outputs: Sequence[str],
+    scientific_action_ids: Sequence[str],
+) -> StructuredOutputRequest:
+    """Return the run-bound strict schema for one observation-driven next step."""
+
+    normalized_step_id = str(replace_from_step_id or "").strip()
+    if not normalized_step_id:
+        raise PlannerStructuredOutputSchemaError(
+            "runtime suffix requires one replacement step id"
+        )
+    normalized_role = str(planned_analysis_role or "").strip()
+    if normalized_role not in {"primary", "secondary", "sensitivity", "auxiliary"}:
+        raise PlannerStructuredOutputSchemaError(
+            "runtime suffix requires one valid planned analysis role"
+        )
+    return _runtime_suffix_structured_output_request_cached(
+        normalize_literature_citation_keys(allowed_literature_citation_keys),
+        normalized_step_id,
+        normalized_role,
+        tuple(
+            dict.fromkeys(
+                str(value).strip() for value in allowed_inputs if str(value).strip()
+            )
+        ),
+        tuple(str(value).strip() for value in expected_outputs),
+        tuple(
+            dict.fromkeys(
+                str(value).strip()
+                for value in scientific_action_ids
+                if str(value).strip()
+            )
+        ),
+    )
 
 
 def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
@@ -1626,6 +1753,7 @@ __all__ = [
     "PlannerStructuredOutputSchemaError",
     "decode_planner_transport_payload",
     "planner_structured_output_request",
+    "runtime_suffix_structured_output_request",
     "planner_descriptive_method_guidance",
     "planner_descriptive_robustness_guidance",
     "planner_adjusted_association_owner_guidance",

@@ -16,6 +16,7 @@ from ..trajectory.plan_contract import (
     trajectory_planner_contract_guide,
 )
 from ..providers.protocol import LLMMessage
+from ..providers.capabilities import llm_supports_strict_json_schema
 from ..research_context.prompt_scope import (
     planner_variable_catalog,
     scoped_planner_context,
@@ -325,10 +326,62 @@ class ReplannerAgent(PlannerAgent):
         replanner_bytes = sum(
             len(str(message.content or "").encode("utf-8")) for message in messages
         )
-        if replanner_bytes > _PLANNER_PROMPT_BYTE_LIMIT:
+        structured_output = None
+        if llm_supports_strict_json_schema(self.llm):
+            registered_action_ids: tuple[str, ...] = ()
+            if canonical_analysis_family(current_plan.analysis_type) is not None:
+                registered_action_ids = tuple(
+                    action.action_id
+                    for action in _scientific_actions.scientific_actions_for_analysis_type(
+                        current_plan.analysis_type
+                    ).actions
+                    if action.execution_mode != "not_available"
+                )
+            allowed_inputs = tuple(
+                dict.fromkeys(
+                    [
+                        *(variable.name for variable in context.variables),
+                        *(
+                            output
+                            for step in current_plan.steps[:locked_count]
+                            for output in step.expected_outputs
+                        ),
+                        *current_plan.steps[locked_count].inputs,
+                    ]
+                )
+            )
+            structured_output = _payload.runtime_suffix_structured_output_request(
+                allowed_literature_citation_keys=allowed_citation_keys,
+                replace_from_step_id=replace_from_step_id,
+                planned_analysis_role=(
+                    current_plan.steps[locked_count].planned_analysis_role
+                ),
+                allowed_inputs=allowed_inputs,
+                expected_outputs=(
+                    current_plan.steps[locked_count].expected_outputs
+                ),
+                scientific_action_ids=registered_action_ids,
+            )
+        structured_output_bytes = (
+            structured_output.payload_bytes if structured_output is not None else 0
+        )
+        total_bytes = replanner_bytes + structured_output_bytes
+        self.last_prompt_metrics = {
+            "planner_strategy": "progressive_v2_runtime_suffix",
+            "replace_from_step_id": replace_from_step_id,
+            "message_payload_bytes": replanner_bytes,
+            "structured_output_payload_bytes": structured_output_bytes,
+            "structured_output_authority_sha256": (
+                structured_output.authority_sha256
+                if structured_output is not None
+                else None
+            ),
+            "total_bytes": total_bytes,
+        }
+        if total_bytes > _PLANNER_PROMPT_BYTE_LIMIT:
             raise PlannerPromptBudgetError(
                 "Runtime suffix replanner prompt transport budget exceeded: "
-                f"{replanner_bytes} > {_PLANNER_PROMPT_BYTE_LIMIT} bytes."
+                f"{total_bytes} > {_PLANNER_PROMPT_BYTE_LIMIT} bytes."
             )
         from ..providers.structured_retry import call_llm_with_structured_retry
 
@@ -359,6 +412,7 @@ class ReplannerAgent(PlannerAgent):
                 )
                 + _payload.planner_science_retry_guide()
             ),
+            structured_output=structured_output,
         )
 
     def run(

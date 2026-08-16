@@ -170,3 +170,48 @@ def test_replanner_returns_only_unexecuted_suffix_and_merges_host_side() -> None
     assert "FUTURE OUTLINE" in prompt
     assert plan.steps[0].intent not in prompt
     assert "Return a RuntimePlanSuffixRevision beginning at '02_summary'" in prompt
+
+
+def test_runtime_suffix_strict_schema_binds_only_the_next_coordinate() -> None:
+    plan = _plan()
+    response = _revision(plan).model_dump(mode="json")
+    llm = ScriptedMockLLMClient([json.dumps(response)])
+    llm.supports_strict_json_schema = True
+    agent = ReplannerAgent(llm)
+
+    revised = agent.run(
+        context=_context(),
+        current_plan=plan,
+        completed_step_records=[
+            {
+                "step_id": "01_cohort",
+                "status": "ok",
+                "step_authority_capsule_ref": {
+                    "schema_version": "easyicu.step_authority_capsule_ref/1",
+                    "step_id": "01_cohort",
+                    "capsule_sha256": "a" * 64,
+                },
+            }
+        ],
+        suffix_only=True,
+    )
+
+    assert revised.steps[0] == plan.steps[0]
+    request = llm.calls[0][1]["structured_output"]
+    assert request.name == "easyicu_runtime_plan_suffix_revision_v1"
+    schema = json.loads(request.schema_json)
+    assert schema["properties"]["replace_from_step_id"]["const"] == "02_summary"
+    step = schema["$defs"]["AnalysisStep"]["properties"]
+    assert step["step_id"]["const"] == "02_summary"
+    assert step["planned_analysis_role"]["const"] == "auxiliary"
+    assert [item["const"] for item in step["expected_outputs"]["prefixItems"]] == [
+        "table:descriptive_summary"
+    ]
+    assert "artifact:analysis_cohort" in step["inputs"]["items"]["enum"]
+    assert request.payload_bytes < 32_000
+    assert agent.last_prompt_metrics["structured_output_authority_sha256"] == (
+        request.authority_sha256
+    )
+    assert agent.last_prompt_metrics["total_bytes"] == (
+        agent.last_prompt_metrics["message_payload_bytes"] + request.payload_bytes
+    )
