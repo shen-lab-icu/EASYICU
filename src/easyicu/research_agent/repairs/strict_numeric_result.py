@@ -65,6 +65,84 @@ def _numeric_sink_uses_name(
     return False
 
 
+def _assignment_value(statement: ast.AST) -> ast.expr | None:
+    if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+        return statement.value
+    return None
+
+
+def _single_name_target(statement: ast.AST) -> str | None:
+    if isinstance(statement, ast.Assign):
+        targets = statement.targets
+    elif isinstance(statement, ast.AnnAssign):
+        targets = [statement.target]
+    else:
+        return None
+    if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+        return None
+    return targets[0].id
+
+
+def _is_projection_passthrough(value: ast.expr, *, source_name: str) -> bool:
+    """Recognize only wrappers that preserve the typed result as their input."""
+
+    if isinstance(value, ast.Name):
+        return value.id == source_name
+    if not isinstance(value, ast.Call):
+        return False
+    if (
+        isinstance(value.func, ast.Attribute)
+        and value.func.attr == "copy"
+        and isinstance(value.func.value, ast.Name)
+    ):
+        return value.func.value.id == source_name and not value.args
+    if _call_name(value) != ("pd", "Series") or not value.args:
+        return False
+    first_argument = value.args[0]
+    return isinstance(first_argument, ast.Name) and first_argument.id == source_name
+
+
+def _numeric_sink_uses_projection_alias(
+    tree: ast.Module,
+    *,
+    name: str,
+    assignment: ast.AST,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    """Follow one fail-closed alias layer into a numeric constructor.
+
+    Generated code sometimes branches on the typed wrapper before assigning it
+    to one Series-shaped alias.  Accept that shape only when every definition
+    of the alias in the same function is a known projection passthrough.  An
+    arbitrary transform or mixed-source reassignment remains ambiguous.
+    """
+
+    assignment_owner = _owner(assignment, parents)
+    definitions: dict[str, list[ast.AST]] = {}
+    for statement in ast.walk(tree):
+        if _owner(statement, parents) is not assignment_owner:
+            continue
+        target_name = _single_name_target(statement)
+        if target_name is not None:
+            definitions.setdefault(target_name, []).append(statement)
+
+    for alias, statements in definitions.items():
+        if not statements or not all(
+            (value := _assignment_value(statement)) is not None
+            and _is_projection_passthrough(value, source_name=name)
+            for statement in statements
+        ):
+            continue
+        if _numeric_sink_uses_name(
+            tree,
+            name=alias,
+            assignment=assignment,
+            parents=parents,
+        ):
+            return True
+    return False
+
+
 def _replace_call(code: str, call: ast.Call) -> str | None:
     if call.end_lineno is None or call.end_col_offset is None:
         return None
@@ -122,11 +200,19 @@ def patch_strict_numeric_input_result_projection(code: str, run_log: str) -> str
         if (
             len(targets) == 1
             and isinstance(targets[0], ast.Name)
-            and _numeric_sink_uses_name(
-                tree,
-                name=targets[0].id,
-                assignment=parent,
-                parents=parents,
+            and (
+                _numeric_sink_uses_name(
+                    tree,
+                    name=targets[0].id,
+                    assignment=parent,
+                    parents=parents,
+                )
+                or _numeric_sink_uses_projection_alias(
+                    tree,
+                    name=targets[0].id,
+                    assignment=parent,
+                    parents=parents,
+                )
             )
         ):
             candidates.append(call)

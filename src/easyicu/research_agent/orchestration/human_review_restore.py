@@ -456,6 +456,9 @@ def restore_durable_human_review_pause(
     execution = dict(checkpoint.execution_coordinates)
     scientific_identity = dict(execution.get("scientific_identity") or {})
     target_outcome = execution.get("target_outcome")
+    # Not the cohort: under `rejection_only` the capsule that names the real
+    # cohort is never loaded, so this stays a placeholder that the guarded phase
+    # invokers above make unreachable.
     cohort_path = run_dir
     runtime_capabilities: Sequence[str] = ()
     if not rejection_only:
@@ -634,7 +637,16 @@ def restore_durable_human_review_pause(
     )
     cache_key = execution.get("cache_key")
 
+    def _rejection_only_phase(phase: str) -> Any:
+        raise RuntimeError(
+            f"a rejection-only restore cannot enter the {phase} phase: it was "
+            "reconstructed without the configuration, provider, environment, "
+            "run-input capsule and runtime-capability checks that authorize it"
+        )
+
     def execute_invoker(restored_plan: Any):
+        if rejection_only:
+            _rejection_only_phase("execute")
         return pipeline._run_execute_phase(
             plan_result=restored_plan,
             cohort_path=cohort_path,
@@ -649,6 +661,8 @@ def restore_durable_human_review_pause(
         )
 
     def write_invoker(restored_plan: Any, execute_result: Any):
+        if rejection_only:
+            _rejection_only_phase("write")
         try:
             return pipeline._run_write_phase(
                 plan_result=restored_plan,
@@ -699,6 +713,8 @@ def restore_durable_human_review_pause(
             return _WritePhaseResult(literature=None, bound_path=bound_path)
 
     def finalise_invoker(restored_plan: Any, execute_result: Any, write_result: Any):
+        if rejection_only:
+            _rejection_only_phase("finalise")
         return pipeline._finalise_success(
             plan_result=restored_plan,
             execute_result=execute_result,
