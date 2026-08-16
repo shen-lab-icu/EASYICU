@@ -397,6 +397,9 @@ def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() ->
     phase_source = (research_agent_root / "execution/phase.py").read_text(
         encoding="utf-8"
     )
+    phase_support_source = (
+        research_agent_root / "execution" / "phase_support.py"
+    ).read_text(encoding="utf-8")
     publication_figure_source = (
         research_agent_root / "execution" / "publication_figure.py"
     ).read_text(encoding="utf-8")
@@ -454,11 +457,11 @@ def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() ->
     # Case-plugin candidates share the runner boundary and therefore cannot
     # bypass it.
     assert source.count("_authorize_automatic_repair(") == 4
-    assert phase_source.count("_authorize_automatic_repair(") == 1
+    assert phase_support_source.count("def _step_authorize_automatic_repair(") == 1
     assert publication_figure_source.count("_authorize_automatic_repair(") == 1
     assert (
         source.count("_authorize_automatic_repair(")
-        + phase_source.count("_authorize_automatic_repair(")
+        + phase_support_source.count("def _step_authorize_automatic_repair(")
         + publication_figure_source.count("_authorize_automatic_repair(")
         + step_candidate_recovery_source.count("authorize_automatic_repair(")
         == 7

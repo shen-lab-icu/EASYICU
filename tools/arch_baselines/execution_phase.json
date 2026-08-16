@@ -4,21 +4,21 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 5944,
-      "sha256": "4e27ddba5075ad69b95fd2107cc1535e1d79a8539699b46d7765d4fb8c52d708",
-      "intra_package_import_edges": 103,
+      "loc": 5076,
+      "sha256": "fc23608588fa8989f501a8d6787b3425bb9bda612f78011d2f5b640cb62ab5cb",
+      "intra_package_import_edges": 101,
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
-      "loc": 1613,
-      "sha256": "2c2d8a269317b3549087d582defd6f09fefe51d1a7d36c3326239dc1a1ba32f1",
-      "intra_package_import_edges": 27,
+      "loc": 3680,
+      "sha256": "f060c61b21a6aa4ccc1919f6331c19137255bf2416d41aa287326fdbd0296042",
+      "intra_package_import_edges": 55,
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8543,
-      "sha256": "c4598dcb194cf379e39717145e6f2b10845e2ab2191b9fcfc14c146e8660eb48",
-      "intra_package_import_edges": 115,
+      "loc": 8619,
+      "sha256": "e280c2f91d28d386d298b9e02beb2a96314c5480e05c959ebdbfb82981f2aec4",
+      "intra_package_import_edges": 118,
       "shim_bypass_violations": []
     },
     "reporting/publication_bundles.py": {
@@ -124,9 +124,9 @@
       "shim_bypass_violations": []
     },
     "audits/figures.py": {
-      "loc": 5509,
-      "sha256": "077776071c99c266fa3e2cf8bfc3cd473f513fc60074d1607088adf2242ab4cd",
-      "intra_package_import_edges": 4,
+      "loc": 5501,
+      "sha256": "575b536e30c1c26fd8ec77b1ab8a5995eacfbf489a7fc4a5100299089717212d",
+      "intra_package_import_edges": 5,
       "shim_bypass_violations": []
     },
     "audits/clinical.py": {
@@ -166,9 +166,9 @@
       "shim_bypass_violations": []
     },
     "agents/planner.py": {
-      "loc": 1652,
-      "sha256": "0b4bfec0c73d567f8dd605aed7a8e21c8eef86784545da32b9a3d48eaaed7667",
-      "intra_package_import_edges": 25,
+      "loc": 2000,
+      "sha256": "4ae3537b7fbb063abd50ac242053342a47ec2727b63cf9c1e2c2a3b4b136e2aa",
+      "intra_package_import_edges": 27,
       "shim_bypass_violations": []
     },
     "agents/replanner.py": {
@@ -196,9 +196,9 @@
       "shim_bypass_violations": []
     },
     "schema.py": {
-      "loc": 3268,
-      "sha256": "2b989ebe012ab90baee47daf68e10fb3d253d8f93b87581cc3aedb3ef35260e3",
-      "intra_package_import_edges": 17,
+      "loc": 3269,
+      "sha256": "44d5d16b5909ac55b8d41fb7533bcd2ed4b169896dc0d3c80cf6b3db65cf12b1",
+      "intra_package_import_edges": 18,
       "shim_bypass_violations": []
     },
     "contracts/declared_product.py": {
@@ -208,47 +208,47 @@
       "shim_bypass_violations": []
     },
     "figures/skill.py": {
-      "loc": 3451,
-      "sha256": "67b69b05be994b6fb97cbca069b3af67801157a3f964319e88d29d8227fad40d",
+      "loc": 3442,
+      "sha256": "f153c8b308893a5e05e86695bf094a6d128d32469dc4fa144bf919450c2dbf80",
       "intra_package_import_edges": 13,
       "shim_bypass_violations": []
     },
     "authority/evidence_store.py": {
-      "loc": 3241,
-      "sha256": "df7279f97d7b0b60bc8d1e595ce75974f3ea79d5bac1bf68f189838025168ce7",
-      "intra_package_import_edges": 7,
+      "loc": 3221,
+      "sha256": "ea4c43fc445fba8008eb2af38a796a3180f32c5d79e558a5de3e25029f6d272d",
+      "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     }
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
-      "lines": 2919,
-      "line_start": 2477,
-      "direct_nested_funcs": 22,
-      "total_nested_funcs": 23,
-      "own_bound_names": 196,
+      "lines": 66,
+      "line_start": 1681,
+      "direct_nested_funcs": 0,
+      "total_nested_funcs": 0,
+      "own_bound_names": 2,
       "own_nonlocal_names": [
         "runtime_state"
       ],
       "own_nonlocal_count": 1,
-      "callable_closure_captured_names": 23
+      "callable_closure_captured_names": 0
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 4988,
-      "line_start": 957,
-      "direct_nested_funcs": 15,
-      "total_nested_funcs": 43,
-      "own_bound_names": 156,
+      "lines": 997,
+      "line_start": 998,
+      "direct_nested_funcs": 3,
+      "total_nested_funcs": 4,
+      "own_bound_names": 138,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
-      "callable_closure_captured_names": 79
+      "callable_closure_captured_names": 69
     }
   },
-  "baseline_reason": "duplicate-helper consolidation batch: 16 local _sha256_file definitions (four equivalent implementations) moved to canonical_json.sha256_file behind per-module aliases; repository-hygiene AST ratchet forbids reintroduction and freezes the current _finite upper bound. The only growth, audits/validators.py +9 loc, is the reviewed owner-metadata endpoint semantic-key fix from bfb6ff4 follow-up; it restores nonblocking outcome-ambiguity downgrades and closes a latent conflicting_labels KeyError.",
+  "baseline_reason": "B2 round 9-10: extracted _execute_step finalization into module-level _step_finalize_step (_execute_step 2300->1837 lines); phase.py +134 is the module-function wrapper/params for the same code, not new logic.",
   "baseline_accepted_growth": {
-    "audits/validators.py": {
-      "loc_was": 2797,
-      "loc_now": 2806
+    "execution/phase.py": {
+      "loc_was": 4942,
+      "loc_now": 5076
     }
   },
   "baseline_history": [
@@ -408,6 +408,36 @@
         "audits/validators.py": {
           "loc_was": 2797,
           "loc_now": 2806
+        }
+      }
+    },
+    {
+      "reason": "B2 god-function decomposition (rounds 1-8): run_execute_phase 4987->997, _execute_one_step nested 2919->66-line wrapper with logic moved to module-level _execute_step (2300 lines, next batch target). execution/phase_support.py +2067 is the code moved out of phase.py into its owner module. pipeline.py +76 / agents/planner.py +348 / schema.py +1 are pre-existing progressive-planner feature growth on feat/figure2-dev9-heldout27-20260815, reviewed with the branch work.",
+      "accepted_growth": {
+        "execution/phase_support.py": {
+          "loc_was": 1613,
+          "loc_now": 3680
+        },
+        "pipeline.py": {
+          "loc_was": 8543,
+          "loc_now": 8619
+        },
+        "agents/planner.py": {
+          "loc_was": 1652,
+          "loc_now": 2000
+        },
+        "schema.py": {
+          "loc_was": 3268,
+          "loc_now": 3269
+        }
+      }
+    },
+    {
+      "reason": "B2 round 9-10: extracted _execute_step finalization into module-level _step_finalize_step (_execute_step 2300->1837 lines); phase.py +134 is the module-function wrapper/params for the same code, not new logic.",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 4942,
+          "loc_now": 5076
         }
       }
     }

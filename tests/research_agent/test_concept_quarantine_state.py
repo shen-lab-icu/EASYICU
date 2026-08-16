@@ -6,6 +6,7 @@ import ast
 import inspect
 
 from easyicu.research_agent.execution import phase as pipeline_execute
+from easyicu.research_agent.execution import phase_support as pipeline_execute_support
 from easyicu.research_agent.execution import concept_audit as concept_audit_execution
 from easyicu.research_agent.execution import concept_repair as concept_repair_execution
 from easyicu.research_agent.execution.concept_reaudit import (
@@ -15,12 +16,12 @@ from easyicu.research_agent.schema import ValidationFinding
 
 
 def _execute_one_step_node() -> ast.FunctionDef | ast.AsyncFunctionDef:
-    tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
+    tree = ast.parse(inspect.getsource(pipeline_execute._execute_step))
     return next(
         node
         for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "_execute_one_step"
+        and node.name == "_execute_step"
     )
 
 
@@ -365,9 +366,11 @@ def test_execute_phase_keeps_quarantine_lifecycle_on_one_state_object() -> None:
 
     use_draft = next(
         node
-        for node in ast.walk(execute_one_step)
+        for node in ast.walk(
+            ast.parse(inspect.getsource(pipeline_execute_support))
+        )
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "_use_quarantined_draft"
+        and node.name == "_step_use_quarantined_draft"
     )
     assert not any(isinstance(node, ast.Nonlocal) for node in ast.walk(use_draft))
 

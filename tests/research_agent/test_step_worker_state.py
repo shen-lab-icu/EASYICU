@@ -165,6 +165,7 @@ def test_generation_mode_exhaustively_matches_extracted_legacy_projection() -> N
 
 def test_worker_progress_is_data_only_and_pipeline_uses_single_seam() -> None:
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import phase_support as pipeline_execute_support
     from easyicu.research_agent.execution import concept_repair
     from easyicu.research_agent.execution import step_worker_state
 
@@ -181,9 +182,14 @@ def test_worker_progress_is_data_only_and_pipeline_uses_single_seam() -> None:
     ):
         assert forbidden not in module_source
 
-    run_source = inspect.getsource(pipeline_execute.run_execute_phase)
-    execute_source = run_source + inspect.getsource(
-        pipeline_execute._candidate_execute_transition
+    run_source = inspect.getsource(pipeline_execute._execute_step)
+    execute_source = (
+        run_source
+        + inspect.getsource(pipeline_execute._candidate_execute_transition)
+        + inspect.getsource(
+            pipeline_execute_support._step_register_run_artifacts
+        )
+        + inspect.getsource(pipeline_execute._step_finalize_step)
     )
     assert execute_source.count("StepWorkerProgress()") == 1
     assert "def _script_generation_mode(" not in execute_source
@@ -193,7 +199,7 @@ def test_worker_progress_is_data_only_and_pipeline_uses_single_seam() -> None:
     execute_one = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_execute_one_step"
+        if isinstance(node, ast.FunctionDef) and node.name == "_execute_step"
     )
     constructors = [
         node

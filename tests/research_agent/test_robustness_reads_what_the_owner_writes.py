@@ -276,10 +276,10 @@ def test_deterministic_fallback_code_also_gets_its_receipts_stamped():
 def test_the_robustness_path_really_sets_that_flag():
     """Anchors the test above on the producing side, not on a name I chose."""
 
-    from easyicu.research_agent.execution import phase
+    from easyicu.research_agent.execution import phase_support
 
-    source = Path(phase.__file__).read_text()
-    marker = "_deterministic_robustness_sensitivity_code"
+    source = Path(phase_support.__file__).read_text()
+    marker = "_step_deterministic_robustness_sensitivity_code"
     body = source[source.index(f"def {marker}") :][:1500]
     assert "worker_progress.deterministic_fallback_used = True" in body
     assert "worker_progress.deterministic_standard_executor_used" not in body
