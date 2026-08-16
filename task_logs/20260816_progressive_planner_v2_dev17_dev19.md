@@ -1,4 +1,4 @@
-# Progressive Planner v2: Dev17 decision gate through Dev23
+# Progressive Planner v2: Dev17 decision gate through Dev24
 
 Date: 2026-08-16
 Task: `FIG2-DEV9-HELDOUT27`
@@ -145,8 +145,36 @@ than one design-binding record for the same step.
   literature authority, and package-direction set passed 48 tests. Ruff and
   `git diff --check` are clean.
 
+### Dev24
+
+Root:
+`/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_50a9b11_e1_dev24`
+
+The exact `50a9b11` image completed four Planner calls, using 69,895 tokens
+and an estimated USD 0.94927. Request payloads were 83,242, 84,037, 35,990,
+and 33,774 bytes. The Dev23 repeated-source finding did not recur. Planning
+instead stopped before Execute when the proposed Table 1 listed its `group_by`
+column again as a row variable. `TableOneSpec` correctly rejected that
+impossible display shape, but its raw Pydantic `ValidationError` escaped the
+progressive compiler and therefore could not drive typed suffix repair.
+
+## Repair after Dev24
+
+- The compiler now treats a Table 1 `group_by` entry in the row roster as a
+  redundant representation of the already-declared grouping coordinate and
+  omits it deterministically. No analysis variable or group definition is
+  removed: the grouping column remains bound in `TableOneSpec.group_by` and in
+  the step inputs.
+- A roster containing no distinct row variable still fails closed with
+  `progressive_table_one_rows_missing`. Any remaining downstream
+  `TableOneSpec` validation error is contained at the compiler boundary as
+  `progressive_table_one_contract_invalid`, with step and field coordinates,
+  rather than leaking an unattributable Pydantic exception.
+- The progressive Planner and adjacent Table 1 contract/ordinal sets passed
+  50 tests. Ruff and `git diff --check` are clean.
+
 ## Next gate
 
-Build an exact-source image from the repair commit and run a fresh E1 Dev24.
+Build an exact-source image from the repair commit and run a fresh E1 Dev25.
 Do not start E2 until E1 completes the full analysis, audit, figure, and report
 workflow under development authority.

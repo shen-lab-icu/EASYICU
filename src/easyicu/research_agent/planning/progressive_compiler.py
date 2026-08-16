@@ -369,8 +369,19 @@ def _compile_table_one(
     step_index: int,
 ) -> TableOneSpec:
     group_by = str(step.table_one_group_by or "")
+    row_intents = [
+        item for item in step.table_one_variables if item.name != group_by
+    ]
+    if not row_intents:
+        raise _fail(
+            "progressive_table_one_rows_missing",
+            "Table 1 needs at least one row variable distinct from group_by",
+            step=step,
+            step_index=step_index,
+            path="table_one_variables",
+        )
     _require_variables(
-        [group_by, *(item.name for item in step.table_one_variables)],
+        [group_by, *(item.name for item in row_intents)],
         variables=variables,
         step=step,
         step_index=step_index,
@@ -386,7 +397,7 @@ def _compile_table_one(
             path="table_one_group_by",
         )
     rows: list[TableOneVariableSpec] = []
-    for index, item in enumerate(step.table_one_variables):
+    for index, item in enumerate(row_intents):
         variable = variables[item.name]
         levels = observed_levels_for(name=item.name, variables=dict(variables))
         kind = _table_one_variable_kind(variable, levels)
@@ -436,22 +447,34 @@ def _compile_table_one(
             )
         )
     descriptive = step.table_one_mode == "descriptive_smd_only"
-    return TableOneSpec(
-        schema_version=(
-            "easyicu.table_one/2" if descriptive else "easyicu.table_one/1"
-        ),
-        group_by=group_by,
-        group_levels=list(group_levels),
-        variables=rows,
-        include_overall=True,
-        missing_group_policy="fail_closed",
-        missingness_display="n_percent_by_group",
-        p_values_required=not descriptive,
-        p_value_adjustment=(
-            "not_applicable_repeated_units" if descriptive else "none_descriptive_table"
-        ),
-        standardized_difference_mode="auto_binary_groups",
-    )
+    try:
+        return TableOneSpec(
+            schema_version=(
+                "easyicu.table_one/2" if descriptive else "easyicu.table_one/1"
+            ),
+            group_by=group_by,
+            group_levels=list(group_levels),
+            variables=rows,
+            include_overall=True,
+            missing_group_policy="fail_closed",
+            missingness_display="n_percent_by_group",
+            p_values_required=not descriptive,
+            p_value_adjustment=(
+                "not_applicable_repeated_units"
+                if descriptive
+                else "none_descriptive_table"
+            ),
+            standardized_difference_mode="auto_binary_groups",
+        )
+    except ValidationError as exc:
+        finding = exc.errors(include_input=False)[0]
+        raise _fail(
+            "progressive_table_one_contract_invalid",
+            f"compiled Table 1 violates its typed contract: {finding['msg']}",
+            step=step,
+            step_index=step_index,
+            path="table_one_variables",
+        ) from exc
 
 
 def _level_at(
