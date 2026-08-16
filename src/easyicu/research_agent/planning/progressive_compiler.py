@@ -784,15 +784,19 @@ def _compile_inputs(
                     inputs.append(product_id)
     for reference in refs:
         owner = producers.get(reference.product_id)
-        if owner != reference.producer_step_id:
+        if owner is None:
             raise _fail(
                 "progressive_product_reference_mismatch",
-                f"{reference.product_id!r} is produced by {owner!r}, not "
-                f"{reference.producer_step_id!r}",
+                f"{reference.product_id!r} has no preceding host-registered "
+                f"owner; declared producer was {reference.producer_step_id!r}",
                 step=step,
                 step_index=step_index,
                 path="product_inputs",
             )
+        # Product ids have one preceding owner by construction.  Resolve that
+        # owner from the host registry instead of making the model repeat an
+        # already-known edge correctly in two fields.  The product id remains
+        # exact and an absent product still fails closed above.
         inputs.append(reference.product_id)
     inputs = list(dict.fromkeys(inputs))
     consumption = [
