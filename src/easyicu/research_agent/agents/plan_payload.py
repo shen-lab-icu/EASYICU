@@ -154,6 +154,118 @@ def _artifact_consumption_transport_schema(
     }
 
 
+def _literature_design_binding_transport_schema(
+    definition: Mapping[str, Any],
+    allowed_keys: Sequence[str],
+) -> Dict[str, Any]:
+    """Compile exact run-bound source/element pairs for strict transport.
+
+    Method sources have a closed host-curated design vocabulary.  Leaving the
+    two fields independent in JSON Schema lets a provider emit combinations
+    that the unchanged literature authority must reject.  Topic and screened
+    comparator sources remain eligible for the full typed design-element
+    vocabulary because their relevance is judged from the sealed source
+    excerpt after transport, not from method cards.
+    """
+
+    properties = definition.get("properties")
+    expected = {
+        "citation_key",
+        "design_elements",
+        "application",
+        "divergence",
+    }
+    if not isinstance(properties, dict) or set(properties) != expected:
+        raise PlannerStructuredOutputSchemaError(
+            "LiteratureDesignBinding schema drifted from its wire compiler"
+        )
+    design_elements = properties["design_elements"]
+    if not isinstance(design_elements, dict):
+        raise PlannerStructuredOutputSchemaError(
+            "LiteratureDesignBinding design_elements schema is not an array"
+        )
+    items = design_elements.get("items")
+    global_elements = items.get("enum") if isinstance(items, dict) else None
+    if not isinstance(global_elements, list) or not global_elements:
+        raise PlannerStructuredOutputSchemaError(
+            "LiteratureDesignBinding design-element vocabulary is not closed"
+        )
+
+    method_elements: dict[str, set[str]] = {}
+    for card in METHOD_CARDS:
+        method_elements.setdefault(card.source_key, set()).update(
+            card.design_elements
+        )
+
+    branches: list[Dict[str, Any]] = []
+    for source_key in allowed_keys:
+        allowed_elements = sorted(
+            method_elements.get(source_key, set(global_elements))
+        )
+        branch_elements = copy.deepcopy(design_elements)
+        branch_elements["items"] = {
+            "type": "string",
+            "enum": allowed_elements,
+        }
+        branches.append(
+            _closed_object_schema(
+                {
+                    "citation_key": {"type": "string", "const": source_key},
+                    "design_elements": branch_elements,
+                    "application": copy.deepcopy(properties["application"]),
+                    "divergence": copy.deepcopy(properties["divergence"]),
+                }
+            )
+        )
+    if not branches:
+        raise PlannerStructuredOutputSchemaError(
+            "run-bound literature binding schema requires at least one source"
+        )
+    return {"anyOf": branches}
+
+
+def _bind_literature_transport_authority(
+    definitions: Mapping[str, Any],
+    allowed_keys: Sequence[str],
+) -> None:
+    """Bind citation arrays and nested records to one sealed run roster."""
+
+    analysis_step = definitions.get("AnalysisStep")
+    if not isinstance(analysis_step, dict):
+        raise PlannerStructuredOutputSchemaError(
+            "AnalysisStep schema is unavailable for literature authority"
+        )
+    step_properties = analysis_step.get("properties")
+    if not isinstance(step_properties, dict):
+        raise PlannerStructuredOutputSchemaError(
+            "AnalysisStep properties are unavailable for literature authority"
+        )
+    citation_roster = step_properties.get("literature_citation_keys")
+    design_bindings = step_properties.get("literature_design_bindings")
+    if not isinstance(citation_roster, dict) or not isinstance(
+        design_bindings, dict
+    ):
+        raise PlannerStructuredOutputSchemaError(
+            "AnalysisStep literature fields drifted from their wire compiler"
+        )
+
+    keys = tuple(allowed_keys)
+    if not keys:
+        citation_roster["maxItems"] = 0
+        design_bindings["maxItems"] = 0
+        return
+
+    citation_roster["items"] = {"type": "string", "enum": list(keys)}
+    binding_definition = definitions.get("LiteratureDesignBinding")
+    if not isinstance(binding_definition, dict):
+        raise PlannerStructuredOutputSchemaError(
+            "LiteratureDesignBinding schema is unavailable"
+        )
+    definitions["LiteratureDesignBinding"] = (
+        _literature_design_binding_transport_schema(binding_definition, keys)
+    )
+
+
 def _strictify_planner_transport_schema(node: Any) -> None:
     """Mutate a Pydantic schema into the provider's strict JSON subset."""
 
@@ -230,7 +342,9 @@ def _assert_closed_planner_transport_schema(node: Any, *, path: str = "$") -> No
                 )
 
 
-def _planner_transport_schema() -> Dict[str, Any]:
+def _planner_transport_schema(
+    allowed_literature_citation_keys: tuple[str, ...] | None = None,
+) -> Dict[str, Any]:
     """Return a strict transport schema derived from the authority model.
 
     Pydantic's validation schema contains three open maps and several ``Any``
@@ -329,6 +443,11 @@ def _planner_transport_schema() -> Dict[str, Any]:
                 definitions["ArtifactConsumptionContract"]
             )
         )
+        if allowed_literature_citation_keys is not None:
+            _bind_literature_transport_authority(
+                definitions,
+                allowed_literature_citation_keys,
+            )
     except (KeyError, TypeError) as exc:
         raise PlannerStructuredOutputSchemaError(
             "AnalysisPlan schema shape changed; review the transport projection"
@@ -339,15 +458,38 @@ def _planner_transport_schema() -> Dict[str, Any]:
     return schema
 
 
-@lru_cache(maxsize=1)
-def planner_structured_output_request() -> StructuredOutputRequest:
-    """Return the immutable strict-schema authority for Planner transport."""
+@lru_cache(maxsize=64)
+def _planner_structured_output_request_cached(
+    allowed_literature_citation_keys: tuple[str, ...] | None,
+) -> StructuredOutputRequest:
+    """Cache one immutable authority per normalized run-bound source roster."""
 
     return StructuredOutputRequest.from_schema(
         name="easyicu_analysis_plan_v1",
-        schema=_planner_transport_schema(),
+        schema=_planner_transport_schema(allowed_literature_citation_keys),
         strict=True,
     )
+
+
+def planner_structured_output_request(
+    allowed_literature_citation_keys: Sequence[str] | None = None,
+) -> StructuredOutputRequest:
+    """Return the strict schema bound to the run's sealed citation roster.
+
+    ``None`` preserves the generic schema for offline inspection and budget
+    baselines.  A Planner run passes an explicit (possibly empty) roster so the
+    provider cannot invent a source or attach a curated method source to an
+    unsupported design element.
+    """
+
+    normalized = (
+        None
+        if allowed_literature_citation_keys is None
+        else normalize_literature_citation_keys(
+            allowed_literature_citation_keys
+        )
+    )
+    return _planner_structured_output_request_cached(normalized)
 
 
 def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:

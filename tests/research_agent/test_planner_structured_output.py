@@ -96,6 +96,38 @@ def test_planner_transport_schema_is_closed_compact_and_deterministic():
     assert second["json_schema"]["schema"]["properties"]
 
 
+def test_run_bound_literature_schema_closes_source_element_pairs():
+    request = planner_structured_output_request(
+        ["strobe_2007", "singer_sepsis3_2016", "strobe_2007"]
+    )
+    schema = json.loads(request.schema_json)
+    step = schema["$defs"]["AnalysisStep"]["properties"]
+
+    assert step["literature_citation_keys"]["items"]["enum"] == [
+        "strobe_2007",
+        "singer_sepsis3_2016",
+    ]
+    branches = {
+        branch["properties"]["citation_key"]["const"]: branch
+        for branch in schema["$defs"]["LiteratureDesignBinding"]["anyOf"]
+    }
+    assert set(branches) == {"strobe_2007", "singer_sepsis3_2016"}
+    assert branches["strobe_2007"]["properties"]["design_elements"]["items"][
+        "enum"
+    ] == ["dependence", "estimand", "outcome", "reporting"]
+    assert "population" in branches["singer_sepsis3_2016"]["properties"][
+        "design_elements"
+    ]["items"]["enum"]
+
+
+def test_empty_run_bound_literature_schema_requires_empty_arrays():
+    schema = json.loads(planner_structured_output_request([]).schema_json)
+    step = schema["$defs"]["AnalysisStep"]["properties"]
+
+    assert step["literature_citation_keys"]["maxItems"] == 0
+    assert step["literature_design_bindings"]["maxItems"] == 0
+
+
 def test_transport_projection_only_decodes_labels_and_null_placeholders():
     source = {
         "research_question": "q",
