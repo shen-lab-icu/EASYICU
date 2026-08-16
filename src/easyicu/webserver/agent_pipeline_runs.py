@@ -88,6 +88,7 @@ from easyicu.webserver.agent_review_recovery import (
 )
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
+_RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
 _MAX_MANUSCRIPT_PREVIEW = 24_000
 _MAX_FIGURE_EMBED_BYTES = 420_000
 _MAX_FIGURE_EMBED_TOTAL = 1_400_000
@@ -3029,11 +3030,20 @@ def make_research_pipeline_run_runner(
         raise ResearchPipelineRunError(exc.code, exc.message, details=exc.details) from exc
     research_provider_environment = dict(provider_environment)
     source_run_id = _clean_text(plan_revision_source_run_id, 160)
-    selected_runner_image = str(runner_image or "").strip()
-    if runner_image is not None and not selected_runner_image:
+    environment_runner_image = os.environ.get(_RUNNER_IMAGE_ENV)
+    raw_runner_image = (
+        runner_image if runner_image is not None else environment_runner_image
+    )
+    selected_runner_image = str(raw_runner_image or "").strip()
+    if raw_runner_image is not None and (
+        not selected_runner_image
+        or "\n" in selected_runner_image
+        or "\r" in selected_runner_image
+        or "\0" in selected_runner_image
+    ):
         raise ResearchPipelineRunError(
             "research_pipeline_runner_image_invalid",
-            "The server-owned runner image cannot be empty.",
+            "The server-owned runner image must be one non-empty reference.",
         )
 
     def runner(job: Any) -> Dict[str, Any]:
@@ -3187,7 +3197,7 @@ def make_research_pipeline_run_runner(
             submission_profile_ref = (
                 "npj_dm_e1_demo_dev/20260815"
                 if selected_budget_mode == "full_reviewed"
-                else "npj_dm_e1_canary_dev/20260814"
+                else "npj_dm_e1_canary_dev/20260816"
             )
             submission_profile = get_submission_profile(submission_profile_ref)
             profile_options = submission_profile.pipeline_options()

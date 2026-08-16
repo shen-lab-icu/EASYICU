@@ -9,7 +9,7 @@ part of the evaluation/submission scaffold defined in
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 
 @dataclass(frozen=True)
@@ -75,6 +75,10 @@ class SubmissionProfile:
     # every transition into Execute, regardless of which entrypoint applies the
     # profile. ``None`` preserves historical profile replay bytes.
     planner_only: Optional[bool] = None
+    # Planner strategy changes both the provider contract and the planning
+    # authority chain. Historical profiles omit it to preserve their replay
+    # bytes; additive profiles may pin the progressive strategy explicitly.
+    planner_strategy: Optional[Literal["monolithic_v1", "progressive_v2"]] = None
 
     @property
     def ref(self) -> str:
@@ -134,6 +138,8 @@ class SubmissionProfile:
             options["expected_runner_image_digest"] = self.expected_runner_image_digest
         if self.planner_only is not None:
             options["planner_only"] = self.planner_only
+        if self.planner_strategy is not None:
+            options["planner_strategy"] = self.planner_strategy
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -169,6 +175,7 @@ class SubmissionProfile:
             "expected_runner_image_digest",
             "allow_external_figure_upload",
             "planner_only",
+            "planner_strategy",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -336,6 +343,33 @@ E1_PLANNER_CANARY_2026_08_14 = SubmissionProfile(
     planner_only=True,
 )
 
+E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16 = SubmissionProfile(
+    name="npj_dm_e1_canary_dev",
+    version="20260816",
+    locked_at="2026-08-16T14:58:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Additive replacement for the archived 20260814 canary. It retains the
+    # same development-only data authority while making the progressive
+    # outline/materialization contract a frozen run coordinate.
+    expected_concept_dict_sha=(
+        E1_PLANNER_CANARY_2026_08_14.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        E1_PLANNER_CANARY_2026_08_14.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=True,
+    planner_strategy="progressive_v2",
+)
+
 E1_REVIEWED_DEMO_2026_08_15 = SubmissionProfile(
     name="npj_dm_e1_demo_dev",
     version="20260815",
@@ -458,6 +492,9 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_07_18.ref: NPJ_DM_2026_07_18,
     NPJ_DM_2026_07_19.ref: NPJ_DM_2026_07_19,
     E1_PLANNER_CANARY_2026_08_14.ref: E1_PLANNER_CANARY_2026_08_14,
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16
+    ),
     E1_REVIEWED_DEMO_2026_08_15.ref: E1_REVIEWED_DEMO_2026_08_15,
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),

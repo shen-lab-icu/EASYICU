@@ -484,6 +484,31 @@ def test_e1_planner_canary_profile_binds_current_dictionaries_without_publicatio
     assert is_paper_facing_profile(profile.name) is False
 
 
+def test_e1_progressive_planner_canary_is_additive_and_strategy_locked() -> None:
+    from easyicu.research_agent.orchestration.profiles import (
+        E1_PLANNER_CANARY_2026_08_14,
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16,
+        is_paper_facing_profile,
+    )
+
+    profile = E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16
+
+    assert E1_PLANNER_CANARY_2026_08_14.ref == (
+        "npj_dm_e1_canary_dev/20260814"
+    )
+    assert profile.ref == "npj_dm_e1_canary_dev/20260816"
+    assert profile.planner_only is True
+    assert profile.planner_strategy == "progressive_v2"
+    assert profile.pipeline_options()["planner_strategy"] == "progressive_v2"
+    assert profile.expected_concept_dict_sha == (
+        E1_PLANNER_CANARY_2026_08_14.expected_concept_dict_sha
+    )
+    assert profile.expected_sofa2_dict_sha == (
+        E1_PLANNER_CANARY_2026_08_14.expected_sofa2_dict_sha
+    )
+    assert is_paper_facing_profile(profile.name) is False
+
+
 def test_e1_reviewed_demo_profile_executes_without_paper_authority() -> None:
     from easyicu.research_agent.orchestration.profiles import (
         E1_PLANNER_CANARY_2026_08_14,

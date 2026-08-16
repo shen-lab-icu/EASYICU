@@ -3336,13 +3336,32 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
     (
         "budget_mode",
         "runner_image",
+        "runner_image_environment",
+        "expected_runner_image",
         "expected_profile_name",
         "expected_profile_version",
     ),
     [
-        (None, None, "npj_dm_e1_canary_dev", "20260814"),
+        (
+            None,
+            None,
+            None,
+            "easyicu-research-agent:1.0.0",
+            "npj_dm_e1_canary_dev",
+            "20260816",
+        ),
+        (
+            None,
+            None,
+            "easyicu-research-agent:isolated-exact-head",
+            "easyicu-research-agent:isolated-exact-head",
+            "npj_dm_e1_canary_dev",
+            "20260816",
+        ),
         (
             "full_reviewed",
+            "easyicu-research-agent:e1-demo-local",
+            " \n",
             "easyicu-research-agent:e1-demo-local",
             "npj_dm_e1_demo_dev",
             "20260815",
@@ -3354,9 +3373,13 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     monkeypatch: pytest.MonkeyPatch,
     budget_mode: str | None,
     runner_image: str | None,
+    runner_image_environment: str | None,
+    expected_runner_image: str,
     expected_profile_name: str,
     expected_profile_version: str,
 ) -> None:
+    if runner_image_environment is not None:
+        monkeypatch.setenv("EASYICU_RUNNER_IMAGE", runner_image_environment)
     actual_run = tmp_path / "actual-pipeline-run"
     _write_real_pipeline_fixture(
         actual_run,
@@ -3491,11 +3514,12 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     )
     assert calls["config"].runner_kind == "docker"
     assert calls["config"].runner_network == "none"
-    assert calls["config"].runner_image == (
-        runner_image or "easyicu-research-agent:1.0.0"
-    )
+    assert calls["config"].runner_image == expected_runner_image
     assert calls["config"].submission_profile_name == expected_profile_name
     assert calls["config"].submission_profile_version == expected_profile_version
+    assert calls["config"].planner_strategy == (
+        "progressive_v2" if budget_mode is None else "monolithic_v1"
+    )
     assert calls["config"].enable_memory is False
     assert calls["config"].enable_experience_bank is False
     assert calls["config"].enable_reviewed_memory is False
@@ -3524,6 +3548,32 @@ def test_web_runner_delegates_to_research_agent_pipeline(
         and event["total"] == 5
         for event in Job.events
     )
+
+
+def test_web_runner_rejects_invalid_server_owned_image_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EASYICU_RUNNER_IMAGE", " \n")
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_data_foundation_profile",
+        lambda **_kwargs: _foundation_profile(),
+    )
+    export_path = _write_pipeline_export(tmp_path / "export")
+
+    with pytest.raises(
+        agent_pipeline_runs.ResearchPipelineRunError
+    ) as exc_info:
+        agent_pipeline_runs.make_research_pipeline_run_runner(
+            export_path=str(export_path),
+            study_context=_complete_study(),
+            project_root=str(tmp_path / "projects"),
+            provider={"provider": "openai", "external": True},
+            provider_environment=_PI_PROVIDER_ENVIRONMENT,
+        )
+
+    assert exc_info.value.code == "research_pipeline_runner_image_invalid"
 
 
 def test_web_runner_enables_live_pubmed_only_with_host_authorization(
