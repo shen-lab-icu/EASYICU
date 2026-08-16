@@ -33,6 +33,7 @@ from .capabilities import (
     SUPPORTED_PROVIDER_NAMES,
     cli_account_profile,
     provider_profile,
+    user_account_profile,
 )
 
 LOCAL_OPENAI_DUMMY_API_KEY = "easyicu-local-noauth"
@@ -257,6 +258,16 @@ def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
             bool(instance_vars.get("supports_strict_json_schema", False)),
             str(instance_vars.get("_subprocess_environment_sha256", "")),
         )
+    if _is_reviewed_client_type(client, "CodexAppServerLLMClient"):
+        instance_vars = _safe_instance_vars(client)
+        return (
+            "codex-app-server",
+            str(instance_vars.get("_model", "")),
+            float(instance_vars.get("_timeout", 0.0)),
+            str(instance_vars.get("_endpoint_identity", "")),
+            str(instance_vars.get("_session_binding_sha256", "")),
+            str(instance_vars.get("_subprocess_environment_sha256", "")),
+        )
     return ()
 
 
@@ -334,6 +345,7 @@ def _mark_reviewed_transport_constructed(client: Any) -> Any:
         _is_reviewed_client_type(client, "OpenAIClient")
         or _is_reviewed_client_type(client, "AnthropicMessagesClient")
         or _is_reviewed_client_type(client, "CLIAgentLLMClient")
+        or _is_reviewed_client_type(client, "CodexAppServerLLMClient")
     ) or not _caller_is_exact_constructor(client, skip=1):
         raise ProviderConfigurationError(
             EXTERNAL_LLM_NOT_AUTHORIZED,
@@ -723,6 +735,7 @@ def _attach_provider_authorization(
         _is_reviewed_client_type(client, "OpenAIClient")
         or _is_reviewed_client_type(client, "AnthropicMessagesClient")
         or _is_reviewed_client_type(client, "CLIAgentLLMClient")
+        or _is_reviewed_client_type(client, "CodexAppServerLLMClient")
     ):
         return client
 
@@ -791,7 +804,8 @@ def authorize_provider_client(
     is_openai = _is_reviewed_client_type(client, "OpenAIClient")
     is_anthropic = _is_reviewed_client_type(client, "AnthropicMessagesClient")
     is_cli = _is_reviewed_client_type(client, "CLIAgentLLMClient")
-    if not (is_openai or is_anthropic or is_cli):
+    is_codex_user = _is_reviewed_client_type(client, "CodexAppServerLLMClient")
+    if not (is_openai or is_anthropic or is_cli or is_codex_user):
         raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
     if is_openai:
         profile_definition = provider_profile(provider)
@@ -820,7 +834,7 @@ def authorize_provider_client(
             or destination != "external"
         ):
             raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
-    else:
+    elif is_cli:
         backend = str(getattr(client, "_backend", "") or "")
         profile_definition = cli_account_profile(backend)
         live_model = str(getattr(client, "_model", "") or "") or "cli-default"
@@ -833,6 +847,23 @@ def authorize_provider_client(
             raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
         if destination == "local":
             raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
+    else:
+        profile_definition = user_account_profile("codex")
+        live_model = str(getattr(client, "_model", "") or "") or "account-default"
+        live_endpoint = str(getattr(client, "_endpoint_identity", "") or "")
+        session_binding = str(
+            getattr(client, "_session_binding_sha256", "") or ""
+        )
+        if (
+            profile_definition is None
+            or str(provider) != profile_definition.provider_identity
+            or str(base_url) != live_endpoint
+            or str(model) != live_model
+            or not session_binding
+            or not live_endpoint.endswith("/session/" + session_binding)
+            or destination != "external"
+        ):
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
     if destination == "external" and not _external_llm_allowed(env):
         raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
     authorization = ProviderAuthorization.create(
@@ -842,7 +873,7 @@ def authorize_provider_client(
         destination=destination,
         authorization_mode=(
             "account_session"
-            if is_cli
+            if is_cli or is_codex_user
             else ("operator_env" if destination == "external" else "local_exempt")
         ),
     )
@@ -956,6 +987,23 @@ def _transport_matches_authorization(
             and authorization.model == live_model
             and authorization.destination == "external"
             and authorization.authorization_mode == "account_session"
+        )
+    if _is_reviewed_client_type(client, "CodexAppServerLLMClient"):
+        profile_definition = user_account_profile("codex")
+        live_model = str(getattr(client, "_model", "") or "") or "account-default"
+        live_endpoint = str(getattr(client, "_endpoint_identity", "") or "")
+        session_binding = str(
+            getattr(client, "_session_binding_sha256", "") or ""
+        )
+        return (
+            profile_definition is not None
+            and authorization.provider == profile_definition.provider_identity
+            and authorization.base_url == live_endpoint
+            and authorization.model == live_model
+            and authorization.destination == "external"
+            and authorization.authorization_mode == "account_session"
+            and bool(session_binding)
+            and live_endpoint.endswith("/session/" + session_binding)
         )
     return False
 

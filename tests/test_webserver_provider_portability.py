@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import stat
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -12,23 +11,48 @@ import pytest
 from easyicu.webserver import provider_adapter
 
 
-def _ready_account(backend: str):
-    from easyicu.research_agent.providers.capabilities import CLIAccountReadiness
+SESSION_SHA256 = "b" * 64
 
-    return CLIAccountReadiness(
-        backend=backend,
-        provider_identity=f"{backend}-cli",
-        executable_present=True,
-        status_check_supported=backend == "codex",
-        authentication_verified=True if backend == "codex" else None,
-        launch_ready=True,
-        reason_code=(
-            "cli_account_ready"
-            if backend == "codex"
-            else "cli_login_status_unavailable"
-        ),
-        subprocess_calls=1 if backend == "codex" else 0,
-    )
+
+def _codex_user_environment(tmp_path: Path) -> dict[str, str]:
+    home = tmp_path / "user-home"
+    codex_home = tmp_path / "user-codex-home"
+    home.mkdir()
+    codex_home.mkdir()
+    return {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(home),
+        "CODEX_HOME": str(codex_home),
+        "EASYICU_ALLOW_EXTERNAL_LLM": "1",
+        "EASYICU_CODEX_SESSION_SHA256": SESSION_SHA256,
+        "EASYICU_CODEX_MODEL": "gpt-5.6-luna",
+        "OPENAI_API_KEY": "must-not-cross-account-boundary",
+        "DEEPSEEK_API_KEY": "must-not-cross-account-boundary",
+    }
+
+
+class _ReadyCodexAppServer:
+    instances: list["_ReadyCodexAppServer"] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.__class__.instances.append(self)
+
+    def __enter__(self) -> "_ReadyCodexAppServer":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def request(self, method: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        assert method == "account/read"
+        return {
+            "account": {
+                "type": "chatgpt",
+                "email": "user@example.test",
+                "planType": "plus",
+            }
+        }
 
 
 @pytest.mark.parametrize(
@@ -200,58 +224,57 @@ def test_web_writes_deepseek_config_with_private_permissions(
 
 def test_web_codex_readiness_uses_account_session_without_api_key(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.providers import llm
+    from easyicu.research_agent.providers import codex_app_server
 
     monkeypatch.setattr(
-        llm,
-        "probe_cli_account_readiness",
-        lambda *_args, **_kwargs: _ready_account("codex"),
+        codex_app_server,
+        "CodexAppServerRuntime",
+        _ReadyCodexAppServer,
     )
+    environment = _codex_user_environment(tmp_path)
     readiness = provider_adapter.provider_readiness(
         "codex",
         ai_enabled=True,
-        environ={
-            "PATH": "/usr/bin",
-            "HOME": "/private/user",
-            "CODEX_HOME": "/private/codex",
-            "OPENAI_API_KEY": "must-not-be-used",
-            "EASYICU_CODEX_MODEL": "gpt-5.6-luna",
-        },
+        environ=environment,
     )
 
     assert readiness["ready"] is True
-    assert readiness["authentication_mode"] == "account_session"
+    assert readiness["authentication_mode"] == "chatgpt_account"
     assert readiness["authentication_verified"] is True
+    assert readiness["session_binding_sha256"] == SESSION_SHA256
     assert readiness["model"] == "gpt-5.6-luna"
     assert readiness["model_source"] == "EASYICU_CODEX_MODEL"
-    assert readiness["base_url_source"] == "cli_account"
+    assert readiness["base_url_source"] == "codex_app_server"
     assert readiness["credential_env_candidates"] == []
-    assert "must-not-be-used" not in json.dumps(readiness)
+    assert "must-not-cross-account-boundary" not in json.dumps(readiness)
+    runtime_environment = _ReadyCodexAppServer.instances[-1].kwargs["environment"]
+    assert runtime_environment["HOME"] == environment["HOME"]
+    assert runtime_environment["CODEX_HOME"] == environment["CODEX_HOME"]
+    assert "OPENAI_API_KEY" not in runtime_environment
+    assert "DEEPSEEK_API_KEY" not in runtime_environment
 
 
-def test_web_account_pipeline_environment_excludes_unrelated_api_keys() -> None:
-    environment = {
-        "HOME": "/private/operator",
-        "CODEX_HOME": "/private/operator/.codex",
-        "PATH": os.environ.get("PATH", ""),
-        "OPENAI_API_KEY": "must-not-cross-account-boundary",
-        "DEEPSEEK_API_KEY": "must-not-cross-account-boundary",
-    }
+def test_web_account_pipeline_environment_excludes_unrelated_api_keys(
+    tmp_path: Path,
+) -> None:
+    environment = _codex_user_environment(tmp_path)
 
     selected = provider_adapter.account_provider_environment(
         "codex",
         environ=environment,
     )
 
-    assert selected["HOME"] == "/private/operator"
-    assert selected["CODEX_HOME"] == "/private/operator/.codex"
+    assert selected["HOME"] == environment["HOME"]
+    assert selected["CODEX_HOME"] == environment["CODEX_HOME"]
+    assert selected["EASYICU_CODEX_SESSION_SHA256"] == SESSION_SHA256
     assert selected["EASYICU_ALLOW_EXTERNAL_LLM"] == "1"
     assert "OPENAI_API_KEY" not in selected
     assert "DEEPSEEK_API_KEY" not in selected
 
 
-def test_web_full_pipeline_accepts_only_matching_local_account_source(
+def test_web_full_pipeline_accepts_only_matching_codex_user_auth_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from fastapi import HTTPException
@@ -259,42 +282,45 @@ def test_web_full_pipeline_accepts_only_matching_local_account_source(
     from easyicu.webserver.routes import agent as agent_route
 
     expected = {
-        "HOME": "/private/operator",
-        "CODEX_HOME": "/private/operator/.codex",
+        "HOME": "/private/user-session",
+        "CODEX_HOME": "/private/user-session/.codex",
         "EASYICU_ALLOW_EXTERNAL_LLM": "1",
+        "EASYICU_CODEX_SESSION_SHA256": SESSION_SHA256,
     }
     monkeypatch.setattr(
         provider_adapter,
         "account_provider_environment",
-        lambda _provider: dict(expected),
+        lambda _provider, *, environ: dict(environ or {}),
     )
 
     resolved = agent_route._provider_environment_for_agent_run(
-        credential_source="local_account",
+        credential_source="codex_user_auth",
         engine="research_agent_pipeline",
         run_type="full",
         external_llm_opt_in=True,
         llm_provider="codex",
+        account_environment=expected,
     )
     assert resolved == expected
 
     with pytest.raises(HTTPException) as wrong_provider:
         agent_route._provider_environment_for_agent_run(
-            credential_source="local_account",
+            credential_source="codex_user_auth",
             engine="research_agent_pipeline",
             run_type="full",
             external_llm_opt_in=True,
             llm_provider="deepseek",
+            account_environment=expected,
         )
     assert wrong_provider.value.detail == {
-        "error": "research_pipeline_local_account_provider_required"
+        "error": "codex_user_auth_provider_required"
     }
 
 
 @pytest.mark.parametrize(
     ("source", "provider", "expected"),
     [
-        ("local_account", "codex", "local_account"),
+        ("codex_user_auth", "codex", "codex_user_auth"),
         ("pi_verified", "openai", "pi_verified"),
     ],
 )
@@ -316,11 +342,11 @@ def test_pipeline_credential_source_rejects_cross_family_reuse() -> None:
 
     with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as api_as_account:
         agent_pipeline_runs._validated_pipeline_credential_source(
-            "local_account",
+            "codex_user_auth",
             provider={"provider": "deepseek"},
         )
     assert api_as_account.value.code == (
-        "research_pipeline_local_account_provider_required"
+        "research_pipeline_codex_user_auth_provider_required"
     )
 
     with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as account_as_api:
@@ -329,35 +355,26 @@ def test_pipeline_credential_source_rejects_cross_family_reuse() -> None:
             provider={"provider": "codex"},
         )
     assert account_as_api.value.code == (
-        "research_pipeline_local_account_credentials_required"
+        "research_pipeline_codex_user_auth_required"
     )
 
 
 def test_web_codex_client_uses_only_reviewed_account_environment(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.providers import llm
+    from easyicu.research_agent.providers import codex_app_server
+    from easyicu.research_agent.providers.factory import (
+        provider_authorization_manifest,
+    )
+    from easyicu.research_agent.providers.llm import CodexAppServerLLMClient
 
     monkeypatch.setattr(
-        llm,
-        "probe_cli_account_readiness",
-        lambda *_args, **_kwargs: _ready_account("codex"),
+        codex_app_server,
+        "CodexAppServerRuntime",
+        _ReadyCodexAppServer,
     )
-    captured: dict[str, Any] = {}
-    account_client = object()
-
-    def _build(**kwargs: Any):
-        captured.update(kwargs)
-        return SimpleNamespace(client=account_client)
-
-    monkeypatch.setattr(llm, "build_llm_client", _build)
-    environment = {
-        "PATH": "/usr/bin",
-        "HOME": "/private/user",
-        "CODEX_HOME": "/private/codex",
-        "OPENAI_API_KEY": "must-not-cross-account-boundary",
-        "EASYICU_CODEX_MODEL": "gpt-5.6-luna",
-    }
+    environment = _codex_user_environment(tmp_path)
 
     client, public = provider_adapter.build_research_agent_provider_client(
         {
@@ -369,20 +386,21 @@ def test_web_codex_client_uses_only_reviewed_account_environment(
         environ=environment,
     )
 
-    assert client is account_client
-    assert captured["prefer"] == "codex"
-    assert captured["ladder"] == ["codex"]
-    assert captured["allow_mock"] is False
-    assert captured["model"] == "gpt-5.6-luna"
-    assert captured["environment"]["CODEX_HOME"] == "/private/codex"
-    assert "OPENAI_API_KEY" not in captured["environment"]
-    assert public["authentication_mode"] == "account_session"
+    assert isinstance(client, CodexAppServerLLMClient)
+    manifest = provider_authorization_manifest(client)
+    assert manifest["clients"][0]["provider"] == "codex-app-server"
+    assert manifest["clients"][0]["base_url"].endswith(
+        f"/session/{SESSION_SHA256}"
+    )
+    assert client._subprocess_environment["CODEX_HOME"] == environment["CODEX_HOME"]
+    assert "OPENAI_API_KEY" not in client._subprocess_environment
+    assert public["authentication_mode"] == "chatgpt_account"
     assert public["transport_max_attempts"] == 1
     assert public["strict_json_schema_enabled"] is True
     assert "must-not-cross-account-boundary" not in json.dumps(public)
 
 
-def test_web_codex_scaffold_uses_typed_cli_output(
+def test_web_codex_scaffold_uses_app_server_output_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from easyicu.research_agent.providers.mocks import ExternalCaptureMockLLMClient
@@ -426,7 +444,9 @@ def test_web_codex_scaffold_uses_typed_cli_output(
     _messages, captured = client.calls[0]
     assert captured["structured_output"].name == "easyicu_agent_run"
     assert result["agent_plan"]["run_id"] == "run_1"
-    assert result["provider"]["json_format_style"] == "cli_output_schema"
+    assert result["provider"]["json_format_style"] == (
+        "codex_app_server_output_schema"
+    )
     assert result["provider"]["external_calls"] == 1
 
 

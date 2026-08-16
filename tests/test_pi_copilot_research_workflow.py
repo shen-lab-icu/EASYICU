@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 import pandas as pd
+from starlette.requests import Request
 
 from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
 from easyicu.research_agent.reporting.result_card import (
@@ -47,6 +48,22 @@ from easyicu.webserver.pi_copilot.workflow import (
     build_research_workflow_snapshot,
     registered_export_matches_study,
 )
+
+
+def _request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/jobs/agent-run",
+            "raw_path": b"/api/jobs/agent-run",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 123),
+        }
+    )
 
 
 def _complete_study() -> dict[str, Any]:
@@ -3815,7 +3832,8 @@ def test_pipeline_route_rejects_raw_tabular_files_before_provider_resolution(
                 "run_type": "full",
                 "credential_source": "pi_verified",
                 "external_llm_opt_in": True,
-            }
+            },
+            request=_request(),
         )
 
     assert getattr(raised.value, "detail")["error"] in {
@@ -3901,7 +3919,8 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
             "credential_source": "pi_verified",
             "external_llm_opt_in": True,
             "project_root": str(tmp_path / "client-controlled"),
-        }
+        },
+        request=_request(),
     )
 
     assert result["job_id"] == "job-workspace"
@@ -3931,7 +3950,8 @@ def test_pipeline_route_rejects_client_selected_full_reviewed_mode(
                 "engine": "research_agent_pipeline",
                 "run_type": "full",
                 "budget_mode": "full_reviewed",
-            }
+            },
+            request=_request(),
         )
 
     assert getattr(raised.value, "detail") == {
@@ -3962,7 +3982,8 @@ def test_planner_canary_cannot_be_approved_into_execution(
                 "study_context_id": "study-workflow",
                 "decision": "approved",
                 "external_llm_opt_in": True,
-            }
+            },
+            request=_request(),
         )
 
     assert getattr(raised.value, "detail") == {

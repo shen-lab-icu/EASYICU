@@ -27,7 +27,8 @@
   let agReview = { projectDir: null, loading: false, error: null, data: null, signing: false };
   let agHistory = { studyId: null, loading: false, error: null, data: null };
   let agArtifact = { projectDir: null, name: null, loading: false, error: null, data: null };
-  let agProvider = { provider: 'openai', consent: false, loading: false, error: null, status: null };
+  let agProvider = { provider: 'openai', consent: false, loading: false, error: null, status: null, login: null, authBusy: false };
+  let agCodexAuthPoll = null;
   let agIdeaProjects = { loading: false, error: null, data: null };
   let agBlockFamily = 'all';
   let agBlockSelected = 'nature_writing';
@@ -653,6 +654,35 @@
       repaintBody();
     }).catch(err => {
       agProvider = Object.assign({}, agProvider, { loading: false, error: err.message || String(err), status: null });
+      repaintBody();
+    });
+  }
+  function stopCodexAuthPoll() {
+    if (agCodexAuthPoll) window.clearTimeout(agCodexAuthPoll);
+    agCodexAuthPoll = null;
+  }
+  function mergeCodexAuth(auth) {
+    if (!auth) return;
+    agProvider = Object.assign({}, agProvider, {
+      status: Object.assign({}, agProvider.status || {}, auth),
+      authBusy: false,
+    });
+  }
+  function pollCodexAuth() {
+    stopCodexAuthPoll();
+    if (agProvider.provider !== 'codex' || !window.EU_API || !window.EU_API.loadCodexAuthStatus) return;
+    window.EU_API.loadCodexAuthStatus().then(data => {
+      const auth = data && data.auth ? data.auth : null;
+      mergeCodexAuth(auth);
+      if (auth && auth.authentication_verified) {
+        agProvider = Object.assign({}, agProvider, { login: null });
+        requestProviderStatus(true);
+      } else if (auth && auth.account_session_status === 'codex_auth_login_pending') {
+        agCodexAuthPoll = window.setTimeout(pollCodexAuth, 2000);
+      }
+      repaintBody();
+    }).catch(err => {
+      agProvider = Object.assign({}, agProvider, { authBusy: false, error: err.message || String(err) });
       repaintBody();
     });
   }
@@ -2229,9 +2259,59 @@
     }));
     host.querySelectorAll('[data-ag-provider-refresh]').forEach(b => b.addEventListener('click', () => requestProviderStatus(true)));
     host.querySelectorAll('[data-ag-provider]').forEach(b => b.addEventListener('click', () => {
-      agProvider = { provider: b.dataset.agProvider || 'openai', consent: false, loading: false, error: null, status: null };
+      stopCodexAuthPoll();
+      agProvider = { provider: b.dataset.agProvider || 'openai', consent: false, loading: false, error: null, status: null, login: null, authBusy: false };
       requestProviderStatus(true);
       repaintBody();
+    }));
+    host.querySelectorAll('[data-ag-codex-login]').forEach(b => b.addEventListener('click', () => {
+      if (agProvider.authBusy || !window.EU_API || !window.EU_API.startCodexAuthLogin) return;
+      agProvider = Object.assign({}, agProvider, { authBusy: true, error: null });
+      repaintBody();
+      window.EU_API.startCodexAuthLogin().then(data => {
+        mergeCodexAuth(data && data.auth);
+        agProvider = Object.assign({}, agProvider, {
+          login: data && data.login_started ? {
+            verification_url: data.verification_url,
+            user_code: data.user_code,
+          } : null,
+        });
+        if (data && data.verification_url) {
+          window.open(data.verification_url, '_blank', 'noopener,noreferrer');
+        }
+        pollCodexAuth();
+        repaintBody();
+      }).catch(err => {
+        agProvider = Object.assign({}, agProvider, { authBusy: false, error: err.message || String(err) });
+        repaintBody();
+      });
+    }));
+    host.querySelectorAll('[data-ag-codex-cancel]').forEach(b => b.addEventListener('click', () => {
+      if (agProvider.authBusy || !window.EU_API || !window.EU_API.cancelCodexAuthLogin) return;
+      agProvider = Object.assign({}, agProvider, { authBusy: true, error: null });
+      window.EU_API.cancelCodexAuthLogin().then(data => {
+        stopCodexAuthPoll();
+        mergeCodexAuth(data && data.auth);
+        agProvider = Object.assign({}, agProvider, { login: null });
+        repaintBody();
+      }).catch(err => {
+        agProvider = Object.assign({}, agProvider, { authBusy: false, error: err.message || String(err) });
+        repaintBody();
+      });
+    }));
+    host.querySelectorAll('[data-ag-codex-logout]').forEach(b => b.addEventListener('click', () => {
+      if (agProvider.authBusy || !window.EU_API || !window.EU_API.logoutCodexAuth) return;
+      agProvider = Object.assign({}, agProvider, { authBusy: true, error: null });
+      window.EU_API.logoutCodexAuth().then(data => {
+        stopCodexAuthPoll();
+        mergeCodexAuth(data && data.auth);
+        agProvider = Object.assign({}, agProvider, { consent: false, login: null });
+        requestProviderStatus(true);
+        repaintBody();
+      }).catch(err => {
+        agProvider = Object.assign({}, agProvider, { authBusy: false, error: err.message || String(err) });
+        repaintBody();
+      });
     }));
     host.querySelectorAll('[data-ag-external-consent]').forEach(c => c.addEventListener('change', () => {
       agProvider = Object.assign({}, agProvider, { consent: !!c.checked });
@@ -2241,7 +2321,12 @@
       if (b.getAttribute('aria-disabled') === 'true') return;
       const src = exportSourceForStudy(study());
       if (!src) return;
-      startRealRun(src, { runType: 'full', provider: agProvider.provider, externalOptIn: true });
+      startRealRun(src, {
+        runType: 'full',
+        provider: agProvider.provider,
+        externalOptIn: true,
+        credentialSource: agProvider.provider === 'codex' ? 'codex_user_auth' : 'scientific_provider',
+      });
       // "for this run only": consume the consent so the next full run must be
       // re-authorized instead of silently reusing stale approval.
       agProvider = Object.assign({}, agProvider, { consent: false });
@@ -2256,7 +2341,7 @@
         provider: agProvider.provider,
         externalOptIn: true,
         engine: 'research_agent_pipeline',
-        credentialSource: 'local_account',
+        credentialSource: 'codex_user_auth',
       });
       agProvider = Object.assign({}, agProvider, { consent: false });
       repaintBody();

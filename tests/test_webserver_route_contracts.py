@@ -301,6 +301,26 @@ EXPECTED_AGENT_CONTROL_ROUTES = [
     ("POST", "/api/jobs/agent-run-review", "jobs_agent_run_review"),
     (
         "GET",
+        "/api/agent-runs/codex-auth/status",
+        "get_agent_run_codex_auth_status",
+    ),
+    (
+        "POST",
+        "/api/agent-runs/codex-auth/login",
+        "post_agent_run_codex_auth_login",
+    ),
+    (
+        "POST",
+        "/api/agent-runs/codex-auth/cancel",
+        "post_agent_run_codex_auth_cancel",
+    ),
+    (
+        "POST",
+        "/api/agent-runs/codex-auth/logout",
+        "post_agent_run_codex_auth_logout",
+    ),
+    (
+        "GET",
         "/api/agent-runs/provider-status",
         "get_agent_run_provider_status",
     ),

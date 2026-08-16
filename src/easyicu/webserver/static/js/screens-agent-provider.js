@@ -33,7 +33,9 @@
     const envFile = st.env_file || {};
     const missing = Array.isArray(st.missing) ? st.missing : [];
     const ready = !!st.ready;
-    const accountMode = st.authentication_mode === 'account_session';
+    const accountMode = st.authentication_mode === 'chatgpt_account';
+    const login = providerState.login || null;
+    const authPending = st.account_session_status === 'codex_auth_login_pending';
     const canRun = !!(source && ready && providerState.consent && !runState.active && !contextBlocker);
     const disabledReason = (contextBlocker && contextBlocker.reason) || (!source
       ? t('No active export source', '没有 active export 源')
@@ -49,16 +51,18 @@
       : !!st.credential_present;
     const credentialText = accountMode
       ? (st.authentication_verified === true
-        ? t('account login verified', '账户登录已验证')
-        : st.account_session_present
-        ? t('Codex runtime ready; account checked on call', 'Codex 运行环境就绪；调用时验证账户')
-        : t('account login unavailable', '账户登录不可用'))
+        ? t('your Codex account is connected', '你的 Codex 账户已连接')
+        : authPending
+        ? t('waiting for account authorization', '正在等待账户授权')
+        : t('Codex sign-in required', '需要登录 Codex'))
       : (st.credential_present
         ? t('key env present', 'key env 已配置')
         : t('key env missing', 'key env 缺失'));
     const details = accountMode
       ? [
           [t('Account status', '账户状态'), st.account_session_status || '—'],
+          [t('Signed-in account', '登录账户'), st.account_label || '—'],
+          [t('ChatGPT plan', 'ChatGPT 套餐'), st.plan_type || '—'],
           [t('Model source', '模型来源'), st.model_source || 'account_default'],
           [t('Transport', '传输方式'), st.provider_identity || st.provider || '—'],
           [t('Private env file', '私有 env 文件'), t('not used for account login', '账户登录不读取 env 密钥文件')],
@@ -76,16 +80,31 @@
         <div class="row" style="justify-content:space-between;align-items:baseline;">
           <div>
             <div class="eyebrow">${t('External provider scaffold', '外部 provider 骨架')}</div>
-            <div class="panel-sub" style="margin-top:4px;">${t('Uses this machine\'s signed-in Codex account or a configured API to generate a bounded plan and draft scaffold. It does not run a complete research analysis, and secrets are never shown or written to artifacts.', '使用本机已登录的 Codex 账户或已配置 API 生成受限计划与草稿骨架。这不是完整科研分析，登录凭据与密钥均不会显示或写入产物。')}</div>
+            <div class="panel-sub" style="margin-top:4px;">${t('Use your own Codex account or a configured API with the same Research Agent workflow. Each browser account session is isolated; login tokens and API keys are never shown or written to research artifacts.', '可使用你自己的 Codex 账户或已配置 API，二者进入同一 Research Agent 流程。每个浏览器账户会话相互隔离，登录令牌与 API 密钥都不会显示或写入科研产物。')}</div>
           </div>
           <button class="btn sm ghost" data-ag-provider-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
         </div>
         <div class="row wrap gap-6 mt-12">
           ${PROVIDERS.map(item => `<button class="btn sm ${providerState.provider === item.id ? 'primary' : 'ghost'}" data-ag-provider="${item.id}">${esc(item.label)}</button>`).join('')}
         </div>
-        <div class="note-line mt-8" style="font-size:11px;color:var(--ink-4);">${icon('shield', 11)} ${t('Codex can reuse this machine\'s signed-in account. Claude and other API providers use server-owned environment configuration. EasyICU remains local-only by default.', 'Codex 可复用本机已登录账户；Claude 与其他 API provider 使用服务器自有环境配置。EasyICU 默认仍仅限本机访问。')}</div>
+        <div class="note-line mt-8" style="font-size:11px;color:var(--ink-4);">${icon('shield', 11)} ${t('Codex uses this browser user\'s ChatGPT sign-in through an isolated App Server session; it never falls back to the server operator\'s Codex login.', 'Codex 通过隔离的 App Server 会话使用当前浏览器用户自己的 ChatGPT 登录；绝不会回退到服务器操作者的 Codex 登录。')}</div>
         ${providerState.loading ? `<div class="note info mt-12"><div class="ico">${icon('shield', 16)}</div><div class="body"><span class="t">${t('Checking provider readiness', '正在检查 provider 就绪状态')}</span><span class="d">${t('No research prompt is sent during this check.', '此检查不会发送科研提示词。')}</span></div></div>` : ''}
         ${providerState.error ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 16)}</div><div class="body"><span class="t">${t('Provider status unavailable', 'provider 状态不可用')}</span><span class="d">${esc(providerState.error)}</span></div></div>` : ''}
+        ${accountMode && !st.authentication_verified ? `
+          <div class="note info mt-12">
+            <div class="ico">${icon('user', 16)}</div>
+            <div class="body">
+              <span class="t">${authPending ? t('Complete Codex sign-in', '完成 Codex 登录') : t('Connect your Codex account', '连接你的 Codex 账户')}</span>
+              <span class="d">${login && login.user_code
+                ? `${t('Open the official OpenAI page and enter code', '打开 OpenAI 官方页面并输入代码')} <strong class="mono">${esc(login.user_code)}</strong>`
+                : t('EasyICU will open OpenAI\'s official device authorization page. No password is entered into EasyICU.', 'EasyICU 会打开 OpenAI 官方设备授权页；你不会在 EasyICU 中输入密码。')}</span>
+              <span class="row gap-8 mt-8">
+                ${login && login.verification_url ? `<a class="btn primary sm" href="${esc(login.verification_url)}" target="_blank" rel="noopener noreferrer">${t('Open OpenAI sign-in', '打开 OpenAI 登录')}</a>` : `<button class="btn primary sm" data-ag-codex-login ${providerState.authBusy ? 'disabled' : ''}>${t('Sign in with Codex', '使用 Codex 登录')}</button>`}
+                ${authPending ? `<button class="btn ghost sm" data-ag-codex-cancel ${providerState.authBusy ? 'disabled' : ''}>${t('Cancel', '取消')}</button>` : ''}
+              </span>
+            </div>
+          </div>` : ''}
+        ${accountMode && st.authentication_verified ? `<div class="row gap-8 mt-12"><button class="btn ghost sm" data-ag-codex-logout ${providerState.authBusy ? 'disabled' : ''}>${t('Sign out of Codex', '退出 Codex')}</button></div>` : ''}
         <div class="row wrap gap-6 mt-12">
           <span class="pill ${st.ai_enabled ? 'ok' : 'warn'}" style="height:22px;"><span class="dot"></span>AI ${st.ai_enabled ? t('enabled', '已开启') : t('off', '关闭')}</span>
           <span class="pill ${credentialOkay ? 'ok' : 'warn'}" style="height:22px;"><span class="dot"></span>${credentialText}</span>
