@@ -38,11 +38,13 @@ from ..authority.provider_budget import (
 from ..authority.secret_redaction import (
     debug_capture_enabled,
     redact_debug_value,
+    redact_text_secrets,
 )
 from .capabilities import llm_supports_vision, model_looks_vision_capable
 from .protocol import (
     LLMClient,
     LLMMessage,
+    ProviderRefusal,
     StructuredOutputCapabilityError,
     StructuredOutputRequest,
 )
@@ -379,6 +381,7 @@ def _response_namespace_from_stream(stream: Any) -> Any:
 
     content_parts: List[str] = []
     reasoning_parts: List[str] = []
+    refusal_parts: List[str] = []
     finish_reason: Optional[str] = None
     usage = None
     response_model = None
@@ -402,6 +405,9 @@ def _response_namespace_from_stream(stream: Any) -> Any:
                 content = getattr(delta, "content", None)
                 if isinstance(content, str):
                     content_parts.append(content)
+                refusal = getattr(delta, "refusal", None)
+                if isinstance(refusal, str):
+                    refusal_parts.append(refusal)
                 for attr in ("reasoning_content", "reasoning"):
                     value = getattr(delta, attr, None)
                     if isinstance(value, str):
@@ -419,6 +425,7 @@ def _response_namespace_from_stream(stream: Any) -> Any:
         content="".join(content_parts),
         reasoning_content=reasoning or None,
         reasoning=reasoning or None,
+        refusal="".join(refusal_parts) or None,
     )
     choice = SimpleNamespace(message=message, finish_reason=finish_reason)
     return SimpleNamespace(choices=[choice], usage=usage, model=response_model)
@@ -430,7 +437,7 @@ def _response_namespace_from_stream(stream: Any) -> Any:
 
 
 class OpenAIClient:
-    """Thin wrapper around ``openai>=1.0`` chat completions.
+    """Thin wrapper around ``openai>=1.40.0`` chat completions.
 
     External transports must be created through
     :func:`easyicu.research_agent.providers.factory.build_provider_client`.
@@ -1046,6 +1053,32 @@ class OpenAIClient:
         choice = resp.choices[0]
         self.last_finish_reason = getattr(choice, "finish_reason", None)
         msg = choice.message
+        raw_refusal = getattr(msg, "refusal", None)
+        refusal_reason = (
+            redact_text_secrets(str(raw_refusal).strip())
+            if raw_refusal is not None and str(raw_refusal).strip()
+            else ""
+        )
+        if refusal_reason:
+            refusal_reason = _truncated_debug_text(refusal_reason)
+            _record_provider_call_receipt(
+                finish_reason=self.last_finish_reason,
+                usage=call_usage,
+                transport_attempts=self.last_transport_attempts,
+            )
+            receipt = current_provider_call_receipt()
+            raise ProviderRefusal(
+                refusal_reason,
+                finish_reason=receipt.finish_reason if receipt is not None else None,
+                usage_summary=(
+                    dict(receipt.usage_summary) if receipt is not None else None
+                ),
+                transport_attempts=(
+                    receipt.transport_attempts
+                    if receipt is not None
+                    else self.last_transport_attempts
+                ),
+            )
         raw_msg_content = (getattr(msg, "content", None) or "").strip()
         content = _strip_reasoning_blocks(raw_msg_content)
         if not content:
