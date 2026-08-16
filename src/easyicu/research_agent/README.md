@@ -157,7 +157,7 @@ Two invariants enforce this split:
 
 1. **The engine is optional, never required — capability degradation ladder.**
    `providers.llm.build_llm_client(prefer=...)` walks
-   `CLI agent (codex/claude) → OpenAI → OpenRouter → MockLLMClient`, returning
+   `requested engine → OpenAI → OpenRouter → MockLLMClient`, returning
    an `LLMClientSelection` that records what actually ran and why it fell back.
    A user without any coding-agent CLI or API key still gets a working,
    end-to-end pipeline on the offline `MockLLMClient` floor (design rule #1 in
@@ -172,11 +172,55 @@ Two invariants enforce this split:
    is reached by *asking* for it: call `build_llm_client(...)` (or pass
    `MockLLMClient()`) and hand the result to `run(llm=...)`.
 
+   Provider identity is separate from wire protocol. The dependency-neutral
+   `providers.capabilities` owner currently registers `openai`, `openrouter`,
+   `deepseek`, `custom`, and `anthropic`. The first four use the reviewed OpenAI
+   Chat Completions transport; `custom` covers operator-configured compatible
+   gateways and local servers. `anthropic` uses the native Anthropic Messages
+   API and translates strict output requests to native `output_config.format`
+   JSON Schema rather than relying on Anthropic's OpenAI compatibility layer.
+   Provider identity is preserved in every authorization receipt.
+
+   The only user-facing account-backed engine is `codex`. It reuses a local
+   `codex login` session, verifies it with `codex login status`, runs
+   `codex exec` in a private temporary directory with a read-only sandbox, and
+   maps strict structured output to `--output-schema`. Its frozen subprocess
+   environment excludes API keys. The older Claude Code adapter remains only
+   as an internal compatibility seam for the opt-in agentic-coder path; it is
+   not a selectable Research Agent provider in the CLI, MCP, benchmark, or Web
+   catalog. Claude users configure the native `anthropic` API provider instead.
+
+   Strict JSON Schema is an explicit run-bound capability: it is never inferred
+   for OpenAI-compatible relays from a provider or model name, and a requested
+   strict transport fails closed when the endpoint has not advertised or passed
+   that capability.
+
+   Before assigning a new endpoint to a development run, use
+   `tools/probe_research_agent_provider_capabilities.py` with an owner-only
+   env file and `--external-llm-opt-in`. It sends only synthetic data and
+   records host-validated JSON and strict-schema support separately, including
+   requested versus provider-returned model identity. A passing generic JSON
+   probe does not authorize the strict transport or any paper-facing run.
+
+   The native WebApp exposes the Codex account engine only on its local-only
+   surface. After the user confirms one run, the account panel can launch either
+   a one-call bounded scaffold or the full Research Agent Planner canary with a
+   typed `local_account` credential source. The latter reuses the same
+   plan/execute/verify pipeline, Provider hard stops, EvidenceStore, and
+   publication gates as an API-backed run. `codex exec` is the current local
+   transport implementation, not a requirement that the Web user operate a
+   terminal; an already signed-in Codex account is detected by the server. A
+   remotely hosted product must
+   instead create an isolated browser/device login session for each user; it
+   must never copy or share the server operator's account cache. Other vendors
+   remain available through a reviewed native provider or the `custom` API path,
+   not by inheriting arbitrary local CLI configuration.
+
 2. **No engine bypasses `NumericClaim` binding — engine-agnostic provenance.**
    `manuscript_post.bind_numeric_values` takes only the manuscript *string* plus
    the `EvidenceStore`; in STRICT mode every printed number must trace to a
    registered claim or it is rejected, regardless of which brain wrote it
-   (mock, API, or a local Codex/Claude CLI). Stronger engines hallucinate more
+   (mock, API, or the local Codex account engine). Stronger engines hallucinate more
    confidently, so this gate *gains* value as the brain improves. Do not add an
    engine-specific "trusted" path that lets some provider's numbers skip
    binding; `tests/research_agent/test_numeric_provenance_engine_agnostic.py`
@@ -553,7 +597,8 @@ Tests that hit a real LLM provider should be marked
 `@pytest.mark.needs_real_llm` (declared in `pytest.ini`); they are
 skipped by default and only run with `pytest --run-real-llm` plus a
 matching API key in the environment (`OPENAI_API_KEY`,
-`OPENROUTER_API_KEY`, or `ANTHROPIC_API_KEY`). This keeps real-provider
+`OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `EASYICU_LLM_API_KEY`, or
+`ANTHROPIC_API_KEY`). This keeps real-provider
 costs opt-in and makes "passes only under mock" testing visible in CI
 reports rather than hidden as a green test.
 
@@ -657,6 +702,38 @@ easyicu-research-agent \
     --enable-tavily \
     --workdir ./research_output
 ```
+
+An account-authenticated Codex run needs no API key or model override after the
+one-time login:
+
+```bash
+codex login
+easyicu-research-agent \
+    --question "Is admission SOFA-2 score associated with ICU mortality?" \
+    --cohort path/to/cohort.parquet \
+    --database miiv \
+    --target-outcome death \
+    --llm codex \
+    --external-llm-opt-in \
+    --workdir ./research_output
+```
+
+Claude is configured through the native Anthropic API, not Claude Code:
+
+```bash
+export ANTHROPIC_API_KEY="..."
+easyicu-research-agent \
+    --question "Describe this ICU cohort." \
+    --cohort path/to/cohort.parquet \
+    --llm anthropic \
+    --model claude-sonnet-4-5 \
+    --external-llm-opt-in \
+    --workdir ./research_output
+```
+
+Optional Codex model overrides can be supplied with `--model` or
+`EASYICU_CODEX_MODEL`. Never place API keys in command history, run artifacts,
+or benchmark specifications; use a private environment file or secret manager.
 
 For paper reproduction, the replication CLI now supports a second,
 paper-aware mode. It first parses the paper into a typed replication

@@ -183,7 +183,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "js/app.js?v=20260812-route-a11y1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260803-picker-owner" in index_html
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
+    assert "js/screens-agent.js?v=20260816-account-providers1" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -654,7 +654,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
+    assert "js/screens-agent.js?v=20260816-account-providers1" in index_html
     assert "css/agent.css?v=20260812-natural-conversations1" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
@@ -804,7 +804,7 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
     assert "css/agent.css?v=20260812-natural-conversations1" in index_html
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
+    assert "js/screens-agent.js?v=20260816-account-providers1" in index_html
 
     assert "ag-block-grid" not in app_js
     assert "Research Blocks" not in app_js
@@ -852,6 +852,36 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
     assert "js/screens-agent-render.js?v=20260815-system-validation1" in index_html
+
+
+def test_native_agent_provider_panel_is_split_and_account_aware() -> None:
+    agent_js = _static_js("screens-agent.js")
+    provider_js = _static_js("screens-agent-provider.js")
+    index_html = _static_html("index.html")
+
+    assert "const PROVIDERS = Object.freeze([" in provider_js
+    assert "id: 'codex', label: 'Codex account', mode: 'account'" in provider_js
+    assert "Claude account" not in provider_js
+    assert "Gemini account" not in provider_js
+    assert "id: 'anthropic', label: 'Claude API', mode: 'api'" in provider_js
+    assert "id: 'deepseek', label: 'DeepSeek API', mode: 'api'" in provider_js
+    assert "window.AGENT_PROVIDER_PANEL =" in provider_js
+    assert "window.AGENT_PROVIDER_PANEL" in agent_js
+    assert "data-ag-account-pipeline-run" in provider_js
+    assert "credentialSource: 'local_account'" in agent_js
+    assert "engine: 'research_agent_pipeline'" in agent_js
+    assert "const providers = [" not in agent_js
+
+    provider_pos = index_html.find("screens-agent-provider.js?")
+    main_pos = index_html.find("screens-agent.js?")
+    assert provider_pos != -1 and main_pos != -1
+    assert provider_pos < main_pos
+    assert (
+        "js/screens-agent-provider.js?v=20260816-codex-anthropic1" in index_html
+    )
+
+    for foreign_marker in ("data-cd-", "data-pt-", "data-idea-"):
+        assert foreign_marker not in provider_js
 
 
 def test_native_agent_overview_renders_object_idea_plan_steps() -> None:
@@ -962,7 +992,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert ".ag-wrap .ag-req-list" in agent_question_css
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
     assert "css/agent.css?v=20260812-natural-conversations1" in index_html
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
+    assert "js/screens-agent.js?v=20260816-account-providers1" in index_html
 
     for name in (
         "benchmark_scorecard.json",
@@ -2547,11 +2577,13 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
 
 def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
     agent_js = _static_js("screens-agent.js")
+    provider_js = _static_js("screens-agent-provider.js")
     api_js = _static_js("api.js")
 
-    assert "DeepSeek-compatible" in agent_js
-    assert "Custom / local OpenAI-compatible" in agent_js
-    assert "Custom/local endpoints must be OpenAI-compatible" in agent_js
+    assert "DeepSeek API" in provider_js
+    assert "Claude API" in provider_js
+    assert "Custom / compatible API" in provider_js
+    assert "Codex account" in provider_js
     assert "loadJobSnapshot" in api_js
     assert "cancelJob" in api_js
     assert "getJSON('/api/jobs/' + encodeURIComponent(jobId || ''))" in api_js

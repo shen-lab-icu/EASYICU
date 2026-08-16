@@ -238,6 +238,7 @@ __all__ = [
     "LLMClient",
     "MockLLMClient",
     "OpenAIClient",
+    "AnthropicMessagesClient",
     "CLIAgentLLMClient",
     "LLMRouter",
     "build_llm_client",
@@ -723,6 +724,7 @@ def __getattr__(name: str):
         return getattr(_mocks, name)
     if name in {
         "OpenAIClient",
+        "AnthropicMessagesClient",
         "CLIAgentLLMClient",
         "LLMRouter",
         "build_llm_client",

@@ -319,3 +319,44 @@ scientific run.
 
 Commit and push this containment fix, build an exact-source image, and run E1
 Dev29. E2 remains blocked until E1 completes analysis, audit, figure, and report.
+
+### Dev29
+
+Root:
+`/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_8bbd8be_e1_dev29`
+
+The exact pushed `8bbd8be` source and image started one strict-schema
+Progressive Planner skeleton call. The request carried a 61,951-byte payload
+and reserved 20,000 completion tokens, but the provider returned no response
+before the configured 900-second request deadline. The transport receipt
+closed as `failed` with `APITimeoutError`; no prompt/completion usage was
+reported, no structured retry was attempted, and the run did not enter
+Execute.
+
+This is a provider transport failure, not evidence that the Dev28 compiler
+containment repair passed or failed. No Planner, schema, or scientific contract
+change is justified by this run. The invalid paper-acceptance artifact is the
+expected fail-closed result for a development item that never produced a plan.
+
+## Next gate
+
+Run a bounded synthetic, non-clinical compatibility probe before changing
+provider. The probe must exercise the actual Planner structured-output
+transport (including JSON Schema authority and output ceiling), must not store
+prompts, responses, credentials, or Canonical9 data, and must fail closed if an
+OpenAI-compatible endpoint supports only generic JSON-object mode. If no
+alternative provider satisfies that contract, rerun E1 on the same exact HEAD
+after transport availability recovers. E2 remains blocked until E1 completes
+analysis, audit, figure, and report.
+
+### Provider-probe resolution
+
+The bounded probe and provider-portability implementation are recorded in
+`task_logs/20260816_research_agent_provider_portability.md`. Local Luna passed
+the OpenAI strict-schema request; official DeepSeek and the tested relay
+correctly recorded that request as unsupported/failed while passing an explicit
+JSON-object transport request plus the host's exact typed-value check. Therefore
+Dev30 will be a fresh, explicitly non-strict development transport policy on
+official DeepSeek, not a silent fallback of the Dev29 request and not a reuse of
+Dev29 state. All host typed validation and publication gates remain fail closed.
+E2 remains blocked.
