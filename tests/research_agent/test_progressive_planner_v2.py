@@ -401,6 +401,66 @@ def _skeleton() -> ProgressivePlanSkeleton:
     return ProgressivePlanSkeleton.model_validate(_payload())
 
 
+def _outline_payload(payload: dict | None = None) -> dict:
+    source = payload or _payload()
+    return {
+        "schema_version": "easyicu.progressive_plan_outline/1",
+        "analysis_type": source["analysis_type"],
+        "cohort_objective": "Use the sealed cohort and preserve its denominator.",
+        "steps": [
+            {
+                "step_id": step["step_id"],
+                "planned_analysis_role": step["planned_analysis_role"],
+                "module_id": step["module_id"],
+                "objective": step["objective"],
+                "depends_on": list(step["depends_on"]),
+                "variable_names": [
+                    "exposure_flag",
+                    "outcome_flag",
+                    "age_years",
+                    "sex_code",
+                ],
+                "literature_citation_keys": list(
+                    dict.fromkeys(
+                        binding["citation_key"]
+                        for binding in step["literature_bindings"]
+                    )
+                ),
+                "scientific_action_id": step["scientific_action_id"],
+            }
+            for step in source["steps"]
+        ],
+        "rationale": source["rationale"],
+    }
+
+
+def _materialization_payloads(payload: dict | None = None) -> list[dict]:
+    source = payload or _payload()
+    outline = ProgressivePlanOutline.model_validate(_outline_payload(source))
+    responses = []
+    for index, (outline_step, step) in enumerate(zip(outline.steps, source["steps"])):
+        responses.append(
+            {
+                "schema_version": "easyicu.progressive_step_materialization/1",
+                "outline_step_sha256": canonical_sha256(
+                    outline_step.model_dump(mode="json")
+                ),
+                "foundation": (
+                    {
+                        "cohort": source["cohort"],
+                        "display_labels": source["display_labels"],
+                        "robustness_intents": source["robustness_intents"],
+                        "know_how_decisions": source.get("know_how_decisions", []),
+                    }
+                    if index == 0
+                    else None
+                ),
+                "step": step,
+            }
+        )
+    return responses
+
+
 def _walk_objects(node):
     if not isinstance(node, dict):
         return
@@ -432,6 +492,7 @@ def test_progressive_skeleton_schema_is_small_closed_and_case_neutral() -> None:
 def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> None:
     request = progressive_outline_structured_output_request(
         analysis_types=["association_study"],
+        variable_names=["exposure_flag", "outcome_flag", "age_years"],
         scientific_action_ids=["association.adjusted_association"],
     )
     schema = json.loads(request.schema_json)
@@ -449,6 +510,8 @@ def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> 
         "module_id",
         "objective",
         "depends_on",
+        "variable_names",
+        "literature_citation_keys",
         "scientific_action_id",
     }
     for forbidden in (
@@ -472,6 +535,8 @@ def test_current_step_schema_locks_outline_coordinate_and_product_registry() -> 
         module_id="adjusted_association",
         objective="Estimate the prespecified adjusted association.",
         depends_on=["01_cohort"],
+        variable_names=["exposure_flag", "outcome_flag", "age_years"],
+        literature_citation_keys=["strobe_2007"],
         scientific_action_id="association.adjusted_association",
     )
     outline_sha256 = canonical_sha256(outline_step.model_dump(mode="json"))
@@ -534,6 +599,8 @@ def test_current_step_without_available_products_closes_product_inputs() -> None
                     "module_id": "cohort_definition",
                     "objective": "Bind the authorized cohort and its denominator.",
                     "depends_on": [],
+                    "variable_names": ["exposure_flag", "outcome_flag"],
+                    "literature_citation_keys": [],
                     "scientific_action_id": None,
                 }
             ],
@@ -1048,40 +1115,82 @@ def test_question_retrieval_keeps_association_when_notes_request_audits() -> Non
     assert candidates[0] == "association_study"
 
 
-def test_agent_repairs_only_rejected_suffix_with_strict_transport() -> None:
-    first = _payload()
-    first["steps"][4]["scientific_action_id"] = "descriptive.descriptive_summary"
-    corrected = _payload()
-    suffix = {
-        "schema_version": "easyicu.progressive_suffix_revision/1",
-        "replace_from_step_id": "05_primary",
-        "replacement_steps": corrected["steps"][4:],
-        "rationale": (
-            "Correct the family-specific action while preserving the compiled prefix."
-        ),
-    }
-    llm = ScriptedMockLLMClient([json.dumps(first), json.dumps(suffix)])
+def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
+    responses = [_outline_payload(), *_materialization_payloads()]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
     llm.supports_strict_json_schema = True
     agent = ProgressivePlannerAgent(llm)
 
     plan = agent.run(_context())
 
     assert len(plan.steps) == 7
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 8
     requests = [call[1]["structured_output"] for call in llm.calls]
-    assert [request.name for request in requests] == [
-        "easyicu_progressive_plan_skeleton_v1",
-        "easyicu_progressive_plan_suffix_v1",
-    ]
+    assert requests[0].name == "easyicu_progressive_plan_outline_v1"
+    assert {request.name for request in requests[1:]} == {
+        "easyicu_progressive_step_materialization_v1"
+    }
+    first_schema = requests[0].schema_json
+    assert "raw_inputs" not in first_schema
+    assert "product_inputs" not in first_schema
+    assert "model_terms" not in first_schema
     second_prompt = llm.calls[1][0][-1].content
-    assert "IMMUTABLE COMPILED PREFIX" in second_prompt
-    assert '"step_id": "04_measurement"' in second_prompt
-    assert "Outbound-safe ResearchContext" not in second_prompt
-    assert agent.last_prompt_metrics["compile_revision_count"] == 1
-    assert agent.last_prompt_metrics["suffix_revision_count"] == 1
-    assert (
-        agent.last_prompt_metrics["suffix_request_payload_bytes"][0]
-        < (agent.last_prompt_metrics["total_bytes"])
-    )
+    assert "Current outline step and host digest" in second_prompt
+    assert "Do not return or rewrite any prefix or future step" in second_prompt
+    assert agent.last_prompt_metrics["compile_revision_count"] == 0
+    assert agent.last_prompt_metrics["step_materialization_count"] == 7
+    assert agent.last_prompt_metrics["full_revision_count"] == 0
     assert agent.last_compile_receipt is not None
+    assert agent.last_outline is not None
+    assert len(agent.last_materializations) == 7
     assert agent.last_skeleton is not None
+
+
+def test_agent_repairs_only_the_current_materialization() -> None:
+    materializations = _materialization_payloads()
+    invalid_primary = json.loads(json.dumps(materializations[4]))
+    invalid_primary["step"]["model_terms"][1]["name"] = "invented_covariate"
+    responses = [
+        _outline_payload(),
+        *materializations[:4],
+        invalid_primary,
+        materializations[4],
+        *materializations[5:],
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+
+    plan = agent.run(_context())
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 9
+    repair_prompt = llm.calls[6][0][-1].content
+    assert "HOST COMPILER OBSERVATION FOR THIS CURRENT STEP" in repair_prompt
+    assert "progressive_unknown_variable" in repair_prompt
+    assert '"step_id":"05_primary"' in repair_prompt
+    assert "CURRENT UNLOCKED SUFFIX" not in repair_prompt
+    assert "corrected complete skeleton" not in repair_prompt
+    assert llm.calls[5][1]["structured_output"].authority_sha256 == (
+        llm.calls[6][1]["structured_output"].authority_sha256
+    )
+    assert agent.last_prompt_metrics["compile_revision_count"] == 1
+    assert agent.last_prompt_metrics["step_materialization_count"] == 7
+    assert agent.last_prompt_metrics["full_revision_count"] == 0
+
+
+def test_agent_rejects_materialization_coordinate_drift_without_full_rewrite() -> None:
+    materializations = _materialization_payloads()
+    materializations[2]["step"]["objective"] = "Rewrite the outline-owned objective."
+    responses = [_outline_payload(), *materializations]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    agent = ProgressivePlannerAgent(llm)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        agent.run(_context())
+
+    assert caught.value.reason_code == "progressive_step_materialization_mismatch"
+    assert caught.value.step_id == "03_distribution"
+    assert caught.value.path == "objective"
+    assert len(llm.calls) == 4
+    assert agent.last_prompt_metrics["full_revision_count"] == 0

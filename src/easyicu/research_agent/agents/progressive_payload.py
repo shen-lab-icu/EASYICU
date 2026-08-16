@@ -162,7 +162,9 @@ def _bind_outline_authorities(
     definitions: dict[str, Any],
     *,
     analysis_types: tuple[str, ...],
+    variable_names: tuple[str, ...],
     scientific_action_ids: tuple[str, ...],
+    allowed_citation_keys: tuple[str, ...],
 ) -> None:
     properties = schema.get("properties")
     step = definitions.get("ProgressiveOutlineStep")
@@ -176,6 +178,12 @@ def _bind_outline_authorities(
             "progressive outline step properties are unavailable"
         )
     properties["analysis_type"] = _string_enum(analysis_types)
+    step_properties["variable_names"]["items"] = _string_enum(variable_names)
+    citations = step_properties["literature_citation_keys"]
+    if allowed_citation_keys:
+        citations["items"] = _string_enum(allowed_citation_keys)
+    else:
+        citations["maxItems"] = 0
     step_properties["scientific_action_id"] = (
         _nullable(_string_enum(scientific_action_ids))
         if scientific_action_ids
@@ -503,7 +511,9 @@ def _closed_request(*, name: str, schema: dict[str, Any]) -> StructuredOutputReq
 def progressive_outline_structured_output_request(
     *,
     analysis_types: Sequence[str],
+    variable_names: Sequence[str],
     scientific_action_ids: Sequence[str],
+    allowed_literature_citation_keys: Sequence[str] = (),
 ) -> StructuredOutputRequest:
     """Return the tiny run-bound schema used for the first Planner response."""
 
@@ -519,9 +529,21 @@ def progressive_outline_structured_output_request(
             if str(value).strip()
         )
     )
-    if not normalized_types:
+    normalized_variables = tuple(
+        dict.fromkeys(
+            str(value).strip() for value in variable_names if str(value).strip()
+        )
+    )
+    normalized_citations = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in allowed_literature_citation_keys
+            if str(value).strip()
+        )
+    )
+    if not normalized_types or not normalized_variables:
         raise ProgressiveTransportSchemaError(
-            "progressive outline transport requires an analysis-type roster"
+            "progressive outline transport requires analysis-type and variable rosters"
         )
     schema = copy.deepcopy(ProgressivePlanOutline.model_json_schema(mode="validation"))
     definitions = schema.get("$defs")
@@ -531,7 +553,9 @@ def progressive_outline_structured_output_request(
         schema,
         definitions,
         analysis_types=normalized_types,
+        variable_names=normalized_variables,
         scientific_action_ids=normalized_actions,
+        allowed_citation_keys=normalized_citations,
     )
     return _closed_request(
         name="easyicu_progressive_plan_outline_v1",
@@ -549,6 +573,7 @@ def progressive_step_materialization_request(
     allowed_literature_citation_keys: Sequence[str] = (),
     allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
     include_foundation: bool,
+    foundation_variable_names: Sequence[str] = (),
     available_product_refs: Sequence[tuple[str, str]] = (),
 ) -> StructuredOutputRequest:
     """Return one coordinate-bound schema for the current step only."""
@@ -566,6 +591,13 @@ def progressive_step_materialization_request(
         dict.fromkeys(
             str(value).strip()
             for value in scientific_action_ids
+            if str(value).strip()
+        )
+    )
+    normalized_foundation_variables = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (foundation_variable_names or normalized_variables)
             if str(value).strip()
         )
     )
@@ -626,7 +658,7 @@ def progressive_step_materialization_request(
     if include_foundation:
         _bind_foundation_authorities(
             definitions,
-            variable_names=normalized_variables,
+            variable_names=normalized_foundation_variables,
             cohort_concept_ids=normalized_concepts,
             know_how_authority=_authority_rows(allowed_know_how_decisions),
         )
