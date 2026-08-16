@@ -963,7 +963,7 @@ def test_locked_measurement_preflight_runs_before_every_coder_repair():
         StepCandidateRecovery,
     )
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase) + "\n".join(
+    source = inspect.getsource(pipeline_execute._execute_step) + "\n".join(
         inspect.getsource(stage)
         for stage in (
             pipeline_execute._candidate_concept_audit_transition,
@@ -984,19 +984,15 @@ def test_locked_measurement_preflight_runs_before_every_coder_repair():
 def test_sealed_figure_preflight_supersedes_stale_resume_capsule_candidate():
     """A selected failed figure capsule cannot inherit a new renderer id."""
 
-    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import phase_support as pipeline_execute_support
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
-    selection_start = source.index("standard_executor = select_standard_executor(")
-    standard_branch = source.index(
-        "if preflight_standard_code is not None:", selection_start
+    source = inspect.getsource(
+        pipeline_execute_support._step_resolve_initial_code
     )
-    figure_branch = source.index(
-        "elif preflight_figure_code is not None:", selection_start
-    )
+    standard_branch = source.index("if preflight_standard_code is not None:")
+    figure_branch = source.index("elif preflight_figure_code is not None:")
     resumed_branch = source.index(
-        "elif step_attempt_state.selected_resume_capsule is not None:",
-        selection_start,
+        "elif step_attempt_state.selected_resume_capsule is not None:"
     )
 
     assert standard_branch < figure_branch < resumed_branch
@@ -1008,16 +1004,16 @@ def test_sealed_figure_preflight_supersedes_stale_resume_capsule_candidate():
 
 
 def test_authorized_resume_repair_supersedes_failed_candidate_capsule():
-    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import phase_support as pipeline_execute_support
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
-    selection_start = source.index("standard_executor = select_standard_executor(")
+    source = inspect.getsource(
+        pipeline_execute_support._step_resolve_initial_code
+    )
     repair_branch = source.index(
-        "elif resume_deterministic_repair_code is not None:", selection_start
+        "elif resume_deterministic_repair_code is not None:"
     )
     capsule_branch = source.index(
-        "elif step_attempt_state.selected_resume_capsule is not None:",
-        selection_start,
+        "elif step_attempt_state.selected_resume_capsule is not None:"
     )
 
     assert repair_branch < capsule_branch
@@ -1027,7 +1023,7 @@ def test_stability_standard_executor_supersedes_stale_resume_capsule():
     from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.execution.runners import selection
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    source = inspect.getsource(pipeline_execute._execute_step)
     assignment = source[source.index("standard_executor = select_standard_executor(") :]
     assignment = assignment[: assignment.index("preflight_figure_code =")]
     selector_source = inspect.getsource(selection.select_standard_executor)
@@ -1124,9 +1120,9 @@ def test_publication_figure_gate_accepts_structural_figure_contracts(
 
 
 def test_execute_phase_mandatory_publication_gate_uses_structural_predicate():
-    from easyicu.research_agent.execution.phase import run_execute_phase
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
-    source = inspect.getsource(run_execute_phase)
+    source = inspect.getsource(pipeline_execute._execute_step)
     gate_start = source.index("publication_step =")
     gate_end = source.index("figure_role =", gate_start)
     gate_source = source[gate_start:gate_end]
@@ -1221,18 +1217,27 @@ def test_run_execute_phase_does_not_mutate_pipeline_state():
 def test_execute_phase_preserves_repair_provenance_across_concept_and_runtime():
     """Every LLM mutation must outrank pure resume/runner provenance labels."""
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import phase_support as pipeline_execute_support
     from easyicu.research_agent.execution.concept_repair import (
         run_concept_repair_loop,
     )
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase) + "\n".join(
-        inspect.getsource(stage)
-        for stage in (
-            pipeline_execute._candidate_concept_audit_transition,
-            pipeline_execute._candidate_execute_transition,
-            pipeline_execute._candidate_visual_transition,
-            pipeline_execute._candidate_contract_repair_transition,
-            pipeline_execute._candidate_failure_transition,
+    source = (
+        inspect.getsource(pipeline_execute._execute_step)
+        + inspect.getsource(pipeline_execute._step_finalize_step)
+        + "\n".join(
+            inspect.getsource(stage)
+            for stage in (
+                pipeline_execute._candidate_concept_audit_transition,
+                pipeline_execute._candidate_execute_transition,
+                pipeline_execute._candidate_visual_transition,
+                pipeline_execute._candidate_contract_repair_transition,
+                pipeline_execute._candidate_failure_transition,
+            )
+        )
+        + "\n"
+        + inspect.getsource(
+            pipeline_execute_support._step_register_run_artifacts
         )
     )
     concept_source = inspect.getsource(run_concept_repair_loop)
@@ -1313,25 +1318,40 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
     # keep the caller-side ordering: figure repair -> output-artifact registration
     # (aliases deferred) -> status resolution -> the commit boundary.
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import phase_support as pipeline_execute_support
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
-    seal = source.index("sealed_result_digests =")
-    artifact_registration = source.index("for art in run_result.artefacts:", seal)
-    numeric_registration = source.index(
-        "evidence.register_step_summary_numerics(", artifact_registration
+    source = inspect.getsource(pipeline_execute._execute_step)
+    finalize_source = inspect.getsource(pipeline_execute._step_finalize_step)
+    helper_source = inspect.getsource(
+        pipeline_execute_support._step_register_run_artifacts
     )
-    status_resolution = source.index(
+    seal = source.index("sealed_result_digests =")
+    artifact_registration = source.index("= _step_register_run_artifacts(", seal)
+    numeric_handoff = finalize_source.index(
+        "_register_current_step_numeric_claims = functools.partial("
+    )
+    status_resolution = finalize_source.index(
         'step_record["status"] = _step_status_from_contract_findings('
     )
-    commit = source.rindex("step_evidence_commit.commit_validated_step(")
+    commit = finalize_source.rindex("step_evidence_commit.commit_validated_step(")
+    register_numeric_claims_arg = finalize_source.index(
+        "register_numeric_claims=_register_current_step_numeric_claims,",
+        commit,
+    )
     final_repair = source.rindex("_repair_publication_figure_in_staging(")
 
-    assert final_repair < seal < artifact_registration < numeric_registration
-    assert numeric_registration < status_resolution < commit
-    assert "publish_aliases=False" in source[artifact_registration:status_resolution]
+    assert final_repair < seal < artifact_registration
+    assert numeric_handoff < status_resolution < commit < register_numeric_claims_arg
+    assert "for art in run_result.artefacts:" in helper_source
+    assert "publish_aliases=False" in helper_source
     assert (
         "_repair_publication_figure_in_staging(" not in source[artifact_registration:]
     )
+    helper_source = inspect.getsource(
+        pipeline_execute_support._step_register_current_step_numeric_claims
+    )
+    assert "evidence.register_step_summary_numerics(" in helper_source
+    assert "evidence.register_step_derived_claims(" in helper_source
 
 
 def test_execute_phase_deterministically_requires_typed_exposure_consumption():
@@ -1344,7 +1364,7 @@ def test_execute_phase_deterministically_requires_typed_exposure_consumption():
         pipeline_execute._deterministic_code_gate_findings
     )
     execute_source = inspect.getsource(
-        pipeline_execute.run_execute_phase
+        pipeline_execute._execute_step
     ) + inspect.getsource(pipeline_execute._candidate_concept_audit_transition)
     concept_execution_source = inspect.getsource(
         concept_audit_execution.ConceptAuditCoordinator.findings_for_code
@@ -1425,7 +1445,7 @@ def test_fresh_execution_uses_the_authoritative_final_gate_evaluator_once():
 
     from easyicu.research_agent.execution import phase as pipeline_execute
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    source = inspect.getsource(pipeline_execute._step_finalize_step)
     tree = ast.parse(source)
     evaluator_calls = [
         node
@@ -1971,7 +1991,13 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
 
     candidate_source = inspect.getsource(pipeline_execute._candidate_execute_transition)
     source = (
-        inspect.getsource(pipeline_execute.run_execute_phase) + "\n" + candidate_source
+        inspect.getsource(pipeline_execute.run_execute_phase)
+        + "\n"
+        + inspect.getsource(pipeline_execute._step_resolve_run_transition)
+        + "\n"
+        + inspect.getsource(pipeline_execute._execute_step)
+        + "\n"
+        + candidate_source
     )
     bootstrap_source = inspect.getsource(
         step_attempt_bootstrap.prepare_step_attempt_bootstrap
@@ -2049,11 +2075,16 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
 
 def test_every_runner_build_receives_the_selected_trajectory_authority():
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import phase_support as pipeline_execute_support
 
     tree = ast.parse(
         inspect.getsource(pipeline_execute.run_execute_phase)
         + "\n"
         + inspect.getsource(pipeline_execute._candidate_execute_transition)
+        + "\n"
+        + inspect.getsource(
+            pipeline_execute_support._step_try_materialize_cohort_from_prose
+        )
     )
     runner_builds = [
         node

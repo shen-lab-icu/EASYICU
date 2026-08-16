@@ -297,7 +297,11 @@ def test_run_coordinator_is_science_neutral_and_pipeline_owns_transitions() -> N
     ):
         assert forbidden not in module_source
 
-    phase_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    phase_source = (
+        inspect.getsource(pipeline_execute.run_execute_phase)
+        + inspect.getsource(pipeline_execute._step_resolve_run_transition)
+        + inspect.getsource(pipeline_execute._step_audit_final_figures)
+    )
     assert "while remaining_steps:" not in phase_source
     assert phase_source.count("run_coordinator.run_sequential(") == 1
     assert phase_source.count("run_coordinator.run_parallel(") == 1
