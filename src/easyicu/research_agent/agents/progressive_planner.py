@@ -732,6 +732,7 @@ class ProgressivePlannerAgent:
             "compile_revision_count": 0,
             "suffix_revision_count": 0,
             "full_revision_count": 0,
+            "suffix_request_payload_bytes": [],
         }
         skeleton = call_llm_with_structured_retry(
             self.llm,
@@ -822,7 +823,10 @@ class ProgressivePlannerAgent:
                         suffix=True,
                     )
                 suffix_prompt = (
-                    user_prompt
+                    "RESEARCH QUESTION:\n"
+                    + context.research_question
+                    + "\n\nAUTHORIZED ANALYSIS FAMILY:\n"
+                    + current.analysis_type
                     + "\n\nIMMUTABLE COMPILED PREFIX (do not return or change):\n"
                     + json.dumps(
                         [
@@ -854,12 +858,19 @@ class ProgressivePlannerAgent:
                     + repr(exc.step_id)
                     + ". Preserve every satisfied requirement in the suffix."
                 )
+                suffix_messages = [
+                    LLMMessage(role="system", content=_GUIDE),
+                    LLMMessage(role="user", content=suffix_prompt),
+                ]
+                suffix_payload_bytes = sum(
+                    len(item.content.encode("utf-8")) for item in suffix_messages
+                ) + (suffix_schema.payload_bytes if suffix_schema is not None else 0)
+                self.last_prompt_metrics["suffix_request_payload_bytes"].append(
+                    suffix_payload_bytes
+                )
                 revision_obj = call_llm_with_structured_retry(
                     self.llm,
-                    [
-                        LLMMessage(role="system", content=_GUIDE),
-                        LLMMessage(role="user", content=suffix_prompt),
-                    ],
+                    suffix_messages,
                     parser=lambda raw: _parse_suffix_revision(
                         raw,
                         expected_step_id=rejected_step_id,

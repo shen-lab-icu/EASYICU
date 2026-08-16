@@ -752,7 +752,7 @@ def _build_planner_user_prompt(
         # already does.
         "    {\n"
         '      "step_id": "03_exposure_outcome_distribution",\n'
-        '      "planned_analysis_role": "auxiliary",\n'
+        '      "planned_analysis_role": "secondary",\n'
         '      "intent": "<one sentence>",\n'
         # Exactly one typed input (the cohort artifact, which carries the
         # digest and product contract), plus the exposure and outcome column

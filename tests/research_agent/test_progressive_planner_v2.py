@@ -13,6 +13,9 @@ from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
     candidate_analysis_types,
 )
+from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
+    exposure_outcome_distribution_executor_owns_step,
+)
 from easyicu.research_agent.planning.progressive_compiler import (
     assert_immutable_prefix,
     compile_progressive_plan,
@@ -450,8 +453,11 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
         "B",
     ]
 
-    distribution = by_id["03_distribution"].exposure_outcome_distribution_spec
+    distribution_step = by_id["03_distribution"]
+    distribution = distribution_step.exposure_outcome_distribution_spec
     assert distribution is not None
+    assert distribution_step.method == "descriptive"
+    assert exposure_outcome_distribution_executor_owns_step(distribution_step)
     assert distribution.exposure_levels == [0, 1]
     assert distribution.outcome_positive_value == 1
     assert distribution.risk_difference_contrast.reference_exposure_level == 0
@@ -527,6 +533,27 @@ def test_cross_family_action_is_rejected_before_analysis_plan_acceptance() -> No
     assert caught.value.path == "scientific_action_id"
 
 
+def test_preflight_batches_independent_suffix_findings() -> None:
+    payload = _payload()
+    duplicate = json.loads(json.dumps(payload["steps"][3]))
+    duplicate["step_id"] = "04b_measurement_detail"
+    duplicate["depends_on"] = ["04_measurement"]
+    payload["steps"].insert(4, duplicate)
+    payload["steps"][5]["scientific_action_id"] = "descriptive.descriptive_summary"
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=skeleton, context=_context())
+
+    assert caught.value.reason_code == "progressive_compile_batch_invalid"
+    assert caught.value.step_id == "04b_measurement_detail"
+    findings = caught.value.details["findings"]
+    assert {item["reason_code"] for item in findings} == {
+        "progressive_product_has_multiple_owners",
+        "progressive_scientific_action_invalid",
+    }
+
+
 def test_run_bound_schema_closes_runtime_rosters_under_twelve_kib() -> None:
     request = progressive_structured_output_request(
         analysis_types=["association_study"],
@@ -599,7 +626,12 @@ def test_agent_repairs_only_rejected_suffix_with_strict_transport() -> None:
     second_prompt = llm.calls[1][0][-1].content
     assert "IMMUTABLE COMPILED PREFIX" in second_prompt
     assert '"step_id": "04_measurement"' in second_prompt
+    assert "Outbound-safe ResearchContext" not in second_prompt
     assert agent.last_prompt_metrics["compile_revision_count"] == 1
     assert agent.last_prompt_metrics["suffix_revision_count"] == 1
+    assert (
+        agent.last_prompt_metrics["suffix_request_payload_bytes"][0]
+        < (agent.last_prompt_metrics["total_bytes"])
+    )
     assert agent.last_compile_receipt is not None
     assert agent.last_skeleton is not None

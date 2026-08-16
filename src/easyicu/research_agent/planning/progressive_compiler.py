@@ -114,7 +114,7 @@ _MODULE_OUTPUT_ROLES: Mapping[str, frozenset[str]] = {
 _METHOD_BY_MODULE: Mapping[str, str] = {
     "cohort_definition": "cohort_definition_and_attrition",
     "table_one": "table_one",
-    "exposure_outcome_distribution": "exposure_outcome_distribution",
+    "exposure_outcome_distribution": "descriptive",
     "measurement_audit": "missing_data",
     "adjusted_association": "adjusted_association_models",
     "robustness_replay": "robustness_sensitivity",
@@ -931,6 +931,141 @@ def _compile_one_step(
     )
 
 
+def _preflight_step_findings(
+    *,
+    skeleton: ProgressivePlanSkeleton,
+    context: ResearchContext,
+    canonical_type: str,
+    variables: Mapping[str, Any],
+    allowed_citations: frozenset[str],
+) -> None:
+    """Report independent step defects together before suffix materialization.
+
+    The compiler used to stop at the first invalid step.  A model could then
+    repair that coordinate only to expose an unrelated later defect, consuming
+    one Provider call per finding.  This preflight uses the same owner helpers
+    as materialization, preserves their stable reason codes, and returns one
+    earliest suffix coordinate plus the complete set of currently observable
+    findings.  Final compilation still reruns every check and remains the
+    authority.
+    """
+
+    findings: list[ProgressivePlanCompileError] = []
+    producers: dict[str, str] = {}
+    outputs_by_step: dict[str, tuple[str, ...]] = {}
+    for index, step in enumerate(skeleton.steps):
+        if step.scientific_action_id is not None:
+            try:
+                scientific_action_for_id(
+                    analysis_type=canonical_type,
+                    action_id=step.scientific_action_id,
+                )
+            except ScientificActionGapError as exc:
+                findings.append(
+                    _fail(
+                        "progressive_scientific_action_invalid",
+                        str(exc),
+                        step=step,
+                        step_index=index,
+                        path="scientific_action_id",
+                    )
+                )
+
+        try:
+            output_pairs = _canonical_outputs(step)
+            _validate_outputs(output_pairs, step=step, step_index=index)
+        except ValueError as exc:
+            findings.append(
+                _fail(
+                    "progressive_conflicting_output_role",
+                    str(exc),
+                    step=step,
+                    step_index=index,
+                    path="outputs",
+                )
+            )
+            output_pairs = []
+        except ProgressivePlanCompileError as exc:
+            findings.append(exc)
+            output_pairs = []
+
+        output_ids = tuple(product for product, _role in output_pairs)
+        for product in output_ids:
+            prior = producers.get(product)
+            if prior is not None:
+                findings.append(
+                    _fail(
+                        "progressive_product_has_multiple_owners",
+                        f"product {product!r} is already produced by {prior!r}",
+                        step=step,
+                        step_index=index,
+                        path="outputs",
+                    )
+                )
+
+        if output_pairs:
+            try:
+                _compile_one_step(
+                    context=context,
+                    skeleton=skeleton,
+                    step=step,
+                    step_index=index,
+                    variables=variables,
+                    allowed_citations=allowed_citations,
+                    producers=producers,
+                    outputs_by_step=outputs_by_step,
+                )
+            except ProgressivePlanCompileError as exc:
+                findings.append(exc)
+
+        for product in output_ids:
+            producers.setdefault(product, step.step_id)
+        outputs_by_step[step.step_id] = output_ids
+
+    unique: list[ProgressivePlanCompileError] = []
+    seen: set[tuple[object, ...]] = set()
+    for finding in findings:
+        key = (
+            finding.reason_code,
+            finding.step_id,
+            finding.step_index,
+            finding.path,
+            finding.details["message"],
+        )
+        if key not in seen:
+            seen.add(key)
+            unique.append(finding)
+    if not unique:
+        return
+    if len(unique) == 1:
+        single = unique[0]
+        single.details["findings"] = [dict(single.details)]
+        raise single
+
+    ordered = sorted(
+        unique,
+        key=lambda item: (
+            item.step_index is None,
+            item.step_index if item.step_index is not None else len(skeleton.steps),
+            item.reason_code,
+        ),
+    )
+    first = ordered[0]
+    summary = "; ".join(
+        f"{item.step_id or '<plan>'}:{item.reason_code}:{item.path or '<root>'}"
+        for item in ordered
+    )
+    raise ProgressivePlanCompileError(
+        "progressive_compile_batch_invalid",
+        f"{len(ordered)} independent compiler findings must be fixed together: "
+        f"{summary}",
+        step_id=first.step_id,
+        step_index=first.step_index,
+        path=first.path,
+        findings=[item.details for item in ordered],
+    )
+
+
 def assert_immutable_prefix(
     *,
     prior_receipt: ProgressivePlanCompileReceipt,
@@ -990,6 +1125,13 @@ def compile_progressive_plan(
     variables = _variable_index(context)
     allowed_citations = frozenset(
         str(value).strip() for value in allowed_literature_citation_keys
+    )
+    _preflight_step_findings(
+        skeleton=skeleton,
+        context=context,
+        canonical_type=canonical_type,
+        variables=variables,
+        allowed_citations=allowed_citations,
     )
     producers: dict[str, str] = {}
     outputs_by_step: dict[str, tuple[str, ...]] = {}
