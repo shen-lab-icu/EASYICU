@@ -10,6 +10,7 @@ from fastapi.responses import Response
 from easyicu.webserver import capabilities
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver.catalog import build_catalog
+from easyicu.webserver.routes.request_parsing import body_int
 
 router = APIRouter()
 
@@ -74,7 +75,8 @@ def post_capability_tool_check(body: Dict[str, Any]) -> dict:
 def post_capability_zotero_search(body: Dict[str, Any]) -> dict:
     """Search Zotero through the local Zotero Desktop API when enabled."""
     return capabilities.search_zotero(
-        str(body.get("query") or ""), limit=int(body.get("limit") or 5)
+        str(body.get("query") or ""),
+        limit=body_int(body, "limit", 5, min_value=1, max_value=50),
     )
 
 
@@ -103,7 +105,9 @@ def post_capability_zotero_import(body: Dict[str, Any]) -> dict:
 @router.post("/api/capabilities/audit-events")
 def post_capability_audit_events(body: Dict[str, Any] | None = None) -> dict:
     """Read the local capability/tool audit log."""
-    return capabilities.audit_events(limit=int((body or {}).get("limit") or 20))
+    return capabilities.audit_events(
+        limit=body_int(body or {}, "limit", 20, min_value=1, max_value=100)
+    )
 
 
 __all__ = ["router"]

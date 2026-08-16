@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from easyicu.webserver import capabilities
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver.ideas import mining as idea_mining_web
-from easyicu.webserver.routes.request_parsing import body_bool
+from easyicu.webserver.routes.request_parsing import body_bool, body_int
 
 router = APIRouter()
 
@@ -59,6 +59,7 @@ def post_ideas_discover(body: Dict[str, Any]) -> dict:
     """Run or prepare opt-in PubMed/frontier literature discovery."""
     try:
         patched, connector_reason = _pubmed_connector_gate(body)
+        patched["limit"] = body_int(body, "limit", 8, min_value=1, max_value=20)
         payload = idea_mining_web.discover_literature(patched)
         if connector_reason:
             payload["connector_disabled_reason"] = connector_reason
@@ -155,13 +156,17 @@ def post_ideas_create_agent_project(body: Dict[str, Any]) -> dict:
 @router.post("/api/ideas/agent-projects")
 def post_ideas_agent_projects(body: Dict[str, Any] | None = None) -> dict:
     """List Agent project seeds created by Idea Mining."""
-    return idea_mining_web.list_agent_projects(body or {})
+    patched = dict(body or {})
+    patched["limit"] = body_int(body or {}, "limit", 20, min_value=1, max_value=100)
+    return idea_mining_web.list_agent_projects(patched)
 
 
 @router.post("/api/ideas/history")
 def post_ideas_history(body: Dict[str, Any] | None = None) -> dict:
     """List local metadata-only idea mining runs."""
-    return idea_mining_web.list_runs(body or {})
+    patched = dict(body or {})
+    patched["limit"] = body_int(body or {}, "limit", 20, min_value=1, max_value=100)
+    return idea_mining_web.list_runs(patched)
 
 
 @router.post("/api/ideas/run")

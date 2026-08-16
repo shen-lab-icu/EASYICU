@@ -624,9 +624,21 @@ def record_tool_event(event_type: str, detail: Dict[str, Any] | None = None) -> 
         "event_type": str(event_type or "tool_event"),
         "detail": detail or {},
     }
-    _STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with _AUDIT_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    try:
+        _STATE_DIR.mkdir(parents=True, exist_ok=True)
+        with _AUDIT_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        # A read-only home directory must not take down the business endpoint
+        # that triggered the audit write. Fail closed by reporting the audit
+        # gap so callers can surface it, but keep the audit path free of PHI.
+        return {
+            "recorded": False,
+            "reason": "tool_audit_write_failed",
+            "path": str(_AUDIT_PATH),
+            "error": type(exc).__name__,
+            "event": event,
+        }
     return {"recorded": True, "path": str(_AUDIT_PATH), "event": event}
 
 
