@@ -34,6 +34,7 @@ from ..concept_availability import (
     default_public_databases,
     hypothesis_cross_database_feasibility,
     normalize_concept_name,
+    normalize_database_name,
 )
 
 # Signature of the injectable availability engine: (concepts, databases) -> the
@@ -76,7 +77,15 @@ def _harmonized_databases(
     """Databases where BOTH concepts resolve to full availability."""
     payload = feasibility_fn(concepts=[predictor, outcome], databases=list(databases))
     per_db = payload.get("cross_database_feasibility", {})
-    return [db for db in databases if str(per_db.get(db)) == "full"]
+    harmonized = []
+    for db in databases:
+        canonical = normalize_database_name(str(db))
+        status = per_db.get(canonical)
+        if status is None:
+            status = per_db.get(str(db))
+        if str(status) == "full":
+            harmonized.append(db)
+    return harmonized
 
 
 def _differentiator_note(
@@ -91,10 +100,10 @@ def _differentiator_note(
     )
     if is_under_published and literature_hit_count is not None:
         note += (
-            f"; under-published (<= {literature_hit_count} prior-art hits) — a "
-            "cross-database transportability target the harmonized layer can "
-            "execute end to end. Human prior-art review required; not a novelty "
-            "claim."
+            f"; under-published (<= {_DEFAULT_GAP_MAX_HITS} prior-art hits; "
+            f"observed {literature_hit_count}) — a cross-database transportability "
+            "target the harmonized layer can execute end to end. Human prior-art "
+            "review required; not a novelty claim."
         )
     elif not is_under_published and literature_hit_count is not None:
         note += f"; literature-screened ({literature_hit_count} prior-art hits)"

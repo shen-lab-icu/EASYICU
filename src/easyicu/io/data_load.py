@@ -164,8 +164,16 @@ def load_src(
             post_filter = rows
         elif isinstance(rows, FilterSpec):
             filter_specs.append(rows)
-        elif isinstance(rows, Iterable) and all(isinstance(item, FilterSpec) for item in rows):
-            filter_specs.extend(rows)  # type: ignore[arg-type]
+        elif isinstance(rows, Iterable):
+            # Materialize first: `all(...)` would otherwise consume a
+            # generator/iterator before extend() reads it.
+            row_list = list(rows)
+            if not all(isinstance(item, FilterSpec) for item in row_list):
+                raise TypeError(
+                    "rows must be a callable, FilterSpec, iterable of "
+                    "FilterSpec, or mapping of filters"
+                )
+            filter_specs.extend(row_list)
         elif isinstance(rows, Mapping):
             for column, value in rows.items():
                 if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):

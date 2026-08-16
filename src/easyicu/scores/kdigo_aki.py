@@ -183,6 +183,7 @@ def kdigo_creatinine(
     id_col: Optional[str] = None,
     time_col: Optional[str] = None,
     value_col: str = 'crea',
+    time_unit: Optional[str] = None,
 ) -> pd.DataFrame:
     """Calculate creatinine-based AKI staging using KDIGO criteria.
     
@@ -272,7 +273,7 @@ def kdigo_creatinine(
     # Vectorized: use searchsorted for O(N log N) window boundaries per patient
     
     # Detect time unit and convert to hours for uniform processing
-    time_unit = _detect_time_unit(df[time_col], time_col)
+    time_unit = time_unit or _detect_time_unit(df[time_col], time_col)
     logger.debug(f"Creatinine baseline calculation using time unit: {time_unit}")
     
     if time_unit == 'datetime':
@@ -384,6 +385,7 @@ def kdigo_uo(
     weight_col: str = 'weight',
     source_is_rate: bool = False,
     interval: Optional[pd.Timedelta] = None,
+    time_unit: Optional[str] = None,
 ) -> pd.DataFrame:
     """Calculate urine output-based AKI staging using KDIGO criteria.
     
@@ -435,6 +437,7 @@ def kdigo_uo(
         urine_col, weight_col,
         source_is_rate=source_is_rate,
         interval=interval,
+        time_unit=time_unit,
     )
     
     if result.empty:
@@ -522,6 +525,7 @@ def _calculate_uo_rates_simple(
     weight_col: str = 'weight',
     source_is_rate: bool = False,
     interval: Optional[pd.Timedelta] = None,
+    time_unit: Optional[str] = None,
 ) -> pd.DataFrame:
     """Calculate urine output rates using simplified time-windowed averages.
     
@@ -689,7 +693,7 @@ def _calculate_uo_rates_simple(
     urine = urine.sort_values([id_col, time_col]).reset_index(drop=True)
     
     # Determine time unit (datetime, hours, minutes, or seconds)
-    time_unit = _detect_time_unit(urine[time_col], time_col)
+    time_unit = time_unit or _detect_time_unit(urine[time_col], time_col)
     logger.debug(f"Detected time unit for UO calculation: {time_unit}")
 
     # Vectorized UO rate calculation using cumsum + searchsorted (O(N log N))
@@ -945,6 +949,7 @@ def kdigo_stages(
     urine_col: str = 'urine',
     weight_col: str = 'weight',
     urine_source_is_rate: bool = False,
+    time_unit: Optional[str] = None,
     interval: Optional[pd.Timedelta] = None,
     observation_window_coverage: Optional[Mapping[Any, str]] = None,
 ) -> pd.DataFrame:
@@ -1050,7 +1055,9 @@ def kdigo_stages(
                 message=f"Non-empty creatinine source is missing {missing!r}",
             )
         try:
-            crea_staging = kdigo_creatinine(crea_df, id_col, time_col, crea_col)
+            crea_staging = kdigo_creatinine(
+                crea_df, id_col, time_col, crea_col, time_unit=time_unit
+            )
         except KDIGOComponentError:
             raise
         except Exception as exc:
@@ -1086,6 +1093,7 @@ def kdigo_stages(
                 weight_col,
                 source_is_rate=urine_source_is_rate,
                 interval=interval,
+                time_unit=time_unit,
             )
 
             if not uo_staging.empty:

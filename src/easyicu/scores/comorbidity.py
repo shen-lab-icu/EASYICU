@@ -1247,11 +1247,11 @@ def _lower_cols(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _explode_eicu_codes(series: pd.Series) -> pd.DataFrame:
-    """eICU diagnosis.icd9code is a comma-joined mix, e.g. '414.00, I25.10'.
+    """eICU diagnosis.icd9code is an ICD-9 field.
 
-    Split, infer ICD version per token (leading letter -> ICD-10, else
-    ICD-9), and return a long frame of (idx, code, version) preserving the
-    original row index for a join back to patientunitstayid.
+    Letter-leading tokens are ICD-9 V-codes (e.g. V45.1 dialysis), not
+    ICD-10, so every token is version 9. A stray non-ICD-9 token simply
+    matches no prefix -- it must not be silently reclassified as ICD-10.
     """
     exploded = series.fillna("").str.split(",")
     rows = []
@@ -1260,8 +1260,7 @@ def _explode_eicu_codes(series: pd.Series) -> pd.DataFrame:
             tok = tok.strip()
             if not tok:
                 continue
-            version = 10 if tok[:1].isalpha() else 9
-            rows.append((idx, tok, version))
+            rows.append((idx, tok, 9))
     return pd.DataFrame(rows, columns=["_row", "code", "version"])
 
 

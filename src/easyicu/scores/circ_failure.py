@@ -198,13 +198,17 @@ def calculate_circ_failure_status(
     
     if df.empty:
         return df
-    
+
+    # Core criteria are required. Treating a missing lactate or MAP column as
+    # "not elevated / not low" silently under-detects circulatory failure.
+    if lactate_col is None or lactate_col not in df.columns:
+        raise ValueError("circulatory failure requires a lactate column")
+    if map_col is None or map_col not in df.columns:
+        raise ValueError("circulatory failure requires a MAP column")
+
     # Calculate component conditions
-    if lactate_col in df.columns:
-        df['lactate_elevated'] = df[lactate_col] >= LACTATE_THRESHOLD
-        
-    if map_col in df.columns:
-        df['map_low'] = df[map_col] <= MAP_THRESHOLD
+    df['lactate_elevated'] = df[lactate_col] >= LACTATE_THRESHOLD
+    df['map_low'] = df[map_col] <= MAP_THRESHOLD
         
     # Level 1 drugs
     if level1_cols:
@@ -368,6 +372,8 @@ def load_circ_failure(
         'dopa_rate',
         'phn_rate',
         'milrinone',
+        'levo_rate',
+        'theo_rate',
     ]
     all_needed = core_concepts + optional_concepts
     
@@ -419,8 +425,17 @@ def load_circ_failure(
                     loaded_dfs[_cname] = _cdf.rename(columns={_alias: 'charttime'})
                     break
     
+    # Core concepts are non-optional; a silent partial load would score
+    # circulatory failure without its lactate or MAP evidence.
+    missing_core = [c for c in core_concepts if c not in loaded_dfs]
+    if missing_core:
+        raise ValueError(
+            "circulatory failure could not load required core concepts: "
+            + ", ".join(missing_core)
+        )
+
     # Build merged dataframe from core concepts
-    core_dfs = [loaded_dfs[c] for c in core_concepts if c in loaded_dfs]
+    core_dfs = [loaded_dfs[c] for c in core_concepts]
     if not core_dfs:
         if verbose:
             print("No core data loaded")
@@ -471,6 +486,8 @@ def load_circ_failure(
     # Map column names
     lactate_col = 'lact' if 'lact' in df.columns else ('lac' if 'lac' in df.columns else 'lactate')
     map_col = 'map' if 'map' in df.columns else None
+    if map_col is None:
+        raise ValueError("circulatory failure requires a MAP column")
     
     # Find drug columns (based on what was loaded)
     norepi_col = 'norepi_rate' if 'norepi_rate' in df.columns else None
@@ -603,8 +620,10 @@ def get_circ_failure_incidence(
     if events.empty:
         return pd.DataFrame()
     
-    # Get first event per patient
-    first_events = events.groupby(id_col).agg({
+    # Get first event per patient. Sort by time first so the level always
+    # describes the same row as the minimum time.
+    events = events.sort_values(time_col)
+    first_events = events.groupby(id_col, sort=False).agg({
         time_col: 'min',
         'circ_event': 'first',
     }).reset_index()

@@ -273,7 +273,9 @@ def sofa2_score(
                 invalid_count=int(repeated.sum()),
             )
 
-    result["sofa2"] = result[required].fillna(0).sum(axis=1).astype(int)
+    result["sofa2"] = (
+        result[required].sum(axis=1, min_count=len(required)).round().astype("Int64")
+    )
     observed = [f"{component}_observed" for component in required]
     available = [f"{component}_available" for component in required]
     result["sofa2_n_observed_components"] = (
