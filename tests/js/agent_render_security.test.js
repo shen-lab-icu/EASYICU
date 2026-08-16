@@ -12,7 +12,12 @@ const sandbox = {
     icon: () => '',
   },
 };
-vm.runInNewContext(source, sandbox);
+/* html-escape.js owns esc/escAttr and this module destructures them at the
+   top of its IIFE, so it loads first here exactly as it does in index.html. */
+const escapeOwner = path.join(path.dirname(path.resolve(process.argv[2])), 'html-escape.js');
+const context = vm.createContext(sandbox);
+vm.runInNewContext(fs.readFileSync(escapeOwner, 'utf8'), context, { filename: escapeOwner });
+vm.runInNewContext(source, context, { filename: process.argv[2] });
 const renderer = sandbox.window.AGENT_RENDER;
 
 const hostileLabel = 'figure" onerror="globalThis.pwned=1';

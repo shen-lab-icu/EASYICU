@@ -20,6 +20,11 @@ NODE_APP = STATIC.parent / "pi_copilot" / "node_app"
 def _read(relative: str) -> str:
     return (STATIC / relative).read_text(encoding="utf-8")
 
+# The screen modules destructure `esc` from window.EU_HTML at the top of their
+# IIFE, so these Node harnesses have to install the shared escaping owner into
+# the stub window before evaluating a module — the same order index.html uses.
+_ESCAPE_OWNER = _read("js/html-escape.js")
+
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
@@ -461,6 +466,7 @@ def test_pi_project_restore_does_not_let_an_empty_session_hide_history() -> None
     source = _read("js/screens-guided-pi-replay.js")
     script = f"""
       global.window = {{}};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const choose = window.EU_GUIDED_PI_REPLAY.preferredSessionId;
       const sessions = [
@@ -595,6 +601,7 @@ def test_reviewer_demo_contract_completes_all_stages_without_upgrading_authority
     source = _read("js/screens-guided-pi-demo.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const demo = window.EU_GUIDED_PI_DEMO;
       const workflow = demo.workflow();
@@ -634,6 +641,7 @@ def test_reviewer_demo_lifecycle_exposes_only_resolvable_standard_artifacts() ->
     source = _read("js/screens-guided-pi-demo.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const demo = window.EU_GUIDED_PI_DEMO;
       const messages = demo.messages();
@@ -762,6 +770,7 @@ def test_reviewer_demo_reuses_the_web_renderer_and_hydrates_registered_figures()
           '<img src="data:image/png;base64,CCCC">',
         ].join(''),
       }});
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       window.EU_GUIDED_PI_DEMO.previewArtifact('figure_gallery.json').then(item => {{
         console.log(JSON.stringify({{
@@ -849,6 +858,7 @@ def test_literature_renderer_escapes_metadata_and_rejects_unsafe_links() -> None
     source = _read("js/screens-guided-pi-literature.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const html = window.EU_GUIDED_PI_LITERATURE.renderArtifact({{
         search: {{ search_conducted: true }},
@@ -885,6 +895,7 @@ def test_assistant_message_renderer_makes_https_citations_clickable_and_safe() -
     markdown = _read("js/screens-guided-pi-markdown.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({literature!r});
       eval({markdown!r});
       console.log(window.EU_GUIDED_PI_MARKDOWN.render(
@@ -956,6 +967,7 @@ def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
         }},
       }};
       global.document = {{ getElementById() {{ return null; }} }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const host = {{
         hidden: false,
