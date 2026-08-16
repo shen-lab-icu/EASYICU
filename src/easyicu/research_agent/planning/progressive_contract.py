@@ -316,8 +316,71 @@ class ProgressiveKnowHowDecision(BaseModel):
         return values
 
 
+class ProgressiveOutlineStep(BaseModel):
+    """One concise scientific step before any executable detail is requested."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    step_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_]{0,79}$")
+    planned_analysis_role: Literal["primary", "secondary", "sensitivity", "auxiliary"]
+    module_id: ProgressiveModuleId
+    objective: str = Field(min_length=8, max_length=600)
+    depends_on: list[str] = Field(default_factory=list)
+    scientific_action_id: Optional[str] = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$",
+    )
+
+    @field_validator("depends_on")
+    @classmethod
+    def _unique_dependencies(cls, values: list[str]) -> list[str]:
+        cleaned = [str(value or "").strip() for value in values]
+        if any(not value for value in cleaned) or len(cleaned) != len(set(cleaned)):
+            raise ValueError("outline dependencies must be unique non-empty ids")
+        return cleaned
+
+
+class ProgressivePlanOutline(BaseModel):
+    """Small retrieval-informed plan; the host materializes one step at a time."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.progressive_plan_outline/1"] = (
+        "easyicu.progressive_plan_outline/1"
+    )
+    analysis_type: str = Field(min_length=1, max_length=128)
+    cohort_objective: str = Field(min_length=8, max_length=600)
+    steps: list[ProgressiveOutlineStep] = Field(min_length=1, max_length=24)
+    rationale: str = Field(min_length=8, max_length=1200)
+
+    @model_validator(mode="after")
+    def _closed_dag(self) -> "ProgressivePlanOutline":
+        step_ids = [step.step_id for step in self.steps]
+        if len(step_ids) != len(set(step_ids)):
+            raise ValueError("progressive outline step ids must be unique")
+        positions = {step_id: index for index, step_id in enumerate(step_ids)}
+        for index, step in enumerate(self.steps):
+            for dependency in step.depends_on:
+                if dependency not in positions:
+                    raise ValueError(
+                        f"step {step.step_id!r} depends on unknown step {dependency!r}"
+                    )
+                if positions[dependency] >= index:
+                    raise ValueError(
+                        f"step {step.step_id!r} dependency {dependency!r} must precede it"
+                    )
+        primary = [
+            step.step_id
+            for step in self.steps
+            if step.planned_analysis_role == "primary"
+        ]
+        if len(primary) > 1:
+            raise ValueError("progressive outline may declare at most one primary step")
+        return self
+
+
 class ProgressiveSkeletonStep(BaseModel):
-    """One high-level step before host materialization."""
+    """Strict detail for only the step currently being materialized by the host."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -437,8 +500,47 @@ class ProgressiveSkeletonStep(BaseModel):
         return self
 
 
+class ProgressivePlanFoundation(BaseModel):
+    """Plan-wide detail bound once while the first outline step is materialized."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cohort: ProgressiveCohortIntent
+    display_labels: list[ProgressiveDisplayLabel] = Field(default_factory=list)
+    robustness_intents: list[ProgressiveRobustnessIntent] = Field(default_factory=list)
+    know_how_decisions: list[ProgressiveKnowHowDecision] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _unique_rosters(self) -> "ProgressivePlanFoundation":
+        label_keys = [item.key for item in self.display_labels]
+        if len(label_keys) != len(set(label_keys)):
+            raise ValueError("display label keys must be unique")
+        robustness_ids = [item.spec_id for item in self.robustness_intents]
+        if len(robustness_ids) != len(set(robustness_ids)):
+            raise ValueError("robustness intent ids must be unique")
+        know_how_coordinates = [
+            (item.card_id, item.claim_id) for item in self.know_how_decisions
+        ]
+        if len(know_how_coordinates) != len(set(know_how_coordinates)):
+            raise ValueError("know-how decisions must not repeat a card/claim pair")
+        return self
+
+
+class ProgressiveStepMaterialization(BaseModel):
+    """One outline-bound strict step response, never a full executable DAG."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.progressive_step_materialization/1"] = (
+        "easyicu.progressive_step_materialization/1"
+    )
+    outline_step_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    foundation: Optional[ProgressivePlanFoundation]
+    step: ProgressiveSkeletonStep
+
+
 class ProgressivePlanSkeleton(BaseModel):
-    """Small Planner-owned research skeleton compiled before execution."""
+    """Host-assembled research skeleton compiled from step materializations."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -593,12 +695,16 @@ __all__ = [
     "ProgressiveKnowHowDecision",
     "ProgressiveModelTermIntent",
     "ProgressiveOutputIntent",
+    "ProgressiveOutlineStep",
     "ProgressivePlanCompileError",
     "ProgressivePlanCompileReceipt",
+    "ProgressivePlanFoundation",
+    "ProgressivePlanOutline",
     "ProgressivePlanSkeleton",
     "ProgressiveProductRef",
     "ProgressiveRobustnessIntent",
     "ProgressiveSkeletonStep",
+    "ProgressiveStepMaterialization",
     "ProgressiveSuffixRevision",
     "ProgressiveTableOneVariable",
 ]

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import copy
+import re
 from functools import lru_cache
 from typing import Any, Mapping, Sequence, get_args
 
 from ..planning.method_literature import METHOD_CARDS
 from ..planning.progressive_contract import (
     ProgressiveModuleId,
+    ProgressiveOutlineStep,
+    ProgressivePlanOutline,
     ProgressivePlanSkeleton,
+    ProgressiveStepMaterialization,
     ProgressiveSuffixRevision,
 )
 from ..providers.protocol import StructuredOutputRequest
@@ -66,7 +70,11 @@ def _non_null(schema: Mapping[str, Any], *, field: str) -> dict[str, Any]:
     return copy.deepcopy(non_null[0])
 
 
-def _bind_step_module_shape(definitions: dict[str, Any]) -> None:
+def _bind_step_module_shape(
+    definitions: dict[str, Any],
+    *,
+    locked_module_id: str | None = None,
+) -> None:
     """Compile the one cross-field rule the base schema cannot express cheaply.
 
     A standard module's method is host-owned, so ``custom_method`` is not an
@@ -93,7 +101,11 @@ def _bind_step_module_shape(definitions: dict[str, Any]) -> None:
     standard_ids = [value for value in module_ids if value != "custom_analysis"]
 
     standard = copy.deepcopy(step)
-    standard["properties"]["module_id"] = _string_enum(standard_ids)
+    standard["properties"]["module_id"] = (
+        {"type": "string", "const": locked_module_id}
+        if locked_module_id is not None and locked_module_id != "custom_analysis"
+        else _string_enum(standard_ids)
+    )
     standard["properties"]["custom_method"] = {"type": "null"}
 
     custom_fields = (
@@ -125,7 +137,184 @@ def _bind_step_module_shape(definitions: dict[str, Any]) -> None:
     custom_properties["outputs"]["items"] = custom_output
     custom_properties["outputs"]["minItems"] = 1
     custom = _closed_object(custom_properties)
-    definitions["ProgressiveSkeletonStep"] = {"anyOf": [standard, custom]}
+    if locked_module_id == "custom_analysis":
+        definitions["ProgressiveSkeletonStep"] = custom
+    elif locked_module_id is not None:
+        definitions["ProgressiveSkeletonStep"] = standard
+    else:
+        definitions["ProgressiveSkeletonStep"] = {"anyOf": [standard, custom]}
+
+
+def _exact_string_array(values: Sequence[str]) -> dict[str, Any]:
+    normalized = [str(value).strip() for value in values]
+    return {
+        "type": "array",
+        "prefixItems": [
+            {"type": "string", "const": value} for value in normalized
+        ],
+        "minItems": len(normalized),
+        "maxItems": len(normalized),
+    }
+
+
+def _bind_outline_authorities(
+    schema: dict[str, Any],
+    definitions: dict[str, Any],
+    *,
+    analysis_types: tuple[str, ...],
+    scientific_action_ids: tuple[str, ...],
+) -> None:
+    properties = schema.get("properties")
+    step = definitions.get("ProgressiveOutlineStep")
+    if not isinstance(properties, dict) or not isinstance(step, dict):
+        raise ProgressiveTransportSchemaError(
+            "progressive outline properties are unavailable"
+        )
+    step_properties = step.get("properties")
+    if not isinstance(step_properties, dict):
+        raise ProgressiveTransportSchemaError(
+            "progressive outline step properties are unavailable"
+        )
+    properties["analysis_type"] = _string_enum(analysis_types)
+    step_properties["scientific_action_id"] = (
+        _nullable(_string_enum(scientific_action_ids))
+        if scientific_action_ids
+        else {"type": "null"}
+    )
+
+
+def _bind_foundation_authorities(
+    definitions: dict[str, Any],
+    *,
+    variable_names: tuple[str, ...],
+    cohort_concept_ids: tuple[str, ...],
+    know_how_authority: tuple[tuple[str, str, str, str, tuple[str, ...]], ...],
+) -> None:
+    foundation = definitions.get("ProgressivePlanFoundation")
+    robustness = definitions.get("ProgressiveRobustnessIntent")
+    predicate = definitions.get("ProgressiveCohortPredicate")
+    if not all(isinstance(value, dict) for value in (foundation, robustness, predicate)):
+        raise ProgressiveTransportSchemaError(
+            "progressive materialization foundation definitions are unavailable"
+        )
+    foundation_properties = foundation.get("properties")
+    robustness_properties = robustness.get("properties")
+    predicate_properties = predicate.get("properties")
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            foundation_properties,
+            robustness_properties,
+            predicate_properties,
+        )
+    ):
+        raise ProgressiveTransportSchemaError(
+            "progressive materialization foundation properties are unavailable"
+        )
+    robustness_properties["complete_case_variables"]["items"] = _string_enum(
+        variable_names
+    )
+    predicate_properties["concept_id"] = _string_enum(cohort_concept_ids)
+    decisions = foundation_properties["know_how_decisions"]
+    if not know_how_authority:
+        decisions["maxItems"] = 0
+        return
+    definition = definitions.get("ProgressiveKnowHowDecision")
+    if not isinstance(definition, dict) or not isinstance(
+        definition.get("properties"), dict
+    ):
+        raise ProgressiveTransportSchemaError(
+            "progressive know-how decision definition is unavailable"
+        )
+    source = definition["properties"]
+    branches = []
+    for card_id, version, sha256, claim_id, citation_ids in know_how_authority:
+        branches.append(
+            _closed_object(
+                {
+                    "card_id": {"type": "string", "const": card_id},
+                    "card_version": {"type": "string", "const": version},
+                    "card_sha256": {"type": "string", "const": sha256},
+                    "claim_id": {"type": "string", "const": claim_id},
+                    "disposition": copy.deepcopy(source["disposition"]),
+                    "reason_code": copy.deepcopy(source["reason_code"]),
+                    "rationale": copy.deepcopy(source["rationale"]),
+                    "citation_ids": _exact_string_array(citation_ids),
+                }
+            )
+        )
+    definitions["ProgressiveKnowHowDecision"] = {"anyOf": branches}
+
+
+def _bind_materialization_coordinate(
+    schema: dict[str, Any],
+    definitions: dict[str, Any],
+    *,
+    outline_step: ProgressiveOutlineStep,
+    outline_step_sha256: str,
+    include_foundation: bool,
+    available_product_refs: tuple[tuple[str, str], ...],
+) -> None:
+    properties = schema.get("properties")
+    step = definitions.get("ProgressiveSkeletonStep")
+    if not isinstance(properties, dict) or not isinstance(step, dict):
+        raise ProgressiveTransportSchemaError(
+            "progressive materialization properties are unavailable"
+        )
+    step_properties = step.get("properties")
+    if not isinstance(step_properties, dict):
+        raise ProgressiveTransportSchemaError(
+            "progressive materialization step properties are unavailable"
+        )
+    properties["outline_step_sha256"] = {
+        "type": "string",
+        "const": outline_step_sha256,
+    }
+    properties["foundation"] = (
+        _non_null(properties["foundation"], field="foundation")
+        if include_foundation
+        else {"type": "null"}
+    )
+    step_properties["step_id"] = {
+        "type": "string",
+        "const": outline_step.step_id,
+    }
+    step_properties["planned_analysis_role"] = {
+        "type": "string",
+        "const": outline_step.planned_analysis_role,
+    }
+    step_properties["module_id"] = {
+        "type": "string",
+        "const": outline_step.module_id,
+    }
+    step_properties["objective"] = {
+        "type": "string",
+        "const": outline_step.objective,
+    }
+    step_properties["depends_on"] = _exact_string_array(outline_step.depends_on)
+    step_properties["scientific_action_id"] = (
+        {
+            "type": "string",
+            "const": outline_step.scientific_action_id,
+        }
+        if outline_step.scientific_action_id is not None
+        else {"type": "null"}
+    )
+    product_inputs = step_properties["product_inputs"]
+    if not available_product_refs:
+        product_inputs["maxItems"] = 0
+        return
+    definitions["ProgressiveProductRef"] = {
+        "anyOf": [
+            _closed_object(
+                {
+                    "producer_step_id": {"type": "string", "const": producer},
+                    "product_id": {"type": "string", "const": product},
+                }
+            )
+            for producer, product in available_product_refs
+        ]
+    }
 
 
 def _bind_step_rosters(
@@ -298,6 +487,167 @@ def _authority_rows(
     return tuple(rows)
 
 
+def _closed_request(*, name: str, schema: dict[str, Any]) -> StructuredOutputRequest:
+    strictify_json_schema(schema)
+    try:
+        assert_closed_json_schema(schema)
+    except StrictJsonSchemaError as exc:
+        raise ProgressiveTransportSchemaError(str(exc)) from exc
+    return StructuredOutputRequest.from_schema(
+        name=name,
+        schema=schema,
+        strict=True,
+    )
+
+
+def progressive_outline_structured_output_request(
+    *,
+    analysis_types: Sequence[str],
+    scientific_action_ids: Sequence[str],
+) -> StructuredOutputRequest:
+    """Return the tiny run-bound schema used for the first Planner response."""
+
+    normalized_types = tuple(
+        dict.fromkeys(
+            str(value).strip() for value in analysis_types if str(value).strip()
+        )
+    )
+    normalized_actions = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in scientific_action_ids
+            if str(value).strip()
+        )
+    )
+    if not normalized_types:
+        raise ProgressiveTransportSchemaError(
+            "progressive outline transport requires an analysis-type roster"
+        )
+    schema = copy.deepcopy(ProgressivePlanOutline.model_json_schema(mode="validation"))
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        raise ProgressiveTransportSchemaError("progressive outline schema has no $defs")
+    _bind_outline_authorities(
+        schema,
+        definitions,
+        analysis_types=normalized_types,
+        scientific_action_ids=normalized_actions,
+    )
+    return _closed_request(
+        name="easyicu_progressive_plan_outline_v1",
+        schema=schema,
+    )
+
+
+def progressive_step_materialization_request(
+    *,
+    outline_step: ProgressiveOutlineStep,
+    outline_step_sha256: str,
+    variable_names: Sequence[str],
+    cohort_concept_ids: Sequence[str] = (),
+    scientific_action_ids: Sequence[str],
+    allowed_literature_citation_keys: Sequence[str] = (),
+    allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
+    include_foundation: bool,
+    available_product_refs: Sequence[tuple[str, str]] = (),
+) -> StructuredOutputRequest:
+    """Return one coordinate-bound schema for the current step only."""
+
+    if not re.fullmatch(r"[0-9a-f]{64}", str(outline_step_sha256 or "")):
+        raise ProgressiveTransportSchemaError(
+            "outline_step_sha256 must be one canonical sha256"
+        )
+    normalized_variables = tuple(
+        dict.fromkeys(
+            str(value).strip() for value in variable_names if str(value).strip()
+        )
+    )
+    normalized_actions = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in scientific_action_ids
+            if str(value).strip()
+        )
+    )
+    normalized_citations = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in allowed_literature_citation_keys
+            if str(value).strip()
+        )
+    )
+    if not normalized_variables:
+        raise ProgressiveTransportSchemaError(
+            "progressive step transport requires a variable roster"
+        )
+    if (
+        outline_step.scientific_action_id is not None
+        and outline_step.scientific_action_id not in normalized_actions
+    ):
+        raise ProgressiveTransportSchemaError(
+            "outline scientific action is outside the run-bound action roster"
+        )
+    normalized_concepts = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (cohort_concept_ids or normalized_variables)
+            if str(value).strip()
+        )
+    )
+    normalized_products: list[tuple[str, str]] = []
+    for producer, product in available_product_refs:
+        producer_id = str(producer or "").strip()
+        product_id = str(product or "").strip()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_]{0,79}", producer_id):
+            raise ProgressiveTransportSchemaError(
+                f"invalid available product producer {producer_id!r}"
+            )
+        if not re.fullmatch(r"[a-z][a-z0-9_]*:[a-z][a-z0-9_]*", product_id):
+            raise ProgressiveTransportSchemaError(
+                f"invalid available product token {product_id!r}"
+            )
+        coordinate = (producer_id, product_id)
+        if coordinate not in normalized_products:
+            normalized_products.append(coordinate)
+    schema = copy.deepcopy(
+        ProgressiveStepMaterialization.model_json_schema(mode="validation")
+    )
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        raise ProgressiveTransportSchemaError(
+            "progressive materialization schema has no $defs"
+        )
+    _bind_step_rosters(
+        definitions,
+        variable_names=normalized_variables,
+        scientific_action_ids=normalized_actions,
+        allowed_citation_keys=normalized_citations,
+    )
+    if include_foundation:
+        _bind_foundation_authorities(
+            definitions,
+            variable_names=normalized_variables,
+            cohort_concept_ids=normalized_concepts,
+            know_how_authority=_authority_rows(allowed_know_how_decisions),
+        )
+    _bind_materialization_coordinate(
+        schema,
+        definitions,
+        outline_step=outline_step,
+        outline_step_sha256=outline_step_sha256,
+        include_foundation=include_foundation,
+        available_product_refs=tuple(normalized_products),
+    )
+    _bind_step_module_shape(
+        definitions,
+        locked_module_id=outline_step.module_id,
+    )
+    return _closed_request(
+        name="easyicu_progressive_step_materialization_v1",
+        schema=schema,
+    )
+
+
 @lru_cache(maxsize=64)
 def _request_cached(
     kind: str,
@@ -403,5 +753,7 @@ def progressive_structured_output_request(
 
 __all__ = [
     "ProgressiveTransportSchemaError",
+    "progressive_outline_structured_output_request",
+    "progressive_step_materialization_request",
     "progressive_structured_output_request",
 ]
