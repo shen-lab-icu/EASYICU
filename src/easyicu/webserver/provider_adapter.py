@@ -33,9 +33,9 @@ from easyicu.provider_auth import (
 from easyicu.research_agent.providers.capabilities import (
     ANTHROPIC_MESSAGES,
     OPENAI_CHAT_COMPLETIONS,
-    SUPPORTED_CLI_ACCOUNT_NAMES,
-    cli_account_profile,
+    SUPPORTED_USER_ACCOUNT_NAMES,
     provider_profile,
+    user_account_profile,
 )
 from easyicu.webserver import state_paths
 from easyicu.webserver import agent_outputs
@@ -123,8 +123,8 @@ def require_external_credentials(
     if not provider_meta.get("external"):
         return provider_meta
     provider = str(provider_meta.get("provider") or "").strip().lower()
-    if is_cli_account_provider(provider):
-        return _require_cli_account_session(provider_meta, environ=environ)
+    if is_user_account_provider(provider):
+        return _require_user_account_session(provider_meta, environ=environ)
     try:
         credentials = _load_external_credentials(
             str(provider_meta.get("provider") or ""), environ=environ
@@ -138,26 +138,64 @@ def require_external_credentials(
     return updated
 
 
-def _cli_account_environment(
+def _user_account_environment(
     provider: str,
     environ: Optional[Mapping[str, str]],
 ) -> Dict[str, str]:
-    source = os.environ if environ is None else environ
+    if environ is None:
+        raise ProviderAdapterError(
+            {
+                "error": "codex_auth_session_required",
+                "provider": provider,
+                "secrets_returned": False,
+            }
+        )
+    source = environ
     from easyicu.research_agent.providers.subprocess_env import (
         build_provider_subprocess_env,
     )
 
-    selected = build_provider_subprocess_env(provider, environment=source)
-    # The Web provider gate has already checked both global and per-run opt-in.
-    # The account-client factory independently requires the same explicit bit.
+    selected = build_provider_subprocess_env(
+        provider,
+        environment=source,
+        required_keys=(
+            "EASYICU_ALLOW_EXTERNAL_LLM",
+            "EASYICU_CODEX_SESSION_SHA256",
+            "EASYICU_CODEX_MODEL",
+            "CODEX_MODEL",
+        ),
+    )
+    binding = str(selected.get("EASYICU_CODEX_SESSION_SHA256") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", binding):
+        raise ProviderAdapterError(
+            {
+                "error": "codex_auth_session_required",
+                "provider": provider,
+                "secrets_returned": False,
+            }
+        )
+    if not selected.get("HOME") or not selected.get("CODEX_HOME"):
+        raise ProviderAdapterError(
+            {
+                "error": "codex_auth_isolated_home_required",
+                "provider": provider,
+                "secrets_returned": False,
+            }
+        )
     selected["EASYICU_ALLOW_EXTERNAL_LLM"] = "1"
     return selected
 
 
-def is_cli_account_provider(provider: str) -> bool:
-    """Return whether *provider* is a reviewed local account transport."""
+def is_user_account_provider(provider: str) -> bool:
+    """Return whether *provider* is a reviewed per-user account transport."""
 
-    return str(provider or "").strip().lower() in SUPPORTED_CLI_ACCOUNT_NAMES
+    return str(provider or "").strip().lower() in SUPPORTED_USER_ACCOUNT_NAMES
+
+
+def is_cli_account_provider(provider: str) -> bool:
+    """Compatibility alias; public Web accounts are no longer host CLI logins."""
+
+    return is_user_account_provider(provider)
 
 
 def account_provider_environment(
@@ -167,32 +205,30 @@ def account_provider_environment(
 ) -> Dict[str, str]:
     """Compile the bounded subprocess environment for a Web Pipeline run.
 
-    The returned mapping contains only the reviewed CLI/account variables and
+    The returned mapping contains only the reviewed user-account variables and
     the canonical external-LLM opt-in bit. API keys for unrelated providers are
     deliberately excluded by :mod:`providers.subprocess_env`.
     """
 
     normalized = str(provider or "").strip().lower()
-    if not is_cli_account_provider(normalized):
+    if not is_user_account_provider(normalized):
         raise ProviderAdapterError(
             {
-                "error": "research_pipeline_local_account_provider_required",
+                "error": "research_pipeline_codex_user_auth_provider_required",
                 "provider": normalized,
                 "secrets_returned": False,
             }
         )
-    return _cli_account_environment(normalized, environ)
+    return _user_account_environment(normalized, environ)
 
 
-def _cli_account_status(
+def _user_account_status(
     provider: str,
     *,
     ai_enabled: bool,
     environ: Optional[Mapping[str, str]],
 ) -> Dict[str, Any]:
-    profile = (
-        cli_account_profile(provider) if is_cli_account_provider(provider) else None
-    )
+    profile = user_account_profile(provider) if is_user_account_provider(provider) else None
     if profile is None:
         raise ProviderAdapterError(
             {
@@ -201,48 +237,100 @@ def _cli_account_status(
                 "secrets_returned": False,
             }
         )
-    source = os.environ if environ is None else environ
+    if environ is None:
+        return {
+            "provider": provider,
+            "provider_identity": profile.provider_identity,
+            "external": True,
+            "ai_enabled": bool(ai_enabled),
+            "authentication_mode": "chatgpt_account",
+            "authentication_verified": False,
+            "account_session_present": False,
+            "account_session_status": "codex_auth_session_required",
+            "credential_env_candidates": [],
+            "credential_present": False,
+            "credential_source": None,
+            "base_url_env_candidates": [],
+            "base_url_present": True,
+            "base_url_source": "codex_app_server",
+            "base_url_validation": "codex_app_server",
+            "base_url_rejection_reason": None,
+            "model_env_candidates": list(profile.model_env_names),
+            "model_present": True,
+            "model": "account-default",
+            "model_source": "account_default",
+            "ready": False,
+            "missing": ["codex_user_auth"],
+            "env_file": {
+                "enabled": False,
+                "status": "not_used_user_account",
+                "present": False,
+                "loaded_keys": [],
+                "secrets_returned": False,
+            },
+            "secrets_returned": False,
+            "client_constructed": False,
+            "network_calls": 0,
+            "subprocess_calls": 0,
+        }
+    source = _user_account_environment(provider, environ)
     model_source, model = profile.model(source)
-    from easyicu.research_agent.providers.llm import probe_cli_account_readiness
+    from easyicu.research_agent.providers.codex_app_server import (
+        CodexAppServerError,
+        CodexAppServerRuntime,
+    )
 
-    probe = probe_cli_account_readiness(provider, environment=source)
+    account = None
+    status_code = "codex_auth_login_required"
+    try:
+        runtime_cwd = Path(str(source["HOME"])) / "app-server-readiness"
+        with CodexAppServerRuntime(
+            environment=source,
+            cwd=runtime_cwd,
+            request_timeout=15.0,
+        ) as runtime:
+            account = runtime.request(
+                "account/read", {"refreshToken": False}, timeout=15.0
+            ).get("account")
+    except CodexAppServerError as exc:
+        status_code = exc.code
+    verified = bool(isinstance(account, Mapping) and account.get("type") == "chatgpt")
+    if verified:
+        status_code = "codex_auth_ready"
     missing: List[str] = []
     if not ai_enabled:
         missing.append("ai_enabled")
-    if not probe.executable_present:
-        missing.append("cli_executable")
-    if probe.authentication_verified is False:
-        missing.append("account_login")
+    if not verified:
+        missing.append("codex_user_auth")
+    binding = str(source.get("EASYICU_CODEX_SESSION_SHA256") or "")
     return {
         "provider": provider,
         "provider_identity": profile.provider_identity,
         "external": True,
         "ai_enabled": bool(ai_enabled),
-        "authentication_mode": "account_session",
-        "authentication_verified": probe.authentication_verified,
-        "account_session_present": bool(probe.launch_ready),
-        "account_session_status": probe.reason_code,
-        "status_check_supported": probe.status_check_supported,
-        "cli_executable_present": probe.executable_present,
+        "authentication_mode": "chatgpt_account",
+        "authentication_verified": verified,
+        "account_session_present": verified,
+        "account_session_status": status_code,
+        "session_binding_sha256": binding,
+        "status_check_supported": True,
         "credential_env_candidates": [],
-        "credential_present": bool(probe.launch_ready),
-        "credential_source": (
-            f"{provider}_account_session" if probe.launch_ready else None
-        ),
+        "credential_present": verified,
+        "credential_source": "codex_user_auth" if verified else None,
         "base_url_env_candidates": [],
         "base_url_present": True,
-        "base_url_source": "cli_account",
-        "base_url_validation": "cli_account",
+        "base_url_source": "codex_app_server",
+        "base_url_validation": "codex_app_server",
         "base_url_rejection_reason": None,
         "model_env_candidates": list(profile.model_env_names),
         "model_present": True,
-        "model": model or "cli-default",
-        "model_source": model_source or "cli_default",
-        "ready": bool(ai_enabled and probe.launch_ready),
+        "model": model or "account-default",
+        "model_source": model_source or "account_default",
+        "ready": bool(ai_enabled and verified),
         "missing": missing,
         "env_file": {
             "enabled": False,
-            "status": "not_used_account_session",
+            "status": "not_used_user_account",
             "present": False,
             "loaded_keys": [],
             "secrets_returned": False,
@@ -250,17 +338,17 @@ def _cli_account_status(
         "secrets_returned": False,
         "client_constructed": False,
         "network_calls": 0,
-        "subprocess_calls": probe.subprocess_calls,
+        "subprocess_calls": 1,
     }
 
 
-def _require_cli_account_session(
+def _require_user_account_session(
     provider_meta: Dict[str, Any],
     *,
     environ: Optional[Mapping[str, str]],
 ) -> Dict[str, Any]:
     provider = str(provider_meta.get("provider") or "").strip().lower()
-    status = _cli_account_status(
+    status = _user_account_status(
         provider,
         ai_enabled=bool(provider_meta.get("ai_enabled")),
         environ=environ,
@@ -271,19 +359,20 @@ def _require_cli_account_session(
                 **provider_meta,
                 **status,
                 "error": str(status["account_session_status"]),
-                "blocked_by": "cli_account_session",
+                "blocked_by": "codex_user_auth",
             }
         )
     updated = dict(provider_meta)
     updated.update(status)
     updated["credentials_attempted"] = True
     updated["credentials_loaded"] = True
-    profile = cli_account_profile(provider)
-    assert profile is not None  # guarded by _cli_account_status
-    updated["endpoint_fingerprint"] = _fingerprint(str(profile.endpoint_identity))
-    updated["base_url_endpoint"] = "cli_account"
+    profile = user_account_profile(provider)
+    assert profile is not None  # guarded by _user_account_status
+    endpoint = f"{profile.endpoint_identity}/session/{status['session_binding_sha256']}"
+    updated["endpoint_fingerprint"] = _fingerprint(endpoint)
+    updated["base_url_endpoint"] = "codex_app_server"
     updated["provider_gate"] = "external_provider_account_ready"
-    updated.setdefault("provider_gate_order", []).append("account_session_checked")
+    updated.setdefault("provider_gate_order", []).append("user_account_checked")
     return updated
 
 
@@ -310,32 +399,47 @@ def build_research_agent_provider_client(
             }
         )
     requested_provider = str(provider_meta.get("provider") or "").strip().lower()
-    cli_profile = (
-        cli_account_profile(requested_provider)
-        if is_cli_account_provider(requested_provider)
+    account_profile = (
+        user_account_profile(requested_provider)
+        if is_user_account_provider(requested_provider)
         else None
     )
-    if cli_profile is not None:
-        account = _require_cli_account_session(provider_meta, environ=environ)
-        account_environment = _cli_account_environment(requested_provider, environ)
-        selected_model = str(account.get("model") or "cli-default")
+    if account_profile is not None:
+        account = _require_user_account_session(provider_meta, environ=environ)
+        account_environment = _user_account_environment(requested_provider, environ)
+        selected_model = str(account.get("model") or "account-default")
         effective_timeout = (
             float(request_timeout)
             if request_timeout is not None
             else _DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT
         )
         try:
-            from easyicu.research_agent.providers.llm import build_llm_client
+            from easyicu.research_agent.providers.factory import (
+                authorize_provider_client,
+            )
+            from easyicu.research_agent.providers.llm import (
+                CodexAppServerLLMClient,
+            )
 
-            selection = build_llm_client(
-                prefer=requested_provider,
-                model=None if selected_model == "cli-default" else selected_model,
-                allow_mock=False,
-                ladder=[requested_provider],
+            client = CodexAppServerLLMClient(
+                model=(
+                    None if selected_model == "account-default" else selected_model
+                ),
                 request_timeout=effective_timeout,
                 environment=account_environment,
             )
-            client = selection.client
+            endpoint = (
+                f"{account_profile.endpoint_identity}/session/"
+                f"{account['session_binding_sha256']}"
+            )
+            client = authorize_provider_client(
+                client,
+                provider=account_profile.provider_identity,
+                model=selected_model,
+                base_url=endpoint,
+                destination="external",
+                environment=account_environment,
+            )
         except Exception as exc:
             raise ProviderAdapterError(
                 {
@@ -348,14 +452,17 @@ def build_research_agent_provider_client(
         public = dict(account)
         public.update(
             {
-                "client": "easyicu.research_agent.providers.CLIAgentLLMClient",
+                "client": (
+                    "easyicu.research_agent.providers.llm."
+                    "CodexAppServerLLMClient"
+                ),
                 "client_constructed": True,
                 "provider_gate": "research_agent_provider_ready",
                 "request_timeout_seconds": effective_timeout,
                 "transport_max_attempts": 1,
                 "retryable_http_status_codes": [],
                 "strict_json_schema_enabled": bool(
-                    cli_profile.supports_strict_json_schema
+                    account_profile.supports_strict_json_schema
                 ),
                 "provider_hard_stop": {
                     "required": True,
@@ -495,7 +602,7 @@ def generate_bound_provider_payload(
     requested_provider = str(provider_meta.get("provider") or "").strip().lower()
     profile = provider_profile(requested_provider)
     governed_client_transport = bool(
-        is_cli_account_provider(requested_provider)
+        is_user_account_provider(requested_provider)
         or (profile is not None and profile.transport == ANTHROPIC_MESSAGES)
     )
     if governed_client_transport:
@@ -517,7 +624,7 @@ def generate_bound_provider_payload(
             cohort=cohort,
             quality=quality,
             output_artifacts=output_artifacts or {},
-            model=str(provider_public.get("model") or "cli-default"),
+            model=str(provider_public.get("model") or "account-default"),
             max_output_tokens=max_output_tokens,
             json_format_style="chat",
         )
@@ -581,8 +688,8 @@ def generate_bound_provider_payload(
         )
         provider_update = dict(provider_public)
         strict_enabled = bool(provider_public.get("strict_json_schema_enabled"))
-        if strict_enabled and is_cli_account_provider(requested_provider):
-            json_transport = "cli_output_schema"
+        if strict_enabled and is_user_account_provider(requested_provider):
+            json_transport = "codex_app_server_output_schema"
         elif strict_enabled and profile is not None:
             json_transport = "anthropic_output_config"
         else:
@@ -698,8 +805,8 @@ def provider_readiness(
 ) -> Dict[str, Any]:
     """Return sanitized provider readiness without constructing clients."""
     provider_text = str(provider or "openai").strip() or "openai"
-    if is_cli_account_provider(provider_text):
-        status = _cli_account_status(
+    if is_user_account_provider(provider_text):
+        status = _user_account_status(
             provider_text,
             ai_enabled=ai_enabled,
             environ=environ,
@@ -708,10 +815,10 @@ def provider_readiness(
             "max_external_calls_per_run": _MAX_EXTERNAL_CALLS_PER_RUN,
             "max_output_tokens": _max_output_tokens(environ=environ),
             "json_format_style": (
-                "cli_output_schema"
+                "codex_app_server_output_schema"
                 if bool(
-                    cli_account_profile(provider_text)
-                    and cli_account_profile(provider_text).supports_strict_json_schema
+                    user_account_profile(provider_text)
+                    and user_account_profile(provider_text).supports_strict_json_schema
                 )
                 else "prompted_json"
             ),

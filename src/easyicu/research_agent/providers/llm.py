@@ -50,6 +50,7 @@ from .capabilities import (
     llm_supports_vision,
     model_looks_vision_capable,
     provider_profile,
+    user_account_profile,
 )
 from .protocol import (
     LLMClient,
@@ -2252,6 +2253,242 @@ class CLIAgentLLMClient:
         if not text:
             raise RuntimeError(f"{self._command} returned an empty response.")
         return text
+
+
+class CodexAppServerLLMClient:
+    """Use one isolated user's managed ChatGPT login through App Server.
+
+    Unlike :class:`CLIAgentLLMClient`, this transport never inspects the host
+    operator's Codex login. The Web session owner must provide an isolated
+    ``HOME``/``CODEX_HOME`` pair plus its non-secret binding digest.
+    """
+
+    supports_strict_json_schema = True
+
+    def __init__(
+        self,
+        *,
+        model: Optional[str] = None,
+        request_timeout: float = 180.0,
+        environment: Mapping[str, str],
+    ) -> None:
+        profile = user_account_profile("codex")
+        assert profile is not None
+        from .subprocess_env import build_provider_subprocess_env
+
+        selected = build_provider_subprocess_env(
+            "codex",
+            environment=environment,
+            required_keys=(
+                "EASYICU_ALLOW_EXTERNAL_LLM",
+                "EASYICU_CODEX_SESSION_SHA256",
+            ),
+        )
+        session_sha256 = str(
+            selected.get("EASYICU_CODEX_SESSION_SHA256") or ""
+        ).strip()
+        if not re.fullmatch(r"[0-9a-f]{64}", session_sha256):
+            raise ValueError("codex_auth_session_binding_required")
+        if not selected.get("HOME") or not selected.get("CODEX_HOME"):
+            raise ValueError("codex_auth_isolated_home_required")
+        self._backend = "codex"
+        self._model = str(model or "").strip()
+        self._timeout = max(0.1, float(request_timeout))
+        self._command = profile.executable
+        self._session_binding_sha256 = session_sha256
+        self._endpoint_identity = (
+            f"{profile.endpoint_identity}/session/{session_sha256}"
+        )
+        self._subprocess_environment = MappingProxyType(selected)
+        self._subprocess_environment_sha256 = hashlib.sha256(
+            json.dumps(
+                selected,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        self.last_usage: Optional[Dict[str, int]] = None
+        self.last_finish_reason: Optional[str] = None
+        self.last_model: Optional[str] = None
+        self.name = "codex-app-server"
+        from .factory import _mark_reviewed_transport_constructed
+
+        _mark_reviewed_transport_constructed(self)
+
+    def _require_outbound_authorization(self) -> None:
+        from .factory import require_provider_client_authorization
+
+        try:
+            require_provider_client_authorization(self)
+        except Exception as exc:
+            raise PermissionError(
+                "Codex App Server calls require factory-minted user authorization"
+            ) from exc
+
+    def complete(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        seed: Optional[int] = None,
+        top_p: Optional[float] = None,
+        structured_output: Optional[StructuredOutputRequest] = None,
+        **_ignored: Any,
+    ) -> str:
+        text, _usage = self.complete_with_usage(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            seed=seed,
+            top_p=top_p,
+            structured_output=structured_output,
+        )
+        return text
+
+    def complete_with_usage(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        seed: Optional[int] = None,
+        top_p: Optional[float] = None,
+        structured_output: Optional[StructuredOutputRequest] = None,
+        **_ignored: Any,
+    ) -> tuple[str, Optional[Dict[str, int]]]:
+        del max_tokens, temperature, seed, top_p
+        import tempfile
+
+        from .codex_app_server import CodexAppServerRuntime
+
+        self._require_outbound_authorization()
+        if structured_output is not None and not isinstance(
+            structured_output, StructuredOutputRequest
+        ):
+            raise TypeError("structured_output must be StructuredOutputRequest")
+        system, conversation = CLIAgentLLMClient._flatten(messages)
+        prompt = f"{system}\n\n{conversation}".strip() if system else conversation
+        if not prompt:
+            raise ValueError("Codex App Server requires a non-empty prompt")
+        with tempfile.TemporaryDirectory(prefix="easyicu-codex-turn-") as cwd:
+            runtime = CodexAppServerRuntime(
+                environment=self._subprocess_environment,
+                cwd=Path(cwd),
+                executable=self._command,
+                request_timeout=min(self._timeout, 30.0),
+            )
+            with runtime:
+                account = runtime.request(
+                    "account/read",
+                    {"refreshToken": True},
+                    timeout=min(self._timeout, 30.0),
+                ).get("account")
+                if not isinstance(account, Mapping) or account.get("type") != "chatgpt":
+                    raise RuntimeError("codex_auth_chatgpt_login_required")
+                thread_params: Dict[str, Any] = {
+                    "cwd": cwd,
+                    "approvalPolicy": "never",
+                    "sandbox": "read-only",
+                    "ephemeral": True,
+                    "dynamicTools": [],
+                    "environments": [],
+                    "runtimeWorkspaceRoots": [cwd],
+                    "developerInstructions": (
+                        "Act only as a text-generation backend. Do not invoke tools, "
+                        "inspect files, or execute commands; answer from the supplied "
+                        "message and return only the requested final response."
+                    ),
+                }
+                if self._model:
+                    thread_params["model"] = self._model
+                thread_result = runtime.request(
+                    "thread/start",
+                    thread_params,
+                    timeout=min(self._timeout, 30.0),
+                )
+                thread = thread_result.get("thread")
+                if not isinstance(thread, Mapping) or not thread.get("id"):
+                    raise RuntimeError("codex_app_server_thread_start_invalid")
+                self.last_model = str(thread_result.get("model") or "") or None
+                turn_params: Dict[str, Any] = {
+                    "threadId": str(thread["id"]),
+                    "input": [{"type": "text", "text": prompt}],
+                    "approvalPolicy": "never",
+                    "sandboxPolicy": {
+                        "type": "readOnly",
+                        "networkAccess": False,
+                    },
+                    "environments": [],
+                    "runtimeWorkspaceRoots": [cwd],
+                }
+                if structured_output is not None:
+                    turn_params["outputSchema"] = json.loads(
+                        structured_output.schema_json
+                    )
+                notification_start = runtime.notification_count
+                turn_result = runtime.request(
+                    "turn/start",
+                    turn_params,
+                    timeout=min(self._timeout, 30.0),
+                )
+                turn = turn_result.get("turn")
+                if not isinstance(turn, Mapping) or not turn.get("id"):
+                    raise RuntimeError("codex_app_server_turn_start_invalid")
+                thread_id = str(thread["id"])
+                turn_id = str(turn["id"])
+                completed = runtime.wait_for_notification(
+                    lambda item: item.get("method") == "turn/completed"
+                    and (item.get("params") or {}).get("threadId") == thread_id
+                    and ((item.get("params") or {}).get("turn") or {}).get("id")
+                    == turn_id,
+                    after=notification_start,
+                    timeout=self._timeout,
+                )
+                completed_turn = (completed.get("params") or {}).get("turn") or {}
+                status = str(completed_turn.get("status") or "")
+                if status != "completed":
+                    error = completed_turn.get("error") or {}
+                    error_kind = error.get("codexErrorInfo") if isinstance(error, Mapping) else None
+                    self.last_finish_reason = "error"
+                    raise RuntimeError(
+                        "codex_app_server_turn_failed:"
+                        + str(error_kind or status or "unknown")[:120]
+                    )
+                text = ""
+                for item in completed_turn.get("items") or []:
+                    if isinstance(item, Mapping) and item.get("type") == "agentMessage":
+                        text = str(item.get("text") or "").strip()
+                notifications = runtime.notifications_since(notification_start)
+                if not text:
+                    text = "".join(
+                        str((item.get("params") or {}).get("delta") or "")
+                        for item in notifications
+                        if item.get("method") == "item/agentMessage/delta"
+                        and (item.get("params") or {}).get("turnId") == turn_id
+                    ).strip()
+                if not text:
+                    raise RuntimeError("codex_app_server_empty_response")
+                usage: Optional[Dict[str, int]] = None
+                for item in notifications:
+                    if item.get("method") != "thread/tokenUsage/updated":
+                        continue
+                    params = item.get("params") or {}
+                    if params.get("turnId") != turn_id:
+                        continue
+                    last = (params.get("tokenUsage") or {}).get("last") or {}
+                    if isinstance(last, Mapping):
+                        usage = {
+                            "prompt_tokens": max(0, int(last.get("inputTokens") or 0)),
+                            "completion_tokens": max(
+                                0, int(last.get("outputTokens") or 0)
+                            ),
+                            "total_tokens": max(0, int(last.get("totalTokens") or 0)),
+                        }
+                self.last_usage = dict(usage) if usage is not None else None
+                self.last_finish_reason = "stop"
+                return text, usage
 
 
 @dataclass

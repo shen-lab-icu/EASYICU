@@ -31,9 +31,12 @@ _CAPABILITY_EXPORTS = frozenset(
         "ProviderProfile",
         "REGISTERED_CLI_BACKEND_NAMES",
         "SUPPORTED_CLI_ACCOUNT_NAMES",
+        "SUPPORTED_USER_ACCOUNT_NAMES",
         "SUPPORTED_PROVIDER_NAMES",
+        "UserAccountProfile",
         "cli_account_profile",
         "provider_profile",
+        "user_account_profile",
     }
 )
 __all__ = sorted(_FACTORY_EXPORTS | _CAPABILITY_EXPORTS)

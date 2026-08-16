@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from easyicu.webserver import state_paths
@@ -17,6 +17,7 @@ from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import capabilities
 from easyicu.webserver import dataio
 from easyicu.webserver import provider_adapter
+from easyicu.webserver import codex_account_sessions
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import science_workbench
 from easyicu.webserver import sources as source_store
@@ -45,27 +46,39 @@ def _provider_environment_for_agent_run(
     run_type: str,
     external_llm_opt_in: bool,
     llm_provider: str = "",
+    account_environment: Optional[Mapping[str, str]] = None,
 ) -> Optional[Mapping[str, str]]:
     """Resolve one credential authority without returning secret values."""
 
     source = str(credential_source or "scientific_provider").strip().lower()
-    account_provider = provider_adapter.is_cli_account_provider(llm_provider)
-    if source == "local_account":
-        if engine != "research_agent_pipeline" or run_type != "full":
+    account_provider = provider_adapter.is_user_account_provider(llm_provider)
+    if source == "codex_user_auth":
+        if run_type != "full":
             raise HTTPException(
                 status_code=400,
-                detail={"error": "local_account_research_pipeline_only"},
+                detail={"error": "codex_user_auth_full_run_only"},
             )
         if not account_provider:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "research_pipeline_local_account_provider_required"},
+                detail={"error": "codex_user_auth_provider_required"},
             )
-        return provider_adapter.account_provider_environment(llm_provider)
+        try:
+            return provider_adapter.account_provider_environment(
+                llm_provider,
+                environ=account_environment,
+            )
+        except provider_adapter.ProviderAdapterError as exc:
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
     if engine == "research_agent_pipeline" and account_provider:
         raise HTTPException(
             status_code=400,
-            detail={"error": "research_pipeline_local_account_credentials_required"},
+            detail={"error": "research_pipeline_codex_user_auth_required"},
+        )
+    if account_provider:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "codex_user_auth_required"},
         )
     if engine == "research_agent_pipeline" and source != "pi_verified":
         raise HTTPException(
@@ -93,7 +106,7 @@ def _provider_environment_for_agent_run(
 
 
 @control_router.post("/api/jobs/agent-run")
-def jobs_agent_run(body: Dict[str, Any]) -> dict:
+def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
     """Start a registry-backed local Research Agent run.
 
     The default run is deterministic and local: it consumes the active export
@@ -182,20 +195,31 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
             detail={"error": "literature_search_authorization_scope_invalid"},
         )
     default_credential_source = (
-        "local_account"
-        if engine == "research_agent_pipeline"
-        and provider_adapter.is_cli_account_provider(llm_provider)
+        "codex_user_auth"
+        if provider_adapter.is_user_account_provider(llm_provider)
         else "scientific_provider"
     )
     credential_source = str(
         body.get("credential_source") or default_credential_source
     ).strip()
+    account_environment = None
+    if provider_adapter.is_user_account_provider(llm_provider):
+        try:
+            account_environment = codex_account_sessions.environment_for_request(
+                request
+            )
+        except codex_account_sessions.CodexAccountSessionError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": exc.code},
+            ) from exc
     provider_environment = _provider_environment_for_agent_run(
         credential_source=credential_source,
         engine=engine,
         run_type=run_type,
         external_llm_opt_in=external_llm_opt_in,
         llm_provider=llm_provider,
+        account_environment=account_environment,
     )
     settings = settings_store.load_settings()
     compute = capabilities.validate_compute_target(body)
@@ -265,6 +289,7 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
                 external_llm_opt_in=external_llm_opt_in,
                 ai_enabled=bool(settings.get("ai_enabled")),
                 study_context=study_context,
+                provider_environment=provider_environment,
             )
     except context_store.StudyContextError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
@@ -399,7 +424,7 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
 
 
 @control_router.post("/api/jobs/agent-run-review")
-def jobs_agent_run_review(body: Dict[str, Any]) -> dict:
+def jobs_agent_run_review(body: Dict[str, Any], request: Request) -> dict:
     """Resume one same-process digest-bound Research Agent plan review."""
 
     run_id = str(body.get("run_id") or "").strip()
@@ -446,6 +471,18 @@ def jobs_agent_run_review(body: Dict[str, Any]) -> dict:
             status_code=409,
             detail={"error": "research_pipeline_planner_canary_execution_blocked"},
         )
+    pending_provider = str(pending.get("provider") or "")
+    account_environment = None
+    if provider_adapter.is_user_account_provider(pending_provider):
+        try:
+            account_environment = codex_account_sessions.environment_for_request(
+                request
+            )
+        except codex_account_sessions.CodexAccountSessionError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": exc.code},
+            ) from exc
     provider_environment = _provider_environment_for_agent_run(
         credential_source=str(
             pending.get("credential_source") or "scientific_provider"
@@ -453,7 +490,8 @@ def jobs_agent_run_review(body: Dict[str, Any]) -> dict:
         engine="research_agent_pipeline",
         run_type="full",
         external_llm_opt_in=True,
-        llm_provider=str(pending.get("provider") or ""),
+        llm_provider=pending_provider,
+        account_environment=account_environment,
     )
     try:
         study_context = context_store.get_context(study_context_id)
@@ -671,8 +709,47 @@ def _agent_seed_run_root(project_seed_dir: str) -> str | None:
     return str(Path(project_seed_dir).expanduser() / "runs")
 
 
+@control_router.get("/api/agent-runs/codex-auth/status")
+def get_agent_run_codex_auth_status(request: Request) -> dict:
+    """Return only this browser session's sanitized ChatGPT auth state."""
+
+    return {"ok": True, "auth": codex_account_sessions.status(request)}
+
+
+@control_router.post("/api/agent-runs/codex-auth/login")
+def post_agent_run_codex_auth_login(
+    request: Request,
+    response: Response,
+) -> dict:
+    """Start official Codex-managed ChatGPT device authentication."""
+
+    try:
+        return codex_account_sessions.start_login(request, response)
+    except codex_account_sessions.CodexAccountSessionError as exc:
+        raise HTTPException(status_code=400, detail={"error": exc.code}) from exc
+
+
+@control_router.post("/api/agent-runs/codex-auth/cancel")
+def post_agent_run_codex_auth_cancel(request: Request) -> dict:
+    try:
+        return codex_account_sessions.cancel_login(request)
+    except codex_account_sessions.CodexAccountSessionError as exc:
+        raise HTTPException(status_code=400, detail={"error": exc.code}) from exc
+
+
+@control_router.post("/api/agent-runs/codex-auth/logout")
+def post_agent_run_codex_auth_logout(request: Request) -> dict:
+    try:
+        return codex_account_sessions.logout(request)
+    except codex_account_sessions.CodexAccountSessionError as exc:
+        raise HTTPException(status_code=400, detail={"error": exc.code}) from exc
+
+
 @control_router.get("/api/agent-runs/provider-status")
-def get_agent_run_provider_status(provider: str = "openai") -> dict:
+def get_agent_run_provider_status(
+    request: Request,
+    provider: str = "openai",
+) -> dict:
     """Return sanitized external-provider readiness for UI controls.
 
     This endpoint never constructs a model client and never returns credential
@@ -680,12 +757,40 @@ def get_agent_run_provider_status(provider: str = "openai") -> dict:
     present and whether global AI opt-in is enabled.
     """
     settings = settings_store.load_settings()
+    environment = None
+    auth_status = None
+    if provider_adapter.is_user_account_provider(provider):
+        auth_status = codex_account_sessions.status(request)
+        if auth_status.get("authentication_verified"):
+            try:
+                environment = codex_account_sessions.environment_for_request(request)
+            except codex_account_sessions.CodexAccountSessionError:
+                environment = None
+    readiness = provider_adapter.provider_readiness(
+        provider,
+        ai_enabled=bool(settings.get("ai_enabled")),
+        environ=environment,
+    )
+    if auth_status is not None:
+        readiness.update(
+            {
+                key: auth_status.get(key)
+                for key in (
+                    "authentication_mode",
+                    "authentication_verified",
+                    "account_session_present",
+                    "account_session_status",
+                    "plan_type",
+                    "account_label",
+                )
+            }
+        )
+        readiness["ready"] = bool(
+            readiness.get("ready") and auth_status.get("authentication_verified")
+        )
     return {
         "ok": True,
-        "provider_status": provider_adapter.provider_readiness(
-            provider,
-            ai_enabled=bool(settings.get("ai_enabled")),
-        ),
+        "provider_status": readiness,
     }
 
 

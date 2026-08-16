@@ -285,6 +285,18 @@
     const q = provider ? '?provider=' + encodeURIComponent(provider) : '';
     return getJSON('/api/agent-runs/provider-status' + q);
   }
+  function loadCodexAuthStatus() {
+    return getJSON('/api/agent-runs/codex-auth/status');
+  }
+  function startCodexAuthLogin() {
+    return postJSON('/api/agent-runs/codex-auth/login', {});
+  }
+  function cancelCodexAuthLogin() {
+    return postJSON('/api/agent-runs/codex-auth/cancel', {});
+  }
+  function logoutCodexAuth() {
+    return postJSON('/api/agent-runs/codex-auth/logout', {});
+  }
   function saveAgentProviderConfig(body) {
     return postJSON('/api/agent-runs/provider-config', body || {});
   }
@@ -597,6 +609,10 @@
   window.EU_API.startCrossdbReviewSummaryJob = startCrossdbReviewSummaryJob;
   window.EU_API.loadCrossdbDemoDistribution = loadCrossdbDemoDistribution;
   window.EU_API.loadAgentProviderStatus = loadAgentProviderStatus;
+  window.EU_API.loadCodexAuthStatus = loadCodexAuthStatus;
+  window.EU_API.startCodexAuthLogin = startCodexAuthLogin;
+  window.EU_API.cancelCodexAuthLogin = cancelCodexAuthLogin;
+  window.EU_API.logoutCodexAuth = logoutCodexAuth;
   window.EU_API.saveAgentProviderConfig = saveAgentProviderConfig;
   window.EU_API.startAgentRun = startAgentRun;
   window.EU_API.loadActiveStudyContext = loadActiveStudyContext;

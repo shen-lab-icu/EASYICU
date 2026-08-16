@@ -2765,6 +2765,7 @@ def _recover_pending_run(
             "endpoint_fingerprint",
             "credential_header",
             "base_url_endpoint",
+            "session_binding_sha256",
         ):
             if provider_public.get(key) != record.provider_public.get(key):
                 raise WebReviewRecoveryError(
@@ -2883,22 +2884,22 @@ def _validated_pipeline_credential_source(
     """Bind one Web credential source to the matching provider family."""
 
     selected = str(credential_source or "").strip().lower()
-    if selected not in {"pi_verified", "local_account"}:
+    if selected not in {"pi_verified", "codex_user_auth"}:
         raise ResearchPipelineRunError(
             "research_pipeline_credential_source_invalid",
             "Choose one server-verified Research Agent credential source.",
         )
     provider_name = _clean_text(provider.get("provider"), 64).lower()
-    account_provider = provider_adapter.is_cli_account_provider(provider_name)
-    if selected == "local_account" and not account_provider:
+    account_provider = provider_adapter.is_user_account_provider(provider_name)
+    if selected == "codex_user_auth" and not account_provider:
         raise ResearchPipelineRunError(
-            "research_pipeline_local_account_provider_required",
-            "A local account credential source requires a reviewed account CLI provider.",
+            "research_pipeline_codex_user_auth_provider_required",
+            "Codex user authentication requires the reviewed Codex account provider.",
         )
     if selected == "pi_verified" and account_provider:
         raise ResearchPipelineRunError(
-            "research_pipeline_local_account_credentials_required",
-            "Account CLI providers require the local account credential source.",
+            "research_pipeline_codex_user_auth_required",
+            "The Codex account provider requires this browser user's ChatGPT login.",
         )
     return selected
 
@@ -2997,8 +2998,8 @@ def make_research_pipeline_run_runner(
     if provider_environment is None:
         raise ResearchPipelineRunError(
             (
-                "research_pipeline_local_account_credentials_required"
-                if selected_credential_source == "local_account"
+                "research_pipeline_codex_user_auth_required"
+                if selected_credential_source == "codex_user_auth"
                 else "research_pipeline_pi_verified_credentials_required"
             ),
             "A verified provider credential is required for this pipeline.",

@@ -94,6 +94,25 @@ class CLIAccountReadiness:
     subprocess_calls: int
 
 
+@dataclass(frozen=True)
+class UserAccountProfile:
+    """Reviewed per-user account transport exposed by the Web product."""
+
+    name: str
+    executable: str
+    provider_identity: str
+    endpoint_identity: str
+    model_env_names: tuple[str, ...]
+    supports_strict_json_schema: bool
+
+    def model(self, environment: Mapping[str, str]) -> tuple[Optional[str], str]:
+        for name in self.model_env_names:
+            value = str(environment.get(name) or "").strip()
+            if value:
+                return name, value
+        return None, ""
+
+
 _CLI_ACCOUNT_PROFILES = {
     "codex": CLIAccountProfile(
         name="codex",
@@ -125,10 +144,30 @@ REGISTERED_CLI_BACKEND_NAMES = tuple(_CLI_ACCOUNT_PROFILES)
 SUPPORTED_CLI_ACCOUNT_NAMES = ("codex",)
 
 
+_USER_ACCOUNT_PROFILES = {
+    "codex": UserAccountProfile(
+        name="codex",
+        executable="codex",
+        provider_identity="codex-app-server",
+        endpoint_identity="app-server://stdio",
+        model_env_names=("EASYICU_CODEX_MODEL", "CODEX_MODEL"),
+        supports_strict_json_schema=True,
+    ),
+}
+
+SUPPORTED_USER_ACCOUNT_NAMES = tuple(_USER_ACCOUNT_PROFILES)
+
+
 def cli_account_profile(backend: str) -> Optional[CLIAccountProfile]:
     """Return one reviewed account-backed CLI profile, if registered."""
 
     return _CLI_ACCOUNT_PROFILES.get(str(backend or "").strip().lower())
+
+
+def user_account_profile(provider: str) -> Optional[UserAccountProfile]:
+    """Return one reviewed product-managed user account profile."""
+
+    return _USER_ACCOUNT_PROFILES.get(str(provider or "").strip().lower())
 
 
 _PROFILES = {
@@ -294,10 +333,13 @@ __all__ = [
     "ProviderProfile",
     "REGISTERED_CLI_BACKEND_NAMES",
     "SUPPORTED_CLI_ACCOUNT_NAMES",
+    "SUPPORTED_USER_ACCOUNT_NAMES",
     "SUPPORTED_PROVIDER_NAMES",
+    "UserAccountProfile",
     "cli_account_profile",
     "llm_supports_strict_json_schema",
     "llm_supports_vision",
     "model_looks_vision_capable",
     "provider_profile",
+    "user_account_profile",
 ]
