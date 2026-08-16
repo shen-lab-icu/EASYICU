@@ -298,15 +298,25 @@ def test_the_initial_directive_publishes_table_one_inputs_and_descriptive_ceilin
     assert "every `variables[*].name`" in directive
     assert '"unresolved_limitations"' in directive
     assert '"post_baseline_exposure_opportunity_unresolved"' in directive
-    assert '{"input_key":"table:exact_product","mode":"all_rows"}' in directive
-    assert "never rename them to `input` and `cardinality`" in directive
+    assert (
+        '{"schema_version":"easyicu.artifact_consumption/1",'
+        '"input_key":"table:exact_product","mode":"all_rows",'
+        '"role_column":null,"expected_roles":[]}' in directive
+    )
+    assert (
+        "Never rename `input_key` to `input` or `mode` to `cardinality`." in directive
+    )
 
 
 def test_the_retry_reminder_publishes_exact_nested_contract_shapes():
     reminder = planner_science_retry_guide()
 
-    assert '`{"input_key": "table:exact_product", "mode": "all_rows"}`' in reminder
-    assert "never rename `input_key` to `input`" in reminder
+    assert (
+        '`{"schema_version":"easyicu.artifact_consumption/1",'
+        '"input_key":"table:exact_product","mode":"all_rows",'
+        '"role_column":null,"expected_roles":[]}`' in reminder
+    )
+    assert "Never rename `input_key` to `input` or `mode` to `cardinality`." in reminder
     assert "`all_rows`, `single_row`, and `one_per_role`" in reminder
     assert "must be JSON strings" in reminder
     assert '`["0", "1"]`' in reminder

@@ -947,14 +947,24 @@ def figure_panel_shape_guide() -> str:
 def artifact_consumption_contract_shape_guide() -> str:
     """Publish the mode-dependent wire contract without choosing cardinality."""
 
+    all_rows_example = json.dumps(
+        {
+            "schema_version": "easyicu.artifact_consumption/1",
+            "input_key": "table:exact_product",
+            "mode": "all_rows",
+            "role_column": None,
+            "expected_roles": [],
+        },
+        separators=(",", ":"),
+    )
     return (
-        "Each `input_consumption_contracts` item has exactly "
-        "`schema_version`, `input_key`, `mode`, `role_column`, and "
-        "`expected_roles`; use schema version "
-        "`easyicu.artifact_consumption/1` and an exact lowercase "
-        "`kind:product` input key. For `all_rows`/`single_row`, set "
-        "`role_column:null`, `expected_roles:[]`. For `one_per_role`, both "
-        "role fields must be non-empty and `expected_roles` complete and unique."
+        "`input_consumption_contracts` item: "
+        f"`{all_rows_example}`. "
+        "`input_key` is lowercase `kind:product`. Modes are `all_rows`, "
+        "`single_row`, and `one_per_role`: first two use `role_column:null`, "
+        "`expected_roles:[]`; last uses non-empty role column and complete "
+        "unique roles. "
+        "Never rename `input_key` to `input` or `mode` to `cardinality`. "
     )
 
 

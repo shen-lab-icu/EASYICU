@@ -13,7 +13,7 @@ into the shared schema or prompt.
 from __future__ import annotations
 
 import re
-from typing import Literal, Optional
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -559,6 +559,7 @@ class ProgressivePlanCompileError(ValueError):
         step_id: Optional[str] = None,
         step_index: Optional[int] = None,
         path: Optional[str] = None,
+        findings: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code):
             raise ValueError(
@@ -577,6 +578,8 @@ class ProgressivePlanCompileError(ValueError):
             "path": path,
             "message": str(message),
         }
+        if findings:
+            self.details["findings"] = [dict(item) for item in findings]
         coordinate = f" step={step_id!r}" if step_id else ""
         if path:
             coordinate += f" path={path}"
