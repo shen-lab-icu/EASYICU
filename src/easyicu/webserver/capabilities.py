@@ -12,13 +12,13 @@ import re
 import time
 import urllib.parse
 import urllib.request
-from pathlib import Path
 from typing import Any, Dict, List
 
 from easyicu.research_agent.publication_skills import PUBLICATION_SKILLS
+from easyicu.webserver import state_paths
 from easyicu.webserver import settings as settings_store
 
-_STATE_DIR = Path.home() / ".easyicu"
+_STATE_DIR = state_paths.state_root()
 _AUDIT_PATH = _STATE_DIR / "capability_tool_audit.jsonl"
 _ZOTERO_LOCAL_API = "http://127.0.0.1:23119/api/users/0/items"
 _ZOTERO_TIMEOUT_SECONDS = 0.35

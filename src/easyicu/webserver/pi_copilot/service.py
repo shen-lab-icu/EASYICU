@@ -19,6 +19,7 @@ from easyicu.extensions import (
     ExtensionRegistryError,
 )
 
+from easyicu.webserver import state_paths
 from easyicu.webserver import (
     agent_pipeline_runs,
     agent_runs,
@@ -96,7 +97,7 @@ class PiCopilotService:
         self.store_path = (
             Path(store_path)
             if store_path is not None
-            else Path.home() / ".easyicu" / "pi_copilot_sessions.json"
+            else state_paths.state_root() / "pi_copilot_sessions.json"
         )
         self.gateway = gateway or PiGatewayClient()
         self.provider_store = (

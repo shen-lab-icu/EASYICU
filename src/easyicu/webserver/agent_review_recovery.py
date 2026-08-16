@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from easyicu.research_agent.canonical_json import canonical_sha256
 
+from easyicu.webserver import state_paths
+
 try:  # pragma: no branch - selected once per platform
     import fcntl
 except ImportError:  # pragma: no cover - exercised on Windows
@@ -239,7 +241,7 @@ class WebReviewRecoverySeed(BaseModel):
 
 
 def default_store_path() -> Path:
-    return Path.home() / ".easyicu" / "web_review_recovery.json"
+    return state_paths.state_root() / "web_review_recovery.json"
 
 
 def _read(path: Path) -> Dict[str, Any]:

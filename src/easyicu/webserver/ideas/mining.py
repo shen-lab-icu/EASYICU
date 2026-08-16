@@ -35,6 +35,7 @@ from easyicu.research_agent.literature_concepts import (
     concept_id as literature_concept_id,
     literature_concept_phrase,
 )
+from easyicu.webserver import state_paths
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.ideas import direct_evidence_search
@@ -51,8 +52,10 @@ from easyicu.webserver.ideas.prior_art_receipt import (
     load_bound_prior_art_literature as _load_bound_prior_art_literature,
 )
 from easyicu.webserver.input_validation import parse_bool
+# Aliased: `entity_ids` is also a local variable name in this module.
+from easyicu.webserver import entity_ids as entity_id_contract
 
-_CONFIG_DIR = Path.home() / ".easyicu"
+_CONFIG_DIR = state_paths.state_root()
 _RUN_ROOT = _CONFIG_DIR / "idea_mining_runs"
 _HISTORY_PATH = _CONFIG_DIR / "webserver_idea_mining_runs.json"
 _AGENT_PROJECTS_ROOT = _CONFIG_DIR / "agent_project_seeds"
@@ -2276,7 +2279,7 @@ def _feature_stats(
             continue
         if frame.empty or concept_id not in frame.columns:
             continue
-        entity_col = frame["stay_id"].map(dataio._norm_id)
+        entity_col = frame["stay_id"].map(entity_id_contract.normalize_entity_id)
         is_event_rate = _is_event_rate_concept(concept_id)
         non_null_mask = frame[concept_id].notna()
         non_null = frame[non_null_mask].copy()
@@ -2398,7 +2401,7 @@ def _bounded_feature_sample_stat(
             "summary_label": "No usable values were found in the bounded sample.",
             "status": "missing",
         }
-    entity_col = frame["stay_id"].map(dataio._norm_id)
+    entity_col = frame["stay_id"].map(entity_id_contract.normalize_entity_id)
     sample_entities = max(int(entity_col.nunique()), 1)
     is_event_rate = _is_event_rate_concept(concept_id)
     if is_event_rate:

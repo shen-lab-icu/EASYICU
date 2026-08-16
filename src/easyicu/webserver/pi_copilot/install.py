@@ -12,6 +12,8 @@ import tempfile
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
+from easyicu.webserver import state_paths
+
 PI_PACKAGE_VERSION = "0.84.1"
 RUNTIME_FILES = (
     "package.json",
@@ -122,7 +124,7 @@ PI_RUNTIME_REVISION = (
 
 
 def user_runtime_dir(*, home: Optional[Path] = None) -> Path:
-    root = Path(home) if home is not None else Path.home()
+    root = Path(home) if home is not None else state_paths.user_home()
     return root / ".easyicu" / "pi-agent" / "runtime" / PI_RUNTIME_REVISION
 
 
