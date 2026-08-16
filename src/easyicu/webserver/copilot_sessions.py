@@ -19,9 +19,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-_CONFIG_DIR = Path.home() / ".easyicu"
+from easyicu.webserver import state_paths
+
+_CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_copilot_sessions.json"
-_PROJECTS_ROOT = Path.home() / "easyicu" / "projects"
+_PROJECTS_ROOT = state_paths.projects_root()
 _MAX_SESSIONS = 80
 _MAX_MESSAGES = 120
 _LOCK = threading.RLock()

@@ -17,6 +17,7 @@
    never a guessed one. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
   function T(en, zh) { return (window.t || (a => a))(en, zh); }
 
@@ -82,10 +83,6 @@
     return single ? [single] : [];
   }
 
-  function esc(value) {
-    return String(value == null ? '' : value)
-      .replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-  }
 
   /* One row per remedy: what is required, and the button that goes there. */
   function render(remedies) {

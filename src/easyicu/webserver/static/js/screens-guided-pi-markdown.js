@@ -3,12 +3,8 @@
    needed by Copilot replies and never turns arbitrary HTML into DOM. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
-  function esc(value) {
-    return String(value == null ? '' : value)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
 
   function safeUrl(value) {
     const literature = window.EU_GUIDED_PI_LITERATURE;

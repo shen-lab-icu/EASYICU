@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Mapping, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
+from easyicu.webserver import state_paths
 from easyicu.webserver import agent_runs
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import capabilities
@@ -25,7 +26,7 @@ from easyicu.webserver.pi_copilot.contracts import PiCopilotError
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
 from easyicu.webserver.pi_copilot.workspace import ProjectWorkspace
 from easyicu.webserver.routes.jobs import submit_job
-from easyicu.webserver.routes.request_parsing import body_bool
+from easyicu.webserver.routes.request_parsing import body_bool, body_int
 
 control_router = APIRouter()
 artifact_router = APIRouter()
@@ -34,7 +35,7 @@ artifact_router = APIRouter()
 def _research_pipeline_workspace() -> ProjectWorkspace:
     """Return the server-owned Pi workspace used for scientific run artifacts."""
 
-    return ProjectWorkspace(Path.home() / ".easyicu" / "pi-agent" / "workspace")
+    return ProjectWorkspace(state_paths.state_root() / "pi-agent" / "workspace")
 
 
 def _provider_environment_for_agent_run(
@@ -777,7 +778,7 @@ def post_agent_run_history(body: Dict[str, Any]) -> dict:
     return agent_runs.list_run_history(
         study_id=body.get("study_id"),
         project_root=body.get("project_root") or _agent_seed_run_root(seed_dir),
-        limit=int(body.get("limit") or 50),
+        limit=body_int(body, "limit", 50, min_value=1, max_value=200),
     )
 
 

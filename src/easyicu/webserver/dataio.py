@@ -41,6 +41,7 @@ from easyicu.concept_output_sources import (
 from easyicu.databases import normalize_database_key
 from easyicu.outcome_availability import structural_outcome_unavailability
 from easyicu.webserver.input_validation import parse_bool
+from easyicu.webserver import entity_ids as entity_id_contract
 
 # Core metadata tables per database — a folder that holds these (as parquet or
 # csv) is recognised as that database. Mirrors check_data_status' core_tables.
@@ -2316,7 +2317,7 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
         }
     all_stay_ids = [
         stay_id
-        for stay_id in id_frame["stay_id"].map(_norm_id).drop_duplicates().tolist()
+        for stay_id in id_frame["stay_id"].map(entity_id_contract.normalize_entity_id).drop_duplicates().tolist()
         if stay_id
     ]
     total_stays = len(all_stay_ids)
@@ -2346,7 +2347,7 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
         demo = pd.DataFrame({"stay_id": sampled_id_order})
 
     demo = demo.copy()
-    demo["stay_id"] = demo["stay_id"].map(_norm_id)
+    demo["stay_id"] = demo["stay_id"].map(entity_id_contract.normalize_entity_id)
     demo = demo[demo["stay_id"].astype(str).str.len() > 0].drop_duplicates("stay_id")
     demo = demo.head(_WORKSPACE_SAMPLE_LIMIT)
     sampled_stays = len(stay_ids)
@@ -3053,7 +3054,7 @@ def _read_export_projection(
         )
     frame = pd.read_excel(path, usecols=selected)
     if stay_ids is not None and entity_column in frame.columns:
-        frame = frame[frame[entity_column].map(_norm_id).isin(stay_ids)].copy()
+        frame = frame[frame[entity_column].map(entity_id_contract.normalize_entity_id).isin(stay_ids)].copy()
     return frame
 
 
@@ -3151,24 +3152,7 @@ def _read_stay_ids(
         return None
     if "stay_id" not in frame.columns:
         return None
-    return {sid for sid in frame["stay_id"].map(_norm_id).dropna().astype(str) if sid}
-
-
-def _norm_id(value: Any) -> str:
-    try:
-        import pandas as pd
-
-        if pd.isna(value):
-            return ""
-    except Exception:
-        pass
-    try:
-        f = float(value)
-        if f.is_integer():
-            return str(int(f))
-    except (TypeError, ValueError):
-        pass
-    return "" if value is None else str(value)
+    return {sid for sid in frame["stay_id"].map(entity_id_contract.normalize_entity_id).dropna().astype(str) if sid}
 
 
 def _clean(value: Any) -> Optional[str]:
@@ -3199,7 +3183,7 @@ def _filter_by_stay(frame: Any, stay_ids: set[str]) -> Any:
     if frame is None or frame.empty or "stay_id" not in frame.columns:
         return frame
     tmp = frame.copy()
-    tmp["stay_id"] = tmp["stay_id"].map(_norm_id)
+    tmp["stay_id"] = tmp["stay_id"].map(entity_id_contract.normalize_entity_id)
     return tmp[tmp["stay_id"].isin(stay_ids)]
 
 
@@ -3364,7 +3348,7 @@ def _count_matching_stay_rows(path: Path, stay_ids: set[str]) -> int:
         return 0
     if "stay_id" not in frame.columns:
         return 0
-    return int(frame["stay_id"].map(_norm_id).isin(stay_ids).sum())
+    return int(frame["stay_id"].map(entity_id_contract.normalize_entity_id).isin(stay_ids).sum())
 
 
 def _quality_row(

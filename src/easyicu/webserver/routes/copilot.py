@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool, StringConstraints
 
 from easyicu.webserver import copilot_sessions, study_intent
 from easyicu.webserver import settings as settings_store
+from easyicu.webserver.routes.request_parsing import body_int
 
 router = APIRouter()
 
@@ -76,7 +77,9 @@ def post_copilot_action(body: Dict[str, Any]) -> dict:
 @router.post("/api/copilot/sessions/list")
 def post_copilot_sessions_list(body: Dict[str, Any] | None = None) -> dict:
     """List local metadata-only Copilot/Page guide session folders."""
-    return copilot_sessions.list_sessions(limit=int((body or {}).get("limit") or 20))
+    return copilot_sessions.list_sessions(
+        limit=body_int(body or {}, "limit", 20, min_value=1, max_value=100)
+    )
 
 
 __all__ = ["router"]

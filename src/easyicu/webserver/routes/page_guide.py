@@ -7,6 +7,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 
 from easyicu.webserver import copilot_sessions
+from easyicu.webserver.routes.request_parsing import body_int
 
 router = APIRouter()
 
@@ -42,7 +43,9 @@ def post_page_guide_action(body: Dict[str, Any]) -> dict:
 @router.post("/api/page-guide/sessions/list")
 def post_page_guide_sessions_list(body: Dict[str, Any] | None = None) -> dict:
     """List local metadata-only Page guide session folders."""
-    return copilot_sessions.list_sessions(limit=int((body or {}).get("limit") or 20))
+    return copilot_sessions.list_sessions(
+        limit=body_int(body or {}, "limit", 20, min_value=1, max_value=100)
+    )
 
 
 __all__ = ["router"]

@@ -31,6 +31,36 @@ def resolve_entity_id_column(columns: Iterable[object]) -> str | None:
     return None
 
 
+def normalize_entity_id(value: Any) -> str:
+    """Return the comparable string form of one stored stay id.
+
+    Prepared exports store the stay key as int64, float64 or string depending
+    on the source database and the converter path, so `1`, `1.0` and `"1"` all
+    have to compare equal. A whole float is rendered through `int` so it does
+    not arrive as `"1.0"` or, for a large id, in scientific notation. A missing
+    value becomes the empty string rather than `"nan"`, which would otherwise
+    match a literal `nan` id.
+
+    Values that are not numbers are returned as their own text, so an opaque
+    key such as `"stay_7"` survives unchanged.
+    """
+
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    try:
+        number = float(value)
+        if number.is_integer():
+            return str(int(number))
+    except (TypeError, ValueError):
+        pass
+    return "" if value is None else str(value)
+
+
 def canonicalize_entity_frame(frame: Any, source_column: str) -> Any:
     """Rename a verified source stay key to the Patient Review canonical name."""
 

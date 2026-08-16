@@ -2023,7 +2023,10 @@ def _search_literature(
     """Run the existing PubMed Idea Mining owner after one-turn opt-in."""
 
     _require_args(params, allowed=("topic", "journal", "limit"))
-    requested_limit = max(1, min(int(params.get("limit") or 5), 8))
+    try:
+        requested_limit = max(1, min(int(params.get("limit") or 5), 8))
+    except (TypeError, ValueError):
+        requested_limit = 5
     study = _bound_context(context.session.binding) or {}
     topic = str(params.get("topic") or study.get("question") or "").strip()
     if not topic:

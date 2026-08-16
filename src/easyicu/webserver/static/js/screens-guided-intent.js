@@ -17,6 +17,7 @@
    `null` means "could not read" — never a fabricated contract. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
   window.EU_STUDY_INTENT = window.EU_STUDY_INTENT || {};
   const NS = window.EU_STUDY_INTENT;
@@ -33,11 +34,6 @@
   const SLOT_ORDER = ['population', 'exposure', 'outcome', 'outcome_type', 'time_window_hours', 'comparator', 'analysis_family'];
 
   function tx(en, zh) { return window.t ? window.t(en, zh) : en; }
-  function esc(v) {
-    return String(v == null ? '' : v).replace(/[&<>"']/g, c => (
-      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-    ));
-  }
   function label(slot) {
     const pair = SLOT_LABELS[slot] || [slot, slot];
     return tx(pair[0], pair[1]);
