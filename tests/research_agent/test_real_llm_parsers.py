@@ -632,7 +632,8 @@ def test_large_retry_projection_keeps_authority_as_a_bounded_coordinate_table() 
                     "complete_case",
                     "landmark_alive_at_24h",
                     "non_readmission_icu_stays",
-                ],
+                ]
+                + ([7] if index == 0 else []),
                 "model_requirements": [
                     {
                         "requirement_id": "primary",
@@ -680,12 +681,15 @@ def test_large_retry_projection_keeps_authority_as_a_bounded_coordinate_table() 
     strings = payload["coordinate_string_table"]
 
     def deref(value):
-        if isinstance(value, list) and len(value) == 2 and value[0] == "s":
-            return strings[value[1]]
+        if isinstance(value, list) and len(value) == 2 and value[0] == "n":
+            return value[1]
+        if isinstance(value, int) and not isinstance(value, bool):
+            return strings[value]
         if isinstance(value, list):
             return [deref(item) for item in value]
         return value
 
+    assert deref(first["role"]) == "auxiliary"
     assert deref(first["action"]) == "association.adjusted_models"
     assert deref(first["capability"]) == "association_adjusted_v1"
     assert deref(first["citation_keys"]) == [
@@ -702,6 +706,7 @@ def test_large_retry_projection_keeps_authority_as_a_bounded_coordinate_table() 
         "complete_case",
         "landmark_alive_at_24h",
         "non_readmission_icu_stays",
+        7,
     ]
 
 

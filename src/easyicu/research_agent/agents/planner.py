@@ -1357,16 +1357,18 @@ def _planner_retry_response_projection(
         """Intern one string without confusing invalid literal scalars."""
 
         if not isinstance(value, str):
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return ["n", value]
             return value
         index = coordinate_string_indexes.get(value)
         if index is None:
             index = len(coordinate_strings)
             coordinate_string_indexes[value] = index
             coordinate_strings.append(value)
-        # A tagged reference remains unambiguous if a non-strict provider sent
-        # an invalid integer in a string field.  The projection is lossless
-        # evidence for correction, not a second permissive plan schema.
-        return ["s", index]
+        # Every bare non-negative integer is a string-table reference. Literal
+        # numeric scalars from a non-strict/invalid response are wrapped above,
+        # so the denser representation remains lossless and unambiguous.
+        return index
 
     def coordinate_refs(value: Any) -> Any:
         if not isinstance(value, list):
@@ -1391,7 +1393,7 @@ def _planner_retry_response_projection(
         coordinate_steps.append(
             [
                 step.get("step_id"),
-                step.get("planned_analysis_role"),
+                coordinate_ref(step.get("planned_analysis_role")),
                 coordinate_ref(step.get("scientific_action_id")),
                 coordinate_ref(step.get("scientific_capability")),
                 coordinate_ref(step.get("method")),
@@ -1406,9 +1408,10 @@ def _planner_retry_response_projection(
     projection["step_coordinate_columns"] = list(coordinate_columns)
     projection["step_coordinates"] = coordinate_steps
     projection["projection_note"] = (
-        "['s',n] indexes coordinate_string_table; other scalars are literal. "
-        "Prior coordinates only: emit the complete schema and literature "
-        "binding applications required by the original prompt."
+        "Inside step_coordinates, bare integers index coordinate_string_table; "
+        "['n',v] preserves a literal numeric scalar. Prior coordinates only: "
+        "emit the complete schema and literature binding applications required "
+        "by the original prompt."
     )
     projection["robustness_specs"] = [
         {key: spec[key] for key in ("spec_id", "axis") if key in spec}
