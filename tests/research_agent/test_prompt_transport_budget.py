@@ -536,7 +536,7 @@ _DECLARED_RAW_RESOLVER_SITES = {
     # ReplannerAgent still enforces its own constructed projection. Planner
     # generation is transport-wrapped because its structured retries append
     # response/feedback messages after the initial agent-local measurement.
-    ("execution/phase.py", "planner", "ReplannerAgent"),
+    ("execution/phase_support.py", "planner", "ReplannerAgent"),
 }
 
 

@@ -142,6 +142,7 @@ TARGET_FILES: List[Path] = [
 TARGET_FUNCTIONS: List[Tuple[str, str]] = [
     ("execution/phase.py", "_execute_one_step"),
     ("execution/phase.py", "run_execute_phase"),
+    ("execution/phase.py", "_execute_step"),
 ]
 # Compatibility-shim import paths a future batch may introduce. While empty the
 # shim-bypass check is a no-op. The pre-v1 cleanup deliberately retires old paths

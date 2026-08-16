@@ -4166,20 +4166,15 @@ class FigureSourceDataValidator:
                 ),
             }
 
-        def _key_set(frame: pd.DataFrame) -> Set[tuple[str, ...]]:
-            return set(
-                frame[list(key_cols)]
-                .dropna()
-                .astype(str)
-                .itertuples(index=False, name=None)
-            )
+        def _key_set(frame: pd.DataFrame):
+            return _figure_source_compare___key_set(frame, key_cols=key_cols)
 
         upstream_keys = _key_set(upstream)
         missing_keys = sorted(_key_set(source) - upstream_keys)
         key_label = positional_key_label or "+".join(key_cols)
 
-        def _format_key(row: pd.Series) -> str:
-            return "|".join(str(row[col]) for col in key_cols)
+        def _format_key(row: pd.Series):
+            return _figure_source_compare___format_key(row, key_cols=key_cols)
 
         if missing_keys:
             return {
@@ -4216,58 +4211,11 @@ class FigureSourceDataValidator:
             r"count|ci|lower|upper|mean|median|se|p|statistic|value|n)(?:_|$)"
         )
 
-        def _clean_numeric(raw: pd.Series) -> pd.Series:
-            # Figure source tables sometimes serialize display values as
-            # ``91%`` or ``1,234``.  Parse those forms for verification while
-            # retaining the original missing/non-finite semantics below.
-            text = raw.astype(str).str.strip()
-            text = text.str.replace(",", "", regex=False)
-            text = text.str.replace("%", "", regex=False)
-            text = text.str.replace("−", "-", regex=False)
-            text = text.str.replace(
-                r"^\(([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\)$",
-                r"-\1",
-                regex=True,
-            )
-            return pd.to_numeric(text, errors="coerce").astype(float)
+        def _clean_numeric(raw: pd.Series):
+            return _figure_source_compare___clean_numeric(raw)
 
-        def _is_value_column(frame: pd.DataFrame, col: str) -> bool:
-            if col in ignored_for_dynamic_numeric or col in cls._TEXT_COLUMNS:
-                return False
-            raw = frame[col]
-            if pd.api.types.is_bool_dtype(raw) or str(col).lower() in {
-                "is_continuous",
-                "treated",
-            }:
-                return False
-            present = raw.notna() & raw.astype(str).str.strip().ne("")
-            if not present.any():
-                return False
-            # CSV round-trips commonly represent nullable boolean metadata as
-            # object dtype (for example ``[False, NaN]``). A name such as
-            # ``estimate_identical_to_primary`` contains the token
-            # ``estimate`` but remains a flag, not a numeric result. Treating
-            # it as numeric turns two identical ``False`` values into matching
-            # parse failures and falsely rejects an exact parent projection.
-            if pd.api.types.infer_dtype(raw[present], skipna=True) == "boolean":
-                return False
-            parsed = _clean_numeric(raw[present])
-            numeric_evidence = bool(
-                pd.api.types.is_numeric_dtype(raw) or parsed.notna().all()
-            )
-            # Text-like suffixes normally identify labels/roles rather than
-            # values.  A name that also declares a value role (for example a
-            # numeric ``estimate_label``) must not escape verification merely
-            # because it contains ``label``.
-            if text_name.search(str(col).lower()) and not (
-                value_name.search(str(col).lower()) and numeric_evidence
-            ):
-                return False
-            return bool(
-                col in cls._NUMERIC_COLUMNS
-                or numeric_evidence
-                or value_name.search(str(col).lower())
-            )
+        def _is_value_column(frame: pd.DataFrame, col: str):
+            return _figure_source_compare___is_value_column(frame, col, _clean_numeric=_clean_numeric, cls=cls, ignored_for_dynamic_numeric=ignored_for_dynamic_numeric, text_name=text_name, value_name=value_name)
 
         source_value_columns = {
             col for col in source.columns if _is_value_column(source, col)
@@ -4276,278 +4224,26 @@ class FigureSourceDataValidator:
             col for col in upstream.columns if _is_value_column(upstream, col)
         }
 
-        def _merged_source(col: str) -> pd.Series:
-            suffixed = f"{col}_source"
-            return (
-                merged[suffixed]
-                if col in upstream.columns and suffixed in merged.columns
-                else merged[col]
-            )
+        def _merged_source(col: str):
+            return _figure_source_compare___merged_source(col, merged=merged, upstream=upstream)
 
-        def _merged_upstream(col: str) -> pd.Series:
-            suffixed = f"{col}_upstream"
-            return (
-                merged[suffixed]
-                if col in source.columns and suffixed in merged.columns
-                else merged[col]
-            )
+        def _merged_upstream(col: str):
+            return _figure_source_compare___merged_upstream(col, merged=merged, source=source)
 
-        def _numeric_comparison(
-            source_name: str, upstream_name: str
-        ) -> tuple[bool, bool, pd.Series, pd.Series, pd.Series, pd.Series]:
-            left_raw = _merged_source(source_name)
-            right_raw = _merged_upstream(upstream_name)
-            left_present = left_raw.notna() & left_raw.astype(str).str.strip().ne("")
-            right_present = right_raw.notna() & right_raw.astype(str).str.strip().ne("")
-            left = _clean_numeric(left_raw)
-            right = _clean_numeric(right_raw)
-            left_finite = left.notna() & left.map(math.isfinite)
-            right_finite = right.notna() & right.map(math.isfinite)
-            comparable = left_present & right_present & left_finite & right_finite
-            abs_tolerance = (
-                cls._PERCENTAGE_ABS_TOL
-                if any(
-                    token in name.lower()
-                    for name in (source_name, upstream_name)
-                    for token in ("_pct", "percent")
-                )
-                else cls._DEFAULT_NUMERIC_ABS_TOL
-            )
-            diff = (left - right).abs()
-            same_nonfinite = (
-                left_present & right_present & left.eq(right) & ~left_finite & ~right_finite
-            )
-            # Equal nonnumeric receipt text is faithful, not a parse failure.
-            same_semantic_text = (
-                left_present & right_present & left.isna() & right.isna()
-                & left_raw.astype(str).str.strip().eq(right_raw.astype(str).str.strip())
-            )
-            parse_failure = ((left_present & left.isna()) | (right_present & right.isna())) & ~same_semantic_text
-            bad = (
-                (left_present ^ right_present)
-                | parse_failure
-                | (comparable & (diff > abs_tolerance))
-                | (
-                    left_present
-                    & right_present
-                    & ~comparable
-                    & ~same_semantic_text
-                    & ~same_nonfinite
-                    & ~parse_failure
-                )
-            )
-            return (
-                bool((comparable | same_semantic_text).any() and not bad.any()),
-                bool(bad.any()),
-                bad,
-                left,
-                right,
-                diff,
-            )
+        def _numeric_comparison(source_name: str, upstream_name: str):
+            return _figure_source_compare___numeric_comparison(source_name, upstream_name, _clean_numeric=_clean_numeric, _merged_source=_merged_source, _merged_upstream=_merged_upstream, cls=cls)
 
-        def _value_family(col: str) -> str:
-            """Classify value-column names for safe cross-name matching.
+        def _value_family(col: str):
+            return _figure_source_compare___value_family(col)
 
-            Row-aligned equality proves that a numeric vector came from the
-            parent table, but it does not by itself prove semantic identity. A
-            count vector must not authenticate an ``estimate`` merely because
-            the numbers happen to coincide.  Keep the families deliberately
-            small and case-neutral; same-name comparisons remain authoritative.
-            """
+        def _structured_source_family(source_name: str):
+            return _figure_source_compare___structured_source_family(source_name, _value_family=_value_family, cls=cls, source=source)
 
-            name = re.sub(r"[^a-z0-9]+", "_", str(col).strip().lower()).strip("_")
-            tokens = set(name.split("_")) if name else set()
-            if tokens & {"percent", "percentage", "pct"}:
-                return "percent"
-            if (
-                name in {"n", "count", "denominator", "sample_size"}
-                or tokens & {"count", "events", "deaths"}
-                or "denominator" in tokens
-                or "sample" in tokens
-                and "size" in tokens
-                or name.startswith("n_")
-                or name.endswith("_n")
-            ):
-                return "count"
-            if tokens & {
-                "risk",
-                "rate",
-                "proportion",
-                "prevalence",
-                "incidence",
-                "probability",
-            }:
-                return "rate"
-            if ("ci" in tokens and tokens & {"low", "lower", "lcl"}) or tokens & {
-                "lcl"
-            }:
-                return "ci_low"
-            if ("ci" in tokens and tokens & {"high", "upper", "ucl"}) or tokens & {
-                "ucl"
-            }:
-                return "ci_high"
-            if name in {
-                "se",
-                "stderr",
-                "std_err",
-                "std_error",
-                "standard_err",
-                "standard_error",
-            } or (
-                bool(tokens & {"std", "standard"}) and bool(tokens & {"err", "error"})
-            ):
-                return "standard_error"
-            if name in {"p", "pval", "p_val", "pvalue", "p_value"} or (
-                "p" in tokens and bool(tokens & {"val", "value"})
-            ):
-                return "p_value"
-            if tokens & {"mean", "median", "quantile"}:
-                return "location_summary"
-            if tokens & {"order", "position", "rank"}:
-                return "ordering"
-            if tokens & {"ratio", "odds", "hazard"} or name in {
-                "or",
-                "hr",
-                "rr",
-            }:
-                return "ratio"
-            if tokens & {"estimate", "effect", "statistic"}:
-                return "generic_estimate"
-            if "value" in tokens:
-                return "generic_value"
-            return "other_numeric"
+        def _cross_name_families_compatible(source_name: str, upstream_name: str):
+            return _figure_source_compare___cross_name_families_compatible(source_name, upstream_name, _structured_source_family=_structured_source_family, _value_family=_value_family)
 
-        def _structured_source_family(source_name: str) -> str:
-            family = _value_family(source_name)
-            if family != "generic_estimate":
-                return family
-            semantic_values: Set[str] = set()
-            for semantic_col in ("value_type", "estimate_type", "effect_scale"):
-                if semantic_col not in source.columns:
-                    continue
-                semantic_values.update(
-                    cls._normalise(item)
-                    for item in source[semantic_col].dropna().astype(str)
-                    if str(item).strip()
-                )
-            semantic_families: Set[str] = set()
-            if semantic_values & {
-                "distribution",
-                "continuous_distribution",
-                "distribution_mean",
-                "distribution_median",
-                "location_summary",
-                "mean",
-                "median",
-                "quantile",
-            }:
-                semantic_families.add("location_summary")
-            if semantic_values & {
-                "risk",
-                "rate",
-                "probability",
-                "prevalence",
-                "incidence",
-                "absolute_risk",
-                "event_rate",
-                "mortality_rate",
-            }:
-                semantic_families.add("rate")
-            if semantic_values & {
-                "odds",
-                "hazard",
-                "ratio",
-                "association",
-                "effect",
-                "odds_ratio",
-                "hazard_ratio",
-                "risk_ratio",
-                "association_estimate",
-                "effect_estimate",
-                "or",
-                "hr",
-                "rr",
-            }:
-                semantic_families.add("ratio")
-            if len(semantic_families) == 1:
-                return next(iter(semantic_families))
-            return family
-
-        def _cross_name_families_compatible(
-            source_name: str, upstream_name: str
-        ) -> bool:
-            source_family = _structured_source_family(source_name)
-            upstream_family = _value_family(upstream_name)
-            # Unknown/generic numeric names have no semantic contract.  Exact
-            # same-name columns were already handled above; across names, an
-            # equal vector such as ``display_metric`` == ``age`` must not be
-            # treated as proof that the displayed quantity came from the
-            # claimed upstream measure.
-            if source_family in {
-                "generic_value",
-                "other_numeric",
-            } or upstream_family in {"generic_value", "other_numeric"}:
-                return False
-            # Ordering is presentation metadata, not a scientific value
-            # family. Only the explicit ``plot_*`` derivation below may bind
-            # it to a complete row-aligned upstream ordering vector.
-            if "ordering" in {source_family, upstream_family}:
-                return False
-            if "count" in {source_family, upstream_family}:
-                return source_family == upstream_family
-            # Percent-labelled columns require either a same-family raw vector
-            # or the explicit derived percentage logic below; they cannot
-            # silently inherit the scale of a 0-1 risk/rate column.
-            if "percent" in {source_family, upstream_family}:
-                return source_family == upstream_family
-            inferential_specific = {
-                "ci_low",
-                "ci_high",
-                "standard_error",
-                "p_value",
-            }
-            if (
-                source_family in inferential_specific
-                or upstream_family in inferential_specific
-            ):
-                return source_family == upstream_family
-            # A presentation-neutral estimate may project a rate/risk or ratio
-            # when its complete vector matches.  Location summaries require a
-            # structured source semantic (value_type/estimate_type/effect_scale)
-            # so an unrelated mean-age vector cannot authenticate an outcome
-            # estimate merely because the numbers happen to coincide.
-            # e.g. a renderer's ``estimate`` may faithfully project an
-            # upstream ``mortality_rate``.
-            if source_family == "generic_estimate":
-                return upstream_family in {"rate", "ratio"}
-            return source_family == upstream_family
-
-        def _explicit_semantic_target_columns(source_name: str) -> List[str]:
-            """Resolve a concrete source declaration to its named parent value.
-
-            A declaration such as ``value_type=mortality_rate`` is stronger
-            than the broad ``rate`` family inferred from it. When that exact
-            normalised value column exists upstream, bind to it so a sibling
-            rate/effect column with coincident values cannot authenticate the
-            claim. Generic declarations that do not name an upstream column
-            retain the family-level compatibility path below.
-            """
-
-            declared = {
-                cls._normalise(item)
-                for semantic_col in ("value_type", "estimate_type", "effect_scale")
-                if semantic_col in source.columns
-                for item in source[semantic_col].dropna().astype(str)
-                if str(item).strip()
-            }
-            if not declared:
-                return []
-            return sorted(
-                upstream_col
-                for upstream_col in upstream_value_columns
-                if cls._normalise(upstream_col) in declared
-                and _cross_name_families_compatible(source_name, upstream_col)
-            )
+        def _explicit_semantic_target_columns(source_name: str):
+            return _figure_source_compare___explicit_semantic_target_columns(source_name, _cross_name_families_compatible=_cross_name_families_compatible, cls=cls, source=source, upstream_value_columns=upstream_value_columns)
 
         verified_value_mappings: Dict[str, str] = {}
         used_upstream_value_columns: Set[str] = set()
@@ -4654,31 +4350,8 @@ class FigureSourceDataValidator:
             elif len(matching_upstream_columns) > 1:
                 ambiguous_value_mappings[source_col] = matching_upstream_columns
 
-        def _derived_matches(
-            source_col: str,
-            expected_vectors: Sequence[pd.Series],
-            *,
-            tolerance: Optional[float] = None,
-        ) -> bool:
-            tolerance = cls._DEFAULT_NUMERIC_ABS_TOL if tolerance is None else tolerance
-            left_raw = _merged_source(source_col)
-            left_present = left_raw.notna() & left_raw.astype(str).str.strip().ne("")
-            left = _clean_numeric(left_raw)
-            if not left_present.any() or (left_present & left.isna()).any():
-                return False
-            for expected in expected_vectors:
-                expected = pd.to_numeric(expected, errors="coerce").astype(float)
-                comparable = (
-                    left_present
-                    & left.notna()
-                    & expected.notna()
-                    & left.map(math.isfinite)
-                    & expected.map(math.isfinite)
-                )
-                matched = comparable & ((left - expected).abs() <= tolerance)
-                if comparable.any() and (matched | ~left_present).all():
-                    return True
-            return False
+        def _derived_matches(source_col: str, expected_vectors: Sequence[pd.Series], *, tolerance: Optional[float]=None):
+            return _figure_source_compare___derived_matches(source_col, expected_vectors, tolerance=tolerance, _clean_numeric=_clean_numeric, _merged_source=_merged_source, cls=cls)
 
         # Derived display columns remain fail-closed, but can be authenticated
         # from already verified source values.  This preserves honest renderer
@@ -5499,3 +5172,367 @@ class FigureContractQualityValidator:
                     ]
                 )
         return "\n".join(part for part in parts if part)
+
+def _figure_source_compare___key_set(frame: pd.DataFrame, *, key_cols: Any) -> Set[tuple[str, ...]]:
+    return set(
+        frame[list(key_cols)]
+        .dropna()
+        .astype(str)
+        .itertuples(index=False, name=None)
+    )
+
+
+def _figure_source_compare___format_key(row: pd.Series, *, key_cols: Any) -> str:
+    return "|".join(str(row[col]) for col in key_cols)
+
+
+def _figure_source_compare___clean_numeric(raw: pd.Series) -> pd.Series:
+    text = raw.astype(str).str.strip()
+    text = text.str.replace(",", "", regex=False)
+    text = text.str.replace("%", "", regex=False)
+    text = text.str.replace("−", "-", regex=False)
+    text = text.str.replace(
+        r"^\(([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\)$",
+        r"-\1",
+        regex=True,
+    )
+    return pd.to_numeric(text, errors="coerce").astype(float)
+
+
+def _figure_source_compare___is_value_column(frame: pd.DataFrame, col: str, *, _clean_numeric: Any, cls: Any, ignored_for_dynamic_numeric: Any, text_name: Any, value_name: Any) -> bool:
+    if col in ignored_for_dynamic_numeric or col in cls._TEXT_COLUMNS:
+        return False
+    raw = frame[col]
+    if pd.api.types.is_bool_dtype(raw) or str(col).lower() in {
+        "is_continuous",
+        "treated",
+    }:
+        return False
+    present = raw.notna() & raw.astype(str).str.strip().ne("")
+    if not present.any():
+        return False
+    # CSV round-trips commonly represent nullable boolean metadata as
+    # object dtype (for example ``[False, NaN]``). A name such as
+    # ``estimate_identical_to_primary`` contains the token
+    # ``estimate`` but remains a flag, not a numeric result. Treating
+    # it as numeric turns two identical ``False`` values into matching
+    # parse failures and falsely rejects an exact parent projection.
+    if pd.api.types.infer_dtype(raw[present], skipna=True) == "boolean":
+        return False
+    parsed = _clean_numeric(raw[present])
+    numeric_evidence = bool(
+        pd.api.types.is_numeric_dtype(raw) or parsed.notna().all()
+    )
+    # Text-like suffixes normally identify labels/roles rather than
+    # values.  A name that also declares a value role (for example a
+    # numeric ``estimate_label``) must not escape verification merely
+    # because it contains ``label``.
+    if text_name.search(str(col).lower()) and not (
+        value_name.search(str(col).lower()) and numeric_evidence
+    ):
+        return False
+    return bool(
+        col in cls._NUMERIC_COLUMNS
+        or numeric_evidence
+        or value_name.search(str(col).lower())
+    )
+
+
+def _figure_source_compare___merged_source(col: str, *, merged: Any, upstream: Any) -> pd.Series:
+    suffixed = f"{col}_source"
+    return (
+        merged[suffixed]
+        if col in upstream.columns and suffixed in merged.columns
+        else merged[col]
+    )
+
+
+def _figure_source_compare___merged_upstream(col: str, *, merged: Any, source: Any) -> pd.Series:
+    suffixed = f"{col}_upstream"
+    return (
+        merged[suffixed]
+        if col in source.columns and suffixed in merged.columns
+        else merged[col]
+    )
+
+
+def _figure_source_compare___numeric_comparison(source_name: str, upstream_name: str, *, _clean_numeric: Any, _merged_source: Any, _merged_upstream: Any, cls: Any) -> tuple[bool, bool, pd.Series, pd.Series, pd.Series, pd.Series]:
+    left_raw = _merged_source(source_name)
+    right_raw = _merged_upstream(upstream_name)
+    left_present = left_raw.notna() & left_raw.astype(str).str.strip().ne("")
+    right_present = right_raw.notna() & right_raw.astype(str).str.strip().ne("")
+    left = _clean_numeric(left_raw)
+    right = _clean_numeric(right_raw)
+    left_finite = left.notna() & left.map(math.isfinite)
+    right_finite = right.notna() & right.map(math.isfinite)
+    comparable = left_present & right_present & left_finite & right_finite
+    abs_tolerance = (
+        cls._PERCENTAGE_ABS_TOL
+        if any(
+            token in name.lower()
+            for name in (source_name, upstream_name)
+            for token in ("_pct", "percent")
+        )
+        else cls._DEFAULT_NUMERIC_ABS_TOL
+    )
+    diff = (left - right).abs()
+    same_nonfinite = (
+        left_present & right_present & left.eq(right) & ~left_finite & ~right_finite
+    )
+    # Equal nonnumeric receipt text is faithful, not a parse failure.
+    same_semantic_text = (
+        left_present & right_present & left.isna() & right.isna()
+        & left_raw.astype(str).str.strip().eq(right_raw.astype(str).str.strip())
+    )
+    parse_failure = ((left_present & left.isna()) | (right_present & right.isna())) & ~same_semantic_text
+    bad = (
+        (left_present ^ right_present)
+        | parse_failure
+        | (comparable & (diff > abs_tolerance))
+        | (
+            left_present
+            & right_present
+            & ~comparable
+            & ~same_semantic_text
+            & ~same_nonfinite
+            & ~parse_failure
+        )
+    )
+    return (
+        bool((comparable | same_semantic_text).any() and not bad.any()),
+        bool(bad.any()),
+        bad,
+        left,
+        right,
+        diff,
+    )
+
+
+def _figure_source_compare___value_family(col: str) -> str:
+    """Classify value-column names for safe cross-name matching.
+
+    Row-aligned equality proves that a numeric vector came from the
+    parent table, but it does not by itself prove semantic identity. A
+    count vector must not authenticate an ``estimate`` merely because
+    the numbers happen to coincide.  Keep the families deliberately
+    small and case-neutral; same-name comparisons remain authoritative.
+    """
+
+    name = re.sub(r"[^a-z0-9]+", "_", str(col).strip().lower()).strip("_")
+    tokens = set(name.split("_")) if name else set()
+    if tokens & {"percent", "percentage", "pct"}:
+        return "percent"
+    if (
+        name in {"n", "count", "denominator", "sample_size"}
+        or tokens & {"count", "events", "deaths"}
+        or "denominator" in tokens
+        or "sample" in tokens
+        and "size" in tokens
+        or name.startswith("n_")
+        or name.endswith("_n")
+    ):
+        return "count"
+    if tokens & {
+        "risk",
+        "rate",
+        "proportion",
+        "prevalence",
+        "incidence",
+        "probability",
+    }:
+        return "rate"
+    if ("ci" in tokens and tokens & {"low", "lower", "lcl"}) or tokens & {
+        "lcl"
+    }:
+        return "ci_low"
+    if ("ci" in tokens and tokens & {"high", "upper", "ucl"}) or tokens & {
+        "ucl"
+    }:
+        return "ci_high"
+    if name in {
+        "se",
+        "stderr",
+        "std_err",
+        "std_error",
+        "standard_err",
+        "standard_error",
+    } or (
+        bool(tokens & {"std", "standard"}) and bool(tokens & {"err", "error"})
+    ):
+        return "standard_error"
+    if name in {"p", "pval", "p_val", "pvalue", "p_value"} or (
+        "p" in tokens and bool(tokens & {"val", "value"})
+    ):
+        return "p_value"
+    if tokens & {"mean", "median", "quantile"}:
+        return "location_summary"
+    if tokens & {"order", "position", "rank"}:
+        return "ordering"
+    if tokens & {"ratio", "odds", "hazard"} or name in {
+        "or",
+        "hr",
+        "rr",
+    }:
+        return "ratio"
+    if tokens & {"estimate", "effect", "statistic"}:
+        return "generic_estimate"
+    if "value" in tokens:
+        return "generic_value"
+    return "other_numeric"
+
+
+def _figure_source_compare___structured_source_family(source_name: str, *, _value_family: Any, cls: Any, source: Any) -> str:
+    family = _value_family(source_name)
+    if family != "generic_estimate":
+        return family
+    semantic_values: Set[str] = set()
+    for semantic_col in ("value_type", "estimate_type", "effect_scale"):
+        if semantic_col not in source.columns:
+            continue
+        semantic_values.update(
+            cls._normalise(item)
+            for item in source[semantic_col].dropna().astype(str)
+            if str(item).strip()
+        )
+    semantic_families: Set[str] = set()
+    if semantic_values & {
+        "distribution",
+        "continuous_distribution",
+        "distribution_mean",
+        "distribution_median",
+        "location_summary",
+        "mean",
+        "median",
+        "quantile",
+    }:
+        semantic_families.add("location_summary")
+    if semantic_values & {
+        "risk",
+        "rate",
+        "probability",
+        "prevalence",
+        "incidence",
+        "absolute_risk",
+        "event_rate",
+        "mortality_rate",
+    }:
+        semantic_families.add("rate")
+    if semantic_values & {
+        "odds",
+        "hazard",
+        "ratio",
+        "association",
+        "effect",
+        "odds_ratio",
+        "hazard_ratio",
+        "risk_ratio",
+        "association_estimate",
+        "effect_estimate",
+        "or",
+        "hr",
+        "rr",
+    }:
+        semantic_families.add("ratio")
+    if len(semantic_families) == 1:
+        return next(iter(semantic_families))
+    return family
+
+
+def _figure_source_compare___cross_name_families_compatible(source_name: str, upstream_name: str, *, _structured_source_family: Any, _value_family: Any) -> bool:
+    source_family = _structured_source_family(source_name)
+    upstream_family = _value_family(upstream_name)
+    # Unknown/generic numeric names have no semantic contract.  Exact
+    # same-name columns were already handled above; across names, an
+    # equal vector such as ``display_metric`` == ``age`` must not be
+    # treated as proof that the displayed quantity came from the
+    # claimed upstream measure.
+    if source_family in {
+        "generic_value",
+        "other_numeric",
+    } or upstream_family in {"generic_value", "other_numeric"}:
+        return False
+    # Ordering is presentation metadata, not a scientific value
+    # family. Only the explicit ``plot_*`` derivation below may bind
+    # it to a complete row-aligned upstream ordering vector.
+    if "ordering" in {source_family, upstream_family}:
+        return False
+    if "count" in {source_family, upstream_family}:
+        return source_family == upstream_family
+    # Percent-labelled columns require either a same-family raw vector
+    # or the explicit derived percentage logic below; they cannot
+    # silently inherit the scale of a 0-1 risk/rate column.
+    if "percent" in {source_family, upstream_family}:
+        return source_family == upstream_family
+    inferential_specific = {
+        "ci_low",
+        "ci_high",
+        "standard_error",
+        "p_value",
+    }
+    if (
+        source_family in inferential_specific
+        or upstream_family in inferential_specific
+    ):
+        return source_family == upstream_family
+    # A presentation-neutral estimate may project a rate/risk or ratio
+    # when its complete vector matches.  Location summaries require a
+    # structured source semantic (value_type/estimate_type/effect_scale)
+    # so an unrelated mean-age vector cannot authenticate an outcome
+    # estimate merely because the numbers happen to coincide.
+    # e.g. a renderer's ``estimate`` may faithfully project an
+    # upstream ``mortality_rate``.
+    if source_family == "generic_estimate":
+        return upstream_family in {"rate", "ratio"}
+    return source_family == upstream_family
+
+
+def _figure_source_compare___explicit_semantic_target_columns(source_name: str, *, _cross_name_families_compatible: Any, cls: Any, source: Any, upstream_value_columns: Any) -> List[str]:
+    """Resolve a concrete source declaration to its named parent value.
+
+    A declaration such as ``value_type=mortality_rate`` is stronger
+    than the broad ``rate`` family inferred from it. When that exact
+    normalised value column exists upstream, bind to it so a sibling
+    rate/effect column with coincident values cannot authenticate the
+    claim. Generic declarations that do not name an upstream column
+    retain the family-level compatibility path below.
+    """
+
+    declared = {
+        cls._normalise(item)
+        for semantic_col in ("value_type", "estimate_type", "effect_scale")
+        if semantic_col in source.columns
+        for item in source[semantic_col].dropna().astype(str)
+        if str(item).strip()
+    }
+    if not declared:
+        return []
+    return sorted(
+        upstream_col
+        for upstream_col in upstream_value_columns
+        if cls._normalise(upstream_col) in declared
+        and _cross_name_families_compatible(source_name, upstream_col)
+    )
+
+
+def _figure_source_compare___derived_matches(source_col: str, expected_vectors: Sequence[pd.Series], tolerance: Optional[float], _clean_numeric: Any, _merged_source: Any, cls: Any) -> bool:
+    tolerance = cls._DEFAULT_NUMERIC_ABS_TOL if tolerance is None else tolerance
+    left_raw = _merged_source(source_col)
+    left_present = left_raw.notna() & left_raw.astype(str).str.strip().ne("")
+    left = _clean_numeric(left_raw)
+    if not left_present.any() or (left_present & left.isna()).any():
+        return False
+    for expected in expected_vectors:
+        expected = pd.to_numeric(expected, errors="coerce").astype(float)
+        comparable = (
+            left_present
+            & left.notna()
+            & expected.notna()
+            & left.map(math.isfinite)
+            & expected.map(math.isfinite)
+        )
+        matched = comparable & ((left - expected).abs() <= tolerance)
+        if comparable.any() and (matched | ~left_present).all():
+            return True
+    return False
+
+

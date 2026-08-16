@@ -1994,147 +1994,104 @@ def run_execute_phase(
     )
 
 
-def _execute_step(
-    step: AnalysisStep,
+@dataclass
+class _StepAuthorityPreparation:
+    worker_progress: Any
+    quarantine_state: Any
+    step_attempt_state: Any
+    checkpoint_authority: Any
+    coder_context: Any
+    coder_authority: Any
+    step_execution_cohort_path: Any
+    plausibility_authority: Any
+    resolved_input_bindings: Any
+    resolved_input_evidence_ids: Any
+    existing_refs: Any
+    resolved_inputs_path: Any
+    resolved_inputs_sha256: Any
+    run_input_capsule_sha256: Any
+    sealed_renderer_state: Any
+    sealed_renderer_authorized_code_sha256: Any
+    monotonic_concept_constraints: Any
+    _llm_repair_budget_available: Any
+    _logical_llm_repair_budget_available: Any
+    step_current: Any
+
+
+@dataclass
+class _StepInitialCodeSettlement:
+    code: Any
+    local_runtime_state: Any
+    standard_executor: Any
+    _consume_llm_repair_budget: Any
+    _remember_concept_constraints: Any
+    _quarantine_error_payloads: Any
+    _monotonic_concept_constraint_ticket: Any
+    _monotonic_concept_constraint_log: Any
+    _repair_with_capsule: Any
+
+
+@dataclass
+class _StepConceptRepairOutcome:
+    code: Any
+    concept_approved_code_digest: Any
+    sealed_renderer_authorized_code_sha256: Any
+    concept_audit: Any
+    _deterministic_fallback_code: Any
+    _authorized_deterministic_concept_repair: Any
+
+
+@dataclass
+class _StepPostCandidateFigurePreparation:
+    figure_role: Any
+    lineage_input_evidence_ids: Any
+    repair_evidence_metadata: Any
+    step_summary: Any
+
+
+def _step_prepare_execution_authority(
     *,
-    runtime_state: Any,
-    _authorize_automatic_repair: Any,
-    _automatic_repair_authorized: Any,
     _failed_dependency_record: Any,
     _flush_partial_manifest: Any,
-    _propagate_findings_to_evidence: Any,
-    _record_repair: Any,
-    _validator_messages: Any,
-    analyzer: Any,
-    clinical_validator: Any,
-    coder: Any,
+    _sync_provider_budget: Any,
     coder_base_context: Any,
     coder_provider_identity_sha256: Any,
     cohort_path: Any,
     concept_audit_environment_sha256: Any,
     context: Any,
-    cross_step_cohort_lock_validator: Any,
-    cross_step_reconciliation_trace_validator: Any,
-    cross_step_registered_output_validator: Any,
-    cross_step_source_status_validator: Any,
     emit_progress: Any,
     evidence: Any,
-    figure_contract_validator: Any,
-    figure_source_validator: Any,
     findings: Any,
-    llm_concept_audit_cache: Any,
-    llm_concept_audit_client: Any,
     llm_concept_auditor_identity_sha256: Any,
     llm_concept_auditor_implementation_sha256: Any,
-    llm_signature: Any,
-    pattern_auditor: Any,
     per_step_records: Any,
     pipeline: Any,
     plan: Any,
     plan_result: Any,
-    primary_model_contract_validator: Any,
+    prior_attempt_records: Any,
+    prior_step_record: Any,
     prompt_files: Any,
     prompt_version: Any,
+    provider_budget: Any,
+    provider_receipt_path: Any,
     requested_resume_from_step_id: Any,
-    resume_controller: Any,
-    reuse_selected_step_code_opt_in: Any,
+    reserved_final_category: Any,
     run_dir: Any,
     run_id: Any,
     run_input_authority_state: Any,
-    runner: Any,
-    services: Any,
+    runtime_state: Any,
     shared_lock: Any,
-    stat_validator: Any,
-    statistical_guard: Any,
+    step: Any,
     step_attempt_history: Any,
-    step_evidence_commit: Any,
-    step_executor: Any,
+    step_execution_cohort_path: Any,
     step_order: Any,
-    step_summary_fraction_validator: Any,
+    step_record: Any,
+    step_repair_budget: Any,
     step_summary_integrity_validator: Any,
-    supervisor: Any,
     total_steps: Any,
     typed_binding_resolver: Any,
     universe_path: Any,
-    usage_auditor: Any,
-) -> Tuple[Any, Dict[str, Any]]:
-    attempt_bootstrap = prepare_step_attempt_bootstrap(
-        resume_state=(
-            plan_result.resume_state
-            if isinstance(plan_result.resume_state, Mapping)
-            else None
-        ),
-        per_step_records=per_step_records,
-        shared_lock=shared_lock,
-        step=step,
-        plan=plan,
-        run_id=run_id,
-        run_dir=run_dir,
-        universe_path=universe_path,
-        cohort_path=cohort_path,
-        plan_scientific_signature=(
-            _serializable_plan_scientific_scope_signature(plan)
-        ),
-        findings=findings,
-        max_provider_calls=pipeline._max_step_provider_calls,
-        max_llm_repairs=pipeline._max_step_llm_repair_attempts,
-        reserve_concept_audit=pipeline._enable_llm_concept_audit,
-        allow_terminal_initial_generation_restart=(
-            resume_controller.explicitly_reruns_step(step.step_id)
-        ),
-    )
-    prior_attempt_records = attempt_bootstrap.prior_attempt_records
-    prior_step_record = attempt_bootstrap.prior_step_record
-    attempt_id = attempt_bootstrap.attempt_id
-    review_checkpoint_id = attempt_bootstrap.review_checkpoint_id
-    step_record = attempt_bootstrap.step_record
-    step_execution_cohort_path = attempt_bootstrap.execution_cohort_path
-    budget_runtime = attempt_bootstrap.budget_runtime
-    provider_budget = budget_runtime.provider_budget
-    step_repair_budget = budget_runtime.repair_budget
-    provider_receipt_path = budget_runtime.receipt_path
-    provider_receipt_relative_path = budget_runtime.receipt_relative_path
-    reserved_final_category = budget_runtime.reserved_final_category
-    provider_receipt_integrity_error = budget_runtime.integrity_error
-    _sync_provider_budget = step_repair_budget.sync_provider
-    if provider_receipt_integrity_error is not None:
-        step_record.update(
-            {
-                "status": "contract_failed",
-                "generation_mode": "system",
-                "provider_call_budget_receipt_invalid": True,
-                "provider_call_budget_receipt_error": (
-                    provider_receipt_integrity_error
-                ),
-            }
-        )
-        receipt_finding = ValidationFinding(
-            validator="provider_call_budget_receipt",
-            severity="error",
-            message=(
-                f"Step {step.step_id} cannot resume because its durable "
-                "provider-call receipt is missing, corrupt, or inconsistent."
-            ),
-            detail={
-                "step_id": step.step_id,
-                "receipt_path": provider_receipt_relative_path,
-                "reason": provider_receipt_integrity_error,
-            },
-        )
-        with shared_lock:
-            findings.append(receipt_finding)
-            _append_terminal_step_record(per_step_records, step_record)
-            _flush_partial_manifest()
-        emit_progress(
-            "step",
-            f"Step {step.step_id} failed closed: provider-call receipt invalid.",
-            status="failed",
-            run_id=run_id,
-            step_id=step.step_id,
-            current_step=step_order.get(step.step_id, 0) + 1,
-            total_steps=total_steps,
-        )
-        return runtime_state, step_record
+) -> Tuple[Optional[Dict[str, Any]], Optional["_StepAuthorityPreparation"]]:
     primary_cohort_execution_receipt = (
         _planner_materialized_cohort_execution_receipt(
             plan=plan,
@@ -2266,7 +2223,7 @@ def _execute_step(
             current_step=step_current,
             total_steps=total_steps,
         )
-        return runtime_state, step_record
+        return step_record, None
     emit_progress(
         "step",
         f"Step {step_current}/{total_steps} started: {step.step_id}.",
@@ -2324,7 +2281,7 @@ def _execute_step(
             current_step=step_current,
             total_steps=total_steps,
         )
-        return runtime_state, step_record
+        return step_record, None
     try:
         (
             existing_refs,
@@ -2373,7 +2330,7 @@ def _execute_step(
             current_step=step_current,
             total_steps=total_steps,
         )
-        return runtime_state, step_record
+        return step_record, None
     step_execution_cohort_path = _bind_step_execution_cohort(
         run_dir, step_execution_cohort_path, resolved_input_bindings, step_record
     )
@@ -2468,7 +2425,7 @@ def _execute_step(
             findings.append(capsule_finding)
             _append_terminal_step_record(per_step_records, step_record)
             _flush_partial_manifest()
-        return runtime_state, step_record
+        return step_record, None
     step_record["run_input_capsule_sha256"] = run_input_capsule_sha256
     step_record["resolved_input_evidence_ids"] = list(resolved_input_evidence_ids)
     coder_context, terminal_step_record = _step_apply_authority_resume(
@@ -2512,9 +2469,79 @@ def _execute_step(
         _flush_partial_manifest=_flush_partial_manifest,
         per_step_records=per_step_records,
     )
-    if terminal_step_record is not None:
-        return runtime_state, terminal_step_record
+    return None, _StepAuthorityPreparation(
+        worker_progress=worker_progress,
+        quarantine_state=quarantine_state,
+        step_attempt_state=step_attempt_state,
+        checkpoint_authority=checkpoint_authority,
+        coder_context=coder_context,
+        coder_authority=coder_authority,
+        step_execution_cohort_path=step_execution_cohort_path,
+        plausibility_authority=plausibility_authority,
+        resolved_input_bindings=resolved_input_bindings,
+        resolved_input_evidence_ids=resolved_input_evidence_ids,
+        existing_refs=existing_refs,
+        resolved_inputs_path=resolved_inputs_path,
+        resolved_inputs_sha256=resolved_inputs_sha256,
+        run_input_capsule_sha256=run_input_capsule_sha256,
+        sealed_renderer_state=sealed_renderer_state,
+        sealed_renderer_authorized_code_sha256=(
+            sealed_renderer_authorized_code_sha256
+        ),
+        monotonic_concept_constraints=monotonic_concept_constraints,
+        _llm_repair_budget_available=_llm_repair_budget_available,
+        _logical_llm_repair_budget_available=_logical_llm_repair_budget_available,
+        step_current=step_current,
+    )
 
+
+def _step_settle_initial_code(
+    *,
+    _authorize_automatic_repair: Any,
+    _flush_partial_manifest: Any,
+    _record_repair: Any,
+    _sync_provider_budget: Any,
+    checkpoint_authority: Any,
+    coder: Any,
+    coder_authority: Any,
+    coder_context: Any,
+    coder_provider_identity_sha256: Any,
+    context: Any,
+    emit_progress: Any,
+    existing_refs: Any,
+    findings: Any,
+    monotonic_concept_constraints: Any,
+    per_step_records: Any,
+    pipeline: Any,
+    plan: Any,
+    plan_result: Any,
+    plausibility_authority: Any,
+    prior_attempt_records: Any,
+    prior_step_record: Any,
+    prompt_version: Any,
+    provider_budget: Any,
+    quarantine_state: Any,
+    requested_resume_from_step_id: Any,
+    resolved_input_bindings: Any,
+    resolved_inputs_sha256: Any,
+    resume_controller: Any,
+    reuse_selected_step_code_opt_in: Any,
+    run_dir: Any,
+    run_id: Any,
+    run_input_capsule_sha256: Any,
+    runtime_state: Any,
+    sealed_renderer_state: Any,
+    services: Any,
+    shared_lock: Any,
+    step: Any,
+    step_attempt_state: Any,
+    step_current: Any,
+    step_record: Any,
+    step_repair_budget: Any,
+    supervisor: Any,
+    total_steps: Any,
+    worker_progress: Any,
+) -> Tuple[Optional[Dict[str, Any]], Optional["_StepInitialCodeSettlement"]]:
     repair_reservation = StepRepairReservation(
         step=step,
         repair_budget=step_repair_budget,
@@ -2811,7 +2838,7 @@ def _execute_step(
             current_step=step_current,
             total_steps=total_steps,
         )
-        return runtime_state, step_record
+        return step_record, None
     preflight_figure_code = (
         None
         if preflight_standard_code is not None
@@ -2929,9 +2956,68 @@ def _execute_step(
         resume_controller=resume_controller,
         prior_step_record=prior_step_record,
     )
-    if terminal_step_record is not None:
-        return runtime_state, terminal_step_record
+    return None, _StepInitialCodeSettlement(
+        code=code,
+        local_runtime_state=local_runtime_state,
+        standard_executor=standard_executor,
+        _consume_llm_repair_budget=_consume_llm_repair_budget,
+        _remember_concept_constraints=_remember_concept_constraints,
+        _quarantine_error_payloads=_quarantine_error_payloads,
+        _monotonic_concept_constraint_ticket=_monotonic_concept_constraint_ticket,
+        _monotonic_concept_constraint_log=_monotonic_concept_constraint_log,
+        _repair_with_capsule=_repair_with_capsule,
+    )
 
+
+def _step_run_concept_repair_phase(
+    *,
+    _authorize_automatic_repair: Any,
+    _consume_llm_repair_budget: Any,
+    _flush_partial_manifest: Any,
+    _llm_repair_budget_available: Any,
+    _logical_llm_repair_budget_available: Any,
+    _monotonic_concept_constraint_ticket: Any,
+    _quarantine_error_payloads: Any,
+    _record_repair: Any,
+    _remember_concept_constraints: Any,
+    _repair_with_capsule: Any,
+    _sync_provider_budget: Any,
+    checkpoint_authority: Any,
+    code: Any,
+    coder_authority: Any,
+    coder_context: Any,
+    concept_audit_environment_sha256: Any,
+    context: Any,
+    emit_progress: Any,
+    findings: Any,
+    llm_concept_audit_cache: Any,
+    llm_concept_audit_client: Any,
+    llm_concept_auditor_implementation_sha256: Any,
+    pattern_auditor: Any,
+    per_step_records: Any,
+    pipeline: Any,
+    plan_result: Any,
+    plausibility_authority: Any,
+    prior_attempt_records: Any,
+    prior_step_record: Any,
+    provider_budget: Any,
+    quarantine_state: Any,
+    resolved_input_bindings: Any,
+    run_dir: Any,
+    run_id: Any,
+    runtime_state: Any,
+    sealed_renderer_state: Any,
+    shared_lock: Any,
+    standard_executor: Any,
+    step: Any,
+    step_attempt_state: Any,
+    step_current: Any,
+    step_record: Any,
+    step_repair_budget: Any,
+    total_steps: Any,
+    usage_auditor: Any,
+    worker_progress: Any,
+) -> Tuple[Optional[Dict[str, Any]], Optional["_StepConceptRepairOutcome"]]:
     _deterministic_fallback_code = functools.partial(
         _step_deterministic_fallback_code,
         worker_progress=worker_progress,
@@ -3109,7 +3195,7 @@ def _execute_step(
             current_step=step_current,
             total_steps=total_steps,
         )
-        return runtime_state, step_record
+        return step_record, None
 
     if (
         quarantine_state.repair_succeeded
@@ -3146,178 +3232,52 @@ def _execute_step(
                 findings.append(cleanup_finding)
                 _append_terminal_step_record(per_step_records, step_record)
                 _flush_partial_manifest()
-            return runtime_state, step_record
-
-    worker_progress.repair_attempts = 0
-    worker_progress.contract_repair_attempts = 0
-    worker_progress.llm_contract_repair_attempts = 0
-    worker_progress.visual_repair_attempts = 0
-    # Contract, visual-layout, and runtime failures have independent repair
-    # budgets. ``repair_attempts`` remains the total mutation count used for
-    # provenance and generation-mode labels.
-    worker_progress.runtime_repair_attempts = 0
-    worker_progress.runner_repair_name = (
-        worker_progress.preexecution_runner_repair_name
-    )
-    is_trajectory_stability_standard = bool(
-        step.trajectory_stability_spec is not None
-        and step_record.get("deterministic_standard_analysis")
-        == "trajectory_cluster_stability"
-    )
-    standard_executor_terminal_block = False
-    standard_executor_terminal_reason: Optional[str] = None
-    standard_executor_terminal_summary: Dict[str, Any] = {}
-    standard_executor_terminal_findings: List[ValidationFinding] = []
-    deterministic_contract_approved_code_digest: Optional[str] = None
-    final_concept_gate_approved_code_digest: Optional[str] = None
-    candidate_loop_state = _CandidateLoopState(
+            return step_record, None
+    return None, _StepConceptRepairOutcome(
         code=code,
         concept_approved_code_digest=concept_approved_code_digest,
-        deterministic_contract_approved_code_digest=(
-            deterministic_contract_approved_code_digest
+        sealed_renderer_authorized_code_sha256=(
+            sealed_renderer_authorized_code_sha256
         ),
-        final_concept_gate_approved_code_digest=(
-            final_concept_gate_approved_code_digest
+        concept_audit=concept_audit,
+        _deterministic_fallback_code=_deterministic_fallback_code,
+        _authorized_deterministic_concept_repair=(
+            _authorized_deterministic_concept_repair
         ),
-        standard_executor_terminal_block=standard_executor_terminal_block,
-        standard_executor_terminal_reason=standard_executor_terminal_reason,
-        standard_executor_terminal_summary=standard_executor_terminal_summary,
-        standard_executor_terminal_findings=standard_executor_terminal_findings,
     )
-    candidate_loop_terminal = _run_candidate_loop(
-        host=_CandidateLoopHost(
-            _authorize_automatic_repair=_authorize_automatic_repair,
-            _append_terminal_step_record=_append_terminal_step_record,
-            _automatic_repair_authorized=_automatic_repair_authorized,
-            _contract_repair_log=_contract_repair_log,
-            _execution_input_authority_integrity_finding=(
-                _execution_input_authority_integrity_finding
-            ),
-            _flush_partial_manifest=_flush_partial_manifest,
-            _fresh_plausibility_receipt_findings=(
-                _fresh_plausibility_receipt_findings
-            ),
-            _locked_measurement_data_quality_issues=(
-                _locked_measurement_data_quality_issues
-            ),
-            _python_repair_is_materially_changed=(
-                _python_repair_is_materially_changed
-            ),
-            _record_repair=_record_repair,
-            _remove_standard_executor_pending_artifacts=(
-                _remove_standard_executor_pending_artifacts
-            ),
-            _unowned_sealed_authority_markers=(_unowned_sealed_authority_markers),
-            cohort_path=cohort_path,
-            concept_audit_environment_sha256=concept_audit_environment_sha256,
-            context=context,
-            cross_step_cohort_lock_validator=cross_step_cohort_lock_validator,
-            cross_step_reconciliation_trace_validator=(
-                cross_step_reconciliation_trace_validator
-            ),
-            cross_step_registered_output_validator=(
-                cross_step_registered_output_validator
-            ),
-            cross_step_source_status_validator=cross_step_source_status_validator,
-            emit_progress=emit_progress,
-            evidence=evidence,
-            figure_contract_validator=figure_contract_validator,
-            figure_source_validator=figure_source_validator,
-            findings=findings,
-            llm_concept_auditor_identity_sha256=(
-                llm_concept_auditor_identity_sha256
-            ),
-            llm_concept_auditor_implementation_sha256=(
-                llm_concept_auditor_implementation_sha256
-            ),
-            llm_signature=llm_signature,
-            per_step_records=per_step_records,
-            pipeline=pipeline,
-            plan=plan,
-            primary_model_contract_validator=primary_model_contract_validator,
-            prompt_version=prompt_version,
-            run_dir=run_dir,
-            run_id=run_id,
-            run_input_authority_state=run_input_authority_state,
-            runner=runner,
-            shared_lock=shared_lock,
-            step_executor=step_executor,
-            step_summary_fraction_validator=step_summary_fraction_validator,
-            step_summary_integrity_validator=step_summary_integrity_validator,
-            total_steps=total_steps,
-            universe_path=universe_path,
-        ),
-        attempt=_CandidateLoopAttempt(
-            _authorized_deterministic_concept_repair=(
-                _authorized_deterministic_concept_repair
-            ),
-            _consume_llm_repair_budget=_consume_llm_repair_budget,
-            _deterministic_fallback_code=_deterministic_fallback_code,
-            _llm_repair_budget_available=_llm_repair_budget_available,
-            _logical_llm_repair_budget_available=(
-                _logical_llm_repair_budget_available
-            ),
-            _monotonic_concept_constraint_log=_monotonic_concept_constraint_log,
-            _monotonic_concept_constraint_ticket=(
-                _monotonic_concept_constraint_ticket
-            ),
-            _quarantine_error_payloads=_quarantine_error_payloads,
-            _remember_concept_constraints=_remember_concept_constraints,
-            _repair_with_capsule=_repair_with_capsule,
-            _sync_provider_budget=_sync_provider_budget,
-            checkpoint_authority=checkpoint_authority,
-            coder_context=coder_context,
-            concept_audit=concept_audit,
-            is_trajectory_stability_standard=is_trajectory_stability_standard,
-            local_runtime_state=local_runtime_state,
-            plausibility_authority=plausibility_authority,
-            provider_budget=provider_budget,
-            quarantine_state=quarantine_state,
-            resolved_input_bindings=resolved_input_bindings,
-            resolved_input_evidence_ids=resolved_input_evidence_ids,
-            resolved_inputs_path=resolved_inputs_path,
-            resolved_inputs_sha256=resolved_inputs_sha256,
-            sealed_renderer_authorized_code_sha256=(
-                sealed_renderer_authorized_code_sha256
-            ),
-            sealed_renderer_state=sealed_renderer_state,
-            standard_executor=standard_executor,
-            step=step,
-            step_attempt_state=step_attempt_state,
-            step_current=step_current,
-            step_execution_cohort_path=step_execution_cohort_path,
-            step_record=step_record,
-            step_repair_budget=step_repair_budget,
-            worker_progress=worker_progress,
-        ),
-        state=candidate_loop_state,
-    )
-    if candidate_loop_terminal:
-        return runtime_state, step_record
-    code = candidate_loop_state.code
-    concept_approved_code_digest = candidate_loop_state.concept_approved_code_digest
-    deterministic_contract_approved_code_digest = (
-        candidate_loop_state.deterministic_contract_approved_code_digest
-    )
-    final_concept_gate_approved_code_digest = (
-        candidate_loop_state.final_concept_gate_approved_code_digest
-    )
-    usage_findings = candidate_loop_state.usage_findings
-    run_result = candidate_loop_state.run_result
-    executed_code_digest = candidate_loop_state.executed_code_digest
-    script_record = candidate_loop_state.script_record
-    standard_executor_terminal_block = (
-        candidate_loop_state.standard_executor_terminal_block
-    )
-    standard_executor_terminal_reason = (
-        candidate_loop_state.standard_executor_terminal_reason
-    )
-    standard_executor_terminal_summary = (
-        candidate_loop_state.standard_executor_terminal_summary
-    )
-    standard_executor_terminal_findings = (
-        candidate_loop_state.standard_executor_terminal_findings
-    )
+
+
+def _step_prepare_post_candidate_figures(
+    *,
+    _automatic_repair_authorized: Any,
+    _flush_partial_manifest: Any,
+    _record_repair: Any,
+    attempt_id: Any,
+    emit_progress: Any,
+    figure_contract_validator: Any,
+    figure_source_validator: Any,
+    findings: Any,
+    per_step_records: Any,
+    plan: Any,
+    resolved_input_bindings: Any,
+    resolved_input_evidence_ids: Any,
+    review_checkpoint_id: Any,
+    run_dir: Any,
+    run_id: Any,
+    run_result: Any,
+    runtime_state: Any,
+    script_record: Any,
+    sealed_renderer_authorized_code_sha256: Any,
+    services: Any,
+    shared_lock: Any,
+    standard_executor: Any,
+    standard_executor_terminal_block: Any,
+    step: Any,
+    step_current: Any,
+    step_record: Any,
+    total_steps: Any,
+    worker_progress: Any,
+) -> Tuple[Optional[Dict[str, Any]], Optional["_StepPostCandidateFigurePreparation"]]:
     publication_step = _step_requires_publication_figure_exports(
         step
     ) and not step_record.get("deterministic_standard_analysis")
@@ -3537,7 +3497,7 @@ def _execute_step(
             current_step=step_current,
             total_steps=total_steps,
         )
-        return runtime_state, step_record
+        return step_record, None
 
     # Finalise every result-bearing figure before any output is copied into
     # EvidenceStore or any numeric claim is registered.  The staged repair
@@ -3713,7 +3673,559 @@ def _execute_step(
             current_step=step_current,
             total_steps=total_steps,
         )
+        return step_record, None
+    return None, _StepPostCandidateFigurePreparation(
+        figure_role=figure_role,
+        lineage_input_evidence_ids=lineage_input_evidence_ids,
+        repair_evidence_metadata=repair_evidence_metadata,
+        step_summary=step_summary,
+    )
+
+
+
+def _execute_step(
+    step: AnalysisStep,
+    *,
+    runtime_state: Any,
+    _authorize_automatic_repair: Any,
+    _automatic_repair_authorized: Any,
+    _failed_dependency_record: Any,
+    _flush_partial_manifest: Any,
+    _propagate_findings_to_evidence: Any,
+    _record_repair: Any,
+    _validator_messages: Any,
+    analyzer: Any,
+    clinical_validator: Any,
+    coder: Any,
+    coder_base_context: Any,
+    coder_provider_identity_sha256: Any,
+    cohort_path: Any,
+    concept_audit_environment_sha256: Any,
+    context: Any,
+    cross_step_cohort_lock_validator: Any,
+    cross_step_reconciliation_trace_validator: Any,
+    cross_step_registered_output_validator: Any,
+    cross_step_source_status_validator: Any,
+    emit_progress: Any,
+    evidence: Any,
+    figure_contract_validator: Any,
+    figure_source_validator: Any,
+    findings: Any,
+    llm_concept_audit_cache: Any,
+    llm_concept_audit_client: Any,
+    llm_concept_auditor_identity_sha256: Any,
+    llm_concept_auditor_implementation_sha256: Any,
+    llm_signature: Any,
+    pattern_auditor: Any,
+    per_step_records: Any,
+    pipeline: Any,
+    plan: Any,
+    plan_result: Any,
+    primary_model_contract_validator: Any,
+    prompt_files: Any,
+    prompt_version: Any,
+    requested_resume_from_step_id: Any,
+    resume_controller: Any,
+    reuse_selected_step_code_opt_in: Any,
+    run_dir: Any,
+    run_id: Any,
+    run_input_authority_state: Any,
+    runner: Any,
+    services: Any,
+    shared_lock: Any,
+    stat_validator: Any,
+    statistical_guard: Any,
+    step_attempt_history: Any,
+    step_evidence_commit: Any,
+    step_executor: Any,
+    step_order: Any,
+    step_summary_fraction_validator: Any,
+    step_summary_integrity_validator: Any,
+    supervisor: Any,
+    total_steps: Any,
+    typed_binding_resolver: Any,
+    universe_path: Any,
+    usage_auditor: Any,
+) -> Tuple[Any, Dict[str, Any]]:
+    attempt_bootstrap = prepare_step_attempt_bootstrap(
+        resume_state=(
+            plan_result.resume_state
+            if isinstance(plan_result.resume_state, Mapping)
+            else None
+        ),
+        per_step_records=per_step_records,
+        shared_lock=shared_lock,
+        step=step,
+        plan=plan,
+        run_id=run_id,
+        run_dir=run_dir,
+        universe_path=universe_path,
+        cohort_path=cohort_path,
+        plan_scientific_signature=(
+            _serializable_plan_scientific_scope_signature(plan)
+        ),
+        findings=findings,
+        max_provider_calls=pipeline._max_step_provider_calls,
+        max_llm_repairs=pipeline._max_step_llm_repair_attempts,
+        reserve_concept_audit=pipeline._enable_llm_concept_audit,
+        allow_terminal_initial_generation_restart=(
+            resume_controller.explicitly_reruns_step(step.step_id)
+        ),
+    )
+    prior_attempt_records = attempt_bootstrap.prior_attempt_records
+    prior_step_record = attempt_bootstrap.prior_step_record
+    attempt_id = attempt_bootstrap.attempt_id
+    review_checkpoint_id = attempt_bootstrap.review_checkpoint_id
+    step_record = attempt_bootstrap.step_record
+    step_execution_cohort_path = attempt_bootstrap.execution_cohort_path
+    budget_runtime = attempt_bootstrap.budget_runtime
+    provider_budget = budget_runtime.provider_budget
+    step_repair_budget = budget_runtime.repair_budget
+    provider_receipt_path = budget_runtime.receipt_path
+    provider_receipt_relative_path = budget_runtime.receipt_relative_path
+    reserved_final_category = budget_runtime.reserved_final_category
+    provider_receipt_integrity_error = budget_runtime.integrity_error
+    _sync_provider_budget = step_repair_budget.sync_provider
+    if provider_receipt_integrity_error is not None:
+        step_record.update(
+            {
+                "status": "contract_failed",
+                "generation_mode": "system",
+                "provider_call_budget_receipt_invalid": True,
+                "provider_call_budget_receipt_error": (
+                    provider_receipt_integrity_error
+                ),
+            }
+        )
+        receipt_finding = ValidationFinding(
+            validator="provider_call_budget_receipt",
+            severity="error",
+            message=(
+                f"Step {step.step_id} cannot resume because its durable "
+                "provider-call receipt is missing, corrupt, or inconsistent."
+            ),
+            detail={
+                "step_id": step.step_id,
+                "receipt_path": provider_receipt_relative_path,
+                "reason": provider_receipt_integrity_error,
+            },
+        )
+        with shared_lock:
+            findings.append(receipt_finding)
+            _append_terminal_step_record(per_step_records, step_record)
+            _flush_partial_manifest()
+        emit_progress(
+            "step",
+            f"Step {step.step_id} failed closed: provider-call receipt invalid.",
+            status="failed",
+            run_id=run_id,
+            step_id=step.step_id,
+            current_step=step_order.get(step.step_id, 0) + 1,
+            total_steps=total_steps,
+        )
         return runtime_state, step_record
+    terminal_step_record, preparation = _step_prepare_execution_authority(
+        _failed_dependency_record=_failed_dependency_record,
+        _flush_partial_manifest=_flush_partial_manifest,
+        _sync_provider_budget=_sync_provider_budget,
+        coder_base_context=coder_base_context,
+        coder_provider_identity_sha256=coder_provider_identity_sha256,
+        cohort_path=cohort_path,
+        concept_audit_environment_sha256=concept_audit_environment_sha256,
+        context=context,
+        emit_progress=emit_progress,
+        evidence=evidence,
+        findings=findings,
+        llm_concept_auditor_identity_sha256=llm_concept_auditor_identity_sha256,
+        llm_concept_auditor_implementation_sha256=(
+            llm_concept_auditor_implementation_sha256
+        ),
+        per_step_records=per_step_records,
+        pipeline=pipeline,
+        plan=plan,
+        plan_result=plan_result,
+        prior_attempt_records=prior_attempt_records,
+        prior_step_record=prior_step_record,
+        prompt_files=prompt_files,
+        prompt_version=prompt_version,
+        provider_budget=provider_budget,
+        provider_receipt_path=provider_receipt_path,
+        requested_resume_from_step_id=requested_resume_from_step_id,
+        reserved_final_category=reserved_final_category,
+        run_dir=run_dir,
+        run_id=run_id,
+        run_input_authority_state=run_input_authority_state,
+        runtime_state=runtime_state,
+        shared_lock=shared_lock,
+        step=step,
+        step_attempt_history=step_attempt_history,
+        step_execution_cohort_path=step_execution_cohort_path,
+        step_order=step_order,
+        step_record=step_record,
+        step_repair_budget=step_repair_budget,
+        step_summary_integrity_validator=step_summary_integrity_validator,
+        total_steps=total_steps,
+        typed_binding_resolver=typed_binding_resolver,
+        universe_path=universe_path,
+    )
+    if terminal_step_record is not None:
+        return runtime_state, terminal_step_record
+    worker_progress = preparation.worker_progress
+    quarantine_state = preparation.quarantine_state
+    step_attempt_state = preparation.step_attempt_state
+    checkpoint_authority = preparation.checkpoint_authority
+    coder_context = preparation.coder_context
+    coder_authority = preparation.coder_authority
+    step_execution_cohort_path = preparation.step_execution_cohort_path
+    plausibility_authority = preparation.plausibility_authority
+    resolved_input_bindings = preparation.resolved_input_bindings
+    resolved_input_evidence_ids = preparation.resolved_input_evidence_ids
+    existing_refs = preparation.existing_refs
+    resolved_inputs_path = preparation.resolved_inputs_path
+    resolved_inputs_sha256 = preparation.resolved_inputs_sha256
+    run_input_capsule_sha256 = preparation.run_input_capsule_sha256
+    sealed_renderer_state = preparation.sealed_renderer_state
+    sealed_renderer_authorized_code_sha256 = (
+        preparation.sealed_renderer_authorized_code_sha256
+    )
+    monotonic_concept_constraints = preparation.monotonic_concept_constraints
+    _llm_repair_budget_available = preparation._llm_repair_budget_available
+    _logical_llm_repair_budget_available = (
+        preparation._logical_llm_repair_budget_available
+    )
+    step_current = preparation.step_current
+
+    terminal_step_record, settlement = _step_settle_initial_code(
+        _authorize_automatic_repair=_authorize_automatic_repair,
+        _flush_partial_manifest=_flush_partial_manifest,
+        _record_repair=_record_repair,
+        _sync_provider_budget=_sync_provider_budget,
+        checkpoint_authority=checkpoint_authority,
+        coder=coder,
+        coder_authority=coder_authority,
+        coder_context=coder_context,
+        coder_provider_identity_sha256=coder_provider_identity_sha256,
+        context=context,
+        emit_progress=emit_progress,
+        existing_refs=existing_refs,
+        findings=findings,
+        monotonic_concept_constraints=monotonic_concept_constraints,
+        per_step_records=per_step_records,
+        pipeline=pipeline,
+        plan=plan,
+        plan_result=plan_result,
+        plausibility_authority=plausibility_authority,
+        prior_attempt_records=prior_attempt_records,
+        prior_step_record=prior_step_record,
+        prompt_version=prompt_version,
+        provider_budget=provider_budget,
+        quarantine_state=quarantine_state,
+        requested_resume_from_step_id=requested_resume_from_step_id,
+        resolved_input_bindings=resolved_input_bindings,
+        resolved_inputs_sha256=resolved_inputs_sha256,
+        resume_controller=resume_controller,
+        reuse_selected_step_code_opt_in=reuse_selected_step_code_opt_in,
+        run_dir=run_dir,
+        run_id=run_id,
+        run_input_capsule_sha256=run_input_capsule_sha256,
+        runtime_state=runtime_state,
+        sealed_renderer_state=sealed_renderer_state,
+        services=services,
+        shared_lock=shared_lock,
+        step=step,
+        step_attempt_state=step_attempt_state,
+        step_current=step_current,
+        step_record=step_record,
+        step_repair_budget=step_repair_budget,
+        supervisor=supervisor,
+        total_steps=total_steps,
+        worker_progress=worker_progress,
+    )
+    if terminal_step_record is not None:
+        return runtime_state, terminal_step_record
+    code = settlement.code
+    local_runtime_state = settlement.local_runtime_state
+    standard_executor = settlement.standard_executor
+    _consume_llm_repair_budget = settlement._consume_llm_repair_budget
+    _remember_concept_constraints = settlement._remember_concept_constraints
+    _quarantine_error_payloads = settlement._quarantine_error_payloads
+    _monotonic_concept_constraint_ticket = (
+        settlement._monotonic_concept_constraint_ticket
+    )
+    _monotonic_concept_constraint_log = settlement._monotonic_concept_constraint_log
+    _repair_with_capsule = settlement._repair_with_capsule
+
+    terminal_step_record, concept_outcome = _step_run_concept_repair_phase(
+        _authorize_automatic_repair=_authorize_automatic_repair,
+        _consume_llm_repair_budget=_consume_llm_repair_budget,
+        _flush_partial_manifest=_flush_partial_manifest,
+        _llm_repair_budget_available=_llm_repair_budget_available,
+        _logical_llm_repair_budget_available=_logical_llm_repair_budget_available,
+        _monotonic_concept_constraint_ticket=_monotonic_concept_constraint_ticket,
+        _quarantine_error_payloads=_quarantine_error_payloads,
+        _record_repair=_record_repair,
+        _remember_concept_constraints=_remember_concept_constraints,
+        _repair_with_capsule=_repair_with_capsule,
+        _sync_provider_budget=_sync_provider_budget,
+        checkpoint_authority=checkpoint_authority,
+        code=code,
+        coder_authority=coder_authority,
+        coder_context=coder_context,
+        concept_audit_environment_sha256=concept_audit_environment_sha256,
+        context=context,
+        emit_progress=emit_progress,
+        findings=findings,
+        llm_concept_audit_cache=llm_concept_audit_cache,
+        llm_concept_audit_client=llm_concept_audit_client,
+        llm_concept_auditor_implementation_sha256=(
+            llm_concept_auditor_implementation_sha256
+        ),
+        pattern_auditor=pattern_auditor,
+        per_step_records=per_step_records,
+        pipeline=pipeline,
+        plan_result=plan_result,
+        plausibility_authority=plausibility_authority,
+        prior_attempt_records=prior_attempt_records,
+        prior_step_record=prior_step_record,
+        provider_budget=provider_budget,
+        quarantine_state=quarantine_state,
+        resolved_input_bindings=resolved_input_bindings,
+        run_dir=run_dir,
+        run_id=run_id,
+        runtime_state=runtime_state,
+        sealed_renderer_state=sealed_renderer_state,
+        shared_lock=shared_lock,
+        standard_executor=standard_executor,
+        step=step,
+        step_attempt_state=step_attempt_state,
+        step_current=step_current,
+        step_record=step_record,
+        step_repair_budget=step_repair_budget,
+        total_steps=total_steps,
+        usage_auditor=usage_auditor,
+        worker_progress=worker_progress,
+    )
+    if terminal_step_record is not None:
+        return runtime_state, terminal_step_record
+    code = concept_outcome.code
+    concept_approved_code_digest = concept_outcome.concept_approved_code_digest
+    sealed_renderer_authorized_code_sha256 = (
+        concept_outcome.sealed_renderer_authorized_code_sha256
+    )
+    concept_audit = concept_outcome.concept_audit
+    _deterministic_fallback_code = concept_outcome._deterministic_fallback_code
+    _authorized_deterministic_concept_repair = (
+        concept_outcome._authorized_deterministic_concept_repair
+    )
+
+    worker_progress.repair_attempts = 0
+    worker_progress.contract_repair_attempts = 0
+    worker_progress.llm_contract_repair_attempts = 0
+    worker_progress.visual_repair_attempts = 0
+    # Contract, visual-layout, and runtime failures have independent repair
+    # budgets. ``repair_attempts`` remains the total mutation count used for
+    # provenance and generation-mode labels.
+    worker_progress.runtime_repair_attempts = 0
+    worker_progress.runner_repair_name = (
+        worker_progress.preexecution_runner_repair_name
+    )
+    is_trajectory_stability_standard = bool(
+        step.trajectory_stability_spec is not None
+        and step_record.get("deterministic_standard_analysis")
+        == "trajectory_cluster_stability"
+    )
+    standard_executor_terminal_block = False
+    standard_executor_terminal_reason: Optional[str] = None
+    standard_executor_terminal_summary: Dict[str, Any] = {}
+    standard_executor_terminal_findings: List[ValidationFinding] = []
+    deterministic_contract_approved_code_digest: Optional[str] = None
+    final_concept_gate_approved_code_digest: Optional[str] = None
+    candidate_loop_state = _CandidateLoopState(
+        code=code,
+        concept_approved_code_digest=concept_approved_code_digest,
+        deterministic_contract_approved_code_digest=(
+            deterministic_contract_approved_code_digest
+        ),
+        final_concept_gate_approved_code_digest=(
+            final_concept_gate_approved_code_digest
+        ),
+        standard_executor_terminal_block=standard_executor_terminal_block,
+        standard_executor_terminal_reason=standard_executor_terminal_reason,
+        standard_executor_terminal_summary=standard_executor_terminal_summary,
+        standard_executor_terminal_findings=standard_executor_terminal_findings,
+    )
+    candidate_loop_terminal = _run_candidate_loop(
+        host=_CandidateLoopHost(
+            _authorize_automatic_repair=_authorize_automatic_repair,
+            _append_terminal_step_record=_append_terminal_step_record,
+            _automatic_repair_authorized=_automatic_repair_authorized,
+            _contract_repair_log=_contract_repair_log,
+            _execution_input_authority_integrity_finding=(
+                _execution_input_authority_integrity_finding
+            ),
+            _flush_partial_manifest=_flush_partial_manifest,
+            _fresh_plausibility_receipt_findings=(
+                _fresh_plausibility_receipt_findings
+            ),
+            _locked_measurement_data_quality_issues=(
+                _locked_measurement_data_quality_issues
+            ),
+            _python_repair_is_materially_changed=(
+                _python_repair_is_materially_changed
+            ),
+            _record_repair=_record_repair,
+            _remove_standard_executor_pending_artifacts=(
+                _remove_standard_executor_pending_artifacts
+            ),
+            _unowned_sealed_authority_markers=(_unowned_sealed_authority_markers),
+            cohort_path=cohort_path,
+            concept_audit_environment_sha256=concept_audit_environment_sha256,
+            context=context,
+            cross_step_cohort_lock_validator=cross_step_cohort_lock_validator,
+            cross_step_reconciliation_trace_validator=(
+                cross_step_reconciliation_trace_validator
+            ),
+            cross_step_registered_output_validator=(
+                cross_step_registered_output_validator
+            ),
+            cross_step_source_status_validator=cross_step_source_status_validator,
+            emit_progress=emit_progress,
+            evidence=evidence,
+            figure_contract_validator=figure_contract_validator,
+            figure_source_validator=figure_source_validator,
+            findings=findings,
+            llm_concept_auditor_identity_sha256=(
+                llm_concept_auditor_identity_sha256
+            ),
+            llm_concept_auditor_implementation_sha256=(
+                llm_concept_auditor_implementation_sha256
+            ),
+            llm_signature=llm_signature,
+            per_step_records=per_step_records,
+            pipeline=pipeline,
+            plan=plan,
+            primary_model_contract_validator=primary_model_contract_validator,
+            prompt_version=prompt_version,
+            run_dir=run_dir,
+            run_id=run_id,
+            run_input_authority_state=run_input_authority_state,
+            runner=runner,
+            shared_lock=shared_lock,
+            step_executor=step_executor,
+            step_summary_fraction_validator=step_summary_fraction_validator,
+            step_summary_integrity_validator=step_summary_integrity_validator,
+            total_steps=total_steps,
+            universe_path=universe_path,
+        ),
+        attempt=_CandidateLoopAttempt(
+            _authorized_deterministic_concept_repair=(
+                _authorized_deterministic_concept_repair
+            ),
+            _consume_llm_repair_budget=_consume_llm_repair_budget,
+            _deterministic_fallback_code=_deterministic_fallback_code,
+            _llm_repair_budget_available=_llm_repair_budget_available,
+            _logical_llm_repair_budget_available=(
+                _logical_llm_repair_budget_available
+            ),
+            _monotonic_concept_constraint_log=_monotonic_concept_constraint_log,
+            _monotonic_concept_constraint_ticket=(
+                _monotonic_concept_constraint_ticket
+            ),
+            _quarantine_error_payloads=_quarantine_error_payloads,
+            _remember_concept_constraints=_remember_concept_constraints,
+            _repair_with_capsule=_repair_with_capsule,
+            _sync_provider_budget=_sync_provider_budget,
+            checkpoint_authority=checkpoint_authority,
+            coder_context=coder_context,
+            concept_audit=concept_audit,
+            is_trajectory_stability_standard=is_trajectory_stability_standard,
+            local_runtime_state=local_runtime_state,
+            plausibility_authority=plausibility_authority,
+            provider_budget=provider_budget,
+            quarantine_state=quarantine_state,
+            resolved_input_bindings=resolved_input_bindings,
+            resolved_input_evidence_ids=resolved_input_evidence_ids,
+            resolved_inputs_path=resolved_inputs_path,
+            resolved_inputs_sha256=resolved_inputs_sha256,
+            sealed_renderer_authorized_code_sha256=(
+                sealed_renderer_authorized_code_sha256
+            ),
+            sealed_renderer_state=sealed_renderer_state,
+            standard_executor=standard_executor,
+            step=step,
+            step_attempt_state=step_attempt_state,
+            step_current=step_current,
+            step_execution_cohort_path=step_execution_cohort_path,
+            step_record=step_record,
+            step_repair_budget=step_repair_budget,
+            worker_progress=worker_progress,
+        ),
+        state=candidate_loop_state,
+    )
+    if candidate_loop_terminal:
+        return runtime_state, step_record
+    code = candidate_loop_state.code
+    concept_approved_code_digest = candidate_loop_state.concept_approved_code_digest
+    deterministic_contract_approved_code_digest = (
+        candidate_loop_state.deterministic_contract_approved_code_digest
+    )
+    final_concept_gate_approved_code_digest = (
+        candidate_loop_state.final_concept_gate_approved_code_digest
+    )
+    usage_findings = candidate_loop_state.usage_findings
+    run_result = candidate_loop_state.run_result
+    executed_code_digest = candidate_loop_state.executed_code_digest
+    script_record = candidate_loop_state.script_record
+    standard_executor_terminal_block = (
+        candidate_loop_state.standard_executor_terminal_block
+    )
+    standard_executor_terminal_reason = (
+        candidate_loop_state.standard_executor_terminal_reason
+    )
+    standard_executor_terminal_summary = (
+        candidate_loop_state.standard_executor_terminal_summary
+    )
+    standard_executor_terminal_findings = (
+        candidate_loop_state.standard_executor_terminal_findings
+    )
+    terminal_step_record, figure_preparation = _step_prepare_post_candidate_figures(
+        _automatic_repair_authorized=_automatic_repair_authorized,
+        _flush_partial_manifest=_flush_partial_manifest,
+        _record_repair=_record_repair,
+        attempt_id=attempt_id,
+        emit_progress=emit_progress,
+        figure_contract_validator=figure_contract_validator,
+        figure_source_validator=figure_source_validator,
+        findings=findings,
+        per_step_records=per_step_records,
+        plan=plan,
+        resolved_input_bindings=resolved_input_bindings,
+        resolved_input_evidence_ids=resolved_input_evidence_ids,
+        review_checkpoint_id=review_checkpoint_id,
+        run_dir=run_dir,
+        run_id=run_id,
+        run_result=run_result,
+        runtime_state=runtime_state,
+        script_record=script_record,
+        sealed_renderer_authorized_code_sha256=(
+            sealed_renderer_authorized_code_sha256
+        ),
+        services=services,
+        shared_lock=shared_lock,
+        standard_executor=standard_executor,
+        standard_executor_terminal_block=standard_executor_terminal_block,
+        step=step,
+        step_current=step_current,
+        step_record=step_record,
+        total_steps=total_steps,
+        worker_progress=worker_progress,
+    )
+    if terminal_step_record is not None:
+        return runtime_state, terminal_step_record
+    figure_role = figure_preparation.figure_role
+    lineage_input_evidence_ids = figure_preparation.lineage_input_evidence_ids
+    repair_evidence_metadata = figure_preparation.repair_evidence_metadata
+    step_summary = figure_preparation.step_summary
 
     # This is the seal boundary.  From here onward result artifacts are
     # immutable: validation may fail closed, but no repair can mutate them.

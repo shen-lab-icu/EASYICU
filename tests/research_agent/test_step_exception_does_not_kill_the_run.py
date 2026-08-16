@@ -191,7 +191,7 @@ def test_the_recorder_persists_the_traceback() -> None:
     recorder = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_record_step_exception"
+        if isinstance(node, ast.FunctionDef) and node.name == "_step_record_step_exception"
     )
     body = ast.unparse(recorder)
 
