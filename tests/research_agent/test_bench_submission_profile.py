@@ -509,6 +509,32 @@ def test_e1_progressive_planner_canary_is_additive_and_strategy_locked() -> None
     assert is_paper_facing_profile(profile.name) is False
 
 
+def test_e1_progressive_profile_is_public_and_rejects_strategy_override(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent import (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16 as public_profile,
+    )
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+
+    assert public_profile.ref == "npj_dm_e1_canary_dev/20260816"
+    with pytest.raises(ValueError, match="pins planner_strategy='progressive_v2'"):
+        PipelineConfig(
+            workdir=tmp_path / "mismatch",
+            submission_profile_name=public_profile.name,
+            submission_profile_version=public_profile.version,
+            planner_strategy="monolithic_v1",
+        )
+
+    config = PipelineConfig(
+        workdir=tmp_path / "matching",
+        submission_profile_name=public_profile.name,
+        submission_profile_version=public_profile.version,
+        planner_strategy="progressive_v2",
+    )
+    assert config.planner_strategy == "progressive_v2"
+
+
 def test_e1_reviewed_demo_profile_executes_without_paper_authority() -> None:
     from easyicu.research_agent.orchestration.profiles import (
         E1_PLANNER_CANARY_2026_08_14,

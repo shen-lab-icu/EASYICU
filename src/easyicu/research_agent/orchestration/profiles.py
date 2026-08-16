@@ -627,6 +627,26 @@ def require_profile_capability_workflow_setting(
         )
 
 
+def require_profile_planner_strategy(
+    *,
+    name: Optional[str],
+    version: Optional[str],
+    planner_strategy: str,
+) -> None:
+    """Reject callers that override a profile-owned Planner contract."""
+
+    if name is None:
+        return
+    ref = f"{name}/{version}"
+    expected = get_submission_profile(ref).planner_strategy
+    if expected is not None and planner_strategy != expected:
+        raise ValueError(
+            "Planner strategy changes provider and plan authority and must "
+            f"match the submission profile; profile {ref!r} pins "
+            f"planner_strategy={expected!r}"
+        )
+
+
 __all__ = [
     "SubmissionProfile",
     "NPJ_DM_2026_05",
@@ -637,6 +657,7 @@ __all__ = [
     "NPJ_DM_2026_07_18",
     "NPJ_DM_2026_07_19",
     "E1_PLANNER_CANARY_2026_08_14",
+    "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16",
     "E1_REVIEWED_DEMO_2026_08_15",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
@@ -650,4 +671,5 @@ __all__ = [
     "require_profile_coder_resource_setting",
     "require_profile_reviewed_memory_setting",
     "require_profile_capability_workflow_setting",
+    "require_profile_planner_strategy",
 ]
