@@ -147,6 +147,7 @@ TARGET_FUNCTIONS: List[Tuple[str, str]] = [
     ("audits/figures.py", "_compare_source_to_upstream"),
     ("pipeline.py", "run"),
     ("pipeline.py", "_generate_or_resume_plan"),
+    ("pipeline.py", "_run_plan_phase"),
 ]
 # Compatibility-shim import paths a future batch may introduce. While empty the
 # shim-bypass check is a no-op. The pre-v1 cleanup deliberately retires old paths
