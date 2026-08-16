@@ -21,6 +21,7 @@ def _load_refresher():
 
 def test_selected_module_refresh_is_limited_to_correctness_modules() -> None:
     refresher = _load_refresher()
+    assert refresher._validate_modules(["outcome"]) == ("outcome",)
     assert refresher._validate_modules(["renal"]) == ("renal",)
     assert refresher._validate_modules(["respiratory"]) == ("respiratory",)
     assert refresher._validate_modules(["sofa2_score"]) == ("sofa2_score",)
@@ -34,6 +35,7 @@ def test_selected_module_refresh_is_limited_to_correctness_modules() -> None:
 
 def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
     refresher = _load_refresher()
+    assert refresher._expand_module_dependency_closure(["outcome"]) == ("outcome",)
     assert refresher._expand_module_dependency_closure(["respiratory"]) == (
         "respiratory",
         "sepsis_shared",
@@ -43,8 +45,9 @@ def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
         "sepsis3_sofa2",
     )
     assert refresher._expand_module_dependency_closure(
-        ["renal", "respiratory"]
+        ["outcome", "renal", "respiratory"]
     ) == (
+        "outcome",
         "respiratory",
         "renal",
         "sepsis_shared",
@@ -63,9 +66,7 @@ def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
 def test_selected_module_refresh_rejects_duplicate_data_path_overrides() -> None:
     refresher = _load_refresher()
     with pytest.raises(refresher.ModuleRefreshError, match="Duplicate"):
-        refresher._parse_data_path_overrides(
-            ["miiv=/tmp/one", "miiv=/tmp/two"]
-        )
+        refresher._parse_data_path_overrides(["miiv=/tmp/one", "miiv=/tmp/two"])
 
 
 def test_new_candidate_never_reuses_source_module_just_because_schema_matches(
@@ -175,15 +176,15 @@ def test_resume_reuses_only_complete_files_detached_from_source(
         (source / f"respiratory{suffix}").write_bytes(b"source")
         (candidate / f"respiratory{suffix}").write_bytes(b"refreshed")
     (candidate / "respiratory.manifest.json").write_text(
-        json.dumps(
-            {"elapsed_sec": 1, "peak_rss_mb": 2, "peak_working_set_mb": 3}
-        )
+        json.dumps({"elapsed_sec": 1, "peak_rss_mb": 2, "peak_working_set_mb": 3})
     )
     monkeypatch.setattr(refresher, "_module_is_canonical_refresh", lambda *_: True)
     monkeypatch.setattr(
         refresher,
         "extract_database",
-        lambda *args, **kwargs: pytest.fail("detached completed files were re-extracted"),
+        lambda *args, **kwargs: pytest.fail(
+            "detached completed files were re-extracted"
+        ),
     )
 
     result = refresher._refresh_one_database(

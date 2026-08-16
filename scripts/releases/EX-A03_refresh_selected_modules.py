@@ -9,7 +9,9 @@ run, while the derived candidate has one consistent runtime provenance and can
 be sealed by ``EX-A01_seal_full6_release.py``.
 
 Only correctness modules and their declared downstream closure are allowlisted.
-``renal`` has ascertainment-aware KDIGO outputs. ``respiratory`` removes
+``renal`` has ascertainment-aware KDIGO outputs. ``outcome`` preserves the
+owner-issued death-event time companion required by landmark analyses.
+``respiratory`` removes
 implicit room-air FiO2 imputation and therefore expands to ``sofa1_score`` and
 ``sofa2_score``, the shared infection evidence required at execution time, and
 the two Sepsis-SOFA labels that consume those scores. This is not a generic way
@@ -53,8 +55,11 @@ def _load_republisher():
 REPUBLICATION = _load_republisher()
 DATABASES: tuple[str, ...] = tuple(REPUBLICATION.DATABASES)
 MODULES: tuple[str, ...] = tuple(REPUBLICATION.MODULES)
-DIRECT_REFRESHABLE_MODULES = frozenset({"renal", "respiratory", "sofa2_score"})
+DIRECT_REFRESHABLE_MODULES = frozenset(
+    {"outcome", "renal", "respiratory", "sofa2_score"}
+)
 MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
+    "outcome": ("outcome",),
     "renal": ("renal",),
     "respiratory": (
         "respiratory",
@@ -139,8 +144,8 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
     disallowed = set(selected) - DIRECT_REFRESHABLE_MODULES
     if disallowed:
         raise ModuleRefreshError(
-            "This audited refresh entry point currently allows only renal, "
-            "respiratory and sofa2_score; "
+            "This audited refresh entry point currently allows only outcome, "
+            "renal, respiratory and sofa2_score; "
             f"got disallowed modules: {sorted(disallowed)}"
         )
     return selected
@@ -177,25 +182,32 @@ def _replace_selected_module_files(
         os.replace(source_manifest, destination_database_root / source_manifest.name)
 
 
-def _module_is_canonical_refresh(
-    database_root: Path, modules: Sequence[str]
-) -> bool:
+def _module_is_canonical_refresh(database_root: Path, modules: Sequence[str]) -> bool:
     """Check whether a candidate already contains the selected new columns."""
 
     try:
         import pyarrow.parquet as pq
     except ImportError as exc:  # pragma: no cover - package is release-required
-        raise ModuleRefreshError("pyarrow is required to resume a module refresh") from exc
+        raise ModuleRefreshError(
+            "pyarrow is required to resume a module refresh"
+        ) from exc
     for module in modules:
         parquet = database_root / f"{module}.parquet"
         manifest = database_root / f"{module}.manifest.json"
-        if parquet.is_symlink() or manifest.is_symlink() or not parquet.is_file() or not manifest.is_file():
+        if (
+            parquet.is_symlink()
+            or manifest.is_symlink()
+            or not parquet.is_file()
+            or not manifest.is_file()
+        ):
             return False
         try:
             columns = set(pq.read_schema(parquet).names)
         except Exception:
             return False
-        if "stay_id" not in columns or not set(EXTRACT_MODULES[module]).issubset(columns):
+        if "stay_id" not in columns or not set(EXTRACT_MODULES[module]).issubset(
+            columns
+        ):
             return False
     return True
 
@@ -268,9 +280,7 @@ def _module_runtime_metrics(
             metrics[module] = {
                 "elapsed_seconds": float(receipt.get("elapsed") or 0.0),
                 "peak_rss_mb": float(receipt.get("peak_rss_mb") or 0.0),
-                "peak_working_set_mb": float(
-                    receipt.get("peak_working_set_mb") or 0.0
-                ),
+                "peak_working_set_mb": float(receipt.get("peak_working_set_mb") or 0.0),
             }
         except (TypeError, ValueError) as exc:
             raise ModuleRefreshError(
@@ -322,9 +332,7 @@ def _refresh_one_database(
                 destination_database_root=destination_database_root,
                 modules=modules,
             )
-            metrics = _metrics_from_module_manifests(
-                destination_database_root, modules
-            )
+            metrics = _metrics_from_module_manifests(destination_database_root, modules)
             shutil.rmtree(staging_root)
             return {
                 "database": database,
@@ -371,7 +379,8 @@ def _refresh_one_database(
 
 
 def _rebind_manifest_metrics(
-    manifest: dict[str, Any], metrics: Mapping[str, Mapping[str, float]]) -> None:
+    manifest: dict[str, Any], metrics: Mapping[str, Mapping[str, float]]
+) -> None:
     for field, metric_name in (
         ("module_timings_seconds", "elapsed_seconds"),
         ("module_peak_rss_mb", "peak_rss_mb"),
@@ -501,7 +510,9 @@ def refresh_candidate(
             "easyicu_git_commit": publication_commit,
             "easyicu_git_dirty": False,
         }
-        REPUBLICATION._atomic_write_json(destination / "run_manifest.json", updated_run_manifest)
+        REPUBLICATION._atomic_write_json(
+            destination / "run_manifest.json", updated_run_manifest
+        )
     except Exception:
         # The unsealed candidate is intentionally retained for diagnosis.  It
         # can neither replace a source package nor be promoted without EX-A01.
@@ -523,7 +534,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="append",
         default=[],
         help=(
-            "Raw-derived module to refresh (renal, respiratory or sofa2_score); repeatable."
+            "Raw-derived module to refresh (outcome, renal, respiratory or "
+            "sofa2_score); repeatable."
         ),
     )
     parser.add_argument(
