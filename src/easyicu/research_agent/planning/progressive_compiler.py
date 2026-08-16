@@ -49,6 +49,7 @@ from .cohort_contract import CohortDefinition, ConceptPredicate, TimeWindow
 from .literature_contract import LiteratureDesignBinding
 from .progressive_contract import (
     ProgressiveCompiledStepReceipt,
+    ProgressiveLiteratureBinding,
     ProgressivePlanCompileError,
     ProgressivePlanCompileReceipt,
     ProgressivePlanSkeleton,
@@ -790,7 +791,10 @@ def _compile_literature(
     allowed_citations: frozenset[str],
     step_index: int,
 ) -> tuple[list[str], list[LiteratureDesignBinding]]:
-    keys = [item.citation_key for item in step.literature_bindings]
+    bindings_by_key: dict[str, list[ProgressiveLiteratureBinding]] = {}
+    for item in step.literature_bindings:
+        bindings_by_key.setdefault(item.citation_key, []).append(item)
+    keys = list(bindings_by_key)
     unknown = sorted(set(keys) - allowed_citations)
     if unknown:
         raise _fail(
@@ -800,18 +804,49 @@ def _compile_literature(
             step_index=step_index,
             path="literature_bindings",
         )
-    if len(keys) != len(set(keys)):
-        raise _fail(
-            "progressive_duplicate_literature_source",
-            "a step may bind each citation key at most once",
-            step=step,
-            step_index=step_index,
-            path="literature_bindings",
+
+    compiled: list[LiteratureDesignBinding] = []
+    for citation_key, bindings in bindings_by_key.items():
+        design_elements = list(
+            dict.fromkeys(
+                element for binding in bindings for element in binding.design_elements
+            )
         )
-    return keys, [
-        LiteratureDesignBinding.model_validate(item.model_dump(mode="json"))
-        for item in step.literature_bindings
-    ]
+        applications = list(dict.fromkeys(binding.application for binding in bindings))
+        divergences = list(
+            dict.fromkeys(
+                binding.divergence
+                for binding in bindings
+                if binding.divergence is not None
+            )
+        )
+        application = "\n".join(applications)
+        divergence = "\n".join(divergences) if divergences else None
+        try:
+            binding = LiteratureDesignBinding(
+                citation_key=citation_key,
+                design_elements=design_elements,
+                application=application,
+                divergence=divergence,
+            )
+        except ValidationError as exc:
+            finding = exc.errors(include_input=False)[0]
+            field = ".".join(str(value) for value in finding["loc"])
+            code = (
+                "progressive_literature_merge_overflow"
+                if finding["type"] == "string_too_long"
+                else "progressive_literature_merge_invalid"
+            )
+            raise _fail(
+                code,
+                f"coalescing citation {citation_key!r} violates the {field} "
+                f"contract: {finding['msg']}",
+                step=step,
+                step_index=step_index,
+                path=f"literature_bindings.{field}",
+            ) from exc
+        compiled.append(binding)
+    return keys, compiled
 
 
 def _compile_one_step(
