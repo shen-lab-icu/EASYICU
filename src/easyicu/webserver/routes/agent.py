@@ -105,8 +105,11 @@ def _provider_environment_for_agent_run(
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
 
-@control_router.post("/api/jobs/agent-run")
-def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
+def submit_agent_run(
+    body: Dict[str, Any],
+    *,
+    account_environment: Optional[Mapping[str, str]] = None,
+) -> dict:
     """Start a registry-backed local Research Agent run.
 
     The default run is deterministic and local: it consumes the active export
@@ -202,17 +205,14 @@ def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
     credential_source = str(
         body.get("credential_source") or default_credential_source
     ).strip()
-    account_environment = None
-    if provider_adapter.is_user_account_provider(llm_provider):
-        try:
-            account_environment = codex_account_sessions.environment_for_request(
-                request
-            )
-        except codex_account_sessions.CodexAccountSessionError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": exc.code},
-            ) from exc
+    if (
+        provider_adapter.is_user_account_provider(llm_provider)
+        and account_environment is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "codex_auth_login_required"},
+        )
     provider_environment = _provider_environment_for_agent_run(
         credential_source=credential_source,
         engine=engine,
@@ -421,6 +421,25 @@ def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
         ),
         "audit_warning": audit_warning,
     }
+
+
+@control_router.post("/api/jobs/agent-run")
+def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
+    """HTTP adapter that resolves only the current browser's account authority."""
+
+    llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
+    account_environment: Optional[Mapping[str, str]] = None
+    if provider_adapter.is_user_account_provider(llm_provider):
+        try:
+            account_environment = codex_account_sessions.environment_for_request(
+                request
+            )
+        except codex_account_sessions.CodexAccountSessionError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": exc.code},
+            ) from exc
+    return submit_agent_run(body, account_environment=account_environment)
 
 
 @control_router.post("/api/jobs/agent-run-review")

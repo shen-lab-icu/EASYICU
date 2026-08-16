@@ -23,6 +23,7 @@ from easyicu.webserver.pi_copilot.contracts import (
     HostTurnGrant,
     PiCopilotError,
     PiProjectBindingHandoffReceipt,
+    ResearchProviderBinding,
     PiSessionRecord,
     ToolExecutionContext,
     WorkspaceMutationLimitError,
@@ -99,6 +100,33 @@ class FakeGateway:
     def apply_provider_config(self, config: PiProviderConfig) -> None:
         self.applied_config = config
         self.environ.update(config.as_environment())
+
+
+def test_research_provider_binding_is_coherent_and_browser_projection_is_safe() -> None:
+    with pytest.raises(ValidationError, match="codex research provider binding"):
+        ResearchProviderBinding(
+            provider="codex",
+            credential_source="codex_user_auth",
+            authentication_mode="chatgpt_account",
+            model="gpt-5.6-luna",
+        )
+
+    binding = ResearchProviderBinding(
+        provider="codex",
+        credential_source="codex_user_auth",
+        authentication_mode="chatgpt_account",
+        model="gpt-5.6-luna",
+        account_session_sha256="a" * 64,
+    )
+
+    assert binding.public_projection() == {
+        "schema_version": "easyicu.research-provider-binding/1",
+        "provider": "codex",
+        "credential_source": "codex_user_auth",
+        "authentication_mode": "chatgpt_account",
+        "model": "gpt-5.6-luna",
+    }
+    assert "account_session_sha256" not in binding.public_projection()
 
 
 def test_service_rejects_symlinked_gateway_workspace_root(tmp_path: Path) -> None:
@@ -1721,8 +1749,8 @@ def test_superseded_plan_replan_starts_fresh_pipeline_run(
     submitted: list[dict[str, Any]] = []
     monkeypatch.setattr(
         agent_routes,
-        "jobs_agent_run",
-        lambda payload: (
+        "submit_agent_run",
+        lambda payload, *, account_environment=None: (
             submitted.append(dict(payload))
             or {
                 "job_id": "job-fresh-plan",
@@ -1791,8 +1819,8 @@ def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
     submitted: list[dict[str, Any]] = []
     monkeypatch.setattr(
         agent_routes,
-        "jobs_agent_run",
-        lambda payload: (
+        "submit_agent_run",
+        lambda payload, *, account_environment=None: (
             submitted.append(dict(payload))
             or {
                 "job_id": "job-terminal-retry",
@@ -1883,8 +1911,8 @@ def test_preflight_only_history_replan_starts_fresh_pipeline_run(
     submitted: list[dict[str, Any]] = []
     monkeypatch.setattr(
         agent_routes,
-        "jobs_agent_run",
-        lambda payload: (
+        "submit_agent_run",
+        lambda payload, *, account_environment=None: (
             submitted.append(dict(payload))
             or {
                 "job_id": "job-fresh-after-bridge-failure",
@@ -1961,8 +1989,8 @@ def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
     submitted: list[dict[str, Any]] = []
     monkeypatch.setattr(
         agent_routes,
-        "jobs_agent_run",
-        lambda payload: submitted.append(dict(payload)),
+        "submit_agent_run",
+        lambda payload, *, account_environment=None: submitted.append(dict(payload)),
     )
     context = ToolExecutionContext(
         session=PiSessionRecord(
@@ -2876,7 +2904,8 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
 ) -> None:
     submitted_bodies = []
 
-    def submit(body):
+    def submit(body, *, account_environment=None):
+        assert account_environment is None
         submitted_bodies.append(dict(body))
         return {
             "job_id": "scientific-job-1",
@@ -2888,7 +2917,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
 
     from easyicu.webserver.routes import agent as agent_route
 
-    monkeypatch.setattr(agent_route, "jobs_agent_run", submit)
+    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
     monkeypatch.setattr(
         tool_module,
         "_bound_context",
