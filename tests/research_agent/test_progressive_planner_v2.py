@@ -489,6 +489,43 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
 
 
+def test_compiler_drops_group_by_from_table_one_rows() -> None:
+    payload = _payload()
+    payload["steps"][1]["table_one_variables"].insert(
+        0,
+        {"name": "exposure_flag", "summary": "count_percent"},
+    )
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=skeleton,
+        context=_context(),
+    )
+
+    table_one = next(step for step in plan.steps if step.step_id == "02_table_one")
+    assert table_one.table_one_spec is not None
+    assert table_one.table_one_spec.group_by == "exposure_flag"
+    assert [item.name for item in table_one.table_one_spec.variables] == [
+        "age_years",
+        "sex_code",
+    ]
+
+
+def test_compiler_contains_table_one_validation_errors() -> None:
+    payload = _payload()
+    payload["steps"][1]["table_one_variables"].append(
+        {"name": "age_years", "summary": "mean_sd"}
+    )
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=skeleton, context=_context())
+
+    assert caught.value.reason_code == "progressive_table_one_contract_invalid"
+    assert caught.value.step_id == "02_table_one"
+    assert caught.value.path == "table_one_variables"
+
+
 def test_compiler_materializes_the_locked_robustness_replay_bundle() -> None:
     payload = _payload()
     replay = payload["steps"][5]
