@@ -76,6 +76,10 @@ _CANONICAL_OUTPUTS: Mapping[str, tuple[tuple[str, str], ...]] = {
     "adjusted_association": (
         ("table:adjusted_association_estimates", "adjusted_association_estimates"),
     ),
+    "robustness_replay": (
+        ("table:robustness_matrix", "robustness_matrix"),
+        ("table:robustness_summary", "robustness_summary"),
+    ),
 }
 _MODULE_OUTPUT_ROLES: Mapping[str, frozenset[str]] = {
     "cohort_definition": frozenset({"analysis_cohort", "cohort_flow"}),

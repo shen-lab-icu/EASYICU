@@ -1,4 +1,4 @@
-# Progressive Planner v2: Dev17 decision gate through Dev19
+# Progressive Planner v2: Dev17 decision gate through Dev20
 
 Date: 2026-08-16
 Task: `FIG2-DEV9-HELDOUT27`
@@ -77,8 +77,41 @@ and stopped on stable compiler code
   literature, identity, configuration, and archive tests passed with one
   environment skip; Ruff and `git diff --check` are clean.
 
+### Dev20
+
+Root:
+`/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_6c1f0e1_e1_dev20`
+
+The exact `6c1f0e1` image made three successful strict-schema skeleton calls.
+The transport receipts recorded 59,207 prompt tokens and 13,018 completion
+tokens (72,225 total); the configured USD 10/30 per-million price table implies
+USD 0.98261. Request payloads were 61,837 to 63,503 bytes. The run still did not
+enter analysis execution.
+
+The retries reduced five validation findings to one. Standard modules had
+filled the schema-permitted `custom_method` field even though Pydantic correctly
+reserved it for `custom_analysis`; the final response then omitted outputs for
+the locked-grid `robustness_replay`, although those outputs are deterministic
+runtime products. The final stable boundary was therefore schema-to-host
+materialization, not statistics or Docker execution.
+
+## Repair after Dev20
+
+- The run-bound step transport is now a compact two-branch contract. Every
+  standard module requires `custom_method=null`; only `custom_analysis` accepts
+  a string, and that branch exposes only fields it can use. The resulting
+  authority payload is 11,101 bytes, below the existing 12 KiB ratchet.
+- The compiler now materializes the locked-grid replay's two unambiguous
+  deterministic products, `table:robustness_matrix` and
+  `table:robustness_summary`, when the skeleton uses `outputs=[]`. It also emits
+  the existing typed `RobustnessReplaySpec`; the deterministic replay contract
+  accepts the compiled step.
+- The direct set passed 186 tests. The broader focused Planner/robustness set
+  then passed 510 tests with one environment skip. Ruff and
+  `git diff --check` are clean.
+
 ## Next gate
 
-Build an exact-source image from the repair commit and run a fresh E1 Dev20.
+Build an exact-source image from the repair commit and run a fresh E1 Dev21.
 Do not start E2 until E1 completes the full analysis, audit, figure, and report
 workflow under development authority.

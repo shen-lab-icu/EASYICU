@@ -427,7 +427,6 @@ class ProgressiveSkeletonStep(BaseModel):
             self.module_id
             in {
                 "measurement_audit",
-                "robustness_replay",
                 "custom_analysis",
                 "visualization",
                 "report",

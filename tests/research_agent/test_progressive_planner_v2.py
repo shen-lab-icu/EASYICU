@@ -16,6 +16,9 @@ from easyicu.research_agent.agents.progressive_planner import (
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
     exposure_outcome_distribution_executor_owns_step,
 )
+from easyicu.research_agent.execution.runners.deterministic_robustness import (
+    robustness_replay_spec_is_emittable,
+)
 from easyicu.research_agent.planning.progressive_compiler import (
     assert_immutable_prefix,
     compile_progressive_plan,
@@ -486,6 +489,45 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
 
 
+def test_compiler_materializes_the_locked_robustness_replay_bundle() -> None:
+    payload = _payload()
+    replay = payload["steps"][5]
+    replay.update(
+        {
+            "step_id": "06_robustness",
+            "module_id": "robustness_replay",
+            "objective": (
+                "Replay the already locked robustness grid without changing the estimand."
+            ),
+            "product_inputs": [
+                {
+                    "producer_step_id": "05_primary",
+                    "product_id": "table:adjusted_association_estimates",
+                }
+            ],
+            "outputs": [],
+            "scientific_action_id": None,
+            "custom_method": None,
+            "sensitivity_spec_ids": ["complete_case"],
+        }
+    )
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=skeleton,
+        context=_context(),
+    )
+
+    step = next(item for item in plan.steps if item.step_id == "06_robustness")
+    assert step.expected_outputs == [
+        "table:robustness_matrix",
+        "table:robustness_summary",
+    ]
+    assert step.method == "robustness_sensitivity"
+    assert step.robustness_replay_spec is not None
+    assert robustness_replay_spec_is_emittable(step)
+
+
 def test_compiler_reports_attributable_unknown_variable() -> None:
     payload = _payload()
     payload["steps"][4]["model_terms"][1]["name"] = "invented_covariate"
@@ -567,7 +609,22 @@ def test_run_bound_schema_closes_runtime_rosters_under_twelve_kib() -> None:
 
     assert len(encoded.encode("utf-8")) < 12_000
     assert schema["properties"]["analysis_type"]["enum"] == ["association_study"]
-    step = schema["$defs"]["ProgressiveSkeletonStep"]["properties"]
+    branches = schema["$defs"]["ProgressiveSkeletonStep"]["anyOf"]
+    standard = next(
+        branch
+        for branch in branches
+        if "enum" in branch["properties"]["module_id"]
+    )
+    custom = next(
+        branch
+        for branch in branches
+        if branch["properties"]["module_id"].get("const") == "custom_analysis"
+    )
+    step = standard["properties"]
+    assert "custom_analysis" not in step["module_id"]["enum"]
+    assert step["custom_method"] == {"type": "null"}
+    assert custom["properties"]["custom_method"]["type"] == "string"
+    assert "table_one_variables" not in custom["properties"]
     assert step["raw_inputs"]["items"]["enum"] == [
         "exposure_flag",
         "outcome_flag",

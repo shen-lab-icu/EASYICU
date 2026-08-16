@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import copy
 from functools import lru_cache
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, get_args
 
 from ..planning.method_literature import METHOD_CARDS
 from ..planning.progressive_contract import (
+    ProgressiveModuleId,
     ProgressivePlanSkeleton,
     ProgressiveSuffixRevision,
 )
@@ -43,6 +44,75 @@ def _string_enum(values: Sequence[str]) -> dict[str, Any]:
 
 def _nullable(schema: Mapping[str, Any]) -> dict[str, Any]:
     return {"anyOf": [copy.deepcopy(dict(schema)), {"type": "null"}]}
+
+
+def _non_null(schema: Mapping[str, Any], *, field: str) -> dict[str, Any]:
+    """Return the single non-null branch of one optional field schema."""
+
+    branches = schema.get("anyOf")
+    if not isinstance(branches, list):
+        raise ProgressiveTransportSchemaError(
+            f"progressive optional field {field!r} has no anyOf branches"
+        )
+    non_null = [
+        branch
+        for branch in branches
+        if isinstance(branch, dict) and branch.get("type") != "null"
+    ]
+    if len(non_null) != 1:
+        raise ProgressiveTransportSchemaError(
+            f"progressive optional field {field!r} has no unique non-null branch"
+        )
+    return copy.deepcopy(non_null[0])
+
+
+def _bind_step_module_shape(definitions: dict[str, Any]) -> None:
+    """Compile the one cross-field rule the base schema cannot express cheaply.
+
+    A standard module's method is host-owned, so ``custom_method`` is not an
+    alternate spelling of that method and must be null.  ``custom_analysis`` is
+    the only branch that accepts free-form method text.  Keeping its branch to
+    the fields it can actually use avoids cloning the entire step schema and
+    keeps the run-bound authority compact.
+    """
+
+    step = definitions.get("ProgressiveSkeletonStep")
+    if not isinstance(step, dict) or not isinstance(step.get("properties"), dict):
+        raise ProgressiveTransportSchemaError(
+            "progressive skeleton step definition is unavailable"
+        )
+    properties = step["properties"]
+    module_ids = list(get_args(ProgressiveModuleId))
+    standard_ids = [value for value in module_ids if value != "custom_analysis"]
+
+    standard = copy.deepcopy(step)
+    standard["properties"]["module_id"] = _string_enum(standard_ids)
+    standard["properties"]["custom_method"] = {"type": "null"}
+
+    custom_fields = (
+        "step_id",
+        "planned_analysis_role",
+        "objective",
+        "depends_on",
+        "raw_inputs",
+        "product_inputs",
+        "outputs",
+        "scientific_action_id",
+        "sensitivity_spec_ids",
+        "literature_bindings",
+    )
+    custom_properties = {
+        field: copy.deepcopy(properties[field]) for field in custom_fields
+    }
+    custom_properties["module_id"] = {
+        "type": "string",
+        "const": "custom_analysis",
+    }
+    custom_properties["custom_method"] = _non_null(
+        properties["custom_method"], field="custom_method"
+    )
+    custom = _closed_object(custom_properties)
+    definitions["ProgressiveSkeletonStep"] = {"anyOf": [standard, custom]}
 
 
 def _bind_step_rosters(
@@ -245,6 +315,7 @@ def _request_cached(
             cohort_concept_ids=cohort_concept_ids,
             know_how_authority=know_how_authority,
         )
+    _bind_step_module_shape(definitions)
     strictify_json_schema(schema)
     try:
         assert_closed_json_schema(schema)

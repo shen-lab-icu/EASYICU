@@ -515,7 +515,9 @@ class ProgressivePlannerAgent:
         blocks.append(
             "Return the compact skeleton only. Standard modules have canonical "
             "host-derived outputs; use outputs=[] for cohort_definition, "
-            "table_one, exposure_outcome_distribution, and adjusted_association."
+            "table_one, exposure_outcome_distribution, adjusted_association, "
+            "and robustness_replay. custom_method must be null for every "
+            "standard module and is available only on custom_analysis."
         )
         return "\n\n".join(blocks)
 
