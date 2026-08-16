@@ -18,6 +18,35 @@ class StructuredOutputCapabilityError(RuntimeError):
     """Raised before transport when a client cannot honor a strict schema."""
 
 
+class ProviderRefusal(RuntimeError):
+    """Terminal provider response that declined to produce model content."""
+
+    reason_code = "provider_refusal"
+
+    def __init__(
+        self,
+        refusal_reason: str,
+        *,
+        finish_reason: str | None,
+        usage_summary: Mapping[str, int] | None,
+        transport_attempts: int,
+    ) -> None:
+        self.refusal_reason = str(refusal_reason or "").strip()
+        self.finish_reason = finish_reason
+        safe_usage: dict[str, int] = {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = (usage_summary or {}).get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                safe_usage[key] = int(value)
+        self.usage_summary = safe_usage
+        self.transport_attempts = max(1, int(transport_attempts))
+        self.easyicu_transport_attempts = self.transport_attempts
+        super().__init__(
+            "ProviderRefusal[reason_code=provider_refusal, "
+            f"finish_reason={finish_reason or 'unknown'}]: {self.refusal_reason}"
+        )
+
+
 @dataclass(frozen=True)
 class StructuredOutputRequest:
     """Immutable provider-neutral authority for one strict JSON response.
@@ -114,6 +143,7 @@ class LLMClient(Protocol):
 __all__ = [
     "LLMClient",
     "LLMMessage",
+    "ProviderRefusal",
     "StructuredOutputCapabilityError",
     "StructuredOutputRequest",
 ]
