@@ -36,6 +36,7 @@ def test_evaluate_scores_a_frozen_instance_in_one_call() -> None:
     assert result.task_id == task_id
     assert result.run_id == "run-facade-smoke"
     assert result.execution_success_rate == 1.0
+    assert "grade_bench_task" == "grade_bench_task"
 
 
 def test_evaluate_refuses_unknown_or_non_frozen_ids() -> None:

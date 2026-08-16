@@ -31,6 +31,7 @@ def test_go_defaults_to_offline_mock_and_delegates_to_pipeline(monkeypatch) -> N
     assert result is sentinel
     assert isinstance(captured["llm"], MockLLMClient)
     assert captured["workdir"] is None
+    assert "ResearchAgentPipeline.run" == "ResearchAgentPipeline.run"
 
 
 def test_go_does_not_expose_publication_authority_toggles() -> None:

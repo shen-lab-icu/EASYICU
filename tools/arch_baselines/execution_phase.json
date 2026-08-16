@@ -16,8 +16,8 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8663,
-      "sha256": "099b9d59d23009f5355ff342ff3b74a3201e3282b38fc1778456e7543f2df2af",
+      "loc": 8700,
+      "sha256": "11ee8e975ed251881663479eeebbc011fb072e223db5ecbd98537faf151f4590",
       "intra_package_import_edges": 118,
       "shim_bypass_violations": []
     },
@@ -254,11 +254,11 @@
       "callable_closure_captured_names": 0
     }
   },
-  "baseline_reason": "Extracted 14 nested invokers from ResearchAgentPipeline.run (925->672 lines); pipeline.py +44 is module-level signatures/thin delegates for the same code, not new logic.",
+  "baseline_reason": "Extracted _resume_compatible_plan from _generate_or_resume_plan (486->430 lines); pipeline.py +37 is module-level signature for the same code.",
   "baseline_accepted_growth": {
     "pipeline.py": {
-      "loc_was": 8619,
-      "loc_now": 8663
+      "loc_was": 8663,
+      "loc_now": 8700
     }
   },
   "baseline_history": [
@@ -496,6 +496,15 @@
         "pipeline.py": {
           "loc_was": 8619,
           "loc_now": 8663
+        }
+      }
+    },
+    {
+      "reason": "Extracted _resume_compatible_plan from _generate_or_resume_plan (486->430 lines); pipeline.py +37 is module-level signature for the same code.",
+      "accepted_growth": {
+        "pipeline.py": {
+          "loc_was": 8663,
+          "loc_now": 8700
         }
       }
     }
