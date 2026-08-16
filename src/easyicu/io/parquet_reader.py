@@ -174,7 +174,7 @@ def read_parquet_parallel(
         for i, future in enumerate(as_completed(futures), 1):
             outcome = future.result()
             if isinstance(outcome, Exception):
-                failures.append(f"{futures[future].name}: {outcome}")
+                failures.append(f"{Path(futures[future]).name}: {outcome}")
             else:
                 dfs.append(outcome)
 

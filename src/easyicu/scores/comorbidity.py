@@ -1247,12 +1247,27 @@ def _lower_cols(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _explode_eicu_codes(series: pd.Series) -> pd.DataFrame:
-    """eICU diagnosis.icd9code is an ICD-9 field.
+    """Split eICU's mixed ``icd9code`` field with bounded version rules.
 
-    Letter-leading tokens are ICD-9 V-codes (e.g. V45.1 dialysis), not
-    ICD-10, so every token is version 9. A stray non-ICD-9 token simply
-    matches no prefix -- it must not be silently reclassified as ICD-10.
+    Numeric codes and ICD-9 V/external-cause E codes remain ICD-9.  Other
+    letter-leading tokens (for example I50.9 and E11.9) are ICD-10; treating
+    every alphabetic token as ICD-9 drops common ICD-10 comorbidities.
     """
+
+    def _version(token: str) -> int:
+        compact = token.upper().replace(" ", "")
+        if not compact[:1].isalpha():
+            return 9
+        if compact.startswith("V"):
+            return 9
+        if compact.startswith("E"):
+            stem = compact.split(".", 1)[0]
+            # ICD-9 external-cause E codes have three digits before the
+            # decimal (E000-E999); ICD-10 endocrine codes such as E11.9 do not.
+            if len(stem) == 4 and stem[1:].isdigit():
+                return 9
+        return 10
+
     exploded = series.fillna("").str.split(",")
     rows = []
     for idx, tokens in exploded.items():
@@ -1260,7 +1275,7 @@ def _explode_eicu_codes(series: pd.Series) -> pd.DataFrame:
             tok = tok.strip()
             if not tok:
                 continue
-            rows.append((idx, tok, 9))
+            rows.append((idx, tok, _version(tok)))
     return pd.DataFrame(rows, columns=["_row", "code", "version"])
 
 

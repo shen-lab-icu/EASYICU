@@ -84,8 +84,12 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
     ].copy()
     pat["dod"] = pd.to_datetime(pat["dod"], errors="coerce")
     df = icu.merge(pat, on="subject_id", how="left")
+    # MIMIC patients.dod is a DATE, not a death timestamp.  Keep the endpoint
+    # at the source-supported calendar-day resolution; subtracting an exact
+    # ICU intime from a midnight DATE makes same-day deaths negative and then
+    # incorrectly censors them below.
     df["days_to_death"] = (
-        df["dod"] - df["intime"]
+        df["dod"] - df["intime"].dt.normalize()
     ).dt.total_seconds() / 86400.0
     df["los_days"] = pd.to_numeric(df["los"], errors="coerce")
     return df.rename(columns={stay_col: "_stay", "intime": "_intime"})[

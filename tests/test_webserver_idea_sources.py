@@ -625,6 +625,92 @@ def test_legacy_handoff_refreshes_to_locked_unconfirmed_agent_seed(
     assert len(seed["canonical_handoff_sha256"]) == 64
 
 
+def test_create_agent_project_requires_exact_nonempty_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path / "idea_runs")
+    monkeypatch.setattr(idea_mining, "_HISTORY_PATH", tmp_path / "idea_history.json")
+    monkeypatch.setattr(
+        idea_mining, "_AGENT_PROJECTS_ROOT", tmp_path / "agent_projects"
+    )
+    monkeypatch.setattr(
+        idea_mining, "_AGENT_PROJECTS_PATH", tmp_path / "agent_projects.json"
+    )
+    monkeypatch.setattr(idea_mining, "_active_export", lambda: None)
+    run = idea_mining.mine_ideas(
+        {
+            "source_type": "url",
+            "title": "Vasopressors and mortality in ICU patients",
+            "excerpt": "Vasopressors may be associated with mortality.",
+        }
+    )
+    idea = run["idea_ledger"][0]
+    idea_mining.create_handoff(
+        {"run_id": run["run_id"], "idea_id": idea["idea_id"]}
+    )
+
+    with pytest.raises(idea_mining.IdeaMiningWebError) as exc_info:
+        idea_mining.create_agent_project({"run_id": run["run_id"]})
+
+    assert exc_info.value.detail["error"] == "idea_identity_required"
+
+
+def test_run_scoped_idea_actions_do_not_fall_back_to_first_idea(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path / "idea_runs")
+    monkeypatch.setattr(idea_mining, "_HISTORY_PATH", tmp_path / "idea_history.json")
+    monkeypatch.setattr(idea_mining, "_active_export", lambda: None)
+    run = idea_mining.mine_ideas(
+        {
+            "source_type": "manual",
+            "title": "Lactate and ICU mortality",
+            "excerpt": "Lactate may be associated with ICU mortality.",
+        }
+    )
+
+    assert idea_mining._selected_idea(run, "") is None
+    for action in (idea_mining.plan_idea, idea_mining.bounded_sample_feasibility):
+        with pytest.raises(idea_mining.IdeaMiningWebError) as exc_info:
+            action({"run_id": run["run_id"]})
+        assert exc_info.value.detail["error"] == "idea_not_found"
+
+
+def test_handoff_staleness_compares_the_nested_plan_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path)
+    run_id = "nested-plan"
+    run_dir = idea_mining._run_dir(run_id)
+    run_dir.mkdir(parents=True)
+    plan = {
+        "human_plan_notes": "Use the first ICU stay.",
+        "selection_mode": "human_curated_with_text_edits",
+        "plan_status": "planned_requires_final_confirmation",
+        "analysis_plan": [{"phase": "Question"}],
+        "execution_gate": {"blockers": []},
+    }
+    (run_dir / "idea_plan.json").write_text(
+        json.dumps({"schema_version": "test/1", "plan": plan}), encoding="utf-8"
+    )
+    handoff = {"handoff_plan": dict(plan)}
+
+    assert not idea_mining._handoff_plan_is_stale(handoff, run_id, {})
+
+    revised = dict(plan)
+    revised["human_plan_notes"] = "Use all ICU stays."
+    (run_dir / "idea_plan.json").write_text(
+        json.dumps({"schema_version": "test/1", "plan": revised}), encoding="utf-8"
+    )
+    assert idea_mining._handoff_plan_is_stale(handoff, run_id, {})
+
+    (run_dir / "idea_plan.json").unlink()
+    assert not idea_mining._handoff_plan_is_stale(handoff, run_id, {})
+
+
 def test_idea_mining_does_not_recommend_mock_export_as_real_feasibility(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -902,6 +988,75 @@ def test_prior_art_executes_the_queries_prespecified_by_the_mined_idea(
     )
 
     assert checked["prior_art"]["queries_to_run"] == queries
+
+
+def test_prior_art_rejects_untracked_or_mismatched_legacy_run_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path)
+    empty_run = idea_mining._run_dir("empty-retained-dir")
+    empty_run.mkdir(parents=True)
+
+    with pytest.raises(idea_mining.IdeaMiningWebError) as exc_info:
+        idea_mining.check_prior_art(
+            {"run_id": "empty-retained-dir", "idea_id": "idea-a"}
+        )
+    assert exc_info.value.detail["error"] == "idea_run_not_found"
+
+    legacy_run = idea_mining._run_dir("legacy-prior")
+    legacy_run.mkdir(parents=True)
+    (legacy_run / "prior_art_check.json").write_text(
+        json.dumps(
+            {
+                "run_id": "legacy-prior",
+                "idea_id": "idea-a",
+                "prior_art": {
+                    "status": "searched_no_hits",
+                    "search_performed": True,
+                    "queries_to_run": ["prespecified query"],
+                    "results": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(idea_mining.IdeaMiningWebError) as exc_info:
+        idea_mining.check_prior_art(
+            {"run_id": "legacy-prior", "idea_id": "idea-b"}
+        )
+    assert exc_info.value.detail["error"] == "idea_not_found"
+
+
+def test_url_metadata_failure_does_not_hide_error_behind_doi_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        idea_mining,
+        "_resolve_public_http_target",
+        lambda url: SimpleNamespace(url=str(url)),
+    )
+
+    def fail_html(*_args, **_kwargs):
+        raise OSError("journal HTML unavailable")
+
+    monkeypatch.setattr(idea_mining, "_open_public_url", fail_html)
+    monkeypatch.setattr(
+        idea_mining,
+        "_fetch_doi_metadata",
+        lambda _doi: {
+            "status": "doi_fetch_failed",
+            "network_calls": 1,
+            "reason": "Crossref unavailable",
+        },
+    )
+
+    result = idea_mining._fetch_url_metadata(
+        "https://example.org/doi/10.1000/unavailable"
+    )
+
+    assert result["status"] == "fetch_failed"
+    assert "journal HTML unavailable" in result["reason"]
 
 
 def test_pubmed_esearch_requests_relevance_order(
@@ -1483,7 +1638,12 @@ def test_blocked_prior_art_recheck_does_not_clobber_successful_review(
     )
 
     blocked = idea_mining.check_prior_art(
-        {"run_id": run_id, "idea_title": "vasopressor timing", "allow_network": False}
+        {
+            "run_id": run_id,
+            "idea_id": "vasopressor-timing",
+            "idea_title": "vasopressor timing",
+            "allow_network": False,
+        }
     )
 
     assert blocked["prior_art"]["search_performed"] is False

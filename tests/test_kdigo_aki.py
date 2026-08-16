@@ -38,7 +38,9 @@ def test_kdigo_uo_requires_minimum_documented_window_hours():
     )
     weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
 
-    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+    result = _calculate_uo_rates_simple(
+        urine, weight, "stay_id", "charttime", time_unit="minutes"
+    )
 
     assert result["uo_rt_6hr"].isna().all()
     assert result["uo_rt_12hr"].isna().all()
@@ -55,7 +57,9 @@ def test_kdigo_uo_matches_mit_lcp_window_rules_once_six_hours_are_present():
     )
     weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
 
-    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+    result = _calculate_uo_rates_simple(
+        urine, weight, "stay_id", "charttime", time_unit="minutes"
+    )
 
     assert result["uo_rt_6hr"].iloc[-1] == 0.1
     assert pd.isna(result["uo_rt_12hr"].iloc[-1])
@@ -72,7 +76,9 @@ def test_kdigo_uo_large_minute_offsets_are_not_misclassified_as_seconds():
     )
     weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
 
-    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+    result = _calculate_uo_rates_simple(
+        urine, weight, "stay_id", "charttime", time_unit="minutes"
+    )
 
     assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(0.1)
 
@@ -87,7 +93,9 @@ def test_kdigo_uo_hour_numeric_time_axis_is_supported():
     )
     weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
 
-    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "time")
+    result = _calculate_uo_rates_simple(
+        urine, weight, "stay_id", "time", time_unit="hours"
+    )
 
     assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(0.1)
 
@@ -102,13 +110,17 @@ def test_kdigo_uo_missing_patient_weight_leaves_rates_missing():
     )
     weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
 
-    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+    result = _calculate_uo_rates_simple(
+        urine, weight, "stay_id", "charttime", time_unit="minutes"
+    )
 
     assert result["uo_rt_6hr"].isna().all()
     assert result["uo_rt_12hr"].isna().all()
     assert result["uo_rt_24hr"].isna().all()
 
-    staged = kdigo_uo(urine, weight, "stay_id", "charttime")
+    staged = kdigo_uo(
+        urine, weight, "stay_id", "charttime", time_unit="minutes"
+    )
     assert staged["uo_rt_6hr"].isna().all()
     assert staged["aki_stage_uo"].isna().all()
     assert not staged["uo_assessable"].any()
@@ -127,7 +139,9 @@ def test_kdigo_uo_invalid_weight_does_not_fall_back_to_70kg():
     )
     weight = pd.DataFrame({"stay_id": [1], "weight": [0.0]})
 
-    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+    result = _calculate_uo_rates_simple(
+        urine, weight, "stay_id", "charttime", time_unit="minutes"
+    )
 
     assert result["uo_rt_6hr"].isna().all()
 
@@ -144,7 +158,9 @@ def test_kdigo_uo_conflicting_keyed_weights_fail_closed(weights):
     weight = pd.DataFrame({"stay_id": [1, 1], "weight": weights})
 
     with pytest.raises(KDIGOComponentCalculationError) as caught:
-        _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+        _calculate_uo_rates_simple(
+            urine, weight, "stay_id", "charttime", time_unit="minutes"
+        )
 
     assert caught.value.reason_code == "kdigo_weight_values_conflict"
 
@@ -188,7 +204,9 @@ def test_kdigo_uo_duplicate_identical_keyed_weights_are_accepted():
     )
     weight = pd.DataFrame({"stay_id": [1, 1], "weight": [100.0, 100.0]})
 
-    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+    result = _calculate_uo_rates_simple(
+        urine, weight, "stay_id", "charttime", time_unit="minutes"
+    )
 
     assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(0.3)
 
@@ -208,6 +226,7 @@ def test_empty_weight_source_is_missingness_not_a_calculation_crash():
         weight_df=pd.DataFrame(),
         id_col="stay_id",
         time_col="charttime",
+        time_unit="minutes",
     )
 
     assert result["urine_ascertainment"].eq("indeterminate").all()
@@ -220,7 +239,12 @@ def test_kdigo_missing_baseline_is_unknown_not_stage_zero():
         {"stay_id": [1], "charttime": [0], "crea": [1.2]}
     )
 
-    result = kdigo_stages(creatinine, id_col="stay_id", time_col="charttime")
+    result = kdigo_stages(
+        creatinine,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="minutes",
+    )
 
     assert pd.isna(result["aki_stage_creat"].iloc[0])
     assert pd.isna(result["aki_stage_uo"].iloc[0])
@@ -254,6 +278,7 @@ def test_kdigo_uses_urine_timeline_when_creatinine_is_unavailable():
         weight_df=weight,
         id_col="stay_id",
         time_col="charttime",
+        time_unit="minutes",
     )
 
     assert len(result) == len(urine)
@@ -271,6 +296,7 @@ def test_kdigo_uses_rrt_timeline_when_no_laboratory_or_urine_exists():
         rrt_df=rrt,
         id_col="stay_id",
         time_col="charttime",
+        time_unit="minutes",
     )
 
     assert result[["stay_id", "charttime"]].to_dict("records") == [
@@ -285,7 +311,7 @@ def test_load_kdigo_keeps_urine_only_patients_in_the_public_api():
     urine = pd.DataFrame(
         {
             "stay_id": [1, 1, 1, 1, 1, 1],
-            "charttime": [0, 60, 120, 180, 240, 300],
+            "charttime": [0, 1, 2, 3, 4, 5],
             "urine": [10.0] * 6,
         }
     )
@@ -352,6 +378,7 @@ def test_kdigo_uo_calculation_error_fails_closed_with_stable_reason(monkeypatch)
             weight_df=weight,
             id_col="stay_id",
             time_col="charttime",
+            time_unit="minutes",
         )
 
     assert error.value.component == "urine_output"
@@ -374,6 +401,7 @@ def test_nonnumeric_urine_is_not_silently_converted_to_zero_output():
             weight,
             id_col="stay_id",
             time_col="charttime",
+            time_unit="minutes",
         )
 
     assert error.value.component == "urine_output"
@@ -394,6 +422,7 @@ def test_nonnumeric_creatinine_is_not_downgraded_to_patient_data_absent():
             creatinine,
             id_col="stay_id",
             time_col="charttime",
+            time_unit="minutes",
         )
 
     assert error.value.component == "creatinine"
@@ -430,6 +459,23 @@ def test_sparse_hourly_creatinine_is_not_misread_as_minutes():
     assert row["aki_stage_creat"].item() == 3
 
 
+def test_numeric_kdigo_charttime_requires_explicit_unit() -> None:
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0, 24, 120],
+            "crea": [1.0, 1.0, 1.4],
+        }
+    )
+
+    with pytest.raises(ValueError, match="time_unit"):
+        kdigo_aki.kdigo_creatinine(
+            creatinine,
+            id_col="stay_id",
+            time_col="charttime",
+        )
+
+
 def test_out_of_range_creatinine_is_dropped_without_losing_valid_kdigo_series():
     creatinine = pd.DataFrame(
         {
@@ -443,6 +489,7 @@ def test_out_of_range_creatinine_is_dropped_without_losing_valid_kdigo_series():
         creatinine,
         id_col="stay_id",
         time_col="charttime",
+        time_unit="minutes",
     )
 
     assert result["charttime"].tolist() == [0, 120]
@@ -459,7 +506,9 @@ def test_negative_urine_observation_is_dropped_without_invalidating_valid_window
     )
     weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
 
-    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+    result = _calculate_uo_rates_simple(
+        urine, weight, "stay_id", "charttime", time_unit="minutes"
+    )
 
     assert 120 not in result["charttime"].tolist()
     assert result["uo_rt_6hr"].notna().any()
@@ -475,7 +524,9 @@ def test_kdigo_uo_global_weight_without_id_applies_to_all_rows():
     )
     weight = pd.DataFrame({"weight": [50.0]})
 
-    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+    result = _calculate_uo_rates_simple(
+        urine, weight, "stay_id", "charttime", time_unit="minutes"
+    )
 
     assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(0.2)
 
@@ -492,7 +543,9 @@ def test_kdigo_uo_refuses_unkeyed_weight_for_multiple_urine_entities():
     # the first 50 kg row was broadcast to both stays.
     weight = pd.DataFrame({"patientid": [10, 20], "weight": [50.0, 100.0]})
 
-    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+    result = _calculate_uo_rates_simple(
+        urine, weight, "stay_id", "charttime", time_unit="minutes"
+    )
 
     assert result["uo_rt_6hr"].isna().all()
 
@@ -570,7 +623,13 @@ def test_kdigo_rrt_stage_applies_from_first_active_rrt_time():
     )
     rrt = pd.DataFrame({"stay_id": [1], "charttime": [180], "rrt": [1]})
 
-    result = kdigo_stages(creatinine, rrt_df=rrt, id_col="stay_id", time_col="charttime")
+    result = kdigo_stages(
+        creatinine,
+        rrt_df=rrt,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="minutes",
+    )
 
     # The component-neutral spine retains the RRT initiation itself instead
     # of waiting for the next creatinine measurement.
@@ -601,7 +660,13 @@ def test_kdigo_rrt_exact_timestamp_match_is_not_required():
     )
     rrt = pd.DataFrame({"stay_id": [1], "charttime": [150], "rrt": [True]})
 
-    result = kdigo_stages(creatinine, rrt_df=rrt, id_col="stay_id", time_col="charttime")
+    result = kdigo_stages(
+        creatinine,
+        rrt_df=rrt,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="minutes",
+    )
 
     assert result.loc[result["charttime"] == 200, "aki_stage_rrt"].item() == 3
 
@@ -619,6 +684,7 @@ def test_component_negative_without_complete_window_is_partial_not_negative():
         creatinine,
         id_col="stay_id",
         time_col="charttime",
+        time_unit="minutes",
     )
 
     last = result.iloc[-1]
@@ -660,6 +726,7 @@ def test_complete_window_and_three_negative_components_prove_negative_aki():
         rrt_df=rrt,
         id_col="stay_id",
         time_col="charttime",
+        time_unit="minutes",
         observation_window_coverage={1: "complete"},
     )
 
@@ -687,6 +754,7 @@ def test_positive_component_overrides_partial_coverage():
         rrt_df=rrt,
         id_col="stay_id",
         time_col="charttime",
+        time_unit="minutes",
     )
 
     assert result["observation_window_coverage"].iloc[0] == "partial"
@@ -711,6 +779,7 @@ def test_stage_one_is_not_misclassified_as_confirmed_no_severe_aki():
         creatinine,
         id_col="stay_id",
         time_col="charttime",
+        time_unit="minutes",
     )
 
     last = result.iloc[-1]
@@ -736,6 +805,7 @@ def test_stage_two_component_confirms_severe_aki_with_partial_coverage():
         creatinine,
         id_col="stay_id",
         time_col="charttime",
+        time_unit="minutes",
     )
 
     last = result.iloc[-1]
@@ -753,6 +823,7 @@ def test_nonempty_rrt_with_unresolved_schema_fails_closed():
             rrt_df=pd.DataFrame({"wrong": [1]}),
             id_col="stay_id",
             time_col="charttime",
+            time_unit="minutes",
         )
 
     assert error.value.reason_code == "kdigo_rrt_timeline_schema_invalid"

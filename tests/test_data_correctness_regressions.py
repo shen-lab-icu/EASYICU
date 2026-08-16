@@ -1110,7 +1110,9 @@ def test_converter_distinguishes_mimic_generations_and_rejects_ambiguity(tmp_pat
         DataConverter(ambiguous, verbose=False)
 
 
-def test_mimic_mortality_horizon_is_measured_from_icu_intime(monkeypatch):
+def test_mimic_same_calendar_day_death_is_not_lost_to_midnight_precision(
+    monkeypatch,
+):
     import easyicu.scores.outcomes as outcomes
 
     icu = pd.DataFrame(
@@ -1118,11 +1120,12 @@ def test_mimic_mortality_horizon_is_measured_from_icu_intime(monkeypatch):
             "subject_id": [1],
             "hadm_id": [10],
             "stay_id": [1],
-            "intime": ["2020-01-01 23:30:00"],
+            "intime": ["2020-01-01 12:00:00"],
             "los": [2.0],
         }
     )
-    patients = pd.DataFrame({"subject_id": [1], "dod": ["2020-01-29 17:30:00"]})
+    # MIMIC patients.dod is a DATE, represented at midnight after loading.
+    patients = pd.DataFrame({"subject_id": [1], "dod": ["2020-01-01"]})
     monkeypatch.setattr(
         outcomes,
         "_raw_table",
@@ -1131,8 +1134,9 @@ def test_mimic_mortality_horizon_is_measured_from_icu_intime(monkeypatch):
 
     result = outcomes.load_outcomes("miiv").set_index("stay_id")
 
-    # 27.75 days after ICU admission -> within 28 days; the old midnight-based
-    # calculation added up to +24h and misclassified this as alive.
+    # Subtracting exact intime from a midnight DATE produces -0.5 days and
+    # previously censored a genuine same-day death. Calendar-day semantics are
+    # the strongest resolution the source can support.
     assert bool(result.loc[1, "mort_28d"]) is True
 
 
