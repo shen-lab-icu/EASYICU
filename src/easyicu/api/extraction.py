@@ -725,6 +725,22 @@ def _module_arrow_table(
     """Create a stable module table, adding structural nulls only in Arrow."""
     table = pyarrow_module.Table.from_pandas(frame, preserve_index=False)
     requested = _native_export_physical_value_columns(concepts)
+    # Event-time companions are derived at the native-v2 publication boundary
+    # from the event concept's source ``charttime``.  Do not invent an all-null
+    # staging column when the concept loader has not supplied the companion
+    # itself: doing so makes the final publisher believe that a real (but
+    # entirely missing) owner column already exists, so it cannot preserve the
+    # source event time before normalising the stay-level outcome axis to 0 h.
+    #
+    # SOFA-2 observed/available receipts are different: they are emitted by the
+    # score owner in the extraction frame and remain part of the stable streamed
+    # schema.  A genuinely owner-supplied event-time column is likewise kept.
+    event_time_companions = set(_NATIVE_EXPORT_EVENT_TIME_COMPANIONS.values())
+    requested = [
+        concept
+        for concept in requested
+        if concept not in event_time_companions or concept in table.column_names
+    ]
     requested_set = set(requested)
 
     # Every non-demographics module is longitudinal in the native-v2 physical
