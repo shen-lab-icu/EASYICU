@@ -91,12 +91,16 @@ def test_circ_failure_missing_map_fails_closed() -> None:
 
 
 @pytest.mark.parametrize(
-    ("missing_column", "expected_known_flag"),
-    [("map", "lactate_elevated"), ("lact", "map_low")],
+    ("missing_column", "expected_known_flag", "expected_unknown_flag"),
+    [
+        ("map", "lactate_elevated", "map_low"),
+        ("lact", "map_low", "lactate_elevated"),
+    ],
 )
 def test_circ_failure_row_level_core_missing_stays_unknown(
     missing_column: str,
     expected_known_flag: str,
+    expected_unknown_flag: str,
 ) -> None:
     from easyicu.scores.circ_failure import calculate_circ_failure_status
 
@@ -113,6 +117,7 @@ def test_circ_failure_row_level_core_missing_stays_unknown(
     out = calculate_circ_failure_status(df, use_rolling_window=False)
 
     assert bool(out.loc[0, expected_known_flag]) is True
+    assert pd.isna(out.loc[0, expected_unknown_flag])
     assert pd.isna(out.loc[0, "circ_event"])
     assert pd.isna(out.loc[0, "circ_failure"])
 
@@ -132,6 +137,8 @@ def test_circ_failure_row_level_drug_missing_stays_unknown() -> None:
 
     out = calculate_circ_failure_status(df, use_rolling_window=False)
 
+    assert pd.isna(out.loc[0, "level2_drugs"])
+    assert pd.isna(out.loc[0, "level3_drugs"])
     assert pd.isna(out.loc[0, "circ_event"])
     assert pd.isna(out.loc[0, "circ_failure"])
 

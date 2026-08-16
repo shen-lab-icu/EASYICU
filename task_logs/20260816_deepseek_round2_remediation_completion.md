@@ -62,3 +62,9 @@ Another session modified Copilot/Agent backend and frontend files in the same wo
 - Real six-database validation remains separate because the real-data tests were unavailable/skipped.
 - The canonical LOCK remains an independent publication gate.
 - No formal Figure 2 run or manuscript result was produced.
+
+## Independent-review follow-up
+
+Claude independently reproduced the same-day MIMIC mortality, SOFA-2 completeness, KDIGO time-unit, and circulatory-failure fixes at `9740821`. It also identified a narrower output-contract inconsistency: missing lactate/MAP made the final event nullable but left the corresponding component flag as `False`.
+
+The follow-up reproduced that behavior with a red regression, then made all measured component comparisons (core and drug-rate flags) preserve source missingness as pandas nullable booleans. The clinical owner/adjacent gate remained `189 passed, 13 skipped`; Ruff, compileall, and diff-check passed. This does not change the real-data and publication boundaries above.
