@@ -728,6 +728,37 @@ def test_stream_arrow_table_keeps_sofa2_owner_receipt_companions() -> None:
     assert table.column("sofa2_resp_available").to_pylist() == [1, 0]
 
 
+def test_stream_arrow_table_defers_missing_death_time_to_native_publisher() -> None:
+    import pyarrow as pa
+
+    dictionary = api.load_dictionary(include_sofa2=True)
+    source = pd.DataFrame(
+        {
+            "stay_id": [101, 102],
+            "charttime": [12.0, 0.0],
+            "death": [True, None],
+        }
+    )
+
+    staged = api._module_arrow_table(
+        source,
+        ["death"],
+        pa,
+        module="outcome",
+    ).to_pandas()
+    assert list(staged.columns) == ["stay_id", "charttime", "death"]
+
+    canonical = api._canonicalise_native_export_frame(
+        staged,
+        module="outcome",
+        requested_concepts=["death"],
+        dictionary=dictionary,
+        database="miiv",
+    )
+    assert canonical.loc[0, "death_time"] == 12.0
+    assert pd.isna(canonical.loc[1, "death_time"])
+
+
 def test_native_arrow_schema_normalises_backend_large_strings() -> None:
     import pyarrow as pa
 

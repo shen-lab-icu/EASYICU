@@ -21,6 +21,7 @@ to bypass the full extraction controller.
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.util
 import json
 import os
@@ -401,6 +402,7 @@ def refresh_candidate(
     data_path_overrides: Mapping[str, str],
     batch_size: int | None,
     resume: bool = False,
+    repair_finalized: bool = False,
 ) -> Path:
     source = source_run_root.resolve()
     destination = output_root.expanduser().absolute()
@@ -419,14 +421,49 @@ def refresh_candidate(
         for database in DATABASES
     }
 
+    prior_provenance: dict[str, Any] | None = None
+    if repair_finalized and not resume:
+        raise ModuleRefreshError("--repair-finalized requires --resume")
     if resume:
         if destination.is_symlink() or not destination.is_dir():
             raise ModuleRefreshError(
                 f"--resume requires an existing regular candidate directory: {destination}"
             )
-        if (destination / "module_refresh_provenance.json").exists() or (
-            destination / "run_metadata.json"
-        ).exists():
+        provenance_path = destination / "module_refresh_provenance.json"
+        sealed_path = destination / "run_metadata.json"
+        if repair_finalized:
+            if sealed_path.exists() or sealed_path.is_symlink():
+                raise ModuleRefreshError(
+                    "--repair-finalized refuses a sealed candidate"
+                )
+            prior_provenance = _read_json(
+                provenance_path,
+                label="existing module-refresh provenance",
+            )
+            if prior_provenance.get("schema_version") != SCHEMA_VERSION:
+                raise ModuleRefreshError(
+                    "--repair-finalized requires the current selected-module "
+                    "refresh provenance schema"
+                )
+            if not prior_provenance.get("raw_database_reread"):
+                raise ModuleRefreshError(
+                    "--repair-finalized requires a prior raw-data refresh"
+                )
+            if (
+                Path(str(prior_provenance.get("source_run_root", ""))).resolve()
+                != source
+            ):
+                raise ModuleRefreshError(
+                    "--repair-finalized source run differs from the prior refresh"
+                )
+            if (
+                prior_provenance.get("source_run_manifest_sha256")
+                != source_run_manifest_sha256
+            ):
+                raise ModuleRefreshError(
+                    "--repair-finalized source manifest hash changed"
+                )
+        elif provenance_path.exists() or sealed_path.exists():
             raise ModuleRefreshError(
                 "--resume refuses a sealed or already-finalized refresh candidate"
             )
@@ -449,7 +486,68 @@ def refresh_candidate(
                 candidate_root=destination,
                 modules=selected_modules,
                 batch_size=batch_size,
-                reuse_completed_export=resume,
+                reuse_completed_export=resume and not repair_finalized,
+            )
+
+        all_refreshed_modules = list(selected_modules)
+        all_requested_modules = list(requested_modules)
+        combined_runtime = refreshed
+        repair_history: list[dict[str, Any]] = []
+        if prior_provenance is not None:
+            prior_refreshed = {
+                str(module) for module in prior_provenance.get("refreshed_modules", [])
+            }
+            prior_requested = [
+                str(module) for module in prior_provenance.get("requested_modules", [])
+            ]
+            all_refreshed_modules = [
+                module
+                for module in MODULES
+                if module in prior_refreshed or module in selected_modules
+            ]
+            all_requested_modules = list(
+                dict.fromkeys([*prior_requested, *requested_modules])
+            )
+            prior_runtime = prior_provenance.get("per_database_runtime") or {}
+            combined_runtime = {}
+            for database in DATABASES:
+                previous = copy.deepcopy(prior_runtime.get(database) or {})
+                current = refreshed[database]
+                previous_modules = dict(previous.get("modules") or {})
+                previous_modules.update(current.get("modules") or {})
+                previous.update(
+                    {
+                        "database": database,
+                        "data_path": current.get("data_path"),
+                        "num_patients": (
+                            current.get("num_patients")
+                            if current.get("num_patients") is not None
+                            else previous.get("num_patients")
+                        ),
+                        "batch_size": (
+                            current.get("batch_size")
+                            if current.get("batch_size") is not None
+                            else previous.get("batch_size")
+                        ),
+                        "modules": previous_modules,
+                        "latest_repair_elapsed_seconds": current.get(
+                            "total_elapsed_seconds"
+                        ),
+                    }
+                )
+                combined_runtime[database] = previous
+            repair_history = list(prior_provenance.get("repair_history") or [])
+            repair_history.append(
+                {
+                    "repaired_at": _utc_now(),
+                    "prior_publication_easyicu_git_commit": prior_provenance.get(
+                        "publication_easyicu_git_commit"
+                    ),
+                    "publication_easyicu_git_commit": publication_commit,
+                    "requested_modules": list(requested_modules),
+                    "dependency_closure_applied": list(selected_modules),
+                    "reason": "explicit_unsealed_finalized_candidate_repair",
+                }
             )
 
         native_manifests: dict[str, dict[str, Any]] = {}
@@ -464,11 +562,11 @@ def refresh_candidate(
             manifest["source_extraction_provenance"] = {
                 **(manifest.get("source_extraction_provenance") or {}),
                 "raw_database_reread": True,
-                "refreshed_modules": list(selected_modules),
+                "refreshed_modules": list(all_refreshed_modules),
                 "reused_modules": [
-                    module for module in MODULES if module not in selected_modules
+                    module for module in MODULES if module not in all_refreshed_modules
                 ],
-                "module_refresh_runtime": refreshed[database],
+                "module_refresh_runtime": combined_runtime[database],
                 "transformation": (
                     "raw re-extraction of selected modules plus canonical native-v2 "
                     "republication of the complete package"
@@ -491,15 +589,18 @@ def refresh_candidate(
             "publication_easyicu_git_commit": publication_commit,
             "publication_easyicu_git_dirty": False,
             "refresher": str(Path(__file__).relative_to(REPOSITORY_ROOT)),
-            "refreshed_modules": list(selected_modules),
-            "requested_modules": list(requested_modules),
-            "dependency_closure_applied": list(selected_modules),
+            "refreshed_modules": list(all_refreshed_modules),
+            "requested_modules": list(all_requested_modules),
+            "dependency_closure_applied": list(all_refreshed_modules),
             "raw_database_reread": True,
             "raw_data_paths": data_paths,
-            "per_database_runtime": refreshed,
-            "reused_module_count_per_database": len(MODULES) - len(selected_modules),
+            "per_database_runtime": combined_runtime,
+            "reused_module_count_per_database": len(MODULES)
+            - len(all_refreshed_modules),
             "seal_required_after_refresh": True,
         }
+        if repair_history:
+            provenance["repair_history"] = repair_history
         REPUBLICATION._atomic_write_json(
             destination / "module_refresh_provenance.json", provenance
         )
@@ -528,6 +629,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--resume",
         action="store_true",
         help="Resume an unsealed candidate after recovering canonical staged modules.",
+    )
+    parser.add_argument(
+        "--repair-finalized",
+        action="store_true",
+        help=(
+            "With --resume, force the requested modules to be re-read in an "
+            "unsealed finalized candidate and merge their receipts into its "
+            "existing refresh provenance. Sealed candidates remain immutable."
+        ),
     )
     parser.add_argument(
         "--module",
@@ -566,6 +676,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             data_path_overrides=_parse_data_path_overrides(args.data_path),
             batch_size=args.batch_size,
             resume=args.resume,
+            repair_finalized=args.repair_finalized,
         )
     except (ModuleRefreshError, OSError, ValueError) as exc:
         print(f"selected-module refresh failed: {exc}", file=sys.stderr)
