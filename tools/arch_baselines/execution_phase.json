@@ -1,6 +1,6 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "47001ed8a3ac9fa1211d595fb9e6911ef04a63374fb09a9e7c1c745210c7f257",
+  "tool_sha256": "f83e7dcf1dec0a0ba8e035e6b98a7ab64c603e05a9d2db52963b87c5996f18c2",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
@@ -64,9 +64,9 @@
       "shim_bypass_violations": []
     },
     "gates/preflight.py": {
-      "loc": 6268,
-      "sha256": "32a03d4c3653377014330016b63a3b979ee9fa60ad109363b17f2be3a22cb6a1",
-      "intra_package_import_edges": 14,
+      "loc": 5784,
+      "sha256": "7f07e6370b46136301480a0be31f4045154ea3415625e3755536a79b2375f2a8",
+      "intra_package_import_edges": 15,
       "shim_bypass_violations": []
     },
     "gates/preflight_statics.py": {
@@ -252,15 +252,49 @@
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 0
+    },
+    "execution/phase.py::_prepare_execute_phase_authority": {
+      "lines": 139,
+      "line_start": 1022,
+      "direct_nested_funcs": 0,
+      "total_nested_funcs": 0,
+      "own_bound_names": 31,
+      "own_nonlocal_names": [],
+      "own_nonlocal_count": 0,
+      "callable_closure_captured_names": 0
+    },
+    "audits/figures.py::_compare_source_to_upstream": {
+      "lines": 866,
+      "line_start": 3815,
+      "direct_nested_funcs": 12,
+      "total_nested_funcs": 12,
+      "own_bound_names": 128,
+      "own_nonlocal_names": [],
+      "own_nonlocal_count": 0,
+      "callable_closure_captured_names": 15
+    },
+    "pipeline.py::run": {
+      "lines": 672,
+      "line_start": 4578,
+      "direct_nested_funcs": 13,
+      "total_nested_funcs": 13,
+      "own_bound_names": 107,
+      "own_nonlocal_names": [],
+      "own_nonlocal_count": 0,
+      "callable_closure_captured_names": 43
+    },
+    "pipeline.py::_generate_or_resume_plan": {
+      "lines": 449,
+      "line_start": 2325,
+      "direct_nested_funcs": 0,
+      "total_nested_funcs": 0,
+      "own_bound_names": 50,
+      "own_nonlocal_names": [],
+      "own_nonlocal_count": 0,
+      "callable_closure_captured_names": 0
     }
   },
-  "baseline_reason": "Extracted _resume_compatible_plan from _generate_or_resume_plan (486->430 lines); pipeline.py +37 is module-level signature for the same code.",
-  "baseline_accepted_growth": {
-    "pipeline.py": {
-      "loc_was": 8663,
-      "loc_now": 8700
-    }
-  },
+  "baseline_reason": "Add _prepare_execute_phase_authority, _compare_source_to_upstream, pipeline.run and _generate_or_resume_plan to the function ratchet; preflight.py split into preflight_support.py moved 24 leaf helpers.",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -507,6 +541,9 @@
           "loc_now": 8700
         }
       }
+    },
+    {
+      "reason": "Add _prepare_execute_phase_authority, _compare_source_to_upstream, pipeline.run and _generate_or_resume_plan to the function ratchet; preflight.py split into preflight_support.py moved 24 leaf helpers."
     }
   ]
 }
