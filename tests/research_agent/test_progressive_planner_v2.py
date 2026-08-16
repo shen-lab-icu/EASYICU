@@ -7,6 +7,8 @@ import json
 import pytest
 
 from easyicu.research_agent.agents.progressive_payload import (
+    progressive_outline_structured_output_request,
+    progressive_step_materialization_request,
     progressive_structured_output_request,
 )
 from easyicu.research_agent.agents.progressive_planner import (
@@ -24,9 +26,12 @@ from easyicu.research_agent.planning.progressive_compiler import (
     compile_progressive_plan,
 )
 from easyicu.research_agent.planning.progressive_contract import (
+    ProgressiveOutlineStep,
     ProgressivePlanCompileError,
+    ProgressivePlanOutline,
     ProgressivePlanSkeleton,
 )
+from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.providers.strict_json_schema import (
     closed_pydantic_json_schema,
 )
@@ -422,6 +427,135 @@ def test_progressive_skeleton_schema_is_small_closed_and_case_neutral() -> None:
     for object_schema in _walk_objects(schema):
         assert set(object_schema["required"]) == set(object_schema["properties"])
         assert object_schema["additionalProperties"] is False
+
+
+def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> None:
+    request = progressive_outline_structured_output_request(
+        analysis_types=["association_study"],
+        scientific_action_ids=["association.adjusted_association"],
+    )
+    schema = json.loads(request.schema_json)
+    encoded = request.canonical_payload_json
+
+    assert len(encoded.encode("utf-8")) < 4_000
+    assert request.name == "easyicu_progressive_plan_outline_v1"
+    assert schema["properties"]["analysis_type"]["enum"] == [
+        "association_study"
+    ]
+    step = schema["$defs"]["ProgressiveOutlineStep"]["properties"]
+    assert set(step) == {
+        "step_id",
+        "planned_analysis_role",
+        "module_id",
+        "objective",
+        "depends_on",
+        "scientific_action_id",
+    }
+    for forbidden in (
+        "raw_inputs",
+        "product_inputs",
+        "outputs",
+        "model_terms",
+        "literature_bindings",
+        "denominator_policy",
+    ):
+        assert forbidden not in encoded
+    for object_schema in _walk_objects(schema):
+        assert set(object_schema["required"]) == set(object_schema["properties"])
+        assert object_schema["additionalProperties"] is False
+
+
+def test_current_step_schema_locks_outline_coordinate_and_product_registry() -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id="05_primary",
+        planned_analysis_role="primary",
+        module_id="adjusted_association",
+        objective="Estimate the prespecified adjusted association.",
+        depends_on=["01_cohort"],
+        scientific_action_id="association.adjusted_association",
+    )
+    outline_sha256 = canonical_sha256(outline_step.model_dump(mode="json"))
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=outline_sha256,
+        variable_names=["exposure_flag", "outcome_flag", "age_years"],
+        scientific_action_ids=["association.adjusted_association"],
+        allowed_literature_citation_keys=["strobe_2007"],
+        include_foundation=False,
+        available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
+    )
+    schema = json.loads(request.schema_json)
+
+    assert request.name == "easyicu_progressive_step_materialization_v1"
+    assert schema["properties"]["outline_step_sha256"]["const"] == outline_sha256
+    assert schema["properties"]["foundation"] == {"type": "null"}
+    step = schema["$defs"]["ProgressiveSkeletonStep"]["properties"]
+    assert step["step_id"]["const"] == "05_primary"
+    assert step["planned_analysis_role"]["const"] == "primary"
+    assert step["module_id"]["const"] == "adjusted_association"
+    assert step["objective"]["const"] == outline_step.objective
+    assert step["depends_on"]["prefixItems"] == [
+        {"type": "string", "const": "01_cohort"}
+    ]
+    assert step["scientific_action_id"]["const"] == (
+        "association.adjusted_association"
+    )
+    assert step["raw_inputs"]["items"]["enum"] == [
+        "exposure_flag",
+        "outcome_flag",
+        "age_years",
+    ]
+    product = schema["$defs"]["ProgressiveProductRef"]["anyOf"]
+    assert product == [
+        {
+            "type": "object",
+            "properties": {
+                "producer_step_id": {"type": "string", "const": "01_cohort"},
+                "product_id": {
+                    "type": "string",
+                    "const": "artifact:analysis_cohort",
+                },
+            },
+            "required": ["producer_step_id", "product_id"],
+            "additionalProperties": False,
+        }
+    ]
+
+
+def test_current_step_without_available_products_closes_product_inputs() -> None:
+    outline_step = ProgressivePlanOutline.model_validate(
+        {
+            "analysis_type": "association_study",
+            "cohort_objective": "Use the authorized input cohort without invention.",
+            "steps": [
+                {
+                    "step_id": "01_cohort",
+                    "planned_analysis_role": "auxiliary",
+                    "module_id": "cohort_definition",
+                    "objective": "Bind the authorized cohort and its denominator.",
+                    "depends_on": [],
+                    "scientific_action_id": None,
+                }
+            ],
+            "rationale": "Start by binding the study population authority.",
+        }
+    ).steps[0]
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(
+            outline_step.model_dump(mode="json")
+        ),
+        variable_names=["exposure_flag", "outcome_flag"],
+        scientific_action_ids=[],
+        include_foundation=True,
+    )
+    schema = json.loads(request.schema_json)
+
+    assert schema["properties"]["foundation"] == {
+        "$ref": "#/$defs/ProgressivePlanFoundation"
+    }
+    step = schema["$defs"]["ProgressiveSkeletonStep"]["properties"]
+    assert step["product_inputs"]["maxItems"] == 0
 
 
 def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
