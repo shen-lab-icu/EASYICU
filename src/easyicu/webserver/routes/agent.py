@@ -26,7 +26,7 @@ from easyicu.webserver.pi_copilot.contracts import PiCopilotError
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
 from easyicu.webserver.pi_copilot.workspace import ProjectWorkspace
 from easyicu.webserver.routes.jobs import submit_job
-from easyicu.webserver.routes.request_parsing import body_bool
+from easyicu.webserver.routes.request_parsing import body_bool, body_int
 
 control_router = APIRouter()
 artifact_router = APIRouter()
@@ -750,7 +750,7 @@ def post_agent_run_history(body: Dict[str, Any]) -> dict:
     return agent_runs.list_run_history(
         study_id=body.get("study_id"),
         project_root=body.get("project_root") or _agent_seed_run_root(seed_dir),
-        limit=int(body.get("limit") or 50),
+        limit=body_int(body, "limit", 50, min_value=1, max_value=200),
     )
 
 
