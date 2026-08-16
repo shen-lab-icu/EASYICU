@@ -612,6 +612,13 @@ class PipelineConfig:
             raise ValueError(
                 "planner_strategy must be 'monolithic_v1' or 'progressive_v2'"
             )
+        from .profiles import require_profile_planner_strategy
+
+        require_profile_planner_strategy(
+            name=self.submission_profile_name,
+            version=self.submission_profile_version,
+            planner_strategy=self.planner_strategy,
+        )
         assert_step_provider_budget_funds_its_repairs(
             max_step_provider_calls=self.max_step_provider_calls,
             max_code_repair_attempts=self.max_code_repair_attempts,
