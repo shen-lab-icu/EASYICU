@@ -5,7 +5,10 @@ import threading
 from types import SimpleNamespace
 
 from easyicu.research_agent.authority.provider_budget import StepProviderCallBudget
-from easyicu.research_agent.execution.phase import run_execute_phase
+from easyicu.research_agent.execution.phase import (
+    _execute_step,
+    _step_settle_initial_code,
+)
 from easyicu.research_agent.execution.repair_reservation import StepRepairReservation
 from easyicu.research_agent.execution.step_attempt_bootstrap import (
     prepare_step_attempt_bootstrap,
@@ -129,7 +132,11 @@ def test_repair_reservation_binds_and_checkpoints_exact_attempt(tmp_path) -> Non
 
 
 def test_execute_worker_delegates_attempt_bootstrap_and_repair_reservation() -> None:
-    source = inspect.getsource(run_execute_phase)
+    source = (
+        inspect.getsource(_execute_step)
+        + "\n"
+        + inspect.getsource(_step_settle_initial_code)
+    )
 
     assert "prepare_step_attempt_bootstrap(" in source
     assert "StepRepairReservation(" in source

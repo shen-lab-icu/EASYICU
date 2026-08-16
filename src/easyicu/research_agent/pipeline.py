@@ -1443,6 +1443,80 @@ class _PlanGenerationResult:
     proposed_plan: AnalysisPlan
 
 
+def _resume_compatible_plan(
+    *,
+    run_dir: Path,
+    resume_state: Any,
+    context: Any,
+    agent_context: Any,
+    evidence: Any,
+    know_how_binding: Any,
+    enable_know_how: Any,
+    findings: Any,
+) -> Tuple[Any, Optional[Path], Optional[AnalysisPlan], bool, str]:
+    # Resume: reuse the locked plan from the prior run instead of re-planning.
+    # (see _generate_or_resume_plan for the full rationale)
+    reused_prior_plan = False
+    reused_plan_path: Optional[Path] = None
+    proposed_plan: Optional[AnalysisPlan] = None
+    if resume_state is not None:
+        plan, _prior_plan_path = _load_compatible_resume_plan(
+            run_dir=run_dir,
+            resume_state=resume_state,
+            context=context,
+            evidence=evidence,
+            prompt_pack_version=PROMPT_PACK_VERSION,
+        )
+        if plan is not None and plan.steps:
+            proposed_plan = plan.model_copy(deep=True)
+            restore_table_one_private_checkpoint(
+                run_dir=run_dir,
+                plan=plan,
+                context=agent_context,
+            )
+            # The resumed plan is the one on disk, so it still carries the
+            # host's opaque placeholders; a resume that skipped this would
+            # execute a different declaration than the first attempt did.
+            for resumed_step in plan.steps:
+                bind_step_declared_levels(resumed_step, agent_context)
+            know_how_binding.verify_resume(
+                plan.know_how_decisions,
+                enabled=enable_know_how,
+            )
+            reused_prior_plan = True
+            reused_plan_path = _prior_plan_path
+            plan_generation_mode = "resumed"
+            findings.append(
+                ValidationFinding(
+                    validator="planner",
+                    severity="warning",
+                    message=(
+                        "Resuming prior run: reused the latest compatible "
+                        "saved analysis plan (skipped re-planning) so "
+                        "completed step_ids stay aligned and execution "
+                        "continues from the failed step."
+                    ),
+                    detail={
+                        "generation_mode": "resumed",
+                        "n_steps": len(plan.steps),
+                        "plan_path": (
+                            str(_prior_plan_path.relative_to(run_dir))
+                            if _prior_plan_path is not None
+                            and _prior_plan_path.is_relative_to(run_dir)
+                            else str(_prior_plan_path)
+                        ),
+                    },
+                )
+            )
+        else:
+            raise LegacyResumePlanMigrationError(
+                "resume checkpoint has no digest-verified analysis plan "
+                "evidence compatible with every completed step"
+            )
+    return plan, reused_plan_path, proposed_plan, reused_prior_plan, plan_generation_mode
+
+
+
 class ResearchAgentPipeline:
     """One-shot orchestration. Construct, call :meth:`run`, read the result."""
 
@@ -2284,59 +2358,22 @@ class ResearchAgentPipeline:
         migrated_plan_path: Optional[Path] = None
         proposed_plan: Optional[AnalysisPlan] = None
         if resume_state is not None:
-            plan, _prior_plan_path = _load_compatible_resume_plan(
+            (
+                plan,
+                reused_plan_path,
+                proposed_plan,
+                reused_prior_plan,
+                plan_generation_mode,
+            ) = _resume_compatible_plan(
                 run_dir=run_dir,
                 resume_state=resume_state,
                 context=context,
+                agent_context=agent_context,
                 evidence=evidence,
-                prompt_pack_version=PROMPT_PACK_VERSION,
+                know_how_binding=know_how_binding,
+                enable_know_how=self._enable_know_how,
+                findings=findings,
             )
-            if plan is not None and plan.steps:
-                proposed_plan = plan.model_copy(deep=True)
-                restore_table_one_private_checkpoint(
-                    run_dir=run_dir,
-                    plan=plan,
-                    context=agent_context,
-                )
-                # The resumed plan is the one on disk, so it still carries the
-                # host's opaque placeholders; a resume that skipped this would
-                # execute a different declaration than the first attempt did.
-                for resumed_step in plan.steps:
-                    bind_step_declared_levels(resumed_step, agent_context)
-                know_how_binding.verify_resume(
-                    plan.know_how_decisions,
-                    enabled=self._enable_know_how,
-                )
-                reused_prior_plan = True
-                reused_plan_path = _prior_plan_path
-                plan_generation_mode = "resumed"
-                findings.append(
-                    ValidationFinding(
-                        validator="planner",
-                        severity="warning",
-                        message=(
-                            "Resuming prior run: reused the latest compatible "
-                            "saved analysis plan (skipped re-planning) so "
-                            "completed step_ids stay aligned and execution "
-                            "continues from the failed step."
-                        ),
-                        detail={
-                            "generation_mode": "resumed",
-                            "n_steps": len(plan.steps),
-                            "plan_path": (
-                                str(_prior_plan_path.relative_to(run_dir))
-                                if _prior_plan_path is not None
-                                and _prior_plan_path.is_relative_to(run_dir)
-                                else str(_prior_plan_path)
-                            ),
-                        },
-                    )
-                )
-            else:
-                raise LegacyResumePlanMigrationError(
-                    "resume checkpoint has no digest-verified analysis plan "
-                    "evidence compatible with every completed step"
-                )
 
         if reused_prior_plan:
             from .orchestration.profiles import is_paper_facing_profile

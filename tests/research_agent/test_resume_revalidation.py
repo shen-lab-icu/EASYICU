@@ -1421,7 +1421,13 @@ def test_replay_uses_shared_gates_and_never_constructs_llm_auditor():
     replay_source = inspect.getsource(
         pipeline_execute._selectively_revalidate_resume_successes
     )
-    fresh_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    fresh_source = (
+        inspect.getsource(pipeline_execute._prepare_execute_phase_authority)
+        + "\n"
+        + inspect.getsource(pipeline_execute._step_run_concept_repair_phase)
+        + "\n"
+        + inspect.getsource(pipeline_execute._step_finalize_step)
+    )
     concept_execution_source = inspect.getsource(
         concept_audit_execution.ConceptAuditCoordinator.findings_for_code
     )
@@ -1507,8 +1513,12 @@ def test_execute_phase_writes_resume_audit_history_separately_from_authority_vie
 
     from easyicu.research_agent.execution import phase as pipeline_execute
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    source = (
+        inspect.getsource(pipeline_execute._prepare_execute_phase_authority)
+        + "\n"
+        + inspect.getsource(pipeline_execute.run_execute_phase)
+    )
 
     assert "step_attempt_history.extend(resume_application.audit_history)" in source
-    assert '"step_attempt_history": step_attempt_history' in source
+    assert "step_attempt_history=step_attempt_history" in source
     assert "per_step_records.extend(resume_application.per_step_records)" in source

@@ -28,8 +28,6 @@ from easyicu.research_agent.execution.owner_declaration import (
 from easyicu.research_agent.schema import AnalysisPlan
 
 from .test_adjusted_association_executor import _model_terms, _real_step_payload
-from .test_gate_evaluator_contract import gate_call_order
-
 _COVARIATES = ["age", "sex", "charlson_max"]
 
 
@@ -41,6 +39,37 @@ def _plan(*steps: dict) -> AnalysisPlan:
             "rationale": "owner-declaration gate regression",
         }
     )
+
+
+def _phase_replan_call_order() -> dict[str, int]:
+    """First call line of the plan gate vs the replan dispatcher helpers.
+
+    The owner-declaration gate is called in ``run_execute_phase``; ``_maybe_replan``
+    is invoked by the extracted replan helpers after the plan preflight block.
+    Concatenate in logical order so the line numbers preserve the ordering.
+    """
+    import ast
+    import inspect
+
+    from easyicu.research_agent.execution import phase as pipeline_execute
+
+    source = (
+        inspect.getsource(pipeline_execute.run_execute_phase)
+        + "\n"
+        + inspect.getsource(pipeline_execute._step_run_initial_replan)
+        + "\n"
+        + inspect.getsource(pipeline_execute._step_resolve_run_transition)
+        + "\n"
+        + inspect.getsource(pipeline_execute._step_maybe_directed_model_replan)
+    )
+    wanted = {"owner_declaration_plan_findings", "_maybe_replan"}
+    first: dict[str, int] = {}
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call):
+            name = node.func.id if isinstance(node.func, ast.Name) else None
+            if name in wanted:
+                first[name] = min(first.get(name, node.lineno), node.lineno)
+    return first
 
 
 # ---------------------------------------------------------------------------
@@ -185,10 +214,7 @@ def test_the_gate_runs_before_the_replan_dispatch():
     generated code. Read the call order from the AST, not from string indexes.
     """
 
-    order = gate_call_order(
-        pipeline_execute.run_execute_phase,
-        ("owner_declaration_plan_findings", "_maybe_replan"),
-    )
+    order = _phase_replan_call_order()
     assert "owner_declaration_plan_findings" in order, (
         "the gate is not called in run_execute_phase at all"
     )
@@ -208,7 +234,9 @@ def test_the_gate_forces_the_replan_it_asked_for():
     import inspect
     import textwrap
 
-    source = textwrap.dedent(inspect.getsource(pipeline_execute.run_execute_phase))
+    source = textwrap.dedent(
+        inspect.getsource(pipeline_execute._step_run_initial_replan)
+    )
     tree = ast.parse(source)
     call = next(
         node

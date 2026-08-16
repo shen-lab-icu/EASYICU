@@ -67,6 +67,8 @@ Measured 2026-08-14 at `26bdcdc`.
 | `scientific_adapters/*` | 52 | `experimental` | scientific-adapters | Optional dowhy / pandera / sksurv adapters are dynamically probed but may not upgrade current scientific capabilities. | 10 | - | 2026-11-01 |
 | `replication_cli.py` | 228 | `production_reachable` | replication | `[project.scripts] easyicu-research-replication` → `replication_cli.main` → `ResearchAgentPipeline.reproduce_paper`. | `tests/research_agent/test_replication_cli.py::test_replication_cli_paper_mode_dispatches_to_pipeline` | `call:replication_cli.main;trace:reproduce_paper` | 2026-11-01 |
 | `case_plugins/` | 26 | `experimental` | case-plugins | Plugin discovery surface; default production registry remains empty until an explicit plugin activation contract is supplied. | 7 | - | 2026-11-01 |
+| `facade.py` | 100 | `production_reachable` | agent | Public `easyicu.research_agent.facade.go` → `ResearchAgentPipeline.run` with fail-closed offline mock; replicate/resume wrappers delegate to the same pipeline. | `tests/research_agent/test_facade.py::test_go_defaults_to_offline_mock_and_delegates_to_pipeline` | `call:facade.go;trace:ResearchAgentPipeline.run` | 2026-11-01 |
+| `benchmark_instances.py` | 60 | `production_reachable` | agent | Public `easyicu.research_agent.benchmark_instances.evaluate` → `icu_agent_bench.grade_bench_task` over the frozen checkable subset. | `tests/research_agent/test_benchmark_instances.py::test_evaluate_scores_a_frozen_instance_in_one_call` | `call:evaluate;trace:grade_bench_task` | 2026-11-01 |
 
 ## Rules
 
