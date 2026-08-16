@@ -209,11 +209,16 @@ def calculate_circ_failure_status(
     if map_col is None or map_col not in df.columns:
         raise ValueError("circulatory failure requires a MAP column")
 
+    def nullable_flag(source: pd.Series, comparison: pd.Series) -> pd.Series:
+        return comparison.astype("boolean").mask(source.isna(), pd.NA)
+
     # Calculate component conditions while preserving row-level unknowns.
-    df['lactate_elevated'] = (df[lactate_col] >= LACTATE_THRESHOLD).astype(
-        "boolean"
+    df['lactate_elevated'] = nullable_flag(
+        df[lactate_col], df[lactate_col] >= LACTATE_THRESHOLD
     )
-    df['map_low'] = (df[map_col] <= MAP_THRESHOLD).astype("boolean")
+    df['map_low'] = nullable_flag(
+        df[map_col], df[map_col] <= MAP_THRESHOLD
+    )
     df['level1_drugs'] = pd.Series(False, index=df.index, dtype="boolean")
     df['level2_drugs'] = pd.Series(False, index=df.index, dtype="boolean")
     df['level3_drugs'] = pd.Series(False, index=df.index, dtype="boolean")
@@ -225,38 +230,42 @@ def calculate_circ_failure_status(
         for col in level1_cols:
             if col in df.columns:
                 evidence_columns.append(col)
-                df['level1_drugs'] = df['level1_drugs'] | (df[col] > 0).astype(
-                    "boolean"
+                df['level1_drugs'] = df['level1_drugs'] | nullable_flag(
+                    df[col], df[col] > 0
                 )
     
     # Level 2 drugs (0 < norepi/epi < 0.1)
     if norepi_rate_col and norepi_rate_col in df.columns:
         evidence_columns.append(norepi_rate_col)
-        df['level2_drugs'] = df['level2_drugs'] | (
-            (df[norepi_rate_col] > 0) & 
-            (df[norepi_rate_col] < NOREPI_EPI_LEVEL2_THRESHOLD)
-        ).astype("boolean")
+        df['level2_drugs'] = df['level2_drugs'] | nullable_flag(
+            df[norepi_rate_col],
+            (df[norepi_rate_col] > 0)
+            & (df[norepi_rate_col] < NOREPI_EPI_LEVEL2_THRESHOLD),
+        )
     if epi_rate_col and epi_rate_col in df.columns:
         evidence_columns.append(epi_rate_col)
-        df['level2_drugs'] = df['level2_drugs'] | (
-            (df[epi_rate_col] > 0) & 
-            (df[epi_rate_col] < NOREPI_EPI_LEVEL2_THRESHOLD)
-        ).astype("boolean")
+        df['level2_drugs'] = df['level2_drugs'] | nullable_flag(
+            df[epi_rate_col],
+            (df[epi_rate_col] > 0)
+            & (df[epi_rate_col] < NOREPI_EPI_LEVEL2_THRESHOLD),
+        )
     
     # Level 3 drugs (norepi/epi ≥ 0.1 OR vasopressin)
     if norepi_rate_col and norepi_rate_col in df.columns:
-        df['level3_drugs'] = df['level3_drugs'] | (
-            df[norepi_rate_col] >= NOREPI_EPI_LEVEL2_THRESHOLD
-        ).astype("boolean")
+        df['level3_drugs'] = df['level3_drugs'] | nullable_flag(
+            df[norepi_rate_col],
+            df[norepi_rate_col] >= NOREPI_EPI_LEVEL2_THRESHOLD,
+        )
     if epi_rate_col and epi_rate_col in df.columns:
-        df['level3_drugs'] = df['level3_drugs'] | (
-            df[epi_rate_col] >= NOREPI_EPI_LEVEL2_THRESHOLD
-        ).astype("boolean")
+        df['level3_drugs'] = df['level3_drugs'] | nullable_flag(
+            df[epi_rate_col],
+            df[epi_rate_col] >= NOREPI_EPI_LEVEL2_THRESHOLD,
+        )
     if vaso_rate_col and vaso_rate_col in df.columns:
         evidence_columns.append(vaso_rate_col)
-        df['level3_drugs'] = df['level3_drugs'] | (
-            df[vaso_rate_col] > 0
-        ).astype("boolean")
+        df['level3_drugs'] = df['level3_drugs'] | nullable_flag(
+            df[vaso_rate_col], df[vaso_rate_col] > 0
+        )
 
     # A present-but-missing input is unknown, not evidence of absence.  Columns
     # not supplied by the caller remain outside this row contract; callers that
