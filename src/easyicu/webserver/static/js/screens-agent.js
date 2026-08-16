@@ -27,8 +27,6 @@
   let agReview = { projectDir: null, loading: false, error: null, data: null, signing: false };
   let agHistory = { studyId: null, loading: false, error: null, data: null };
   let agArtifact = { projectDir: null, name: null, loading: false, error: null, data: null };
-  let agProvider = { provider: 'openai', consent: false, loading: false, error: null, status: null, login: null, authBusy: false };
-  let agCodexAuthPoll = null;
   let agIdeaProjects = { loading: false, error: null, data: null };
   let agBlockFamily = 'all';
   let agBlockSelected = 'nature_writing';
@@ -645,47 +643,6 @@
       repaintBody();
     });
   }
-  function requestProviderStatus(force) {
-    if (window.EU_DATA !== 'real' || !window.EU_API || !window.EU_API.loadAgentProviderStatus) return;
-    if (!force && (agProvider.loading || agProvider.status || agProvider.error)) return;
-    agProvider = Object.assign({}, agProvider, { loading: true, error: null });
-    window.EU_API.loadAgentProviderStatus(agProvider.provider).then(data => {
-      agProvider = Object.assign({}, agProvider, { loading: false, error: null, status: (data && data.provider_status) || data || null });
-      repaintBody();
-    }).catch(err => {
-      agProvider = Object.assign({}, agProvider, { loading: false, error: err.message || String(err), status: null });
-      repaintBody();
-    });
-  }
-  function stopCodexAuthPoll() {
-    if (agCodexAuthPoll) window.clearTimeout(agCodexAuthPoll);
-    agCodexAuthPoll = null;
-  }
-  function mergeCodexAuth(auth) {
-    if (!auth) return;
-    agProvider = Object.assign({}, agProvider, {
-      status: Object.assign({}, agProvider.status || {}, auth),
-      authBusy: false,
-    });
-  }
-  function pollCodexAuth() {
-    stopCodexAuthPoll();
-    if (agProvider.provider !== 'codex' || !window.EU_API || !window.EU_API.loadCodexAuthStatus) return;
-    window.EU_API.loadCodexAuthStatus().then(data => {
-      const auth = data && data.auth ? data.auth : null;
-      mergeCodexAuth(auth);
-      if (auth && auth.authentication_verified) {
-        agProvider = Object.assign({}, agProvider, { login: null });
-        requestProviderStatus(true);
-      } else if (auth && auth.account_session_status === 'codex_auth_login_pending') {
-        agCodexAuthPoll = window.setTimeout(pollCodexAuth, 2000);
-      }
-      repaintBody();
-    }).catch(err => {
-      agProvider = Object.assign({}, agProvider, { authBusy: false, error: err.message || String(err) });
-      repaintBody();
-    });
-  }
   function liveRunFromReview(review) {
     const payloads = review && review.artifact_payloads ? review.artifact_payloads : {};
     const context = payloads['run_context.json'] || {};
@@ -888,6 +845,8 @@
   function agentListCollapsed() {
     if (agListMode === 'focus') return true;
     if (agListMode === 'open') return false;
+    const host = document.getElementById('agHost');
+    if (host && host.clientWidth > 0 && host.clientWidth < 1040) return true;
     return AG_FOCUS_TABS.has(agTab);
   }
   function studyList() {
@@ -1096,30 +1055,6 @@
       </div>`;
   }
 
-  function providerRunPanel() {
-    if (window.EU_DATA !== 'real') return '';
-    const currentStudy = study();
-    if (currentStudy.empty || currentStudy.mode !== 'analysis') return '';
-    const src = exportSourceForStudy(currentStudy);
-    const contextBlocker = window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.runBlocker
-      ? window.EU_AGENT_STUDY_CONTEXT.runBlocker(currentStudy)
-      : null;
-    requestProviderStatus();
-    const panel = window.AGENT_PROVIDER_PANEL;
-    if (!panel || typeof panel.render !== 'function') return '';
-    return panel.render({
-      realData: true,
-      currentStudy,
-      source: src,
-      contextBlocker,
-      providerState: agProvider,
-      runState: agRun,
-      t,
-      icon,
-      esc,
-    });
-  }
-
   function nextBar() {
     const s = study();
     if (agRun.active) {
@@ -1225,7 +1160,7 @@
       return `
       <div class="nextbar accent">
         <div class="nb-ico">${icon('play', 16)}</div>
-        <div class="grow"><div class="nb-t">${t('Ready to run the preflight', '准备运行预检')}</div><div class="nb-d">${t('This runs a deterministic, local evidence preflight (cohort, coverage, Table 1 — no external model call). The provider panel below can separately generate a plan and draft scaffold, not a complete analysis.', '这会运行确定性的本地证据预检（队列、覆盖率、Table 1 —— 不调用外部模型）。下方 provider 面板可单独生成计划与草稿骨架，但不会运行完整分析。')}</div></div>
+        <div class="grow"><div class="nb-t">${t('Ready to run the preflight', '准备运行预检')}</div><div class="nb-d">${t('This runs a deterministic, local evidence preflight (cohort, coverage, Table 1 — no external model call). Choose the full-analysis account or API in Guided Copilot; governed runs and evidence return to this project.', '这会运行确定性的本地证据预检（队列、覆盖率、Table 1 —— 不调用外部模型）。完整分析所用账户或 API 请在研究引导中选择；受治理的运行和证据会回到当前项目。')}</div></div>
         <button class="btn primary" data-ag-runbtn>${icon('play', 13)} ${t('Run preflight', '运行预检')}</button>
       </div>`;
     }
@@ -1357,7 +1292,6 @@
       <div class="split-320 mt-16" style="grid-template-columns:1fr 300px;">
         <div class="col gap-16">
           ${planList()}
-          ${providerRunPanel()}
         </div>
         ${contextStats()}
       </div>
@@ -2256,95 +2190,6 @@
         clearRememberedAgentJob(jobId, selectedId);
         repaintBody();
       });
-    }));
-    host.querySelectorAll('[data-ag-provider-refresh]').forEach(b => b.addEventListener('click', () => requestProviderStatus(true)));
-    host.querySelectorAll('[data-ag-provider]').forEach(b => b.addEventListener('click', () => {
-      stopCodexAuthPoll();
-      agProvider = { provider: b.dataset.agProvider || 'openai', consent: false, loading: false, error: null, status: null, login: null, authBusy: false };
-      requestProviderStatus(true);
-      repaintBody();
-    }));
-    host.querySelectorAll('[data-ag-codex-login]').forEach(b => b.addEventListener('click', () => {
-      if (agProvider.authBusy || !window.EU_API || !window.EU_API.startCodexAuthLogin) return;
-      agProvider = Object.assign({}, agProvider, { authBusy: true, error: null });
-      repaintBody();
-      window.EU_API.startCodexAuthLogin().then(data => {
-        mergeCodexAuth(data && data.auth);
-        agProvider = Object.assign({}, agProvider, {
-          login: data && data.login_started ? {
-            verification_url: data.verification_url,
-            user_code: data.user_code,
-          } : null,
-        });
-        if (data && data.verification_url) {
-          window.open(data.verification_url, '_blank', 'noopener,noreferrer');
-        }
-        pollCodexAuth();
-        repaintBody();
-      }).catch(err => {
-        agProvider = Object.assign({}, agProvider, { authBusy: false, error: err.message || String(err) });
-        repaintBody();
-      });
-    }));
-    host.querySelectorAll('[data-ag-codex-cancel]').forEach(b => b.addEventListener('click', () => {
-      if (agProvider.authBusy || !window.EU_API || !window.EU_API.cancelCodexAuthLogin) return;
-      agProvider = Object.assign({}, agProvider, { authBusy: true, error: null });
-      window.EU_API.cancelCodexAuthLogin().then(data => {
-        stopCodexAuthPoll();
-        mergeCodexAuth(data && data.auth);
-        agProvider = Object.assign({}, agProvider, { login: null });
-        repaintBody();
-      }).catch(err => {
-        agProvider = Object.assign({}, agProvider, { authBusy: false, error: err.message || String(err) });
-        repaintBody();
-      });
-    }));
-    host.querySelectorAll('[data-ag-codex-logout]').forEach(b => b.addEventListener('click', () => {
-      if (agProvider.authBusy || !window.EU_API || !window.EU_API.logoutCodexAuth) return;
-      agProvider = Object.assign({}, agProvider, { authBusy: true, error: null });
-      window.EU_API.logoutCodexAuth().then(data => {
-        stopCodexAuthPoll();
-        mergeCodexAuth(data && data.auth);
-        agProvider = Object.assign({}, agProvider, { consent: false, login: null });
-        requestProviderStatus(true);
-        repaintBody();
-      }).catch(err => {
-        agProvider = Object.assign({}, agProvider, { authBusy: false, error: err.message || String(err) });
-        repaintBody();
-      });
-    }));
-    host.querySelectorAll('[data-ag-external-consent]').forEach(c => c.addEventListener('change', () => {
-      agProvider = Object.assign({}, agProvider, { consent: !!c.checked });
-      repaintBody();
-    }));
-    host.querySelectorAll('[data-ag-external-run]').forEach(b => b.addEventListener('click', () => {
-      if (b.getAttribute('aria-disabled') === 'true') return;
-      const src = exportSourceForStudy(study());
-      if (!src) return;
-      startRealRun(src, {
-        runType: 'full',
-        provider: agProvider.provider,
-        externalOptIn: true,
-        credentialSource: agProvider.provider === 'codex' ? 'codex_user_auth' : 'scientific_provider',
-      });
-      // "for this run only": consume the consent so the next full run must be
-      // re-authorized instead of silently reusing stale approval.
-      agProvider = Object.assign({}, agProvider, { consent: false });
-      repaintBody();
-    }));
-    host.querySelectorAll('[data-ag-account-pipeline-run]').forEach(b => b.addEventListener('click', () => {
-      if (b.getAttribute('aria-disabled') === 'true') return;
-      const src = exportSourceForStudy(study());
-      if (!src) return;
-      startRealRun(src, {
-        runType: 'full',
-        provider: agProvider.provider,
-        externalOptIn: true,
-        engine: 'research_agent_pipeline',
-        credentialSource: 'codex_user_auth',
-      });
-      agProvider = Object.assign({}, agProvider, { consent: false });
-      repaintBody();
     }));
     host.querySelectorAll('[data-ag-history-refresh]').forEach(b => b.addEventListener('click', () => requestRunHistory(true)));
     host.querySelectorAll('[data-ag-refresh-projects]').forEach(b => b.addEventListener('click', () => requestIdeaAgentProjects(true)));

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from easyicu.extensions.contracts import (
     EMPTY_EXTENSION_ACTIVATION,
@@ -73,6 +73,52 @@ class AuthorityBinding(BaseModel):
     active_job_id: Optional[str] = None
 
 
+class ResearchProviderBinding(BaseModel):
+    """Immutable credential authority selected before a Copilot session starts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.research-provider-binding/1"] = (
+        "easyicu.research-provider-binding/1"
+    )
+    provider: Literal["openai", "codex"] = "openai"
+    credential_source: Literal["pi_verified", "codex_user_auth"] = "pi_verified"
+    authentication_mode: Literal["api_key", "chatgpt_account"] = "api_key"
+    model: str = Field(default="configured_provider_model", min_length=1, max_length=256)
+    account_session_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def _authority_is_coherent(self) -> "ResearchProviderBinding":
+        if self.provider == "codex":
+            if (
+                self.credential_source != "codex_user_auth"
+                or self.authentication_mode != "chatgpt_account"
+                or not self.account_session_sha256
+            ):
+                raise ValueError("codex research provider binding is incomplete")
+        elif (
+            self.credential_source != "pi_verified"
+            or self.authentication_mode != "api_key"
+            or self.account_session_sha256 is not None
+        ):
+            raise ValueError("API research provider binding is inconsistent")
+        return self
+
+    def public_projection(self) -> Dict[str, Any]:
+        """Return browser-safe identity without the server-side account locator."""
+
+        return {
+            "schema_version": self.schema_version,
+            "provider": self.provider,
+            "credential_source": self.credential_source,
+            "authentication_mode": self.authentication_mode,
+            "model": self.model,
+        }
+
+
 class PiProjectBindingHandoffReceipt(BaseModel):
     """Path-free Agent/StudyContext handoff into one Pi research project."""
 
@@ -115,6 +161,10 @@ class PiSessionRecord(BaseModel):
     # path-free descriptor and load exact Skill objects by content digest.
     extension_activation: ExtensionActivationSnapshot = Field(
         default_factory=lambda: EMPTY_EXTENSION_ACTIVATION
+    )
+    research_provider: ResearchProviderBinding = Field(
+        default_factory=ResearchProviderBinding,
+        frozen=True,
     )
     binding: AuthorityBinding = Field(default_factory=AuthorityBinding)
     created_at: str = Field(default_factory=utc_now)
@@ -310,6 +360,7 @@ __all__ = [
     "PROTOCOL_VERSION",
     "PiCopilotError",
     "PiProjectBindingHandoffReceipt",
+    "ResearchProviderBinding",
     "PiSessionRecord",
     "PiToolResult",
     "SESSION_SCHEMA_VERSION",

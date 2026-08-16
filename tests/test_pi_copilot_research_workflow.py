@@ -40,6 +40,7 @@ from easyicu.webserver.pi_copilot import tools as tool_module
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
     PiCopilotError,
+    ResearchProviderBinding,
     PiSessionRecord,
     ToolExecutionContext,
 )
@@ -2153,7 +2154,12 @@ def test_extraction_uses_bound_study_source_and_returns_no_path(
     )
     from easyicu.webserver.routes import jobs as jobs_route
 
-    def submit(body: dict[str, Any]) -> dict[str, Any]:
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        assert account_environment is None
         submitted.append(dict(body))
         return {
             "job_id": "extract-job-1",
@@ -2303,7 +2309,12 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
     )
     from easyicu.webserver.routes import agent as agent_route
 
-    def submit(body: dict[str, Any]) -> dict[str, Any]:
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        assert account_environment is None
         submitted.append(dict(body))
         return {
             "job_id": "agent-job-full",
@@ -2313,7 +2324,7 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
             "study_context_revision": 5,
         }
 
-    monkeypatch.setattr(agent_route, "jobs_agent_run", submit)
+    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
     context = ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-full-owner",
@@ -2344,6 +2355,78 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
             "credential_source": "pi_verified",
         }
     ]
+
+
+def test_full_run_uses_the_codex_account_frozen_into_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver import codex_account_sessions
+    from easyicu.webserver.routes import agent as agent_route
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        tool_module,
+        "_bound_context",
+        lambda _binding: {
+            **_complete_study(),
+            "question": "Bound aggregate scientific question",
+        },
+    )
+
+    def account_environment(binding: str, *, model: str) -> dict[str, str]:
+        assert binding == "a" * 64
+        assert model == "gpt-5.6-luna"
+        return {
+            "EASYICU_CODEX_SESSION_SHA256": binding,
+            "EASYICU_CODEX_MODEL": model,
+        }
+
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        captured["body"] = dict(body)
+        captured["environment"] = dict(account_environment or {})
+        return {
+            "job_id": "agent-job-codex",
+            "kind": "agent-run",
+            "status": "running",
+            "study_context_id": "study-workflow",
+            "study_context_revision": 5,
+        }
+
+    monkeypatch.setattr(
+        codex_account_sessions,
+        "environment_for_binding",
+        account_environment,
+    )
+    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-codex-owner",
+            external_llm_opt_in=True,
+            research_provider=ResearchProviderBinding(
+                provider="codex",
+                credential_source="codex_user_auth",
+                authentication_mode="chatgpt_account",
+                model="gpt-5.6-luna",
+                account_session_sha256="a" * 64,
+            ),
+            binding=AuthorityBinding(
+                study_context_id="study-workflow",
+                study_revision=4,
+            ),
+        ),
+        allowed_actions={"provider_run"},
+    )
+
+    result = tool_module.execute_tool("easyicu_run", {}, context)
+
+    assert result["code"] == "easyicu_full_run_submitted"
+    assert captured["body"]["llm_provider"] == "codex"
+    assert captured["body"]["credential_source"] == "codex_user_auth"
+    assert captured["environment"]["EASYICU_CODEX_MODEL"] == "gpt-5.6-luna"
 
 
 def _write_real_pipeline_fixture(run_dir: Path, *, manuscript: str) -> None:
