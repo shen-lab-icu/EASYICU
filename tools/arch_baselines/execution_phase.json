@@ -4,8 +4,8 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 5587,
-      "sha256": "ac8059fa7d0ebd3a1f4d508ed0bcff3636e56a8b1c1c98492c2e3bae418d5245",
+      "loc": 5676,
+      "sha256": "2212384164ea8fbd4596e805db397888a1029975cfa6021c0439fd30fac70fa8",
       "intra_package_import_edges": 101,
       "shim_bypass_violations": []
     },
@@ -16,8 +16,8 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8619,
-      "sha256": "e280c2f91d28d386d298b9e02beb2a96314c5480e05c959ebdbfb82981f2aec4",
+      "loc": 8663,
+      "sha256": "099b9d59d23009f5355ff342ff3b74a3201e3282b38fc1778456e7543f2df2af",
       "intra_package_import_edges": 118,
       "shim_bypass_violations": []
     },
@@ -125,7 +125,7 @@
     },
     "audits/figures.py": {
       "loc": 5538,
-      "sha256": "e7d8b5b3aab571e24711551143705bb3893d5f84ee60b74cf4e2bfa0426268c9",
+      "sha256": "087516f1ef4d4f3b45509a84dd503c23ca1b47ab39351fb6738cef3d2090ed39",
       "intra_package_import_edges": 5,
       "shim_bypass_violations": []
     },
@@ -223,7 +223,7 @@
   "functions": {
     "execution/phase.py::_execute_one_step": {
       "lines": 66,
-      "line_start": 1681,
+      "line_start": 1770,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 2,
@@ -234,18 +234,18 @@
       "callable_closure_captured_names": 0
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 997,
-      "line_start": 998,
+      "lines": 921,
+      "line_start": 1163,
       "direct_nested_funcs": 3,
       "total_nested_funcs": 4,
-      "own_bound_names": 138,
+      "own_bound_names": 133,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 69
     },
     "execution/phase.py::_execute_step": {
       "lines": 660,
-      "line_start": 3686,
+      "line_start": 3775,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 135,
@@ -254,11 +254,11 @@
       "callable_closure_captured_names": 0
     }
   },
-  "baseline_reason": "Extracted _base_planner_user_prompt from _build_planner_user_prompt (801->219 lines); agents/planner.py +24 is the module-level signature for the same prompt text, not new logic.",
+  "baseline_reason": "Extracted 14 nested invokers from ResearchAgentPipeline.run (925->672 lines); pipeline.py +44 is module-level signatures/thin delegates for the same code, not new logic.",
   "baseline_accepted_growth": {
-    "agents/planner.py": {
-      "loc_was": 2000,
-      "loc_now": 2024
+    "pipeline.py": {
+      "loc_was": 8619,
+      "loc_now": 8663
     }
   },
   "baseline_history": [
@@ -478,6 +478,24 @@
         "agents/planner.py": {
           "loc_was": 2000,
           "loc_now": 2024
+        }
+      }
+    },
+    {
+      "reason": "Extracted _prepare_execute_phase_authority from run_execute_phase (997->921 lines); execution/phase.py +89 is the module-level signature/unpack glue for the same code, not new logic.",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 5587,
+          "loc_now": 5676
+        }
+      }
+    },
+    {
+      "reason": "Extracted 14 nested invokers from ResearchAgentPipeline.run (925->672 lines); pipeline.py +44 is module-level signatures/thin delegates for the same code, not new logic.",
+      "accepted_growth": {
+        "pipeline.py": {
+          "loc_was": 8619,
+          "loc_now": 8663
         }
       }
     }

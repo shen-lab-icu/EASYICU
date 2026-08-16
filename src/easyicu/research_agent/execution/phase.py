@@ -995,20 +995,38 @@ def _repair_publication_figure_in_staging(
                 continue
         return repair_id
 
-def run_execute_phase(
+@dataclass
+class _ExecutePhasePreparation:
+    services: Any
+    context: Any
+    coder_base_context: Any
+    evidence: Any
+    step_evidence_commit: Any
+    findings: Any
+    plan: Any
+    plan_path: Any
+    resume_controller: Any
+    requested_resume_from_step_id: Any
+    requested_stop_after_step_id: Any
+    reuse_selected_step_code_opt_in: Any
+    _replan_state: Any
+    role_resolver: Any
+    llm_signature: Any
+    llm_concept_audit_client: Any
+    llm_concept_auditor_identity_sha256: Any
+    concept_audit_environment_sha256: Any
+    prompt_version: Any
+    prompt_files: Any
+
+
+def _prepare_execute_phase_authority(
     pipeline: ExecutePhaseHost,
     *,
     plan_result: _PlanPhaseResult,
-    cohort_path: Path,
-    trajectory_binding: Optional[StagedTrajectoryBinding],
     run_dir: Path,
-    run_id: str,
-    skill_obj: Optional[ClinicalSkill],
-    notes: Optional[str],
-    emit_progress: Callable[..., None],
-    resume_from_step_id: Optional[str] = None,
-    stop_after_step_id: Optional[str] = None,
-) -> _ExecutePhaseResult:
+    resume_from_step_id: Optional[str],
+    stop_after_step_id: Optional[str],
+) -> _ExecutePhasePreparation:
     """Execute probe + per-step analysis loop, with optional replanning."""
     services = pipeline._execute_phase_services()
     context = plan_result.context
@@ -1116,6 +1134,77 @@ def run_execute_phase(
     prompt_files = plan_result.prompt_files
     assert_cohort_definition_locked(run_dir=run_dir, plan=plan)
     assert_robustness_specs_locked(run_dir=run_dir, plan=plan)
+    return _ExecutePhasePreparation(
+        services=services,
+        context=context,
+        coder_base_context=coder_base_context,
+        evidence=evidence,
+        step_evidence_commit=step_evidence_commit,
+        findings=findings,
+        plan=plan,
+        plan_path=plan_path,
+        resume_controller=resume_controller,
+        requested_resume_from_step_id=requested_resume_from_step_id,
+        requested_stop_after_step_id=requested_stop_after_step_id,
+        reuse_selected_step_code_opt_in=reuse_selected_step_code_opt_in,
+        _replan_state=_replan_state,
+        role_resolver=role_resolver,
+        llm_signature=llm_signature,
+        llm_concept_audit_client=llm_concept_audit_client,
+        llm_concept_auditor_identity_sha256=(
+            llm_concept_auditor_identity_sha256
+        ),
+        concept_audit_environment_sha256=concept_audit_environment_sha256,
+        prompt_version=prompt_version,
+        prompt_files=prompt_files,
+    )
+
+
+def run_execute_phase(
+    pipeline: ExecutePhaseHost,
+    *,
+    plan_result: _PlanPhaseResult,
+    cohort_path: Path,
+    trajectory_binding: Optional[StagedTrajectoryBinding],
+    run_dir: Path,
+    run_id: str,
+    skill_obj: Optional[ClinicalSkill],
+    notes: Optional[str],
+    emit_progress: Callable[..., None],
+    resume_from_step_id: Optional[str] = None,
+    stop_after_step_id: Optional[str] = None,
+) -> _ExecutePhaseResult:
+    preparation = _prepare_execute_phase_authority(
+        pipeline,
+        plan_result=plan_result,
+        run_dir=run_dir,
+        resume_from_step_id=resume_from_step_id,
+        stop_after_step_id=stop_after_step_id,
+    )
+    services = preparation.services
+    context = preparation.context
+    coder_base_context = preparation.coder_base_context
+    evidence = preparation.evidence
+    step_evidence_commit = preparation.step_evidence_commit
+    findings = preparation.findings
+    plan = preparation.plan
+    plan_path = preparation.plan_path
+    resume_controller = preparation.resume_controller
+    requested_resume_from_step_id = preparation.requested_resume_from_step_id
+    requested_stop_after_step_id = preparation.requested_stop_after_step_id
+    reuse_selected_step_code_opt_in = preparation.reuse_selected_step_code_opt_in
+    _replan_state = preparation._replan_state
+    role_resolver = preparation.role_resolver
+    llm_signature = preparation.llm_signature
+    llm_concept_audit_client = preparation.llm_concept_audit_client
+    llm_concept_auditor_identity_sha256 = (
+        preparation.llm_concept_auditor_identity_sha256
+    )
+    concept_audit_environment_sha256 = (
+        preparation.concept_audit_environment_sha256
+    )
+    prompt_version = preparation.prompt_version
+    prompt_files = preparation.prompt_files
 
     # Dual-track cohort. If the plan phase materialised the locked cohort
     # definition into a filtered analysis cohort, every downstream consumer
