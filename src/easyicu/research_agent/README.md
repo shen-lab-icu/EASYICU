@@ -73,6 +73,11 @@ symbols continue to be exposed from `easyicu.research_agent`.
 - **Layer 3 — Agent Orchestration**: planner / replanner / coder / analyzer / writer coordinated through a runtime supervisor pattern.
 - **Layer 4 — Candidate Hypothesis Ranking**: a pre-plan hypothesis blueprint that distills literature, feasibility, self-critique and ICU domain gates before the planner executes, ranking candidate research questions for human curation. It is **not** an autonomous scientific-discovery system; it is a ranking module whose outputs are filtered by humans and constrained by Layers 1–2.
 
+Here, “agent” means role-scoped LLM calls inside a sequential
+**plan → execute → verify** state machine. The named roles do not negotiate as
+independent autonomous agents, and the retired `graph.py` surface is only a
+fail-closed compatibility shell.
+
 ### Control-plane responsibility packages
 
 The execute loop is being decomposed along authority boundaries rather than by
@@ -646,6 +651,8 @@ easyicu-research-agent \
     --cohort path/to/cohort.parquet \
     --database miiv \
     --target-outcome death \
+    --llm openai \
+    --external-llm-opt-in \
     --manuscript-language zh \
     --enable-tavily \
     --workdir ./research_output
@@ -664,6 +671,7 @@ easyicu-research-replication \
     --database miiv \
     --mode manuscript \
     --llm openai \
+    --external-llm-opt-in \
     --openai-model qwen3-coder-30b \
     --output ./research_output/paper_replication
 ```

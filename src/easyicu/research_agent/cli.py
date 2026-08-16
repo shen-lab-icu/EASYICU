@@ -12,8 +12,8 @@ writing Python::
 
 The CLI requires an explicit ``--llm`` choice so main-path runs never
 silently fall back to :class:`MockLLMClient`. Use ``--llm mock`` only
-for tests or deterministic demos; use ``--llm openai`` (and an
-``OPENAI_API_KEY`` env var) for real runs.
+for tests or deterministic demos; use ``--llm openai`` together with
+``--external-llm-opt-in`` (and an ``OPENAI_API_KEY`` env var) for real runs.
 """
 
 from __future__ import annotations
@@ -199,6 +199,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Model name when --llm openai (default: gpt-4o-mini).",
     )
     p.add_argument(
+        "--external-llm-opt-in",
+        action="store_true",
+        help=(
+            "Explicitly authorize this run to send prompts to an external LLM. "
+            "Required with --llm openai."
+        ),
+    )
+    p.add_argument(
         "--timeout",
         type=float,
         default=900.0,
@@ -292,7 +300,23 @@ def _parse_cohort_map(raw_items: Sequence[str]) -> Dict[str, str]:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
 
-    # Lazy imports so --help works without pandas / openai installed.
+    if args.llm is None:
+        raise SystemExit("Choose an explicit --llm backend (`mock` or `openai`).")
+    if args.llm == "openai":
+        from easyicu import ai_optin
+
+        try:
+            ai_optin.check_external_llm_opt_in(
+                args.llm,
+                ai_enabled=args.external_llm_opt_in,
+                language="en",
+            )
+        except ai_optin.AIOptInError as exc:
+            raise SystemExit(str(exc)) from exc
+
+    # Lazy imports so --help works without pandas / openai installed.  The
+    # canonical opt-in gate above deliberately runs before provider/client
+    # construction or credential lookup.
     from .providers.factory import build_provider_client
     from .providers.llm import OpenAIClient
     from .providers.mocks import MockLLMClient
@@ -300,8 +324,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     from .orchestration.experiment_spec import load_experiment_spec
     from .orchestration.workflow import HumanReviewPending, HumanReviewRejected
 
-    if args.llm is None:
-        raise SystemExit("Choose an explicit --llm backend (`mock` or `openai`).")
     if args.llm == "openai":
         llm = build_provider_client(
             provider="openai",

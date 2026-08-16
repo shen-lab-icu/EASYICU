@@ -1,9 +1,11 @@
-"""Strict typed-input extension for :class:`ResearchContext`.
+"""Strict typed-input extensions for :class:`ResearchContext`.
 
 Version 1 remains the literal archived contract in :mod:`schema`.  Version 2
-adds only host-verified physical and lineage facts.  These facts never assign
-the study cohort, exposure, outcome, method, or estimand; those remain Planner
-and Coder decisions.
+added host-verified physical and lineage facts.  Version 3 additionally binds
+the descriptor's materialization-window role to those facts.  Archived V2
+payloads remain readable under their original contract; new typed contexts are
+written as V3.  None of these facts assigns the study cohort, exposure,
+outcome, method, or estimand; those remain Planner and Coder decisions.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from .implementation_identity import metadata_implementation_identity
 from ..schema import ConceptDescriptor, ResearchContext
 
 RESEARCH_CONTEXT_V2_SCHEMA_VERSION = "easyicu.research_context/2"
+RESEARCH_CONTEXT_V3_SCHEMA_VERSION = "easyicu.research_context/3"
 MATERIALIZED_INPUT_PROMPT_SCHEMA_VERSION = "easyicu.materialized_input_prompt_facts/2"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_PROMPT_COLUMN_BINDINGS = 48
@@ -198,6 +201,41 @@ def descriptor_physical_updates(
             f"relative to {metadata.time_origin} in {metadata.time_unit}"
         )
     return updates
+
+
+_V2_DESCRIPTOR_PHYSICAL_FIELDS = frozenset(
+    {
+        "unit",
+        "valid_range",
+        "source_concept",
+        "derived_from_concepts",
+        "source_tables",
+        "item_ids",
+        "unit_normalization",
+        "source_databases",
+        "description",
+        "analysis_window",
+        "temporal_resolution",
+    }
+)
+
+
+def _v2_descriptor_physical_updates(
+    binding: CanonicalColumnBinding,
+) -> Dict[str, Any]:
+    """Return the descriptor projection frozen by the archived V2 contract.
+
+    ``analysis_window_role`` was added to the closure validator after V2
+    artifacts had already been sealed.  Filtering through an explicit frozen
+    field set keeps future descriptor additions from silently narrowing V2
+    again.
+    """
+
+    return {
+        key: value
+        for key, value in descriptor_physical_updates(binding).items()
+        if key in _V2_DESCRIPTOR_PHYSICAL_FIELDS
+    }
 
 
 class MaterializedCohortContext(BaseModel):
@@ -427,7 +465,7 @@ class MaterializedResearchInputs(BaseModel):
 
 
 class ResearchContextV2(ResearchContext):
-    """ResearchContext plus exact host-verified materialized-input facts."""
+    """Archived typed context with the original V2 closure semantics."""
 
     # The inherited V1 fields retain their archived coercion/JSON behaviour
     # (notably ISO datetime parsing). Strictness is applied to every new V2
@@ -480,7 +518,8 @@ class ResearchContextV2(ResearchContext):
             )
         for column, variable in selected_variables.items():
             binding = cohort.column_bindings[column]
-            for field_name, expected in descriptor_physical_updates(binding).items():
+            legacy_updates = _v2_descriptor_physical_updates(binding)
+            for field_name, expected in legacy_updates.items():
                 if getattr(variable, field_name) != expected:
                     raise ValueError(
                         "context descriptor physical field does not match typed "
@@ -506,7 +545,51 @@ class ResearchContextV2(ResearchContext):
         return self
 
 
-ResearchContextAuthority = Union[ResearchContext, ResearchContextV2]
+class ResearchContextV3(ResearchContextV2):
+    """Current typed context with a bound materialization-window role."""
+
+    schema_version: Literal[RESEARCH_CONTEXT_V3_SCHEMA_VERSION] = (
+        RESEARCH_CONTEXT_V3_SCHEMA_VERSION
+    )
+
+    @model_validator(mode="after")
+    def _validate_window_role_closure(self) -> "ResearchContextV3":
+        cohort = self.materialized_inputs.cohort
+        time_columns = {
+            str(item.get("column") or "") for item in cohort.time_coordinates
+        }
+        excluded_columns = {cohort.identity_column, *time_columns}
+        selected_variables = {
+            variable.name: variable
+            for variable in self.variables
+            if variable.name not in excluded_columns
+        }
+        for column, variable in selected_variables.items():
+            binding = cohort.column_bindings[column]
+            expected = descriptor_physical_updates(binding).get(
+                "analysis_window_role"
+            )
+            if expected is not None and variable.analysis_window_role != expected:
+                raise ValueError(
+                    "context descriptor physical field does not match typed "
+                    f"column binding: {column}.analysis_window_role"
+                )
+        return self
+
+
+ResearchContextAuthority = Union[
+    ResearchContext,
+    ResearchContextV2,
+    ResearchContextV3,
+]
+
+
+def _revalidate_typed_research_context(
+    context: ResearchContextV2,
+) -> ResearchContextV2:
+    """Revalidate nested mutable payloads without changing schema versions."""
+
+    return type(context).model_validate(context.model_dump(mode="python"))
 
 
 def _without_empty_values(payload: Mapping[str, Any]) -> Dict[str, Any]:
@@ -595,11 +678,12 @@ def materialized_input_prompt_projection(
 
     if not isinstance(context, ResearchContextV2):
         return None
-    # V2 is frozen at the model surface, while nested compatibility payloads
-    # remain ordinary Python containers. Revalidate the canonical dump before
-    # every authority-bearing prompt render so an in-memory nested mutation
-    # cannot bypass binding digests or closure validators.
-    context = ResearchContextV2.model_validate(context.model_dump(mode="python"))
+    # Typed contexts are frozen at the model surface, while nested
+    # compatibility payloads remain ordinary Python containers. Revalidate the
+    # canonical dump before every authority-bearing prompt render so an
+    # in-memory nested mutation cannot bypass binding digests or closure
+    # validators.
+    context = _revalidate_typed_research_context(context)
     cohort = context.materialized_inputs.cohort
     exact_variable_order = [
         variable.name
@@ -1096,7 +1180,7 @@ def resolved_raw_input_contracts(
         payload["contracts_sha256"] = hashlib.sha256(canonical).hexdigest()
         return payload
 
-    context = ResearchContextV2.model_validate(context.model_dump(mode="python"))
+    context = _revalidate_typed_research_context(context)
     cohort = context.materialized_inputs.cohort
     variables = {variable.name: variable for variable in context.variables}
     for name in raw_names:
@@ -1393,7 +1477,7 @@ def project_research_context_variables(
     """
 
     if isinstance(context, ResearchContextV2):
-        context = ResearchContextV2.model_validate(context.model_dump(mode="python"))
+        context = _revalidate_typed_research_context(context)
     full_by_name = {item.name: item for item in context.variables}
     names = [item.name for item in selected_variables]
     if len(names) != len(set(names)):
@@ -1505,13 +1589,58 @@ def project_research_context_variables(
             "trajectory": scoped_trajectory,
         }
     )
-    return ResearchContextV2.model_validate(
+    return type(context).model_validate(
         {
             **context.model_dump(mode="python"),
             "variables": list(selected_variables),
             "materialized_inputs": scoped_inputs,
         }
     )
+
+
+def migrate_research_context_v2(
+    payload: Union[Mapping[str, Any], ResearchContextV2],
+) -> ResearchContextV3:
+    """Explicitly upgrade an archived V2 context to the current V3 contract.
+
+    The upgrade is deterministic from the sealed column binding.  A missing
+    window role is populated, while an explicit conflicting role is rejected
+    rather than overwritten.  Parsing alone never mutates an archived V2
+    document or changes its schema identity.
+    """
+
+    if isinstance(payload, ResearchContextV3):
+        return ResearchContextV3.model_validate(payload.model_dump(mode="python"))
+    context = (
+        ResearchContextV2.model_validate(payload)
+        if isinstance(payload, Mapping)
+        else ResearchContextV2.model_validate(payload.model_dump(mode="python"))
+    )
+    migrated = context.model_dump(mode="python")
+    cohort = context.materialized_inputs.cohort
+    time_columns = {
+        str(item.get("column") or "") for item in cohort.time_coordinates
+    }
+    excluded_columns = {cohort.identity_column, *time_columns}
+    for variable in migrated["variables"]:
+        column = str(variable.get("name") or "")
+        if column in excluded_columns:
+            continue
+        binding = cohort.column_bindings[column]
+        expected = descriptor_physical_updates(binding).get(
+            "analysis_window_role"
+        )
+        if expected is None:
+            continue
+        actual = variable.get("analysis_window_role")
+        if actual not in {None, expected}:
+            raise ValueError(
+                "archived V2 context descriptor physical field conflicts with "
+                f"typed column binding: {column}.analysis_window_role"
+            )
+        variable["analysis_window_role"] = expected
+    migrated["schema_version"] = RESEARCH_CONTEXT_V3_SCHEMA_VERSION
+    return ResearchContextV3.model_validate(migrated)
 
 
 def parse_research_context(payload: Mapping[str, Any]) -> ResearchContextAuthority:
@@ -1524,6 +1653,8 @@ def parse_research_context(payload: Mapping[str, Any]) -> ResearchContextAuthori
         return ResearchContext.model_validate(payload)
     if version == RESEARCH_CONTEXT_V2_SCHEMA_VERSION:
         return ResearchContextV2.model_validate(payload)
+    if version == RESEARCH_CONTEXT_V3_SCHEMA_VERSION:
+        return ResearchContextV3.model_validate(payload)
     raise ValueError(f"unsupported research context schema: {version!r}")
 
 
@@ -1567,8 +1698,10 @@ __all__ = [
     "MaterializedTrajectoryContext",
     "MATERIALIZED_INPUT_PROMPT_SCHEMA_VERSION",
     "RESEARCH_CONTEXT_V2_SCHEMA_VERSION",
+    "RESEARCH_CONTEXT_V3_SCHEMA_VERSION",
     "ResearchContextAuthority",
     "ResearchContextV2",
+    "ResearchContextV3",
     "binding_preserves_analysis_range",
     "canonical_column_binding",
     "descriptor_physical_updates",
@@ -1576,6 +1709,7 @@ __all__ = [
     "materialized_input_prompt_attachment",
     "materialized_input_prompt_projection",
     "materialized_research_inputs_from_authority",
+    "migrate_research_context_v2",
     "parse_research_context",
     "parse_research_context_json",
     "project_research_context_variables",
