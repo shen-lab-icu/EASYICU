@@ -418,6 +418,21 @@
   function savePiCopilotProviderConfig(body) {
     return postJSON('/api/copilot/pi/provider-config', body || {});
   }
+  function loadPiCopilotCodexStatus() {
+    return getJSON('/api/copilot/pi/research-provider/codex/status');
+  }
+  function startPiCopilotCodexLogin(flow) {
+    return postJSON('/api/copilot/pi/research-provider/codex/login', { flow: flow || 'browser' });
+  }
+  function cancelPiCopilotCodexLogin() {
+    return postJSON('/api/copilot/pi/research-provider/codex/cancel', {});
+  }
+  function logoutPiCopilotCodex() {
+    return postJSON('/api/copilot/pi/research-provider/codex/logout', {});
+  }
+  function loadPiCopilotCodexModels() {
+    return getJSON('/api/copilot/pi/research-provider/codex/models');
+  }
   function createPiCopilotSession(body) {
     return postJSON('/api/copilot/pi/sessions', body || {});
   }
@@ -650,6 +665,11 @@
   window.EU_API.loadGuidedSessions = loadGuidedSessions;
   window.EU_API.loadPiCopilotStatus = loadPiCopilotStatus;
   window.EU_API.savePiCopilotProviderConfig = savePiCopilotProviderConfig;
+  window.EU_API.loadPiCopilotCodexStatus = loadPiCopilotCodexStatus;
+  window.EU_API.startPiCopilotCodexLogin = startPiCopilotCodexLogin;
+  window.EU_API.cancelPiCopilotCodexLogin = cancelPiCopilotCodexLogin;
+  window.EU_API.logoutPiCopilotCodex = logoutPiCopilotCodex;
+  window.EU_API.loadPiCopilotCodexModels = loadPiCopilotCodexModels;
   window.EU_API.createPiCopilotSession = createPiCopilotSession;
   window.EU_API.initializePiCopilotProject = initializePiCopilotProject;
   window.EU_API.loadPiCopilotProjectWorkflow = loadPiCopilotProjectWorkflow;

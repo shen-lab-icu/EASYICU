@@ -33,6 +33,29 @@ SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{40,100}")
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _USER_CODE_RE = re.compile(r"[A-Za-z0-9-]{4,32}")
+_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+_SUBSCRIPTION_MODEL_CATALOG_AUTHORITY = "easyicu.codex-subscription-model-catalog/1"
+# Codex App Server releases can lag the subscription backend catalog. These
+# account models are documented by OpenAI and independently shipped by the
+# OpenCode/Pi Codex OAuth providers; the real App Server turn remains the final
+# capability check.
+_DOCUMENTED_SUBSCRIPTION_MODELS = (
+    (
+        "gpt-5.6-luna",
+        "GPT-5.6 Luna",
+        "Cost-sensitive, high-volume GPT-5.6 model.",
+    ),
+    (
+        "gpt-5.6-sol",
+        "GPT-5.6 Sol",
+        "Flagship GPT-5.6 model for complex professional work.",
+    ),
+    (
+        "gpt-5.6-terra",
+        "GPT-5.6 Terra",
+        "Balanced GPT-5.6 model for intelligence and cost.",
+    ),
+)
 
 
 class CodexAccountSessionError(ValueError):
@@ -56,6 +79,8 @@ class CodexSessionCoordinates:
 class _ManagedRuntime:
     runtime: CodexAppServerRuntime
     login_id: str = ""
+    login_flow: str = ""
+    auth_url: str = ""
     verification_url: str = ""
     user_code: str = ""
     lock: Any = field(default_factory=threading.RLock, repr=False)
@@ -126,6 +151,39 @@ def _coordinates(token: str, *, create: bool) -> CodexSessionCoordinates:
     return coordinates
 
 
+def _coordinates_from_binding(
+    binding_sha256: str,
+) -> CodexSessionCoordinates:
+    binding = str(binding_sha256 or "").strip().lower()
+    if _DIGEST_RE.fullmatch(binding) is None:
+        raise CodexAccountSessionError("codex_auth_session_invalid")
+    sessions_root = _sessions_root().resolve()
+    root = (sessions_root / binding).resolve()
+    if root.parent != sessions_root:
+        raise CodexAccountSessionError("codex_auth_session_invalid")
+    coordinates = CodexSessionCoordinates(
+        binding_sha256=binding,
+        root=root,
+        home=root / "home",
+        codex_home=root / "codex",
+        runtime_cwd=root / "runtime",
+    )
+    for path in (
+        coordinates.root,
+        coordinates.home,
+        coordinates.codex_home,
+        coordinates.runtime_cwd,
+    ):
+        if (
+            not path.exists()
+            or path.is_symlink()
+            or not path.is_dir()
+            or path.resolve() != path
+        ):
+            raise CodexAccountSessionError("codex_auth_login_required")
+    return coordinates
+
+
 def _request_token(request: Request) -> str:
     token = str(request.cookies.get(COOKIE_NAME) or "").strip()
     if not token:
@@ -179,7 +237,40 @@ def environment_for_request(request: Request) -> dict[str, str]:
     """Return only the current browser user's isolated account environment."""
 
     coordinates = _coordinates(_request_token(request), create=False)
+    managed = _runtime_for(coordinates)
+    with managed.lock:
+        if not _status_for_managed(managed).get("authentication_verified"):
+            raise CodexAccountSessionError("codex_auth_login_required")
     return environment_for_coordinates(coordinates)
+
+
+def binding_for_request(request: Request) -> str:
+    """Return the current verified browser binding, never its opaque cookie."""
+
+    coordinates = _coordinates(_request_token(request), create=False)
+    managed = _runtime_for(coordinates)
+    with managed.lock:
+        if not _status_for_managed(managed).get("authentication_verified"):
+            raise CodexAccountSessionError("codex_auth_login_required")
+    return coordinates.binding_sha256
+
+
+def environment_for_binding(
+    binding_sha256: str,
+    *,
+    model: str,
+) -> dict[str, str]:
+    """Resolve one immutable Copilot-session binding for a scientific run."""
+
+    coordinates = _coordinates_from_binding(binding_sha256)
+    managed = _runtime_for(coordinates)
+    with managed.lock:
+        if not _status_for_managed(managed).get("authentication_verified"):
+            raise CodexAccountSessionError("codex_auth_login_required")
+        selected = _validated_model(managed, model)
+    environment = environment_for_coordinates(coordinates)
+    environment["EASYICU_CODEX_MODEL"] = selected
+    return environment
 
 
 def _runtime_for(coordinates: CodexSessionCoordinates) -> _ManagedRuntime:
@@ -195,6 +286,16 @@ def _runtime_for(coordinates: CodexSessionCoordinates) -> _ManagedRuntime:
             )
             _RUNTIMES[coordinates.binding_sha256] = managed
         return managed
+
+
+def _discard_runtime(
+    binding_sha256: str,
+    managed: _ManagedRuntime,
+) -> None:
+    with _RUNTIMES_LOCK:
+        if _RUNTIMES.get(binding_sha256) is managed:
+            _RUNTIMES.pop(binding_sha256, None)
+    managed.runtime.close()
 
 
 def _masked_email(value: object) -> str | None:
@@ -258,6 +359,8 @@ def _status_for_managed(managed: _ManagedRuntime) -> dict[str, Any]:
             }
         )
         managed.login_id = ""
+        managed.login_flow = ""
+        managed.auth_url = ""
         managed.verification_url = ""
         managed.user_code = ""
         return public
@@ -274,6 +377,8 @@ def _status_for_managed(managed: _ManagedRuntime) -> dict[str, Any]:
         )
         if failure is not None:
             managed.login_id = ""
+            managed.login_flow = ""
+            managed.auth_url = ""
             managed.verification_url = ""
             managed.user_code = ""
             public["account_session_status"] = "codex_auth_login_failed"
@@ -282,7 +387,7 @@ def _status_for_managed(managed: _ManagedRuntime) -> dict[str, Any]:
     return public
 
 
-def _validated_verification_url(value: object) -> str:
+def _validated_openai_url(value: object, *, device_code: bool) -> str:
     text = str(value or "").strip()
     parsed = urlsplit(text)
     if (
@@ -290,53 +395,186 @@ def _validated_verification_url(value: object) -> str:
         or (parsed.hostname or "").lower() != "auth.openai.com"
         or parsed.username is not None
         or parsed.password is not None
-        or parsed.path.rstrip("/") != "/codex/device"
+        or (device_code and parsed.path.rstrip("/") != "/codex/device")
+        or (not device_code and not parsed.path.startswith("/"))
         or parsed.fragment
     ):
-        raise CodexAccountSessionError("codex_auth_verification_url_invalid")
+        raise CodexAccountSessionError("codex_auth_url_invalid")
     return text
 
 
-def start_login(request: Request, response: Response) -> dict[str, Any]:
-    """Start the official managed ChatGPT device-code ceremony."""
+def start_login(
+    request: Request,
+    response: Response,
+    *,
+    flow: str = "browser",
+) -> dict[str, Any]:
+    """Start Codex-managed browser OAuth, with device code as fallback."""
 
     coordinates = _ensure_session(request, response)
     managed = _runtime_for(coordinates)
+    selected_flow = "device_code" if flow == "device_code" else "browser"
     with managed.lock:
         current = _status_for_managed(managed)
         if current["authentication_verified"]:
             return {"ok": True, "auth": current, "login_started": False}
-        if managed.login_id and managed.verification_url and managed.user_code:
+        if managed.login_id and managed.login_flow == selected_flow:
             return {
                 "ok": True,
                 "auth": current,
                 "login_started": True,
-                "verification_url": managed.verification_url,
-                "user_code": managed.user_code,
+                "flow": managed.login_flow,
+                **({"auth_url": managed.auth_url} if managed.auth_url else {}),
+                **(
+                    {
+                        "verification_url": managed.verification_url,
+                        "user_code": managed.user_code,
+                    }
+                    if managed.verification_url and managed.user_code
+                    else {}
+                ),
             }
+        if managed.login_id:
+            try:
+                managed.runtime.request(
+                    "account/login/cancel",
+                    {"loginId": managed.login_id},
+                    timeout=15.0,
+                )
+            except CodexAppServerError as exc:
+                raise CodexAccountSessionError(exc.code) from exc
         try:
             result = managed.runtime.request(
                 "account/login/start",
-                {"type": "chatgptDeviceCode"},
+                (
+                    {"type": "chatgptDeviceCode"}
+                    if selected_flow == "device_code"
+                    else {"type": "chatgpt", "codexStreamlinedLogin": True}
+                ),
                 timeout=30.0,
             )
         except CodexAppServerError as exc:
             raise CodexAccountSessionError(exc.code) from exc
         login_id = str(result.get("loginId") or "").strip()
-        verification_url = _validated_verification_url(result.get("verificationUrl"))
-        user_code = str(result.get("userCode") or "").strip()
-        if not login_id or _USER_CODE_RE.fullmatch(user_code) is None:
-            raise CodexAccountSessionError("codex_auth_device_code_invalid")
+        if not login_id:
+            raise CodexAccountSessionError("codex_auth_login_response_invalid")
+        if selected_flow == "browser":
+            auth_url = _validated_openai_url(
+                result.get("authUrl"),
+                device_code=False,
+            )
+            verification_url = ""
+            user_code = ""
+        else:
+            auth_url = ""
+            verification_url = _validated_openai_url(
+                result.get("verificationUrl"),
+                device_code=True,
+            )
+            user_code = str(result.get("userCode") or "").strip()
+            if _USER_CODE_RE.fullmatch(user_code) is None:
+                raise CodexAccountSessionError("codex_auth_device_code_invalid")
         managed.login_id = login_id
+        managed.login_flow = selected_flow
+        managed.auth_url = auth_url
         managed.verification_url = verification_url
         managed.user_code = user_code
         return {
             "ok": True,
             "auth": _status_for_managed(managed),
             "login_started": True,
-            "verification_url": verification_url,
-            "user_code": user_code,
+            "flow": selected_flow,
+            **({"auth_url": managed.auth_url} if managed.auth_url else {}),
+            **(
+                {
+                    "verification_url": managed.verification_url,
+                    "user_code": managed.user_code,
+                }
+                if managed.verification_url and managed.user_code
+                else {}
+            ),
         }
+
+
+def _model_rows(managed: _ManagedRuntime) -> list[dict[str, Any]]:
+    try:
+        result = managed.runtime.request(
+            "model/list",
+            {"includeHidden": False, "limit": 100},
+            timeout=20.0,
+        )
+    except CodexAppServerError as exc:
+        raise CodexAccountSessionError(exc.code) from exc
+    rows: list[dict[str, Any]] = []
+    for raw in result.get("data") or []:
+        if not isinstance(raw, Mapping) or bool(raw.get("hidden")):
+            continue
+        model = str(raw.get("model") or raw.get("id") or "").strip()
+        if _MODEL_RE.fullmatch(model) is None:
+            continue
+        rows.append(
+            {
+                "id": model,
+                "label": str(raw.get("displayName") or model).strip()[:160],
+                "description": str(raw.get("description") or "").strip()[:400],
+                "is_default": bool(raw.get("isDefault")),
+                "catalog_source": "codex_app_server",
+            }
+        )
+    observed = {row["id"] for row in rows}
+    for model, label, description in _DOCUMENTED_SUBSCRIPTION_MODELS:
+        if model in observed:
+            continue
+        rows.append(
+            {
+                "id": model,
+                "label": label,
+                "description": description,
+                "is_default": False,
+                "catalog_source": "openai_documented_subscription",
+            }
+        )
+    if not rows:
+        raise CodexAccountSessionError("codex_auth_model_catalog_empty")
+    return rows
+
+
+def _validated_model(managed: _ManagedRuntime, model: str) -> str:
+    requested = str(model or "").strip()
+    rows = _model_rows(managed)
+    if not requested:
+        default = next((row["id"] for row in rows if row["is_default"]), None)
+        return str(default or rows[0]["id"])
+    if requested not in {row["id"] for row in rows}:
+        raise CodexAccountSessionError("codex_auth_model_unavailable")
+    return requested
+
+
+def models(request: Request) -> dict[str, Any]:
+    coordinates = _coordinates(_request_token(request), create=False)
+    managed = _runtime_for(coordinates)
+    with managed.lock:
+        if not _status_for_managed(managed).get("authentication_verified"):
+            raise CodexAccountSessionError("codex_auth_login_required")
+        rows = _model_rows(managed)
+    return {
+        "schema_version": "easyicu.codex-user-model-catalog/1",
+        "provider": "codex",
+        "catalog_authority": _SUBSCRIPTION_MODEL_CATALOG_AUTHORITY,
+        "models": rows,
+        "secrets_returned": False,
+    }
+
+
+def validated_model_for_request(request: Request, model: str) -> str:
+    """Compile a browser selection against the signed-in account catalog."""
+
+    coordinates = _coordinates(_request_token(request), create=False)
+    managed = _runtime_for(coordinates)
+    with managed.lock:
+        if not _status_for_managed(managed).get("authentication_verified"):
+            raise CodexAccountSessionError("codex_auth_login_required")
+        return _validated_model(managed, model)
 
 
 def status_for_coordinates(coordinates: CodexSessionCoordinates) -> dict[str, Any]:
@@ -350,6 +588,7 @@ def status_for_coordinates(coordinates: CodexSessionCoordinates) -> dict[str, An
 def cancel_login(request: Request) -> dict[str, Any]:
     coordinates = _coordinates(_request_token(request), create=False)
     managed = _runtime_for(coordinates)
+    failure: CodexAccountSessionError | None = None
     with managed.lock:
         if managed.login_id:
             try:
@@ -359,11 +598,18 @@ def cancel_login(request: Request) -> dict[str, Any]:
                     timeout=15.0,
                 )
             except CodexAppServerError as exc:
-                raise CodexAccountSessionError(exc.code) from exc
+                failure = CodexAccountSessionError(exc.code)
         managed.login_id = ""
+        managed.login_flow = ""
+        managed.auth_url = ""
         managed.verification_url = ""
         managed.user_code = ""
-        return {"ok": True, "auth": _status_for_managed(managed)}
+    # Codex keeps the loopback callback listener alive after cancellation.
+    # Closing only this browser-owned child releases the fixed callback port.
+    _discard_runtime(coordinates.binding_sha256, managed)
+    if failure is not None:
+        raise failure
+    return {"ok": True, "auth": _base_status(session_present=True)}
 
 
 def logout(request: Request) -> dict[str, Any]:
@@ -379,6 +625,8 @@ def logout(request: Request) -> dict[str, Any]:
         except CodexAppServerError as exc:
             raise CodexAccountSessionError(exc.code) from exc
         managed.login_id = ""
+        managed.login_flow = ""
+        managed.auth_url = ""
         managed.verification_url = ""
         managed.user_code = ""
         return {"ok": True, "auth": _status_for_managed(managed)}
@@ -398,11 +646,15 @@ __all__ = [
     "COOKIE_NAME",
     "CodexAccountSessionError",
     "CodexSessionCoordinates",
+    "binding_for_request",
     "cancel_login",
+    "environment_for_binding",
     "environment_for_coordinates",
     "environment_for_request",
     "logout",
+    "models",
     "shutdown_all",
     "start_login",
     "status",
+    "validated_model_for_request",
 ]

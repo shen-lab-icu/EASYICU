@@ -5,7 +5,7 @@ from __future__ import annotations
 from html import escape as html_escape
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
 
@@ -13,7 +13,9 @@ from easyicu.webserver.pi_copilot import get_pi_copilot_service
 from easyicu.webserver.pi_copilot.contracts import (
     PiCopilotError,
     PiProjectBindingHandoffReceipt,
+    ResearchProviderBinding,
 )
+from easyicu.webserver import codex_account_sessions
 
 router = APIRouter()
 
@@ -95,6 +97,14 @@ class PiSessionCreateRequest(BaseModel):
     language: Literal["en", "zh"] = "en"
     thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
     external_llm_opt_in: StrictBool = False
+    research_provider: Literal["api", "codex"] = "api"
+    research_model: ModelText | None = None
+
+
+class CodexLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    flow: Literal["browser", "device_code"] = "browser"
 
 
 class PiMessageRequest(BaseModel):
@@ -169,6 +179,16 @@ def _raise_http(error: PiCopilotError) -> None:
     raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
+def _raise_codex_http(error: codex_account_sessions.CodexAccountSessionError) -> None:
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": error.code,
+            "owner": "easyicu.webserver.codex_account_sessions",
+        },
+    ) from error
+
+
 def _workspace_preview_document(*, file_name: str, artifact_html: str) -> str:
     """Keep Host provenance outside the sandboxed model-authored document."""
 
@@ -221,18 +241,84 @@ def post_pi_copilot_provider_config(body: PiProviderConfigRequest) -> dict:
 
 
 @router.post("/api/copilot/pi/sessions")
-def post_pi_copilot_session(body: PiSessionCreateRequest) -> dict:
+def post_pi_copilot_session(body: PiSessionCreateRequest, request: Request) -> dict:
     try:
-        return get_pi_copilot_service().create_session(
+        service = get_pi_copilot_service()
+        if body.research_provider == "codex":
+            try:
+                selected_model = codex_account_sessions.validated_model_for_request(
+                    request,
+                    str(body.research_model or ""),
+                )
+                research_provider = ResearchProviderBinding(
+                    provider="codex",
+                    credential_source="codex_user_auth",
+                    authentication_mode="chatgpt_account",
+                    model=selected_model,
+                    account_session_sha256=(
+                        codex_account_sessions.binding_for_request(request)
+                    ),
+                )
+            except codex_account_sessions.CodexAccountSessionError as exc:
+                _raise_codex_http(exc)
+        else:
+            research_provider = service.verified_api_research_provider_binding()
+        return service.create_session(
             project_id=body.project_id,
             title=body.title,
             agent_mode=body.agent_mode,
             language=body.language,
             thinking_level=body.thinking_level,
             external_llm_opt_in=body.external_llm_opt_in,
+            research_provider=research_provider,
         )
     except PiCopilotError as exc:
         _raise_http(exc)
+
+
+@router.get("/api/copilot/pi/research-provider/codex/status")
+def get_pi_copilot_codex_status(request: Request) -> dict:
+    return {"ok": True, "auth": codex_account_sessions.status(request)}
+
+
+@router.post("/api/copilot/pi/research-provider/codex/login")
+def post_pi_copilot_codex_login(
+    body: CodexLoginRequest,
+    request: Request,
+    response: Response,
+) -> dict:
+    try:
+        return codex_account_sessions.start_login(
+            request,
+            response,
+            flow=body.flow,
+        )
+    except codex_account_sessions.CodexAccountSessionError as exc:
+        _raise_codex_http(exc)
+
+
+@router.post("/api/copilot/pi/research-provider/codex/cancel")
+def post_pi_copilot_codex_cancel(request: Request) -> dict:
+    try:
+        return codex_account_sessions.cancel_login(request)
+    except codex_account_sessions.CodexAccountSessionError as exc:
+        _raise_codex_http(exc)
+
+
+@router.post("/api/copilot/pi/research-provider/codex/logout")
+def post_pi_copilot_codex_logout(request: Request) -> dict:
+    try:
+        return codex_account_sessions.logout(request)
+    except codex_account_sessions.CodexAccountSessionError as exc:
+        _raise_codex_http(exc)
+
+
+@router.get("/api/copilot/pi/research-provider/codex/models")
+def get_pi_copilot_codex_models(request: Request) -> dict:
+    try:
+        return codex_account_sessions.models(request)
+    except codex_account_sessions.CodexAccountSessionError as exc:
+        _raise_codex_http(exc)
 
 
 @router.post("/api/copilot/pi/projects/initialize")

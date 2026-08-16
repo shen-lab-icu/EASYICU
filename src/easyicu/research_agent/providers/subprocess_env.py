@@ -6,6 +6,9 @@ import os
 from typing import Mapping, Sequence
 
 
+CODEX_APP_SERVER_EXECUTABLE_ENV = "EASYICU_CODEX_EXECUTABLE"
+
+
 _SAFE_PROVIDER_ENV_KEYS = (
     "PATH",
     "HOME",
@@ -23,7 +26,10 @@ _SAFE_PROVIDER_ENV_KEYS = (
 )
 
 _BACKEND_ENV_KEYS = {
-    "codex": ("CODEX_HOME",),
+    "codex": (
+        "CODEX_HOME",
+        CODEX_APP_SERVER_EXECUTABLE_ENV,
+    ),
     "claude": (
         "CLAUDE_CODE_OAUTH_TOKEN",
         "CLAUDE_CONFIG_DIR",
@@ -62,4 +68,8 @@ def build_provider_subprocess_env(
     return selected
 
 
-__all__ = ["build_provider_subprocess_env", "external_llm_opted_in"]
+__all__ = [
+    "CODEX_APP_SERVER_EXECUTABLE_ENV",
+    "build_provider_subprocess_env",
+    "external_llm_opted_in",
+]

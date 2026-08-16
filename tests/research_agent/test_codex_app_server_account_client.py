@@ -166,6 +166,7 @@ def test_codex_app_server_client_uses_chatgpt_account_and_strict_schema(
     runtime = _FakeRuntime.instances[0]
     assert runtime.kwargs["environment"]["CODEX_HOME"] == str(tmp_path / "codex")
     assert "OPENAI_API_KEY" not in runtime.kwargs["environment"]
+    assert runtime.kwargs["experimental_api"] is True
     methods = [method for method, _params in runtime.calls]
     assert methods == ["account/read", "thread/start", "turn/start"]
     thread = runtime.calls[1][1]

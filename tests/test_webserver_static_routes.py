@@ -127,7 +127,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260816-codex-user-auth1" in index_html
+    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -183,7 +183,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "js/app.js?v=20260812-route-a11y1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260803-picker-owner" in index_html
-    assert "js/screens-agent.js?v=20260816-codex-user-auth1" in index_html
+    assert "js/screens-agent.js?v=20260816-copilot-provider-owner1" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -391,7 +391,7 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260816-codex-user-auth1" in index_html
+    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -528,7 +528,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20260815-compact-rail2" in index_html
     assert "css/guided-projects.css?v=20260815-mobile-rail1" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260816-codex-user-auth1" in index_html
+    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     )
@@ -667,7 +667,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260816-codex-user-auth1" in index_html
+    assert "js/screens-agent.js?v=20260816-copilot-provider-owner1" in index_html
     assert "css/agent.css?v=20260812-natural-conversations1" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
@@ -817,7 +817,7 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
     assert "css/agent.css?v=20260812-natural-conversations1" in index_html
-    assert "js/screens-agent.js?v=20260816-codex-user-auth1" in index_html
+    assert "js/screens-agent.js?v=20260816-copilot-provider-owner1" in index_html
 
     assert "ag-block-grid" not in app_js
     assert "Research Blocks" not in app_js
@@ -867,38 +867,36 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert "js/screens-agent-render.js?v=20260815-system-validation1" in index_html
 
 
-def test_native_agent_provider_panel_is_split_and_account_aware() -> None:
+def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     agent_js = _static_js("screens-agent.js")
-    provider_js = _static_js("screens-agent-provider.js")
+    guided_js = _static_js("screens-guided-pi.js")
+    provider_js = _static_js("screens-guided-pi-provider.js")
     index_html = _static_html("index.html")
 
-    assert "const PROVIDERS = Object.freeze([" in provider_js
-    assert "id: 'codex', label: 'Codex account', mode: 'account'" in provider_js
-    assert "Claude account" not in provider_js
-    assert "Gemini account" not in provider_js
-    assert "id: 'anthropic', label: 'Claude API', mode: 'api'" in provider_js
-    assert "id: 'deepseek', label: 'DeepSeek API', mode: 'api'" in provider_js
-    assert "window.AGENT_PROVIDER_PANEL =" in provider_js
-    assert "window.AGENT_PROVIDER_PANEL" in agent_js
-    assert "data-ag-account-pipeline-run" in provider_js
-    assert "credentialSource: 'codex_user_auth'" in agent_js
-    assert "loadCodexAuthStatus" in agent_js
-    assert "startCodexAuthLogin" in agent_js
-    assert "data-ag-codex-login" in provider_js
-    assert "data-ag-codex-logout" in provider_js
-    assert "machine's signed-in" not in provider_js
-    assert "engine: 'research_agent_pipeline'" in agent_js
-    assert "const providers = [" not in agent_js
+    assert "window.EU_GUIDED_PI_PROVIDER =" in provider_js
+    assert "ChatGPT / Codex account" in provider_js
+    assert "DeepSeek API" in provider_js
+    assert "OpenRouter API" in provider_js
+    assert "data-gpi-codex-login" in provider_js
+    assert "data-gpi-codex-device" in provider_js
+    assert "data-gpi-codex-model" in provider_js
+    assert "research_provider: state.researchProvider" in guided_js
+    assert "startPiCopilotCodexLogin" in guided_js
+    assert "AGENT_PROVIDER_PANEL" not in agent_js
+    assert "data-ag-codex-login" not in agent_js
+    assert "data-ag-external-run" not in agent_js
+    assert "screens-agent-provider.js" not in index_html
 
-    provider_pos = index_html.find("screens-agent-provider.js?")
-    main_pos = index_html.find("screens-agent.js?")
+    provider_pos = index_html.find("screens-guided-pi-provider.js?")
+    main_pos = index_html.find("screens-guided-pi.js?")
     assert provider_pos != -1 and main_pos != -1
     assert provider_pos < main_pos
     assert (
-        "js/screens-agent-provider.js?v=20260816-codex-user-auth1" in index_html
+        "js/screens-guided-pi-provider.js?v=20260816-copilot-provider-owner1"
+        in index_html
     )
 
-    for foreign_marker in ("data-cd-", "data-pt-", "data-idea-"):
+    for foreign_marker in ("data-ag-", "data-cd-", "data-pt-", "data-idea-"):
         assert foreign_marker not in provider_js
 
 
@@ -1010,7 +1008,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert ".ag-wrap .ag-req-list" in agent_question_css
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
     assert "css/agent.css?v=20260812-natural-conversations1" in index_html
-    assert "js/screens-agent.js?v=20260816-codex-user-auth1" in index_html
+    assert "js/screens-agent.js?v=20260816-copilot-provider-owner1" in index_html
 
     for name in (
         "benchmark_scorecard.json",
@@ -2308,7 +2306,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260816-codex-user-auth1" in index_html
+    assert "api.js?v=20260816-copilot-provider-owner1" in index_html
     assert "screens-dict.js?v=20260712-ux-fixes" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -2578,7 +2576,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260816-codex-user-auth1" in index_html
+    assert "api.js?v=20260816-copilot-provider-owner1" in index_html
     assert "screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -2595,13 +2593,13 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
 
 def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
     agent_js = _static_js("screens-agent.js")
-    provider_js = _static_js("screens-agent-provider.js")
+    provider_js = _static_js("screens-guided-pi-provider.js")
     api_js = _static_js("api.js")
 
     assert "DeepSeek API" in provider_js
-    assert "Claude API" in provider_js
-    assert "Custom / compatible API" in provider_js
-    assert "Codex account" in provider_js
+    assert "Anthropic / Claude API" in provider_js
+    assert "OpenAI-compatible gateway" in provider_js
+    assert "ChatGPT / Codex account" in provider_js
     assert "loadJobSnapshot" in api_js
     assert "cancelJob" in api_js
     assert "getJSON('/api/jobs/' + encodeURIComponent(jobId || ''))" in api_js
@@ -2618,6 +2616,8 @@ def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
     assert "Restart from active export" in agent_js
     assert "safe continuation is to restart from the active export" in agent_js
     assert "seedGateBlocksRun" in agent_js
+    assert "host.clientWidth < 1040" in agent_js
+    assert "data-ag-" not in provider_js
     assert "project_seed_dir" in agent_js
     assert "Agent preflight checks are not ready" in agent_js
     # The remedy sentences moved out of a regex-over-English table in
