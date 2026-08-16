@@ -273,7 +273,7 @@ def kdigo_creatinine(
     # Vectorized: use searchsorted for O(N log N) window boundaries per patient
     
     # Detect time unit and convert to hours for uniform processing
-    time_unit = time_unit or _detect_time_unit(df[time_col], time_col)
+    time_unit = _resolve_time_unit(df[time_col], time_col, time_unit)
     logger.debug(f"Creatinine baseline calculation using time unit: {time_unit}")
     
     if time_unit == 'datetime':
@@ -501,19 +501,50 @@ def _detect_time_unit(time_series: pd.Series, time_col: str | None = None) -> st
     if pd.api.types.is_timedelta64_dtype(time_series):
         return 'timedelta'
 
-    # KDIGO accepts both raw source offsets and normalized concept time axes.
-    # Reuse ts_utils' inference, but do not let the generic "charttime" name
-    # override numeric spacing because older callers pass minute offsets under
-    # that column name.
+    # Numeric charttime/time columns do not carry a unit contract.  Spacing is
+    # not a safe substitute: a sparse hourly series and a minute-offset series
+    # can have the same values.  Semantic raw-source names remain inferable;
+    # generic names must be accompanied by an explicit time_unit.
     index_hint = time_col or getattr(time_series, "name", None)
-    if str(index_hint).lower() == "charttime":
-        index_hint = None
+    if str(index_hint or "").strip().lower() in {"", "charttime", "time"}:
+        raise ValueError(
+            "numeric KDIGO time axis is ambiguous; pass time_unit explicitly"
+        )
     inferred = _infer_numeric_time_unit(time_series, index_hint)
     if inferred == 's':
         return 'seconds'
     if inferred == 'h':
         return 'hours'
     return 'minutes'
+
+
+def _resolve_time_unit(
+    time_series: pd.Series,
+    time_col: str | None,
+    explicit: Optional[str],
+) -> str:
+    if explicit is None:
+        return _detect_time_unit(time_series, time_col)
+    aliases = {
+        "h": "hours",
+        "hour": "hours",
+        "hours": "hours",
+        "min": "minutes",
+        "minute": "minutes",
+        "minutes": "minutes",
+        "s": "seconds",
+        "second": "seconds",
+        "seconds": "seconds",
+        "datetime": "datetime",
+        "timedelta": "timedelta",
+    }
+    normalized = aliases.get(str(explicit).strip().lower())
+    if normalized is None:
+        raise ValueError(
+            "time_unit must be one of hours, minutes, seconds, datetime, or "
+            "timedelta"
+        )
+    return normalized
 
 
 def _calculate_uo_rates_simple(
@@ -693,7 +724,7 @@ def _calculate_uo_rates_simple(
     urine = urine.sort_values([id_col, time_col]).reset_index(drop=True)
     
     # Determine time unit (datetime, hours, minutes, or seconds)
-    time_unit = time_unit or _detect_time_unit(urine[time_col], time_col)
+    time_unit = _resolve_time_unit(urine[time_col], time_col, time_unit)
     logger.debug(f"Detected time unit for UO calculation: {time_unit}")
 
     # Vectorized UO rate calculation using cumsum + searchsorted (O(N log N))
@@ -1566,6 +1597,7 @@ def load_kdigo_aki(
         urine_col='urine',
         weight_col='weight',
         urine_source_is_rate=str(database).lower() == 'hirid',
+        time_unit="hours",
         interval=pd.Timedelta(hours=1),
         observation_window_coverage=observation_window_coverage,
     )

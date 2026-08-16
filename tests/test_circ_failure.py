@@ -38,6 +38,25 @@ def test_load_circ_failure_uses_vasopressin_and_level1_drugs():
     assert result["level1_drugs"].tolist() == [False, True, True]
 
 
+def test_load_circ_failure_uses_levosimendan_and_theophylline() -> None:
+    preloaded = {
+        "lact": _concept_frame("lact", [3.0, 3.0, 3.0]),
+        "map": _concept_frame("map", [80.0, 80.0, 80.0]),
+        "levo_rate": _concept_frame("levo_rate", [1.0, 0.0, 0.0]),
+        "theo_rate": _concept_frame("theo_rate", [0.0, 1.0, 0.0]),
+    }
+
+    result = load_circ_failure(
+        "miiv",
+        preloaded_data=preloaded,
+        use_rolling_window=False,
+        verbose=False,
+    ).sort_values("charttime")
+
+    assert result["circ_event"].tolist() == [1, 1, 0]
+    assert result["level1_drugs"].tolist() == [True, True, False]
+
+
 def test_rolling_window_does_not_promote_event_from_single_drugged_point():
     # MAP is low throughout (sustained Event 1), lactate elevated throughout, but
     # a Level-3 vasopressor appears at a single timepoint only. The faithful

@@ -66,6 +66,15 @@ def test_eicu_v_codes_are_icd9_not_icd10() -> None:
     assert long["version"].tolist() == [9, 9]
 
 
+def test_eicu_true_icd10_letter_codes_are_not_reclassified_as_icd9() -> None:
+    from easyicu.scores.comorbidity import _explode_eicu_codes
+
+    long = _explode_eicu_codes(pd.Series(["I50.9,E11.9,E849.7,V45.1"]))
+
+    assert long["code"].tolist() == ["I50.9", "E11.9", "E849.7", "V45.1"]
+    assert long["version"].tolist() == [10, 10, 9, 9]
+
+
 def test_circ_failure_missing_map_fails_closed() -> None:
     from easyicu.scores.circ_failure import calculate_circ_failure_status
 
@@ -79,6 +88,70 @@ def test_circ_failure_missing_map_fails_closed() -> None:
 
     with pytest.raises(ValueError, match="MAP"):
         calculate_circ_failure_status(df)
+
+
+@pytest.mark.parametrize(
+    ("missing_column", "expected_known_flag"),
+    [("map", "lactate_elevated"), ("lact", "map_low")],
+)
+def test_circ_failure_row_level_core_missing_stays_unknown(
+    missing_column: str,
+    expected_known_flag: str,
+) -> None:
+    from easyicu.scores.circ_failure import calculate_circ_failure_status
+
+    df = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0],
+            "lact": [3.0],
+            "map": [60.0],
+            missing_column: [pd.NA],
+        }
+    )
+
+    out = calculate_circ_failure_status(df, use_rolling_window=False)
+
+    assert bool(out.loc[0, expected_known_flag]) is True
+    assert pd.isna(out.loc[0, "circ_event"])
+    assert pd.isna(out.loc[0, "circ_failure"])
+
+
+def test_circ_failure_row_level_drug_missing_stays_unknown() -> None:
+    from easyicu.scores.circ_failure import calculate_circ_failure_status
+
+    df = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0],
+            "lact": [3.0],
+            "map": [80.0],
+            "norepi_rate": [pd.NA],
+        }
+    )
+
+    out = calculate_circ_failure_status(df, use_rolling_window=False)
+
+    assert pd.isna(out.loc[0, "circ_event"])
+    assert pd.isna(out.loc[0, "circ_failure"])
+
+
+def test_circ_failure_does_not_use_dataframe_index_as_row_identity() -> None:
+    from easyicu.scores.circ_failure import calculate_circ_failure_status
+
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0, 5],
+            "lact": [3.0, 1.0],
+            "map": [60.0, 80.0],
+        },
+        index=[0, 0],
+    )
+
+    out = calculate_circ_failure_status(df, use_rolling_window=False)
+
+    assert out["circ_event"].tolist() == [1, 0]
 
 
 def test_circ_failure_first_event_level_matches_first_time() -> None:

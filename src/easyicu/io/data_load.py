@@ -164,6 +164,12 @@ def load_src(
             post_filter = rows
         elif isinstance(rows, FilterSpec):
             filter_specs.append(rows)
+        elif isinstance(rows, Mapping):
+            for column, value in rows.items():
+                if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+                    filter_specs.append(FilterSpec(column=column, op=FilterOp.IN, value=value))
+                else:
+                    filter_specs.append(FilterSpec(column=column, op=FilterOp.EQ, value=value))
         elif isinstance(rows, Iterable):
             # Materialize first: `all(...)` would otherwise consume a
             # generator/iterator before extend() reads it.
@@ -174,12 +180,6 @@ def load_src(
                     "FilterSpec, or mapping of filters"
                 )
             filter_specs.extend(row_list)
-        elif isinstance(rows, Mapping):
-            for column, value in rows.items():
-                if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
-                    filter_specs.append(FilterSpec(column=column, op=FilterOp.IN, value=value))
-                else:
-                    filter_specs.append(FilterSpec(column=column, op=FilterOp.EQ, value=value))
         else:
             raise TypeError(
                 "rows must be a callable, FilterSpec, iterable of FilterSpec, or mapping of filters"

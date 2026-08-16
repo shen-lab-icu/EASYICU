@@ -1065,6 +1065,9 @@ def fill_gaps(
 
     filled_groups: List[pd.DataFrame] = []
 
+    class _OffGridFallback(Exception):
+        """Signal that the vectorized grid cannot preserve an observation."""
+
     # 🚀 优化: 对纯数值时间+有limits的常见路径，使用批量cross-join替代逐组reindex
     # 这是SOFA计算的热路径，10000患者可加速10x
     _use_fast_path = (
@@ -1155,10 +1158,7 @@ def fill_gaps(
                                 np.abs(_within_f - np.round(_within_f)) > 1e-9
                             )
                             if _offgrid.any():
-                                raise ValueError(
-                                    "off-grid observations require the "
-                                    "per-group path"
-                                )
+                                raise _OffGridFallback
                             _within_f = np.round(_within_f)
                             # Safe conversion: only valid rows get integer positions
                             _within = np.where(_known, _within_f, -1).astype(np.int64)
@@ -1182,6 +1182,8 @@ def fill_gaps(
                                 arr[_gpos_valid] = src[_valid]
                                 result_dict[col] = arr
                             return pd.DataFrame(result_dict)
+                        except _OffGridFallback:
+                            raise
                         except Exception:
                             pass  # fall through to merge path
 
@@ -1202,6 +1204,8 @@ def fill_gaps(
                     else:
                         result = full_grid
                     return result
+        except _OffGridFallback:
+            pass  # Preserve original timestamps in the per-group path below.
         except Exception:
             pass  # Fall through to per-group path
 
@@ -2982,7 +2986,6 @@ def round_to_interval(
         raise ValueError("interval must be a positive timedelta")
 
     step_ns = interval_td.value
-    step_hours = interval_td / pd.Timedelta(hours=1)
 
     def _floor_ns(int_values: np.ndarray) -> np.ndarray:
         return (int_values // step_ns) * step_ns
@@ -3029,6 +3032,9 @@ def round_to_interval(
 
         return times
 
+    if isinstance(times, pd.Index) and pd.api.types.is_numeric_dtype(times.dtype):
+        return _floor_numeric(pd.Series(times))
+
     if isinstance(times, pd.DatetimeIndex):
         floored = _floor_ns(times.astype("int64", copy=False))
         return pd.to_datetime(floored)
@@ -3045,9 +3051,7 @@ def round_to_interval(
         return pd.to_timedelta(_floor_ns(np.array([td.value]))[0], unit="ns")
 
     if isinstance(times, (float, int)):
-        if step_hours == 0:
-            raise ValueError("interval must not be zero")
-        return float(np.floor(times / step_hours) * step_hours)
+        return _floor_numeric(pd.Series([times]))
 
     return times
 

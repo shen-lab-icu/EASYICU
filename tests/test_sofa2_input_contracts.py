@@ -192,6 +192,16 @@ def test_sofa2_aggregate_uses_only_trusted_or_explicit_identity_columns(
     assert "source_note" not in result.columns
 
 
+def test_sofa2_aggregate_masks_score_disclaimed_by_availability_receipt() -> None:
+    frames = _component_frames()
+    frames["sofa2_resp"]["sofa2_resp_available"] = 0
+
+    result = sofa2_score(frames)
+
+    assert pd.isna(result.loc[0, "sofa2"])
+    assert result.loc[0, "sofa2_n_available_components"] == 5
+
+
 def test_sofa2_aggregate_rejects_nonunique_component_keys() -> None:
     frames = _component_frames()
     frames["sofa2_resp"] = pd.concat(

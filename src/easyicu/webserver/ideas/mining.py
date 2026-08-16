@@ -750,26 +750,53 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
     metadata/snippets, never full text.
     """
     run_id = str(body.get("run_id") or "").strip()
+    idea_id = str(body.get("idea_id") or "").strip()
     payload = _load_run(run_id) if run_id else None
+    legacy_prior: Optional[Dict[str, Any]] = None
     if run_id and payload is None:
-        # A run directory that exists but has no ledger is a legitimate
-        # retained-review target (prior_art_check.json on disk). A run id
-        # with no directory at all must fail closed instead of fabricating a
-        # synthetic idea under a non-existent run.
-        if not _run_dir(run_id).exists():
+        # Retained pre-ledger review directories remain usable only when the
+        # persisted receipt proves the exact requested run/idea identity.
+        legacy_prior = _load_prior_art(run_id)
+        if legacy_prior is None:
             raise IdeaMiningWebError(
                 {"error": "idea_run_not_found", "run_id": run_id}
             )
-    idea = _selected_idea(payload or {}, str(body.get("idea_id") or ""))
+        if str(legacy_prior.get("run_id") or "").strip() != run_id:
+            raise IdeaMiningWebError(
+                {"error": "idea_run_not_found", "run_id": run_id}
+            )
+        if (
+            not idea_id
+            or str(legacy_prior.get("idea_id") or "").strip() != idea_id
+        ):
+            raise IdeaMiningWebError(
+                {"error": "idea_not_found", "idea_id": idea_id, "run_id": run_id}
+            )
+
+    idea = _selected_idea(payload or {}, idea_id)
     if run_id and payload is not None and idea is None:
         raise IdeaMiningWebError(
             {
                 "error": "idea_not_found",
-                "idea_id": str(body.get("idea_id") or ""),
+                "idea_id": idea_id,
                 "run_id": run_id,
             }
         )
     source = ((payload or {}).get("source_evidence") or [{}])[0]
+    if legacy_prior is not None:
+        source = _source_record(body)
+        persisted_prior = legacy_prior.get("prior_art") or {}
+        idea = {
+            "idea_id": idea_id,
+            "idea_title": _clean(
+                body.get("idea_title") or body.get("topic") or idea_id,
+                180,
+            ),
+            "mapped_concepts": [],
+            "prior_art": {
+                "queries_to_run": persisted_prior.get("queries_to_run") or []
+            },
+        }
     if not idea:
         source = _source_record(body)
         idea = {
@@ -1102,7 +1129,7 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
         raise IdeaMiningWebError({"error": "idea_not_found", "idea_id": idea_id})
     edits = str(body.get("plan_edits") or "").strip()
     plan_artifact = _load_plan(run_id)
-    plan = dict((plan_artifact or {}).get("plan") or payload.get("handoff_plan") or {})
+    plan = dict(_plan_payload(plan_artifact) or payload.get("handoff_plan") or {})
     if edits:
         plan["human_plan_notes"] = edits[:1200]
         plan["selection_mode"] = "human_curated_with_text_edits"
@@ -1186,12 +1213,29 @@ def create_agent_project(body: Dict[str, Any]) -> Dict[str, Any]:
     """Create a metadata-only Agent Projects seed from a frozen handoff."""
     run_id = str(body.get("run_id") or "").strip()
     idea_id = str(body.get("idea_id") or "").strip()
+    if not run_id or not idea_id:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_identity_required",
+                "run_id": run_id or None,
+                "idea_id": idea_id or None,
+            }
+        )
     handoff = _load_handoff(run_id)
     canonical_packet: Optional[DiscoveryHandoffPacket] = None
     if not handoff:
         handoff = create_handoff(body)
-    if idea_id and str(handoff.get("idea_id") or "") != idea_id:
-        handoff = create_handoff(body)
+    elif (
+        str(handoff.get("run_id") or "").strip() != run_id
+        or str(handoff.get("idea_id") or "").strip() != idea_id
+    ):
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_handoff_identity_mismatch",
+                "run_id": run_id,
+                "idea_id": idea_id,
+            }
+        )
     try:
         # A canonical envelope is immutable evidence. Validate it before any
         # legitimate plan/prior-art refresh so a simultaneous update cannot
@@ -1210,7 +1254,7 @@ def create_agent_project(body: Dict[str, Any]) -> Dict[str, Any]:
                 # Prefer the freshest human plan notes: the on-disk plan (the user's
                 # latest edit, which may never have been re-frozen) over the frozen
                 # handoff notes, so a re-plan is not silently dropped from the seed.
-                plan = _load_plan(run_id) or {}
+                plan = _plan_payload(_load_plan(run_id))
                 refresh_body["plan_edits"] = plan.get("human_plan_notes") or (
                     handoff.get("handoff_plan") or {}
                 ).get("human_plan_notes")
@@ -2827,6 +2871,16 @@ def _load_plan(run_id: str) -> Optional[Dict[str, Any]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _plan_payload(artifact: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return the plan body from current envelopes or legacy direct plans."""
+    if not isinstance(artifact, dict):
+        return {}
+    nested = artifact.get("plan")
+    if isinstance(nested, dict):
+        return nested
+    return artifact
+
+
 def _load_bounded_sample(run_id: str) -> Optional[Dict[str, Any]]:
     if not run_id:
         return None
@@ -2855,12 +2909,13 @@ def _project_for_run(run_id: str) -> Optional[Dict[str, Any]]:
 def _selected_idea(
     payload: Dict[str, Any], idea_id: str = ""
 ) -> Optional[Dict[str, Any]]:
+    idea_id = str(idea_id or "").strip()
+    if not idea_id:
+        return None
     ideas = payload.get("idea_ledger") or []
-    if idea_id:
-        return next(
-            (row for row in ideas if str(row.get("idea_id") or "") == idea_id), None
-        )
-    return ideas[0] if ideas else None
+    return next(
+        (row for row in ideas if str(row.get("idea_id") or "") == idea_id), None
+    )
 
 
 def _read_history() -> List[Dict[str, Any]]:
@@ -2914,7 +2969,7 @@ def _handoff_plan_is_stale(
     is re-frozen from the newer plan.
     """
     frozen = handoff.get("handoff_plan") or {}
-    plan = _load_plan(run_id) or {}
+    plan_artifact = _load_plan(run_id)
 
     def _comparable(value: Dict[str, Any]) -> str:
         return json.dumps(
@@ -2935,6 +2990,9 @@ def _handoff_plan_is_stale(
     body_edits = str(body.get("plan_edits") or "").strip()
     if body_edits and body_edits != str(frozen.get("human_plan_notes") or "").strip():
         return True
+    if plan_artifact is None:
+        return False
+    plan = _plan_payload(plan_artifact)
     return _comparable(plan) != _comparable(frozen)
 
 
@@ -3969,7 +4027,7 @@ def _fetch_url_metadata(url: str) -> Dict[str, Any]:
         "bytes_read": min(len(raw), _MAX_FETCH_BYTES),
         "reason": (
             fetch_error
-            if fetch_error and not (title or description or doi)
+            if fetch_error and not (title or description)
             else "Stored bounded metadata only; full HTML was not persisted."
         ),
     }
