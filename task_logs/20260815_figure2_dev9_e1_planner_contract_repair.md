@@ -323,3 +323,52 @@ image, and start E1 from a fresh `dev10` root. Never resume or reuse `dev09`.
 
 Commit the guarded structural compiler, build and validate a new exact-source
 image, and start E1 from a fresh `dev11` root. Never resume or reuse `dev10`.
+
+## Dev11 result
+
+- Source commit: `6f65e2b`; exact image:
+  `easyicu-research-agent:6f65e2b-dev`, image id
+  `sha256:a27bcdb47e6b051172cf7c58f0b14b9437fb3ee955a9e0320fb1974011b09d69`.
+- Runtime/source validation passed under `network=none` with all 11 method
+  capabilities and requirements SHA-256
+  `1979a0794d760a90bec78680850d80acf7dae2f26b65578d112702f78317f724`.
+- Run root:
+  `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_6f65e2b_e1_dev11`.
+- Five completed Planner calls accounted for 129,049 prompt and 36,064
+  completion tokens (165,113 total; estimated cost USD 2.37241). Their message
+  payloads were 82,327--88,492 bytes, below the reviewed transport limit. No
+  generated analysis code executed.
+- The five drafts again failed in distinct ways. An early draft still carried
+  an unprovable mixed-panel shape and therefore failed closed rather than being
+  guessed by the new compiler. The final draft converged to two instances of
+  one wire-contract defect: `all_rows` consumption records carried non-null
+  `role_column`/`expected_roles`, which are valid only for `one_per_role`.
+
+## Dev11 consumption wire-schema repair
+
+- Owner: the strict transport projection in `agents/plan_payload.py`. Pydantic's
+  generated JSON Schema exposed each field type but could not express the
+  model-level relationship between `mode` and its role coordinates. The
+  provider could therefore complete a combination the unchanged host validator
+  was guaranteed to reject.
+- `ArtifactConsumptionContract` now has three closed transport branches.
+  `all_rows` and `single_row` require `role_column:null` and an empty role
+  roster; `one_per_role` requires non-empty role coordinates. The host still
+  checks canonical input keys, complete/unique roles, and same-step inputs.
+- Initial and retry guidance now publish the exact five-field strict-wire shape
+  without raising the fixed 51,600-byte Planner directive budget.
+- The first compatibility probe correctly found that this provider rejects the
+  optional JSON Schema keyword `uniqueItems`. That keyword was removed from the
+  wire projection only; Pydantic remains the uniqueness authority. A second
+  live exact-schema probe was accepted: 26,799 schema bytes, authority SHA-256
+  `398d16aecda5d39a817614fb1685dbc97a443210db76fea9c3c8b81955adedd4`,
+  5,350 prompt + 183 completion = 5,533 tokens. This proves transport
+  compatibility only, not scientific-plan success.
+- 68 focused schema, consumption-contract, parser, prompt-budget, and Planner
+  directive tests passed; the final narrowed schema/prompt suite passed 25/25.
+  Ruff and `git diff --check` passed.
+
+## Next
+
+Commit the mode-dependent wire schema, build and validate a new exact-source
+image, and start E1 from a fresh `dev12` root. Never resume or reuse `dev11`.

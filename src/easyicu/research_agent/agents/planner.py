@@ -507,14 +507,10 @@ def _build_planner_user_prompt(
         "a host runner. Name the step and its products whatever your reader "
         "should see; the `output` field is what the execution layer reads.\n\n"
         "Use `input_consumption_contracts` when a step consumes typed result "
-        "tables and cardinality matters. `all_rows` preserves the complete "
-        "table; `single_row` is valid only for a true singleton; "
-        "`one_per_role` requires an exact `role_column` and complete "
-        "`expected_roles` roster. Never select the first row or assume a table "
-        "has one result merely because the downstream step renders one figure. "
-        "Every item uses the exact keys `input_key` and `mode`, for example "
-        '`{"input_key":"table:exact_product","mode":"all_rows"}`; never '
-        "rename them to `input` and `cardinality`. "
+        "tables and cardinality matters. Never select the first row or assume "
+        "a table is a singleton merely because one figure consumes it. "
+        + _payload.artifact_consumption_contract_shape_guide()
+        + " "
         "Leave this array empty when no typed-table cardinality rule is needed.\n\n"
         + _payload.figure_panel_shape_guide() + " Leave `figure_panels` empty on non-visualization steps.\n\n"
         "When the ResearchContext carries `materialized_inputs`, every raw "
