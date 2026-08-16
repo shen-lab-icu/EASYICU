@@ -1,9 +1,9 @@
 {
-  "finalized": false,
-  "finalized_note": "2026-08-06 待 AUMC RRT 区间纠正重跑 — AUMC rrt 改用官方 processitems 治疗过程 12465=CVVH、16363=Hemodialyse 的 start/stop 区间并展开为逐小时在治状态；不再把 CVVH stoppen 医嘱映射为 TRUE，也不再用设备压力/流量记录代替治疗区间。透析导管/通路项目明确排除。旧发布仅保留历史证据，不得进入论文派生链；只有基于该修复提交重提取、质控并封存的新六库发布才可提升为 current。",
-  "locked_for_extraction_run": "pending_aumc_rrt_process_interval_rerun_20260806",
-  "concept_dict_sha256": "14ae7e89487e51e37ddab219af9b135c4b783ca50d59c64379a6033a0ebac773",
-  "sofa2_dict_sha256": "b653e6dec054abdd4db9d178acbad3a4cde4d272693b0cdca66067bcca8e822e",
+  "finalized": true,
+  "finalized_note": "定稿 2026-08-17 — 基于干净提交 d78c5b3a 完成六库 outcome、renal、respiratory 及 SOFA/Sepsis 依赖闭包原始数据重提取。AUMC RRT 使用 processitems 12465=CVVH、16363=Hemodialyse 的 start/stop 治疗区间；KDIGO 异常肌酐过滤、显式 ICU 小时时间轴、SOFA-2 运动反应序数聚合和 owner-issued death_time 均已进入生产产物。六库 manifest、死亡事件时间和针对性临床/发布 QC 通过后方可 seal；eICU death_time 按源限制保持结构性不可用。",
+  "locked_for_extraction_run": "full6_native_v2_m1_renal_resp_outcome_d78c5b3a_20260817",
+  "concept_dict_sha256": "22039e19c9b499d635dce956298550cecb1fdf55059304736cca73ee42bf129a",
+  "sofa2_dict_sha256": "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
   "total_concepts": 251,
   "own_concepts_not_in_ricu": 130,
   "new_this_round": [
@@ -31,16 +31,16 @@
   "gates_passed": {
     "aggregate_arity_violations": 0,
     "json_roundtrip": true,
-    "concept_catalog_tests": "104 passed (test_concept_catalog_consistency + invariants + full_dict_audit + resources + webserver + extended)",
+    "concept_catalog_tests": "Targeted 2026-08-17 foundation suite: 265 passed, 10 source-dependent skipped after updating the stale 5-of-6 SOFA-2 aggregate expectation to the completeness contract.",
     "extract_chunk_cap_tests": "39 passed (tests/test_extract_chunk_cap.py — never > 3 chunks any db/module)",
     "module_extraction_tests": "test_concept_bounds_enforcement updated to the one-wide-file-per-module contract",
-    "full_pipeline_smoke": "17 modules -> wide parquets, 0 manifest errors; build_flat_tables builds study2 (41 cols, 0 skipped) + study3 (50 cols); fio2/pafi/urine/gcs/cvp/lact all present"
+    "full_pipeline_smoke": "Six databases completed raw re-extraction of outcome, renal, respiratory, sepsis_shared, sofa1_score, sofa2_score, sepsis3_sofa1 and sepsis3_sofa2 with zero module errors; all 19 modules were republished into one candidate with one clean runtime commit."
   },
   "audit_coverage": {
     "own103_vs_official_code": "38 fixes (aggregate arity, plr dimension, 3 units, eICU blood-product wrong-table, HiRID route errors)",
     "recall_sweep": "43 fixes (near-broken SIC mean_airway_pres/calcium_iv/bicarbonate/nitroglycerin; AUMC packed_rbc/ft4/retic; class-vs-molecule enoxaparin/milrinone/warfarin; eICU wrong-table nicardipine/diltiazem/pantoprazole)",
     "cross_db_distribution_scan": "235 concepts scanned; all our-own >=3x outliers resolved or explained (ferritin/myoglobin = true assay-selection difference, ng/mL==ug/L identity)",
     "vent_mode": "new harmonised mode concepts (MIMIC-IV/III/AUMC/HiRID); driving_pres_controlled = mode-conditioned driving pressure",
-    "final_data_distribution_check": "PASSED — clean-commit HiRID native-v2 publication contains 19/19 readable Parquet modules, 201 typed columns, zero missing selected concepts, and exact Arrow-schema parity with AUMC/eICU/MIMIC-IV/MIMIC-III/SIC. Full-cohort extraction completed in 722.2 s. HiRID descriptive UO medians are 1.25/1.32/1.40 mL/kg/h and KDIGO UO medians are 1.25/1.35/1.47; MCHC median is 33.8 g/dL across 103,667 values. The three Sepsis modules are explicitly unavailable because HiRID lacks the strict infection-evidence inputs, not because extraction failed."
+    "final_data_distribution_check": "PASSED — candidate full6_native_v2_m1_renal_resp_outcome_d78c5b3a_20260817 contains 6 x 19 readable native-v2 modules with refreshed dependency closure. Death/timed-death counts are AUMC 2473/2473, eICU 18004/0 (structurally unavailable), HiRID 2062/2062, MIMIC-III 5813/5813, MIMIC-IV 9466/9466 and SIC 2100/2100; negative source times remain explicit (AUMC 299, MIMIC-III 90, MIMIC-IV 28). HiRID and SIC strict Sepsis modules remain explicitly unavailable because their sources lack the required infection evidence."
   }
 }
