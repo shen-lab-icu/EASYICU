@@ -64,7 +64,7 @@ def test_provider_package_keeps_factory_import_lazy() -> None:
 
 
 def test_provider_factory_legacy_exports_remain_available() -> None:
-    assert set(providers.__all__) == {
+    legacy_exports = {
         "DEFAULT_OPENAI_BASE_URL",
         "DEFAULT_OPENROUTER_BASE_URL",
         "LOCAL_OPENAI_DUMMY_API_KEY",
@@ -73,8 +73,16 @@ def test_provider_factory_legacy_exports_remain_available() -> None:
         "is_loopback_openai_base_url",
         "resolve_provider_base_url",
     }
+    assert legacy_exports <= set(providers.__all__)
+    assert {
+        "DEFAULT_DEEPSEEK_BASE_URL",
+        "ProviderProfile",
+        "SUPPORTED_PROVIDER_NAMES",
+        "provider_profile",
+    } <= set(providers.__all__)
     assert callable(providers.build_provider_client)
     assert callable(providers.resolve_provider_base_url)
+    assert callable(providers.provider_profile)
     assert providers.DEFAULT_OPENAI_BASE_URL.startswith("https://")
 
 
@@ -138,7 +146,7 @@ def test_protocol_has_no_concrete_provider_or_pipeline_dependency() -> None:
     assert not imported & {"llm", "llm_mocks", "pipeline", "schema"}
 
 
-def test_production_entrypoints_cannot_construct_openai_client_outside_factory():
+def test_production_entrypoints_cannot_construct_provider_clients_outside_factory():
     root = Path(__file__).resolve().parents[2]
     targets = [
         root / "src" / "easyicu" / "research_agent",
@@ -162,9 +170,11 @@ def test_production_entrypoints_cannot_construct_openai_client_outside_factory()
                 name = (
                     func.id
                     if isinstance(func, ast.Name)
-                    else func.attr if isinstance(func, ast.Attribute) else ""
+                    else func.attr
+                    if isinstance(func, ast.Attribute)
+                    else ""
                 )
-                if name == "OpenAIClient":
+                if name in {"OpenAIClient", "AnthropicMessagesClient"}:
                     violations.append(f"{path.relative_to(root)}:{node.lineno}")
     assert violations == []
 
@@ -266,7 +276,9 @@ def test_provider_trust_registration_is_confined_to_reviewed_owners() -> None:
                 name = (
                     func.id
                     if isinstance(func, ast.Name)
-                    else func.attr if isinstance(func, ast.Attribute) else ""
+                    else func.attr
+                    if isinstance(func, ast.Attribute)
+                    else ""
                 )
                 if name in allowed and relative not in allowed[name]:
                     violations.append(f"{relative}:{node.lineno}:{name}")

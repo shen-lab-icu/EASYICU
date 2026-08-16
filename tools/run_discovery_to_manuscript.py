@@ -55,11 +55,15 @@ from easyicu.research_agent.authority.evidence_store import (  # noqa: E402
     EvidenceStore,
     sha256_of_file,
 )
-from easyicu.research_agent.providers.llm import OpenAIClient  # noqa: E402
 from easyicu.research_agent.providers import (  # noqa: E402
     ProviderConfigurationError,
+    SUPPORTED_CLI_ACCOUNT_NAMES,
+    SUPPORTED_PROVIDER_NAMES,
     build_provider_client,
+    cli_account_profile,
+    provider_profile,
 )
+from easyicu.research_agent.providers.llm import build_llm_client  # noqa: E402
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -119,11 +123,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Prepared EasyICU export directory required when --run-analysis is set.",
     )
     parser.add_argument(
-        "--provider", choices=["openai", "openrouter"], default="openai"
+        "--provider",
+        choices=[*SUPPORTED_CLI_ACCOUNT_NAMES, *SUPPORTED_PROVIDER_NAMES],
+        default="openai",
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", "gpt-5.4"),
+        default=None,
+        help=(
+            "Exact provider model. Account CLIs use their logged-in default "
+            "when omitted; API providers use their configured model."
+        ),
     )
     parser.add_argument("--request-timeout", type=float, default=240.0)
     parser.add_argument(
@@ -134,6 +144,26 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--disable-replanning", action="store_true")
     parser.add_argument("--reuse-existing", action="store_true")
     args = parser.parse_args(argv)
+    if not args.model:
+        if args.provider in SUPPORTED_CLI_ACCOUNT_NAMES:
+            account = cli_account_profile(args.provider)
+            _source, configured_model = (
+                account.model(os.environ) if account is not None else (None, "")
+            )
+            args.model = configured_model or "cli-default"
+        else:
+            profile = provider_profile(args.provider)
+            _source, configured_model = (
+                profile.model(os.environ) if profile is not None else (None, "")
+            )
+            args.model = configured_model or os.environ.get(
+                "EASYICU_HOSTED_DEFAULT_MODEL",
+                "",
+            )
+            if not args.model and args.provider == "openai":
+                args.model = "gpt-5.4"
+            if not args.model:
+                parser.error(f"--model is required for --provider {args.provider}")
 
     out_root = Path(args.out_root).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
@@ -557,14 +587,22 @@ def _build_data_foundation_llm(*, provider: str, model: str, request_timeout: fl
     """Use the same explicit provider contract for acquisition and benchmark."""
 
     try:
+        if provider in SUPPORTED_CLI_ACCOUNT_NAMES:
+            return build_llm_client(
+                prefer=provider,
+                model=None if model == "cli-default" else model,
+                allow_mock=False,
+                ladder=[provider],
+                request_timeout=request_timeout,
+                environment=os.environ,
+            ).client
         return build_provider_client(
             provider=provider,
             model=model,
             request_timeout=request_timeout,
             title="EasyICU discovery-to-manuscript",
-            client_cls=OpenAIClient,
         )
-    except ProviderConfigurationError as exc:
+    except (ProviderConfigurationError, RuntimeError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 
 

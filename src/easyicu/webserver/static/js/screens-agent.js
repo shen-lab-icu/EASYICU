@@ -1070,77 +1070,26 @@
 
   function providerRunPanel() {
     if (window.EU_DATA !== 'real') return '';
-    if (study().empty || study().mode !== 'analysis') return '';
-    const src = exportSourceForStudy(study());
+    const currentStudy = study();
+    if (currentStudy.empty || currentStudy.mode !== 'analysis') return '';
+    const src = exportSourceForStudy(currentStudy);
     const contextBlocker = window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.runBlocker
-      ? window.EU_AGENT_STUDY_CONTEXT.runBlocker(study())
+      ? window.EU_AGENT_STUDY_CONTEXT.runBlocker(currentStudy)
       : null;
     requestProviderStatus();
-    const st = agProvider.status || {};
-    const limits = st.limits || {};
-    const envFile = st.env_file || {};
-    const missing = Array.isArray(st.missing) ? st.missing : [];
-    const ready = !!st.ready;
-    const canRun = !!(src && ready && agProvider.consent && !agRun.active && !contextBlocker);
-    const disabledReason = (contextBlocker && contextBlocker.reason) || (!src
-      ? t('No active export source', '没有 active export 源')
-      : !ready
-      ? (missing.length ? missing.join(', ') : t('Provider not ready', 'provider 未就绪'))
-      : !agProvider.consent
-      ? t('Per-run confirmation required', '需要逐次确认')
-      : agRun.active
-      ? t('Run already in progress', '已有运行进行中')
-      : '');
-    const providers = [
-      ['openai', 'OpenAI'],
-      ['openrouter', 'OpenRouter'],
-      ['deepseek', 'DeepSeek-compatible'],
-      ['custom', 'Custom / local OpenAI-compatible'],
-    ];
-    return `
-      <div class="card pad">
-        <div class="row" style="justify-content:space-between;align-items:baseline;">
-          <div>
-            <div class="eyebrow">${t('External provider scaffold', '外部 provider 骨架')}</div>
-            <div class="panel-sub" style="margin-top:4px;">${t('Generates a provider-backed plan and draft scaffold; it does not run a complete research analysis. Uses env vars only, and secrets are never shown or written to artifacts.', '生成 provider-backed 计划与草稿骨架；这不是完整的研究分析。只读取环境变量，密钥不会显示或写入产物。')}</div>
-          </div>
-          <button class="btn sm ghost" data-ag-provider-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
-        </div>
-        <div class="row wrap gap-6 mt-12">
-          ${providers.map(([p, label]) => `<button class="btn sm ${agProvider.provider === p ? 'primary' : 'ghost'}" data-ag-provider="${p}">${esc(label)}</button>`).join('')}
-        </div>
-        <div class="note-line mt-8" style="font-size:11px;color:var(--ink-4);">${icon('shield', 11)} ${t('Custom/local endpoints must be OpenAI-compatible and configured by environment variables; values are never shown here.', 'Custom/本地端点必须兼容 OpenAI Chat Completions,并通过环境变量配置;这里不会显示具体值。')}</div>
-        ${agProvider.loading ? `<div class="note info mt-12"><div class="ico">${icon('shield', 16)}</div><div class="body"><span class="t">${t('Checking provider readiness', '正在检查 provider 就绪状态')}</span><span class="d">${t('No client is constructed and no network call is made.', '不会构造 client,也不会发起网络调用。')}</span></div></div>` : ''}
-        ${agProvider.error ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 16)}</div><div class="body"><span class="t">${t('Provider status unavailable', 'provider 状态不可用')}</span><span class="d">${esc(agProvider.error)}</span></div></div>` : ''}
-        <div class="row wrap gap-6 mt-12">
-          <span class="pill ${st.ai_enabled ? 'ok' : 'warn'}" style="height:22px;"><span class="dot"></span>AI ${st.ai_enabled ? t('enabled', '已开启') : t('off', '关闭')}</span>
-          <span class="pill ${st.credential_present ? 'ok' : 'warn'}" style="height:22px;"><span class="dot"></span>${st.credential_present ? t('key env present', 'key env 已配置') : t('key env missing', 'key env 缺失')}</span>
-          <span class="pill ${st.model_present ? 'ok' : 'warn'}" style="height:22px;"><span class="dot"></span>${st.model_present ? t('model env present', 'model env 已配置') : t('model env missing', 'model env 缺失')}</span>
-          <span class="pill ${st.ready ? 'ok' : 'warn'}" style="height:22px;"><span class="dot"></span>${st.ready ? t('ready', '就绪') : t('blocked', '受阻')}</span>
-        </div>
-        <div class="cols-2 mt-12" style="gap:8px;">
-          ${[
-            [t('Credential source', '凭据来源'), st.credential_source || (st.credential_env_candidates || []).join(' / ') || '—'],
-            [t('Model source', '模型来源'), st.model_source || (st.model_env_candidates || []).join(' / ') || '—'],
-            [t('Base URL source', 'Base URL 来源'), st.base_url_source || (st.base_url_env_candidates || []).join(' / ') || '—'],
-            [t('Private env file', '私有 env 文件'), envFile.status ? `${envFile.status}${Array.isArray(envFile.loaded_keys) && envFile.loaded_keys.length ? ' · ' + envFile.loaded_keys.join(' / ') : ''}` : '—'],
-            [t('Budget', '预算'), `${Number(limits.max_external_calls_per_run || 1)} call · ${Number(limits.max_output_tokens || 1200)} max tokens`],
-          ].map(([k, v]) => `
-            <div style="padding:8px 10px;background:var(--surface-2);border-radius:var(--r-2);min-width:0;">
-              <div class="eyebrow" style="font-size:9.5px;">${k}</div>
-              <div class="mono" style="font-size:11.5px;color:var(--ink);margin-top:3px;overflow:hidden;text-overflow:ellipsis;">${esc(v)}</div>
-            </div>`).join('')}
-        </div>
-        <label class="rtodo-row mt-12" style="background:var(--surface-2);">
-          <input type="checkbox" data-ag-external-consent ${agProvider.consent ? 'checked' : ''} />
-          <span class="rtodo-t">${t('I authorize this single external provider call for this run only', '我授权本次运行进行一次外部 provider 调用')}</span>
-          <span class="rtodo-ref mono">per_run_opt_in</span>
-        </label>
-        <div class="row gap-8 mt-12">
-          <button class="btn primary sm" data-ag-external-run aria-disabled="${canRun ? 'false' : 'true'}">${icon('file', 12)} ${t('Generate provider scaffold', '生成 provider 骨架')}</button>
-          <span style="font-size:11px;color:var(--ink-4);align-self:center;">${canRun ? t('Will remain analysis_only unless STRICT evidence and human review pass.', '除非 STRICT evidence 与人工审阅通过,否则仍保持 analysis_only。') : esc(disabledReason)}</span>
-        </div>
-      </div>`;
+    const panel = window.AGENT_PROVIDER_PANEL;
+    if (!panel || typeof panel.render !== 'function') return '';
+    return panel.render({
+      realData: true,
+      currentStudy,
+      source: src,
+      contextBlocker,
+      providerState: agProvider,
+      runState: agRun,
+      t,
+      icon,
+      esc,
+    });
   }
 
   function nextBar() {
@@ -2024,6 +1973,8 @@
       study_mode: s.mode,
       run_type: opts.runType || 'preflight',
       provider: opts.provider || 'mock',
+      engine: opts.engine || 'native_summary',
+      credential_source: opts.credentialSource || 'scientific_provider',
       project_seed_dir: s.ideaSeed && s.ideaSeed.project_dir,
     });
     closeRunStream();
@@ -2048,6 +1999,8 @@
         project_root: runToken.project_seed_dir ? `${runToken.project_seed_dir}/runs` : undefined,
         run_type: runToken.run_type,
         llm_provider: runToken.provider,
+        engine: runToken.engine,
+        credential_source: runToken.credential_source,
         external_llm_opt_in: !!opts.externalOptIn,
         question: runToken.question,
         study_context_id: runToken.context_id || undefined,
@@ -2293,6 +2246,20 @@
       startRealRun(src, { runType: 'full', provider: agProvider.provider, externalOptIn: true });
       // "for this run only": consume the consent so the next full run must be
       // re-authorized instead of silently reusing stale approval.
+      agProvider = Object.assign({}, agProvider, { consent: false });
+      repaintBody();
+    }));
+    host.querySelectorAll('[data-ag-account-pipeline-run]').forEach(b => b.addEventListener('click', () => {
+      if (b.getAttribute('aria-disabled') === 'true') return;
+      const src = exportSourceForStudy(study());
+      if (!src) return;
+      startRealRun(src, {
+        runType: 'full',
+        provider: agProvider.provider,
+        externalOptIn: true,
+        engine: 'research_agent_pipeline',
+        credentialSource: 'local_account',
+      });
       agProvider = Object.assign({}, agProvider, { consent: false });
       repaintBody();
     }));

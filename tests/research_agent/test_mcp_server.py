@@ -588,6 +588,66 @@ def test_mcp_run_constructs_explicit_llm(ra, tmp_path, monkeypatch):
     assert seen["hard_stop_limit"] == 96
 
 
+def test_mcp_run_accepts_account_cli_default_without_api_credentials(
+    ra,
+    tmp_path,
+    monkeypatch,
+):
+    import easyicu.research_agent.mcp_server as mcp
+
+    cohort = tmp_path / "cohort.parquet"
+    cohort.write_bytes(b"fixture")
+    seen = {}
+    account_client = object()
+
+    def build_account(**kwargs):
+        seen["builder"] = kwargs
+        return SimpleNamespace(client=account_client)
+
+    class FakeHardStop:
+        def finish(self, **_kwargs):
+            return None
+
+    def hard_stop(*, workdir, provider_identity):
+        seen["provider_identity"] = provider_identity
+        return FakeHardStop()
+
+    class FakePipeline:
+        @classmethod
+        def from_config(cls, _config, *, services):
+            seen["llm"] = services.llm
+            return cls()
+
+        def run(self, **_kwargs):
+            return SimpleNamespace(model_dump=lambda: {"status": "ok"})
+
+    monkeypatch.setattr(mcp, "build_llm_client", build_account)
+    monkeypatch.setattr(mcp, "_mcp_provider_hard_stop", hard_stop)
+    monkeypatch.setattr(mcp, "ResearchAgentPipeline", FakePipeline)
+
+    result = mcp.dispatch(
+        "research_agent.run",
+        {
+            "question": "Inspect the synthetic cohort.",
+            "cohort_path": str(cohort),
+            "workdir": str(tmp_path / "run"),
+            "provider": "codex",
+        },
+    )
+
+    assert result == {"status": "ok"}
+    assert seen["builder"]["prefer"] == "codex"
+    assert seen["builder"]["model"] is None
+    assert seen["builder"]["ladder"] == ["codex"]
+    assert seen["builder"]["allow_mock"] is False
+    assert seen["llm"] is account_client
+    assert seen["provider_identity"] == {
+        "provider": "codex-cli",
+        "model": "cli-default",
+        "base_url": "cli://codex",
+    }
+
+
 def test_mcp_write_scope_is_checked_before_concept_extraction(
     ra, tmp_path, monkeypatch
 ):
@@ -701,11 +761,17 @@ def test_mcp_run_rejects_key_exfiltration_base_url(ra, tmp_path, monkeypatch):
     import easyicu.research_agent.mcp_server as mcp
 
     constructed = []
+    real_builder = mcp.build_provider_client
+
+    class RecordingClient:
+        def __init__(self, **kwargs):
+            constructed.append(kwargs)
+
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-leave-server")
     monkeypatch.setattr(
         mcp,
-        "OpenAIClient",
-        lambda **kwargs: constructed.append(kwargs),
+        "build_provider_client",
+        lambda **kwargs: real_builder(client_cls=RecordingClient, **kwargs),
     )
 
     result = mcp.dispatch(
@@ -731,6 +797,7 @@ def test_mcp_run_loopback_override_does_not_forward_environment_key(
     import easyicu.research_agent.mcp_server as mcp
 
     seen = {}
+    real_builder = mcp.build_provider_client
 
     class FakeClient:
         def __init__(self, **kwargs):
@@ -746,7 +813,11 @@ def test_mcp_run_loopback_override_does_not_forward_environment_key(
             return SimpleNamespace(model_dump=lambda: {"status": "ok"})
 
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-loopback")
-    monkeypatch.setattr(mcp, "OpenAIClient", FakeClient)
+    monkeypatch.setattr(
+        mcp,
+        "build_provider_client",
+        lambda **kwargs: real_builder(client_cls=FakeClient, **kwargs),
+    )
     monkeypatch.setattr(mcp, "ResearchAgentPipeline", FakePipeline)
 
     result = mcp.dispatch(

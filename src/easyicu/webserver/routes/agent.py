@@ -43,10 +43,29 @@ def _provider_environment_for_agent_run(
     engine: str,
     run_type: str,
     external_llm_opt_in: bool,
+    llm_provider: str = "",
 ) -> Optional[Mapping[str, str]]:
     """Resolve one credential authority without returning secret values."""
 
     source = str(credential_source or "scientific_provider").strip().lower()
+    account_provider = provider_adapter.is_cli_account_provider(llm_provider)
+    if source == "local_account":
+        if engine != "research_agent_pipeline" or run_type != "full":
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "local_account_research_pipeline_only"},
+            )
+        if not account_provider:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "research_pipeline_local_account_provider_required"},
+            )
+        return provider_adapter.account_provider_environment(llm_provider)
+    if engine == "research_agent_pipeline" and account_provider:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "research_pipeline_local_account_credentials_required"},
+        )
     if engine == "research_agent_pipeline" and source != "pi_verified":
         raise HTTPException(
             status_code=400,
@@ -161,14 +180,21 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
             status_code=400,
             detail={"error": "literature_search_authorization_scope_invalid"},
         )
+    default_credential_source = (
+        "local_account"
+        if engine == "research_agent_pipeline"
+        and provider_adapter.is_cli_account_provider(llm_provider)
+        else "scientific_provider"
+    )
     credential_source = str(
-        body.get("credential_source") or "scientific_provider"
+        body.get("credential_source") or default_credential_source
     ).strip()
     provider_environment = _provider_environment_for_agent_run(
         credential_source=credential_source,
         engine=engine,
         run_type=run_type,
         external_llm_opt_in=external_llm_opt_in,
+        llm_provider=llm_provider,
     )
     settings = settings_store.load_settings()
     compute = capabilities.validate_compute_target(body)
@@ -206,6 +232,7 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
                 "project_root": project_root,
                 "provider": provider_meta,
                 "provider_environment": provider_environment,
+                "credential_source": credential_source,
                 "budget_mode": budget_mode,
             }
             if literature_search_authorized:
@@ -425,6 +452,7 @@ def jobs_agent_run_review(body: Dict[str, Any]) -> dict:
         engine="research_agent_pipeline",
         run_type="full",
         external_llm_opt_in=True,
+        llm_provider=str(pending.get("provider") or ""),
     )
     try:
         study_context = context_store.get_context(study_context_id)

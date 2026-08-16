@@ -2411,29 +2411,72 @@ def _make_llm(
     from easyicu.research_agent import (  # type: ignore
         LLMRouter,
         MockLLMClient,
-        OpenAIClient,
     )
     from easyicu.research_agent.providers import (  # type: ignore
+        ANTHROPIC_MESSAGES,
         ProviderConfigurationError,
+        SUPPORTED_CLI_ACCOUNT_NAMES,
         build_provider_client,
+        cli_account_profile,
+        provider_profile,
     )
-    from easyicu.research_agent.providers.llm import reasoning_effort_by_role
+    from easyicu.research_agent.providers.llm import (
+        build_llm_client,
+        reasoning_effort_by_role,
+    )
 
     if provider == "mock":
         return MockLLMClient()
+    if provider in SUPPORTED_CLI_ACCOUNT_NAMES:
+        cli_profile = cli_account_profile(provider)
+        assert cli_profile is not None
+        if reasoning_effort_profile != "provider_default":
+            raise SystemExit(
+                "Account-backed CLI providers currently require "
+                "--reasoning-effort-profile provider_default."
+            )
+        if total_transport_attempts != 1 or stream_enabled:
+            raise SystemExit(
+                "Account-backed CLI providers use one non-streaming transport "
+                "attempt per logical call."
+            )
+        if planner_strict_json_schema and not (cli_profile.supports_strict_json_schema):
+            raise SystemExit(
+                f"Provider {provider!r} cannot honor strict Planner JSON Schema."
+            )
+        try:
+            return build_llm_client(
+                prefer=provider,
+                model=None if model == "cli-default" else model,
+                allow_mock=False,
+                ladder=[provider],
+                request_timeout=request_timeout,
+                environment=provider_environment,
+            ).client
+        except (RuntimeError, ValueError, ProviderConfigurationError) as exc:
+            raise SystemExit(str(exc)) from exc
     try:
         # The CLI option is deliberately expressed as total physical attempts,
         # while OpenAIClient's conventional ``max_retries`` contract counts
         # only attempts after the initial request.
         transport_max_retries = total_transport_attempts - 1
         effort_by_role = reasoning_effort_by_role(reasoning_effort_profile)
+        profile_definition = provider_profile(provider)
+        if (
+            effort_by_role
+            and profile_definition is not None
+            and profile_definition.transport == ANTHROPIC_MESSAGES
+        ):
+            raise SystemExit(
+                "Anthropic native API currently requires "
+                "--reasoning-effort-profile provider_default."
+            )
         if not effort_by_role:
             return build_provider_client(
                 provider=provider,
                 model=model,
                 request_timeout=request_timeout,
                 title="EasyICU research-agent benchmark",
-                client_cls=OpenAIClient,
                 environment=provider_environment,
                 max_retries=transport_max_retries,
                 stream_enabled=bool(stream_enabled),
@@ -2446,7 +2489,6 @@ def _make_llm(
                 model=model,
                 request_timeout=request_timeout,
                 title="EasyICU research-agent benchmark",
-                client_cls=OpenAIClient,
                 environment=provider_environment,
                 extra_body={"reasoning": {"effort": effort}},
                 max_retries=transport_max_retries,
@@ -2487,9 +2529,43 @@ def _resolve_backend_base_url(provider: str) -> str:
     if provider == "mock":
         return "mock://deterministic"
     _bootstrap_imports()
-    from easyicu.research_agent.providers import resolve_provider_base_url
+    from easyicu.research_agent.providers import (
+        cli_account_profile,
+        resolve_provider_base_url,
+    )
+
+    cli_profile = cli_account_profile(provider)
+    if cli_profile is not None:
+        return cli_profile.endpoint_identity
 
     return resolve_provider_base_url(provider)
+
+
+def _default_model_for_provider(provider: str) -> str:
+    """Return a provider-family-safe development default."""
+
+    _bootstrap_imports()
+    from easyicu.research_agent.providers import cli_account_profile, provider_profile
+
+    normalized = str(provider or "").strip().lower()
+    if normalized == "mock":
+        return "mock"
+    account = cli_account_profile(normalized)
+    if account is not None:
+        _source, configured_model = account.model(os.environ)
+        return configured_model or "cli-default"
+    profile = provider_profile(normalized)
+    _source, configured_model = (
+        profile.model(os.environ) if profile is not None else (None, "")
+    )
+    selected = configured_model or os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", "")
+    if selected:
+        return selected
+    if normalized == "openrouter":
+        return "openai/gpt-oss-120b:free"
+    if normalized == "openai":
+        return "gpt-4o-mini"
+    raise SystemExit(f"--model is required for --provider {normalized}")
 
 
 def _provider_environment_snapshot(
@@ -2497,17 +2573,42 @@ def _provider_environment_snapshot(
 ) -> Dict[str, str]:
     """Freeze endpoint semantics while retaining only required credentials."""
 
-    keys = {
-        "OPENAI_API_KEY",
-        "OPENROUTER_API_KEY",
-        "EASYICU_ALLOW_EXTERNAL_LLM",
-        "EASYICU_TRUST_LOOPBACK_PROXY_KEY",
-    }
+    _bootstrap_imports()
+    from easyicu.research_agent.providers import (
+        cli_account_profile,
+        is_loopback_openai_base_url,
+        provider_profile,
+    )
+    from easyicu.research_agent.providers.subprocess_env import (
+        build_provider_subprocess_env,
+    )
+
+    cli_profile = cli_account_profile(provider)
+    if cli_profile is not None:
+        snapshot = build_provider_subprocess_env(provider)
+        if "EASYICU_ALLOW_EXTERNAL_LLM" in os.environ:
+            snapshot["EASYICU_ALLOW_EXTERNAL_LLM"] = os.environ[
+                "EASYICU_ALLOW_EXTERNAL_LLM"
+            ]
+        return snapshot
+    profile = provider_profile(provider)
+    keys = {"EASYICU_ALLOW_EXTERNAL_LLM"}
+    if (
+        profile is not None
+        and profile.supports_auth_header_override
+        and is_loopback_openai_base_url(provider_base_url)
+    ):
+        keys.update(
+            {
+                "EASYICU_OPENAI_AUTH_HEADER",
+                "EASYICU_TRUST_LOOPBACK_PROXY_KEY",
+            }
+        )
+    if profile is not None:
+        keys.update(profile.api_key_env_names)
     snapshot = {key: os.environ[key] for key in keys if key in os.environ}
-    if provider == "openai":
-        snapshot["OPENAI_BASE_URL"] = str(provider_base_url)
-    elif provider == "openrouter":
-        snapshot["OPENROUTER_BASE_URL"] = str(provider_base_url)
+    if profile is not None:
+        snapshot[profile.base_url_env_names[0]] = str(provider_base_url)
     return snapshot
 
 
@@ -2868,7 +2969,7 @@ def _enforce_mock_aware_provider(
         raise SystemExit(
             "The 'aware' arm on the mock provider returns pre-written, "
             "fixture responses, so its results are not real. Use "
-            "--provider openrouter/openai for paper-facing runs, restrict to "
+            "a configured real --provider for paper-facing runs, restrict to "
             "--arms naive, or pass --allow-mock-aware for an offline plumbing "
             "smoke test (results are non-substantive)."
         )
@@ -3455,6 +3556,10 @@ def _figure2_realrun_authorization_gate(args):
 def main() -> int:
     _bootstrap_imports()
 
+    from easyicu.research_agent.providers import (
+        SUPPORTED_CLI_ACCOUNT_NAMES,
+        SUPPORTED_PROVIDER_NAMES,
+    )
     from tests.bench import ANALYSIS_BENCH_ITEMS, RULE_BENCH_ITEMS  # type: ignore
 
     default_submission_profile_ref = _default_submission_profile_ref()
@@ -3479,7 +3584,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--provider",
-        choices=["mock", "openrouter", "openai"],
+        choices=["mock", *SUPPORTED_CLI_ACCOUNT_NAMES, *SUPPORTED_PROVIDER_NAMES],
         default="mock",
         help="LLM backend for the benchmark arms.",
     )
@@ -3504,10 +3609,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get(
-            "EASYICU_HOSTED_DEFAULT_MODEL", "openai/gpt-oss-120b:free"
+        default=None,
+        help=(
+            "Single model name for real-provider runs. Account CLIs default "
+            "to their logged-in model; API providers retain the hosted-model "
+            "development default. Formal runs should pin an exact model."
         ),
-        help="Single model name for real-provider runs.",
     )
     parser.add_argument(
         "--models",
@@ -3955,6 +4062,8 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    if not args.model and not args.models:
+        args.model = _default_model_for_provider(str(args.provider))
     # Resolve once. The authorization digest and every subsequently created
     # client receive this exact endpoint; later environment mutation is inert.
     args.provider_base_url = str(

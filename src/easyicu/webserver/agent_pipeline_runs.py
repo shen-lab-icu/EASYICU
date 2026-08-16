@@ -2631,6 +2631,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             study = record.study
             credential_source = record.credential_source
             budget_mode = record.budget_mode
+            provider_name = _clean_text(record.provider_meta.get("provider"), 64)
         except WebReviewRecoveryError:
             return None
     else:
@@ -2638,6 +2639,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         study = entry.study
         credential_source = entry.credential_source
         budget_mode = entry.budget_mode
+        provider_name = _clean_text(entry.provider.get("provider"), 64)
     return {
             "run_id": pending.run_id,
             "study_id": _clean_text(study.get("id"), 160),
@@ -2646,6 +2648,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             ),
             "resume_scope": pending.resume_scope,
             "credential_source": credential_source,
+            "provider": provider_name,
             "budget_mode": budget_mode,
             "resumable_here": bool(pending.resumable_here),
             "requests": [
@@ -2872,6 +2875,34 @@ def _compile_plan_revision_contract(
     return render_agent_plan_revision_contract(parsed_review)
 
 
+def _validated_pipeline_credential_source(
+    credential_source: str,
+    *,
+    provider: Mapping[str, Any],
+) -> str:
+    """Bind one Web credential source to the matching provider family."""
+
+    selected = str(credential_source or "").strip().lower()
+    if selected not in {"pi_verified", "local_account"}:
+        raise ResearchPipelineRunError(
+            "research_pipeline_credential_source_invalid",
+            "Choose one server-verified Research Agent credential source.",
+        )
+    provider_name = _clean_text(provider.get("provider"), 64).lower()
+    account_provider = provider_adapter.is_cli_account_provider(provider_name)
+    if selected == "local_account" and not account_provider:
+        raise ResearchPipelineRunError(
+            "research_pipeline_local_account_provider_required",
+            "A local account credential source requires a reviewed account CLI provider.",
+        )
+    if selected == "pi_verified" and account_provider:
+        raise ResearchPipelineRunError(
+            "research_pipeline_local_account_credentials_required",
+            "Account CLI providers require the local account credential source.",
+        )
+    return selected
+
+
 def make_research_pipeline_run_runner(
     *,
     export_path: str,
@@ -2879,6 +2910,7 @@ def make_research_pipeline_run_runner(
     project_root: Optional[str],
     provider: Mapping[str, Any],
     provider_environment: Optional[Mapping[str, str]] = None,
+    credential_source: str = "pi_verified",
     literature_search_authorized: bool = False,
     plan_revision_source_run_id: str = "",
     budget_mode: str = "planner_canary",
@@ -2958,10 +2990,18 @@ def make_research_pipeline_run_runner(
             "research_pipeline_budget_mode_invalid",
             "Choose an explicit reviewed Research Agent budget mode.",
         ) from exc
+    selected_credential_source = _validated_pipeline_credential_source(
+        credential_source,
+        provider=provider,
+    )
     if provider_environment is None:
         raise ResearchPipelineRunError(
-            "research_pipeline_pi_verified_credentials_required",
-            "A verified Pi provider credential is required for this pipeline.",
+            (
+                "research_pipeline_local_account_credentials_required"
+                if selected_credential_source == "local_account"
+                else "research_pipeline_pi_verified_credentials_required"
+            ),
+            "A verified provider credential is required for this pipeline.",
         )
     if not project_root:
         raise ResearchPipelineRunError(
@@ -3246,7 +3286,7 @@ def make_research_pipeline_run_runner(
                 ),
                 provider_meta=dict(provider),
                 provider_public=dict(provider_public),
-                credential_source="pi_verified",
+                credential_source=selected_credential_source,
                 budget_mode=selected_budget_mode,
                 prepared_package_binding=prepared_package_binding,
                 pipeline_config=config_payload,
@@ -3331,7 +3371,7 @@ def make_research_pipeline_run_runner(
                     provider=provider_public,
                     acquisition=acquisition,
                     created_at=time.time(),
-                    credential_source="pi_verified",
+                    credential_source=selected_credential_source,
                     budget_mode=selected_budget_mode,
                     prepared_package_binding=prepared_package_binding,
                     provider_hard_stop=provider_hard_stop,

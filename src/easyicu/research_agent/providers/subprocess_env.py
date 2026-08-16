@@ -23,13 +23,8 @@ _SAFE_PROVIDER_ENV_KEYS = (
 )
 
 _BACKEND_ENV_KEYS = {
-    "codex": (
-        "OPENAI_API_KEY",
-        "OPENROUTER_API_KEY",
-        "CODEX_HOME",
-    ),
+    "codex": ("CODEX_HOME",),
     "claude": (
-        "ANTHROPIC_API_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN",
         "CLAUDE_CONFIG_DIR",
     ),
@@ -56,9 +51,7 @@ def build_provider_subprocess_env(
     source = os.environ if environment is None else environment
     keys = (*_SAFE_PROVIDER_ENV_KEYS, *_BACKEND_ENV_KEYS[normalized_backend])
     selected = {
-        key: str(source[key])
-        for key in keys
-        if key in source and str(source[key])
+        key: str(source[key]) for key in keys if key in source and str(source[key])
     }
     for raw_key in required_keys:
         key = str(raw_key or "").strip()

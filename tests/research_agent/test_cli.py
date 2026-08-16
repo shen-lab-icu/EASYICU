@@ -99,8 +99,12 @@ def test_external_cli_is_blocked_before_provider_construction_without_opt_in(
     assert constructed == []
 
 
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [("openai", "gpt-4o-mini"), ("deepseek", "deepseek-v4-flash")],
+)
 def test_external_cli_calls_canonical_opt_in_before_provider_construction(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, provider, model
 ):
     from easyicu import ai_optin
     from easyicu.research_agent import cli
@@ -113,8 +117,8 @@ def test_external_cli_calls_canonical_opt_in_before_provider_construction(
     def check_opt_in(choice, *, ai_enabled, language):
         events.append(("gate", choice, ai_enabled, language))
 
-    def build_provider(**_kwargs):
-        events.append(("provider",))
+    def build_provider(**kwargs):
+        events.append(("provider", kwargs["provider"], kwargs["model"]))
         return llm
 
     class FakePipeline:
@@ -141,7 +145,9 @@ def test_external_cli_calls_canonical_opt_in_before_provider_construction(
     rc = cli.main(
         [
             "--llm",
-            "openai",
+            provider,
+            "--model",
+            model,
             "--external-llm-opt-in",
             "--question",
             "Describe this cohort.",
@@ -154,7 +160,103 @@ def test_external_cli_calls_canonical_opt_in_before_provider_construction(
 
     assert rc == 0
     assert events == [
-        ("gate", "openai", True, "en"),
-        ("provider",),
+        ("gate", provider, True, "en"),
+        ("provider", provider, model),
         ("pipeline", True),
     ]
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [("codex", None)],
+)
+def test_account_cli_calls_canonical_opt_in_before_account_client_construction(
+    monkeypatch,
+    tmp_path,
+    provider,
+    model,
+):
+    from easyicu import ai_optin
+    from easyicu.research_agent import cli
+    import easyicu.research_agent.pipeline as pipeline_module
+    import easyicu.research_agent.providers.llm as llm_module
+
+    events = []
+    account_client = object()
+
+    def check_opt_in(choice, *, ai_enabled, language):
+        events.append(("gate", choice, ai_enabled, language))
+
+    def build_account(**kwargs):
+        events.append(
+            (
+                "account",
+                kwargs["prefer"],
+                kwargs["model"],
+                kwargs["ladder"],
+                kwargs["allow_mock"],
+                kwargs["environment"]["EASYICU_ALLOW_EXTERNAL_LLM"],
+            )
+        )
+        return SimpleNamespace(client=account_client)
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            events.append(("pipeline", kwargs["llm"] is account_client))
+
+        def run(self, **_kwargs):
+            return SimpleNamespace(
+                run_id="run-cli-account",
+                workdir=str(tmp_path),
+                context_path=str(tmp_path / "context.json"),
+                plan_path=str(tmp_path / "plan.json"),
+                manifest_path=str(tmp_path / "manifest.json"),
+                report_path=str(tmp_path / "report.md"),
+                manuscript_path=str(tmp_path / "manuscript.md"),
+                evidence_count=0,
+                findings_count=0,
+            )
+
+    monkeypatch.setattr(ai_optin, "check_external_llm_opt_in", check_opt_in)
+    monkeypatch.setattr(llm_module, "build_llm_client", build_account)
+    monkeypatch.setattr(pipeline_module, "ResearchAgentPipeline", FakePipeline)
+    argv = [
+        "--llm",
+        provider,
+        "--external-llm-opt-in",
+        "--question",
+        "Describe this synthetic cohort.",
+        "--cohort",
+        str(tmp_path / "cohort.parquet"),
+        "--workdir",
+        str(tmp_path),
+    ]
+    if model:
+        argv[2:2] = ["--model", model]
+
+    assert cli.main(argv) == 0
+    assert events == [
+        ("gate", provider, True, "en"),
+        ("account", provider, model, [provider], False, "1"),
+        ("pipeline", True),
+    ]
+
+
+def test_non_openai_cli_requires_explicit_model_after_opt_in(monkeypatch, tmp_path):
+    from easyicu import ai_optin
+    from easyicu.research_agent import cli
+
+    monkeypatch.setattr(ai_optin, "check_external_llm_opt_in", lambda *_a, **_k: None)
+
+    with pytest.raises(SystemExit, match="--model is required"):
+        cli.main(
+            [
+                "--llm",
+                "deepseek",
+                "--external-llm-opt-in",
+                "--question",
+                "Describe this cohort.",
+                "--cohort",
+                str(tmp_path / "cohort.parquet"),
+            ]
+        )

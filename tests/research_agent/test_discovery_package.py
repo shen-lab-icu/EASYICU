@@ -799,6 +799,9 @@ def test_discovery_package_rejects_unregistered_source_and_invalid_figure(
 
 def test_discovery_data_foundation_honours_openrouter_provider(monkeypatch):
     import tools.run_discovery_to_manuscript as launcher
+    from easyicu.research_agent.providers.factory import (
+        build_provider_client as real_builder,
+    )
 
     seen = {}
 
@@ -810,7 +813,11 @@ def test_discovery_data_foundation_honours_openrouter_provider(monkeypatch):
     monkeypatch.setenv("OPENROUTER_BASE_URL", "https://router.example/v1")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://wrong-openai.example/v1")
     monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
-    monkeypatch.setattr(launcher, "OpenAIClient", FakeClient)
+    monkeypatch.setattr(
+        launcher,
+        "build_provider_client",
+        lambda **kwargs: real_builder(client_cls=FakeClient, **kwargs),
+    )
 
     launcher._build_data_foundation_llm(
         provider="openrouter",

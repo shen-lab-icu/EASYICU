@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 from contextvars import ContextVar
+import hashlib
 import json
 import math
 import mimetypes
@@ -28,8 +29,8 @@ import re
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from types import MappingProxyType, SimpleNamespace
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..authority.provider_budget import (
     consume_active_provider_handoff,
@@ -40,7 +41,16 @@ from ..authority.secret_redaction import (
     redact_debug_value,
     redact_text_secrets,
 )
-from .capabilities import llm_supports_vision, model_looks_vision_capable
+from .capabilities import (
+    CLIAccountReadiness,
+    REGISTERED_CLI_BACKEND_NAMES,
+    SUPPORTED_CLI_ACCOUNT_NAMES,
+    SUPPORTED_PROVIDER_NAMES,
+    cli_account_profile,
+    llm_supports_vision,
+    model_looks_vision_capable,
+    provider_profile,
+)
 from .protocol import (
     LLMClient,
     LLMMessage,
@@ -1258,6 +1268,287 @@ class OpenAIClient:
         return _strip_reasoning_blocks((getattr(msg, "content", None) or "").strip())
 
 
+def _anthropic_finish_reason(value: Any) -> Optional[str]:
+    """Map Anthropic stop reasons into the closed provider vocabulary."""
+
+    normalized = str(value or "").strip().lower()
+    return {
+        "end_turn": "stop",
+        "stop_sequence": "stop",
+        "max_tokens": "length",
+        "tool_use": "tool_calls",
+        "refusal": "content_filter",
+        "pause_turn": "stop",
+    }.get(normalized, "other" if normalized else None)
+
+
+class AnthropicMessagesClient:
+    """Native Anthropic Messages API adapter with explicit schema authority."""
+
+    name = "anthropic"
+    __easyicu_anthropic_transport__ = True
+    provider_attempt_budget_aware = True
+
+    def __init__(
+        self,
+        model: str,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        request_timeout: float = 120.0,
+        max_retries: int = 0,
+        retryable_http_status_codes: Optional[Sequence[int]] = None,
+        supports_strict_json_schema: bool = False,
+        stream_enabled: Optional[bool] = False,
+        allow_environment_overrides: bool = True,
+        **unsupported: Any,
+    ) -> None:
+        if unsupported:
+            names = ", ".join(sorted(unsupported))
+            raise ValueError(f"unsupported Anthropic transport options: {names}")
+        if stream_enabled:
+            raise ValueError("Anthropic Messages streaming is not enabled in this adapter")
+        if allow_environment_overrides:
+            request_timeout = float(
+                os.environ.get("EASYICU_LLM_TIMEOUT") or request_timeout
+            )
+            max_retries = int(os.environ.get("EASYICU_LLM_MAX_RETRIES") or max_retries)
+        timeout = float(request_timeout)
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("request_timeout must be finite and positive")
+        resolved_key = str(
+            api_key
+            or (os.environ.get("ANTHROPIC_API_KEY") if allow_environment_overrides else "")
+            or ""
+        ).strip()
+        if not resolved_key:
+            raise ValueError("ANTHROPIC_API_KEY is required")
+        resolved_base_url = str(
+            base_url
+            or (
+                os.environ.get("ANTHROPIC_BASE_URL")
+                if allow_environment_overrides
+                else ""
+            )
+            or "https://api.anthropic.com"
+        ).rstrip("/")
+        try:
+            from anthropic import Anthropic  # type: ignore
+        except Exception as exc:  # pragma: no cover - SDK-missing environment
+            raise ImportError(
+                "AnthropicMessagesClient requires the 'anthropic' package. "
+                "Install EasyICU with the agentic or webapp extra."
+            ) from exc
+        self._client = Anthropic(
+            api_key=resolved_key,
+            base_url=resolved_base_url,
+            timeout=timeout,
+            max_retries=0,
+        )
+        self._model = str(model or "").strip()
+        if not self._model:
+            raise ValueError("Anthropic model is required")
+        self._resolved_base_url = resolved_base_url
+        self._request_timeout = timeout
+        self._timeout = timeout
+        self._max_retries = max(0, int(max_retries))
+        if retryable_http_status_codes is None:
+            self._retryable_http_status_codes = None
+        else:
+            statuses: set[int] = set()
+            for raw_status in retryable_http_status_codes:
+                if not isinstance(raw_status, int) or isinstance(raw_status, bool):
+                    raise ValueError("retryable HTTP statuses must be integers")
+                if raw_status < 100 or raw_status > 599:
+                    raise ValueError("retryable HTTP statuses must be in 100..599")
+                statuses.add(raw_status)
+            self._retryable_http_status_codes = frozenset(statuses)
+        self._stream_enabled = False
+        self._allow_environment_overrides = bool(allow_environment_overrides)
+        self.supports_strict_json_schema = bool(supports_strict_json_schema)
+        self.supports_vision = False
+        self.last_usage: Optional[Dict[str, Any]] = None
+        self.last_finish_reason: Optional[str] = None
+        self.last_transport_attempts = 0
+        from .factory import _mark_reviewed_transport_constructed
+
+        _mark_reviewed_transport_constructed(self)
+
+    def _require_outbound_authorization(self) -> None:
+        from .factory import require_provider_client_authorization
+
+        try:
+            require_provider_client_authorization(self)
+        except Exception as exc:
+            raise PermissionError(
+                "external Anthropic calls require factory-minted provider authorization"
+            ) from exc
+
+    @staticmethod
+    def _wire_messages(
+        messages: Sequence[LLMMessage],
+    ) -> tuple[str, list[dict[str, str]]]:
+        system_parts: list[str] = []
+        wire: list[dict[str, str]] = []
+        for message in messages:
+            role = str(message.role or "").strip().lower()
+            content = str(message.content or "")
+            if role == "system":
+                if content:
+                    system_parts.append(content)
+                continue
+            if role not in {"user", "assistant"}:
+                raise ValueError(f"unsupported Anthropic message role: {role!r}")
+            if wire and wire[-1]["role"] == role:
+                wire[-1]["content"] += "\n\n" + content
+            else:
+                wire.append({"role": role, "content": content})
+        if not wire:
+            raise ValueError("Anthropic Messages requires at least one user/assistant message")
+        return "\n\n".join(system_parts), wire
+
+    def complete(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        seed: Optional[int] = None,
+        top_p: Optional[float] = None,
+        structured_output: Optional[StructuredOutputRequest] = None,
+    ) -> str:
+        text, _usage = self.complete_with_usage(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            seed=seed,
+            top_p=top_p,
+            structured_output=structured_output,
+        )
+        return text
+
+    def complete_with_usage(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        seed: Optional[int] = None,
+        top_p: Optional[float] = None,
+        structured_output: Optional[StructuredOutputRequest] = None,
+    ) -> tuple[str, Optional[Dict[str, Any]]]:
+        del seed  # The native Messages API does not expose a seed parameter.
+        clear_provider_call_receipt()
+        self.last_usage = None
+        self.last_finish_reason = None
+        self.last_transport_attempts = 0
+        self._require_outbound_authorization()
+        system, wire_messages = self._wire_messages(messages)
+        create_kwargs: Dict[str, Any] = {
+            "model": self._model,
+            "messages": wire_messages,
+            "max_tokens": int(max_tokens),
+            "temperature": float(temperature),
+        }
+        if system:
+            create_kwargs["system"] = system
+        if top_p is not None:
+            create_kwargs["top_p"] = float(top_p)
+        if structured_output is not None:
+            if not self.supports_strict_json_schema:
+                raise StructuredOutputCapabilityError(
+                    "Anthropic client was not configured for strict JSON Schema"
+                )
+            create_kwargs["output_config"] = {
+                "format": {
+                    "type": "json_schema",
+                    "schema": json.loads(structured_output.schema_json),
+                }
+            }
+
+        import time as _time
+
+        attempts = 1 + self._max_retries
+        last_exc: Optional[Exception] = None
+        response: Any = None
+        for attempt in range(attempts):
+            self.last_transport_attempts = attempt + 1
+            hard_stop_remaining = consume_active_transport_attempt()
+            transport_kwargs = dict(create_kwargs)
+            if hard_stop_remaining is not None:
+                transport_kwargs["timeout"] = min(
+                    self._timeout,
+                    float(hard_stop_remaining),
+                )
+            try:
+                response = self._client.messages.create(**transport_kwargs)
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                try:
+                    setattr(exc, "easyicu_transport_attempts", attempt + 1)
+                except Exception:
+                    pass
+                status = _structured_provider_http_status_code(exc)
+                retryable = (
+                    status in self._retryable_http_status_codes
+                    if self._retryable_http_status_codes is not None
+                    else _is_retryable_transport_error(exc)
+                )
+                if not retryable or attempt + 1 >= attempts:
+                    raise
+                retry_after = _extract_retry_after(exc)
+                backoff = (
+                    float(retry_after) + 1.0
+                    if retry_after is not None
+                    else min(2.0 * (attempt + 1) ** 2, 30.0)
+                )
+                _time.sleep(backoff)
+        else:  # pragma: no cover - loop either breaks or raises
+            if last_exc is not None:
+                raise last_exc
+
+        usage = getattr(response, "usage", None)
+        prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        call_usage: Dict[str, Any] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+        actual_model = str(getattr(response, "model", "") or "").strip()
+        if actual_model:
+            call_usage["actual_model"] = actual_model
+        self.last_usage = call_usage
+        raw_stop_reason = getattr(response, "stop_reason", None)
+        self.last_finish_reason = _anthropic_finish_reason(raw_stop_reason)
+        text_parts: list[str] = []
+        for block in list(getattr(response, "content", None) or []):
+            if str(getattr(block, "type", "") or "") == "text":
+                value = getattr(block, "text", None)
+                if isinstance(value, str) and value:
+                    text_parts.append(value)
+        text = "\n".join(text_parts).strip()
+        _record_provider_call_receipt(
+            finish_reason=self.last_finish_reason,
+            usage=call_usage,
+            transport_attempts=self.last_transport_attempts,
+        )
+        if str(raw_stop_reason or "").strip().lower() == "refusal":
+            raise ProviderRefusal(
+                _truncated_debug_text(
+                    redact_text_secrets(text or "Anthropic provider refusal")
+                ),
+                finish_reason=self.last_finish_reason,
+                usage_summary=call_usage,
+                transport_attempts=self.last_transport_attempts,
+            )
+        if not text:
+            error = RuntimeError("Anthropic provider returned no text content")
+            setattr(error, "easyicu_transport_attempts", self.last_transport_attempts)
+            raise error
+        return text, call_usage
+
+
 def _model_looks_like_qwen3(model: str) -> bool:
     lowered = (model or "").strip().lower()
     return lowered.startswith("qwen3") or "/qwen3" in lowered or "qwen3-" in lowered
@@ -1432,12 +1723,9 @@ class FallbackLLMClient:
                     _params = _inspect.signature(child_method).parameters
                     _accepts_seed = "seed" in _params
                     _accepts_top_p = "top_p" in _params
-                    _accepts_structured_output = (
-                        "structured_output" in _params
-                        or any(
-                            parameter.kind is _inspect.Parameter.VAR_KEYWORD
-                            for parameter in _params.values()
-                        )
+                    _accepts_structured_output = "structured_output" in _params or any(
+                        parameter.kind is _inspect.Parameter.VAR_KEYWORD
+                        for parameter in _params.values()
                     )
                 except (TypeError, ValueError):
                     _accepts_seed = False
@@ -1729,12 +2017,9 @@ class LLMRouter:
         try:
             _parameters = _inspect.signature(self._default.complete).parameters
             _accepts_top_p = "top_p" in _parameters
-            _accepts_structured_output = (
-                "structured_output" in _parameters
-                or any(
-                    parameter.kind is _inspect.Parameter.VAR_KEYWORD
-                    for parameter in _parameters.values()
-                )
+            _accepts_structured_output = "structured_output" in _parameters or any(
+                parameter.kind is _inspect.Parameter.VAR_KEYWORD
+                for parameter in _parameters.values()
             )
         except (TypeError, ValueError):
             _accepts_top_p = False
@@ -1757,9 +2042,10 @@ class LLMRouter:
 class CLIAgentLLMClient:
     """Drive a local, pre-authenticated coding-agent CLI as a text backend.
 
-    This is the *altitude-1* integration of a local coding agent (Codex CLI /
-    Claude Code CLI) into the research-agent framework: the CLI satisfies the
-    same ``LLMClient`` protocol every other provider does, so any role
+    This is the *altitude-1* integration of the user-facing Codex account
+    transport (plus one legacy internal Claude Code seam) into the
+    research-agent framework: the adapter satisfies the same ``LLMClient``
+    protocol every other provider does, so any role
     (planner / coder / analyzer / writer / critic) can use it via
     ``llm.complete(messages) -> str``.
 
@@ -1778,15 +2064,18 @@ class CLIAgentLLMClient:
 
     The CLIs do not honour ``max_tokens`` / ``temperature`` / ``seed`` /
     ``top_p``; those are accepted for protocol compatibility and ignored.
+    Codex does, however, support a strict final ``--output-schema`` contract,
+    which this adapter materializes inside the throwaway working directory.
     """
 
-    _SUPPORTED = {"codex", "claude"}
+    _SUPPORTED = set(REGISTERED_CLI_BACKEND_NAMES)
 
     def __init__(
         self,
         backend: str = "codex",
         model: Optional[str] = None,
         request_timeout: float = 180.0,
+        environment: Optional[Mapping[str, str]] = None,
     ) -> None:
         backend = str(backend or "").strip().lower()
         if backend not in self._SUPPORTED:
@@ -1794,9 +2083,27 @@ class CLIAgentLLMClient:
                 f"Unknown CLI backend {backend!r}; expected one of {sorted(self._SUPPORTED)}."
             )
         self._backend = backend
-        self._command = backend  # executable name == backend name
         self._model = (model or "").strip()  # "" => CLI default
         self._timeout = float(request_timeout)
+        profile = cli_account_profile(backend)
+        assert profile is not None  # guarded by _SUPPORTED
+        self._command = profile.executable
+        self.supports_strict_json_schema = bool(profile.supports_strict_json_schema)
+        from .subprocess_env import build_provider_subprocess_env
+
+        subprocess_environment = build_provider_subprocess_env(
+            backend,
+            environment=environment,
+        )
+        self._subprocess_environment = MappingProxyType(subprocess_environment)
+        self._subprocess_environment_sha256 = hashlib.sha256(
+            json.dumps(
+                subprocess_environment,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
         self.name = f"{backend}-cli"
         from .factory import _mark_reviewed_transport_constructed
 
@@ -1819,7 +2126,13 @@ class CLIAgentLLMClient:
                 convo_parts.append(f"User:\n{content}")
         return "\n\n".join(system_parts), "\n\n".join(convo_parts)
 
-    def _build_argv(self, system: str, cwd: str) -> List[str]:
+    def _build_argv(
+        self,
+        system: str,
+        cwd: str,
+        *,
+        output_schema_path: Optional[str] = None,
+    ) -> List[str]:
         model = self._model
         if self._backend == "claude":
             argv = [self._command, "-p", "--output-format", "text"]
@@ -1834,6 +2147,9 @@ class CLIAgentLLMClient:
         argv = [
             self._command,
             "exec",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
             "--sandbox",
             "read-only",
             "--skip-git-repo-check",
@@ -1844,6 +2160,8 @@ class CLIAgentLLMClient:
         ]
         if model:
             argv += ["-m", model]
+        if output_schema_path:
+            argv += ["--output-schema", output_schema_path]
         return argv
 
     def _require_outbound_authorization(self) -> None:
@@ -1866,24 +2184,43 @@ class CLIAgentLLMClient:
         temperature: float = 0.2,
         seed: Optional[int] = None,
         top_p: Optional[float] = None,
+        structured_output: Optional[StructuredOutputRequest] = None,
         **_ignored: Any,
     ) -> str:
         import shutil
         import subprocess
         import tempfile
 
-        from .subprocess_env import build_provider_subprocess_env
-
         self._require_outbound_authorization()
+        if structured_output is not None:
+            if not self.supports_strict_json_schema:
+                raise StructuredOutputCapabilityError(
+                    f"{self._backend} CLI does not advertise strict JSON Schema"
+                )
+            if not isinstance(structured_output, StructuredOutputRequest):
+                raise TypeError("structured_output must be StructuredOutputRequest")
         if not shutil.which(self._command):
             raise RuntimeError(
                 f"The '{self._command}' CLI is not installed or not on PATH."
             )
         system, conversation = self._flatten(messages)
         with tempfile.TemporaryDirectory(prefix="easyicu-research-cli-") as cwd:
-            argv = self._build_argv(system, cwd)
+            output_schema_path: Optional[str] = None
+            if structured_output is not None:
+                schema_path = Path(cwd) / "final-output.schema.json"
+                schema_path.write_text(
+                    structured_output.schema_json,
+                    encoding="utf-8",
+                )
+                schema_path.chmod(0o600)
+                output_schema_path = str(schema_path)
+            argv = self._build_argv(
+                system,
+                cwd,
+                output_schema_path=output_schema_path,
+            )
             if self._backend == "codex":
-                # codex has no system flag; fold system into the prompt.
+                # Codex has no system flag; fold system into the prompt.
                 prompt = (
                     f"{system}\n\n{conversation}".strip() if system else conversation
                 )
@@ -1897,7 +2234,7 @@ class CLIAgentLLMClient:
                     text=True,
                     timeout=self._timeout,
                     cwd=cwd,
-                    env=build_provider_subprocess_env(self._backend),
+                    env=dict(self._subprocess_environment),
                 )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(
@@ -1906,11 +2243,12 @@ class CLIAgentLLMClient:
             except OSError as exc:
                 raise RuntimeError(f"Failed to launch {self._command}: {exc}") from exc
         if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "").strip()
+            detail = redact_text_secrets((proc.stderr or proc.stdout or "").strip())
             raise RuntimeError(
                 f"{self._command} exited with code {proc.returncode}: {detail[:500]}"
             )
-        text = _strip_reasoning_blocks((proc.stdout or "").strip())
+        raw_output = (proc.stdout or "").strip()
+        text = _strip_reasoning_blocks(raw_output)
         if not text:
             raise RuntimeError(f"{self._command} returned an empty response.")
         return text
@@ -1934,10 +2272,8 @@ class LLMClientSelection:
 
 
 # Backends served by a local coding-agent CLI vs. an OpenAI-compatible API.
-_CLI_BACKENDS = {"codex", "claude"}
-_API_BACKENDS = {"openai", "openrouter", "custom"}
-
-_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+_CLI_BACKENDS = set(SUPPORTED_CLI_ACCOUNT_NAMES)
+_API_BACKENDS = set(SUPPORTED_PROVIDER_NAMES)
 
 
 def cli_backend_available(backend: str) -> bool:
@@ -1949,24 +2285,128 @@ def cli_backend_available(backend: str) -> bool:
     return shutil.which(backend) is not None
 
 
-def _api_key_present(api_key: Optional[str]) -> bool:
+def probe_cli_account_readiness(
+    backend: str,
+    *,
+    environment: Optional[Mapping[str, str]] = None,
+    timeout: float = 5.0,
+) -> CLIAccountReadiness:
+    """Check one local CLI/account boundary without returning command output.
+
+    Codex exposes a stable non-interactive login-status command, so its account
+    session can be verified before a research prompt is sent. Other reviewed
+    account CLIs have no equivalent stable cross-version status command; an
+    installed executable is therefore launch-ready with authentication
+    explicitly unverified. Its first real call still fails closed if the user
+    has not logged in.
+    """
+
+    import shutil
+    import subprocess
+    import tempfile
+
+    normalized = str(backend or "").strip().lower()
+    profile = cli_account_profile(normalized)
+    if profile is None:
+        raise ValueError(f"Unknown CLI account backend: {backend!r}")
+    from .subprocess_env import build_provider_subprocess_env
+
+    safe_environment = build_provider_subprocess_env(
+        normalized,
+        environment=environment,
+    )
+    executable = shutil.which(
+        profile.executable,
+        path=safe_environment.get("PATH"),
+    )
+    if executable is None:
+        return CLIAccountReadiness(
+            backend=normalized,
+            provider_identity=profile.provider_identity,
+            executable_present=False,
+            status_check_supported=profile.status_argv is not None,
+            authentication_verified=False,
+            launch_ready=False,
+            reason_code="cli_executable_missing",
+            subprocess_calls=0,
+        )
+    if profile.status_argv is None:
+        return CLIAccountReadiness(
+            backend=normalized,
+            provider_identity=profile.provider_identity,
+            executable_present=True,
+            status_check_supported=False,
+            authentication_verified=None,
+            launch_ready=True,
+            reason_code="cli_login_status_unavailable",
+            subprocess_calls=0,
+        )
+    bounded_timeout = max(0.1, min(float(timeout), 30.0))
+    try:
+        with tempfile.TemporaryDirectory(prefix="easyicu-cli-status-") as cwd:
+            result = subprocess.run(
+                list(profile.status_argv),
+                capture_output=True,
+                text=True,
+                timeout=bounded_timeout,
+                cwd=cwd,
+                env=safe_environment,
+            )
+    except subprocess.TimeoutExpired:
+        reason_code = "cli_login_status_timeout"
+        verified = False
+    except OSError:
+        reason_code = "cli_login_status_failed"
+        verified = False
+    else:
+        verified = result.returncode == 0
+        reason_code = "cli_account_ready" if verified else "cli_login_required"
+    return CLIAccountReadiness(
+        backend=normalized,
+        provider_identity=profile.provider_identity,
+        executable_present=True,
+        status_check_supported=True,
+        authentication_verified=verified,
+        launch_ready=verified,
+        reason_code=reason_code,
+        subprocess_calls=1,
+    )
+
+
+def _api_key_present(
+    backend: str,
+    api_key: Optional[str],
+    *,
+    environment: Mapping[str, str],
+) -> bool:
+    profile = provider_profile(backend)
     return bool(
         api_key
-        or os.environ.get("OPENAI_API_KEY")
-        or os.environ.get("OPENROUTER_API_KEY")
+        or (
+            profile is not None
+            and any(environment.get(name) for name in profile.api_key_env_names)
+        )
     )
 
 
 def _backend_available(
-    backend: str, *, api_key: Optional[str], allow_mock: bool
+    backend: str,
+    *,
+    api_key: Optional[str],
+    allow_mock: bool,
+    environment: Mapping[str, str],
 ) -> bool:
     if backend in _CLI_BACKENDS:
         external_allowed = str(
-            os.environ.get("EASYICU_ALLOW_EXTERNAL_LLM", "") or ""
+            environment.get("EASYICU_ALLOW_EXTERNAL_LLM", "") or ""
         ).strip().lower() in {"1", "true", "yes", "on"}
         return cli_backend_available(backend) and external_allowed
     if backend in _API_BACKENDS:
-        return _api_key_present(api_key)
+        return _api_key_present(
+            backend,
+            api_key,
+            environment=environment,
+        )
     if backend == "mock":
         return allow_mock
     return False
@@ -1979,39 +2419,55 @@ def _construct_backend(
     api_key: Optional[str],
     base_url: Optional[str],
     extra_headers: Optional[Dict[str, str]],
+    request_timeout: float,
+    environment: Mapping[str, str],
 ) -> Any:
     if backend in _CLI_BACKENDS:
         from .factory import authorize_provider_client
 
-        client = CLIAgentLLMClient(backend=backend, model=model or None)
+        profile = cli_account_profile(backend)
+        assert profile is not None  # guarded by _CLI_BACKENDS
+        _model_source, configured_model = profile.model(environment)
+        resolved_model = str(model or configured_model or "").strip()
+        client = CLIAgentLLMClient(
+            backend=backend,
+            model=resolved_model or None,
+            request_timeout=request_timeout,
+            environment=environment,
+        )
         return authorize_provider_client(
             client,
-            provider=f"{backend}-cli",
-            model=model or "cli-default",
-            base_url=f"cli://{backend}",
+            provider=profile.provider_identity,
+            model=resolved_model or "cli-default",
+            base_url=profile.endpoint_identity,
             destination="external",
+            environment=environment,
         )
     if backend in _API_BACKENDS:
         from .factory import build_provider_client
 
-        resolved_base = base_url
-        if backend == "openrouter" and not resolved_base:
-            resolved_base = _OPENROUTER_BASE_URL
-        provider_environment = dict(os.environ)
+        profile = provider_profile(backend)
+        if profile is None:  # pragma: no cover - guarded by _API_BACKENDS
+            raise ValueError(f"Unknown LLM backend: {backend!r}")
+        provider_environment = dict(environment)
         if api_key:
-            provider_environment[
-                "OPENROUTER_API_KEY" if backend == "openrouter" else "OPENAI_API_KEY"
-            ] = api_key
-        if resolved_base:
-            provider_environment[
-                "OPENROUTER_BASE_URL" if backend == "openrouter" else "OPENAI_BASE_URL"
-            ] = resolved_base
+            provider_environment[profile.api_key_env_names[0]] = api_key
+        if base_url:
+            provider_environment[profile.base_url_env_names[0]] = base_url
+        _model_source, configured_model = profile.model(provider_environment)
+        resolved_model = model or configured_model
+        if not resolved_model:
+            if backend == "openai":
+                resolved_model = "gpt-4o-mini"
+            else:
+                raise ValueError(
+                    f"An explicit model is required for LLM backend {backend!r}"
+                )
         return build_provider_client(
             provider=backend,
-            model=model or "gpt-4o-mini",
-            request_timeout=120.0,
+            model=resolved_model,
+            request_timeout=request_timeout,
             title=str((extra_headers or {}).get("X-Title") or "EasyICU LLM selector"),
-            client_cls=OpenAIClient,
             environment=provider_environment,
         )
     if backend == "mock":
@@ -2030,11 +2486,13 @@ def build_llm_client(
     extra_headers: Optional[Dict[str, str]] = None,
     allow_mock: bool = True,
     ladder: Optional[Sequence[str]] = None,
+    request_timeout: float = 120.0,
+    environment: Optional[Mapping[str, str]] = None,
 ) -> LLMClientSelection:
     """Build the best available LLM client, degrading gracefully.
 
     The whole point of this factory is concern #1: **a local coding-agent CLI
-    (Codex / Claude Code) must be an *optional* engine, never a dependency.**
+    (Codex) must be an *optional* engine, never a dependency.**
     Not everyone has it installed, so selection walks a capability ladder and
     returns the first engine that is actually usable:
 
@@ -2050,6 +2508,7 @@ def build_llm_client(
     so the choice is auditable rather than silent.
     """
     requested = str(prefer or "").strip().lower() or "codex"
+    selected_environment = os.environ if environment is None else environment
     if ladder is None:
         default_chain = [requested, "openai", "openrouter", "mock"]
         # de-duplicate while preserving order
@@ -2065,7 +2524,12 @@ def build_llm_client(
         chain = [name for name in chain if name != "mock"]
 
     for backend in chain:
-        if not _backend_available(backend, api_key=api_key, allow_mock=allow_mock):
+        if not _backend_available(
+            backend,
+            api_key=api_key,
+            allow_mock=allow_mock,
+            environment=selected_environment,
+        ):
             continue
         client = _construct_backend(
             backend,
@@ -2073,6 +2537,8 @@ def build_llm_client(
             api_key=api_key,
             base_url=base_url,
             extra_headers=extra_headers,
+            request_timeout=request_timeout,
+            environment=selected_environment,
         )
         fell_back = backend != requested
         if not fell_back:
@@ -2099,7 +2565,7 @@ def build_llm_client(
 
     raise RuntimeError(
         f"No usable LLM backend in ladder {chain!r}. "
-        "Install a coding-agent CLI (codex/claude), configure an API key, "
+        "Install the Codex CLI, configure an API key, "
         "or allow the offline mock."
     )
 
@@ -2132,6 +2598,7 @@ __all__ = [
     "LLMMessage",
     "LLMClient",
     "OpenAIClient",
+    "AnthropicMessagesClient",
     "CLIAgentLLMClient",
     "LLMRouter",
     "LLMClientSelection",
