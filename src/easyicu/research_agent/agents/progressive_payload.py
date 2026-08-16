@@ -82,6 +82,13 @@ def _bind_step_module_shape(definitions: dict[str, Any]) -> None:
             "progressive skeleton step definition is unavailable"
         )
     properties = step["properties"]
+    output_intent = definitions.get("ProgressiveOutputIntent")
+    if not isinstance(output_intent, dict) or not isinstance(
+        output_intent.get("properties"), dict
+    ):
+        raise ProgressiveTransportSchemaError(
+            "progressive output intent definition is unavailable"
+        )
     module_ids = list(get_args(ProgressiveModuleId))
     standard_ids = [value for value in module_ids if value != "custom_analysis"]
 
@@ -111,6 +118,12 @@ def _bind_step_module_shape(definitions: dict[str, Any]) -> None:
     custom_properties["custom_method"] = _non_null(
         properties["custom_method"], field="custom_method"
     )
+    custom_output = copy.deepcopy(output_intent)
+    custom_output["properties"]["semantic_role"] = _string_enum(
+        ("scientific_sensitivity", "custom")
+    )
+    custom_properties["outputs"]["items"] = custom_output
+    custom_properties["outputs"]["minItems"] = 1
     custom = _closed_object(custom_properties)
     definitions["ProgressiveSkeletonStep"] = {"anyOf": [standard, custom]}
 

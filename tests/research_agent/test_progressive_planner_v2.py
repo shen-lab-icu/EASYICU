@@ -489,6 +489,36 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
 
 
+def test_compiler_wires_product_reference_to_its_unique_host_owner() -> None:
+    payload = _payload()
+    payload["steps"][-1]["product_inputs"][1]["producer_step_id"] = "02_table_one"
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=skeleton,
+        context=_context(),
+    )
+
+    figure = next(step for step in plan.steps if step.step_id == "07_figure")
+    assert "table:adjusted_association_estimates" in figure.inputs
+
+
+def test_compiler_refuses_product_reference_without_a_host_owner() -> None:
+    payload = _payload()
+    payload["steps"][-1]["product_inputs"][1] = {
+        "producer_step_id": "05_primary",
+        "product_id": "table:unregistered_result",
+    }
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=skeleton, context=_context())
+
+    assert caught.value.reason_code == "progressive_product_reference_mismatch"
+    assert caught.value.step_id == "07_figure"
+    assert caught.value.path == "product_inputs"
+
+
 def test_compiler_drops_group_by_from_table_one_rows() -> None:
     payload = _payload()
     payload["steps"][1]["table_one_variables"].insert(
@@ -740,6 +770,9 @@ def test_run_bound_schema_closes_runtime_rosters_under_twelve_kib() -> None:
     assert "custom_analysis" not in step["module_id"]["enum"]
     assert step["custom_method"] == {"type": "null"}
     assert custom["properties"]["custom_method"]["type"] == "string"
+    assert custom["properties"]["outputs"]["items"]["properties"][
+        "semantic_role"
+    ]["enum"] == ["scientific_sensitivity", "custom"]
     assert "table_one_variables" not in custom["properties"]
     assert step["raw_inputs"]["items"]["enum"] == [
         "exposure_flag",

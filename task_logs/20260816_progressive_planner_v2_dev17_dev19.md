@@ -201,8 +201,36 @@ specific handler could preserve them.
   The complete progressive Planner file passed 15 tests; Ruff and scoped
   `git diff --check` are clean.
 
+### Dev26
+
+Root:
+`/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_22e7bc6_e1_dev26`
+
+The exact `22e7bc6` image completed six Planner calls, using 87,613 tokens and
+an estimated USD 1.22099. The corrected exception ordering exposed the real
+terminal coordinates instead of relabelling them: the final suffix had one
+`progressive_output_role_mismatch` on its custom scientific-sensitivity step
+and one `progressive_product_reference_mismatch` on the report step. The run
+still did not enter Execute.
+
+## Repair after Dev26
+
+- The run-bound `custom_analysis` transport branch now permits only the two
+  output roles that its compiler can materialize (`scientific_sensitivity` and
+  `custom`) and requires at least one output. This moves the discovered
+  module/role rule into the strict suffix schema without adding a case-specific
+  product or benchmark name.
+- Product ids already have one preceding owner in the host compiler registry.
+  The compiler now resolves that owner rather than requiring the model to
+  repeat the same edge correctly in `producer_step_id`; an unregistered
+  product still fails closed with `progressive_product_reference_mismatch`.
+- The complete progressive Planner file passes 17 tests, including a negative
+  unregistered-product regression; the adjacent structured-output/retry and
+  planning-boundary matrix passes 48 tests. The compact run-bound schema
+  remains below its 12 KiB ratchet; Ruff and scoped `git diff --check` are clean.
+
 ## Next gate
 
-Build an exact-source image from the repair commit and run a fresh E1 Dev26.
+Build an exact-source image from the repair commit and run a fresh E1 Dev27.
 Do not start E2 until E1 completes the full analysis, audit, figure, and report
 workflow under development authority.
