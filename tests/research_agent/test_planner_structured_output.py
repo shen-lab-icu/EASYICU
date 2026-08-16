@@ -107,17 +107,68 @@ def test_run_bound_literature_schema_closes_source_element_pairs():
         "strobe_2007",
         "singer_sepsis3_2016",
     ]
-    branches = {
-        branch["properties"]["citation_key"]["const"]: branch
-        for branch in schema["$defs"]["LiteratureDesignBinding"]["anyOf"]
+    branches = schema["$defs"]["LiteratureDesignBinding"]["anyOf"]
+    by_source = {
+        source: branch
+        for branch in branches
+        for source in branch["properties"]["citation_key"]["enum"]
     }
-    assert set(branches) == {"strobe_2007", "singer_sepsis3_2016"}
-    assert branches["strobe_2007"]["properties"]["design_elements"]["items"][
+    assert set(by_source) == {"strobe_2007", "singer_sepsis3_2016"}
+    assert by_source["strobe_2007"]["properties"]["design_elements"]["items"][
         "enum"
     ] == ["dependence", "estimand", "outcome", "reporting"]
-    assert "population" in branches["singer_sepsis3_2016"]["properties"][
+    assert "population" in by_source["singer_sepsis3_2016"]["properties"][
         "design_elements"
     ]["items"]["enum"]
+
+
+def test_run_bound_literature_schema_groups_only_identical_authority_sets():
+    schema = json.loads(
+        planner_structured_output_request(
+            [
+                "suissa_immortal_time_2008",
+                "anderson_landmark_1983",
+                "singer_sepsis3_2016",
+                "johnson_mimiciv_2023",
+                "strobe_2007",
+            ]
+        ).schema_json
+    )
+    branches = schema["$defs"]["LiteratureDesignBinding"]["anyOf"]
+    groups = {
+        tuple(branch["properties"]["citation_key"]["enum"]): tuple(
+            branch["properties"]["design_elements"]["items"]["enum"]
+        )
+        for branch in branches
+    }
+
+    assert groups[
+        ("suissa_immortal_time_2008", "anderson_landmark_1983")
+    ] == ("estimand", "exposure", "time_zero")
+    assert groups[("singer_sepsis3_2016", "johnson_mimiciv_2023")]
+    assert ("strobe_2007",) in groups
+    assert len(groups) == 3
+
+
+def test_ten_source_run_bound_literature_schema_keeps_retry_headroom():
+    request = planner_structured_output_request(
+        [
+            "vincent_sofa_1996",
+            "singer_sepsis3_2016",
+            "strobe_2007",
+            "record_2015",
+            "suissa_immortal_time_2008",
+            "anderson_landmark_1983",
+            "durrleman_splines_1989",
+            "sterne_missing_data_2009",
+            "ricu_2023",
+            "johnson_mimiciv_2023",
+        ]
+    )
+    schema = json.loads(request.schema_json)
+
+    assert request.payload_bytes < 30_000
+    assert len(schema["$defs"]["LiteratureDesignBinding"]["anyOf"]) == 6
 
 
 def test_empty_run_bound_literature_schema_requires_empty_arrays():
