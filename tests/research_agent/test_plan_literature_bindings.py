@@ -14,7 +14,7 @@ from easyicu.research_agent.planning.replan_gate import (
     replan_candidate_contract_findings,
 )
 from easyicu.research_agent.providers.mocks import MockLLMClient, ScriptedMockLLMClient
-from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+from easyicu.research_agent.schema import AnalysisStep, CohortDescriptor, ResearchContext
 
 
 def _context() -> ResearchContext:
@@ -140,16 +140,25 @@ def test_citation_key_without_typed_design_application_is_rejected() -> None:
         )
 
 
-def test_design_binding_cannot_name_an_unbound_source() -> None:
+def test_planner_compiles_a_design_binding_into_the_citation_roster() -> None:
     payload = json.loads(_raw(["strobe_2007"]))
-    payload["steps"][0]["literature_design_bindings"][0]["citation_key"] = "other"
+    payload["steps"][0]["literature_citation_keys"] = []
+
+    plan = PlannerAgent.__new__(PlannerAgent)._parse(
+        json.dumps(payload),
+        _context(),
+        allowed_literature_citation_keys=["strobe_2007"],
+    )
+
+    assert plan.steps[0].literature_citation_keys == ["strobe_2007"]
+
+
+def test_recorded_plan_schema_still_refuses_an_uncompiled_binding() -> None:
+    payload = json.loads(_raw(["strobe_2007"]))["steps"][0]
+    payload["literature_citation_keys"] = []
 
     with pytest.raises(ValueError, match="must also appear"):
-        PlannerAgent.__new__(PlannerAgent)._parse(
-            json.dumps(payload),
-            _context(),
-            allowed_literature_citation_keys=["strobe_2007", "other"],
-        )
+        AnalysisStep.model_validate(payload)
 
 
 def test_every_cited_source_needs_an_explicit_design_contribution() -> None:
@@ -254,7 +263,7 @@ def test_initial_literature_authority_publishes_the_exact_nested_binding_shape()
     )
 
     assert (
-        '{"citation_key":"<same exact bound key>",'
+        '{"citation_key":"<exact allowed key>",'
         '"design_elements":["<one or more exact allowed elements>"],'
         '"application":"<how the source shapes this step>",'
         '"divergence":null}'
