@@ -66,6 +66,8 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "static/css/*.css",
         "static/js/*.js",
         "static/assets/demo/*.png",
+        "static/assets/demo/*.html",
+        "static/assets/demo/*.pdf",
         "static/vendor/echarts/*",
         "pi_copilot/node_app/package.json",
         "pi_copilot/node_app/package-lock.json",
@@ -77,6 +79,9 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "pi_copilot/node_app/src/skills/web-prototype/SKILL.md",
     ]
     assert "recursive-include src/easyicu/webserver/static *.html *.css *.js" in manifest
+    assert (
+        "recursive-include src/easyicu/webserver/static/assets *.png *.pdf" in manifest
+    )
     assert "recursive-include src/easyicu/webserver/static/vendor *" in manifest
 
     required_assets = [
@@ -86,6 +91,8 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "src/easyicu/webserver/static/js/screens-viz-patient-features.js",
         "src/easyicu/webserver/static/css/app.css",
         "src/easyicu/webserver/static/assets/demo/e1-publication-figure.png",
+        "src/easyicu/webserver/static/assets/demo/system-validation-report.html",
+        "src/easyicu/webserver/static/assets/demo/system-validation-report.pdf",
         "src/easyicu/webserver/static/vendor/echarts/echarts.common.min.js",
         "src/easyicu/webserver/static/vendor/echarts/LICENSE",
         "src/easyicu/webserver/static/vendor/echarts/NOTICE",
