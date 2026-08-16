@@ -40,6 +40,7 @@ from easyicu.research_agent.authority.step_runtime import (
     execution_context_sha256,
     load_checkpoint_selected_step_capsule,
     load_explicit_failed_step_capsule,
+    load_explicit_executed_success_step_capsule,
     load_latest_explicit_failed_step_capsule_from_history,
     load_explicit_success_step_capsule,
     select_explicit_step_capsule_for_targeted_resume,
@@ -1159,6 +1160,54 @@ def _sealed_execution_for_replay(tmp_path: Path):
         budget,
         receipt,
     )
+
+
+def test_explicit_executed_success_capsule_is_observation_authority(
+    tmp_path: Path,
+) -> None:
+    _coordinates_value, verified, _context_digest, _budget, _receipt = (
+        _sealed_execution_for_replay(tmp_path)
+    )
+    record = {
+        "step_id": verified.ref.step_id,
+        "status": "ok",
+        "executed_code_sha256": verified.capsule.candidate_code.sha256,
+        "step_authority_capsule_ref": verified.ref.model_dump(mode="json"),
+    }
+
+    loaded = load_explicit_executed_success_step_capsule(
+        tmp_path,
+        step_id=verified.ref.step_id,
+        record=record,
+    )
+
+    assert loaded is not None
+    assert loaded.ref == verified.ref
+    assert loaded.capsule.execution is not None
+    assert loaded.capsule.execution.returncode == 0
+    assert loaded.capsule.execution.outputs_safe_to_collect is True
+
+
+def test_candidate_capsule_cannot_authorize_product_observation(
+    tmp_path: Path,
+) -> None:
+    coordinates, code, candidate_ref, _budget, _receipt = _initial_candidate(tmp_path)
+    record = {
+        "step_id": coordinates.step_id,
+        "status": "ok",
+        "executed_code_sha256": code.sha256,
+        "step_authority_capsule_ref": candidate_ref.model_dump(mode="json"),
+    }
+
+    with pytest.raises(
+        StepAuthorityRuntimeError,
+        match="does not seal execution",
+    ):
+        load_explicit_executed_success_step_capsule(
+            tmp_path,
+            step_id=coordinates.step_id,
+            record=record,
+        )
 
 
 @pytest.mark.parametrize("state", ["backup_only", "out_and_backup"])
