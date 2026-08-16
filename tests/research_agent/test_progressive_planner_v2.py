@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,10 @@ from easyicu.research_agent.execution.runners.deterministic_robustness import (
 from easyicu.research_agent.planning.progressive_compiler import (
     assert_immutable_prefix,
     compile_progressive_plan,
+)
+from easyicu.research_agent.planning.progressive_artifacts import (
+    ProgressivePlanningArtifactError,
+    persist_progressive_planning_artifacts,
 )
 from easyicu.research_agent.planning.progressive_contract import (
     ProgressiveOutlineStep,
@@ -1177,6 +1182,107 @@ def test_agent_repairs_only_the_current_materialization() -> None:
     assert agent.last_prompt_metrics["compile_revision_count"] == 1
     assert agent.last_prompt_metrics["step_materialization_count"] == 7
     assert agent.last_prompt_metrics["full_revision_count"] == 0
+
+
+class _RecordingEvidence:
+    def __init__(self) -> None:
+        self.records: dict[str, dict[str, object]] = {}
+
+    def get(self, evidence_id_or_alias: str) -> object | None:
+        return self.records.get(evidence_id_or_alias)
+
+    def register_file(self, **kwargs: object) -> object:
+        evidence_id = str(kwargs["evidence_id"])
+        self.records[evidence_id] = dict(kwargs)
+        return self.records[evidence_id]
+
+
+def test_progressive_artifacts_bind_each_schema_authority(
+    tmp_path: Path,
+) -> None:
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            *[json.dumps(item) for item in _materialization_payloads()],
+        ]
+    )
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+    agent.run(_context())
+    assert agent.last_outline is not None
+    assert agent.last_skeleton is not None
+    assert agent.last_compile_receipt is not None
+    evidence = _RecordingEvidence()
+
+    paths = persist_progressive_planning_artifacts(
+        run_dir=tmp_path,
+        evidence=evidence,
+        outline=agent.last_outline,
+        materializations=agent.last_materializations,
+        skeleton=agent.last_skeleton,
+        compile_receipt=agent.last_compile_receipt,
+        prompt_metrics=agent.last_prompt_metrics,
+        prompt_pack_version="test",
+    )
+
+    ledger = json.loads(paths.materializations.read_text(encoding="utf-8"))
+    requests = [call[1]["structured_output"] for call in llm.calls]
+    assert ledger["outline_structured_output_authority_sha256"] == (
+        requests[0].authority_sha256
+    )
+    assert [
+        item["structured_output_authority_sha256"]
+        for item in ledger["materializations"]
+    ] == [request.authority_sha256 for request in requests[1:]]
+    assert [item["step_id"] for item in ledger["materializations"]] == [
+        item.step.step_id for item in agent.last_materializations
+    ]
+    assert set(evidence.records) == {
+        "progressive_plan_outline",
+        "progressive_step_materializations",
+        "progressive_plan_skeleton",
+        "progressive_plan_compile_receipt",
+    }
+    assert evidence.records["progressive_plan_skeleton"]["inputs"] == [
+        "progressive_plan_outline",
+        "progressive_step_materializations",
+        "research_context",
+    ]
+
+
+def test_progressive_artifacts_fail_closed_on_schema_authority_drift(
+    tmp_path: Path,
+) -> None:
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            *[json.dumps(item) for item in _materialization_payloads()],
+        ]
+    )
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+    agent.run(_context())
+    assert agent.last_outline is not None
+    assert agent.last_skeleton is not None
+    assert agent.last_compile_receipt is not None
+    drifted_metrics = dict(agent.last_prompt_metrics)
+    drifted_metrics["step_materialization_schema_sha256"] = ["0" * 64]
+
+    with pytest.raises(ProgressivePlanningArtifactError) as caught:
+        persist_progressive_planning_artifacts(
+            run_dir=tmp_path,
+            evidence=_RecordingEvidence(),
+            outline=agent.last_outline,
+            materializations=agent.last_materializations,
+            skeleton=agent.last_skeleton,
+            compile_receipt=agent.last_compile_receipt,
+            prompt_metrics=drifted_metrics,
+            prompt_pack_version="test",
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_step_schema_authority_count_mismatch"
+    )
 
 
 def test_agent_rejects_materialization_coordinate_drift_without_full_rewrite() -> None:
