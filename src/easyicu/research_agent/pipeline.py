@@ -177,7 +177,10 @@ from .reporting.article_contract import (
     validate_plan_against_article_contract,
 )
 from .planning.figure_strategy import build_article_figure_strategy
-from .planning.progressive_artifacts import persist_progressive_planning_artifacts
+from .planning.progressive_artifacts import (
+    persist_progressive_planning_artifacts,
+    persist_progressive_planning_authority,
+)
 from .planning.scientific_review import (
     render_plan_scientific_guardrails,
 )
@@ -3265,6 +3268,23 @@ class ResearchAgentPipeline:
         _plan_lifecycle.persist_normalized_plan(
             run_dir=run_dir, evidence=evidence, normalized=normalized_plan
         )
+        know_how_binding.persist_prompt_metrics(
+            planner_prompt_metrics,
+            run_dir=run_dir,
+            evidence=evidence,
+        )
+        if plan_generation_mode == "llm_progressive_v2":
+            lifecycle_evidence_id = _plan_lifecycle.plan_lifecycle_evidence_id(plan.revision)
+            persist_progressive_planning_authority(
+                run_dir=run_dir,
+                evidence=evidence,
+                proposed_plan_sha256=normalized_plan.proposed.plan_sha256,
+                normalized_plan_sha256=normalized_plan.plan_sha256,
+                normalized_plan_authority_sha256=normalized_plan.authority_sha256,
+                normalized_plan_evidence_id=lifecycle_evidence_id,
+                normalized_plan_filename=f"{lifecycle_evidence_id}.json",
+                prompt_pack_version=prompt_version,
+            )
         if self._config.require_human_plan_review:
             review_gate = prepare_scientific_plan_review_gate(
                 context=context,
@@ -3278,11 +3298,6 @@ class ResearchAgentPipeline:
                 ),
             )
             findings.append(review_gate.finding)
-        know_how_binding.persist_prompt_metrics(
-            planner_prompt_metrics,
-            run_dir=run_dir,
-            evidence=evidence,
-        )
         write_locked_cohort_definition(
             run_dir=run_dir,
             plan=plan,

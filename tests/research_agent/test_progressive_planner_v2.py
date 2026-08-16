@@ -30,6 +30,7 @@ from easyicu.research_agent.planning.progressive_compiler import (
 from easyicu.research_agent.planning.progressive_artifacts import (
     ProgressivePlanningArtifactError,
     persist_progressive_planning_artifacts,
+    persist_progressive_planning_authority,
 )
 from easyicu.research_agent.planning.progressive_contract import (
     ProgressiveOutlineStep,
@@ -38,6 +39,9 @@ from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanSkeleton,
 )
 from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.authority.plan_lifecycle import (
+    build_normalized_plan_lineage,
+)
 from easyicu.research_agent.providers.strict_json_schema import (
     closed_pydantic_json_schema,
 )
@@ -1213,7 +1217,7 @@ def test_progressive_artifacts_bind_each_schema_authority(
     )
     llm.supports_strict_json_schema = True
     agent = ProgressivePlannerAgent(llm)
-    agent.run(_context())
+    plan = agent.run(_context())
     assert agent.last_outline is not None
     assert agent.last_skeleton is not None
     assert agent.last_compile_receipt is not None
@@ -1253,6 +1257,64 @@ def test_progressive_artifacts_bind_each_schema_authority(
         "progressive_step_materializations",
         "research_context",
     ]
+
+    metrics_path = tmp_path / "planner_prompt_metrics.json"
+    metrics_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.planner_prompt_metrics/1",
+                **agent.last_prompt_metrics,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        evidence_id="planner_prompt_metrics",
+        source_path=metrics_path,
+    )
+    plan_path = tmp_path / "analysis_plan.json"
+    plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(evidence_id="analysis_plan", source_path=plan_path)
+    normalized = build_normalized_plan_lineage(
+        proposed_plan=plan,
+        proposed_source="llm_progressive_v2",
+        pre_normalization_plan=plan,
+        normalized_plan=plan,
+        resume_scientific_semantics_changed=False,
+        host_scientific_semantics_changed=False,
+    )
+    lifecycle_path = tmp_path / "plan_lifecycle_revision_0.json"
+    lifecycle_path.write_text(
+        normalized.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        evidence_id="plan_lifecycle_revision_0",
+        source_path=lifecycle_path,
+    )
+
+    authority = persist_progressive_planning_authority(
+        run_dir=tmp_path,
+        evidence=evidence,
+        proposed_plan_sha256=normalized.proposed.plan_sha256,
+        normalized_plan_sha256=normalized.plan_sha256,
+        normalized_plan_authority_sha256=normalized.authority_sha256,
+        normalized_plan_evidence_id="plan_lifecycle_revision_0",
+        normalized_plan_filename="plan_lifecycle_revision_0.json",
+        prompt_pack_version="test",
+    )
+
+    assert authority.strict_transport_bound is True
+    assert authority.compiled_analysis_plan_sha256 == normalized.proposed.plan_sha256
+    assert authority.normalized_plan_authority_sha256 == normalized.authority_sha256
+    assert [item.step_id for item in authority.ordered_steps] == [
+        item.step_id for item in agent.last_outline.steps
+    ]
+    assert evidence.records["progressive_planning_authority"]["inputs"][-1] == (
+        "plan_lifecycle_revision_0"
+    )
 
 
 def test_progressive_artifacts_fail_closed_on_schema_authority_drift(
