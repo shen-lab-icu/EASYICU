@@ -8,6 +8,7 @@ session owner; Research Agent policy and evidence authority remain unchanged.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import shutil
 import subprocess
@@ -18,6 +19,10 @@ from pathlib import Path
 from typing import Any
 
 from ..authority.secret_redaction import redact_text_secrets
+from .subprocess_env import CODEX_APP_SERVER_EXECUTABLE_ENV
+
+
+_CHATGPT_APP_CODEX = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
 
 
 class CodexAppServerError(RuntimeError):
@@ -26,6 +31,55 @@ class CodexAppServerError(RuntimeError):
     def __init__(self, code: str, message: str = "") -> None:
         self.code = str(code)
         super().__init__(message or self.code)
+
+
+def _resolved_executable(path: Path, *, error_code: str) -> str:
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise CodexAppServerError(error_code) from exc
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        raise CodexAppServerError(error_code)
+    return str(resolved)
+
+
+def resolve_codex_app_server_executable(
+    environment: Mapping[str, str],
+    *,
+    configured: str = "codex",
+) -> str:
+    """Resolve one reviewed App Server binary without mutating global tools."""
+
+    override = str(environment.get(CODEX_APP_SERVER_EXECUTABLE_ENV) or "").strip()
+    if override:
+        candidate = Path(override)
+        if not candidate.is_absolute():
+            raise CodexAppServerError("codex_auth_executable_override_invalid")
+        return _resolved_executable(
+            candidate,
+            error_code="codex_auth_executable_override_invalid",
+        )
+
+    configured_text = str(configured or "codex").strip() or "codex"
+    configured_path = Path(configured_text)
+    if configured_path.is_absolute():
+        return _resolved_executable(
+            configured_path,
+            error_code="codex_auth_executable_missing",
+        )
+    if configured_path.name != configured_text:
+        raise CodexAppServerError("codex_auth_executable_missing")
+
+    if _CHATGPT_APP_CODEX.is_file() and os.access(_CHATGPT_APP_CODEX, os.X_OK):
+        return str(_CHATGPT_APP_CODEX.resolve())
+
+    executable = shutil.which(
+        configured_text,
+        path=environment.get("PATH"),
+    )
+    if executable is None:
+        raise CodexAppServerError("codex_auth_executable_missing")
+    return str(Path(executable).resolve())
 
 
 class CodexAppServerRuntime:
@@ -38,11 +92,13 @@ class CodexAppServerRuntime:
         cwd: Path,
         executable: str = "codex",
         request_timeout: float = 30.0,
+        experimental_api: bool = False,
     ) -> None:
         self._environment = {str(key): str(value) for key, value in environment.items()}
         self._cwd = Path(cwd).resolve()
         self._executable = str(executable or "codex")
         self._request_timeout = max(0.1, float(request_timeout))
+        self._experimental_api = bool(experimental_api)
         self._process: subprocess.Popen[str] | None = None
         self._request_id = 0
         self._pending: dict[int, queue.Queue[dict[str, Any]]] = {}
@@ -76,12 +132,10 @@ class CodexAppServerRuntime:
             self._cwd.mkdir(parents=True, exist_ok=True, mode=0o700)
             home.mkdir(parents=True, exist_ok=True, mode=0o700)
             codex_home.mkdir(parents=True, exist_ok=True, mode=0o700)
-            executable = shutil.which(
-                self._executable,
-                path=self._environment.get("PATH"),
+            executable = resolve_codex_app_server_executable(
+                self._environment,
+                configured=self._executable,
             )
-            if executable is None:
-                raise CodexAppServerError("codex_auth_executable_missing")
             try:
                 process = subprocess.Popen(
                     [executable, "app-server", "--stdio"],
@@ -119,7 +173,7 @@ class CodexAppServerRuntime:
                             "name": "easyicu-research-agent",
                             "version": "1",
                         },
-                        "capabilities": {"experimentalApi": False},
+                        "capabilities": {"experimentalApi": self._experimental_api},
                     },
                     timeout=self._request_timeout,
                 )
@@ -324,4 +378,8 @@ class CodexAppServerRuntime:
         self.close()
 
 
-__all__ = ["CodexAppServerError", "CodexAppServerRuntime"]
+__all__ = [
+    "CodexAppServerError",
+    "CodexAppServerRuntime",
+    "resolve_codex_app_server_executable",
+]

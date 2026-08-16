@@ -37,6 +37,7 @@ from .contracts import (
     AuthorityBinding,
     PiCopilotError,
     PiProjectBindingHandoffReceipt,
+    ResearchProviderBinding,
     PiSessionRecord,
     ToolExecutionContext,
     utc_now,
@@ -466,6 +467,20 @@ class PiCopilotService:
             "secrets_returned": False,
         }
 
+    def verified_api_research_provider_binding(self) -> ResearchProviderBinding:
+        """Compile the verified Pi API config into a secret-free run binding."""
+
+        self.provider_store.research_agent_environment(
+            external_llm_opt_in=True,
+        )
+        status = self.provider_store.public_status()
+        return ResearchProviderBinding(
+            provider="openai",
+            credential_source="pi_verified",
+            authentication_mode="api_key",
+            model=str(status.get("model") or "configured_provider_model"),
+        )
+
     @staticmethod
     def _binding_for_context(
         context: Optional[Mapping[str, Any]], *, run_id: Optional[str] = None
@@ -863,6 +878,7 @@ class PiCopilotService:
         thinking_level: str = "off",
         study_context_id: Optional[str] = None,
         external_llm_opt_in: bool = False,
+        research_provider: Optional[ResearchProviderBinding] = None,
     ) -> Dict[str, Any]:
         clean_project_id = str(project_id or "").strip()
         if not clean_project_id:
@@ -938,6 +954,7 @@ class PiCopilotService:
             thinking_level=resolved_thinking,
             external_llm_opt_in=True,
             extension_activation=extension_activation,
+            research_provider=research_provider or ResearchProviderBinding(),
             binding=binding,
         )
         self._save_record(record)
@@ -2009,6 +2026,7 @@ class PiCopilotService:
                 else {}
             ),
             "binding": record.binding.model_dump(mode="json"),
+            "research_provider": record.research_provider.public_projection(),
             "stale": self._stale_details(record),
             "created_at": record.created_at,
             "updated_at": record.updated_at,

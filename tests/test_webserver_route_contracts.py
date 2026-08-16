@@ -94,6 +94,31 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     ("POST", "/api/copilot/pi/sessions", "post_pi_copilot_session"),
     (
+        "GET",
+        "/api/copilot/pi/research-provider/codex/status",
+        "get_pi_copilot_codex_status",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/research-provider/codex/login",
+        "post_pi_copilot_codex_login",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/research-provider/codex/cancel",
+        "post_pi_copilot_codex_cancel",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/research-provider/codex/logout",
+        "post_pi_copilot_codex_logout",
+    ),
+    (
+        "GET",
+        "/api/copilot/pi/research-provider/codex/models",
+        "get_pi_copilot_codex_models",
+    ),
+    (
         "POST",
         "/api/copilot/pi/projects/initialize",
         "post_pi_copilot_project_initialize",

@@ -2378,6 +2378,7 @@ class CodexAppServerLLMClient:
                 cwd=Path(cwd),
                 executable=self._command,
                 request_timeout=min(self._timeout, 30.0),
+                experimental_api=True,
             )
             with runtime:
                 account = runtime.request(
