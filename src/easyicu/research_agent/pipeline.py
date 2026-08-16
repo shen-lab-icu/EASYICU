@@ -177,6 +177,7 @@ from .reporting.article_contract import (
     validate_plan_against_article_contract,
 )
 from .planning.figure_strategy import build_article_figure_strategy
+from .planning.progressive_artifacts import persist_progressive_planning_artifacts
 from .planning.scientific_review import (
     render_plan_scientific_guardrails,
 )
@@ -2766,50 +2767,30 @@ class ResearchAgentPipeline:
                     planning_contract_context=planning_contract_context,
                 )
                 if progressive:
+                    outline = planner.last_outline
+                    materializations = planner.last_materializations
                     skeleton = planner.last_skeleton
                     compile_receipt = planner.last_compile_receipt
-                    if skeleton is None or compile_receipt is None:
+                    if (
+                        outline is None
+                        or not materializations
+                        or skeleton is None
+                        or compile_receipt is None
+                    ):
                         raise RuntimeError(
-                            "Progressive Planner returned without its skeleton/receipt"
+                            "Progressive Planner returned without its outline, "
+                            "step materializations, skeleton, or compile receipt"
                         )
-                    skeleton_path = run_dir / "progressive_plan_skeleton.json"
-                    skeleton_path.write_text(
-                        skeleton.model_dump_json(indent=2),
-                        encoding="utf-8",
+                    persist_progressive_planning_artifacts(
+                        run_dir=run_dir,
+                        evidence=evidence,
+                        outline=outline,
+                        materializations=materializations,
+                        skeleton=skeleton,
+                        compile_receipt=compile_receipt,
+                        prompt_metrics=planner_prompt_metrics,
+                        prompt_pack_version=prompt_version,
                     )
-                    if evidence.get("progressive_plan_skeleton") is None:
-                        evidence.register_file(
-                            kind="log",
-                            description=(
-                                "Planner-owned compact scientific skeleton before "
-                                "host contract compilation."
-                            ),
-                            source_path=skeleton_path,
-                            evidence_id="progressive_plan_skeleton",
-                            inputs=["research_context"],
-                            producer="progressive_planner",
-                            generation_mode="llm",
-                            prompt_pack_version=prompt_version,
-                        )
-                    receipt_path = run_dir / "progressive_plan_compile_receipt.json"
-                    receipt_path.write_text(
-                        compile_receipt.model_dump_json(indent=2),
-                        encoding="utf-8",
-                    )
-                    if evidence.get("progressive_plan_compile_receipt") is None:
-                        evidence.register_file(
-                            kind="log",
-                            description=(
-                                "Host-derived immutable-prefix and AnalysisPlan "
-                                "compilation receipt for Progressive Planner v2."
-                            ),
-                            source_path=receipt_path,
-                            evidence_id="progressive_plan_compile_receipt",
-                            inputs=["progressive_plan_skeleton", "research_context"],
-                            producer="progressive_plan_compiler",
-                            generation_mode="deterministic_skill",
-                            prompt_pack_version=prompt_version,
-                        )
             except PlannerArticleContractError:
                 raise
             except Exception as exc:
@@ -8746,5 +8727,3 @@ def _pipeline_run___commit_human_review_finalize_start(*, checkpoint_commit: Any
     path = checkpoint_commit.get("path")
     if path is not None:
         mark_human_review_execution_phase(Path(path), "finalize_in_progress")
-
-
