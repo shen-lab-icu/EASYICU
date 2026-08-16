@@ -1,4 +1,4 @@
-# Progressive Planner v2: Dev17 decision gate through Dev20
+# Progressive Planner v2: Dev17 decision gate through Dev23
 
 Date: 2026-08-16
 Task: `FIG2-DEV9-HELDOUT27`
@@ -110,8 +110,43 @@ materialization, not statistics or Docker execution.
   then passed 510 tests with one environment skip. Ruff and
   `git diff --check` are clean.
 
+### Dev21 and Dev22
+
+Both exact `61881c2` launches stopped on the first transport attempt with
+HTTP 401 `Invalid API key`. They produced no structured response and are
+transport/authentication diagnostics only, not evidence about the compiler.
+
+### Dev23
+
+Root:
+`/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_61881c2_e1_dev23`
+
+The exact `61881c2` image completed nine Planner calls, using 129,594 tokens
+and an estimated USD 1.79270. The final three suffix requests were 26,389,
+26,968, and 27,506 bytes, confirming that compact suffix transport materially
+reduced the prior 80--89 KiB request surface. The run still did not enter
+Execute. Its terminal owner finding was
+`progressive_duplicate_literature_source` at step
+`scientific_sensitivity_table`: one sealed citation had been returned in more
+than one design-binding record for the same step.
+
+## Repair after Dev23
+
+- The progressive compiler now deterministically coalesces repeated records
+  for one citation key into the single `LiteratureDesignBinding` required by
+  `AnalysisStep`. It preserves first-seen key and design-element order, keeps
+  every distinct application/divergence statement, and does not invent new
+  scientific content.
+- Coalescing delegates final field limits to the existing
+  `LiteratureDesignBinding` contract. If preserving all statements would
+  exceed that contract, compilation fails with attributable code
+  `progressive_literature_merge_overflow`; no text is truncated.
+- The direct and adjacent progressive Planner, run-bound literature schema,
+  literature authority, and package-direction set passed 48 tests. Ruff and
+  `git diff --check` are clean.
+
 ## Next gate
 
-Build an exact-source image from the repair commit and run a fresh E1 Dev21.
+Build an exact-source image from the repair commit and run a fresh E1 Dev24.
 Do not start E2 until E1 completes the full analysis, audit, figure, and report
 workflow under development authority.

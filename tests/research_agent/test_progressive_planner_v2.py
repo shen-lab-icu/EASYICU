@@ -543,6 +543,72 @@ def test_compiler_reports_attributable_unknown_variable() -> None:
     assert caught.value.path == "model_terms"
 
 
+def test_compiler_coalesces_repeated_source_without_losing_design_intent() -> None:
+    payload = _payload()
+    payload["steps"][4]["literature_bindings"] = [
+        {
+            "citation_key": "topic_protocol",
+            "design_elements": ["adjustment"],
+            "application": "Use the declared adjustment set for the primary model.",
+            "divergence": None,
+        },
+        {
+            "citation_key": "topic_protocol",
+            "design_elements": ["reporting"],
+            "application": "Report the adjusted estimate with its uncertainty.",
+            "divergence": "Do not adopt the source population restriction.",
+        },
+    ]
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=skeleton,
+        context=_context(),
+        allowed_literature_citation_keys=["topic_protocol"],
+    )
+
+    primary = next(step for step in plan.steps if step.step_id == "05_primary")
+    assert primary.literature_citation_keys == ["topic_protocol"]
+    assert len(primary.literature_design_bindings) == 1
+    binding = primary.literature_design_bindings[0]
+    assert binding.design_elements == ["adjustment", "reporting"]
+    assert binding.application == (
+        "Use the declared adjustment set for the primary model.\n"
+        "Report the adjusted estimate with its uncertainty."
+    )
+    assert binding.divergence == "Do not adopt the source population restriction."
+
+
+def test_compiler_refuses_lossy_repeated_source_coalescing() -> None:
+    payload = _payload()
+    payload["steps"][4]["literature_bindings"] = [
+        {
+            "citation_key": "topic_protocol",
+            "design_elements": ["adjustment"],
+            "application": "A" * 700,
+            "divergence": None,
+        },
+        {
+            "citation_key": "topic_protocol",
+            "design_elements": ["reporting"],
+            "application": "B" * 700,
+            "divergence": None,
+        },
+    ]
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=skeleton,
+            context=_context(),
+            allowed_literature_citation_keys=["topic_protocol"],
+        )
+
+    assert caught.value.reason_code == "progressive_literature_merge_overflow"
+    assert caught.value.step_id == "05_primary"
+    assert caught.value.path == "literature_bindings.application"
+
+
 def test_suffix_revision_cannot_change_compiled_prefix() -> None:
     skeleton = _skeleton()
     _plan, receipt = compile_progressive_plan(skeleton=skeleton, context=_context())
