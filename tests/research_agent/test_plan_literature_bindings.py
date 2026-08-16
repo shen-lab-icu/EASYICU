@@ -273,7 +273,9 @@ def test_strict_planner_forwards_the_run_bound_literature_schema() -> None:
     schema = json.loads(structured_output.schema_json)
     branches = schema["$defs"]["LiteratureDesignBinding"]["anyOf"]
     assert {
-        branch["properties"]["citation_key"]["const"] for branch in branches
+        source
+        for branch in branches
+        for source in branch["properties"]["citation_key"]["enum"]
     } == {"strobe_2007", "singer_sepsis3_2016"}
     assert (
         planner.last_prompt_metrics["structured_output_authority_sha256"]

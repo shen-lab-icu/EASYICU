@@ -525,3 +525,55 @@ image, and start E1 from a fresh `dev14` root. Never resume or reuse `dev13`.
 Run the broader adjacent Planner/structured-retry contract set, commit the
 run-bound literature schema, build and validate a new exact-source image, and
 start E1 from a fresh `dev16` root. Never resume or reuse `dev14` or `dev15`.
+
+## Dev16 result
+
+- Source commit: `050cb2f`; exact image:
+  `easyicu-research-agent:050cb2f-dev`, image id
+  `sha256:390e95161c01d87eb41643715c60090f9ac62dd00d50ceca266f7043781e0a1a`.
+- Runtime/source validation passed under `network=none` with all 11 method
+  capabilities and requirements SHA-256
+  `32bf6f3e6bb00333aabf750991f9c28250bd89b3722480fb4129839028748601`.
+- Run root:
+  `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_050cb2f_e1_dev16`.
+- The dynamic 10-source schema was accepted by the real E1 transport. Four
+  completed Planner calls accounted for 105,946 prompt and 30,815 completion
+  tokens (136,761 total; estimated completed-call cost USD 1.98391). Message
+  payloads grew from 113,833 to 119,579 bytes. No generated analysis code
+  executed.
+- The Dev15 unsupported `strobe_2007=population` pair did not recur. The four
+  drafts failed in four distinct ways. Before a fifth provider call, the local
+  prompt-budget owner rejected the complete 120,521-byte request as about
+  40,174 tokens against the fixed 40,000-token design ceiling. No schema,
+  validation finding, failed-response coordinate, or evidence binding was
+  truncated, and the budget was not raised.
+
+## Dev16 lossless literature-schema compression
+
+- Owner remains the run-bound strict transport compiler. Sources whose exact
+  authorized design-element sets are identical now share one schema branch.
+  Different method-card authority sets remain separate; all non-method sources
+  can share the full typed design vocabulary because sealed-excerpt review is
+  still their downstream authority. This changes no allowed or forbidden
+  source/element pair.
+- E1's 10-source schema contracts from 10 repeated branches/31,469 bytes to 6
+  authority-equivalent branches/29,480 bytes. Its new authority SHA-256 is
+  `70734048a1f4cf7d8e8e75ce83308227223bf456cbfc6f5bb1efa4ec229993d5`.
+  Applied to Dev16's refused fifth request, the exact schema-byte reduction
+  would move the request from 120,521 to 118,532 bytes without raising the
+  ceiling or removing retry evidence.
+- A live exact-roster compatibility probe was accepted (5,876 prompt + 124
+  completion = 6,000 tokens). A separate minimal probe established that this
+  provider rejects JSON Schema `allOf`; the implementation therefore uses its
+  accepted `anyOf`/enum subset rather than relying on an incompatible, shorter
+  representation.
+- 125 focused strict transport, literature authority, structured-retry,
+  provider hard-stop, and prompt-budget tests passed, including a `<30,000`
+  byte regression for a representative 10-source roster. Ruff and
+  `git diff --check` passed.
+
+## Next
+
+Commit the authority-equivalent schema compression, build and validate a new
+exact-source image, and start E1 from a fresh `dev17` root. Never resume or
+reuse `dev16`.

@@ -197,20 +197,32 @@ def _literature_design_binding_transport_schema(
             card.design_elements
         )
 
-    branches: list[Dict[str, Any]] = []
+    # Several sources can have the exact same authority (for example the two
+    # time-alignment cards, or all non-method sources whose excerpts are judged
+    # later). Group only identical element sets so the source/element relation
+    # is unchanged while the bounded schema does not repeat the application and
+    # divergence fields once per citation.
+    source_groups: dict[tuple[str, ...], list[str]] = {}
     for source_key in allowed_keys:
-        allowed_elements = sorted(
-            method_elements.get(source_key, set(global_elements))
+        allowed_elements = tuple(
+            sorted(method_elements.get(source_key, set(global_elements)))
         )
+        source_groups.setdefault(allowed_elements, []).append(source_key)
+
+    branches: list[Dict[str, Any]] = []
+    for allowed_elements, source_keys in source_groups.items():
         branch_elements = copy.deepcopy(design_elements)
         branch_elements["items"] = {
             "type": "string",
-            "enum": allowed_elements,
+            "enum": list(allowed_elements),
         }
         branches.append(
             _closed_object_schema(
                 {
-                    "citation_key": {"type": "string", "const": source_key},
+                    "citation_key": {
+                        "type": "string",
+                        "enum": source_keys,
+                    },
                     "design_elements": branch_elements,
                     "application": copy.deepcopy(properties["application"]),
                     "divergence": copy.deepcopy(properties["divergence"]),
