@@ -1036,6 +1036,9 @@ def _preflight_step_findings(
         try:
             output_pairs = _canonical_outputs(step)
             _validate_outputs(output_pairs, step=step, step_index=index)
+        except ProgressivePlanCompileError as exc:
+            findings.append(exc)
+            output_pairs = []
         except ValueError as exc:
             findings.append(
                 _fail(
@@ -1046,9 +1049,6 @@ def _preflight_step_findings(
                     path="outputs",
                 )
             )
-            output_pairs = []
-        except ProgressivePlanCompileError as exc:
-            findings.append(exc)
             output_pairs = []
 
         output_ids = tuple(product for product, _role in output_pairs)
