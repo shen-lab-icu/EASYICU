@@ -406,6 +406,25 @@ def test_the_confidence_level_must_be_declared() -> None:
         ExposureOutcomeDistributionSpec.model_validate(payload)
 
 
+def test_an_incomplete_interval_design_reports_every_coupled_field() -> None:
+    """A Planner retry must be told how to repair the closed /2 tuple."""
+
+    with pytest.raises(ValueError) as raised:
+        ExposureOutcomeDistributionSpec.model_validate(
+            {
+                **_SPEC,
+                "interval_method": "wilson",
+                "repeated_unit_interval_method": None,
+            }
+        )
+
+    message = str(raised.value)
+    assert "interval_method='wilson'" in message
+    assert "repeated_unit_interval_method='patient_cluster_robust_wald'" in message
+    assert "non-null confidence_level" in message
+    assert "repeated_unit_interval_method=None" in message
+
+
 # --------------------------------------------------------------------------
 # The product
 # --------------------------------------------------------------------------

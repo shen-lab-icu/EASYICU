@@ -146,6 +146,10 @@ def test_strict_planner_prompt_does_not_duplicate_the_wire_schema_example():
     assert "Required JSON shape (truncated example)" not in strict
     assert "HOST-ENFORCED STRICT JSON SCHEMA" in strict
     assert "RESEARCH CONTEXT:" in strict
+    assert "schema_version='easyicu.exposure_outcome_distribution/2'" in strict
+    assert "interval_method='wilson'" in strict
+    assert "repeated_unit_interval_method='patient_cluster_robust_wald'" in strict
+    assert "even while dependence is null before host binding" in strict
     assert len(strict.encode("utf-8")) < len(ordinary.encode("utf-8"))
 
 
