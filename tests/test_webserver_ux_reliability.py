@@ -57,9 +57,12 @@ def test_language_switch_flushes_guided_slots_before_global_rerender() -> None:
 
 def test_agent_provider_affordance_names_the_scaffold_and_has_no_fake_exports() -> None:
     agent = _js("screens-agent.js")
+    provider = _js("screens-agent-provider.js")
 
-    assert "Generate provider scaffold" in agent
-    assert "it does not run a complete research analysis" in agent
+    # The provider panel lives in its own owner file; the route module keeps
+    # only the preflight workflow copy.
+    assert "Generate provider scaffold" in provider
+    assert "It does not run a complete research analysis" in provider
     # The dock-opening affordance moved to the shared topbar 'Page guide'
     # button; the agent screen must not ship its own duplicate opener.
     assert "data-cpopen" not in agent
