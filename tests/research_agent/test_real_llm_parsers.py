@@ -176,6 +176,193 @@ def test_planner_parse_drops_extra_step_fields(ra):
     assert not hasattr(plan.steps[0], "note")
 
 
+def test_planner_compiles_mixed_panels_into_an_exact_render_child(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Describe a typed result and render its declared panel.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Create the typed summary and its display.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:summary", "figure:summary"],
+                    "method": "descriptive",
+                    "figure_panels": [
+                        {
+                            "panel_id": "summary",
+                            "figure_output": "figure:summary",
+                            "article_role": "distribution",
+                            "chart_type": "bar",
+                            "source_products": ["table:summary"],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    planner = PlannerAgent.__new__(PlannerAgent)
+    plan = planner._parse(raw, ctx)
+
+    assert [step.step_id for step in plan.steps] == [
+        "01_summary",
+        "01_summary_figure",
+    ]
+    parent, child = plan.steps
+    assert parent.expected_outputs == ["table:summary"]
+    assert parent.figure_panels == []
+    assert child.method == "visualization"
+    assert child.inputs == ["table:summary"]
+    assert child.expected_outputs == ["figure:summary"]
+    assert child.figure_panels[0].source_products == ["table:summary"]
+    assert child.input_consumption_contracts[0].mode == "all_rows"
+    assert planner.last_dropped_plan_keys["normalizations"] == [
+        "01_summary:mixed_figure_panels_compiled_to:01_summary_figure"
+    ]
+
+
+def test_planner_does_not_guess_an_unproduced_panel_source(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Refuse an unbound display source.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Create a result but cite an absent display source.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:summary", "figure:summary"],
+                    "method": "descriptive",
+                    "figure_panels": [
+                        {
+                            "panel_id": "summary",
+                            "figure_output": "figure:summary",
+                            "article_role": "distribution",
+                            "chart_type": "bar",
+                            "source_products": ["table:not_produced"],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    with pytest.raises(ValueError, match="valid only on method='visualization'"):
+        PlannerAgent.__new__(PlannerAgent)._parse(raw, ctx)
+
+
+def test_planner_does_not_compile_a_panel_source_produced_later(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Refuse a display dependency that is not available yet.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Create a summary and prematurely render a later result.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:summary", "figure:summary"],
+                    "method": "descriptive",
+                    "figure_panels": [
+                        {
+                            "panel_id": "summary",
+                            "figure_output": "figure:summary",
+                            "article_role": "distribution",
+                            "chart_type": "bar",
+                            "source_products": ["table:future"],
+                        }
+                    ],
+                },
+                {
+                    "step_id": "02_future",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Create the later typed result.",
+                    "inputs": ["table:summary"],
+                    "expected_outputs": ["table:future"],
+                    "method": "descriptive",
+                },
+            ],
+        }
+    )
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    with pytest.raises(ValueError, match="valid only on method='visualization'"):
+        PlannerAgent.__new__(PlannerAgent)._parse(raw, ctx)
+
+
+@pytest.mark.parametrize("malformed_sources", ["table:summary", [{"bad": "shape"}]])
+def test_planner_malformed_panel_sources_fail_schema_without_transport_crash(
+    ra, malformed_sources
+):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Refuse a malformed panel source contract.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Create a typed result and malformed display.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:summary", "figure:summary"],
+                    "method": "descriptive",
+                    "figure_panels": [
+                        {
+                            "panel_id": "summary",
+                            "figure_output": "figure:summary",
+                            "article_role": "distribution",
+                            "chart_type": "bar",
+                            "source_products": malformed_sources,
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    with pytest.raises(ValueError):
+        PlannerAgent.__new__(PlannerAgent)._parse(raw, ctx)
+
+
 def test_planner_uses_enough_completion_budget(ra):
     """Reasoning models can spend part of max_tokens before final JSON."""
     schema = ra.schema

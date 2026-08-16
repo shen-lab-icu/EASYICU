@@ -2556,6 +2556,25 @@ class ResearchAgentPipeline:
                         detail={"dropped_keys": dropped_keys},
                     )
                 )
+            plan_normalizations = list(
+                dropped_plan_keys.get("normalizations", [])
+            )
+            if plan_normalizations:
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema",
+                        severity="warning",
+                        message=(
+                            "Planner mixed result generation with typed panel "
+                            "rendering; the host compiled each exact panel contract "
+                            "into a rendering-only child step."
+                        ),
+                        detail={
+                            "reason_code": "planner_mixed_figure_panels_compiled",
+                            "normalizations": plan_normalizations,
+                        },
+                    )
+                )
             # A hosted model occasionally emits structurally-broken plan JSON
             # (e.g. a stray time-window at the top level and no usable steps
             # array) that normalises to 0 steps. An empty plan must never run:
