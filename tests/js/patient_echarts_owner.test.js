@@ -3,6 +3,7 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(process.argv[2], 'utf8');
@@ -58,7 +59,17 @@ context.echarts = {
   },
 };
 
-vm.runInNewContext(source, vm.createContext(context), { filename: process.argv[2] });
+/* The dependency-free owners load first, same order as index.html: the module
+   destructures `esc` from window.EU_HTML at the top of its IIFE, and reads
+   window.EU_PALETTE while building chart options. */
+const sandbox = vm.createContext(context);
+['html-escape.js', 'chart-palette.js'].forEach(owner => {
+  const ownerPath = path.join(path.dirname(process.argv[2]), owner);
+  vm.runInNewContext(fs.readFileSync(ownerPath, 'utf8'), sandbox, {
+    filename: ownerPath,
+  });
+});
+vm.runInNewContext(source, sandbox, { filename: process.argv[2] });
 const charts = context.EU_PATIENT_CHARTS;
 assert(charts, 'Patient chart owner must publish window.EU_PATIENT_CHARTS');
 assert.equal(charts.VERSION, '6.1.0');
