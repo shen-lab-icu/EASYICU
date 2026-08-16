@@ -404,7 +404,7 @@ def test_sofa2_aggregate_counts_component_receipts_not_score_non_nullness():
         _component_context("sofa2", keep_components=True),
     ).data
 
-    assert result["sofa2"].tolist() == [0]
+    assert pd.isna(result["sofa2"].tolist()[0])
     assert result["sofa2_n_observed_components"].tolist() == [5]
     assert result["sofa2_n_available_components"].tolist() == [5]
     assert result["sofa2_n_components"].tolist() == [5]
@@ -517,7 +517,9 @@ def test_sofa2_production_aggregate_keeps_observation_count_separate_from_zero_i
         none_observed, _component_context("sofa2")
     ).data
     assert all_missing["sofa2_n_components"].tolist() == [0]
-    assert all_missing["sofa2"].tolist() == [0]
+    # No observed component: the total must stay unknown, not masquerade as a
+    # true SOFA-2 score of zero.
+    assert pd.isna(all_missing["sofa2"].tolist()[0])
 
 
 @pytest.mark.clinical_conformance

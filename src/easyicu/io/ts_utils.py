@@ -447,16 +447,16 @@ def expand(
         # MIIV's charttime aligned is in HOURS (values typically 0-168)
         # We use the step_size unit to determine the data unit
         
-        # 🔧 CRITICAL FIX 2025-02-12: Match step_size to data unit
-        # If step_size is in minutes (e.g., 1 min), and data appears to be in minutes
-        # (values > 24), use minutes. Otherwise use hours.
-        is_minute_data = start_var.lower() == 'infusionoffset'
-        
-        if is_minute_data:
-            # Data is in MINUTES, step_size should be in MINUTES
+        # 🔧 CRITICAL FIX 2025-02-12: Match step_size to data unit. Prefer
+        # the semantic unit inference over a single hardcoded column name;
+        # minute-valued columns such as measuredat_minutes or *offset must
+        # not be expanded on an hour grid.
+        numeric_unit = _infer_numeric_time_unit(data[start_var], start_var)
+        if numeric_unit == 's':
+            step_val = float(step_size.total_seconds())
+        elif numeric_unit == 'min':
             step_val = step_size.total_seconds() / 60.0
         else:
-            # Data is in HOURS, step_size should be in HOURS
             step_val = step_size.total_seconds() / 3600.0
         
         # Determine end column
@@ -1147,7 +1147,19 @@ def fill_gaps(
 
                             # NaN in offsets means ID not in limits → skip those rows
                             _known = ~np.isnan(_offsets_raw) & ~np.isnan(_starts_per_row)
-                            _within_f = np.round((_data_time - _starts_per_row) / step_hours)
+                            _within_f = (_data_time - _starts_per_row) / step_hours
+                            # Off-grid observations must not be silently
+                            # rounded onto the grid: the per-group path
+                            # preserves their original timestamps.
+                            _offgrid = _known & (
+                                np.abs(_within_f - np.round(_within_f)) > 1e-9
+                            )
+                            if _offgrid.any():
+                                raise ValueError(
+                                    "off-grid observations require the "
+                                    "per-group path"
+                                )
+                            _within_f = np.round(_within_f)
                             # Safe conversion: only valid rows get integer positions
                             _within = np.where(_known, _within_f, -1).astype(np.int64)
                             _offsets_i = np.where(_known, _offsets_raw, 0).astype(np.int64)
@@ -1741,7 +1753,11 @@ def _slide_vectorized(
             
             if full_window:
                 group_start = group[index_col].min()
-                mask = (result_group[index_col] - window_size >= group_start)
+                window_in_axis = (
+                    pd.Timedelta(hours=window_size)
+                    / pd.Timedelta(1, unit=time_unit)
+                )
+                mask = (result_group[index_col] - window_in_axis >= group_start)
                 result_group = result_group[mask]
         else:
             # For datetime, use time-based rolling
@@ -1908,20 +1924,28 @@ def _slide_loop(
             data = data.copy()
             data[index_col] = pd.to_datetime(data[index_col])
     
-    # Convert before/after to compatible units
-    if before is None:
-        before_val = 24.0 if is_numeric_time else pd.Timedelta(hours=24)
-    elif is_numeric_time:
-        before_val = before.total_seconds() / 3600.0
-    else:
-        before_val = before
+    # Convert before/after to compatible units. Numeric axes are not always
+    # hours (eICU/AUMC offsets are minutes); convert the window into the
+    # inferred axis unit instead of assuming hours and silently shrinking or
+    # inflating windows 60x.
+    if is_numeric_time:
+        numeric_unit = _infer_numeric_time_unit(data[index_col], index_col)
+        unit_td = pd.Timedelta(1, unit=numeric_unit)
 
-    if after is None:
-        after_val = 0.0 if is_numeric_time else pd.Timedelta(0)
-    elif is_numeric_time:
-        after_val = after.total_seconds() / 3600.0
+        def _to_axis(td: pd.Timedelta) -> float:
+            return float(td / unit_td)
+
+        before_val = _to_axis(
+            before if before is not None else pd.Timedelta(hours=24)
+        )
+        after_val = _to_axis(
+            after if after is not None else pd.Timedelta(0)
+        )
     else:
-        after_val = after
+        before_val = (
+            before if before is not None else pd.Timedelta(hours=24)
+        )
+        after_val = after if after is not None else pd.Timedelta(0)
     
     results = []
     
@@ -2109,11 +2133,20 @@ def slide_index(
         agg_func = {}
     
     data = data.copy()
-    
+
+    # Numeric time axes are ambiguous (hours vs minutes vs seconds);
+    # pd.to_datetime on a numeric index silently interprets values as
+    # nanoseconds since the epoch and corrupts every window bound.
+    if pd.api.types.is_numeric_dtype(data[index_col]):
+        raise ValueError(
+            "slide_index requires a datetime time axis; numeric axes are "
+            "ambiguous — convert them to timedelta/datetime first"
+        )
+
     # Ensure time column is datetime
     if not pd.api.types.is_datetime64_any_dtype(data[index_col]):
         data[index_col] = pd.to_datetime(data[index_col])
-    
+
     # Convert index times to datetime if needed
     index_times = [pd.to_datetime(t) if not isinstance(t, pd.Timestamp) else t 
                    for t in index]
@@ -2209,7 +2242,15 @@ def hop(
     
     data = data.copy()
     windows = windows.copy()
-    
+
+    # Numeric time axes are ambiguous; converting them to datetime would
+    # interpret hours as nanoseconds and corrupt every window.
+    if pd.api.types.is_numeric_dtype(data[index_col]):
+        raise ValueError(
+            "hop requires a datetime time axis; numeric axes are ambiguous "
+            "— convert them to timedelta/datetime first"
+        )
+
     # Ensure datetime types
     if not pd.api.types.is_datetime64_any_dtype(data[index_col]):
         data[index_col] = pd.to_datetime(data[index_col])
@@ -2947,13 +2988,11 @@ def round_to_interval(
         return (int_values // step_ns) * step_ns
 
     def _floor_numeric(values: pd.Series) -> pd.Series:
-        numeric = pd.to_numeric(values, errors="coerce")
-        if step_hours == 0:
-            raise ValueError("interval must not be zero")
-        floored = np.floor(numeric / step_hours) * step_hours
-        res = pd.Series(floored, index=values.index, name=values.name)
-        res[numeric.isna()] = np.nan
-        return res
+        raise ValueError(
+            "round_to_interval does not accept bare numeric times: the unit "
+            "(hours/minutes/seconds) is ambiguous. Convert to timedelta or "
+            "datetime first."
+        )
 
     def _series_from(values: np.ndarray, template: pd.Series, converter) -> pd.Series:
         series = converter(values)

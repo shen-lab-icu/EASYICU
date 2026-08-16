@@ -206,7 +206,10 @@ def test_idea_mining_maps_resolved_nejm_title_to_vasopressor_fluid_concepts(
     assert response.status_code == 200
     idea = response.json()["idea_ledger"][0]
     concept_ids = {row["concept_id"] for row in idea["mapped_concepts"]}
-    assert {"vaso_ind", "death"} <= concept_ids
+    assert "vaso_ind" in concept_ids
+    # death must no longer be fabricated as the default outcome when the
+    # source text does not evidence it.
+    assert "death" not in concept_ids
     assert concept_ids & {"total_input_ml", "fluid_balance", "fluid_balance_cumulative"}
     assert "death and death" not in idea["rationale"].lower()
 

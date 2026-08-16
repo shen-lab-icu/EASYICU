@@ -85,7 +85,7 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
     pat["dod"] = pd.to_datetime(pat["dod"], errors="coerce")
     df = icu.merge(pat, on="subject_id", how="left")
     df["days_to_death"] = (
-        df["dod"] - df["intime"].dt.normalize()
+        df["dod"] - df["intime"]
     ).dt.total_seconds() / 86400.0
     df["los_days"] = pd.to_numeric(df["los"], errors="coerce")
     return df.rename(columns={stay_col: "_stay", "intime": "_intime"})[
@@ -190,7 +190,7 @@ def load_outcomes(
     dtd = base["days_to_death"].values
     has_death = ~pd.isna(dtd)
     followup_days = pd.to_numeric(
-        base.get("followup_days", pd.Series(np.inf, index=base.index)),
+        base.get("followup_days", pd.Series(np.nan, index=base.index)),
         errors="coerce",
     ).to_numpy()
     for name, horizon in _HORIZONS.items():

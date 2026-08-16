@@ -245,6 +245,11 @@ def scan_literature_folder(body: Dict[str, Any]) -> Dict[str, Any]:
                 break
             if any(part.startswith(".") for part in item.parts):
                 continue
+            # Never follow a symlinked PDF out of the selected folder: the
+            # scan hashes and excerpts file bytes, so a link could otherwise
+            # make the server read any local PDF.
+            if item.is_symlink():
+                continue
             if item.is_file():
                 pdfs.append(item)
     except PermissionError as exc:
@@ -746,7 +751,24 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
     """
     run_id = str(body.get("run_id") or "").strip()
     payload = _load_run(run_id) if run_id else None
+    if run_id and payload is None:
+        # A run directory that exists but has no ledger is a legitimate
+        # retained-review target (prior_art_check.json on disk). A run id
+        # with no directory at all must fail closed instead of fabricating a
+        # synthetic idea under a non-existent run.
+        if not _run_dir(run_id).exists():
+            raise IdeaMiningWebError(
+                {"error": "idea_run_not_found", "run_id": run_id}
+            )
     idea = _selected_idea(payload or {}, str(body.get("idea_id") or ""))
+    if run_id and payload is not None and idea is None:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_not_found",
+                "idea_id": str(body.get("idea_id") or ""),
+                "run_id": run_id,
+            }
+        )
     source = ((payload or {}).get("source_evidence") or [{}])[0]
     if not idea:
         source = _source_record(body)
@@ -989,12 +1011,20 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
         _mark_denominator_unresolved(stats)
     sampled = {row.get("concept_id") for row in stats}
     missing_required = [cid for cid in required if cid not in sampled]
+    unavailable = [row for row in stats if row.get("status") == "sample_unavailable"]
     low = [
         row
         for row in stats
         if row.get("metric_kind") != "event_rate" and row.get("low_coverage")
     ]
-    status = "ready" if stats and not missing_required else "blocked"
+    # Schema-only rows are not a row-level sample: their presence must never
+    # produce an aggregate "ready" verdict.
+    if not stats or missing_required:
+        status = "blocked"
+    elif unavailable:
+        status = "needs_review"
+    else:
+        status = "ready"
     if status == "ready" and low:
         status = "needs_review"
     if not denominator_resolved and status == "ready":
@@ -1066,7 +1096,7 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
     ideas = payload.get("idea_ledger") or []
     idea = next(
         (row for row in ideas if row.get("idea_id") == idea_id),
-        ideas[0] if ideas else None,
+        None,
     )
     if not idea:
         raise IdeaMiningWebError({"error": "idea_not_found", "idea_id": idea_id})
@@ -2827,11 +2857,9 @@ def _selected_idea(
 ) -> Optional[Dict[str, Any]]:
     ideas = payload.get("idea_ledger") or []
     if idea_id:
-        match = next(
+        return next(
             (row for row in ideas if str(row.get("idea_id") or "") == idea_id), None
         )
-        if match:
-            return match
     return ideas[0] if ideas else None
 
 
@@ -2885,17 +2913,29 @@ def _handoff_plan_is_stale(
     stale plan is seeded into Agent Projects. Detect that here so the handoff
     is re-frozen from the newer plan.
     """
-    frozen_notes = str(
-        (handoff.get("handoff_plan") or {}).get("human_plan_notes") or ""
-    ).strip()
-    body_edits = str(body.get("plan_edits") or "").strip()
-    if body_edits and body_edits != frozen_notes:
-        return True
+    frozen = handoff.get("handoff_plan") or {}
     plan = _load_plan(run_id) or {}
-    plan_notes = str(plan.get("human_plan_notes") or "").strip()
-    if plan_notes and plan_notes != frozen_notes:
+
+    def _comparable(value: Dict[str, Any]) -> str:
+        return json.dumps(
+            {
+                key: value.get(key)
+                for key in (
+                    "human_plan_notes",
+                    "selection_mode",
+                    "plan_status",
+                    "analysis_plan",
+                    "execution_gate",
+                )
+            },
+            sort_keys=True,
+            default=str,
+        )
+
+    body_edits = str(body.get("plan_edits") or "").strip()
+    if body_edits and body_edits != str(frozen.get("human_plan_notes") or "").strip():
         return True
-    return False
+    return _comparable(plan) != _comparable(frozen)
 
 
 def _handoff_needs_refresh(handoff: Dict[str, Any], run_id: str) -> bool:
@@ -3918,7 +3958,7 @@ def _fetch_url_metadata(url: str) -> Dict[str, Any]:
     return {
         "status": (
             "metadata_fetched"
-            if title or description or doi
+            if title or description
             else ("fetch_failed" if fetch_error else "metadata_fetch_empty")
         ),
         "metadata_source": "html" if title or description else None,
@@ -4151,7 +4191,9 @@ def _pick_outcome(text: str, hits: List[Dict[str, Any]]) -> Optional[Dict[str, A
     for row in hits:
         if row.get("concept_id") in {"death", "los_icu", "aki"}:
             return row
-    return _concept_hit("death")
+    # No outcome evidence in the source text: leave the outcome unassigned
+    # instead of fabricating "death" for every idea.
+    return None
 
 
 def _pick_predictor(
@@ -4411,7 +4453,8 @@ def _pre_experiment_interpretation(
         row
         for row in stats
         if row.get("metric_kind") != "event_rate"
-        and float(row.get("coverage_pct") or 0) < 50
+        and row.get("coverage_pct") is not None
+        and float(row["coverage_pct"]) < 50
         and row.get("status") != "metadata_only"
     ]
     event_rows = [row for row in stats if row.get("metric_kind") == "event_rate"]

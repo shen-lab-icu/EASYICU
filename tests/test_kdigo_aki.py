@@ -400,6 +400,36 @@ def test_nonnumeric_creatinine_is_not_downgraded_to_patient_data_absent():
     assert error.value.reason_code == "kdigo_creatinine_numeric_encoding_invalid"
 
 
+def test_sparse_hourly_creatinine_is_not_misread_as_minutes():
+    # Hour-valued charttime sampled once daily: median spacing 24 h. The old
+    # spacing-only heuristic classified this as minutes and inflated the 48 h
+    # window to 2,880 h, so the whole-stay minimum became the "48 h baseline".
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1] * 6,
+            "charttime": [0, 24, 48, 72, 96, 120],
+            "crea": [1.0, 0.4, 0.5, 0.6, 0.7, 1.5],
+        }
+    )
+
+    result = kdigo_aki.kdigo_creatinine(
+        creatinine,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="hours",
+    )
+
+    row = result.loc[result["charttime"] == 120]
+    # True 48 h baseline is 0.6 at t=96; the true 7-day baseline is 0.4 at
+    # t=24, so stage 3 is the correct KDIGO call. If the axis is misread as
+    # minutes both windows inflate 60x and the 48 h baseline would be the
+    # whole-stay minimum 0.4 as well -- losing the distinction the window
+    # contract exists to enforce.
+    assert row["creat_low_past_48hr"].item() == 0.6
+    assert row["creat_low_past_7day"].item() == 0.4
+    assert row["aki_stage_creat"].item() == 3
+
+
 def test_out_of_range_creatinine_is_dropped_without_losing_valid_kdigo_series():
     creatinine = pd.DataFrame(
         {

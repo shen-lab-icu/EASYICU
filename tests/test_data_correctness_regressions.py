@@ -1110,6 +1110,57 @@ def test_converter_distinguishes_mimic_generations_and_rejects_ambiguity(tmp_pat
         DataConverter(ambiguous, verbose=False)
 
 
+def test_mimic_mortality_horizon_is_measured_from_icu_intime(monkeypatch):
+    import easyicu.scores.outcomes as outcomes
+
+    icu = pd.DataFrame(
+        {
+            "subject_id": [1],
+            "hadm_id": [10],
+            "stay_id": [1],
+            "intime": ["2020-01-01 23:30:00"],
+            "los": [2.0],
+        }
+    )
+    patients = pd.DataFrame({"subject_id": [1], "dod": ["2020-01-29 17:30:00"]})
+    monkeypatch.setattr(
+        outcomes,
+        "_raw_table",
+        lambda database, data_path, table: icu if table == "icustays" else patients,
+    )
+
+    result = outcomes.load_outcomes("miiv").set_index("stay_id")
+
+    # 27.75 days after ICU admission -> within 28 days; the old midnight-based
+    # calculation added up to +24h and misclassified this as alive.
+    assert bool(result.loc[1, "mort_28d"]) is True
+
+
+def test_mimic_absent_death_date_is_censored_not_known_alive(monkeypatch):
+    import easyicu.scores.outcomes as outcomes
+
+    icu = pd.DataFrame(
+        {
+            "subject_id": [1],
+            "hadm_id": [10],
+            "stay_id": [1],
+            "intime": ["2020-01-01 12:00:00"],
+            "los": [2.0],
+        }
+    )
+    patients = pd.DataFrame({"subject_id": [1], "dod": [None]})
+    monkeypatch.setattr(
+        outcomes,
+        "_raw_table",
+        lambda database, data_path, table: icu if table == "icustays" else patients,
+    )
+
+    result = outcomes.load_outcomes("miiv").set_index("stay_id")
+
+    assert pd.isna(result.loc[1, "mort_28d"])
+    assert pd.isna(result.loc[1, "mort_365d"])
+
+
 def test_unverified_stay_history_does_not_publish_free_days_or_readmission(
     monkeypatch,
 ):

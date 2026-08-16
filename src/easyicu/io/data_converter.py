@@ -458,6 +458,24 @@ class DataConverter:
             )
         return detected
     
+    def _archive_extraction_complete(self, archive_path: Path) -> bool:
+        """Return True when every regular file in the archive is on disk."""
+        try:
+            with tarfile.open(archive_path, 'r:gz') as tar:
+                members = [m for m in tar.getmembers() if m.isfile()]
+        except Exception:
+            return False
+        if not members:
+            return True
+        for member in members:
+            target = self.data_path / member.name
+            try:
+                if not target.is_file() or target.stat().st_size == 0:
+                    return False
+            except OSError:
+                return False
+        return True
+
     def _extract_hirid_archives(self) -> List[str]:
         """
         Extract HiRID tar.gz archives if they exist.
@@ -516,14 +534,14 @@ class DataConverter:
                         logger.info(f"Skipping {archive_path.name} - parquet version already extracted")
                         continue
             
-            # Check if extraction is needed
+            # Check if extraction is needed. A non-empty marker directory is
+            # not proof of completeness: an interrupted tar extraction leaves
+            # some part-* files behind and would otherwise be skipped forever.
             needs_extract = True
             if marker_path.exists():
-                if marker_path.is_dir():
-                    if any(marker_path.iterdir()):
-                        needs_extract = False
-                else:
-                    needs_extract = False
+                needs_extract = not self._archive_extraction_complete(
+                    archive_path
+                )
             
             if needs_extract:
                 logger.info(f"Extracting {archive_path.name}...")
@@ -797,14 +815,30 @@ class DataConverter:
                 parent_name = f.parent.name.lower()
                 grandparent = f.parent.parent
                 
-                # Map CSV shard directory to ricu parquet shard directory
+                # Map CSV shard directory to ricu parquet shard directory.
+                # Skipping is only safe when the parquet shard count matches
+                # the source CSV shard count; a partial prior conversion must
+                # keep the remaining source shards eligible for conversion.
                 for csv_dir, parquet_dir in shard_patterns.items():
                     if csv_dir in str(f.parent).lower():
-                        # Check if ricu parquet shards exist
                         shard_dir = self.data_path / parquet_dir
-                        if self._valid_numbered_parquet_shard_count(shard_dir) > 0:
-                            skip = True
-                            break
+                        existing = self._valid_numbered_parquet_shard_count(
+                            shard_dir
+                        )
+                        if existing > 0:
+                            try:
+                                source_shards = sum(
+                                    1
+                                    for child in f.parent.iterdir()
+                                    if child.is_file()
+                                    and child.name.lower().startswith('num_')
+                                    and child.suffix.lower() == '.csv'
+                                )
+                            except OSError:
+                                source_shards = 0
+                            if source_shards and existing >= source_shards:
+                                skip = True
+                        break
                 
                 # Also check if parent directory name matches a known shard dir with parquet
                 if not skip and parent_name in ['csv', 'data', 'numericitems_split', 'listitems_split']:
@@ -819,11 +853,20 @@ class DataConverter:
                     }
                     target_dir = mappings.get(table_dir_name, table_dir_name)
                     shard_dir = self.data_path / target_dir
-                    if (
-                        shard_dir != grandparent
-                        and self._valid_numbered_parquet_shard_count(shard_dir) > 0
-                    ):
-                        skip = True
+                    existing = self._valid_numbered_parquet_shard_count(shard_dir)
+                    if existing > 0 and shard_dir != grandparent:
+                        try:
+                            source_shards = sum(
+                                1
+                                for child in f.parent.iterdir()
+                                if child.is_file()
+                                and child.name.lower().startswith('num_')
+                                and child.suffix.lower() == '.csv'
+                            )
+                        except OSError:
+                            source_shards = 0
+                        if source_shards and existing >= source_shards:
+                            skip = True
             
             if not skip:
                 filtered_files.append(f)
@@ -1523,8 +1566,7 @@ class DataConverter:
         # chunk and then dies on later timestamps. Pin everything textual /
         # potentially-sparse.
         'noteevents': ['category', 'description', 'text', 'iserror',
-                       'charttime', 'storetime', 'chartdate',
-                       'hadm_id', 'cgid', 'subject_id', 'row_id'],
+                       'charttime', 'storetime', 'chartdate'],
         # eICU
         'infusiondrug': ['drugrate', 'infusionrate', 'drugamount', 'volumeoffluid'],
         'medication': ['dosage', 'loadingdose', 'frequency'],
@@ -1886,9 +1928,9 @@ class DataConverter:
         partition 2 for breaks[0] < value <= breaks[1], etc.
         """
         import bisect
-        # bisect_right returns the insertion point, which is 0-indexed
-        # We add 1 to get 1-indexed partition numbers
-        return bisect.bisect_right(breaks, value) + 1
+        # bisect_left keeps values equal to a breakpoint in the earlier
+        # partition: partition 1 for values <= breaks[0].
+        return bisect.bisect_left(breaks, value) + 1
     
     def _convert_file_sharded(self, csv_path: Path, result: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -2102,7 +2144,7 @@ class DataConverter:
                 col_values = chunk[partition_col].values
                 _np_breaks = np.asarray(breaks)
                 chunk["_partition"] = (
-                    np.searchsorted(_np_breaks, col_values, side="right") + 1
+                    np.searchsorted(_np_breaks, col_values, side="left") + 1
                 )
 
                 # 🚀 perf Z (eicu wide-table cohort speedup): sort each chunk
@@ -2142,6 +2184,19 @@ class DataConverter:
                 # below is sufficient); calling gc every chunk inserts a
                 # 20–100 ms STW pause that compounded on macfuse runs.
                 del chunk
+
+            # Ensure every numbered shard exists, even when a partition
+            # received no rows. The readiness scanner requires contiguous
+            # 1..n parquet files; an interior empty partition otherwise makes
+            # the table look permanently "not converted".
+            if reference_schema is not None:
+                for part_num in range(1, n_partitions + 1):
+                    if part_num not in partition_writers:
+                        partition_writers[part_num] = pq.ParquetWriter(
+                            get_partition_path(part_num),
+                            reference_schema,
+                            compression=self.parquet_compression,
+                        )
 
             # Close all writers
             close_all_writers()
@@ -2203,6 +2258,26 @@ class DataConverter:
                     # Reference was null but we now have real type - use string
                     try:
                         new_columns.append(col.cast(pa.string(), safe=False))
+                    except Exception:
+                        new_columns.append(col)
+                elif pa.types.is_integer(ref_type) and (
+                    pa.types.is_floating(col.type)
+                    or pa.types.is_decimal(col.type)
+                ):
+                    # Never truncate a float chunk into an integer reference
+                    # schema: the first chunks can look integral (1.0 stored
+                    # as int64) and a later chunk then carries 1.5. Widen to
+                    # float64 instead of silently dropping decimals.
+                    try:
+                        new_columns.append(col.cast(pa.float64(), safe=False))
+                    except Exception:
+                        new_columns.append(col)
+                elif pa.types.is_floating(ref_type) and (
+                    pa.types.is_integer(col.type)
+                    or pa.types.is_decimal(col.type)
+                ):
+                    try:
+                        new_columns.append(col.cast(pa.float64(), safe=False))
                     except Exception:
                         new_columns.append(col)
                 else:
@@ -2741,8 +2816,8 @@ class DataConverter:
             col = tbl.column(partition_col)
             part_idx = None
             for b in breaks:
-                ge = pc.cast(pc.greater_equal(col, b), pa.int32())
-                part_idx = ge if part_idx is None else pc.add(part_idx, ge)
+                gt = pc.cast(pc.greater(col, b), pa.int32())
+                part_idx = gt if part_idx is None else pc.add(part_idx, gt)
             part_idx = pc.add(part_idx, pa.scalar(1, pa.int32()))
             # Null ids (should not occur for an ID column) -> last partition,
             # so rows are never silently dropped.
@@ -2783,6 +2858,13 @@ class DataConverter:
                         logger.info(f"  Read {total_rows:,} rows...")
             if pending:
                 flush(pa.Table.from_batches(pending, schema))
+            for p in range(1, n_partitions + 1):
+                if p not in writers:
+                    writers[p] = pq.ParquetWriter(
+                        shard_dir / f"{p}.parquet",
+                        schema,
+                        compression=self.parquet_compression,
+                    )
         finally:
             for p, w in writers.items():
                 try:
