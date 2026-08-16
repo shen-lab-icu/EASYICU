@@ -256,6 +256,31 @@ def test_planner_receives_exact_preplan_literature_authority() -> None:
     assert len(llm.calls) == 2
 
 
+def test_strict_planner_forwards_the_run_bound_literature_schema() -> None:
+    llm = ScriptedMockLLMClient([_raw(["strobe_2007"])])
+    llm.supports_strict_json_schema = True
+    planner = PlannerAgent(llm)
+
+    planner.run(
+        _context(),
+        allowed_literature_citation_keys=[
+            "strobe_2007",
+            "singer_sepsis3_2016",
+        ],
+    )
+
+    structured_output = llm.calls[0][1]["structured_output"]
+    schema = json.loads(structured_output.schema_json)
+    branches = schema["$defs"]["LiteratureDesignBinding"]["anyOf"]
+    assert {
+        branch["properties"]["citation_key"]["const"] for branch in branches
+    } == {"strobe_2007", "singer_sepsis3_2016"}
+    assert (
+        planner.last_prompt_metrics["structured_output_authority_sha256"]
+        == structured_output.authority_sha256
+    )
+
+
 def test_initial_literature_authority_publishes_the_exact_nested_binding_shape() -> None:
     authority = bind_literature_citation_authority(
         "",

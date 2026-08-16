@@ -30,7 +30,7 @@ from ..cohort.schema import (
 from ..icu_rules import (
     GENERAL_ICU_ANALYSIS_PRINCIPLES,
 )
-from ..providers.protocol import LLMClient, LLMMessage
+from ..providers.protocol import LLMClient, LLMMessage, StructuredOutputRequest
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.llm import llm_is_mockish
 from ..providers.prompt_budget import (
@@ -1073,6 +1073,7 @@ def _planner_prompt_within_budget(
     know_how_context: str = "",
     planning_contract_context: str = "",
     strict_transport_schema: bool = False,
+    structured_output: StructuredOutputRequest | None = None,
 ) -> Tuple[str, str]:
     """Return ``(user_prompt, catalog_detail)``, shortening the menu before failing.
 
@@ -1111,9 +1112,11 @@ def _planner_prompt_within_budget(
             prompt.encode("utf-8")
         )
         if strict_transport_schema:
-            structured_output = _payload.planner_structured_output_request()
-            total += structured_output.payload_bytes + len(
-                _structured_output_authority_note(structured_output).encode("utf-8")
+            request = (
+                structured_output or _payload.planner_structured_output_request()
+            )
+            total += request.payload_bytes + len(
+                _structured_output_authority_note(request).encode("utf-8")
             )
         if total <= _PLANNER_PROMPT_BYTE_LIMIT:
             return prompt, detail
@@ -1451,6 +1454,7 @@ class PlannerAgent:
         know_how_context: str = "",
         planning_contract_context: str = "",
         strict_transport_schema: bool = False,
+        structured_output: StructuredOutputRequest | None = None,
     ) -> list[LLMMessage]:
         """Build the exact initial Planner request used by ``run``."""
         user_prompt, _ = _planner_prompt_within_budget(
@@ -1458,6 +1462,7 @@ class PlannerAgent:
             know_how_context=know_how_context,
             planning_contract_context=planning_contract_context,
             strict_transport_schema=strict_transport_schema,
+            structured_output=structured_output,
         )
         return [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE),
@@ -1472,12 +1477,14 @@ class PlannerAgent:
         know_how_context: str = "",
         planning_contract_context: str = "",
         strict_transport_schema: bool = False,
+        structured_output: StructuredOutputRequest | None = None,
     ) -> Dict[str, Any]:
         _, catalog_detail = _planner_prompt_within_budget(
             context,
             know_how_context=know_how_context,
             planning_contract_context=planning_contract_context,
             strict_transport_schema=strict_transport_schema,
+            structured_output=structured_output,
         )
         try:
             metrics = bounded_request_metrics(
@@ -1505,7 +1512,9 @@ class PlannerAgent:
         # which rung produced the plan it carries.
         metrics["analysis_type_catalog_detail"] = catalog_detail
         if strict_transport_schema:
-            structured_output = _payload.planner_structured_output_request()
+            structured_output = (
+                structured_output or _payload.planner_structured_output_request()
+            )
             authority_note_bytes = len(
                 _structured_output_authority_note(structured_output).encode("utf-8")
             )
@@ -1569,13 +1578,16 @@ class PlannerAgent:
         )
         structured_output = None
         if llm_supports_strict_json_schema(self.llm):
-            structured_output = _payload.planner_structured_output_request()
+            structured_output = _payload.planner_structured_output_request(
+                allowed_citation_keys
+            )
         strict_transport_schema = structured_output is not None
         messages = self.request_messages(
             context,
             know_how_context=know_how_context,
             planning_contract_context=resolved_planning_contract_context,
             strict_transport_schema=strict_transport_schema,
+            structured_output=structured_output,
         )
         if structured_output is not None:
             authority_note = _structured_output_authority_note(structured_output)
@@ -1588,6 +1600,7 @@ class PlannerAgent:
             know_how_context=know_how_context,
             planning_contract_context=resolved_planning_contract_context,
             strict_transport_schema=strict_transport_schema,
+            structured_output=structured_output,
         )
         message_payload_bytes = sum(
             len(message.content.encode("utf-8")) for message in messages

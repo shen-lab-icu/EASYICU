@@ -456,3 +456,72 @@ and start E1 from a fresh `dev13` root. Never resume or reuse `dev12`.
 
 Commit the single-owner product grammar, build and validate a new exact-source
 image, and start E1 from a fresh `dev14` root. Never resume or reuse `dev13`.
+
+## Dev14 result
+
+- Source commit: `2e25bdc`; exact image:
+  `easyicu-research-agent:2e25bdc-dev`, image id
+  `sha256:4b61aa805fe3b76609ef9b791eaaec92498740117b5f7c435030c0c7acdcb63c`.
+- Runtime/source validation passed under `network=none` with all 11 method
+  capabilities and requirements SHA-256
+  `f6192cec4f3fb8503da75ecad9bbb0e99e8c94baed4fb9210a19ced3a52efad0`.
+- Run root:
+  `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_2e25bdc_e1_dev14`.
+- Two completed Planner calls accounted for 50,484 prompt and 14,206
+  completion tokens (64,690 total; estimated completed-call cost USD 0.93102).
+  Their message payloads were 109,301 and 114,083 bytes. The third request was
+  recorded as `failed_usage_unknown` after the loopback provider returned HTTP
+  500 (`stream ID 1; INTERNAL_ERROR`); no generated analysis code executed.
+- This is a transport-failure artifact, not evidence that the Planner contract
+  passed or failed. It was not resumed. A fresh same-source run was required to
+  distinguish a transient proxy failure from a repeatable software defect.
+
+## Dev15 result
+
+- Source commit/image/runtime identity remained exactly the Dev14 identity.
+  Fresh run root:
+  `/Volumes/外置硬盘/easyicu_data/figure2_dev9_runs/batch_20260816_2e25bdc_e1_dev15`.
+- All five Planner calls completed, so the Dev14 HTTP 500 did not recur. They
+  accounted for 128,217 prompt and 33,090 completion tokens (161,307 total;
+  estimated cost USD 2.27487); message payloads were 109,301--114,478 bytes.
+  No generated analysis code executed.
+- The five drafts failed in five distinct ways. The final draft converged to
+  one literature-authority defect: `strobe_2007` was bound to `population`,
+  although its curated method cards authorize only dependence, estimand,
+  outcome, and reporting. The sealed E1 bundle contained non-method topic/data
+  sources that could support a population application after excerpt review, so
+  this was not a missing-source or case-specific method-card problem.
+
+## Dev15 run-bound literature wire repair
+
+- Owner: `agents/plan_payload.py`, which already compiles the strict Planner
+  transport schema. The generic Pydantic projection made `citation_key` and
+  `design_elements` independent, allowing combinations that the unchanged
+  host literature validator was guaranteed to reject.
+- The strict schema is now compiled against the exact normalized citation
+  roster from the sealed pre-plan bundle. Citation arrays accept only those
+  keys. Each curated method-source branch accepts only the union of design
+  elements authorized by that source's host-owned method cards; topic and
+  screened comparator sources retain the full typed design-element vocabulary
+  because their relevance is still judged from sealed excerpts after
+  transport. An explicitly empty run roster requires empty citation and
+  binding arrays.
+- The Planner prompt ladder and recorded request metrics now account for and
+  fingerprint the same run-bound `StructuredOutputRequest` that is sent to the
+  provider; the generic schema remains available only for offline inspection
+  and fixed budget baselines.
+- For E1's exact 10 citation keys, the schema is 31,469 bytes with authority
+  SHA-256
+  `2997b6da1b4b06b13747a95f11b9aa9ce16d9b9d220ebd80765562d78078c934`.
+  A live server-owned loopback compatibility probe was accepted (6,225 prompt
+  + 117 completion = 6,342 tokens). This proves schema transport compatibility
+  only, not scientific-plan success.
+- 159 focused strict transport, literature authority, structured-retry,
+  provider hard-stop, prompt-budget ladder, scoped-context, article-contract,
+  and recorded Planner-budget tests passed. Ruff and `git diff --check` passed.
+
+## Next
+
+Run the broader adjacent Planner/structured-retry contract set, commit the
+run-bound literature schema, build and validate a new exact-source image, and
+start E1 from a fresh `dev16` root. Never resume or reuse `dev14` or `dev15`.
