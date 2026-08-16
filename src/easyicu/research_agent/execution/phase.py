@@ -4553,7 +4553,12 @@ def _step_resolve_run_transition(
     if (
         pipeline._enable_replanning
         and record.get("status") == "ok"
-        and _successful_step_requests_replan(record)
+        and _successful_step_requests_replan(
+            record,
+            progressive_observation_loop=(
+                getattr(pipeline, "_planner_strategy", None) == "progressive_v2"
+            ),
+        )
         and has_remaining
     ):
         revised_plan = _maybe_replan(

@@ -311,7 +311,7 @@ def test_run_coordinator_is_science_neutral_and_pipeline_owns_transitions() -> N
     )
     directed = phase_source.index("directed_plan = _maybe_directed_model_replan(")
     ordinary = phase_source.index(
-        "and _successful_step_requests_replan(record)", directed
+        "and _successful_step_requests_replan(", directed
     )
     assert corruption < requested_stop < directed < ordinary
     assert (
