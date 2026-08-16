@@ -1,5 +1,6 @@
 /* Screens: Data Visualization — Patient Review, Cohort Statistics, Cross-database comparison */
 (function () {
+  const { esc } = window.EU_HTML;
   const S = (window.SCREENS = window.SCREENS || {});
   // demo/fixture data layer lives in screens-viz-demo.js (loaded first);
   // rebind its exports so existing call sites stay unchanged.
@@ -125,9 +126,6 @@
   let cohortSofaMatrixGranularity = 'medium'; // coarse | medium | fine | exact
   let vizErr = null;
 
-  function esc(v) {
-    return String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-  }
   function displayDataMode() {
     return window.getDataMode
       ? window.getDataMode()
@@ -359,7 +357,7 @@
       <div class="patient-flow-card mt-16" data-patient-eligibility-flow>
         <div class="patient-flow-head">
           <div>
-            <div class="patient-flow-title">${esc(title)}</div>
+            <h2 class="patient-flow-title">${esc(title)}</h2>
             <div class="patient-flow-sub">${esc(subtitle)}</div>
           </div>
           <span class="pill ${flow.has_stepwise_report ? 'ok' : 'warn'}" style="height:22px;">${flow.has_stepwise_report ? t('stepwise', '逐步') : t('summary only', '仅摘要')}</span>
@@ -1851,14 +1849,28 @@
       const hasPrevious = Boolean(previewPage.has_previous || activePreview && activePreview.has_previous);
       const hasNext = Boolean(previewPage.has_next || activePreview && activePreview.has_next);
       const pageSize = Number(previewPage.page_size || activePreview && activePreview.page_size || tableState.pageSize || 24);
-      const basisScope = drill.demo ? 'clinically constrained synthetic aggregate' : 'demographics aggregate';
+      /* Labels and provenance captions both go through t(): this table is the
+         only place in Patient Review that still rendered bare English in the
+         Chinese locale. The caption states what each number is computed from,
+         so it has to read in the user's language, not just the label. */
+      const basisScope = drill.demo
+        ? t('clinically constrained synthetic aggregate', '临床约束合成聚合值')
+        : t('demographics aggregate', '人口学聚合值');
       const rows = [
-        ['Entities', fmtInt(s.entities), drill.demo ? 'synthetic fallback denominator' : 'cohort denominator from active export'],
-        ['Mean age', fmtNum(s.mean_age, 1), basisScope],
-        ['Female', fmtPct(s.female_pct), basisScope],
-        ['Mortality', fmtPct(s.mortality), drill.demo ? 'synthetic fallback outcome' : 'outcome aggregate'],
-        ['Median SOFA-2', fmtNum(s.median_sofa2, 1), drill.demo ? 'synthetic fallback score' : 'score aggregate'],
-        ['Sepsis-3 positive', fmtPct(s.sepsis_pct), drill.demo ? 'synthetic fallback event' : 'event aggregate'],
+        [t('Entities', '实体'), fmtInt(s.entities), drill.demo
+          ? t('synthetic fallback denominator', '合成兜底分母')
+          : t('cohort denominator from active export', '来自当前导出的队列分母')],
+        [t('Mean age', '平均年龄'), fmtNum(s.mean_age, 1), basisScope],
+        [t('Female', '女性'), fmtPct(s.female_pct), basisScope],
+        [t('Mortality', '病死率'), fmtPct(s.mortality), drill.demo
+          ? t('synthetic fallback outcome', '合成兜底结局')
+          : t('outcome aggregate', '结局聚合值')],
+        [t('Median SOFA-2', 'SOFA-2 中位数'), fmtNum(s.median_sofa2, 1), drill.demo
+          ? t('synthetic fallback score', '合成兜底评分')
+          : t('score aggregate', '评分聚合值')],
+        [t('Sepsis-3 positive', 'Sepsis-3 阳性'), fmtPct(s.sepsis_pct), drill.demo
+          ? t('synthetic fallback event', '合成兜底事件')
+          : t('event aggregate', '事件聚合值')],
       ];
       const reviewModules = (dt.modules && dt.modules.length ? dt.modules : modules).slice(0, drill.demo ? 32 : 64);
       const activeModule = reviewModules.find(m => m.module === tableState.module) || reviewModules[0] || {};
@@ -1964,7 +1976,7 @@
       ${patientMatrixAudit(drill)}
       <div class="note info mt-16">
         <div class="ico">${icon('shield', 16)}</div>
-        <div class="body"><span class="t">${esc(detailGate.title || 'Source records are optional')}</span> <span class="d" style="display:inline;">— ${esc(detailGate.reason || 'Native Patient Review exposes cohort aggregates and one pseudonymous entity drilldown. Direct identifier tables stay out of the browser payload.')}</span></div>
+        <div class="body"><span class="t">${esc(patientI18nLabel(detailGate.title_i18n, detailGate.title || t('Source records are optional', '源始记录是可选的')))}</span> <span class="d" style="display:inline;">— ${esc(patientI18nLabel(detailGate.reason_i18n, detailGate.reason || t('Native Patient Review exposes cohort aggregates and one pseudonymous entity drilldown. Direct identifier tables stay out of the browser payload.', '原生患者审阅只暴露队列聚合值和单个假名化实体的下钻。直接标识表不会进入浏览器载荷。')))}</span></div>
       </div>`;
     }
     const ws = window.EU_VIZ_WORKSPACE;
@@ -2417,8 +2429,16 @@
         ? window.getDataMode()
         : (window.EU_DATA === 'real' ? 'real' : 'demo');
       const realMode = dataMode === 'real';
+      /* Every render branch below opens with this. Patient Review is a dense
+         workspace whose visible title lives in the card eyebrow and the loaded
+         bar, so the route heading is screen-reader-only — same treatment the
+         Guided fullscreen route uses. It is not decoration: app.js resolves
+         both the document title and the post-navigation focus target from the
+         route's h1, and without one this screen rendered with no heading of
+         any level at all. */
+      const patientHeading = `<h1 class="shell-sr-only" tabindex="-1">${t('Patient Review', '患者审阅')}</h1>`;
       if (patientView === 'loading') {
-        return `${guidedNote}<div class="card pad">${skeletonWorkspace(window.EU_DATA)}</div>`;
+        return `${patientHeading}${guidedNote}<div class="card pad">${skeletonWorkspace(window.EU_DATA)}</div>`;
       }
       if (patientView === 'loaded') {
         const drill = patientDrilldown();
@@ -2472,6 +2492,7 @@
           <button class="btn sm" data-patient-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
         </div>` : '';
         return `
+        ${patientHeading}
         <div class="loaded-bar">
           <span class="pill ok"><span class="dot"></span>${t('Loaded', '已加载')}</span>
           <div class="grow"><span style="font-weight:600;font-size:13px;">${readyTitle}</span> <span class="mono" style="font-size:11px;color:var(--ink-4);">${readyStats}</span></div>
@@ -2495,12 +2516,16 @@
         ? demoSourceOwner.render({ t, esc })
         : `<div class="note warn"><div class="body"><div class="d">${t('Official demo-source controls are unavailable; the clinically constrained synthetic fallback remains usable.', '官方演示数据源控件暂不可用；仍可使用带临床约束的合成兜底。')}</div></div><button class="btn sm" data-gen>${t('Load synthetic fallback', '加载合成兜底')}</button></div>`;
       return `
+      ${patientHeading}
       ${guidedNote}
       <div class="card pad">
         <div class="panel-head">
           <div>
             <div class="eyebrow">${t('Patient Review', '患者审阅')}</div>
-            <div class="panel-title" style="margin-top:4px;font-size:17px;">${t('Load a review workspace', '加载审阅工作区')}</div>
+            <!-- h2, not div: this is the section title under the route's h1.
+                 margin-bottom is zeroed because there is no global heading
+                 reset, and the UA default would otherwise add ~14px here. -->
+            <h2 class="panel-title" style="margin-top:4px;margin-bottom:0;font-size:17px;">${t('Load a review workspace', '加载审阅工作区')}</h2>
             <div class="panel-sub">${realMode ? t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。') : t('Choose an official deidentified ICU demo, or use the offline synthetic fallback for interaction rehearsal only.', '选择官方去标识化 ICU 演示数据，或仅在离线界面演练时使用合成兜底。')}</div>
           </div>
         </div>
@@ -3326,12 +3351,30 @@
         yLabel: cohortText('Survival probability'),
         groupLabel: cohortText('Group'),
         eventsLabel: cohortText('events'),
+        censoredLabel: t('censored', '删失'),
         finalLabel: t('Final survival', '末次生存率'),
+        atRiskLabel: t('Number at risk', '风险人数'),
+        /* The backend declares the display window; passing it through is what
+           lets the number-at-risk columns line up with the axis ticks. */
+        horizon: curve.display_horizon_days,
+        /* Row labels go through cohortText like the group labels do, so the
+           risk table and the group rows key off the same translated string. */
+        atRisk: curve.number_at_risk
+          ? {
+            times: curve.number_at_risk.times || [],
+            rows: (curve.number_at_risk.rows || []).map(row => ({
+              label: cohortText(row.label),
+              values: row.values || [],
+            })),
+          }
+          : null,
         groups: (curve.groups || []).map(group => ({
           label: cohortText(group.label),
           n: fmtInt(group.n),
           events: fmtInt(group.events),
+          censored: group.censored == null ? null : fmtInt(group.censored),
           points: group.points || [],
+          censorMarks: group.censor_marks || [],
         })),
       })}
       <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each step down is one event (e.g. a death); a gap between curves means the groups differ. Unadjusted — for an adjusted effect, run this cohort in Agent Projects.', '曲线每下降一格代表一次事件（如一例死亡）；两条曲线分开表示组间有差异。未做校正 —— 想要校正后的效应，请把该队列带入「研究项目」运行分析。')}</span></div>
@@ -4172,7 +4215,9 @@
     const cols = columns || [];
     const metrics = (rows || []).filter(r => (r.values || []).some(v => typeof v === 'number' && Number.isFinite(v)));
     if (!metrics.length || !cols.length) return '';
-    const colors = ['#0f766e', '#2563eb', '#8b5cf6', '#b45309'];
+    /* One palette, from the owner. This list used to put #2563eb beside
+       #8b5cf6 — the adjacency the shared palette was reordered to remove. */
+    const colors = window.EU_PALETTE.series();
     return `
       <div class="cgc">
         <div class="cgc-legend">${cols.map((c, i) => `<span><i style="background:${colors[i % colors.length]};"></i>${esc(cohortText(c))}</span>`).join('')}</div>

@@ -6,6 +6,7 @@
      • The pipeline + evidence checks are drawn explicitly per study.
    Outputs fail closed: Real mode lists only whitelisted local artifacts. */
 (function () {
+  const { esc } = window.EU_HTML;
   const S = (window.SCREENS = window.SCREENS || {});
 
   /* Fixture data + pure renderers live in screens-agent-render.js
@@ -42,9 +43,6 @@
   /* continuity: Copilot can land a completed run */
   window.__euAgentPreset = function () { agSel = 'sepsis'; agTab = 'outputs'; };
 
-  function esc(value) {
-    return String(value == null ? '' : value).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  }
   function bi(value) {
     return Array.isArray(value) ? t(value[0], value[1]) : esc(value);
   }
