@@ -104,6 +104,17 @@ class PlannerKnowHowBinding:
             strict_transport_schema=strict_transport_schema,
         )
         metrics = dict(planner.last_prompt_metrics)
+        precomputed_without = metrics.get("without_know_how_total_bytes")
+        if isinstance(precomputed_without, int) and not isinstance(
+            precomputed_without, bool
+        ):
+            return {
+                **metrics,
+                "without_know_how_total_bytes": precomputed_without,
+                "know_how_added_bytes": metrics["total_bytes"] - precomputed_without,
+                "know_how_selected_count": len(self.selected_ids),
+                "know_how_enabled": self.enabled,
+            }
         return {
             **metrics,
             "without_know_how_total_bytes": baseline["total_bytes"],
@@ -181,8 +192,7 @@ def verify_know_how_decisions(
     missing = sorted(set(authority) - decided_cards)
     if missing:
         raise KnowHowIntegrityError(
-            "Planner omitted claim-level dispositions for retrieved cards: "
-            f"{missing!r}"
+            f"Planner omitted claim-level dispositions for retrieved cards: {missing!r}"
         )
 
 

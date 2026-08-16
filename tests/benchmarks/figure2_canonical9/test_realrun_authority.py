@@ -160,18 +160,12 @@ def _write_jsonl(path: Path, cohort_paths: dict[str, Path]) -> str:
                     "case_scientific_protocol_sha256": (
                         projection.protocol_content_sha256
                     ),
-                    "runtime_scientific_projection": projection.model_dump(
-                        mode="json"
-                    ),
+                    "runtime_scientific_projection": projection.model_dump(mode="json"),
                     "runtime_scientific_projection_sha256": (
                         projection.runtime_projection_sha256
                     ),
-                    "expected_outputs": list(
-                        projection.agent_visible_required_outputs
-                    ),
-                    "semantic_guardrails": list(
-                        projection.agent_visible_guardrails
-                    ),
+                    "expected_outputs": list(projection.agent_visible_required_outputs),
+                    "semantic_guardrails": list(projection.agent_visible_guardrails),
                     "notes": projection.canonical_protocol_json,
                 }
             )
@@ -209,9 +203,7 @@ def _scientific_protocol_authority(
     for task_id, card_id in REQUIRED_SCIENTIFIC_PROTOCOLS:
         payload = json.loads(
             (
-                _REPO_ROOT
-                / "src/easyicu/data/research_know_how"
-                / f"{card_id}.json"
+                _REPO_ROOT / "src/easyicu/data/research_know_how" / f"{card_id}.json"
             ).read_text(encoding="utf-8")
         )
         payload["review_status"] = "clinical_reviewed"
@@ -1167,9 +1159,7 @@ def _development_binding_receipt(path: Path, jsonl_path: Path) -> Path:
     path.write_text(
         json.dumps(
             {
-                "schema_version": (
-                    "easyicu.canonical9_development_binding_receipt/1"
-                ),
+                "schema_version": ("easyicu.canonical9_development_binding_receipt/1"),
                 "paper_authority": False,
                 "output_jsonl": str(jsonl_path.resolve()),
                 "output_sha256": _sha256_file(jsonl_path),
@@ -1738,6 +1728,16 @@ def test_config_reasoning_effort_profile_mismatch_blocks(tmp_path) -> None:
     assert "EXECUTION_CONFIG_MISMATCH" in _codes(auth)
 
 
+def test_config_planner_strategy_mismatch_blocks(tmp_path) -> None:
+    request, _ = _authorized_setup(tmp_path)
+    changed = _config_with(planner_strategy="progressive_v2")
+    auth = verify_realrun_authorization(
+        _with_invocation(request, execution_config=changed)
+    )
+    assert auth.status == "blocked"
+    assert "EXECUTION_CONFIG_MISMATCH" in _codes(auth)
+
+
 def test_config_mutable_case_selector_blocks_even_when_pinned(tmp_path) -> None:
     request, paths = _authorized_setup(tmp_path)
     changed = build_canonical_execution_config(
@@ -2052,9 +2052,7 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
     assert ledger["complete"] is True
     assert ledger["batch_id"] == _BATCH_ID
     assert len(ledger["children"]) == 9
-    progress = load_provider_hard_stop_ledger(
-        out_root / "figure2_batch_progress.json"
-    )
+    progress = load_provider_hard_stop_ledger(out_root / "figure2_batch_progress.json")
     assert progress["terminal"] is True
     assert [task["status"] for task in progress["tasks"]] == ["completed"] * 9
     canary = json.loads((out_root / "figure2_canary_gate.json").read_text())
@@ -2204,9 +2202,7 @@ def test_incomplete_batch_ledger_downgrades_acceptance_before_write(
         (out_root / "figure2_paper_acceptance.json").read_text(encoding="utf-8")
     )
     assert terminal["status"] == "invalid"
-    assert "BATCH_LEDGER_INVALID" in {
-        issue["code"] for issue in terminal["issues"]
-    }
+    assert "BATCH_LEDGER_INVALID" in {issue["code"] for issue in terminal["issues"]}
 
 
 def test_formal_batch_does_not_start_e2_when_e1_canary_is_diagnostic(
@@ -2314,8 +2310,7 @@ def test_formal_canary_requires_e1_scientific_receipt_for_closure_protocol() -> 
 
     score = {
         "protocol_version": (
-            "easyicu_evaluation_protocol_suite/v2+"
-            "e1_scientific_closure/20260728-v1"
+            "easyicu_evaluation_protocol_suite/v2+e1_scientific_closure/20260728-v1"
         ),
         "aware": {
             "publication_ready": True,

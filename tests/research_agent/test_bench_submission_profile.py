@@ -122,6 +122,17 @@ def test_benchmark_options_enable_preplan_pubmed_explicitly() -> None:
     assert enabled["enable_pubmed"] is True
 
 
+def test_benchmark_options_bind_progressive_planner_strategy() -> None:
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        planner_strategy="progressive_v2",
+    )
+
+    assert options["planner_strategy"] == "progressive_v2"
+
+
 def test_benchmark_options_enable_post_qc_development_sample_explicitly() -> None:
     full_data = _benchmark_pipeline_options(
         max_total_steps=None,

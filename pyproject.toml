@@ -141,7 +141,7 @@ easyicu = ["data/*.json", "data/research_know_how/*.json"]
   "pi_copilot/node_app/src/shell-budget.mjs",
   "pi_copilot/node_app/src/skills/web-prototype/SKILL.md"
 ]
-"easyicu.research_agent.providers.prompts" = ["v1/*.txt"]
+"easyicu.research_agent.providers.prompts" = ["v1/*.txt", "v2/*.txt"]
 # The DockerRunner docstring tells users to build the sandbox image from
 # src/easyicu/research_agent/runner_image/Dockerfile. Ship it, or that
 # instruction is dead for anyone who installed from a wheel.

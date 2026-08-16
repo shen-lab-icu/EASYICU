@@ -75,6 +75,19 @@ def test_primary_cohort_selection_mode_is_typed_and_bound(ra, tmp_path: Path) ->
         )
 
 
+def test_progressive_planner_strategy_is_typed_and_bound(ra, tmp_path: Path) -> None:
+    config = ra.PipelineConfig(
+        workdir=tmp_path,
+        planner_strategy="progressive_v2",
+    )
+    pipeline = ra.ResearchAgentPipeline.from_config(config)
+
+    assert pipeline._planner_strategy == "progressive_v2"
+    assert config.canonical_payload()["planner_strategy"] == "progressive_v2"
+    with pytest.raises(ValueError, match="planner_strategy"):
+        ra.PipelineConfig(workdir=tmp_path, planner_strategy="guess")
+
+
 def test_legacy_flat_constructor_is_a_warning_only_adapter(ra, tmp_path: Path) -> None:
     client = ra.MockLLMClient()
 

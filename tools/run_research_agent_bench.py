@@ -153,8 +153,7 @@ def _bind_runtime_scientific_projection_options(
         supplied = options[option_name]
         if option_name != authority_option or supplied != expected_contract:
             raise ValueError(
-                "SCIENTIFIC_RUNTIME_AUTHORITY_OVERRIDE_FORBIDDEN: "
-                f"{option_name}"
+                f"SCIENTIFIC_RUNTIME_AUTHORITY_OVERRIDE_FORBIDDEN: {option_name}"
             )
     supplied_digest = options.get("scientific_runtime_projection_sha256")
     if supplied_digest is not None and str(supplied_digest) != projection_digest:
@@ -1321,9 +1320,7 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
             )
         )
         result["scientific_acceptance"] = scientific_receipt
-        result["scientific_acceptance_receipt"] = str(
-            scientific_receipt_path
-        )
+        result["scientific_acceptance_receipt"] = str(scientific_receipt_path)
     return result
 
 
@@ -1437,7 +1434,6 @@ def _run_one_arm(
     with cohort_concept_id_scope(
         list(getattr(item, "cohort_columns", None) or getattr(cohort, "columns", []))
     ):
-
         workdir.mkdir(parents=True, exist_ok=True)
         # Force the kind-matched reporting checklist(s) so the EMITTED file matches
         # what the scorecard READS by task kind (single source of truth:
@@ -2545,12 +2541,8 @@ def _provider_hard_stop_limits(
         max_provider_attempts_per_batch=int(
             pipeline_options["max_provider_attempts_per_batch"]
         ),
-        max_total_tokens_per_run=int(
-            pipeline_options["max_total_tokens_per_run"]
-        ),
-        max_total_tokens_per_batch=int(
-            pipeline_options["max_total_tokens_per_batch"]
-        ),
+        max_total_tokens_per_run=int(pipeline_options["max_total_tokens_per_run"]),
+        max_total_tokens_per_batch=int(pipeline_options["max_total_tokens_per_batch"]),
         max_estimated_cost_usd_per_batch=float(
             pipeline_options["max_estimated_cost_usd_per_batch"]
         ),
@@ -2623,6 +2615,7 @@ def _benchmark_pipeline_options(
     max_total_steps: Optional[int],
     disable_replanning: bool,
     max_code_repair_attempts: Optional[int],
+    planner_strategy: str = "monolithic_v1",
     max_step_llm_repair_attempts: Optional[int] = None,
     max_step_provider_calls: int = 9,
     max_provider_attempts_per_run: int = 192,
@@ -2680,6 +2673,7 @@ def _benchmark_pipeline_options(
         options["development_diagnostic"] = True
     if enable_pubmed:
         options["enable_pubmed"] = True
+    options["planner_strategy"] = str(planner_strategy)
     # These are independent execution budgets.  The ordinary timeout bounds
     # model-generated scripts; registered standards use their own longer
     # planner-owned workload budget.
@@ -2696,20 +2690,14 @@ def _benchmark_pipeline_options(
     if max_step_llm_repair_attempts is not None:
         options["max_step_llm_repair_attempts"] = int(max_step_llm_repair_attempts)
     options["max_step_provider_calls"] = int(max_step_provider_calls)
-    options["max_provider_attempts_per_run"] = int(
-        max_provider_attempts_per_run
-    )
-    options["max_provider_attempts_per_batch"] = int(
-        max_provider_attempts_per_batch
-    )
+    options["max_provider_attempts_per_run"] = int(max_provider_attempts_per_run)
+    options["max_provider_attempts_per_batch"] = int(max_provider_attempts_per_batch)
     options["max_total_tokens_per_run"] = int(max_total_tokens_per_run)
     options["max_total_tokens_per_batch"] = int(max_total_tokens_per_batch)
     options["max_estimated_cost_usd_per_batch"] = float(
         max_estimated_cost_usd_per_batch
     )
-    options["max_wall_clock_seconds_per_task"] = float(
-        max_wall_clock_seconds_per_task
-    )
+    options["max_wall_clock_seconds_per_task"] = float(max_wall_clock_seconds_per_task)
     options["provider_input_cost_usd_per_million_tokens"] = float(
         provider_input_cost_usd_per_million_tokens
     )
@@ -2976,9 +2964,7 @@ def _run_suite(
             )
         except BaseException as exc:
             if task_hard_stop is not None:
-                task_hard_stop.finish(
-                    error=f"{type(exc).__name__}: {str(exc)[:1800]}"
-                )
+                task_hard_stop.finish(error=f"{type(exc).__name__}: {str(exc)[:1800]}")
             raise
         scores.append(score)
         if task_hard_stop is not None:
@@ -3114,9 +3100,7 @@ def _canonical_execution_config_from_args(args):
         max_step_llm_repair_attempts=getattr(
             args, "max_step_llm_repair_attempts", None
         ),
-        max_step_provider_calls=int(
-            getattr(args, "max_step_provider_calls", 9)
-        ),
+        max_step_provider_calls=int(getattr(args, "max_step_provider_calls", 9)),
         max_provider_attempts_per_run=int(
             getattr(args, "max_provider_attempts_per_run", 192)
         ),
@@ -3161,9 +3145,8 @@ def _canonical_execution_config_from_args(args):
         reasoning_effort_profile=str(
             getattr(args, "reasoning_effort_profile", "provider_default")
         ),
-        transport_max_attempts=int(
-            getattr(args, "transport_max_attempts", 1)
-        ),
+        planner_strategy=str(getattr(args, "planner_strategy", "monolithic_v1")),
+        transport_max_attempts=int(getattr(args, "transport_max_attempts", 1)),
         provider_base_url=(
             str(getattr(args, "provider_base_url", "") or "").strip()
             or _resolve_backend_base_url(str(getattr(args, "provider", "mock")))
@@ -3212,7 +3195,7 @@ def _verify_figure2_development_diagnostic(
     ).strip()
     if not receipt_raw:
         raise ValueError(
-            "--development-diagnostic requires " "--figure2-development-binding-receipt"
+            "--development-diagnostic requires --figure2-development-binding-receipt"
         )
     receipt_path = Path(receipt_raw).expanduser()
     if not receipt_path.is_absolute() or receipt_path.is_symlink():
@@ -3571,6 +3554,16 @@ def main() -> int:
             "enforce the host-derived AnalysisPlan JSON Schema. The capability "
             "is explicit and becomes part of the provider transport policy, "
             "not PipelineConfig."
+        ),
+    )
+    parser.add_argument(
+        "--planner-strategy",
+        choices=["monolithic_v1", "progressive_v2"],
+        default="monolithic_v1",
+        help=(
+            "Planner contract materialization strategy. Progressive v2 asks "
+            "for a compact skeleton, compiles host-owned execution details, "
+            "and revises only an unlocked suffix."
         ),
     )
     parser.add_argument(
@@ -3964,10 +3957,9 @@ def main() -> int:
     args = parser.parse_args()
     # Resolve once. The authorization digest and every subsequently created
     # client receive this exact endpoint; later environment mutation is inert.
-    args.provider_base_url = (
-        str(args.provider_base_url or "").strip()
-        or _resolve_backend_base_url(str(args.provider))
-    )
+    args.provider_base_url = str(
+        args.provider_base_url or ""
+    ).strip() or _resolve_backend_base_url(str(args.provider))
     _realrun_gate_rc, _figure2_batch_binding = _figure2_realrun_authorization_gate(args)
     if _realrun_gate_rc is not None:
         return _realrun_gate_rc
@@ -4033,18 +4025,15 @@ def main() -> int:
         max_total_steps=args.max_total_steps,
         disable_replanning=bool(args.disable_replanning),
         max_code_repair_attempts=args.max_code_repair_attempts,
+        planner_strategy=str(args.planner_strategy),
         max_step_llm_repair_attempts=max_step_llm_repair_attempts,
         max_step_provider_calls=int(args.max_step_provider_calls),
         max_provider_attempts_per_run=int(args.max_provider_attempts_per_run),
         max_provider_attempts_per_batch=int(args.max_provider_attempts_per_batch),
         max_total_tokens_per_run=int(args.max_total_tokens_per_run),
         max_total_tokens_per_batch=int(args.max_total_tokens_per_batch),
-        max_estimated_cost_usd_per_batch=float(
-            args.max_estimated_cost_usd_per_batch
-        ),
-        max_wall_clock_seconds_per_task=float(
-            args.max_wall_clock_seconds_per_task
-        ),
+        max_estimated_cost_usd_per_batch=float(args.max_estimated_cost_usd_per_batch),
+        max_wall_clock_seconds_per_task=float(args.max_wall_clock_seconds_per_task),
         provider_input_cost_usd_per_million_tokens=float(
             args.provider_input_cost_usd_per_million_tokens
         ),
@@ -4813,8 +4802,7 @@ def _external_item_from_row(
             else None
         ),
         runtime_scientific_projection_sha256=(
-            str(row.get("runtime_scientific_projection_sha256") or "").strip()
-            or None
+            str(row.get("runtime_scientific_projection_sha256") or "").strip() or None
         ),
         protocol_adapter=protocol_adapter,
         cohort_size=int(cohort_size),
@@ -5066,9 +5054,7 @@ def _run_ehrflowbench_jsonl(
             task_ids=input_task_ids,
             limits=hard_stop_limits,
             batch_id=(
-                str(batch_binding.batch_id)
-                if batch_binding is not None
-                else None
+                str(batch_binding.batch_id) if batch_binding is not None else None
             ),
             declaration_sha256=(
                 str(batch_binding.declaration_sha256)
@@ -5526,9 +5512,7 @@ def _run_ehrflowbench_jsonl(
                 pending_row["structured_attempts"] = structured_attempts
             pending.append(pending_row)
             if task_hard_stop is not None:
-                task_hard_stop.finish(
-                    error=f"{type(exc).__name__}: {str(exc)[:1800]}"
-                )
+                task_hard_stop.finish(error=f"{type(exc).__name__}: {str(exc)[:1800]}")
             if formal_canary_task_id is not None and key == formal_canary_task_id:
                 _write_figure2_canary_gate(
                     out_root=out_root,
@@ -5638,21 +5622,16 @@ def _run_ehrflowbench_jsonl(
                     "authorized batch declaration"
                 )
                 print(
-                    "[realrun-authority] POST-RUN batch ledger incomplete: "
-                    f"{detail}."
+                    f"[realrun-authority] POST-RUN batch ledger incomplete: {detail}."
                 )
-                batch_authority_issues.append(
-                    ("BATCH_LEDGER_INVALID", detail, None)
-                )
+                batch_authority_issues.append(("BATCH_LEDGER_INVALID", detail, None))
         except Exception as exc:  # fail closed into the terminal receipt
             detail = f"{type(exc).__name__}: {exc}"[:2048]
             print(
                 "[realrun-authority] POST-RUN batch ledger verification "
                 f"failed: {detail}"
             )
-            batch_authority_issues.append(
-                ("BATCH_LEDGER_INVALID", detail, None)
-            )
+            batch_authority_issues.append(("BATCH_LEDGER_INVALID", detail, None))
 
     acceptance_status: str | None = None
     if require_figure2_paper_acceptance or any(
