@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Mapping, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
+from easyicu.webserver import state_paths
 from easyicu.webserver import agent_runs
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import capabilities
@@ -34,7 +35,7 @@ artifact_router = APIRouter()
 def _research_pipeline_workspace() -> ProjectWorkspace:
     """Return the server-owned Pi workspace used for scientific run artifacts."""
 
-    return ProjectWorkspace(Path.home() / ".easyicu" / "pi-agent" / "workspace")
+    return ProjectWorkspace(state_paths.state_root() / "pi-agent" / "workspace")
 
 
 def _provider_environment_for_agent_run(

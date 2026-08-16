@@ -30,6 +30,7 @@ from easyicu.provider_auth import (
     credential_headers,
     normalize_openai_auth_header,
 )
+from easyicu.webserver import state_paths
 from easyicu.webserver import agent_outputs
 from easyicu.webserver.provider_url_security import (
     ProviderUrlSecurityError,
@@ -40,7 +41,7 @@ _MAX_EXTERNAL_CALLS_PER_RUN = 1
 _DEFAULT_MAX_OUTPUT_TOKENS = 1200
 _MIN_MAX_OUTPUT_TOKENS = 128
 _ABSOLUTE_MAX_OUTPUT_TOKENS = 4000
-_DEFAULT_PROVIDER_ENV_FILE = Path.home() / ".easyicu" / "provider.env"
+_DEFAULT_PROVIDER_ENV_FILE = state_paths.state_root() / "provider.env"
 _DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT = 240.0
 _LOOPBACK_RESEARCH_AGENT_REQUEST_TIMEOUT = 480.0
 _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES = (500, 502, 503, 504)

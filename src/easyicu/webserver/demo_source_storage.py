@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 from urllib.error import URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from easyicu.webserver import state_paths
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.demo_source_contracts import (
     CACHE_ENV,
@@ -35,7 +36,7 @@ from easyicu.webserver.demo_source_contracts import (
     check_cancelled,
 )
 
-DEFAULT_CACHE_ROOT = Path.home() / ".easyicu" / "demo_sources"
+DEFAULT_CACHE_ROOT = state_paths.state_root() / "demo_sources"
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 MAX_ZIP_ENTRIES = 5_000
 CONTENT_RANGE_RE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")

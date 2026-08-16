@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import IO, Optional
 
+from easyicu.webserver import state_paths
+
 
 class UnsupportedWebDeployment(RuntimeError):
     pass
@@ -23,7 +25,7 @@ def acquire_single_process_lease(path: Optional[Path] = None) -> None:
     if _HANDLE is not None:
         _DEPTH += 1
         return
-    selected = path or (Path.home() / ".easyicu" / "webserver-single-process.lock")
+    selected = path or (state_paths.state_root() / "webserver-single-process.lock")
     selected.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     handle = selected.open("a+", encoding="utf-8")
     try:
