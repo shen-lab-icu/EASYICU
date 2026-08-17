@@ -1051,9 +1051,7 @@ class ProgressivePlannerAgent:
                                 materialization.model_dump(mode="json")
                             ),
                             compiler_finding=(
-                                ProgressiveCompilerFinding.model_validate(
-                                    exc.details
-                                )
+                                ProgressiveCompilerFinding.from_details(exc.details)
                             ),
                         )
                     )

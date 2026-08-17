@@ -54,6 +54,43 @@ class ProgressiveCompilerFinding(BaseModel):
         max_length=20,
     )
 
+    @classmethod
+    def from_details(
+        cls,
+        details: Mapping[str, Any],
+    ) -> "ProgressiveCompilerFinding":
+        """Project one compiler exception into the closed replay contract.
+
+        ``ProgressivePlanCompileError.details["findings"]`` may also contain
+        bounded host-authored context such as missing or mismatched key lists.
+        Those context rows are not recursive compiler findings and must not be
+        validated as if they were.  Preserve only fully attributable nested
+        findings here; the root reason/path remains the replay authority.
+        """
+
+        nested: list[ProgressiveCompilerFinding] = []
+        raw_findings = details.get("findings")
+        if isinstance(raw_findings, (list, tuple)):
+            required = {"owner", "reason_code", "message"}
+            for item in raw_findings:
+                if not isinstance(item, Mapping) or not required.issubset(item):
+                    continue
+                try:
+                    nested.append(cls.from_details(item))
+                except (TypeError, ValueError):
+                    continue
+        return cls.model_validate(
+            {
+                "owner": details.get("owner"),
+                "reason_code": details.get("reason_code"),
+                "step_id": details.get("step_id"),
+                "step_index": details.get("step_index"),
+                "path": details.get("path"),
+                "message": details.get("message"),
+                "findings": nested,
+            }
+        )
+
 
 class ProgressiveCompileReplayAttempt(BaseModel):
     """One schema-validated candidate rejected by the deterministic compiler."""
