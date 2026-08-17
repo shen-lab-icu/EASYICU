@@ -306,10 +306,10 @@ def _development_progressive_resume_binding(
     """Resolve one server-owned Dev checkpoint without accepting client paths."""
 
     selected_job = str(source_job_id or "").strip()
-    if budget_mode != "planner_canary":
+    if budget_mode not in {"planner_canary", "full_reviewed"}:
         raise ResearchPipelineRunError(
-            "research_pipeline_development_resume_canary_only",
-            "Development Planner resume is available only in the canary profile.",
+            "research_pipeline_development_resume_budget_invalid",
+            "Development Planner resume requires a reviewed development budget.",
         )
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", selected_job):
         raise ResearchPipelineRunError(
