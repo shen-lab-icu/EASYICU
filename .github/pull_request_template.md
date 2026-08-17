@@ -19,6 +19,27 @@ If the change contains more than one independently reviewable workstream,
 split it before review. A cross-layer contract change may remain together only
 when one owner and its typed consumers are identified explicitly.
 
+**Starting base HEAD (full SHA):**
+
+- [ ] This PR contains one independently reviewable workstream.
+- [ ] Work was performed in a dedicated linked worktree, or a sole-user clone
+      exception is explained below.
+- [ ] No unrelated staged, unstaged, or untracked path was present at commit.
+
+## Task-scope receipt
+
+Run `tools/verify_git_task_scope.py` immediately before committing and paste
+its receipt. The guard fails closed when HEAD moved, when the task ran in the
+shared primary worktree, or when any staged, unstaged, or untracked path falls
+outside the declared allowlist.
+
+```text
+scope_sha256:
+allowed_paths:
+staged_paths:
+unexpected_paths: []
+```
+
 ## Contract and risk
 
 - Owning module and public contract:
@@ -42,6 +63,8 @@ database-specific clinical validation.
 
 ## Verification
 
+**Exact PR head (full SHA) verified:**
+
 **Exact commands and results:**
 
 ```text
@@ -53,6 +76,7 @@ database-specific clinical validation.
 - [ ] Focused tests are not described as full-repository CI
 - [ ] Full exact-head CI was run, or is explicitly marked not run
 - [ ] Generated artifacts identify their source data, code, and commit
+- [ ] Required CI is green for the exact PR head before merge
 
 ## Independent domain review
 
