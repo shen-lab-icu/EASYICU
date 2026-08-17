@@ -269,6 +269,13 @@ def submit_agent_run(
                 runner_kwargs["plan_revision_source_run_id"] = (
                     plan_revision_source_run_id
                 )
+            development_resume_source_job_id = str(
+                body.get("development_resume_source_job_id") or ""
+            ).strip()
+            if development_resume_source_job_id:
+                runner_kwargs["development_resume_source_job_id"] = (
+                    development_resume_source_job_id
+                )
             base_runner = agent_pipeline_runs.make_research_pipeline_run_runner(
                 **runner_kwargs,
             )

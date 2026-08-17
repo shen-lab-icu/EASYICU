@@ -44,6 +44,10 @@ from easyicu.research_agent.planning.scientific_review import (
     PlanScientificReview,
     render_agent_plan_revision_contract,
 )
+from easyicu.research_agent.planning.progressive_artifacts import (
+    ProgressivePlanningArtifactError,
+    load_progressive_planner_checkpoint_chain,
+)
 from easyicu.research_agent.publication_skills import (
     publication_skill_flags_from_settings,
 )
@@ -89,6 +93,9 @@ from easyicu.webserver.agent_review_recovery import (
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
+_DEVELOPMENT_RESUME_JOB_ENV = (
+    "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID"
+)
 _MAX_MANUSCRIPT_PREVIEW = 24_000
 _MAX_FIGURE_EMBED_BYTES = 420_000
 _MAX_FIGURE_EMBED_TOTAL = 1_400_000
@@ -282,6 +289,89 @@ def _checkpoint_pending_from_record(
 def _slug(value: Any) -> str:
     text = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "study")).strip("-.")
     return text[:96] or "study"
+
+
+def _development_progressive_resume_binding(
+    *,
+    project_root: str,
+    study_id: str,
+    source_job_id: str,
+    budget_mode: str,
+) -> tuple[Path, str]:
+    """Resolve one server-owned Dev checkpoint without accepting client paths."""
+
+    selected_job = str(source_job_id or "").strip()
+    if budget_mode != "planner_canary":
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_canary_only",
+            "Development Planner resume is available only in the canary profile.",
+        )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", selected_job):
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_job_invalid",
+            "Choose one valid prior canary job from this study workspace.",
+        )
+    root = Path(project_root).expanduser().resolve()
+    study_root = root / _slug(study_id)
+    wrapper = study_root / f"run_{selected_job}"
+    pipeline_root = wrapper / "pipeline"
+    if wrapper.is_symlink() or pipeline_root.is_symlink():
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_source_invalid",
+            "The prior canary checkpoint source is not a regular owned workspace.",
+        )
+    try:
+        resolved_pipeline = pipeline_root.resolve(strict=True)
+        resolved_pipeline.relative_to(study_root.resolve())
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_source_missing",
+            "The prior canary checkpoint is unavailable in this study workspace.",
+        ) from exc
+    run_dirs = sorted(
+        path
+        for path in resolved_pipeline.iterdir()
+        if path.is_dir() and not path.is_symlink() and path.name.startswith("run_")
+    )
+    if len(run_dirs) != 1:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_source_ambiguous",
+            "The prior canary does not identify exactly one pipeline run.",
+        )
+    checkpoints: list[tuple[int, Path]] = []
+    for path in run_dirs[0].iterdir():
+        match = re.fullmatch(
+            r"progressive_planner_checkpoint_([0-9]{3})\.json",
+            path.name,
+        )
+        if match and path.is_file() and not path.is_symlink():
+            checkpoints.append((int(match.group(1)), path))
+    if not checkpoints:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_checkpoint_missing",
+            "The prior canary has no validated Progressive Planner checkpoint.",
+        )
+    terminal = max(checkpoints, key=lambda item: item[0])[1]
+    try:
+        raw = terminal.read_bytes()
+    except OSError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_checkpoint_unreadable",
+            "The prior canary checkpoint cannot be read safely.",
+        ) from exc
+    artifact_sha256 = hashlib.sha256(raw).hexdigest()
+    try:
+        load_progressive_planner_checkpoint_chain(
+            last_checkpoint_path=terminal,
+            expected_artifact_sha256=artifact_sha256,
+        )
+    except ProgressivePlanningArtifactError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_checkpoint_invalid",
+            "The prior canary checkpoint chain did not pass integrity validation.",
+            details={"reason_code": exc.reason_code},
+        ) from exc
+    return terminal, artifact_sha256
 
 
 def _clean_text(value: Any, limit: int = 1_200) -> str:
@@ -2915,6 +3005,7 @@ def make_research_pipeline_run_runner(
     credential_source: str = "pi_verified",
     literature_search_authorized: bool = False,
     plan_revision_source_run_id: str = "",
+    development_resume_source_job_id: str = "",
     budget_mode: str = "planner_canary",
     runner_image: Optional[str] = None,
 ) -> Any:
@@ -3009,6 +3100,19 @@ def make_research_pipeline_run_runner(
         raise ResearchPipelineRunError(
             "research_pipeline_project_workspace_required",
             "A server-owned Pi project workspace is required for this pipeline.",
+        )
+    development_resume_binding: tuple[Path, str] | None = None
+    selected_resume_source = _clean_text(
+        development_resume_source_job_id
+        or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV),
+        80,
+    )
+    if selected_resume_source:
+        development_resume_binding = _development_progressive_resume_binding(
+            project_root=project_root,
+            study_id=str(study.get("id") or ""),
+            source_job_id=selected_resume_source,
+            budget_mode=selected_budget_mode,
         )
     capability_settings = capability_policy.capability_settings()
     publication_skill_flags = publication_skill_flags_from_settings(
@@ -3209,6 +3313,17 @@ def make_research_pipeline_run_runner(
                     "reviewed_memory_namespaces": (),
                 }
             )
+            if development_resume_binding is not None:
+                profile_options.update(
+                    {
+                        "development_progressive_resume_checkpoint_path": (
+                            development_resume_binding[0]
+                        ),
+                        "development_progressive_resume_checkpoint_sha256": (
+                            development_resume_binding[1]
+                        ),
+                    }
+                )
             config = PipelineConfig(
                 workdir=wrapper_dir / "pipeline",
                 enable_publication_figure_skill=publication_skill_flags[

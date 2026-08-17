@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -3532,6 +3533,28 @@ def test_web_runner_delegates_to_research_agent_pipeline(
         runner_kwargs["budget_mode"] = budget_mode
     if runner_image is not None:
         runner_kwargs["runner_image"] = runner_image
+    expected_resume_path = None
+    if budget_mode is None and runner_image_environment is None:
+        expected_resume_path = (
+            tmp_path
+            / "projects"
+            / "study-workflow"
+            / "run_prior-canary"
+            / "pipeline"
+            / "run_prior"
+            / "progressive_planner_checkpoint_000.json"
+        )
+        expected_resume_path.parent.mkdir(parents=True)
+        expected_resume_path.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(
+            agent_pipeline_runs,
+            "load_progressive_planner_checkpoint_chain",
+            lambda **_kwargs: [object()],
+        )
+        monkeypatch.setenv(
+            "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID",
+            "prior-canary",
+        )
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export_path),
         study_context=_complete_study(),
@@ -3603,6 +3626,14 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["config"].planner_strategy == (
         "progressive_v2" if budget_mode is None else "monolithic_v1"
     )
+    assert calls["config"].development_progressive_resume_checkpoint_path == (
+        expected_resume_path
+    )
+    assert calls[
+        "config"
+    ].development_progressive_resume_checkpoint_sha256 == (
+        hashlib.sha256(b"{}").hexdigest() if expected_resume_path else None
+    )
     assert calls["config"].enable_memory is False
     assert calls["config"].enable_experience_bank is False
     assert calls["config"].enable_reviewed_memory is False
@@ -3657,6 +3688,31 @@ def test_web_runner_rejects_invalid_server_owned_image_environment(
         )
 
     assert exc_info.value.code == "research_pipeline_runner_image_invalid"
+
+
+def test_web_runner_rejects_development_resume_outside_canary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_data_foundation_profile",
+        lambda **_kwargs: _foundation_profile(),
+    )
+    export_path = _write_pipeline_export(tmp_path / "export")
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc_info:
+        agent_pipeline_runs.make_research_pipeline_run_runner(
+            export_path=str(export_path),
+            study_context=_complete_study(),
+            project_root=str(tmp_path / "projects"),
+            provider={"provider": "openai", "external": True},
+            provider_environment=_PI_PROVIDER_ENVIRONMENT,
+            development_resume_source_job_id="prior-canary",
+            budget_mode="full_reviewed",
+        )
+
+    assert exc_info.value.code == "research_pipeline_development_resume_canary_only"
 
 
 def test_web_runner_enables_live_pubmed_only_with_host_authorization(
@@ -4052,6 +4108,7 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
             "credential_source": "pi_verified",
             "external_llm_opt_in": True,
             "project_root": str(tmp_path / "client-controlled"),
+            "development_resume_source_job_id": "prior-canary",
         },
         request=_request(),
     )
@@ -4060,6 +4117,7 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     assert Path(captured["project_root"]) == workspace.project_root(study["id"])
     assert Path(captured["project_root"]) != tmp_path / "client-controlled"
     assert captured["budget_mode"] == "planner_canary"
+    assert captured["development_resume_source_job_id"] == "prior-canary"
 
 
 def test_pipeline_route_rejects_client_selected_full_reviewed_mode(
