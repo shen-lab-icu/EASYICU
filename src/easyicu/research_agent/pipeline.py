@@ -400,6 +400,7 @@ from .plan_utils import (
 )
 from .planning.figure_plan_shaping import (
     bind_deterministic_figure_panels,
+    ensure_cohort_accounting_figure_step,
     ensure_data_quality_figure_step as _ensure_audit_panel_step_in_plan,
     ensure_primary_result_figure_step,
 )
@@ -3075,6 +3076,10 @@ class ResearchAgentPipeline:
                 force=self._enable_publication_figure_skill,
             )
             findings.extend(figure_guard_findings)
+            plan, cohort_figure_findings = ensure_cohort_accounting_figure_step(
+                plan=plan,
+            )
+            findings.extend(cohort_figure_findings)
             plan, audit_panel_findings = _ensure_audit_panel_step_in_plan(
                 plan=plan,
                 context=context,

@@ -48,7 +48,6 @@ from .deterministic_missingness import (
 )
 from .missingness_measurement_figure_executor import (
     missingness_measurement_figure_declaration_verdict,
-    MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
     measurement_missingness_figure_executor_code,
     measurement_missingness_figure_executor_owns_step,
     missingness_measurement_figure_executor_code,
@@ -578,7 +577,9 @@ def select_standard_executor(
         )
     _missed("measurement_missingness_figure")
     if missingness_measurement_figure_executor_owns_step(
-        step, resolved_bindings=resolved_bindings
+        step,
+        plan=plan,
+        resolved_bindings=resolved_bindings,
     ):
         if receipt_required:
             _receipt_declined("missingness_measurement_figure")
@@ -590,8 +591,8 @@ def select_standard_executor(
                 progress_message=(
                     "Using planner-scoped missingness/measurement figure executor"
                 ),
-                code=missingness_measurement_figure_executor_code(step),
-                consumed_input_keys=MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
+                code=missingness_measurement_figure_executor_code(step, plan=plan),
+                consumed_input_keys=tuple(str(value) for value in step.inputs),
                 host_sealed_renderer=True,
             )
         )

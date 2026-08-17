@@ -39,6 +39,7 @@ from ...contracts.figure_plan import (
     MEASUREMENT_PROCESS_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     measurement_availability_figure_panels,
+    resolve_data_quality_figure_inputs,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep
@@ -182,8 +183,14 @@ def _measurement_missingness_input(
     return input_key
 
 
-def _columns_read(input_key: str) -> tuple[str, ...]:
-    if input_key == MEASUREMENT_PROCESS_AUDIT_INPUT:
+def _columns_read(
+    input_key: str,
+    *,
+    audit_role: str | None = None,
+) -> tuple[str, ...]:
+    if audit_role == "measurement_process" or (
+        audit_role is None and input_key == MEASUREMENT_PROCESS_AUDIT_INPUT
+    ):
         return _PROCESS_COLUMNS
     kind, separator, _product = str(input_key or "").partition(":")
     if kind == "table" and separator:
@@ -212,7 +219,12 @@ MISSINGNESS_MEASUREMENT_FIGURE_CAPABILITY = TypedInputCapability(
 )
 
 
-def _binding_carries_the_columns_read(binding: Any, input_key: str) -> bool:
+def _binding_carries_the_columns_read(
+    binding: Any,
+    input_key: str,
+    *,
+    audit_role: str | None = None,
+) -> bool:
     """Whether the bound table really has the columns this renderer indexes.
 
     The loader below already asks this and raises when the answer is no. Asking
@@ -239,22 +251,35 @@ def _binding_carries_the_columns_read(binding: Any, input_key: str) -> bool:
         isinstance(value, str) for value in columns
     ):
         return False
-    return set(_columns_read(input_key)).issubset(set(columns))
+    return set(_columns_read(input_key, audit_role=audit_role)).issubset(set(columns))
 
 
 def missingness_measurement_figure_executor_owns_step(
     step: AnalysisStep,
     *,
+    plan: Any | None = None,
     resolved_bindings: Mapping[str, Any] | None = None,
 ) -> bool:
     """Return whether every scientific choice is fixed by the typed contract."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
-    if not MISSINGNESS_MEASUREMENT_FIGURE_CAPABILITY.admits_step(step):
+    input_by_role = resolve_data_quality_figure_inputs(
+        step.inputs,
+        steps=getattr(plan, "steps", ()) or (),
+    )
+    if input_by_role is None:
         return False
+    required_inputs = frozenset(input_by_role.values())
+    all_row_inputs = {
+        str(contract.input_key)
+        for contract in step.input_consumption_contracts or ()
+        if contract.mode == "all_rows"
+    }
     if not (
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
+        and {str(value) for value in step.inputs} == set(required_inputs)
+        and all_row_inputs == set(required_inputs)
         and len(products) == 1
         and products[0] is not None
         # ``model_requirements`` and ``table_one_spec`` are not checked here:
@@ -267,8 +292,12 @@ def missingness_measurement_figure_executor_owns_step(
     if not isinstance(resolved_bindings, Mapping):
         return False
     return all(
-        _binding_carries_the_columns_read(resolved_bindings.get(key), key)
-        for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
+        _binding_carries_the_columns_read(
+            resolved_bindings.get(input_key),
+            input_key,
+            audit_role=role,
+        )
+        for role, input_key in input_by_role.items()
     )
 
 
@@ -414,7 +443,11 @@ def missingness_measurement_figure_declaration_verdict(
     )
 
 
-def missingness_measurement_figure_executor_code(step: AnalysisStep) -> str:
+def missingness_measurement_figure_executor_code(
+    step: AnalysisStep,
+    *,
+    plan: Any | None = None,
+) -> str:
     """Return the small sandbox entrypoint for the exact declared figure."""
 
     # Ownership is NOT re-derived here. The selector consulted this owner with
@@ -427,6 +460,14 @@ def missingness_measurement_figure_executor_code(step: AnalysisStep) -> str:
     if product is None:
         raise ValueError(
             "The step is not owned by the missingness/measurement renderer"
+        )
+    input_by_role = resolve_data_quality_figure_inputs(
+        step.inputs,
+        steps=getattr(plan, "steps", ()) or (),
+    )
+    if input_by_role is None:
+        raise ValueError(
+            "The step has no closed missingness/measurement audit pair"
         )
     return textwrap.dedent(
         f"""
@@ -443,6 +484,8 @@ def missingness_measurement_figure_executor_code(step: AnalysisStep) -> str:
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
             figure_product={product!r},
+            missingness_input={input_by_role['measurement_missingness']!r},
+            process_input={input_by_role['measurement_process']!r},
         )
         """
     ).strip()
@@ -497,12 +540,13 @@ def _load_one_binding(
     run_dir: Path,
     inputs: Mapping[str, Any],
     input_key: str,
+    audit_role: str | None = None,
 ) -> tuple[pd.DataFrame, Mapping[str, Any], str]:
     binding = inputs.get(input_key)
     if not isinstance(binding, dict):
         raise ValueError(f"{input_key} binding is absent")
     _kind, _separator, product = input_key.partition(":")
-    expected_columns = list(_columns_read(input_key))
+    expected_columns = list(_columns_read(input_key, audit_role=audit_role))
     expected_sha256 = str(binding.get("sha256") or "")
     relative_path = binding.get("relative_path")
     product_contract = binding.get("product_contract")
@@ -571,6 +615,7 @@ def _load_bindings(
     run_dir: Path,
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
+    input_by_role: Mapping[str, str] | None = None,
 ) -> dict[str, tuple[pd.DataFrame, Mapping[str, Any], str]]:
     if isinstance(resolved_inputs, Mapping):
         payload = dict(resolved_inputs)
@@ -578,18 +623,28 @@ def _load_bindings(
         payload = json.loads(Path(resolved_inputs).read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or payload.get("step_id") != step_id:
         raise ValueError("resolved-input manifest does not belong to this step")
+    roles = dict(
+        input_by_role
+        or {
+            "measurement_missingness": MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+            "measurement_process": MEASUREMENT_PROCESS_AUDIT_INPUT,
+        }
+    )
+    if set(roles) != {"measurement_missingness", "measurement_process"} or len(
+        set(roles.values())
+    ) != 2:
+        raise ValueError("audit-table role bindings are incomplete or ambiguous")
     inputs = payload.get("inputs")
-    if not isinstance(inputs, dict) or set(inputs) != set(
-        MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
-    ):
+    if not isinstance(inputs, dict) or set(inputs) != set(roles.values()):
         raise ValueError("exact audit-table bindings are absent or widened")
     return {
         input_key: _load_one_binding(
             run_dir=run_dir,
             inputs=inputs,
             input_key=input_key,
+            audit_role=role,
         )
-        for input_key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
+        for role, input_key in roles.items()
     }
 
 
@@ -1034,6 +1089,8 @@ def run_missingness_measurement_figure(
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
     figure_product: str,
+    missingness_input: str = MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+    process_input: str = MEASUREMENT_PROCESS_AUDIT_INPUT,
 ) -> Mapping[str, Any]:
     """Render the verified missingness/measurement pair and write its contract."""
 
@@ -1048,13 +1105,13 @@ def run_missingness_measurement_figure(
         run_dir=Path(run_dir),
         resolved_inputs=resolved_inputs,
         step_id=step_id,
+        input_by_role={
+            "measurement_missingness": missingness_input,
+            "measurement_process": process_input,
+        },
     )
-    audit_frame, audit_binding, audit_table = bindings[
-        MISSINGNESS_MEASUREMENT_AUDIT_INPUT
-    ]
-    process_frame, process_binding, process_table = bindings[
-        MEASUREMENT_PROCESS_AUDIT_INPUT
-    ]
+    audit_frame, audit_binding, audit_table = bindings[missingness_input]
+    process_frame, process_binding, process_table = bindings[process_input]
     per_variable = _validate_audit_rows(audit_frame)
     process_cells = _validate_process_rows(process_frame)
 
@@ -1291,7 +1348,7 @@ def run_missingness_measurement_figure(
                 "metadata": {
                     "article_role": DATA_QUALITY_FIGURE_PANELS[0].article_role,
                     "chart_type": DATA_QUALITY_FIGURE_PANELS[0].chart_type,
-                    "source_products": [MISSINGNESS_MEASUREMENT_AUDIT_INPUT],
+                    "source_products": [missingness_input],
                     "source_data": [missingness_panel_source.name],
                     "zero_missing_completeness_display": zero_missing_display,
                 },
@@ -1309,7 +1366,7 @@ def run_missingness_measurement_figure(
                 "metadata": {
                     "article_role": DATA_QUALITY_FIGURE_PANELS[1].article_role,
                     "chart_type": DATA_QUALITY_FIGURE_PANELS[1].chart_type,
-                    "source_products": [MEASUREMENT_PROCESS_AUDIT_INPUT],
+                    "source_products": [process_input],
                     "source_data": [process_source.name],
                 },
             },
@@ -1360,18 +1417,18 @@ def run_missingness_measurement_figure(
         "analysis_family": "data_quality",
         "deterministic_standard_analysis": "missingness_measurement_figure",
         "rendering_only": True,
-        "source_inputs": list(MISSINGNESS_MEASUREMENT_FIGURE_INPUTS),
+        "source_inputs": [missingness_input, process_input],
         "source_evidence_ids": {
-            MISSINGNESS_MEASUREMENT_AUDIT_INPUT: audit_binding.get("evidence_id"),
-            MEASUREMENT_PROCESS_AUDIT_INPUT: process_binding.get("evidence_id"),
+            missingness_input: audit_binding.get("evidence_id"),
+            process_input: process_binding.get("evidence_id"),
         },
         "source_sha256": {
-            MISSINGNESS_MEASUREMENT_AUDIT_INPUT: audit_binding.get("sha256"),
-            MEASUREMENT_PROCESS_AUDIT_INPUT: process_binding.get("sha256"),
+            missingness_input: audit_binding.get("sha256"),
+            process_input: process_binding.get("sha256"),
         },
         "source_rows_consumed": {
-            MISSINGNESS_MEASUREMENT_AUDIT_INPUT: int(len(audit_frame)),
-            MEASUREMENT_PROCESS_AUDIT_INPUT: int(len(process_frame)),
+            missingness_input: int(len(audit_frame)),
+            process_input: int(len(process_frame)),
         },
         "audited_variable_count": int(len(per_variable)),
         "zero_missing_completeness_display": zero_missing_display,
