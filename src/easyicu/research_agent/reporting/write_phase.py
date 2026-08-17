@@ -160,6 +160,67 @@ def _repair_rejected_writer_sentences(
     return repaired, applied, fallback_detail
 
 
+def _drop_residual_strict_writer_sentences(
+    scaffold: str,
+    *,
+    enforce_scaffold: Callable[[str], object],
+) -> tuple[str, List[Dict[str, object]], Optional[Dict[str, Any]]]:
+    """Revalidate one bounded repair and drop any prose STRICT still rejects.
+
+    A model-selected evidence citation is not scientific-claim authority.  In
+    particular, appending ``{evidence:*}`` to numeric or interpretive prose
+    does not make that sentence legal under the manuscript grammar.  Run the
+    unchanged owner gate immediately after the bounded repair and remove only
+    the exact residual sentences it names.  A second failure propagates, so
+    this helper cannot turn an unknown enforcement defect into a manuscript.
+    """
+
+    try:
+        enforce_scaffold(scaffold)
+    except EvidenceEnforcementError as exc:
+        detail = exc.detail or {}
+        raw_results = detail.get("removed_sentences", [])
+        raw_claims = detail.get("unsupported_scientific_claim_sentences", [])
+        result_sentences = (
+            [str(value).strip() for value in raw_results if str(value).strip()]
+            if isinstance(raw_results, list)
+            else []
+        )
+        claim_sentences = (
+            [str(value).strip() for value in raw_claims if str(value).strip()]
+            if isinstance(raw_claims, list)
+            else []
+        )
+        rejected = [*result_sentences, *claim_sentences]
+        if not rejected:
+            raise
+        drop_decisions = [
+            {"index": index, "action": "drop", "evidence_ids": []}
+            for index in range(len(rejected))
+        ]
+        cleaned, applied = _apply_writer_evidence_repair_decisions(
+            scaffold,
+            missing_sentences=rejected,
+            decisions=drop_decisions,
+            allowed_claim_refs=(),
+        )
+        # Fail closed if anything outside the exact first-gate rejection set
+        # remains invalid.  The normal bind stage will enforce the same gate
+        # again, but this local check keeps the repair boundary attributable.
+        enforce_scaffold(cleaned)
+        return (
+            cleaned,
+            applied,
+            {
+                "reason_code": "writer_evidence_repair_residual_strict_drop",
+                "rejected_sentence_count": len(rejected),
+                "result_sentence_count": len(result_sentences),
+                "scientific_claim_sentence_count": len(claim_sentences),
+            },
+        )
+    return scaffold, [], None
+
+
 _DEVELOPMENT_MUTABLE_PROVENANCE_FIELDS = frozenset(
     {
         "image_reference",
@@ -1087,11 +1148,27 @@ def _draft_manuscript(
                 allowed_claim_refs=tuple(claim_text_by_ref),
                 language=run_language,
             )
+            (
+                scaffold,
+                residual_strict_drops,
+                residual_strict_drop_detail,
+            ) = _drop_residual_strict_writer_sentences(
+                scaffold,
+                enforce_scaffold=evidence.enforce_evidence_bound_scaffold,
+            )
             repair_message_prefix = (
                 "Applied deterministic drop fallback after an invalid bounded "
                 "writer evidence repair decision for "
                 if repair_fallback_detail is not None
                 else "Applied one bounded writer evidence repair pass to "
+            )
+            residual_message = (
+                " "
+                f"STRICT still rejected {len(residual_strict_drops)} cited or "
+                "unsupported sentence(s), which the host removed before "
+                "binding."
+                if residual_strict_drops
+                else ""
             )
             findings.append(
                 ValidationFinding(
@@ -1100,13 +1177,19 @@ def _draft_manuscript(
                     message=(
                         repair_message_prefix
                         + f"{len(applied_evidence_repairs)} sentence(s); the unchanged "
-                        "STRICT gate will revalidate the result."
+                        "STRICT gate revalidated the result." + residual_message
                     ),
                     detail={
                         "evidence_repairs": applied_evidence_repairs,
+                        "residual_strict_drops": residual_strict_drops,
                         **(
                             {"fallback": repair_fallback_detail}
                             if repair_fallback_detail is not None
+                            else {}
+                        ),
+                        **(
+                            {"residual_drop": residual_strict_drop_detail}
+                            if residual_strict_drop_detail is not None
                             else {}
                         ),
                     },
