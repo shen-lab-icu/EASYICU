@@ -761,6 +761,16 @@ class ProgressivePlanCompileError(ValueError):
             "path": path,
             "message": str(message),
         }
+        # Public/Web diagnostics may expose only these bounded host-authored
+        # coordinates.  The human-readable compiler message can contain
+        # candidate values, so it deliberately stays out of this projection.
+        self.easyicu_safe_diagnostic = {
+            "owner": self.owner,
+            "reason_code": reason_code,
+            "step_id": step_id,
+            "step_index": step_index,
+            "path": path,
+        }
         if findings:
             self.details["findings"] = [dict(item) for item in findings]
         coordinate = f" step={step_id!r}" if step_id else ""

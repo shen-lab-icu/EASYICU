@@ -475,6 +475,13 @@ def _pipeline_failure_code(exc: BaseException) -> str:
         return "research_pipeline_provider_timeout"
     if any(type(item).__name__ == "StructuredResponseFailure" for item in chain):
         return "research_pipeline_plan_contract_exhausted"
+    typed_failure = _safe_pipeline_typed_failure(exc)
+    if typed_failure.get("owner") == (
+        "easyicu.providers.planner_efficiency_budget_v1"
+    ):
+        return "research_pipeline_planner_efficiency_budget_exhausted"
+    if typed_failure.get("owner") == "easyicu.planning.progressive_compiler_v1":
+        return "research_pipeline_progressive_compile_failed"
     return "research_pipeline_execution_failed"
 
 
@@ -502,6 +509,108 @@ def _safe_pipeline_attempt_metadata(exc: BaseException) -> List[Dict[str, Any]]:
             # owner boundary; exception attributes are mutable and untrusted.
             return safe_structured_attempt_metadata(projected)
     return []
+
+
+_SAFE_COMPILER_COORDINATE_RE = re.compile(r"^[A-Za-z0-9_.:\[\]-]{1,240}$")
+_SAFE_PLANNER_BUDGET_REASONS = frozenset(
+    {
+        "call_limit",
+        "provider_usage_unavailable",
+        "reported_token_limit",
+        "wall_clock_limit",
+    }
+)
+
+
+def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
+    """Project one allowlisted owner diagnostic without exception text."""
+
+    for item in _pipeline_exception_chain(exc):
+        raw = getattr(item, "easyicu_safe_diagnostic", None)
+        if not isinstance(raw, Mapping):
+            continue
+        owner = raw.get("owner")
+        if owner == "easyicu.planning.progressive_compiler_v1":
+            reason_code = raw.get("reason_code")
+            if not isinstance(reason_code, str) or not re.fullmatch(
+                r"[a-z][a-z0-9_]{2,79}", reason_code
+            ):
+                continue
+            projected: Dict[str, Any] = {
+                "owner": owner,
+                "reason_code": reason_code,
+            }
+            step_id = raw.get("step_id")
+            if isinstance(step_id, str) and re.fullmatch(
+                r"[a-z0-9][a-z0-9_]{0,79}", step_id
+            ):
+                projected["step_id"] = step_id
+            step_index = raw.get("step_index")
+            if (
+                isinstance(step_index, int)
+                and not isinstance(step_index, bool)
+                and 0 <= step_index <= 10_000
+            ):
+                projected["step_index"] = step_index
+            path = raw.get("path")
+            if isinstance(path, str) and _SAFE_COMPILER_COORDINATE_RE.fullmatch(
+                path
+            ):
+                projected["path"] = path
+            return projected
+        if owner == "easyicu.providers.planner_efficiency_budget_v1":
+            reason = raw.get("reason")
+            reason_code = raw.get("reason_code")
+            calls = raw.get("calls")
+            reported_tokens = raw.get("reported_tokens")
+            elapsed_seconds = raw.get("elapsed_seconds")
+            limits = raw.get("limits")
+            if (
+                reason_code != "planner_efficiency_budget_exhausted"
+                or reason not in _SAFE_PLANNER_BUDGET_REASONS
+                or not isinstance(calls, int)
+                or isinstance(calls, bool)
+                or calls < 0
+                or not isinstance(reported_tokens, int)
+                or isinstance(reported_tokens, bool)
+                or reported_tokens < 0
+                or not isinstance(elapsed_seconds, (int, float))
+                or isinstance(elapsed_seconds, bool)
+                or not math.isfinite(float(elapsed_seconds))
+                or float(elapsed_seconds) < 0
+                or not isinstance(limits, Mapping)
+            ):
+                continue
+            max_calls = limits.get("max_calls")
+            max_reported_tokens = limits.get("max_reported_tokens")
+            max_wall_seconds = limits.get("max_wall_seconds")
+            if (
+                not isinstance(max_calls, int)
+                or isinstance(max_calls, bool)
+                or max_calls <= 0
+                or not isinstance(max_reported_tokens, int)
+                or isinstance(max_reported_tokens, bool)
+                or max_reported_tokens <= 0
+                or not isinstance(max_wall_seconds, (int, float))
+                or isinstance(max_wall_seconds, bool)
+                or not math.isfinite(float(max_wall_seconds))
+                or float(max_wall_seconds) <= 0
+            ):
+                continue
+            return {
+                "owner": owner,
+                "reason_code": reason_code,
+                "reason": reason,
+                "calls": calls,
+                "reported_tokens": reported_tokens,
+                "elapsed_seconds": round(float(elapsed_seconds), 6),
+                "limits": {
+                    "max_calls": max_calls,
+                    "max_reported_tokens": max_reported_tokens,
+                    "max_wall_seconds": float(max_wall_seconds),
+                },
+            }
+    return {}
 
 
 def _pipeline_failure_category(exc: BaseException) -> str:
@@ -545,10 +654,11 @@ def _write_pipeline_failure_diagnostic(
         f"{type(exc).__name__}: {exc}".encode("utf-8")
     ).hexdigest()
     payload = {
-        "schema_version": "easyicu.web-research-pipeline-failure/3",
+        "schema_version": "easyicu.web-research-pipeline-failure/4",
         "status": "failed",
         "code": code,
         "failure_type": _pipeline_failure_category(exc),
+        "typed_failure": _safe_pipeline_typed_failure(exc),
         "message": diagnostic_message,
         "message_sha256": message_sha256,
         "structured_retry_history": [],
@@ -3383,6 +3493,19 @@ def make_research_pipeline_run_runner(
                 provider_output_cost_usd_per_million_tokens=(
                     hard_stop_limits.output_cost_usd_per_million_tokens
                 ),
+                development_planner_efficiency_max_calls=(
+                    6 if selected_budget_mode != "full_reviewed" else None
+                ),
+                development_planner_efficiency_max_reported_tokens=(
+                    100_000
+                    if selected_budget_mode != "full_reviewed"
+                    else None
+                ),
+                development_planner_efficiency_max_wall_seconds=(
+                    600.0
+                    if selected_budget_mode != "full_reviewed"
+                    else None
+                ),
                 **profile_options,
             )
             pipeline = ResearchAgentPipeline.from_config(
@@ -3555,6 +3678,16 @@ def make_research_pipeline_run_runner(
                 message = (
                     "The model used every bounded planning attempt without producing "
                     "a contract-valid plan. No analysis was run."
+                )
+            elif code == "research_pipeline_planner_efficiency_budget_exhausted":
+                message = (
+                    "The development Planner reached its call, token, or time budget. "
+                    "Its validated checkpoint prefix was preserved; no analysis was run."
+                )
+            elif code == "research_pipeline_progressive_compile_failed":
+                message = (
+                    "The deterministic host compiler rejected the bounded Planner "
+                    "repairs. A local replay artifact was preserved; no analysis was run."
                 )
             else:
                 message = (

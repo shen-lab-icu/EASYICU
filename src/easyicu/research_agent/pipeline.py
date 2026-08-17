@@ -2736,14 +2736,39 @@ class ResearchAgentPipeline:
             progressive = self._planner_strategy == "progressive_v2"
             plan_generation_mode = "llm_progressive_v2" if progressive else "llm"
             planner_class = ProgressivePlannerAgent if progressive else PlannerAgent
-            planner = planner_class(
-                budgeted_role_client(
-                    role_resolver,
-                    "planner",
-                    "planner_plan_generation",
-                    limit_tokens=self._max_prompt_tokens_per_call,
-                )
+            planner_client = budgeted_role_client(
+                role_resolver,
+                "planner",
+                "planner_plan_generation",
+                limit_tokens=self._max_prompt_tokens_per_call,
             )
+            if (
+                progressive
+                and self._config.development_planner_efficiency_max_calls
+                is not None
+            ):
+                from .providers.efficiency_budget import (
+                    PlannerEfficiencyBudgetClient,
+                    PlannerEfficiencyLimits,
+                )
+
+                planner_client = PlannerEfficiencyBudgetClient(
+                    planner_client,
+                    limits=PlannerEfficiencyLimits(
+                        max_calls=int(
+                            self._config.development_planner_efficiency_max_calls
+                        ),
+                        max_reported_tokens=int(
+                            self._config.development_planner_efficiency_max_reported_tokens
+                            or 0
+                        ),
+                        max_wall_seconds=float(
+                            self._config.development_planner_efficiency_max_wall_seconds
+                            or 0.0
+                        ),
+                    ),
+                )
+            planner = planner_class(planner_client)
 
             planner_progress = planner_retry_progress_callback(
                 emit_progress, run_id=run_id

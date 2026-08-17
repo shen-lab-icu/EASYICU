@@ -38,6 +38,73 @@ class ProgressivePlanningArtifactError(ValueError):
         self.reason_code = reason_code
 
 
+class ProgressiveCompilerFinding(BaseModel):
+    """Closed compiler diagnostic safe to persist without raw model text."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner: Literal["easyicu.planning.progressive_compiler_v1"]
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{2,79}$")
+    step_id: str | None = Field(default=None, max_length=160)
+    step_index: int | None = Field(default=None, ge=0)
+    path: str | None = Field(default=None, max_length=240)
+    message: str = Field(min_length=1, max_length=2_000)
+    findings: list["ProgressiveCompilerFinding"] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+
+
+class ProgressiveCompileReplayAttempt(BaseModel):
+    """One schema-validated candidate rejected by the deterministic compiler."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    revision: int = Field(ge=0, le=20)
+    step_schema_authority_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    materialization: ProgressiveStepMaterialization
+    materialization_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    compiler_finding: ProgressiveCompilerFinding
+
+    @model_validator(mode="after")
+    def _materialization_digest_matches(self) -> "ProgressiveCompileReplayAttempt":
+        observed = canonical_sha256(self.materialization.model_dump(mode="json"))
+        if observed != self.materialization_sha256:
+            raise ValueError("compile replay materialization digest mismatch")
+        return self
+
+
+class ProgressiveCompileFailureReplay(BaseModel):
+    """Content-addressed failed-candidate set for zero-provider replay."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.progressive_compile_failure_replay/1"] = (
+        "easyicu.progressive_compile_failure_replay/1"
+    )
+    owner: Literal["easyicu.planning.progressive_artifacts_v1"] = (
+        "easyicu.planning.progressive_artifacts_v1"
+    )
+    request_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    prefix_checkpoint_sequence: int = Field(ge=0)
+    prefix_checkpoint_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    attempts: list[ProgressiveCompileReplayAttempt] = Field(
+        min_length=1,
+        max_length=20,
+    )
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _artifact_digest_matches(self) -> "ProgressiveCompileFailureReplay":
+        unsigned = self.model_dump(mode="json", exclude={"artifact_sha256"})
+        if canonical_sha256(unsigned) != self.artifact_sha256:
+            raise ValueError("compile replay artifact digest mismatch")
+        return self
+
+
 class ProgressiveEvidenceRegistrar(Protocol):
     """Small EvidenceStore surface required by this owner module."""
 
@@ -147,6 +214,18 @@ class ProgressivePlannerCheckpointRecorder:
     source_chain: tuple[ProgressivePlannerCheckpoint, ...] = ()
     _pending: list[ProgressivePlannerCheckpoint] = field(default_factory=list)
     _persisted: bool = False
+    _latest_checkpoint: ProgressivePlannerCheckpoint | None = field(
+        init=False,
+        default=None,
+    )
+
+    def __post_init__(self) -> None:
+        if self.source_chain:
+            self._latest_checkpoint = self.source_chain[-1]
+
+    @property
+    def latest_checkpoint(self) -> ProgressivePlannerCheckpoint | None:
+        return self._latest_checkpoint
 
     def record(self, checkpoint: ProgressivePlannerCheckpoint) -> None:
         if self._persisted:
@@ -156,6 +235,7 @@ class ProgressivePlannerCheckpointRecorder:
             )
         if self.source_chain:
             self._pending.append(checkpoint)
+            self._latest_checkpoint = checkpoint
             return
         persist_progressive_planner_checkpoint(
             run_dir=self.run_dir,
@@ -163,6 +243,7 @@ class ProgressivePlannerCheckpointRecorder:
             checkpoint=checkpoint,
             prompt_pack_version=self.prompt_pack_version,
         )
+        self._latest_checkpoint = checkpoint
 
     def persist_validated_resume(self) -> ProgressiveResumePersistenceReceipt:
         if not self.source_chain:
@@ -409,6 +490,93 @@ def persist_progressive_planner_checkpoint(
         prompt_pack_version=prompt_pack_version,
     )
     return path
+
+
+def persist_progressive_compile_failure_replay(
+    *,
+    run_dir: Path,
+    evidence: ProgressiveEvidenceRegistrar,
+    attempts: Sequence[ProgressiveCompileReplayAttempt],
+    prefix_checkpoint: ProgressivePlannerCheckpoint,
+    prompt_pack_version: str,
+) -> Path:
+    """Persist normalized failed candidates for zero-provider compiler replay."""
+
+    validated_attempts = [
+        ProgressiveCompileReplayAttempt.model_validate(item)
+        for item in attempts
+    ]
+    body: dict[str, Any] = {
+        "schema_version": "easyicu.progressive_compile_failure_replay/1",
+        "owner": "easyicu.planning.progressive_artifacts_v1",
+        "request_authority_sha256": (
+            prefix_checkpoint.request_authority_sha256
+        ),
+        "prefix_checkpoint_sequence": int(prefix_checkpoint.sequence),
+        "prefix_checkpoint_sha256": prefix_checkpoint.checkpoint_sha256,
+        "attempts": [item.model_dump(mode="json") for item in validated_attempts],
+    }
+    body["artifact_sha256"] = canonical_sha256(body)
+    replay = ProgressiveCompileFailureReplay.model_validate(body)
+    evidence_id = "progressive_compile_failure_replay"
+    checkpoint_id = (
+        f"progressive_planner_checkpoint_{prefix_checkpoint.sequence:03d}"
+    )
+    path = Path(run_dir) / f"{evidence_id}.json"
+    _write_and_register_once(
+        evidence,
+        content=replay.model_dump_json(indent=2),
+        evidence_id=evidence_id,
+        description=(
+            "Schema-validated Progressive Planner candidates rejected by the "
+            "deterministic host compiler; safe for zero-provider replay."
+        ),
+        source_path=path,
+        inputs=("research_context", checkpoint_id),
+        producer="progressive_compile_failure_replay",
+        generation_mode="llm_validated_diagnostic",
+        prompt_pack_version=prompt_pack_version,
+    )
+    return path
+
+
+def load_progressive_compile_failure_replay(
+    *,
+    replay_path: Path,
+    expected_artifact_sha256: str,
+) -> ProgressiveCompileFailureReplay:
+    """Load one digest-bound failed-candidate set without calling a provider."""
+
+    path = Path(replay_path)
+    expected = str(expected_artifact_sha256 or "").strip().lower()
+    if not _SHA256_RE.fullmatch(expected):
+        raise ProgressivePlanningArtifactError(
+            "progressive_compile_replay_digest_invalid",
+            "expected compile replay artifact digest is not a lowercase SHA-256",
+        )
+    if path.is_symlink() or not path.is_file():
+        raise ProgressivePlanningArtifactError(
+            "progressive_compile_replay_missing",
+            "compile replay artifact is absent or not a regular file",
+        )
+    if path.stat().st_size > _MAX_RESUME_CHECKPOINT_BYTES:
+        raise ProgressivePlanningArtifactError(
+            "progressive_compile_replay_too_large",
+            "compile replay artifact exceeds the bounded reader limit",
+        )
+    content = path.read_bytes()
+    if hashlib.sha256(content).hexdigest() != expected:
+        raise ProgressivePlanningArtifactError(
+            "progressive_compile_replay_digest_mismatch",
+            "compile replay artifact differs from its external authority",
+        )
+    try:
+        return ProgressiveCompileFailureReplay.model_validate_json(content)
+    except Exception as exc:
+        raise ProgressivePlanningArtifactError(
+            "progressive_compile_replay_invalid",
+            "compile replay artifact failed its closed typed contract",
+        ) from exc
 
 
 def load_progressive_planner_checkpoint_chain(
@@ -1014,13 +1182,18 @@ def persist_progressive_planning_authority(
 
 
 __all__ = [
+    "ProgressiveCompileFailureReplay",
+    "ProgressiveCompileReplayAttempt",
+    "ProgressiveCompilerFinding",
     "ProgressivePlanningArtifactError",
     "ProgressivePlanningArtifactPaths",
     "ProgressivePlanningAuthority",
     "ProgressivePlanningStepAuthority",
     "ProgressivePlannerCheckpointRecorder",
     "ProgressiveResumePersistenceReceipt",
+    "load_progressive_compile_failure_replay",
     "load_progressive_planner_checkpoint_chain",
+    "persist_progressive_compile_failure_replay",
     "persist_progressive_planner_checkpoint",
     "persist_progressive_planning_artifacts",
     "persist_progressive_planning_authority",

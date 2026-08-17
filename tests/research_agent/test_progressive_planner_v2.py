@@ -29,8 +29,10 @@ from easyicu.research_agent.planning.progressive_compiler import (
     compile_progressive_plan,
 )
 from easyicu.research_agent.planning.progressive_artifacts import (
+    ProgressiveCompileFailureReplay,
     ProgressivePlannerCheckpointRecorder,
     ProgressivePlanningArtifactError,
+    load_progressive_compile_failure_replay,
     load_progressive_planner_checkpoint_chain,
     persist_progressive_planner_checkpoint,
     persist_progressive_planning_artifacts,
@@ -41,7 +43,12 @@ from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanCompileError,
     ProgressivePlanOutline,
     ProgressivePlanSkeleton,
+    ProgressivePlannerCheckpoint,
     ProgressivePredicateValue,
+)
+from easyicu.research_agent.planning.progressive_resume import (
+    ProgressivePrefixState,
+    compile_progressive_prefix,
 )
 from easyicu.research_agent.orchestration.progressive_planning import (
     run_progressive_planner,
@@ -1639,6 +1646,39 @@ def test_agent_repairs_identical_distribution_contrast_locally() -> None:
     assert agent.last_prompt_metrics["full_revision_count"] == 0
 
 
+def test_agent_stops_after_one_host_compile_repair_and_keeps_attempts() -> None:
+    materializations = _materialization_payloads()
+    invalid_distribution = json.loads(json.dumps(materializations[2]))
+    invalid_distribution["step"]["comparison_exposure_level_index"] = 0
+    responses = [
+        _outline_payload(),
+        _foundation_payload(),
+        *materializations[:2],
+        invalid_distribution,
+        invalid_distribution,
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        agent.run(_context())
+
+    assert caught.value.reason_code == (
+        "progressive_distribution_contrast_not_distinct"
+    )
+    assert len(llm.calls) == 6
+    assert [item.revision for item in agent.last_compile_failure_attempts] == [
+        0,
+        1,
+    ]
+    assert {
+        item.compiler_finding.reason_code
+        for item in agent.last_compile_failure_attempts
+    } == {"progressive_distribution_contrast_not_distinct"}
+    assert agent.last_prompt_metrics["compile_revision_count"] == 1
+
+
 class _RecordingEvidence:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, object]] = {}
@@ -1654,6 +1694,102 @@ class _RecordingEvidence:
             "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
         }
         return self.records[evidence_id]
+
+
+def test_progressive_compile_failure_persists_for_zero_provider_replay(
+    tmp_path: Path,
+) -> None:
+    materializations = _materialization_payloads()
+    invalid_distribution = json.loads(json.dumps(materializations[2]))
+    invalid_distribution["step"]["comparison_exposure_level_index"] = 0
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
+            *[json.dumps(item) for item in materializations[:2]],
+            json.dumps(invalid_distribution),
+            json.dumps(invalid_distribution),
+        ]
+    )
+    llm.supports_strict_json_schema = True
+    evidence = _RecordingEvidence()
+    cohort_path = tmp_path / "cohort.parquet"
+    cohort_path.write_bytes(b"synthetic replay cohort")
+
+    with pytest.raises(ProgressivePlanCompileError):
+        run_progressive_planner(
+            planner=ProgressivePlannerAgent(llm),
+            context=_context(),
+            run_dir=tmp_path,
+            evidence=evidence,
+            prompt_pack_version="test-v1",
+            resume_checkpoint_path=None,
+            resume_checkpoint_sha256=None,
+            cohort_path=cohort_path,
+            llm_signature="mock:test",
+            planner_kwargs={},
+            know_how_binding=PlannerKnowHowBinding(),
+            planning_contract_context="",
+            finding_sink=lambda _finding: None,
+        )
+
+    replay_path = tmp_path / "progressive_compile_failure_replay.json"
+    replay = load_progressive_compile_failure_replay(
+        replay_path=replay_path,
+        expected_artifact_sha256=str(
+            evidence.records["progressive_compile_failure_replay"]["sha256"]
+        ),
+    )
+    assert isinstance(replay, ProgressiveCompileFailureReplay)
+    assert replay.prefix_checkpoint_sequence == 3
+    assert len(replay.attempts) == 2
+    assert evidence.records["progressive_compile_failure_replay"]["inputs"] == [
+        "research_context",
+        "progressive_planner_checkpoint_003",
+    ]
+
+    checkpoint = ProgressivePlannerCheckpoint.model_validate_json(
+        (tmp_path / "progressive_planner_checkpoint_003.json").read_bytes()
+    )
+    assert checkpoint.foundation is not None
+    state = ProgressivePrefixState()
+    for materialization in checkpoint.materializations:
+        state = compile_progressive_prefix(
+            state,
+            materialization,
+            outline=checkpoint.outline,
+            foundation=checkpoint.foundation.foundation,
+            context=_context(),
+            allowed_literature_citation_keys=(),
+            allowed_know_how_decisions=None,
+            reporting_method_source_keys=(),
+        )
+    with pytest.raises(ProgressivePlanCompileError) as replayed:
+        compile_progressive_prefix(
+            state,
+            replay.attempts[0].materialization,
+            outline=checkpoint.outline,
+            foundation=checkpoint.foundation.foundation,
+            context=_context(),
+            allowed_literature_citation_keys=(),
+            allowed_know_how_decisions=None,
+            reporting_method_source_keys=(),
+        )
+    assert replayed.value.reason_code == (
+        replay.attempts[0].compiler_finding.reason_code
+    )
+
+    replay_path.write_text("{}", encoding="utf-8")
+    with pytest.raises(ProgressivePlanningArtifactError) as tampered:
+        load_progressive_compile_failure_replay(
+            replay_path=replay_path,
+            expected_artifact_sha256=str(
+                evidence.records["progressive_compile_failure_replay"]["sha256"]
+            ),
+        )
+    assert tampered.value.reason_code == (
+        "progressive_compile_replay_digest_mismatch"
+    )
 
 
 def test_progressive_checkpoints_persist_as_a_digest_verified_chain(

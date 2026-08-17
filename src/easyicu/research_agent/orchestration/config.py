@@ -381,6 +381,12 @@ class PipelineConfig:
         Union[str, Path]
     ] = None
     development_progressive_resume_checkpoint_sha256: Optional[str] = None
+    # Development canaries stop before another expensive Planner request once
+    # any one of these exact-run limits is exhausted. Formal profiles cannot
+    # enable this partial-run checkpointing envelope.
+    development_planner_efficiency_max_calls: Optional[int] = None
+    development_planner_efficiency_max_reported_tokens: Optional[int] = None
+    development_planner_efficiency_max_wall_seconds: Optional[float] = None
     enable_deterministic_runner_repair: bool = True
     # --- literature search backends -------------------------------------
     enable_pubmed: bool = False
@@ -674,6 +680,50 @@ class PipelineConfig:
                 raise ValueError(
                     "development progressive resume checkpoint SHA-256 is invalid"
                 )
+        planner_efficiency_values = (
+            self.development_planner_efficiency_max_calls,
+            self.development_planner_efficiency_max_reported_tokens,
+            self.development_planner_efficiency_max_wall_seconds,
+        )
+        if any(value is not None for value in planner_efficiency_values):
+            if any(value is None for value in planner_efficiency_values):
+                raise ValueError(
+                    "development Planner efficiency limits must be configured "
+                    "together"
+                )
+            profile_is_development_only = bool(
+                self.submission_profile_name
+                and not is_paper_facing_profile(self.submission_profile_name)
+            )
+            if not self.development_diagnostic and not profile_is_development_only:
+                raise ValueError(
+                    "development Planner efficiency limits require either "
+                    "development_diagnostic=True or a registered development-only "
+                    "profile"
+                )
+            if self.planner_strategy != "progressive_v2":
+                raise ValueError(
+                    "development Planner efficiency limits require "
+                    "planner_strategy='progressive_v2'"
+                )
+            if is_paper_facing_profile(self.submission_profile_name):
+                raise ValueError(
+                    "development Planner efficiency limits cannot be combined "
+                    "with a paper-facing submission profile"
+                )
+            from ..providers.efficiency_budget import PlannerEfficiencyLimits
+
+            PlannerEfficiencyLimits(
+                max_calls=int(
+                    self.development_planner_efficiency_max_calls or 0
+                ),
+                max_reported_tokens=int(
+                    self.development_planner_efficiency_max_reported_tokens or 0
+                ),
+                max_wall_seconds=float(
+                    self.development_planner_efficiency_max_wall_seconds or 0.0
+                ),
+            )
         assert_step_provider_budget_funds_its_repairs(
             max_step_provider_calls=self.max_step_provider_calls,
             max_code_repair_attempts=self.max_code_repair_attempts,
