@@ -40,8 +40,13 @@ def progressive_module_ids_for_analysis_types(
     """Return the union of modules the selected analysis families can execute.
 
     Descriptive epidemiology has no fitted primary effect or uncertainty
-    interval.  Its outline must therefore not advertise the adjusted-model or
-    locked-effect replay owners that require those quantities.
+    interval. Its outline must therefore not advertise the adjusted-model or
+    locked-effect replay owners that require those quantities. Publication
+    figures and manuscript text are also host-owned for this family: the host
+    binds deterministic renderers to the exact typed result/audit products and
+    the evidence-bound Writer runs after execution. Asking the Planner to add
+    parallel visualization or report steps would duplicate those owners and
+    widen source-lineage obligations without adding a scientific decision.
     """
 
     normalized = {
@@ -54,7 +59,13 @@ def progressive_module_ids_for_analysis_types(
         modules = [
             module
             for module in modules
-            if module not in {"adjusted_association", "robustness_replay"}
+            if module
+            not in {
+                "adjusted_association",
+                "robustness_replay",
+                "visualization",
+                "report",
+            }
         ]
     return tuple(modules)
 ProgressiveOutputRole = Literal[

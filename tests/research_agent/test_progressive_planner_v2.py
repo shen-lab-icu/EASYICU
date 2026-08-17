@@ -589,7 +589,7 @@ def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> 
         assert object_schema["additionalProperties"] is False
 
 
-def test_descriptive_outline_schema_does_not_advertise_effect_model_owners() -> None:
+def test_descriptive_outline_schema_advertises_only_scientific_step_owners() -> None:
     request = progressive_outline_structured_output_request(
         analysis_types=["descriptive_epidemiology"],
         variable_names=["exposure_flag", "outcome_flag"],
@@ -602,6 +602,8 @@ def test_descriptive_outline_schema_does_not_advertise_effect_model_owners() -> 
 
     assert "adjusted_association" not in modules
     assert "robustness_replay" not in modules
+    assert "visualization" not in modules
+    assert "report" not in modules
     assert "measurement_audit" in modules
     assert "exposure_outcome_distribution" in modules
 
@@ -1080,6 +1082,64 @@ def test_descriptive_compiler_rejects_effect_robustness_before_plan_assembly() -
         == "progressive_descriptive_robustness_unavailable"
     )
     assert caught.value.path == "robustness_intents"
+
+
+@pytest.mark.parametrize(
+    ("module_id", "product_id", "semantic_role"),
+    [
+        ("visualization", "figure:duplicate_presentation", "figure"),
+        ("report", "report:duplicate_presentation", "report"),
+    ],
+)
+def test_descriptive_compiler_rejects_duplicate_presentation_owners(
+    module_id: str,
+    product_id: str,
+    semantic_role: str,
+) -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                inferred_analysis_family="descriptive_epidemiology",
+            )
+        }
+    )
+    payload = _payload()
+    payload["analysis_type"] = "descriptive_epidemiology"
+    payload["robustness_intents"] = []
+    cohort_step = payload["steps"][0]
+    step = payload["steps"][-1]
+    step.update(
+        {
+            "step_id": "02_duplicate_presentation",
+            "module_id": module_id,
+            "objective": "Duplicate a presentation artifact already owned by the host.",
+            "depends_on": ["01_cohort"],
+            "raw_inputs": [],
+            "product_inputs": [
+                {
+                    "producer_step_id": "01_cohort",
+                    "product_id": "artifact:analysis_cohort",
+                }
+            ],
+            "outputs": [
+                {
+                    "product_id": product_id,
+                    "semantic_role": semantic_role,
+                }
+            ],
+        }
+    )
+    payload["steps"] = [cohort_step, step]
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=context,
+        )
+
+    assert caught.value.reason_code == "progressive_analysis_module_unavailable"
+    assert caught.value.step_id == "02_duplicate_presentation"
+    assert caught.value.path == "module_id"
 
 
 def test_counts_only_primary_post_baseline_distribution_gets_typed_ceiling() -> None:
