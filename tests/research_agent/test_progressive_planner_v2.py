@@ -495,6 +495,27 @@ def _outline_payload(payload: dict | None = None) -> dict:
     }
 
 
+def _outline_with_repeated_robustness() -> dict:
+    payload = _outline_payload()
+    for sequence, suffix, objective in (
+        (8, "a", "Replay all prespecified complete-case robustness intents."),
+        (9, "b", "Replay another compatible robustness intent bundle."),
+    ):
+        payload["steps"].append(
+            {
+                "step_id": f"{sequence:02d}_robustness_{suffix}",
+                "planned_analysis_role": "sensitivity",
+                "module_id": "robustness_replay",
+                "objective": objective,
+                "depends_on": ["05_primary"],
+                "variable_names": ["exposure_flag", "outcome_flag", "age_years"],
+                "literature_citation_keys": [],
+                "scientific_action_id": None,
+            }
+        )
+    return payload
+
+
 def _materialization_payloads(payload: dict | None = None) -> list[dict]:
     source = payload or _payload()
     outline = ProgressivePlanOutline.model_validate(_outline_payload(source))
@@ -1290,6 +1311,38 @@ def test_outline_requires_custom_owner_for_explicit_separate_product() -> None:
     ]
 
 
+def test_outline_rejects_repeated_host_compiled_singleton_module() -> None:
+    outline = ProgressivePlanOutline.model_validate(
+        _outline_with_repeated_robustness()
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            outline,
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+        )
+
+    assert caught.value.reason_code == "progressive_outline_host_module_repeated"
+    assert caught.value.details["path"] == "steps"
+    assert caught.value.details["findings"] == [
+        {
+            "module_id": "robustness_replay",
+            "step_ids": ["08_robustness_a", "09_robustness_b"],
+            "host_products": [
+                "table:robustness_matrix",
+                "table:robustness_summary",
+            ],
+        }
+    ]
+
+
 def test_outline_prompt_projects_explicit_separate_product_without_case_rules() -> None:
     context = _context().model_copy(
         update={
@@ -1307,6 +1360,16 @@ def test_outline_prompt_projects_explicit_separate_product_without_case_rules() 
     assert "Host-resolved separate-analysis obligations" in prompt
     assert '"table:prespecified_sensitivity"' in prompt
     assert "custom_analysis outline step" in prompt
+
+
+def test_outline_prompt_exposes_host_compiled_singleton_ownership() -> None:
+    prompt = ProgressivePlannerAgent.request_messages(_context())[1].content
+
+    assert "Host-compiled singleton module ownership" in prompt
+    assert '"robustness_replay"' in prompt
+    assert '"table:robustness_matrix"' in prompt
+    assert "Each listed module may appear at most once" in prompt
+    assert "all replayable robustness intents in one robustness_replay step" in prompt
 
 
 @pytest.mark.parametrize(
@@ -2128,6 +2191,28 @@ def test_outline_authority_failure_is_retried_before_foundation() -> None:
     )
     assert "progressive_outline_variable_unavailable" in (
         llm.calls[1][0][-1].content
+    )
+
+
+def test_repeated_singleton_outline_is_retried_before_foundation() -> None:
+    responses = [
+        _outline_with_repeated_robustness(),
+        _outline_payload(),
+        _foundation_payload(),
+        *_materialization_payloads(),
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+
+    plan = ProgressivePlannerAgent(llm).run(_context())
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 10
+    assert "progressive_outline_host_module_repeated" in (
+        llm.calls[1][0][-1].content
+    )
+    assert "Host-compiled singleton module ownership" in (
+        llm.calls[0][0][-1].content
     )
 
 
