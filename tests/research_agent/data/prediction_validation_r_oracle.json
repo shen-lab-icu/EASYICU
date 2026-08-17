@@ -1,0 +1,29 @@
+{
+  "_provenance": {
+    "generated_on": "2026-08-17",
+    "generator": "tests/research_agent/data/oracle_prediction_validation.R",
+    "r_version": "4.6.0",
+    "reference_scope": "base-R rank-sum AUROC, mean squared Brier score, stats::glm joint calibration intercept/slope, and explicit threshold confusion counts",
+    "script_sha256": "026f3775530662802d1c931ff60f37bb1eafb5c24b980abaaf900556eded9eb3",
+    "source_csv_sha256": "9487a6abdc64699795d6406de77049149fcd40c5a76e390b9f17713e917492b4"
+  },
+  "auroc": 0.77551020408163263,
+  "brier_score": 0.18571428571428572,
+  "calibration_intercept": -5.9658508787253315e-16,
+  "calibration_slope": 0.99999999999985312,
+  "evaluation_n": 14,
+  "threshold_metrics": {
+    "0.5": {
+      "fn": 1,
+      "fp": 3,
+      "tn": 4,
+      "tp": 6
+    },
+    "0.8": {
+      "fn": 3,
+      "fp": 1,
+      "tn": 6,
+      "tp": 4
+    }
+  }
+}

@@ -7,7 +7,10 @@ them from the same declared frame and contract.
 
 from __future__ import annotations
 
+import io
+import re
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -15,11 +18,17 @@ from pydantic import ValidationError
 
 from ...contracts.prediction_validation import (
     PredictionValidationFinding,
+    PredictionValidationError,
     PredictionValidationReason,
+    PredictionValidationReceipt,
     PredictionValidationResult,
+    PredictionValidationSourceBinding,
     PredictionValidationSpec,
+    prediction_validation_receipt_sha256,
     prediction_validation_result_sha256,
+    prediction_validation_spec_sha256,
 )
+from ...canonical_json import sha256_bytes
 from ...methods.prediction_validation import evaluate_binary_predictions
 
 
@@ -30,6 +39,106 @@ def run_prediction_validation(
     """Run the experimental deterministic owner through its typed boundary."""
 
     return evaluate_binary_predictions(frame, spec)
+
+
+def _raise(
+    reason_code: PredictionValidationReason,
+    message: str,
+    **detail: Any,
+) -> None:
+    raise PredictionValidationError(reason_code, message, **detail)
+
+
+def _read_bound_csv(
+    source_path: Path,
+    *,
+    expected_source_sha256: str,
+) -> tuple[pd.DataFrame, PredictionValidationSourceBinding]:
+    path = Path(source_path)
+    expected_digest = str(expected_source_sha256 or "").strip()
+    if re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None:
+        _raise(
+            PredictionValidationReason.SOURCE_DIGEST_INVALID,
+            "expected source digest must be one lowercase SHA-256 value",
+        )
+    if not path.is_file() or path.suffix.lower() != ".csv":
+        _raise(
+            PredictionValidationReason.SOURCE_ARTIFACT_INVALID,
+            "prediction-validation source must be one regular CSV file",
+            source_name=path.name,
+        )
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise PredictionValidationError(
+            PredictionValidationReason.SOURCE_READ_FAILED,
+            "prediction-validation source bytes could not be read",
+            source_name=path.name,
+        ) from error
+    if not raw:
+        _raise(
+            PredictionValidationReason.SOURCE_ARTIFACT_INVALID,
+            "prediction-validation source CSV is empty",
+            source_name=path.name,
+        )
+    observed_digest = sha256_bytes(raw)
+    if observed_digest != expected_digest:
+        _raise(
+            PredictionValidationReason.SOURCE_DIGEST_MISMATCH,
+            "prediction-validation source digest does not match its authority",
+            source_name=path.name,
+            expected_sha256=expected_digest,
+            observed_sha256=observed_digest,
+        )
+    try:
+        frame = pd.read_csv(
+            io.BytesIO(raw),
+            encoding="utf-8",
+            low_memory=False,
+        )
+    except (OSError, UnicodeDecodeError, pd.errors.ParserError, ValueError) as error:
+        raise PredictionValidationError(
+            PredictionValidationReason.SOURCE_READ_FAILED,
+            "digest-bound prediction-validation CSV could not be parsed",
+            source_name=path.name,
+        ) from error
+    if frame.empty:
+        _raise(
+            PredictionValidationReason.EMPTY_INPUT,
+            "digest-bound prediction-validation CSV contains no rows",
+            source_name=path.name,
+        )
+    binding = PredictionValidationSourceBinding(
+        parser_version=pd.__version__,
+        source_artifact_name=path.name,
+        source_artifact_sha256=observed_digest,
+        source_artifact_size_bytes=len(raw),
+        source_row_count=int(len(frame)),
+        source_columns=tuple(str(column) for column in frame.columns),
+    )
+    return frame, binding
+
+
+def run_prediction_validation_csv(
+    *,
+    source_path: Path,
+    expected_source_sha256: str,
+    spec: PredictionValidationSpec | Mapping[str, Any],
+) -> PredictionValidationReceipt:
+    """Evaluate the exact bytes of one pre-authorized UTF-8 CSV artifact."""
+
+    parsed_spec = PredictionValidationSpec.model_validate(spec)
+    frame, source = _read_bound_csv(
+        source_path,
+        expected_source_sha256=expected_source_sha256,
+    )
+    result = run_prediction_validation(frame, parsed_spec)
+    return PredictionValidationReceipt(
+        source=source,
+        contract_sha256=prediction_validation_spec_sha256(parsed_spec),
+        result_sha256=prediction_validation_result_sha256(result),
+        result=result,
+    )
 
 
 def _first_mismatch(
@@ -75,7 +184,12 @@ def prediction_validation_result_findings(
     """Return a stable finding if ``candidate`` differs from host recomputation."""
 
     try:
-        parsed_candidate = PredictionValidationResult.model_validate(candidate)
+        candidate_input = (
+            candidate.model_dump(mode="python")
+            if isinstance(candidate, PredictionValidationResult)
+            else candidate
+        )
+        parsed_candidate = PredictionValidationResult.model_validate(candidate_input)
     except ValidationError as error:
         return (
             PredictionValidationFinding(
@@ -109,7 +223,72 @@ def prediction_validation_result_findings(
     )
 
 
+def prediction_validation_receipt_findings(
+    *,
+    source_path: Path,
+    expected_source_sha256: str,
+    spec: PredictionValidationSpec | Mapping[str, Any],
+    candidate: PredictionValidationReceipt | Mapping[str, Any],
+) -> tuple[PredictionValidationFinding, ...]:
+    """Validate a candidate receipt against exact source bytes and recomputation."""
+
+    try:
+        candidate_input = (
+            candidate.model_dump(mode="python")
+            if isinstance(candidate, PredictionValidationReceipt)
+            else candidate
+        )
+        parsed_candidate = PredictionValidationReceipt.model_validate(candidate_input)
+    except ValidationError as error:
+        return (
+            PredictionValidationFinding(
+                reason_code=PredictionValidationReason.RECEIPT_SCHEMA_INVALID,
+                message="candidate prediction-validation receipt is not schema-valid",
+                detail={"error_count": error.error_count()},
+            ),
+        )
+    try:
+        expected = run_prediction_validation_csv(
+            source_path=source_path,
+            expected_source_sha256=expected_source_sha256,
+            spec=spec,
+        )
+    except PredictionValidationError as error:
+        return (
+            PredictionValidationFinding(
+                reason_code=error.reason_code,
+                message="source-bound receipt could not be recomputed",
+                detail=error.detail,
+            ),
+        )
+    expected_payload = expected.model_dump(mode="json")
+    candidate_payload = parsed_candidate.model_dump(mode="json")
+    mismatch = _first_mismatch(expected_payload, candidate_payload)
+    if mismatch is None:
+        return ()
+    path, expected_value, observed_value = mismatch
+    return (
+        PredictionValidationFinding(
+            reason_code=PredictionValidationReason.RECEIPT_MISMATCH,
+            message="candidate receipt does not match source-bound recomputation",
+            detail={
+                "path": path,
+                "expected": expected_value,
+                "observed": observed_value,
+                "expected_receipt_sha256": prediction_validation_receipt_sha256(
+                    expected
+                ),
+                "observed_receipt_sha256": prediction_validation_receipt_sha256(
+                    parsed_candidate
+                ),
+            },
+        ),
+    )
+
+
 __all__ = [
+    "prediction_validation_receipt_findings",
     "prediction_validation_result_findings",
     "run_prediction_validation",
+    "run_prediction_validation_csv",
 ]

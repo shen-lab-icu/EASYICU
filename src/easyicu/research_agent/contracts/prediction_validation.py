@@ -33,6 +33,12 @@ class PredictionValidationReason(str, Enum):
     SINGLE_CLASS = "prediction_validation_single_class"
     RESULT_SCHEMA_INVALID = "prediction_validation_result_schema_invalid"
     RESULT_MISMATCH = "prediction_validation_result_mismatch"
+    SOURCE_ARTIFACT_INVALID = "prediction_validation_source_artifact_invalid"
+    SOURCE_DIGEST_INVALID = "prediction_validation_source_digest_invalid"
+    SOURCE_DIGEST_MISMATCH = "prediction_validation_source_digest_mismatch"
+    SOURCE_READ_FAILED = "prediction_validation_source_read_failed"
+    RECEIPT_SCHEMA_INVALID = "prediction_validation_receipt_schema_invalid"
+    RECEIPT_MISMATCH = "prediction_validation_receipt_mismatch"
 
 
 CalibrationStatus = Literal[
@@ -251,6 +257,91 @@ def prediction_validation_result_sha256(
     return canonical_sha256(parsed.model_dump(mode="json"))
 
 
+class PredictionValidationSourceBinding(BaseModel):
+    """Portable identity of the exact CSV bytes consumed by the owner."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.prediction_validation_source/1"] = (
+        "easyicu.prediction_validation_source/1"
+    )
+    source_format: Literal["csv_utf8"] = "csv_utf8"
+    parser: Literal["pandas.read_csv"] = "pandas.read_csv"
+    parser_version: str
+    source_artifact_name: str
+    source_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_artifact_size_bytes: int = Field(ge=1)
+    source_row_count: int = Field(ge=1)
+    source_columns: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("parser_version")
+    @classmethod
+    def _nonempty_parser_version(cls, value: str) -> str:
+        parsed = str(value or "").strip()
+        if not parsed:
+            raise ValueError("parser_version must be non-empty")
+        return parsed
+
+    @field_validator("source_artifact_name")
+    @classmethod
+    def _portable_csv_name(cls, value: str) -> str:
+        parsed = str(value or "").strip()
+        if (
+            not parsed
+            or "/" in parsed
+            or "\\" in parsed
+            or not parsed.lower().endswith(".csv")
+        ):
+            raise ValueError("source_artifact_name must be one portable CSV basename")
+        return parsed
+
+    @field_validator("source_columns")
+    @classmethod
+    def _closed_source_columns(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        parsed = tuple(str(value or "").strip() for value in values)
+        if any(not value for value in parsed) or len(parsed) != len(set(parsed)):
+            raise ValueError("source_columns must be non-empty and unique")
+        return parsed
+
+
+class PredictionValidationReceipt(BaseModel):
+    """Digest-bound source, declaration and deterministic result bundle."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.prediction_validation_receipt/1"] = (
+        "easyicu.prediction_validation_receipt/1"
+    )
+    issuer: Literal["easyicu.prediction_validation/1"] = (
+        "easyicu.prediction_validation/1"
+    )
+    execution_mode: Literal["experimental_deterministic"] = "experimental_deterministic"
+    paper_authorization: Literal[False] = False
+    source: PredictionValidationSourceBinding
+    contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    result: PredictionValidationResult
+
+    @model_validator(mode="after")
+    def _bindings_reconcile(self) -> "PredictionValidationReceipt":
+        if self.contract_sha256 != self.result.contract_sha256:
+            raise ValueError("receipt contract digest does not match its result")
+        if self.result_sha256 != prediction_validation_result_sha256(self.result):
+            raise ValueError("receipt result digest does not match its result")
+        if self.source.source_row_count != self.result.summary.input_n:
+            raise ValueError("receipt source row count does not match its result")
+        return self
+
+
+def prediction_validation_receipt_sha256(
+    receipt: PredictionValidationReceipt | Mapping[str, Any],
+) -> str:
+    """Return the canonical digest of one normalized provenance receipt."""
+
+    parsed = PredictionValidationReceipt.model_validate(receipt)
+    return canonical_sha256(parsed.model_dump(mode="json"))
+
+
 class PredictionValidationFinding(BaseModel):
     """Structured result-validation finding owned by this boundary."""
 
@@ -271,9 +362,12 @@ __all__ = [
     "PredictionValidationError",
     "PredictionValidationFinding",
     "PredictionValidationReason",
+    "PredictionValidationReceipt",
     "PredictionValidationResult",
+    "PredictionValidationSourceBinding",
     "PredictionValidationSpec",
     "PredictionValidationSummary",
+    "prediction_validation_receipt_sha256",
     "prediction_validation_result_sha256",
     "prediction_validation_spec_sha256",
 ]
