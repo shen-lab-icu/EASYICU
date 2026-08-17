@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from easyicu.research_agent.canonical_json import sha256_bytes, sha256_file
 from easyicu.research_agent.contracts.prediction_validation import (
@@ -74,6 +75,10 @@ def test_csv_receipt_binds_exact_source_contract_and_result() -> None:
     assert receipt.source.source_artifact_name == SOURCE.name
     assert receipt.source.source_artifact_sha256 == sha256_file(SOURCE)
     assert receipt.source.source_artifact_size_bytes == SOURCE.stat().st_size
+    assert (
+        receipt.source.model_dump(mode="json")["parser_profile"]
+        == "easyicu.prediction_validation_csv_strict/1"
+    )
     assert receipt.source.source_row_count == 16
     assert receipt.source.source_columns == (
         "row_id",
@@ -156,6 +161,24 @@ def test_csv_source_rejects_invalid_artifacts_and_parse_failures(
     )
 
 
+def test_csv_source_rejects_duplicate_raw_headers(tmp_path: Path) -> None:
+    duplicate = tmp_path / "duplicate.csv"
+    duplicate.write_text(
+        "row_id,subject_id,split,outcome,probability,probability\n"
+        "0,subject-0,test,0,0.1,0.9\n"
+        "1,subject-1,test,1,0.4,0.6\n"
+        "2,subject-2,test,0,0.6,0.4\n"
+        "3,subject-3,test,1,0.9,0.1\n",
+        encoding="utf-8",
+    )
+
+    _assert_source_reason(
+        duplicate,
+        sha256_file(duplicate),
+        PredictionValidationReason.SOURCE_ARTIFACT_INVALID,
+    )
+
+
 def test_csv_source_drift_is_rejected_after_receipt(tmp_path: Path) -> None:
     source = tmp_path / SOURCE.name
     source.write_bytes(SOURCE.read_bytes())
@@ -214,6 +237,8 @@ def test_receipt_validator_rejects_invalid_schema_and_valid_tampering() -> None:
         instance_findings[0].reason_code
         is PredictionValidationReason.RECEIPT_SCHEMA_INVALID
     )
+    with pytest.raises(ValidationError):
+        prediction_validation_receipt_sha256(invalid_instance)
 
     tampered = receipt.model_copy(
         update={
@@ -241,6 +266,8 @@ def test_frozen_r_oracle_is_bound_to_exact_fixture_and_script() -> None:
     assert provenance["source_csv_sha256"] == sha256_file(SOURCE)
     assert provenance["script_sha256"] == sha256_file(R_SCRIPT)
     assert "stats::glm" in provenance["reference_scope"]
+    assert abs(ORACLE["calibration_intercept"]) > 0.2
+    assert abs(ORACLE["calibration_slope"] - 1.0) > 0.2
 
 
 def test_python_owner_matches_frozen_independent_r_oracle() -> None:

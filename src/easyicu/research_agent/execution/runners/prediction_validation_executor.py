@@ -7,6 +7,7 @@ them from the same declared frame and contract.
 
 from __future__ import annotations
 
+import csv
 import io
 import re
 from collections.abc import Mapping, Sequence
@@ -47,6 +48,40 @@ def _raise(
     **detail: Any,
 ) -> None:
     raise PredictionValidationError(reason_code, message, **detail)
+
+
+def _strict_csv_header(raw: bytes, *, source_name: str) -> tuple[str, ...]:
+    try:
+        decoded = raw.decode("utf-8-sig")
+        header = next(csv.reader(io.StringIO(decoded), strict=True), None)
+    except (UnicodeDecodeError, csv.Error) as error:
+        raise PredictionValidationError(
+            PredictionValidationReason.SOURCE_READ_FAILED,
+            "digest-bound prediction-validation CSV header could not be parsed",
+            source_name=source_name,
+        ) from error
+    if not header:
+        _raise(
+            PredictionValidationReason.SOURCE_ARTIFACT_INVALID,
+            "prediction-validation CSV requires one header row",
+            source_name=source_name,
+        )
+    columns = tuple(str(column) for column in header)
+    duplicate_columns = sorted(
+        {column for column in columns if columns.count(column) > 1}
+    )
+    noncanonical_columns = [
+        column for column in columns if not column or column != column.strip()
+    ]
+    if duplicate_columns or noncanonical_columns:
+        _raise(
+            PredictionValidationReason.SOURCE_ARTIFACT_INVALID,
+            "prediction-validation CSV header must be canonical and unique",
+            source_name=source_name,
+            duplicate_columns=duplicate_columns,
+            noncanonical_columns=noncanonical_columns,
+        )
+    return columns
 
 
 def _read_bound_csv(
@@ -90,11 +125,20 @@ def _read_bound_csv(
             expected_sha256=expected_digest,
             observed_sha256=observed_digest,
         )
+    header = _strict_csv_header(raw, source_name=path.name)
     try:
         frame = pd.read_csv(
             io.BytesIO(raw),
-            encoding="utf-8",
+            sep=",",
+            header=0,
+            engine="c",
+            encoding="utf-8-sig",
+            encoding_errors="strict",
+            keep_default_na=True,
+            na_filter=True,
             low_memory=False,
+            on_bad_lines="error",
+            skip_blank_lines=False,
         )
     except (OSError, UnicodeDecodeError, pd.errors.ParserError, ValueError) as error:
         raise PredictionValidationError(
@@ -108,13 +152,22 @@ def _read_bound_csv(
             "digest-bound prediction-validation CSV contains no rows",
             source_name=path.name,
         )
+    parsed_columns = tuple(str(column) for column in frame.columns)
+    if parsed_columns != header:
+        _raise(
+            PredictionValidationReason.SOURCE_ARTIFACT_INVALID,
+            "parsed prediction-validation columns do not match the raw header",
+            source_name=path.name,
+            header_columns=list(header),
+            parsed_columns=list(parsed_columns),
+        )
     binding = PredictionValidationSourceBinding(
         parser_version=pd.__version__,
         source_artifact_name=path.name,
         source_artifact_sha256=observed_digest,
         source_artifact_size_bytes=len(raw),
         source_row_count=int(len(frame)),
-        source_columns=tuple(str(column) for column in frame.columns),
+        source_columns=parsed_columns,
     )
     return frame, binding
 
