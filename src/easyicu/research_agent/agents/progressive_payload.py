@@ -147,14 +147,22 @@ def _bind_step_module_shape(
 
 def _exact_string_array(values: Sequence[str]) -> dict[str, Any]:
     normalized = [str(value).strip() for value in values]
-    return {
+    schema: dict[str, Any] = {
         "type": "array",
-        "prefixItems": [
-            {"type": "string", "const": value} for value in normalized
-        ],
         "minItems": len(normalized),
         "maxItems": len(normalized),
     }
+    if normalized:
+        schema["prefixItems"] = [
+            {"type": "string", "const": value} for value in normalized
+        ]
+    else:
+        # JSON Schema 2020-12 and the OpenAI strict-output validator reject an
+        # explicitly empty ``prefixItems`` array.  ``maxItems: 0`` still locks
+        # the value to the exact empty array; retain an item schema so the
+        # array remains closed and provider-portable.
+        schema["items"] = {"type": "string"}
+    return schema
 
 
 def _bind_outline_authorities(
@@ -458,14 +466,7 @@ def _bind_initial_authorities(
                     "disposition": copy.deepcopy(source["disposition"]),
                     "reason_code": copy.deepcopy(source["reason_code"]),
                     "rationale": copy.deepcopy(source["rationale"]),
-                    "citation_ids": {
-                        "type": "array",
-                        "prefixItems": [
-                            {"type": "string", "const": value} for value in citation_ids
-                        ],
-                        "minItems": len(citation_ids),
-                        "maxItems": len(citation_ids),
-                    },
+                    "citation_ids": _exact_string_array(citation_ids),
                 }
             )
         )
