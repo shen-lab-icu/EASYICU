@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence, get_args
 
 from ..planning.method_literature import METHOD_CARDS
 from ..planning.progressive_contract import (
+    PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveFoundationMaterialization,
     ProgressiveModuleId,
     ProgressiveOutlineStep,
@@ -154,6 +155,9 @@ def _bind_step_module_shape(
             "report",
         }:
             properties["outputs"]["minItems"] = 1
+        if locked_module_id in PROGRESSIVE_HOST_COMPILED_OUTPUTS:
+            properties["outputs"]["minItems"] = 0
+            properties["outputs"]["maxItems"] = 0
         output_properties = output_intent["properties"]
         if locked_module_id == "visualization":
             output_properties["product_id"] = {

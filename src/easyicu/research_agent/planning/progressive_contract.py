@@ -98,6 +98,25 @@ ProgressiveOutputRole = Literal[
     "report",
     "custom",
 ]
+PROGRESSIVE_HOST_COMPILED_OUTPUTS: Mapping[
+    str, tuple[tuple[str, str], ...]
+] = {
+    "cohort_definition": (
+        ("artifact:analysis_cohort", "analysis_cohort"),
+        ("table:cohort_flow", "cohort_flow"),
+    ),
+    "table_one": (("table:table_one", "table_one"),),
+    "exposure_outcome_distribution": (
+        ("table:exposure_outcome_distribution", "exposure_outcome_distribution"),
+    ),
+    "adjusted_association": (
+        ("table:adjusted_association_estimates", "adjusted_association_estimates"),
+    ),
+    "robustness_replay": (
+        ("table:robustness_matrix", "robustness_matrix"),
+        ("table:robustness_summary", "robustness_summary"),
+    ),
+}
 TableOneMode = Literal["independent_inference", "descriptive_smd_only"]
 OutcomeType = Literal["binary", "continuous"]
 ModelTermCoding = Literal[
@@ -834,6 +853,7 @@ __all__ = [
     "ProgressivePlanOutline",
     "ProgressivePlannerCheckpoint",
     "ProgressivePlanSkeleton",
+    "PROGRESSIVE_HOST_COMPILED_OUTPUTS",
     "ProgressiveProductRef",
     "ProgressiveRobustnessIntent",
     "ProgressiveSkeletonStep",
