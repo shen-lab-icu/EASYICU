@@ -27,6 +27,7 @@ import mimetypes
 import os
 import re
 import textwrap
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -818,6 +819,43 @@ class CLIAgentLLMClient:
         return text
 
 
+_CODEX_TURN_PROGRESS_METHODS = frozenset(
+    {
+        "turn/started",
+        "turn/plan/updated",
+        "item/started",
+        "item/completed",
+        "item/agentMessage/delta",
+        "item/plan/delta",
+        "item/reasoning/summaryPartAdded",
+        "item/reasoning/summaryTextDelta",
+        "item/reasoning/textDelta",
+        "rawResponseItem/completed",
+        "rawResponse/completed",
+        "thread/tokenUsage/updated",
+        "model/rerouted",
+        "model/verification",
+        "model/safetyBuffering/updated",
+    }
+)
+
+
+def _codex_turn_progress_notification(
+    notification: Mapping[str, Any],
+    *,
+    thread_id: str,
+    turn_id: str,
+) -> bool:
+    if notification.get("method") not in _CODEX_TURN_PROGRESS_METHODS:
+        return False
+    params = notification.get("params")
+    return bool(
+        isinstance(params, Mapping)
+        and params.get("threadId") == thread_id
+        and params.get("turnId") == turn_id
+    )
+
+
 class CodexAppServerLLMClient:
     """Use one isolated user's managed ChatGPT login through App Server.
 
@@ -827,12 +865,14 @@ class CodexAppServerLLMClient:
     """
 
     supports_strict_json_schema = True
+    provider_attempt_budget_aware = True
 
     def __init__(
         self,
         *,
         model: Optional[str] = None,
         request_timeout: float = 180.0,
+        turn_hard_timeout: float | None = None,
         environment: Mapping[str, str],
     ) -> None:
         profile = user_account_profile("codex")
@@ -856,7 +896,16 @@ class CodexAppServerLLMClient:
             raise ValueError("codex_auth_isolated_home_required")
         self._backend = "codex"
         self._model = str(model or "").strip()
-        self._timeout = max(0.1, float(request_timeout))
+        timeout = float(request_timeout)
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("request_timeout must be finite and positive")
+        hard_timeout = (
+            timeout if turn_hard_timeout is None else float(turn_hard_timeout)
+        )
+        if not math.isfinite(hard_timeout) or hard_timeout <= 0:
+            raise ValueError("turn_hard_timeout must be finite and positive")
+        self._timeout = max(0.1, timeout)
+        self._turn_hard_timeout = max(0.1, hard_timeout)
         self._command = profile.executable
         self._session_binding_sha256 = session_sha256
         self._endpoint_identity = (
@@ -924,7 +973,7 @@ class CodexAppServerLLMClient:
         del max_tokens, temperature, seed, top_p
         import tempfile
 
-        from .codex_app_server import CodexAppServerRuntime
+        from .codex_app_server import CodexAppServerError, CodexAppServerRuntime
 
         self._require_outbound_authorization()
         if structured_output is not None and not isinstance(
@@ -992,14 +1041,33 @@ class CodexAppServerLLMClient:
                         structured_output.schema_json
                     )
                 notification_start = runtime.notification_count
+                attempt_started = time.monotonic()
+                hard_stop_remaining = consume_active_transport_attempt()
+                turn_start_timeout = min(self._timeout, 30.0)
+                if hard_stop_remaining is not None:
+                    turn_start_timeout = min(
+                        turn_start_timeout,
+                        float(hard_stop_remaining),
+                    )
                 turn_result = runtime.request(
                     "turn/start",
                     turn_params,
-                    timeout=min(self._timeout, 30.0),
+                    timeout=turn_start_timeout,
                 )
                 turn = turn_result.get("turn")
                 if not isinstance(turn, Mapping) or not turn.get("id"):
                     raise RuntimeError("codex_app_server_turn_start_invalid")
+                turn_idle_timeout = self._timeout
+                turn_hard_timeout = self._turn_hard_timeout
+                if hard_stop_remaining is not None:
+                    elapsed = max(0.0, time.monotonic() - attempt_started)
+                    remaining = float(hard_stop_remaining) - elapsed
+                    if remaining <= 0:
+                        raise CodexAppServerError(
+                            "codex_auth_notification_hard_timeout"
+                        )
+                    turn_idle_timeout = min(turn_idle_timeout, remaining)
+                    turn_hard_timeout = min(turn_hard_timeout, remaining)
                 thread_id = str(thread["id"])
                 turn_id = str(turn["id"])
                 completed = runtime.wait_for_notification(
@@ -1008,7 +1076,13 @@ class CodexAppServerLLMClient:
                     and ((item.get("params") or {}).get("turn") or {}).get("id")
                     == turn_id,
                     after=notification_start,
-                    timeout=self._timeout,
+                    timeout=turn_idle_timeout,
+                    hard_timeout=turn_hard_timeout,
+                    progress_predicate=lambda item: _codex_turn_progress_notification(
+                        item,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                    ),
                 )
                 completed_turn = (completed.get("params") or {}).get("turn") or {}
                 status = str(completed_turn.get("status") or "")

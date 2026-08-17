@@ -548,6 +548,7 @@ def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
             "codex-app-server",
             str(instance_vars.get("_model", "")),
             float(instance_vars.get("_timeout", 0.0)),
+            float(instance_vars.get("_turn_hard_timeout", 0.0)),
             str(instance_vars.get("_endpoint_identity", "")),
             str(instance_vars.get("_session_binding_sha256", "")),
             str(instance_vars.get("_subprocess_environment_sha256", "")),

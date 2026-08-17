@@ -50,6 +50,7 @@ _MIN_MAX_OUTPUT_TOKENS = 128
 _ABSOLUTE_MAX_OUTPUT_TOKENS = 4000
 _DEFAULT_PROVIDER_ENV_FILE = state_paths.state_root() / "provider.env"
 _DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT = 240.0
+_DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT = 1_800.0
 _LOOPBACK_RESEARCH_AGENT_REQUEST_TIMEOUT = 480.0
 _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES = (500, 502, 503, 504)
 _WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS = 192
@@ -426,6 +427,7 @@ def build_research_agent_provider_client(
                     None if selected_model == "account-default" else selected_model
                 ),
                 request_timeout=effective_timeout,
+                turn_hard_timeout=_DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT,
                 environment=account_environment,
             )
             endpoint = (
@@ -459,6 +461,11 @@ def build_research_agent_provider_client(
                 "client_constructed": True,
                 "provider_gate": "research_agent_provider_ready",
                 "request_timeout_seconds": effective_timeout,
+                "request_idle_timeout_seconds": effective_timeout,
+                "request_hard_timeout_seconds": (
+                    _DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT
+                ),
+                "progress_resets_idle_timeout": True,
                 "transport_max_attempts": 1,
                 "retryable_http_status_codes": [],
                 "strict_json_schema_enabled": bool(
