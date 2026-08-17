@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..canonical_json import canonical_sha256
+from ..planning.cohort_contract import cohort_concept_id_scope
 from ..schema import AnalysisPlan
 from .evidence_store import EvidenceStore
 from .plan_review import PlanReviewAuthority
@@ -26,13 +27,50 @@ class PlanLifecycleAuthorityError(RuntimeError):
     reason_code = "plan_lifecycle_authority_invalid"
 
 
-def _plan_payload(plan: AnalysisPlan | Mapping[str, Any]) -> dict[str, Any]:
-    typed = (
-        plan
-        if isinstance(plan, AnalysisPlan)
-        else AnalysisPlan.model_validate(dict(plan))
+def _cohort_concept_ids(values: Sequence[str] | None) -> tuple[str, ...]:
+    cleaned = tuple(
+        sorted(
+            {
+                str(value).strip()
+                for value in (values or ())
+                if str(value).strip()
+            }
+        )
     )
+    if len(cleaned) > 2_048 or any(
+        len(value) > 200 or any(ord(char) < 32 for char in value)
+        for value in cleaned
+    ):
+        raise ValueError("cohort concept authority is invalid")
+    return cleaned
+
+
+def _plan_payload(
+    plan: AnalysisPlan | Mapping[str, Any],
+    *,
+    cohort_concept_ids: Sequence[str] = (),
+) -> dict[str, Any]:
+    with cohort_concept_id_scope(cohort_concept_ids):
+        typed = (
+            plan
+            if isinstance(plan, AnalysisPlan)
+            else AnalysisPlan.model_validate(dict(plan))
+        )
     return typed.model_dump(mode="json")
+
+
+def _unsigned_normalized_payload(value: "NormalizedPlan") -> dict[str, Any]:
+    payload = value.model_dump(mode="json", exclude={"authority_sha256"})
+    if value.proposed.schema_version == "easyicu.proposed_plan/1":
+        payload["proposed"].pop("cohort_concept_ids", None)
+    return payload
+
+
+def _unsigned_approved_payload(value: "ApprovedExecutablePlan") -> dict[str, Any]:
+    payload = value.model_dump(mode="json", exclude={"authority_sha256"})
+    if value.schema_version == "easyicu.approved_executable_plan/1":
+        payload.pop("cohort_concept_ids", None)
+    return payload
 
 
 def _changed_fields(left: Any, right: Any, *, path: str = "") -> tuple[str, ...]:
@@ -68,14 +106,27 @@ class ProposedPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.proposed_plan/1"] = "easyicu.proposed_plan/1"
+    schema_version: Literal[
+        "easyicu.proposed_plan/1", "easyicu.proposed_plan/2"
+    ] = "easyicu.proposed_plan/1"
     source: str = Field(min_length=1, max_length=120)
+    cohort_concept_ids: tuple[str, ...] = ()
     plan_payload: dict[str, Any]
     plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def _payload_is_typed_and_bound(self) -> "ProposedPlan":
-        payload = _plan_payload(self.plan_payload)
+        concept_ids = _cohort_concept_ids(self.cohort_concept_ids)
+        if concept_ids != self.cohort_concept_ids:
+            raise ValueError("cohort concept authority must be unique and sorted")
+        if self.schema_version.endswith("/1") and concept_ids:
+            raise ValueError("proposed plan v1 cannot carry cohort concept authority")
+        if self.schema_version.endswith("/2") and not concept_ids:
+            raise ValueError("proposed plan v2 requires cohort concept authority")
+        payload = _plan_payload(
+            self.plan_payload,
+            cohort_concept_ids=concept_ids,
+        )
         if payload != self.plan_payload:
             raise ValueError("proposed plan payload is not canonical AnalysisPlan JSON")
         if canonical_sha256(payload) != self.plan_sha256:
@@ -88,12 +139,26 @@ class ProposedPlan(BaseModel):
         *,
         plan: AnalysisPlan | Mapping[str, Any],
         source: str,
+        cohort_concept_ids: Sequence[str] = (),
     ) -> "ProposedPlan":
-        payload = _plan_payload(plan)
-        return cls(
-            source=str(source),
-            plan_payload=payload,
-            plan_sha256=canonical_sha256(payload),
+        concept_ids = _cohort_concept_ids(cohort_concept_ids)
+        payload = _plan_payload(plan, cohort_concept_ids=concept_ids)
+        return cls.model_validate(
+            {
+                "schema_version": (
+                    "easyicu.proposed_plan/2"
+                    if concept_ids
+                    else "easyicu.proposed_plan/1"
+                ),
+                "source": str(source),
+                **(
+                    {"cohort_concept_ids": concept_ids}
+                    if concept_ids
+                    else {}
+                ),
+                "plan_payload": payload,
+                "plan_sha256": canonical_sha256(payload),
+            }
         )
 
 
@@ -161,7 +226,9 @@ class NormalizedPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.normalized_plan/1"] = "easyicu.normalized_plan/1"
+    schema_version: Literal[
+        "easyicu.normalized_plan/1", "easyicu.normalized_plan/2"
+    ] = "easyicu.normalized_plan/1"
     proposed: ProposedPlan
     transformation_receipts: tuple[PlanTransformationReceipt, ...]
     plan_payload: dict[str, Any]
@@ -171,7 +238,17 @@ class NormalizedPlan(BaseModel):
 
     @model_validator(mode="after")
     def _lineage_is_contiguous_and_bound(self) -> "NormalizedPlan":
-        payload = _plan_payload(self.plan_payload)
+        expected_version = (
+            "easyicu.normalized_plan/2"
+            if self.proposed.schema_version.endswith("/2")
+            else "easyicu.normalized_plan/1"
+        )
+        if self.schema_version != expected_version:
+            raise ValueError("normalized and proposed plan schema versions disagree")
+        payload = _plan_payload(
+            self.plan_payload,
+            cohort_concept_ids=self.proposed.cohort_concept_ids,
+        )
         if payload != self.plan_payload or canonical_sha256(payload) != self.plan_sha256:
             raise ValueError("normalized plan payload/digest mismatch")
         cursor = self.proposed.plan_sha256
@@ -187,7 +264,7 @@ class NormalizedPlan(BaseModel):
         )
         if self.scientific_semantics_changed != expected_semantics:
             raise ValueError("normalized plan semantic-change projection mismatch")
-        unsigned = self.model_dump(mode="json", exclude={"authority_sha256"})
+        unsigned = _unsigned_normalized_payload(self)
         if canonical_sha256(unsigned) != self.authority_sha256:
             raise ValueError("normalized plan authority digest mismatch")
         return self
@@ -200,11 +277,19 @@ class NormalizedPlan(BaseModel):
         transformation_receipts: Sequence[PlanTransformationReceipt],
         plan: AnalysisPlan | Mapping[str, Any],
     ) -> "NormalizedPlan":
-        payload = _plan_payload(plan)
+        concept_ids = proposed.cohort_concept_ids
+        payload = _plan_payload(plan, cohort_concept_ids=concept_ids)
         receipts = tuple(transformation_receipts)
+        proposed_payload = proposed.model_dump(mode="json")
+        if not concept_ids:
+            proposed_payload.pop("cohort_concept_ids", None)
         body: dict[str, Any] = {
-            "schema_version": "easyicu.normalized_plan/1",
-            "proposed": proposed.model_dump(mode="json"),
+            "schema_version": (
+                "easyicu.normalized_plan/2"
+                if concept_ids
+                else "easyicu.normalized_plan/1"
+            ),
+            "proposed": proposed_payload,
             "transformation_receipts": [
                 item.model_dump(mode="json") for item in receipts
             ],
@@ -217,15 +302,25 @@ class NormalizedPlan(BaseModel):
         body["authority_sha256"] = canonical_sha256(body)
         return cls.model_validate(body)
 
+    def analysis_plan(self) -> AnalysisPlan:
+        """Rehydrate the typed plan under its sealed cohort-column authority."""
+
+        with cohort_concept_id_scope(self.proposed.cohort_concept_ids):
+            return AnalysisPlan.model_validate(self.plan_payload)
+
 
 class ApprovedExecutablePlan(BaseModel):
     """The normalized plan released to Execute by an exact human decision set."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.approved_executable_plan/1"] = (
+    schema_version: Literal[
+        "easyicu.approved_executable_plan/1",
+        "easyicu.approved_executable_plan/2",
+    ] = (
         "easyicu.approved_executable_plan/1"
     )
+    cohort_concept_ids: tuple[str, ...] = ()
     plan_payload: dict[str, Any]
     plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     normalized_plan_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -235,10 +330,20 @@ class ApprovedExecutablePlan(BaseModel):
 
     @model_validator(mode="after")
     def _approval_is_self_bound(self) -> "ApprovedExecutablePlan":
-        payload = _plan_payload(self.plan_payload)
+        concept_ids = _cohort_concept_ids(self.cohort_concept_ids)
+        if concept_ids != self.cohort_concept_ids:
+            raise ValueError("cohort concept authority must be unique and sorted")
+        if self.schema_version.endswith("/1") and concept_ids:
+            raise ValueError("approved plan v1 cannot carry cohort concept authority")
+        if self.schema_version.endswith("/2") and not concept_ids:
+            raise ValueError("approved plan v2 requires cohort concept authority")
+        payload = _plan_payload(
+            self.plan_payload,
+            cohort_concept_ids=concept_ids,
+        )
         if payload != self.plan_payload or canonical_sha256(payload) != self.plan_sha256:
             raise ValueError("approved executable plan payload/digest mismatch")
-        unsigned = self.model_dump(mode="json", exclude={"authority_sha256"})
+        unsigned = _unsigned_approved_payload(self)
         if canonical_sha256(unsigned) != self.authority_sha256:
             raise ValueError("approved executable plan authority digest mismatch")
         return self
@@ -261,7 +366,20 @@ class ApprovedExecutablePlan(BaseModel):
                 "human-review authority does not bind the normalized plan"
             )
         body: dict[str, Any] = {
-            "schema_version": "easyicu.approved_executable_plan/1",
+            "schema_version": (
+                "easyicu.approved_executable_plan/2"
+                if normalized.proposed.cohort_concept_ids
+                else "easyicu.approved_executable_plan/1"
+            ),
+            **(
+                {
+                    "cohort_concept_ids": (
+                        normalized.proposed.cohort_concept_ids
+                    )
+                }
+                if normalized.proposed.cohort_concept_ids
+                else {}
+            ),
             "plan_payload": normalized.plan_payload,
             "plan_sha256": normalized.plan_sha256,
             "normalized_plan_authority_sha256": normalized.authority_sha256,
@@ -273,6 +391,12 @@ class ApprovedExecutablePlan(BaseModel):
         body["authority_sha256"] = canonical_sha256(body)
         return cls.model_validate(body)
 
+    def analysis_plan(self) -> AnalysisPlan:
+        """Rehydrate the approved plan under its sealed cohort authority."""
+
+        with cohort_concept_id_scope(self.cohort_concept_ids):
+            return AnalysisPlan.model_validate(self.plan_payload)
+
 
 def build_normalized_plan_lineage(
     *,
@@ -282,10 +406,15 @@ def build_normalized_plan_lineage(
     normalized_plan: AnalysisPlan,
     resume_scientific_semantics_changed: bool,
     host_scientific_semantics_changed: bool,
+    cohort_concept_ids: Sequence[str] = (),
 ) -> NormalizedPlan:
     """Compile the two owner boundaries without bloating the pipeline host."""
 
-    proposed = ProposedPlan.create(plan=proposed_plan, source=proposed_source)
+    proposed = ProposedPlan.create(
+        plan=proposed_plan,
+        source=proposed_source,
+        cohort_concept_ids=cohort_concept_ids,
+    )
     receipts: list[PlanTransformationReceipt] = []
     if proposed.plan_sha256 != canonical_sha256(_plan_payload(pre_normalization_plan)):
         receipts.append(
@@ -334,7 +463,7 @@ def persist_normalized_plan(
 ) -> Path:
     """Register or exact-validate one immutable normalized-plan lineage."""
 
-    revision = AnalysisPlan.model_validate(normalized.plan_payload).revision
+    revision = normalized.analysis_plan().revision
     evidence_id = plan_lifecycle_evidence_id(revision)
     path = Path(run_dir) / f"{evidence_id}.json"
     existing = evidence.get(evidence_id)
@@ -416,7 +545,7 @@ def persist_approved_executable_plan(
     evidence: EvidenceStore,
     approved: ApprovedExecutablePlan,
 ) -> Path:
-    plan = AnalysisPlan.model_validate(approved.plan_payload)
+    plan = approved.analysis_plan()
     evidence_id = f"approved_executable_plan_revision_{plan.revision}"
     path = Path(run_dir) / f"{evidence_id}.json"
     existing = evidence.get(evidence_id)

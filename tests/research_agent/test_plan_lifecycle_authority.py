@@ -11,12 +11,14 @@ from easyicu.research_agent.authority.plan_lifecycle import (
     PlanLifecycleAuthorityError,
     PlanTransformationReceipt,
     ProposedPlan,
+    build_normalized_plan_lineage,
     load_approved_executable_plan,
     load_normalized_plan,
     persist_approved_executable_plan,
     persist_normalized_plan,
 )
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+from easyicu.research_agent.planning.cohort_contract import cohort_concept_id_scope
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -51,6 +53,108 @@ def _normalized() -> NormalizedPlan:
         transformation_receipts=(receipt,),
         plan=final_plan,
     )
+
+
+def _plan_with_materialized_identity() -> AnalysisPlan:
+    with cohort_concept_id_scope(("stay_id",)):
+        return AnalysisPlan.model_validate(
+            {
+                "revision": 1,
+                "research_question": "What is observed in this ICU cohort?",
+                "analysis_type": "descriptive_epidemiology",
+                "steps": [
+                    {
+                        "step_id": "01_summary",
+                        "intent": "Summarize the verified cohort denominator.",
+                        "method": "descriptive",
+                        "expected_outputs": ["table:cohort_summary"],
+                    }
+                ],
+                "cohort": {
+                    "name": "verified_input",
+                    "selection_mode": "predicate_filtered",
+                    "inclusion": [
+                        {
+                            "concept_id": "stay_id",
+                            "time_window": {
+                                "anchor": "icu_admission",
+                                "start_offset_hours": 0,
+                                "end_offset_hours": 24,
+                            },
+                            "aggregation": "any",
+                            "op": "not_missing",
+                            "value": None,
+                        }
+                    ],
+                    "exclusion": [],
+                },
+            }
+        )
+
+
+def test_lifecycle_v2_seals_materialized_cohort_concept_authority(tmp_path) -> None:
+    plan = _plan_with_materialized_identity()
+    normalized = build_normalized_plan_lineage(
+        proposed_plan=plan,
+        proposed_source="llm_progressive_v2_dev_resume",
+        pre_normalization_plan=plan,
+        normalized_plan=plan,
+        resume_scientific_semantics_changed=False,
+        host_scientific_semantics_changed=False,
+        cohort_concept_ids=("stay_id",),
+    )
+
+    assert normalized.schema_version == "easyicu.normalized_plan/2"
+    assert normalized.proposed.schema_version == "easyicu.proposed_plan/2"
+    assert normalized.proposed.cohort_concept_ids == ("stay_id",)
+    assert normalized.analysis_plan() == plan
+
+    evidence = EvidenceStore(tmp_path)
+    persist_normalized_plan(
+        run_dir=tmp_path,
+        evidence=evidence,
+        normalized=normalized,
+    )
+    restored = load_normalized_plan(
+        run_dir=tmp_path,
+        evidence=evidence,
+        revision=1,
+    )
+    review = PlanReviewAuthority.create(plan=plan)
+    approved = ApprovedExecutablePlan.create(
+        normalized=restored,
+        plan_review_authority=review,
+        decision_set_sha256="e" * 64,
+    )
+    assert approved.schema_version == "easyicu.approved_executable_plan/2"
+    assert approved.cohort_concept_ids == ("stay_id",)
+    assert approved.analysis_plan() == plan
+    persist_approved_executable_plan(
+        run_dir=tmp_path,
+        evidence=evidence,
+        approved=approved,
+    )
+    assert load_approved_executable_plan(
+        run_dir=tmp_path,
+        evidence=evidence,
+        revision=1,
+        expected_plan_sha256=approved.plan_sha256,
+        expected_decision_set_sha256=approved.decision_set_sha256,
+    ) == approved
+
+
+def test_lifecycle_v2_refuses_unsealed_materialized_concept() -> None:
+    plan = _plan_with_materialized_identity()
+
+    with pytest.raises(ValueError, match="unknown concept_id: stay_id"):
+        build_normalized_plan_lineage(
+            proposed_plan=plan,
+            proposed_source="llm_progressive_v2_dev_resume",
+            pre_normalization_plan=plan,
+            normalized_plan=plan,
+            resume_scientific_semantics_changed=False,
+            host_scientific_semantics_changed=False,
+        )
 
 
 def test_transformation_receipt_names_exact_changed_fields_and_semantics() -> None:
