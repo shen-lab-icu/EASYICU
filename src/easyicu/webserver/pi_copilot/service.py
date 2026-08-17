@@ -51,6 +51,7 @@ from .project_authority import (
 from .provider_config import PiProviderConfigStore
 from .projections import project_job, project_pi_replay_event, reject_sensitive_message
 from .replay_store import PiConversationReplayStore
+from .run_authority import latest_bound_run_id
 from .workspace import ProjectWorkspace
 from .workflow import (
     build_research_workflow_snapshot,
@@ -545,15 +546,19 @@ class PiCopilotService:
             ),
         )
 
-    @staticmethod
-    def _latest_run_id(study_context_id: Optional[str]) -> Optional[str]:
-        if not study_context_id:
-            return None
-        history = agent_runs.list_run_history(study_id=study_context_id, limit=1)
-        rows = history.get("runs") or []
-        if rows and isinstance(rows[0], dict):
-            return str(rows[0].get("run_id") or "") or None
-        return None
+    def _latest_run_id(
+        self,
+        study_context_id: Optional[str],
+        *,
+        project_id: Optional[str] = None,
+    ) -> Optional[str]:
+        project_root = (
+            self.workspace.project_root(project_id) if project_id else None
+        )
+        return latest_bound_run_id(
+            study_context_id=study_context_id,
+            project_root=project_root,
+        )
 
     @staticmethod
     def _explicit_context_binding_receipt(
@@ -857,7 +862,10 @@ class PiCopilotService:
                     )
                 record.binding = self._binding_for_context(
                     context,
-                    run_id=self._latest_run_id(str(context["id"])),
+                    run_id=self._latest_run_id(
+                        str(context["id"]),
+                        project_id=clean_project,
+                    ),
                 )
                 record.updated_at = utc_now()
                 migrated += 1
@@ -972,7 +980,10 @@ class PiCopilotService:
         session_id = f"pi_{secrets.token_hex(10)}"
         binding = self._binding_for_context(
             context,
-            run_id=self._latest_run_id(str(context.get("id")) if context else None),
+            run_id=self._latest_run_id(
+                str(context.get("id")) if context else None,
+                project_id=clean_project_id,
+            ),
         )
         try:
             extension_activation = self.extension_registry.snapshot()
@@ -1110,7 +1121,10 @@ class PiCopilotService:
         current_job = (
             str(current.get("active_job_id")) if current.get("active_job_id") else None
         )
-        current_run = self._latest_run_id(binding.study_context_id)
+        current_run = self._latest_run_id(
+            binding.study_context_id,
+            project_id=project_id,
+        )
         mismatches = {}
         if current_revision != binding.study_revision:
             mismatches["study_revision"] = {
@@ -1163,7 +1177,10 @@ class PiCopilotService:
             )
         record.binding = self._binding_for_context(
             context,
-            run_id=self._latest_run_id(str(context.get("id")) if context else None),
+            run_id=self._latest_run_id(
+                str(context.get("id")) if context else None,
+                project_id=record.project_id,
+            ),
         )
         self._save_record(record)
         state = self._ensure_open(record)

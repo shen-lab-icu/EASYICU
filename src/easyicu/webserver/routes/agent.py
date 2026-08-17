@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -31,6 +32,28 @@ from easyicu.webserver.routes.request_parsing import body_bool, body_int
 
 control_router = APIRouter()
 artifact_router = APIRouter()
+_DEVELOPMENT_REVIEWED_EXECUTION_ENV = (
+    "EASYICU_DEVELOPMENT_REVIEWED_EXECUTION"
+)
+
+
+def _server_research_pipeline_budget_mode() -> str:
+    """Resolve the server-owned development launch mode.
+
+    The browser and model cannot select this value.  Production/default Web
+    launches remain Planner-only canaries; an operator running the bounded
+    Dev9 workflow may explicitly enable the non-paper reviewed companion.
+    """
+
+    raw = str(os.environ.get(_DEVELOPMENT_REVIEWED_EXECUTION_ENV) or "").strip()
+    if not raw:
+        return "planner_canary"
+    if raw == "1":
+        return "full_reviewed"
+    raise HTTPException(
+        status_code=500,
+        detail={"error": "research_pipeline_development_mode_invalid"},
+    )
 
 
 def _research_pipeline_workspace() -> ProjectWorkspace:
@@ -182,6 +205,7 @@ def submit_agent_run(
             dataio.validate_research_pipeline_source(path, database=database)
         except dataio.ExportCohortError as exc:
             raise HTTPException(status_code=400, detail=exc.detail) from exc
+        budget_mode = _server_research_pipeline_budget_mode()
     llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
     external_llm_opt_in = body_bool(body, "external_llm_opt_in")
     literature_search_authorized = body_bool(
@@ -404,6 +428,7 @@ def submit_agent_run(
                 "run_type": run_type,
                 "engine": engine,
                 "llm_provider": llm_provider,
+                "budget_mode": budget_mode,
                 "compute_target": compute.get("compute_target"),
                 "study_context_id": study_context_id or None,
             },
@@ -451,6 +476,34 @@ def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
 
 @control_router.post("/api/jobs/agent-run-review")
 def jobs_agent_run_review(body: Dict[str, Any], request: Request) -> dict:
+    """HTTP adapter that resolves only this browser's account authority."""
+
+    run_id = str(body.get("run_id") or "").strip()
+    pending = agent_pipeline_runs.pending_review(run_id) if run_id else None
+    account_environment: Optional[Mapping[str, str]] = None
+    if pending and provider_adapter.is_user_account_provider(
+        str(pending.get("provider") or "")
+    ):
+        try:
+            account_environment = codex_account_sessions.environment_for_request(
+                request
+            )
+        except codex_account_sessions.CodexAccountSessionError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": exc.code},
+            ) from exc
+    return submit_agent_run_review(
+        body,
+        account_environment=account_environment,
+    )
+
+
+def submit_agent_run_review(
+    body: Dict[str, Any],
+    *,
+    account_environment: Optional[Mapping[str, str]] = None,
+) -> dict:
     """Resume one same-process digest-bound Research Agent plan review."""
 
     run_id = str(body.get("run_id") or "").strip()
@@ -498,17 +551,14 @@ def jobs_agent_run_review(body: Dict[str, Any], request: Request) -> dict:
             detail={"error": "research_pipeline_planner_canary_execution_blocked"},
         )
     pending_provider = str(pending.get("provider") or "")
-    account_environment = None
-    if provider_adapter.is_user_account_provider(pending_provider):
-        try:
-            account_environment = codex_account_sessions.environment_for_request(
-                request
-            )
-        except codex_account_sessions.CodexAccountSessionError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": exc.code},
-            ) from exc
+    if (
+        provider_adapter.is_user_account_provider(pending_provider)
+        and account_environment is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "codex_auth_login_required"},
+        )
     provider_environment = _provider_environment_for_agent_run(
         credential_source=str(
             pending.get("credential_source") or "scientific_provider"
