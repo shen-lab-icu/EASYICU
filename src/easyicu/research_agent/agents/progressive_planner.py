@@ -33,6 +33,7 @@ from ..planning.progressive_compiler import (
     validate_progressive_foundation,
 )
 from ..planning.progressive_contract import (
+    PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveCohortIntent,
     ProgressiveFoundationMaterialization,
     ProgressiveOutlineStep,
@@ -99,6 +100,40 @@ _MAX_OUTLINE_OUTPUT_TOKENS = 4_000
 _MAX_FOUNDATION_OUTPUT_TOKENS = 4_000
 _MAX_STEP_OUTPUT_TOKENS = 8_000
 _MAX_REQUEST_BYTES = DEFAULT_MAX_PROMPT_TOKENS * 4
+_TYPED_PRODUCT_TOKEN = re.compile(
+    r"\b(?:artifact|dataset|model|statistic|table):[a-z][a-z0-9_]*\b"
+)
+_SEPARATE_ANALYSIS_STEP = re.compile(r"\bseparate\s+analysis\s+step\b", re.I)
+
+
+def _required_separate_analysis_products(
+    context: ResearchContext,
+) -> tuple[str, ...]:
+    """Return nonstandard products explicitly assigned to a separate step.
+
+    ``must_have_outputs`` is still a legacy prose field.  We do not infer new
+    science from it; this helper recognizes only an explicit structural
+    instruction and canonical typed product tokens already written by the
+    caller.  Standard host products keep their registered owners.  Everything
+    else needs a ``custom_analysis`` outline coordinate so it cannot disappear
+    inside the generic robustness replay step.
+    """
+
+    preferences = context.user_preferences
+    text = str(getattr(preferences, "must_have_outputs", None) or "")
+    host_products = {
+        product
+        for products in PROGRESSIVE_HOST_COMPILED_OUTPUTS.values()
+        for product, _role in products
+    }
+    required: list[str] = []
+    for line in text.splitlines():
+        if not _SEPARATE_ANALYSIS_STEP.search(line):
+            continue
+        for product in _TYPED_PRODUCT_TOKEN.findall(line):
+            if product not in host_products and product not in required:
+                required.append(product)
+    return tuple(required)
 
 
 def _tokens(value: object) -> set[str]:
@@ -612,6 +647,16 @@ class ProgressivePlannerAgent:
                 "select, while every explicit task requirement remains binding:\n"
                 + planning_contract_context
             )
+        separate_products = _required_separate_analysis_products(context)
+        if separate_products:
+            blocks.append(
+                "Host-resolved separate-analysis obligations:\n"
+                + json.dumps(list(separate_products), ensure_ascii=False)
+                + "\nEach listed product must have its own custom_analysis "
+                "outline step. Do not fold that step into robustness_replay; "
+                "the host will materialize its exact method, inputs, outputs, "
+                "and product edges later."
+            )
         if know_how_context:
             blocks.append(
                 "Retrieved protocol know-how (record every required claim disposition):\n"
@@ -708,6 +753,7 @@ class ProgressivePlannerAgent:
         analysis_types: Sequence[str],
         variable_names: Sequence[str],
         allowed_literature_citation_keys: Sequence[str],
+        required_custom_products: Sequence[str] = (),
     ) -> None:
         if outline.analysis_type not in set(analysis_types):
             raise ProgressivePlanCompileError(
@@ -722,6 +768,19 @@ class ProgressivePlannerAgent:
         allowed_modules = set(
             progressive_module_ids_for_analysis_types((outline.analysis_type,))
         )
+        if required_custom_products and not any(
+            step.module_id == "custom_analysis" for step in outline.steps
+        ):
+            raise ProgressivePlanCompileError(
+                "progressive_outline_separate_analysis_owner_missing",
+                "run-specific separate-analysis product(s) require a "
+                "custom_analysis outline step: "
+                + ", ".join(required_custom_products),
+                path="steps",
+                findings=(
+                    {"required_products": list(required_custom_products)},
+                ),
+            )
         for index, step in enumerate(outline.steps):
             if step.module_id not in allowed_modules:
                 raise ProgressivePlanCompileError(
@@ -807,6 +866,16 @@ class ProgressivePlannerAgent:
             "Return one ProgressiveFoundationMaterialization only. Bind cohort "
             "selection, display labels, robustness intents, and any authorized "
             "know-how decisions. Do not return executable step fields."
+        )
+        blocks.append(
+            "robustness_intents are only for the generic host replay owner. "
+            "The progressive v1 foundation can compile only an explicit "
+            "complete-case missing-data intent with its exact variable list. "
+            "Timing, readmission/cohort restriction, outcome-definition, and "
+            "functional-form analyses belong in custom_analysis outline steps "
+            "and must not be duplicated into robustness_intents. A conditional "
+            "event-time column whose event-absent rows are not applicable must "
+            "not define complete-case membership."
         )
         if outline.analysis_type == "descriptive_epidemiology":
             blocks.append(
@@ -1216,6 +1285,7 @@ class ProgressivePlannerAgent:
             direct_comparator_keys=direct_keys,
             required_method_layers=required_method_layers_for_context(context),
         )
+        required_custom_products = _required_separate_analysis_products(context)
         if resume_checkpoint is not None:
             validate_progressive_resume_runtime_dependencies(
                 resume_dependency_context
@@ -1358,6 +1428,7 @@ class ProgressivePlannerAgent:
                     analysis_types=analysis_types,
                     variable_names=variables,
                     allowed_literature_citation_keys=allowed_citations,
+                    required_custom_products=required_custom_products,
                 )
                 return parsed
 
@@ -1383,6 +1454,7 @@ class ProgressivePlannerAgent:
             analysis_types=analysis_types,
             variable_names=variables,
             allowed_literature_citation_keys=allowed_citations,
+            required_custom_products=required_custom_products,
         )
         self.last_outline = outline
         self.last_foundation = None
@@ -1407,9 +1479,20 @@ class ProgressivePlannerAgent:
 
         foundation_schema = None
         if llm_supports_strict_json_schema(self.llm):
+            complete_case_variables = tuple(
+                name
+                for name in variables
+                if (
+                    (descriptor := context.variable(name)) is None
+                    or descriptor.observation_semantics is None
+                    or descriptor.observation_semantics.kind
+                    != "conditional_event_time"
+                )
+            )
             foundation_schema = progressive_foundation_structured_output_request(
                 outline_sha256=outline_sha256,
                 variable_names=variables,
+                complete_case_variable_names=complete_case_variables,
                 cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
                 allowed_know_how_decisions=allowed_know_how_decisions,
                 required_cohort_selection_mode=(

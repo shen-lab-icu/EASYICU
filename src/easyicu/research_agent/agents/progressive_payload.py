@@ -295,6 +295,7 @@ def _bind_foundation_authorities(
     definitions: dict[str, Any],
     *,
     variable_names: tuple[str, ...],
+    complete_case_variable_names: tuple[str, ...],
     cohort_concept_ids: tuple[str, ...],
     know_how_authority: tuple[tuple[str, str, str, str, tuple[str, ...]], ...],
     required_cohort_selection_mode: str | None,
@@ -331,24 +332,13 @@ def _bind_foundation_authorities(
     complete_case_variables = copy.deepcopy(
         robustness_properties["complete_case_variables"]
     )
-    complete_case_variables["items"] = _string_enum(variable_names)
-    no_complete_case_variables = copy.deepcopy(complete_case_variables)
-    no_complete_case_variables["maxItems"] = 0
+    complete_case_variables["items"] = _string_enum(
+        complete_case_variable_names
+    )
     required_complete_case_variables = copy.deepcopy(complete_case_variables)
     required_complete_case_variables["minItems"] = 1
     definitions["ProgressiveRobustnessIntent"] = {
         "anyOf": [
-            _closed_object(
-                {
-                    "spec_id": copy.deepcopy(robustness_properties["spec_id"]),
-                    "axis": copy.deepcopy(robustness_properties["axis"]),
-                    "description": copy.deepcopy(
-                        robustness_properties["description"]
-                    ),
-                    "missing_strategy": {"type": "string", "const": "none"},
-                    "complete_case_variables": no_complete_case_variables,
-                }
-            ),
             _closed_object(
                 {
                     "spec_id": copy.deepcopy(robustness_properties["spec_id"]),
@@ -720,6 +710,7 @@ def progressive_foundation_structured_output_request(
     *,
     outline_sha256: str,
     variable_names: Sequence[str],
+    complete_case_variable_names: Sequence[str] | None = None,
     cohort_concept_ids: Sequence[str] = (),
     allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
     required_cohort_selection_mode: str | None = None,
@@ -748,6 +739,26 @@ def progressive_foundation_structured_output_request(
             if str(value).strip()
         )
     )
+    normalized_complete_case_variables = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (
+                complete_case_variable_names
+                if complete_case_variable_names is not None
+                else normalized_variables
+            )
+            if str(value).strip()
+        )
+    )
+    if not normalized_complete_case_variables:
+        raise ProgressiveTransportSchemaError(
+            "progressive foundation requires at least one eligible "
+            "complete-case variable"
+        )
+    if not set(normalized_complete_case_variables).issubset(normalized_variables):
+        raise ProgressiveTransportSchemaError(
+            "complete-case variable roster must be a subset of the run roster"
+        )
     schema = copy.deepcopy(
         ProgressiveFoundationMaterialization.model_json_schema(mode="validation")
     )
@@ -764,6 +775,7 @@ def progressive_foundation_structured_output_request(
     _bind_foundation_authorities(
         definitions,
         variable_names=normalized_variables,
+        complete_case_variable_names=normalized_complete_case_variables,
         cohort_concept_ids=normalized_concepts,
         know_how_authority=_authority_rows(allowed_know_how_decisions),
         required_cohort_selection_mode=required_cohort_selection_mode,
