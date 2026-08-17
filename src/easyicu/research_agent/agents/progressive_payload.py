@@ -479,6 +479,7 @@ def _bind_step_rosters(
     definitions: dict[str, Any],
     *,
     variable_names: tuple[str, ...],
+    executable_variable_names: tuple[str, ...] | None = None,
     scientific_action_ids: tuple[str, ...],
     allowed_citation_keys: tuple[str, ...],
 ) -> None:
@@ -510,11 +511,16 @@ def _bind_step_rosters(
             "progressive skeleton property maps are unavailable"
         )
     variable = _string_enum(variable_names)
+    executable_variable = _string_enum(
+        executable_variable_names
+        if executable_variable_names is not None
+        else variable_names
+    )
     step_properties["raw_inputs"]["items"] = copy.deepcopy(variable)
     for field in ("table_one_group_by", "primary_exposure", "outcome"):
-        step_properties[field] = _nullable(variable)
-    table_properties["name"] = copy.deepcopy(variable)
-    model_properties["name"] = copy.deepcopy(variable)
+        step_properties[field] = _nullable(executable_variable)
+    table_properties["name"] = copy.deepcopy(executable_variable)
+    model_properties["name"] = copy.deepcopy(executable_variable)
     action_schema: dict[str, Any]
     if scientific_action_ids:
         action_schema = _nullable(_string_enum(scientific_action_ids))
@@ -793,6 +799,7 @@ def progressive_step_materialization_request(
     outline_step: ProgressiveOutlineStep,
     outline_step_sha256: str,
     variable_names: Sequence[str],
+    executable_variable_names: Sequence[str] | None = None,
     scientific_action_ids: Sequence[str],
     allowed_literature_citation_keys: Sequence[str] = (),
     available_product_refs: Sequence[tuple[str, str]] = (),
@@ -815,6 +822,17 @@ def progressive_step_materialization_request(
             if str(value).strip()
         )
     )
+    normalized_executable_variables = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (
+                executable_variable_names
+                if executable_variable_names is not None
+                else normalized_variables
+            )
+            if str(value).strip()
+        )
+    )
     normalized_citations = tuple(
         dict.fromkeys(
             str(value).strip()
@@ -825,6 +843,23 @@ def progressive_step_materialization_request(
     if not normalized_variables:
         raise ProgressiveTransportSchemaError(
             "progressive step transport requires a variable roster"
+        )
+    if not normalized_executable_variables:
+        if outline_step.module_id in {
+            "adjusted_association",
+            "exposure_outcome_distribution",
+            "table_one",
+        }:
+            raise ProgressiveTransportSchemaError(
+                "statistical step transport requires an executable variable roster"
+            )
+        # Non-statistical module shapes replace these definitions with null
+        # fields below. Keep their unused base definitions provider-valid even
+        # when the outline contains only a host navigation coordinate.
+        normalized_executable_variables = normalized_variables
+    if not set(normalized_executable_variables).issubset(normalized_variables):
+        raise ProgressiveTransportSchemaError(
+            "executable variable roster must be a subset of the step roster"
         )
     if (
         outline_step.scientific_action_id is not None
@@ -859,6 +894,7 @@ def progressive_step_materialization_request(
     _bind_step_rosters(
         definitions,
         variable_names=normalized_variables,
+        executable_variable_names=normalized_executable_variables,
         scientific_action_ids=normalized_actions,
         allowed_citation_keys=normalized_citations,
     )

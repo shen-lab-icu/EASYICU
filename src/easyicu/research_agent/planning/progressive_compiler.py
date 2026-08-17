@@ -875,12 +875,35 @@ def _compile_model_terms(
 
 def _compile_adjusted_association(
     *,
+    context: ResearchContext,
     variables: Mapping[str, Any],
     step: ProgressiveSkeletonStep,
     step_index: int,
 ) -> list[PlannedModelRequirement]:
     exposure = str(step.primary_exposure or "")
     outcome = str(step.outcome or "")
+    reserved_coordinates = set(
+        materialized_input_column_authority(context).reserved_navigation_coordinates
+    )
+    model_coordinates = (
+        ("primary_exposure", exposure),
+        ("outcome", outcome),
+        *(
+            (f"model_terms[{index}]", term.name)
+            for index, term in enumerate(step.model_terms)
+        ),
+    )
+    for path, name in model_coordinates:
+        if name in reserved_coordinates:
+            raise _fail(
+                "progressive_adjusted_model_uses_navigation_coordinate",
+                f"host-reserved navigation coordinate {name!r} is not a "
+                "statistical model field; keep it out of primary_exposure, "
+                "outcome, and model_terms",
+                step=step,
+                step_index=step_index,
+                path=path,
+            )
     _require_variables(
         [exposure, outcome],
         variables=variables,
@@ -1321,6 +1344,7 @@ def _compile_one_step(
         )
     elif step.module_id == "adjusted_association":
         kwargs["model_requirements"] = _compile_adjusted_association(
+            context=context,
             variables=variables,
             step=step,
             step_index=step_index,
