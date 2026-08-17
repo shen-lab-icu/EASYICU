@@ -130,6 +130,9 @@ def test_new_pipeline_instance_resumes_without_running_planner_again(
     assert approved["cohort_concept_ids"] == lineage["proposed"][
         "cohort_concept_ids"
     ]
+    assert checkpoint.plan_handoff["cohort_concept_ids"] == lineage["proposed"][
+        "cohort_concept_ids"
+    ]
     assert approved["plan_sha256"] == lineage["plan_sha256"]
     assert approved["normalized_plan_authority_sha256"] == lineage["authority_sha256"]
     assert approved["decision_set_sha256"] == checkpoint.consumed_decision_sha256

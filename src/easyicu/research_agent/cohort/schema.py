@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from ..authority.lock_contract import (
     LockAuthorityError,
@@ -138,16 +138,24 @@ def write_locked_cohort_definition(
     prompt_pack_version: Optional[str],
     llm_signature: str,
     allow_empty_promotion: bool = False,
+    cohort_concept_ids: Sequence[str] = (),
 ) -> Path:
-    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
-    if definition is None:
-        definition = CohortDefinition(name="primary")
-    validate_cohort_definition(definition)
+    # Materialized run columns are not package-level dictionary concepts.  The
+    # plan lifecycle seals their exact roster, and callers must present that
+    # roster again whenever a cohort payload is revalidated.  Keep the mutable
+    # compatibility registry scoped to parsing only; never leak one run's
+    # columns into another run or hold its lock during evidence I/O.
+    with cohort_concept_id_scope(cohort_concept_ids):
+        definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+        if definition is None:
+            definition = CohortDefinition(name="primary")
+        validate_cohort_definition(definition)
+        definition_sha = cohort_definition_sha(definition)
     path = run_dir / COHORT_LOCK_FILENAME
     if path.exists():
-        locked_definition = _load_locked_cohort_definition(run_dir)
-        definition_sha = cohort_definition_sha(definition)
-        locked_sha = cohort_definition_sha(locked_definition)
+        with cohort_concept_id_scope(cohort_concept_ids):
+            locked_definition = _load_locked_cohort_definition(run_dir)
+            locked_sha = cohort_definition_sha(locked_definition)
         if definition_sha != locked_sha:
             locked_is_empty = not cohort_definition_has_explicit_selection(
                 locked_definition
@@ -215,7 +223,7 @@ def write_locked_cohort_definition(
     payload = {
         "schema_version": "easyicu.cohort_definition/1",
         "locked_at": datetime.now(timezone.utc).isoformat(),
-        "cohort_sha256": cohort_definition_sha(definition),
+        "cohort_sha256": definition_sha,
         "cohort": definition.to_dict(),
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -1028,6 +1036,7 @@ def materialize_locked_analysis_cohort(
     universe_path: Path,
     context: Any = None,
     stem: str = "cohort_analysis",
+    cohort_concept_ids: Sequence[str] = (),
 ) -> Dict[str, Any]:
     """Apply the locked cohort definition to the universe → analysis cohort.
 
@@ -1054,7 +1063,11 @@ def materialize_locked_analysis_cohort(
         "n_cohort": None,
         "error": None,
     }
-    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+    with cohort_concept_id_scope(cohort_concept_ids):
+        definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+        definition_sha = (
+            cohort_definition_sha(definition) if definition is not None else None
+        )
     if not cohort_definition_has_explicit_selection(definition):
         return result
     from ..intake.materialized_metadata import (
@@ -1114,7 +1127,7 @@ def materialize_locked_analysis_cohort(
         "locked_at": datetime.now(timezone.utc).isoformat(),
         "universe_parquet": str(universe_path),
         "cohort_definition": definition.to_dict(),
-        "cohort_sha256": cohort_definition_sha(definition),
+        "cohort_sha256": definition_sha,
         "n_universe": int(len(universe)),
         "n_analysis_cohort": int(len(cohort)),
         "predicate_column_bindings": predicate_bindings,
@@ -1142,7 +1155,7 @@ def materialize_locked_analysis_cohort(
             ),
             producer_parameters={
                 "cohort_definition": definition.to_dict(),
-                "cohort_definition_sha256": cohort_definition_sha(definition),
+                "cohort_definition_sha256": definition_sha,
                 "predicate_column_bindings": predicate_bindings,
                 "stem": stem,
             },
@@ -1172,7 +1185,7 @@ def materialize_locked_analysis_cohort(
         flow_path=flow_path,
         authority_path=authority_path,
         authority_ref=authority_ref,
-        cohort_definition_sha256=cohort_definition_sha(definition),
+        cohort_definition_sha256=definition_sha,
         n_universe=int(len(universe)),
         n_cohort=int(len(cohort)),
     )
@@ -1184,6 +1197,7 @@ def load_materialized_analysis_cohort_result(
     run_dir: Path,
     plan: Any,
     stem: str = "cohort_analysis",
+    cohort_concept_ids: Sequence[str] = (),
 ) -> Optional[Dict[str, Any]]:
     """Recover a plan-phase materialization only from its closed host ledger."""
 
@@ -1194,15 +1208,16 @@ def load_materialized_analysis_cohort_result(
         cohort_path.is_file() and flow_path.is_file() and provenance_path.is_file()
     ):
         return None
-    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
-    if definition is None:
-        return None
+    with cohort_concept_id_scope(cohort_concept_ids):
+        definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+        if definition is None:
+            return None
+        expected_definition_sha = cohort_definition_sha(definition)
     try:
         import pandas as pd  # type: ignore
         import pyarrow.parquet as pq  # type: ignore
 
         provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-        expected_definition_sha = cohort_definition_sha(definition)
         if provenance.get("cohort_sha256") != expected_definition_sha:
             return None
         recorded_parquet_sha = str(
@@ -1283,12 +1298,20 @@ def load_materialized_analysis_cohort_result(
     }
 
 
-def assert_cohort_definition_locked(*, run_dir: Path, plan: Any) -> None:
-    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
-    if definition is None:
-        definition = CohortDefinition(name="primary")
-    locked_definition = _load_locked_cohort_definition(run_dir)
-    if cohort_definition_sha(locked_definition) != cohort_definition_sha(definition):
+def assert_cohort_definition_locked(
+    *,
+    run_dir: Path,
+    plan: Any,
+    cohort_concept_ids: Sequence[str] = (),
+) -> None:
+    with cohort_concept_id_scope(cohort_concept_ids):
+        definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+        if definition is None:
+            definition = CohortDefinition(name="primary")
+        locked_definition = _load_locked_cohort_definition(run_dir)
+        definition_sha = cohort_definition_sha(definition)
+        locked_sha = cohort_definition_sha(locked_definition)
+    if locked_sha != definition_sha:
         raise CohortSchemaError(
             "cohort definition changed after plan lock; execute phase refuses "
             "to run an unlocked cohort"

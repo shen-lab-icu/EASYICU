@@ -18,6 +18,11 @@ from easyicu.research_agent.authority.plan_lifecycle import (
     persist_normalized_plan,
 )
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+from easyicu.research_agent.cohort.schema import (
+    CohortSchemaError,
+    assert_cohort_definition_locked,
+    write_locked_cohort_definition,
+)
 from easyicu.research_agent.planning.cohort_contract import cohort_concept_id_scope
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -154,6 +159,52 @@ def test_lifecycle_v2_refuses_unsealed_materialized_concept() -> None:
             normalized_plan=plan,
             resume_scientific_semantics_changed=False,
             host_scientific_semantics_changed=False,
+        )
+
+
+def test_lifecycle_v2_authority_crosses_cohort_lock_and_execute_assert(
+    tmp_path,
+) -> None:
+    plan = _plan_with_materialized_identity()
+    normalized = build_normalized_plan_lineage(
+        proposed_plan=plan,
+        proposed_source="llm_progressive_v2_dev_resume",
+        pre_normalization_plan=plan,
+        normalized_plan=plan,
+        resume_scientific_semantics_changed=False,
+        host_scientific_semantics_changed=False,
+        cohort_concept_ids=("stay_id",),
+    )
+    evidence = EvidenceStore(tmp_path)
+
+    with pytest.raises(CohortSchemaError, match="unknown concept_id: stay_id"):
+        write_locked_cohort_definition(
+            run_dir=tmp_path,
+            plan=normalized.analysis_plan(),
+            evidence=evidence,
+            prompt_pack_version="test",
+            llm_signature="mock",
+        )
+
+    write_locked_cohort_definition(
+        run_dir=tmp_path,
+        plan=normalized.analysis_plan(),
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+        cohort_concept_ids=normalized.proposed.cohort_concept_ids,
+    )
+    assert_cohort_definition_locked(
+        run_dir=tmp_path,
+        plan=normalized.analysis_plan(),
+        cohort_concept_ids=normalized.proposed.cohort_concept_ids,
+    )
+
+    # The explicit authority must not become a process-global registration.
+    with pytest.raises(CohortSchemaError, match="unknown concept_id: stay_id"):
+        assert_cohort_definition_locked(
+            run_dir=tmp_path,
+            plan=normalized.analysis_plan(),
         )
 
 

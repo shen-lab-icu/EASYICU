@@ -1132,7 +1132,11 @@ def _prepare_execute_phase_authority(
     )
     prompt_version = plan_result.prompt_version
     prompt_files = plan_result.prompt_files
-    assert_cohort_definition_locked(run_dir=run_dir, plan=plan)
+    assert_cohort_definition_locked(
+        run_dir=run_dir,
+        plan=plan,
+        cohort_concept_ids=plan_result.cohort_concept_ids,
+    )
     assert_robustness_specs_locked(run_dir=run_dir, plan=plan)
     return _ExecutePhasePreparation(
         services=services,
@@ -1409,6 +1413,7 @@ def run_execute_phase(
         per_step_records=per_step_records,
         preexecuted_step_ids=preexecuted_step_ids,
         findings=findings,
+        cohort_concept_ids=plan_result.cohort_concept_ids,
     )
 
     _flush_partial_manifest = functools.partial(
@@ -1505,6 +1510,7 @@ def run_execute_phase(
             universe_columns=_universe_columns,
             cohort_path=cohort_path,
             runner=runner,
+            cohort_concept_ids=plan_result.cohort_concept_ids,
         )
         return success
 
