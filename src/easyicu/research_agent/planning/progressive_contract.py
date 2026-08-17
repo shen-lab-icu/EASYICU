@@ -113,7 +113,15 @@ class ProgressivePredicateValue(BaseModel):
     def materialize(self) -> object:
         if self.mode == "none":
             return None
-        return getattr(self, self.mode)
+        if self.mode == "string":
+            return self.string_value
+        if self.mode == "number":
+            return self.number_value
+        if self.mode == "boolean":
+            return self.boolean_value
+        if self.mode == "string_list":
+            return self.string_list
+        return self.number_list
 
 
 class ProgressiveCohortPredicate(BaseModel):

@@ -37,6 +37,7 @@ from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanCompileError,
     ProgressivePlanOutline,
     ProgressivePlanSkeleton,
+    ProgressivePredicateValue,
 )
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.authority.plan_lifecycle import (
@@ -103,6 +104,24 @@ def _context() -> ResearchContext:
         primary_exposure="exposure_flag",
         target_outcome="outcome_flag",
     )
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"mode": "none"}, None),
+        ({"mode": "string", "string_value": "adult"}, "adult"),
+        ({"mode": "number", "number_value": 18.0}, 18.0),
+        ({"mode": "boolean", "boolean_value": True}, True),
+        ({"mode": "string_list", "string_list": ["A", "B"]}, ["A", "B"]),
+        ({"mode": "number_list", "number_list": [0.0, 1.0]}, [0.0, 1.0]),
+    ],
+)
+def test_progressive_predicate_value_materializes_its_declared_field(
+    payload: dict[str, object],
+    expected: object,
+) -> None:
+    assert ProgressivePredicateValue.model_validate(payload).materialize() == expected
 
 
 def _payload() -> dict:
