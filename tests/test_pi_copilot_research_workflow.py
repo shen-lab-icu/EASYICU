@@ -3850,6 +3850,73 @@ def test_web_runner_rejects_development_resume_outside_canary(
     assert exc_info.value.code == "research_pipeline_development_resume_canary_only"
 
 
+def test_development_resume_selects_one_server_owned_checkpoint_sequence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = (
+        tmp_path
+        / "projects"
+        / "study-workflow"
+        / "run_prior-canary"
+        / "pipeline"
+        / "run_prior"
+    )
+    run_dir.mkdir(parents=True)
+    for sequence in range(3):
+        (run_dir / f"progressive_planner_checkpoint_{sequence:03d}.json").write_text(
+            f'{{"sequence":{sequence}}}',
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "load_progressive_planner_checkpoint_chain",
+        lambda **_kwargs: [object()],
+    )
+
+    path, digest = agent_pipeline_runs._development_progressive_resume_binding(
+        project_root=str(tmp_path / "projects"),
+        study_id="study-workflow",
+        source_job_id="prior-canary",
+        budget_mode="planner_canary",
+        checkpoint_sequence="1",
+    )
+
+    assert path.name == "progressive_planner_checkpoint_001.json"
+    assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_development_resume_rejects_missing_server_checkpoint_sequence(
+    tmp_path: Path,
+) -> None:
+    run_dir = (
+        tmp_path
+        / "projects"
+        / "study-workflow"
+        / "run_prior-canary"
+        / "pipeline"
+        / "run_prior"
+    )
+    run_dir.mkdir(parents=True)
+    (run_dir / "progressive_planner_checkpoint_000.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc_info:
+        agent_pipeline_runs._development_progressive_resume_binding(
+            project_root=str(tmp_path / "projects"),
+            study_id="study-workflow",
+            source_job_id="prior-canary",
+            budget_mode="planner_canary",
+            checkpoint_sequence="2",
+        )
+
+    assert exc_info.value.code == (
+        "research_pipeline_development_resume_sequence_missing"
+    )
+
+
 def test_web_runner_enables_live_pubmed_only_with_host_authorization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

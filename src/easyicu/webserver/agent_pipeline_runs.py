@@ -96,6 +96,9 @@ _RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
 _DEVELOPMENT_RESUME_JOB_ENV = (
     "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID"
 )
+_DEVELOPMENT_RESUME_SEQUENCE_ENV = (
+    "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_CHECKPOINT_SEQUENCE"
+)
 _DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS = 120.0
 _MAX_MANUSCRIPT_PREVIEW = 24_000
 _MAX_FIGURE_EMBED_BYTES = 420_000
@@ -298,6 +301,7 @@ def _development_progressive_resume_binding(
     study_id: str,
     source_job_id: str,
     budget_mode: str,
+    checkpoint_sequence: str | int | None = None,
 ) -> tuple[Path, str]:
     """Resolve one server-owned Dev checkpoint without accepting client paths."""
 
@@ -352,7 +356,28 @@ def _development_progressive_resume_binding(
             "research_pipeline_development_resume_checkpoint_missing",
             "The prior canary has no validated Progressive Planner checkpoint.",
         )
-    terminal = max(checkpoints, key=lambda item: item[0])[1]
+    selected_sequence_text = (
+        "" if checkpoint_sequence is None else str(checkpoint_sequence).strip()
+    )
+    if selected_sequence_text:
+        if not re.fullmatch(r"(?:0|[1-9][0-9]{0,2})", selected_sequence_text):
+            raise ResearchPipelineRunError(
+                "research_pipeline_development_resume_sequence_invalid",
+                "The server-selected development checkpoint sequence is invalid.",
+            )
+        selected_sequence = int(selected_sequence_text)
+        selected = [
+            path for sequence, path in checkpoints if sequence == selected_sequence
+        ]
+        if len(selected) != 1:
+            raise ResearchPipelineRunError(
+                "research_pipeline_development_resume_sequence_missing",
+                "The selected development checkpoint is unavailable in the "
+                "prior canary.",
+            )
+        terminal = selected[0]
+    else:
+        terminal = max(checkpoints, key=lambda item: item[0])[1]
     try:
         raw = terminal.read_bytes()
     except OSError as exc:
@@ -3256,6 +3281,9 @@ def make_research_pipeline_run_runner(
             study_id=str(study.get("id") or ""),
             source_job_id=selected_resume_source,
             budget_mode=selected_budget_mode,
+            checkpoint_sequence=os.environ.get(
+                _DEVELOPMENT_RESUME_SEQUENCE_ENV
+            ),
         )
     capability_settings = capability_policy.capability_settings()
     publication_skill_flags = publication_skill_flags_from_settings(
