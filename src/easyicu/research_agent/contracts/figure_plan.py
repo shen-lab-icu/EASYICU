@@ -160,7 +160,7 @@ EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS = (
     ),
     DeterministicFigurePanelTemplate(
         panel_id="outcome_absolute_risk",
-        article_role="distribution",
+        article_role="descriptive_result",
         chart_type="dot_interval_absolute_risk",
         source_products=(EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,),
     ),
@@ -174,7 +174,7 @@ EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS = (
     ),
     DeterministicFigurePanelTemplate(
         panel_id="outcome_absolute_risk",
-        article_role="distribution",
+        article_role="descriptive_result",
         chart_type="point_absolute_risk",
         source_products=(EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,),
     ),
