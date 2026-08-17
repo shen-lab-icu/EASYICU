@@ -1,8 +1,8 @@
 """Analysis-only EvidenceStore bridge for prediction validation.
 
-This authority adapter accepts only a host-recomputed validation receipt and a
-closed set of current upstream EvidenceStore records.  It deliberately does
-not publish aliases or manuscript-bindable claims and is not imported by the
+This authority adapter recomputes from current upstream EvidenceStore bytes;
+callers cannot submit a receipt or validation seal.  It deliberately does not
+publish aliases or manuscript-bindable claims and is not imported by the
 Planner or execution selection path.
 """
 
@@ -20,16 +20,14 @@ from ..contracts.prediction_validation import (
     PredictionValidationArtifactRole,
     PredictionValidationError,
     PredictionValidationFinding,
-    PredictionValidationHostValidationSeal,
     PredictionValidationReason,
-    PredictionValidationReceipt,
     PredictionValidationSpec,
     PredictionValidationUpstreamLineage,
     prediction_validation_analysis_bundle_sha256,
-    prediction_validation_receipt_sha256,
-    prediction_validation_runtime_identity_sha256,
-    prediction_validation_spec_sha256,
     prediction_validation_upstream_lineage_sha256,
+)
+from ..prediction_validation_owner import (
+    recompute_prediction_validation_analysis,
 )
 from .evidence_store import EvidenceStore
 from .runtime_artifacts import verified_run_evidence_path
@@ -62,15 +60,8 @@ def _model_input(value: Any, model_type: type[Any]) -> Any:
 def _parse_registration_inputs(
     *,
     spec: PredictionValidationSpec | Mapping[str, Any],
-    receipt: PredictionValidationReceipt | Mapping[str, Any],
-    validation_seal: PredictionValidationHostValidationSeal | Mapping[str, Any],
     lineage: PredictionValidationUpstreamLineage | Mapping[str, Any],
-) -> tuple[
-    PredictionValidationSpec,
-    PredictionValidationReceipt,
-    PredictionValidationHostValidationSeal,
-    PredictionValidationUpstreamLineage,
-]:
+) -> tuple[PredictionValidationSpec, PredictionValidationUpstreamLineage]:
     try:
         parsed_spec = PredictionValidationSpec.model_validate(
             _model_input(spec, PredictionValidationSpec)
@@ -79,26 +70,6 @@ def _parse_registration_inputs(
         raise PredictionValidationError(
             PredictionValidationReason.LINEAGE_SCHEMA_INVALID,
             "prediction-validation specification is not schema-valid",
-            error_count=error.error_count(),
-        ) from error
-    try:
-        parsed_receipt = PredictionValidationReceipt.model_validate(
-            _model_input(receipt, PredictionValidationReceipt)
-        )
-    except ValidationError as error:
-        raise PredictionValidationError(
-            PredictionValidationReason.RECEIPT_SCHEMA_INVALID,
-            "prediction-validation receipt is not schema-valid",
-            error_count=error.error_count(),
-        ) from error
-    try:
-        parsed_seal = PredictionValidationHostValidationSeal.model_validate(
-            _model_input(validation_seal, PredictionValidationHostValidationSeal)
-        )
-    except ValidationError as error:
-        raise PredictionValidationError(
-            PredictionValidationReason.VALIDATION_SEAL_INVALID,
-            "prediction-validation host seal is not schema-valid",
             error_count=error.error_count(),
         ) from error
     try:
@@ -111,32 +82,7 @@ def _parse_registration_inputs(
             "prediction-validation upstream lineage is not schema-valid",
             error_count=error.error_count(),
         ) from error
-    return parsed_spec, parsed_receipt, parsed_seal, parsed_lineage
-
-
-def _validate_host_seal(
-    *,
-    receipt: PredictionValidationReceipt,
-    seal: PredictionValidationHostValidationSeal,
-    lineage: PredictionValidationUpstreamLineage,
-) -> None:
-    expected = {
-        "receipt_sha256": prediction_validation_receipt_sha256(receipt),
-        "source_artifact_sha256": receipt.source.source_artifact_sha256,
-        "contract_sha256": receipt.contract_sha256,
-        "result_sha256": receipt.result_sha256,
-        "runtime_identity_sha256": prediction_validation_runtime_identity_sha256(
-            lineage.runtime
-        ),
-    }
-    observed = {key: getattr(seal, key) for key in expected}
-    if observed != expected:
-        _raise(
-            PredictionValidationReason.VALIDATION_SEAL_INVALID,
-            "host validation seal does not bind this receipt and runtime",
-            expected=expected,
-            observed=observed,
-        )
+    return parsed_spec, parsed_lineage
 
 
 def _resolve_lineage_artifacts(
@@ -237,12 +183,10 @@ def register_prediction_validation_analysis_artifact(
     *,
     evidence_store: EvidenceStore,
     spec: PredictionValidationSpec | Mapping[str, Any],
-    receipt: PredictionValidationReceipt | Mapping[str, Any],
-    validation_seal: PredictionValidationHostValidationSeal | Mapping[str, Any],
     lineage: PredictionValidationUpstreamLineage | Mapping[str, Any],
     validation_step_id: str,
 ) -> PredictionValidationAnalysisRegistration:
-    """Register one host-sealed prediction result without claim authority."""
+    """Recompute and register one prediction result without claim authority."""
 
     step_id = str(validation_step_id or "").strip()
     if not step_id or step_id != validation_step_id:
@@ -250,27 +194,23 @@ def register_prediction_validation_analysis_artifact(
             PredictionValidationReason.LINEAGE_SCHEMA_INVALID,
             "validation_step_id must be non-empty and whitespace-canonical",
         )
-    parsed_spec, parsed_receipt, parsed_seal, parsed_lineage = (
-        _parse_registration_inputs(
-            spec=spec,
-            receipt=receipt,
-            validation_seal=validation_seal,
-            lineage=lineage,
-        )
+    parsed_spec, parsed_lineage = _parse_registration_inputs(
+        spec=spec,
+        lineage=lineage,
     )
-    if prediction_validation_spec_sha256(parsed_spec) != parsed_receipt.contract_sha256:
-        _raise(
-            PredictionValidationReason.LINEAGE_EVIDENCE_MISMATCH,
-            "specification digest does not match the validation receipt",
-        )
-    _validate_host_seal(
-        receipt=parsed_receipt,
-        seal=parsed_seal,
-        lineage=parsed_lineage,
-    )
-    _resolve_lineage_artifacts(
+    resolved = _resolve_lineage_artifacts(
         evidence_store=evidence_store,
         lineage=parsed_lineage,
+    )
+    parsed_receipt, parsed_seal = recompute_prediction_validation_analysis(
+        prediction_path=resolved["prediction_table"],
+        prediction_sha256=parsed_lineage.binding_for("prediction_table").sha256,
+        cohort_path=resolved["cohort"],
+        cohort_sha256=parsed_lineage.binding_for("cohort").sha256,
+        split_path=resolved["split_assignment"],
+        split_sha256=parsed_lineage.binding_for("split_assignment").sha256,
+        spec=parsed_spec,
+        runtime_identity=parsed_lineage.runtime,
     )
     try:
         bundle = PredictionValidationAnalysisBundle(
@@ -490,9 +430,19 @@ def prediction_validation_analysis_registration_findings(
             ),
         )
     try:
-        _resolve_lineage_artifacts(
+        resolved = _resolve_lineage_artifacts(
             evidence_store=evidence_store,
             lineage=bundle.lineage,
+        )
+        expected_receipt, expected_seal = recompute_prediction_validation_analysis(
+            prediction_path=resolved["prediction_table"],
+            prediction_sha256=bundle.lineage.binding_for("prediction_table").sha256,
+            cohort_path=resolved["cohort"],
+            cohort_sha256=bundle.lineage.binding_for("cohort").sha256,
+            split_path=resolved["split_assignment"],
+            split_sha256=bundle.lineage.binding_for("split_assignment").sha256,
+            spec=bundle.spec,
+            runtime_identity=bundle.lineage.runtime,
         )
     except PredictionValidationError as error:
         return (
@@ -500,6 +450,22 @@ def prediction_validation_analysis_registration_findings(
                 error.reason_code,
                 "registered analysis bundle has invalid upstream authority",
                 **error.detail,
+            ),
+        )
+    if bundle.receipt != expected_receipt:
+        return (
+            _finding(
+                PredictionValidationReason.RECEIPT_MISMATCH,
+                "registered analysis receipt differs from host recomputation",
+                evidence_id=parsed.evidence_id,
+            ),
+        )
+    if bundle.validation_seal != expected_seal:
+        return (
+            _finding(
+                PredictionValidationReason.VALIDATION_SEAL_INVALID,
+                "registered analysis seal differs from host recomputation",
+                evidence_id=parsed.evidence_id,
             ),
         )
     return ()

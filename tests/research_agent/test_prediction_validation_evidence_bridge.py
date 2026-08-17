@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -57,6 +58,23 @@ def _write(path: Path, payload: bytes) -> Path:
     return path
 
 
+def _valid_cohort_payload() -> bytes:
+    return (
+        "subject_id,in_cohort\n"
+        + "".join(f"subject-{index},1\n" for index in range(16))
+    ).encode("utf-8")
+
+
+def _valid_split_payload() -> bytes:
+    return (
+        "subject_id,split\n"
+        + "".join(
+            f"subject-{index},{'train' if index < 2 else 'test'}\n"
+            for index in range(16)
+        )
+    ).encode("utf-8")
+
+
 def _register(
     store: EvidenceStore,
     *,
@@ -86,9 +104,18 @@ def _binding(role: str, record) -> PredictionValidationArtifactBinding:
     )
 
 
-def _prepared_authority(tmp_path: Path) -> dict[str, object]:
+def _prepared_authority(
+    tmp_path: Path,
+    *,
+    cohort_payload: bytes | None = None,
+    split_payload: bytes | None = None,
+) -> dict[str, object]:
     store = EvidenceStore(tmp_path / "run")
     inputs = tmp_path / "inputs"
+    if cohort_payload is None:
+        cohort_payload = _valid_cohort_payload()
+    if split_payload is None:
+        split_payload = _valid_split_payload()
     records = {
         "prediction_table": _register(
             store,
@@ -99,18 +126,14 @@ def _prepared_authority(tmp_path: Path) -> dict[str, object]:
         ),
         "cohort": _register(
             store,
-            source_path=_write(
-                inputs / "cohort.csv", b"subject_id,in_cohort\nsubject-1,1\n"
-            ),
+            source_path=_write(inputs / "cohort.csv", cohort_payload),
             evidence_id="prediction_cohort",
             kind="table",
             produced_by_step="00_prepare",
         ),
         "split_assignment": _register(
             store,
-            source_path=_write(
-                inputs / "split.csv", b"subject_id,split\nsubject-1,train\n"
-            ),
+            source_path=_write(inputs / "split.csv", split_payload),
             evidence_id="prediction_split",
             kind="table",
             produced_by_step="00_prepare",
@@ -214,8 +237,6 @@ def _register_analysis(prepared: dict[str, object]):
     return register_prediction_validation_analysis_artifact(
         evidence_store=prepared["store"],
         spec=prepared["spec"],
-        receipt=prepared["receipt"],
-        validation_seal=prepared["validation_seal"],
         lineage=prepared["lineage"],
         validation_step_id="03_validate",
     )
@@ -280,6 +301,73 @@ def test_bridge_registers_one_verified_analysis_only_bundle(tmp_path: Path) -> N
     )
 
 
+def test_public_bridge_does_not_accept_caller_receipt_or_seal() -> None:
+    parameters = inspect.signature(
+        register_prediction_validation_analysis_artifact
+    ).parameters
+
+    assert "receipt" not in parameters
+    assert "validation_seal" not in parameters
+
+
+@pytest.mark.parametrize(
+    "cohort_payload",
+    [
+        b"subject_id,in_cohort\nsubject-1,1\n",
+        _valid_cohort_payload() + b"subject-1,1\n",
+        b"wrong_subject_id,in_cohort\nsubject-1,1\n",
+    ],
+    ids=("missing-subjects", "duplicate-subject", "missing-identity-column"),
+)
+def test_bridge_rejects_cohort_semantic_mismatch(
+    tmp_path: Path,
+    cohort_payload: bytes,
+) -> None:
+    prepared = _prepared_authority(
+        tmp_path,
+        cohort_payload=cohort_payload,
+    )
+
+    with pytest.raises(PredictionValidationError) as caught:
+        _register_analysis(prepared)
+
+    assert (
+        caught.value.reason_code is PredictionValidationReason.LINEAGE_COHORT_MISMATCH
+    )
+    assert len(prepared["store"].records()) == 7
+
+
+@pytest.mark.parametrize(
+    "split_payload",
+    [
+        b"subject_id,split\nsubject-1,train\n",
+        _valid_split_payload().replace(b"subject-2,test", b"subject-2,train"),
+        _valid_split_payload() + b"subject-1,train\n",
+        b"subject_id,partition\nsubject-1,train\n",
+    ],
+    ids=(
+        "missing-subjects",
+        "wrong-assignment",
+        "duplicate-subject",
+        "missing-split-column",
+    ),
+)
+def test_bridge_rejects_split_semantic_mismatch(
+    tmp_path: Path,
+    split_payload: bytes,
+) -> None:
+    prepared = _prepared_authority(
+        tmp_path,
+        split_payload=split_payload,
+    )
+
+    with pytest.raises(PredictionValidationError) as caught:
+        _register_analysis(prepared)
+
+    assert caught.value.reason_code is PredictionValidationReason.LINEAGE_SPLIT_MISMATCH
+    assert len(prepared["store"].records()) == 7
+
+
 @pytest.mark.parametrize(
     ("mutation", "expected_reason"),
     [
@@ -319,8 +407,6 @@ def test_bridge_fails_closed_on_upstream_evidence_drift(
         register_prediction_validation_analysis_artifact(
             evidence_store=prepared["store"],
             spec=prepared["spec"],
-            receipt=prepared["receipt"],
-            validation_seal=prepared["validation_seal"],
             lineage=changed_lineage,
             validation_step_id="03_validate",
         )
@@ -358,8 +444,6 @@ def test_bridge_rejects_runtime_receipt_semantic_drift(tmp_path: Path) -> None:
         register_prediction_validation_analysis_artifact(
             evidence_store=prepared["store"],
             spec=prepared["spec"],
-            receipt=prepared["receipt"],
-            validation_seal=prepared["validation_seal"],
             lineage=changed_lineage,
             validation_step_id="03_validate",
         )
@@ -410,19 +494,13 @@ def test_bundle_rejects_a_validation_seal_from_another_runtime(
         runtime_identity=other_runtime,
     )
 
-    with pytest.raises(PredictionValidationError) as caught:
-        register_prediction_validation_analysis_artifact(
-            evidence_store=prepared["store"],
+    with pytest.raises(ValidationError):
+        PredictionValidationAnalysisBundle(
             spec=prepared["spec"],
             receipt=prepared["receipt"],
             validation_seal=other_seal,
             lineage=prepared["lineage"],
-            validation_step_id="03_validate",
         )
-
-    assert (
-        caught.value.reason_code is PredictionValidationReason.VALIDATION_SEAL_INVALID
-    )
 
 
 def test_registration_validator_detects_later_claim_or_alias_promotion(

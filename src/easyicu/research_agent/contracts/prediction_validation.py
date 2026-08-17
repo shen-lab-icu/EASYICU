@@ -43,6 +43,8 @@ class PredictionValidationReason(str, Enum):
     LINEAGE_EVIDENCE_MISSING = "prediction_validation_lineage_evidence_missing"
     LINEAGE_EVIDENCE_MISMATCH = "prediction_validation_lineage_evidence_mismatch"
     LINEAGE_EVIDENCE_STALE = "prediction_validation_lineage_evidence_stale"
+    LINEAGE_COHORT_MISMATCH = "prediction_validation_lineage_cohort_mismatch"
+    LINEAGE_SPLIT_MISMATCH = "prediction_validation_lineage_split_mismatch"
     LINEAGE_RUNTIME_MISMATCH = "prediction_validation_lineage_runtime_mismatch"
     VALIDATION_SEAL_INVALID = "prediction_validation_host_seal_invalid"
     AUTHORITY_CEILING_VIOLATION = "prediction_validation_authority_ceiling_violation"
