@@ -60,7 +60,7 @@ def test_patient_seeded_demo_uses_clinical_table_shape() -> None:
         < index_html.index("js/screens-viz-demo-drilldown.js?")
         < index_html.index("js/screens-viz.js?")
     )
-    assert "js/screens-viz.js?v=20260812-crossdb-jobs" in index_html
+    assert "js/screens-viz.js?v=20260817-copilot-boundary1" in index_html
     # A stale pin must stay gone. This asserts the OLD string is absent — my
     # bulk re-pin briefly rewrote it to the current one, which made the two
     # lines contradict each other.

@@ -1,4 +1,4 @@
-/* Agent Projects StudyContext adapter.
+/* Project Monitor StudyContext adapter.
    Owner: persisted StudyContext -> Agent project projection, activation,
    bound-source resolution, and run-persistence ordering. */
 (function () {

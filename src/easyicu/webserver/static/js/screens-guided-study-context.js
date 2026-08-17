@@ -72,7 +72,7 @@
     if (current && current.current_stage === 'crossdb_plan_only' && fresh.question === current.question) {
       return {
         context: current,
-        persisted: Promise.reject(new Error('Reframe the Cross-DB plan as a single-export question before continuing to Agent Projects.')),
+        persisted: Promise.reject(new Error('Reframe the Cross-DB plan as a single-export question before starting a governed analysis.')),
       };
     }
     return store.handoff({

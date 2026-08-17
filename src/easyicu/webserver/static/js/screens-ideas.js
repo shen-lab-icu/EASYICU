@@ -121,7 +121,7 @@
         t('Data context', '数据上下文'),
         t('Confirm export, cohort, and modules', '确认导出、队列和模块'),
         t('Select the real local export, denominator, required modules, and concept dictionary mappings with the user.', '和用户确认真实本地导出、分母、所需模块和概念映射。'),
-        t('Confirmed export/cohort/module contract for Agent Projects.', '交给研究项目的导出/队列/模块契约。'),
+        t('Confirmed export/cohort/module contract for the governed Research Agent handoff.', '交给受治理 Research Agent 的导出/队列/模块契约。'),
         t('MOCK or demo exports are UI rehearsal only.', 'MOCK 或演示导出只能用于界面演练。')
       );
     }
@@ -165,7 +165,7 @@
       return mk(
         t('Agent handoff', 'Agent 交接'),
         t('Create a project seed only after confirmation', '确认后再创建研究项目种子'),
-        t('Send the locked question, feasibility table, literature interpretation, and analysis steps to Agent Projects.', '把锁定问题、可行性表、文献解释和分析步骤交给研究项目。'),
+        t('Store the locked question, feasibility table, literature interpretation, and analysis steps as a governed handoff.', '把锁定问题、可行性表、文献解释和分析步骤存为受治理的交接对象。'),
         t('Metadata-only project seed.', '仅元数据的项目种子。'),
         t('Manuscript claims remain blocked until evidence checks and human sign-off pass.', '证据核验和人工签署前，论文结论保持锁定。')
       );
@@ -948,9 +948,9 @@
     const projectDir = projectSeed && projectSeed.project_dir ? projectSeed.project_dir : '';
     const question = (projectSeed && (projectSeed.question || projectSeed.title)) || plan.research_question || (handoff && handoff.candidate_topic) || t('Idea-derived study', '由 idea 生成的研究');
     const ready = !!projectSeed;
-    const title = ready ? t('Agent project ready', '研究项目已创建') : t('Handoff frozen', '交接已冻结');
+    const title = ready ? t('Project seed ready', '项目种子已就绪') : t('Handoff frozen', '交接已冻结');
     const body = ready
-      ? t('Open Agent Projects to continue from this seed. It includes the locked plan, feasibility context, and evidence boundaries.', '可以到研究项目继续推进。该种子包含已锁定计划、可行性上下文和证据边界。')
+      ? t('Continue in Guided Copilot to confirm the run from this seed. Project Monitor can review the seed and later outputs.', '在研究引导中基于该种子确认运行；项目监控可查看种子和后续产出。')
       : t('The plan is frozen as a metadata-only handoff. Create a project seed when you are ready to run the study workflow.', '计划已冻结为仅元数据交接。准备运行研究流程时，再创建项目种子。');
     return `
       <div class="ideas-handoff-receipt ${ready ? 'ready' : 'frozen'} mt-12">
@@ -970,8 +970,8 @@
         </div>
         ${projectDir ? `<div class="ideas-handoff-path"><span>${t('Project folder', '项目文件夹')}</span><code>${esc(projectDir)}</code></div>` : ''}
         <div class="ideas-handoff-actions">
-          ${ready ? `<button class="btn primary" data-nav="agent">${icon('agent', 13)} ${t('Open Agent Projects', '打开研究项目')}</button>` : `<button class="btn primary" data-idea-create-project ${projectCreating ? 'aria-disabled="true"' : ''}>${projectCreating ? '<span class="spin"></span>' : icon('agent', 13)} ${t('Create Agent project', '创建研究项目')}</button>`}
-          <button class="btn" data-nav="agent">${icon('agent', 13)} ${t('View project list', '查看项目列表')}</button>
+          ${ready ? `<button class="btn primary" data-nav="guided">${icon('spark', 13)} ${t('Continue in Guided Copilot', '在研究引导中继续')}</button>` : `<button class="btn primary" data-idea-create-project ${projectCreating ? 'aria-disabled="true"' : ''}>${projectCreating ? '<span class="spin"></span>' : icon('agent', 13)} ${t('Create project seed', '创建项目种子')}</button>`}
+          <button class="btn" data-nav="agent">${icon('agent', 13)} ${t('Open Project Monitor', '打开项目监控')}</button>
         </div>
       </div>`;
   }
@@ -1101,7 +1101,7 @@
       <div class="card pad ideas-core-card">
         <div class="section-head">
           <span class="sec-ico">${icon('agent', 14)}</span>
-          <div><h2>${t('Plan / replan before Agent', 'Agent 前计划 / replan')}</h2><p>${t('Confirm or revise the plan before sending it to Agent Projects. This does not unlock a manuscript draft.', '交给 Agent Projects 前先确认或修订计划。这里不会解锁论文草稿。')}</p></div>
+          <div><h2>${t('Plan / replan before handoff', '交接前计划 / replan')}</h2><p>${t('Confirm or revise the plan before creating the governed handoff. This does not unlock a manuscript draft.', '创建受治理交接前先确认或修订计划。这里不会解锁论文草稿。')}</p></div>
         </div>
         <div class="note ok mt-8"><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${esc(plan.research_question || '')}</div><div class="d">${esc((plan.agent_boundary && plan.agent_boundary.reason) || t('Draft analysis plan is locked until human confirmation and evidence checks pass.', '分析计划草稿在人工确认和证据核验通过前保持锁定。'))}</div></div></div>
         <div class="ideas-plan-steps mt-12">${planSteps.map(planStep).join('')}</div>
@@ -1227,7 +1227,7 @@
             </div>
           </div>
           <div class="row gap-8">
-            <button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Open Agent Projects', '打开研究项目')}</button>
+            <button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Open Project Monitor', '打开项目监控')}</button>
             <button class="btn sm" data-idea-new>${icon('plus', 13)} ${t('New idea', '新想法')}</button>
           </div>
         </div>
@@ -1458,7 +1458,7 @@
     wide: true,
     crumbs: ['Home', 'Idea Mining'],
     get status() { return `<span class="pill ok"><span class="dot"></span> ${t('Local-first', '本地优先')}</span>`; },
-    get actionHtml() { return `<button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Agent Projects', '研究项目')}</button>`; },
+    get actionHtml() { return `<button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Project Monitor', '项目监控')}</button>`; },
     rail() {
       const last = result && (result.idea_ledger || [])[0];
       return `
@@ -1491,8 +1491,8 @@
               <!-- zh name must match the sidebar entry and CRUMB_LABELS in
                    app.js; this h1 also becomes the document title. -->
               <h1 style="margin-top:6px;">${t('Idea Mining', '想法挖掘')}</h1>
-              <p class="lead">${t('A workspace for turning papers, review themes, or raw hunches into an auditable idea ledger and an Agent-ready seed.', '把文章、review 主题或研究直觉转成可审计 idea 台账和研究项目可接手的种子。')}</p>
-              <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Separated from Research Projects: mining decides what is worth running; Agent Projects runs confirmed analyses.', '已和研究项目拆分：Idea 挖掘判断什么值得做；研究项目只运行确认后的分析。')}</div>
+              <p class="lead">${t('A workspace for turning papers, review themes, or raw hunches into an auditable idea ledger and a governed handoff seed.', '把文章、review 主题或研究直觉转成可审计 idea 台账和受治理的交接种子。')}</p>
+              <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Idea Mining decides what is worth running; Guided Copilot collects the run setup; Project Monitor reviews outputs and evidence.', 'Idea 挖掘判断什么值得做；研究引导收集运行配置；项目监控审阅产出与证据。')}</div>
             </div>
           </div>
         </div>
