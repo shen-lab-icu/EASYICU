@@ -1141,6 +1141,7 @@ def test_execute_phase_mandatory_publication_gate_uses_structural_predicate():
     gate_source = source[gate_start:gate_end]
 
     assert "_step_requires_publication_figure_exports" in gate_source
+    assert "deterministic_standard_analysis" not in gate_source
     assert "step.step_id" not in gate_source
     assert "step.intent" not in gate_source
 

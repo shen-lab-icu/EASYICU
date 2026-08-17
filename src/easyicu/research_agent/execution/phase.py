@@ -3373,13 +3373,13 @@ def _step_prepare_post_candidate_figures(
     total_steps: Any,
     worker_progress: Any,
 ) -> Tuple[Optional[Dict[str, Any]], Optional["_StepPostCandidateFigurePreparation"]]:
-    publication_step = _step_requires_publication_figure_exports(
-        step
-    ) and not step_record.get("deterministic_standard_analysis")
-    # A deterministic data-only auxiliary produces registered tables rather
-    # than an inline figure; a separate rendering step owns its export. Names
-    # and narrative intent are deliberately absent from the predicate above.
-    # A genuine figure method/output contract still fails closed here.
+    publication_step = _step_requires_publication_figure_exports(step)
+    # A deterministic data-only auxiliary does not declare a figure product,
+    # so the structural predicate excludes it without special-casing the
+    # executor.  A deterministic rendering-only step *does* own the declared
+    # figure bundle and must retain publication-figure identity after the
+    # contract/source gates pass; otherwise the downstream skill cannot
+    # promote its already verified outputs.
     figure_role = (
         "publication_figure"
         if publication_step

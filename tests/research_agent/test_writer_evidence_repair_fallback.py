@@ -81,3 +81,57 @@ def test_provider_failure_is_not_hidden_by_writer_drop_fallback(
 
     with pytest.raises(ProviderTransportFailure):
         _repair()
+
+
+def test_citation_cannot_launder_result_prose_past_strict_revalidation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.authority.evidence_store import (
+        EvidenceEnforcementMode,
+        EvidenceStore,
+    )
+
+    sentence = "Mortality was 20%."
+    scaffold = f"## Results\n\n{sentence}\n"
+    monkeypatch.setattr(
+        write_phase,
+        "decide_writer_evidence_repairs",
+        lambda *args, **kwargs: [
+            {"index": 0, "action": "cite", "evidence_ids": ["registered_result"]}
+        ],
+    )
+    repaired, applied, fallback = write_phase._repair_rejected_writer_sentences(
+        scaffold,
+        llm=object(),
+        evidence_ids=["registered_result"],
+        evidence_digest="registered_result: observed counts",
+        rejected_sentences=[sentence],
+        scientific_claims={},
+        claim_required_sentences=[],
+        allowed_claim_refs=[],
+        language="en",
+    )
+    store = EvidenceStore(
+        tmp_path,
+        enforcement_mode=EvidenceEnforcementMode.STRICT,
+    )
+
+    cleaned, residual_drops, detail = (
+        write_phase._drop_residual_strict_writer_sentences(
+            repaired,
+            enforce_scaffold=store.enforce_evidence_bound_scaffold,
+        )
+    )
+
+    assert applied[0]["action"] == "cite"
+    assert fallback is None
+    assert sentence not in cleaned
+    assert residual_drops[0]["action"] == "drop"
+    assert detail == {
+        "reason_code": "writer_evidence_repair_residual_strict_drop",
+        "rejected_sentence_count": 1,
+        "result_sentence_count": 1,
+        "scientific_claim_sentence_count": 0,
+    }
+    store.enforce_evidence_bound_scaffold(cleaned)
