@@ -75,14 +75,18 @@ def _bind_step_module_shape(
     definitions: dict[str, Any],
     *,
     locked_module_id: str | None = None,
+    locked_has_dependencies: bool | None = None,
+    locked_has_available_products: bool | None = None,
 ) -> None:
-    """Compile the one cross-field rule the base schema cannot express cheaply.
+    """Compile Pydantic module-shape rules into the provider contract.
 
     A standard module's method is host-owned, so ``custom_method`` is not an
     alternate spelling of that method and must be null.  ``custom_analysis`` is
-    the only branch that accepts free-form method text.  Keeping its branch to
-    the fields it can actually use avoids cloning the entire step schema and
-    keeps the run-bound authority compact.
+    the only branch that accepts free-form method text.  When the current
+    outline coordinate locks a module, required non-null fields and output
+    cardinality are also locked here so a response accepted by the transport
+    cannot be rejected immediately by ``ProgressiveSkeletonStep`` for the same
+    module-shape rule.
     """
 
     step = definitions.get("ProgressiveSkeletonStep")
@@ -102,6 +106,10 @@ def _bind_step_module_shape(
     standard_ids = [value for value in module_ids if value != "custom_analysis"]
 
     if locked_module_id is not None:
+        if locked_module_id not in module_ids:
+            raise ProgressiveTransportSchemaError(
+                f"unknown locked progressive module {locked_module_id!r}"
+            )
         if locked_module_id == "table_one":
             properties["table_one_group_by"] = _non_null(
                 properties["table_one_group_by"], field="table_one_group_by"
@@ -114,6 +122,44 @@ def _bind_step_module_shape(
             properties["table_one_group_by"] = {"type": "null"}
             properties["table_one_mode"] = {"type": "null"}
             properties["table_one_variables"]["maxItems"] = 0
+
+        required_non_null: tuple[str, ...] = ()
+        if locked_module_id == "adjusted_association":
+            required_non_null = (
+                "primary_exposure",
+                "outcome",
+                "outcome_type",
+            )
+            properties["model_terms"]["minItems"] = 1
+        elif locked_module_id == "exposure_outcome_distribution":
+            required_non_null = (
+                "primary_exposure",
+                "outcome",
+                "event_level_index",
+                "reference_exposure_level_index",
+                "comparison_exposure_level_index",
+                "denominator_policy",
+                "missing_exposure_policy",
+                "missing_outcome_policy",
+                "confidence_level",
+            )
+        for field in required_non_null:
+            properties[field] = _non_null(properties[field], field=field)
+
+        if locked_module_id in {
+            "measurement_audit",
+            "custom_analysis",
+            "visualization",
+            "report",
+        }:
+            properties["outputs"]["minItems"] = 1
+        if locked_module_id == "visualization" and not locked_has_dependencies:
+            if not locked_has_available_products:
+                raise ProgressiveTransportSchemaError(
+                    "visualization outline requires an upstream dependency or "
+                    "available product"
+                )
+            properties["product_inputs"]["minItems"] = 1
 
     standard = copy.deepcopy(step)
     standard["properties"]["module_id"] = (
@@ -782,6 +828,8 @@ def progressive_step_materialization_request(
     _bind_step_module_shape(
         definitions,
         locked_module_id=outline_step.module_id,
+        locked_has_dependencies=bool(outline_step.depends_on),
+        locked_has_available_products=bool(normalized_products),
     )
     return _closed_request(
         name="easyicu_progressive_step_materialization_v1",

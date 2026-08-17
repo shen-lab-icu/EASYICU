@@ -776,6 +776,99 @@ def test_current_table_one_step_requires_its_module_fields_in_schema() -> None:
     assert step["table_one_variables"]["minItems"] == 1
 
 
+def test_current_distribution_step_requires_non_null_contract_fields() -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id="03_distribution",
+        planned_analysis_role="primary",
+        module_id="exposure_outcome_distribution",
+        objective="Estimate prevalence and absolute outcome risk by exposure.",
+        depends_on=["01_cohort"],
+        variable_names=["exposure_flag", "outcome_flag"],
+        literature_citation_keys=[],
+        scientific_action_id="descriptive.descriptive_summary",
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        variable_names=["exposure_flag", "outcome_flag"],
+        scientific_action_ids=["descriptive.descriptive_summary"],
+        available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
+    )
+    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
+        "properties"
+    ]
+
+    required_non_null = {
+        "primary_exposure",
+        "outcome",
+        "event_level_index",
+        "reference_exposure_level_index",
+        "comparison_exposure_level_index",
+        "denominator_policy",
+        "missing_exposure_policy",
+        "missing_outcome_policy",
+        "confidence_level",
+    }
+    assert all("anyOf" not in step[field] for field in required_non_null)
+
+
+def test_current_adjusted_step_requires_model_contract_fields() -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id="05_primary",
+        planned_analysis_role="primary",
+        module_id="adjusted_association",
+        objective="Estimate the prespecified adjusted association.",
+        depends_on=["01_cohort"],
+        variable_names=["exposure_flag", "outcome_flag", "age_years"],
+        literature_citation_keys=[],
+        scientific_action_id="association.adjusted_association",
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        variable_names=["exposure_flag", "outcome_flag", "age_years"],
+        scientific_action_ids=["association.adjusted_association"],
+        available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
+    )
+    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
+        "properties"
+    ]
+
+    assert "anyOf" not in step["primary_exposure"]
+    assert "anyOf" not in step["outcome"]
+    assert "anyOf" not in step["outcome_type"]
+    assert step["model_terms"]["minItems"] == 1
+
+
+@pytest.mark.parametrize(
+    "module_id",
+    ["measurement_audit", "visualization", "report"],
+)
+def test_current_artifact_module_requires_an_explicit_output(module_id: str) -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id=f"02_{module_id}",
+        planned_analysis_role="auxiliary",
+        module_id=module_id,
+        objective="Produce the declared governed artifact for downstream review.",
+        depends_on=["01_cohort"],
+        variable_names=["exposure_flag"],
+        literature_citation_keys=[],
+        scientific_action_id=None,
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        variable_names=["exposure_flag"],
+        scientific_action_ids=[],
+        available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
+    )
+    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
+        "properties"
+    ]
+
+    assert step["outputs"]["minItems"] == 1
+
+
 def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     plan, receipt = compile_progressive_plan(
         skeleton=_skeleton(),
