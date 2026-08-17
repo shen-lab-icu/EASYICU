@@ -91,6 +91,21 @@ def _foundation_runtime_provenance() -> dict[str, str]:
     }
 
 
+def test_physical_column_expansion_preserves_event_time_and_owner_receipts() -> None:
+    assert sealer._physical_columns_from_manifest_concepts(
+        ["stay_id", "charttime"], ["death", "sofa2_resp", "los_icu"]
+    ) == [
+        "stay_id",
+        "charttime",
+        "death",
+        "death_time",
+        "sofa2_resp",
+        "sofa2_resp_observed",
+        "sofa2_resp_available",
+        "los_icu",
+    ]
+
+
 def _build_synthetic_release(run_root: Path) -> None:
     export_root = run_root / "exports"
     timing_rows = []

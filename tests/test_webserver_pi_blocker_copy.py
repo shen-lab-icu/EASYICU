@@ -70,10 +70,13 @@ def test_blocker_owner_pairs_each_code_with_a_remediation() -> None:
 def test_setup_panel_keeps_the_raw_code_available_but_demoted() -> None:
     """Support conversations still need the exact code — just not as headline."""
 
-    panel = _asset("js", "screens-guided-pi.js")
+    # The setup panel moved into its own owner when the Codex account
+    # provider landed; the raw code must survive that move.
+    panel = _asset("js", "screens-guided-pi-provider.js")
     css = _asset("css", "guided-pi.css")
 
     assert 'class="gpi-blocker-code mono"' in panel
+    assert "Diagnostic code reported by the Pi runtime" in panel
     assert ".gpi-blocker-code{" in css
     assert ".gpi-config-note.gpi-blockers{display:block}" in css
 

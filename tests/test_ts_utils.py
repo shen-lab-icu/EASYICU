@@ -3,6 +3,8 @@ import pandas as pd
 
 from easyicu.api import _get_auto_chunk_strategy
 from easyicu.io.ts_utils import locb, locf, slide
+import pytest
+from easyicu.io.ts_utils import fill_gaps, round_to_interval
 
 
 def test_locf_sorts_by_time_before_fill_when_unsorted_and_no_max_gap():
@@ -70,3 +72,39 @@ def test_sofa_auto_chunk_size_is_capped_for_large_cohorts(monkeypatch):
 
     assert strategy is not None
     assert strategy["chunk_size"] == 2000
+
+
+# --- gap filling and numeric-axis rounding (2026-08-16 IO review) ---
+
+def test_fill_gaps_fast_path_preserves_off_grid_observations() -> None:
+    frame = pd.DataFrame(
+        {"stay_id": [1, 1], "time": [0.5, 1.0], "value": [5.0, 10.0]}
+    )
+    limits = pd.DataFrame({"stay_id": [1], "start": [0.0], "end": [2.0]})
+
+    result = fill_gaps(
+        frame,
+        ["stay_id"],
+        "time",
+        pd.Timedelta(hours=1),
+        limits=limits,
+        method="none",
+    ).sort_values("time")
+
+    assert result["time"].tolist() == [0.0, 0.5, 1.0, 2.0]
+    assert result.loc[result["time"] == 0.5, "value"].item() == 5.0
+
+@pytest.mark.parametrize("times", [1.5, pd.Index([0.0, 1.5])])
+def test_round_to_interval_rejects_all_bare_numeric_axes(times) -> None:
+    with pytest.raises(ValueError, match="ambiguous"):
+        round_to_interval(times, pd.Timedelta(hours=1))
+
+def test_round_to_interval_accepts_numeric_axis_with_explicit_unit() -> None:
+    times = pd.Series([0.0, 59.0, 60.0, 119.0], name="charttime")
+
+    result = round_to_interval(
+        times, pd.Timedelta(hours=1), time_unit="minutes"
+    )
+
+    assert result.tolist() == [0.0, 0.0, 60.0, 60.0]
+    assert result.name == "charttime"

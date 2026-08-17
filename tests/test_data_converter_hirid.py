@@ -290,3 +290,42 @@ def test_hirid_status_verification_uses_selected_parquet_candidate(
     needs_conversion, reason = converter._is_conversion_needed(csv_path)
     assert not needs_conversion
     assert reason == "already converted and verified"
+
+
+# --- archive extraction completeness (2026-08-16 IO review) ---
+
+def test_hirid_archive_completeness_checks_exact_member_size(tmp_path: Path) -> None:
+    data_dir = tmp_path / "hirid"
+    data_dir.mkdir()
+    archive = data_dir / "reference_data.tar.gz"
+    payload = b"complete payload"
+    with tarfile.open(archive, "w:gz") as handle:
+        member = tarfile.TarInfo("reference/general_table.csv")
+        member.size = len(payload)
+        handle.addfile(member, io.BytesIO(payload))
+
+    target = data_dir / "reference" / "general_table.csv"
+    target.parent.mkdir()
+    target.write_bytes(b"x")
+    converter = DataConverter(data_dir, database="hirid", verbose=False)
+
+    assert not converter._archive_extraction_complete(archive)
+
+    target.write_bytes(payload)
+    assert converter._archive_extraction_complete(archive)
+
+def test_hirid_archive_completeness_accepts_real_zero_byte_member(tmp_path: Path) -> None:
+    data_dir = tmp_path / "hirid"
+    data_dir.mkdir()
+    archive = data_dir / "reference_data.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        member = tarfile.TarInfo("reference/empty.csv")
+        member.size = 0
+        handle.addfile(member, io.BytesIO())
+
+    target = data_dir / "reference" / "empty.csv"
+    target.parent.mkdir()
+    target.touch()
+    converter = DataConverter(data_dir, database="hirid", verbose=False)
+
+    assert converter._archive_extraction_complete(archive)
