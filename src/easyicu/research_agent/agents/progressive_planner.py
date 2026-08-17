@@ -39,6 +39,7 @@ from ..planning.progressive_contract import (
     ProgressivePlannerCheckpoint,
     ProgressivePlanSkeleton,
     ProgressiveStepMaterialization,
+    progressive_module_ids_for_analysis_types,
 )
 from ..planning.progressive_artifacts import (
     ProgressiveCompileReplayAttempt,
@@ -546,6 +547,9 @@ class ProgressivePlannerAgent:
                 {
                     "analysis_type": analysis_type,
                     "analysis_family": contract.analysis_family,
+                    "available_modules": list(
+                        progressive_module_ids_for_analysis_types((analysis_type,))
+                    ),
                     "required_roles": list(contract.required_roles),
                     "planner_owned_result_roles": list(
                         contract.planner_owned_result_roles
@@ -712,7 +716,19 @@ class ProgressivePlannerAgent:
         allowed = set(allowed_actions)
         available_variables = set(variable_names)
         available_citations = set(allowed_literature_citation_keys)
+        allowed_modules = set(
+            progressive_module_ids_for_analysis_types((outline.analysis_type,))
+        )
         for index, step in enumerate(outline.steps):
+            if step.module_id not in allowed_modules:
+                raise ProgressivePlanCompileError(
+                    "progressive_outline_module_unavailable",
+                    f"outline module {step.module_id!r} is unavailable for "
+                    f"analysis type {outline.analysis_type!r}",
+                    step_id=step.step_id,
+                    step_index=index,
+                    path="module_id",
+                )
             unknown_variables = sorted(set(step.variable_names) - available_variables)
             if unknown_variables:
                 raise ProgressivePlanCompileError(
@@ -789,6 +805,12 @@ class ProgressivePlannerAgent:
             "selection, display labels, robustness intents, and any authorized "
             "know-how decisions. Do not return executable step fields."
         )
+        if outline.analysis_type == "descriptive_epidemiology":
+            blocks.append(
+                "This descriptive family has no fitted primary effect or interval. "
+                "Return robustness_intents=[]; denominator and complete-case "
+                "availability belong to typed audit steps in the outline."
+            )
         return "\n\n".join(blocks)
 
     @staticmethod
@@ -1300,10 +1322,21 @@ class ProgressivePlannerAgent:
             outline = resume_checkpoint.outline
         else:
             self.last_prompt_metrics = current_prompt_metrics
+
+            def parse_outline(raw: str) -> ProgressivePlanOutline:
+                parsed = _parse_model(raw, ProgressivePlanOutline)
+                self._validate_outline_authority(
+                    parsed,
+                    analysis_types=analysis_types,
+                    variable_names=variables,
+                    allowed_literature_citation_keys=allowed_citations,
+                )
+                return parsed
+
             outline = call_llm_with_structured_retry(
                 self.llm,
                 messages,
-                parser=lambda raw: _parse_model(raw, ProgressivePlanOutline),
+                parser=parse_outline,
                 role="progressive_planner_outline",
                 max_retries=_MAX_INITIAL_PARSE_RETRIES,
                 max_tokens=_MAX_OUTLINE_OUTPUT_TOKENS,
@@ -1359,6 +1392,7 @@ class ProgressivePlannerAgent:
                     if required_primary_cohort_selection_mode is not None
                     else None
                 ),
+                analysis_type=outline.analysis_type,
             )
         foundation_prompt = self._foundation_prompt(
             context=context,
@@ -1412,13 +1446,25 @@ class ProgressivePlannerAgent:
             self.last_prompt_metrics[
                 "foundation_structured_output_authority_sha256"
             ] = current_foundation_authority
+
+            def parse_foundation(
+                raw: str,
+            ) -> ProgressiveFoundationMaterialization:
+                parsed = _parse_foundation_materialization(
+                    raw,
+                    host_cohort=host_cohort,
+                )
+                validate_progressive_foundation(
+                    parsed.foundation,
+                    context=context,
+                    analysis_type=outline.analysis_type,
+                )
+                return parsed
+
             foundation_materialization = call_llm_with_structured_retry(
                 self.llm,
                 foundation_messages,
-                parser=lambda raw: _parse_foundation_materialization(
-                    raw,
-                    host_cohort=host_cohort,
-                ),
+                parser=parse_foundation,
                 role="progressive_planner_foundation",
                 max_retries=1,
                 max_tokens=_MAX_FOUNDATION_OUTPUT_TOKENS,
@@ -1454,6 +1500,7 @@ class ProgressivePlannerAgent:
         validate_progressive_foundation(
             foundation,
             context=context,
+            analysis_type=outline.analysis_type,
         )
         self.last_foundation = foundation_materialization
         if not resume_foundation_reused:
