@@ -17,10 +17,12 @@ from pydantic import ValidationError
 from ..contracts.prediction_validation import (
     PredictionValidationAnalysisBundle,
     PredictionValidationAnalysisRegistration,
+    PredictionValidationArtifactBinding,
     PredictionValidationArtifactRole,
     PredictionValidationError,
     PredictionValidationFinding,
     PredictionValidationReason,
+    PredictionValidationRuntimeIdentity,
     PredictionValidationSpec,
     PredictionValidationUpstreamLineage,
     prediction_validation_analysis_bundle_sha256,
@@ -85,13 +87,14 @@ def _parse_registration_inputs(
     return parsed_spec, parsed_lineage
 
 
-def _resolve_lineage_artifacts(
+def _resolve_artifact_bindings(
     *,
     evidence_store: EvidenceStore,
-    lineage: PredictionValidationUpstreamLineage,
+    producer_run_id: str,
+    artifacts: tuple[PredictionValidationArtifactBinding, ...],
 ) -> dict[PredictionValidationArtifactRole, Path]:
     resolved: dict[PredictionValidationArtifactRole, Path] = {}
-    for binding in lineage.artifacts:
+    for binding in artifacts:
         record = evidence_store.get(binding.evidence_id)
         if record is None or record.evidence_id != binding.evidence_id:
             _raise(
@@ -110,7 +113,7 @@ def _resolve_lineage_artifacts(
             "sha256": binding.sha256,
             "kind": binding.kind,
             "produced_by_step": binding.produced_by_step,
-            "run_id": lineage.producer_run_id,
+            "run_id": producer_run_id,
         }
         if observed != expected:
             _raise(
@@ -130,24 +133,92 @@ def _resolve_lineage_artifacts(
                 evidence_id=binding.evidence_id,
             )
         resolved[binding.role] = path
+    return resolved
 
+
+def _verify_runtime_receipt(
+    *,
+    resolved: Mapping[PredictionValidationArtifactRole, Path],
+    runtime: PredictionValidationRuntimeIdentity,
+    runtime_binding: PredictionValidationArtifactBinding,
+) -> None:
     runtime_path = resolved["runtime_receipt"]
     try:
         runtime_payload = runtime_path.read_text(encoding="utf-8")
-        observed_runtime = type(lineage.runtime).model_validate_json(runtime_payload)
+        observed_runtime = PredictionValidationRuntimeIdentity.model_validate_json(
+            runtime_payload
+        )
     except (OSError, UnicodeDecodeError, ValidationError) as error:
         raise PredictionValidationError(
             PredictionValidationReason.LINEAGE_RUNTIME_MISMATCH,
             "runtime receipt is not a valid runtime identity",
-            evidence_id=lineage.binding_for("runtime_receipt").evidence_id,
+            evidence_id=runtime_binding.evidence_id,
         ) from error
-    if observed_runtime != lineage.runtime:
+    if observed_runtime != runtime:
         _raise(
             PredictionValidationReason.LINEAGE_RUNTIME_MISMATCH,
             "runtime receipt does not match the declared runtime identity",
-            expected=lineage.runtime.model_dump(mode="json"),
+            expected=runtime.model_dump(mode="json"),
             observed=observed_runtime.model_dump(mode="json"),
         )
+
+
+def resolve_prediction_validation_runtime_authority(
+    *,
+    evidence_store: EvidenceStore,
+    producer_run_id: str,
+    runtime: PredictionValidationRuntimeIdentity,
+    artifacts: tuple[PredictionValidationArtifactBinding, ...],
+) -> dict[PredictionValidationArtifactRole, Path]:
+    """Resolve the exact code/environment/runtime subset of one lineage."""
+
+    expected_roles = ("code_snapshot", "environment_lock", "runtime_receipt")
+    if tuple(binding.role for binding in artifacts) != expected_roles:
+        _raise(
+            PredictionValidationReason.LINEAGE_SCHEMA_INVALID,
+            "runtime authority requires code, environment and receipt in order",
+            expected_roles=list(expected_roles),
+            observed_roles=[binding.role for binding in artifacts],
+        )
+    if artifacts[0].sha256 != runtime.source_tree_sha256:
+        _raise(
+            PredictionValidationReason.LINEAGE_RUNTIME_MISMATCH,
+            "runtime source tree does not match the code snapshot",
+        )
+    if artifacts[1].sha256 != runtime.environment_sha256:
+        _raise(
+            PredictionValidationReason.LINEAGE_RUNTIME_MISMATCH,
+            "runtime environment does not match the environment lock",
+        )
+    resolved = _resolve_artifact_bindings(
+        evidence_store=evidence_store,
+        producer_run_id=producer_run_id,
+        artifacts=artifacts,
+    )
+    _verify_runtime_receipt(
+        resolved=resolved,
+        runtime=runtime,
+        runtime_binding=artifacts[2],
+    )
+    return resolved
+
+
+def _resolve_lineage_artifacts(
+    *,
+    evidence_store: EvidenceStore,
+    lineage: PredictionValidationUpstreamLineage,
+) -> dict[PredictionValidationArtifactRole, Path]:
+    resolved = _resolve_artifact_bindings(
+        evidence_store=evidence_store,
+        producer_run_id=lineage.producer_run_id,
+        artifacts=lineage.artifacts,
+    )
+
+    _verify_runtime_receipt(
+        resolved=resolved,
+        runtime=lineage.runtime,
+        runtime_binding=lineage.binding_for("runtime_receipt"),
+    )
     return resolved
 
 
@@ -474,4 +545,5 @@ def prediction_validation_analysis_registration_findings(
 __all__ = [
     "prediction_validation_analysis_registration_findings",
     "register_prediction_validation_analysis_artifact",
+    "resolve_prediction_validation_runtime_authority",
 ]
