@@ -2742,6 +2742,8 @@ def _benchmark_pipeline_options(
     development_sample_size: Optional[int] = None,
     development_sample_seed: int = 20260719,
     development_diagnostic: bool = False,
+    development_progressive_resume_checkpoint_path: Optional[Path] = None,
+    development_progressive_resume_checkpoint_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
     if submission_profile:
@@ -2772,6 +2774,22 @@ def _benchmark_pipeline_options(
                 "be combined with --submission-profile."
             )
         options["development_diagnostic"] = True
+    progressive_resume_values = (
+        development_progressive_resume_checkpoint_path,
+        development_progressive_resume_checkpoint_sha256,
+    )
+    if any(value is not None for value in progressive_resume_values):
+        if any(value is None for value in progressive_resume_values):
+            raise SystemExit(
+                "--development-progressive-resume-checkpoint and its SHA-256 "
+                "must be supplied together."
+            )
+        options["development_progressive_resume_checkpoint_path"] = Path(
+            development_progressive_resume_checkpoint_path
+        )
+        options["development_progressive_resume_checkpoint_sha256"] = str(
+            development_progressive_resume_checkpoint_sha256
+        )
     if enable_pubmed:
         options["enable_pubmed"] = True
     options["planner_strategy"] = str(planner_strategy)
@@ -3674,6 +3692,23 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--development-progressive-resume-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Development-only terminal Progressive Planner checkpoint path. "
+            "Requires one selected JSONL item/arm and the exact file SHA-256."
+        ),
+    )
+    parser.add_argument(
+        "--development-progressive-resume-checkpoint-sha256",
+        default=None,
+        help=(
+            "Exact SHA-256 of --development-progressive-resume-checkpoint. "
+            "Formal paper-facing profiles reject this option."
+        ),
+    )
+    parser.add_argument(
         "--max-step-provider-calls",
         type=int,
         default=9,
@@ -4164,6 +4199,16 @@ def main() -> int:
         development_sample_size=getattr(args, "development_sample_size", None),
         development_sample_seed=int(getattr(args, "development_sample_seed", 20260719)),
         development_diagnostic=bool(getattr(args, "development_diagnostic", False)),
+        development_progressive_resume_checkpoint_path=getattr(
+            args,
+            "development_progressive_resume_checkpoint",
+            None,
+        ),
+        development_progressive_resume_checkpoint_sha256=getattr(
+            args,
+            "development_progressive_resume_checkpoint_sha256",
+            None,
+        ),
     )
     planner_strict_json_schema = bool(
         getattr(args, "planner_strict_json_schema", False)
@@ -4190,6 +4235,24 @@ def main() -> int:
             "--figure2-expected-execution-identity."
         )
 
+    progressive_resume_requested = (
+        getattr(args, "development_progressive_resume_checkpoint", None)
+        is not None
+    )
+    if progressive_resume_requested and not args.ehrflowbench_jsonl:
+        raise SystemExit(
+            "--development-progressive-resume-checkpoint requires "
+            "--ehrflowbench-jsonl so one source question can be selected."
+        )
+    if progressive_resume_requested and (
+        _figure2_batch_binding is not None
+        or bool(args.require_figure2_paper_acceptance)
+    ):
+        raise SystemExit(
+            "FORMAL_PROGRESSIVE_CHECKPOINT_RESUME_FORBIDDEN: cross-run Planner "
+            "checkpoint reuse is development-only and cannot enter a formal "
+            "Figure 2 batch."
+        )
     if args.ehrflowbench_jsonl:
         if bool(args.require_figure2_paper_acceptance) and _normalize_arms(
             args.arms
@@ -4206,6 +4269,11 @@ def main() -> int:
             raise SystemExit(
                 "--repeat cannot be combined with --resume-run-id: repeats "
                 "start fresh runs, resume continues one existing run."
+            )
+        if n_repeat > 1 and progressive_resume_requested:
+            raise SystemExit(
+                "--repeat cannot be combined with development Progressive "
+                "Planner checkpoint resume."
             )
 
         # Canonical9 batches run exactly the strict path verified by the gate.  An
@@ -5140,6 +5208,16 @@ def _run_ehrflowbench_jsonl(
         str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
         for idx, row in enumerate(rows)
     ]
+    progressive_resume_path = (pipeline_options or {}).get(
+        "development_progressive_resume_checkpoint_path"
+    )
+    if progressive_resume_path is not None and (
+        len(input_task_ids) != 1 or len(_normalize_arms(arms)) != 1
+    ):
+        raise SystemExit(
+            "Development Progressive Planner checkpoint resume requires exactly "
+            "one selected JSONL item and one arm."
+        )
     hard_stop_limits = _provider_hard_stop_limits(pipeline_options or {})
     if batch_binding is not None and hard_stop_limits is None:
         raise ValueError(

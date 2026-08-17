@@ -88,6 +88,83 @@ def test_progressive_planner_strategy_is_typed_and_bound(ra, tmp_path: Path) -> 
         ra.PipelineConfig(workdir=tmp_path, planner_strategy="guess")
 
 
+def test_progressive_resume_is_explicitly_development_only(
+    ra, tmp_path: Path
+) -> None:
+    checkpoint_path = tmp_path / "progressive_planner_checkpoint_004.json"
+    digest = "a" * 64
+
+    with pytest.raises(ValueError, match="configured together"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            development_progressive_resume_checkpoint_path=checkpoint_path,
+        )
+    with pytest.raises(ValueError, match="development_diagnostic=True"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            planner_strategy="progressive_v2",
+            development_progressive_resume_checkpoint_path=checkpoint_path,
+            development_progressive_resume_checkpoint_sha256=digest,
+        )
+    with pytest.raises(ValueError, match="planner_strategy='progressive_v2'"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            development_diagnostic=True,
+            development_progressive_resume_checkpoint_path=checkpoint_path,
+            development_progressive_resume_checkpoint_sha256=digest,
+        )
+    with pytest.raises(ValueError, match="fallback plan"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            development_diagnostic=True,
+            planner_strategy="progressive_v2",
+            enable_deterministic_planner_fallback=True,
+            development_progressive_resume_checkpoint_path=checkpoint_path,
+            development_progressive_resume_checkpoint_sha256=digest,
+        )
+
+    config = ra.PipelineConfig(
+        workdir=tmp_path,
+        development_diagnostic=True,
+        planner_strategy="progressive_v2",
+        development_progressive_resume_checkpoint_path=checkpoint_path,
+        development_progressive_resume_checkpoint_sha256=digest,
+    )
+    pipeline = ra.ResearchAgentPipeline.from_config(config)
+
+    assert pipeline._config.development_progressive_resume_checkpoint_path == (
+        checkpoint_path
+    )
+    assert (
+        pipeline._config.development_progressive_resume_checkpoint_sha256
+        == digest
+    )
+    assert config.canonical_payload()[
+        "development_progressive_resume_checkpoint_sha256"
+    ] == digest
+
+    profile_config = ra.PipelineConfig(
+        workdir=tmp_path,
+        planner_strategy="progressive_v2",
+        submission_profile_name="npj_dm_e1_canary_dev",
+        submission_profile_version="20260817",
+        development_progressive_resume_checkpoint_path=checkpoint_path,
+        development_progressive_resume_checkpoint_sha256=digest,
+    )
+    assert profile_config.submission_profile_name == "npj_dm_e1_canary_dev"
+
+    with pytest.raises(ValueError, match="paper-facing submission profile"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            development_diagnostic=True,
+            planner_strategy="progressive_v2",
+            submission_profile_name="npj_dm",
+            submission_profile_version="20260719",
+            development_progressive_resume_checkpoint_path=checkpoint_path,
+            development_progressive_resume_checkpoint_sha256=digest,
+        )
+
+
 def test_legacy_flat_constructor_is_a_warning_only_adapter(ra, tmp_path: Path) -> None:
     client = ra.MockLLMClient()
 

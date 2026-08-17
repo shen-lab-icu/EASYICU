@@ -133,6 +133,34 @@ def test_benchmark_options_bind_progressive_planner_strategy() -> None:
     assert options["planner_strategy"] == "progressive_v2"
 
 
+def test_benchmark_options_bind_paired_development_progressive_resume(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "progressive_planner_checkpoint_004.json"
+    with pytest.raises(SystemExit, match="must be supplied together"):
+        _benchmark_pipeline_options(
+            max_total_steps=None,
+            disable_replanning=False,
+            max_code_repair_attempts=None,
+            development_progressive_resume_checkpoint_path=checkpoint,
+        )
+
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        planner_strategy="progressive_v2",
+        development_diagnostic=True,
+        development_progressive_resume_checkpoint_path=checkpoint,
+        development_progressive_resume_checkpoint_sha256="a" * 64,
+    )
+
+    assert options["development_progressive_resume_checkpoint_path"] == checkpoint
+    assert options["development_progressive_resume_checkpoint_sha256"] == (
+        "a" * 64
+    )
+
+
 def test_benchmark_options_enable_post_qc_development_sample_explicitly() -> None:
     full_data = _benchmark_pipeline_options(
         max_total_steps=None,

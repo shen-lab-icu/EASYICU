@@ -29,7 +29,9 @@ from easyicu.research_agent.planning.progressive_compiler import (
     compile_progressive_plan,
 )
 from easyicu.research_agent.planning.progressive_artifacts import (
+    ProgressivePlannerCheckpointRecorder,
     ProgressivePlanningArtifactError,
+    load_progressive_planner_checkpoint_chain,
     persist_progressive_planner_checkpoint,
     persist_progressive_planning_artifacts,
     persist_progressive_planning_authority,
@@ -41,6 +43,10 @@ from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanSkeleton,
     ProgressivePredicateValue,
 )
+from easyicu.research_agent.orchestration.progressive_planning import (
+    run_progressive_planner,
+)
+from easyicu.research_agent.planning.preplan_know_how import PlannerKnowHowBinding
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.authority.plan_lifecycle import (
     build_normalized_plan_lineage,
@@ -1383,6 +1389,161 @@ def test_agent_emits_append_only_validated_prefix_checkpoints() -> None:
     )
 
 
+def test_agent_resumes_only_the_unmaterialized_suffix() -> None:
+    materializations = _materialization_payloads()
+    dependency_context = {
+        "cohort_file_sha256": "b" * 64,
+        "llm_signature": "codex:gpt-test",
+        "prompt_version": "test-v1",
+    }
+    source_llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
+            *[json.dumps(item) for item in materializations],
+        ]
+    )
+    source_llm.supports_strict_json_schema = True
+    source_agent = ProgressivePlannerAgent(source_llm)
+    source_checkpoints = []
+    source_agent.run(
+        _context(),
+        checkpoint_callback=source_checkpoints.append,
+        resume_dependency_context=dependency_context,
+    )
+    resume_checkpoint = source_checkpoints[4]
+
+    resumed_llm = ScriptedMockLLMClient(
+        [json.dumps(item) for item in materializations[3:]]
+    )
+    resumed_llm.supports_strict_json_schema = True
+    resumed_agent = ProgressivePlannerAgent(resumed_llm)
+    resumed_checkpoints = []
+
+    plan = resumed_agent.run(
+        _context(),
+        checkpoint_callback=resumed_checkpoints.append,
+        resume_checkpoint=resume_checkpoint,
+        resume_dependency_context=dependency_context,
+    )
+
+    assert len(plan.steps) == 7
+    assert len(resumed_llm.calls) == 4
+    assert resumed_agent.last_resume_validated is True
+    assert [item.sequence for item in resumed_checkpoints] == [5, 6, 7, 8]
+    assert (
+        resumed_checkpoints[0].previous_checkpoint_sha256
+        == resume_checkpoint.checkpoint_sha256
+    )
+    assert resumed_agent.last_prompt_metrics[
+        "resume_reused_materialization_count"
+    ] == 3
+    assert resumed_agent.last_prompt_metrics[
+        "current_run_step_materialization_count"
+    ] == 4
+
+
+def test_agent_rejects_resume_authority_drift_before_provider_call() -> None:
+    dependency_context = {
+        "cohort_file_sha256": "b" * 64,
+        "llm_signature": "codex:gpt-test",
+        "prompt_version": "test-v1",
+    }
+    source_llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
+            *[json.dumps(item) for item in _materialization_payloads()],
+        ]
+    )
+    source_llm.supports_strict_json_schema = True
+    source_agent = ProgressivePlannerAgent(source_llm)
+    checkpoints = []
+    source_agent.run(
+        _context(),
+        checkpoint_callback=checkpoints.append,
+        resume_dependency_context=dependency_context,
+    )
+    changed_context = _context().model_copy(
+        update={"research_question": "Estimate a different scientific target."}
+    )
+    resumed_llm = ScriptedMockLLMClient([])
+    resumed_llm.supports_strict_json_schema = True
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent(resumed_llm).run(
+            changed_context,
+            resume_checkpoint=checkpoints[4],
+            resume_dependency_context=dependency_context,
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_resume_dependency_authority_mismatch"
+    )
+    assert resumed_llm.calls == []
+
+
+def test_agent_rejects_resume_without_runtime_dependencies() -> None:
+    source_llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
+            *[json.dumps(item) for item in _materialization_payloads()],
+        ]
+    )
+    source_agent = ProgressivePlannerAgent(source_llm)
+    checkpoints = []
+    source_agent.run(_context(), checkpoint_callback=checkpoints.append)
+    resumed_llm = ScriptedMockLLMClient([])
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent(resumed_llm).run(
+            _context(),
+            resume_checkpoint=checkpoints[4],
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_resume_runtime_dependency_missing"
+    )
+    assert resumed_llm.calls == []
+
+
+def test_agent_replays_a_complete_checkpoint_without_provider_calls() -> None:
+    dependency_context = {
+        "cohort_file_sha256": "b" * 64,
+        "llm_signature": "codex:gpt-test",
+        "prompt_version": "test-v1",
+    }
+    source_llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
+            *[json.dumps(item) for item in _materialization_payloads()],
+        ]
+    )
+    source_llm.supports_strict_json_schema = True
+    source_agent = ProgressivePlannerAgent(source_llm)
+    checkpoints = []
+    source_agent.run(
+        _context(),
+        checkpoint_callback=checkpoints.append,
+        resume_dependency_context=dependency_context,
+    )
+    replay_llm = ScriptedMockLLMClient([])
+    replay_llm.supports_strict_json_schema = True
+    replay_agent = ProgressivePlannerAgent(replay_llm)
+
+    plan = replay_agent.run(
+        _context(),
+        resume_checkpoint=checkpoints[-1],
+        resume_dependency_context=dependency_context,
+    )
+
+    assert len(plan.steps) == 7
+    assert replay_llm.calls == []
+    assert replay_agent.last_resume_validated is True
+
+
 def test_agent_repairs_only_the_current_materialization() -> None:
     materializations = _materialization_payloads()
     invalid_primary = json.loads(json.dumps(materializations[4]))
@@ -1509,6 +1670,164 @@ def test_progressive_checkpoints_persist_as_a_digest_verified_chain(
         "research_context",
         "progressive_planner_checkpoint_007",
     ]
+
+    loaded = load_progressive_planner_checkpoint_chain(
+        last_checkpoint_path=paths[-1],
+        expected_artifact_sha256=hashlib.sha256(paths[-1].read_bytes()).hexdigest(),
+    )
+    assert [item.sequence for item in loaded] == list(range(9))
+    assert loaded[-1].checkpoint_sha256 == json.loads(
+        paths[-1].read_text(encoding="utf-8")
+    )["checkpoint_sha256"]
+
+
+def test_progressive_resume_loader_rejects_incomplete_source_chain(
+    tmp_path: Path,
+) -> None:
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
+            *[json.dumps(item) for item in _materialization_payloads()],
+        ]
+    )
+    agent = ProgressivePlannerAgent(llm)
+    checkpoints = []
+    agent.run(_context(), checkpoint_callback=checkpoints.append)
+    terminal = tmp_path / "progressive_planner_checkpoint_004.json"
+    terminal.write_text(checkpoints[4].model_dump_json(indent=2), encoding="utf-8")
+
+    with pytest.raises(ProgressivePlanningArtifactError) as caught:
+        load_progressive_planner_checkpoint_chain(
+            last_checkpoint_path=terminal,
+            expected_artifact_sha256=hashlib.sha256(
+                terminal.read_bytes()
+            ).hexdigest(),
+        )
+
+    assert caught.value.reason_code == "progressive_resume_checkpoint_missing"
+
+
+def test_resume_checkpoint_recorder_imports_only_after_validation(
+    tmp_path: Path,
+) -> None:
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
+            *[json.dumps(item) for item in _materialization_payloads()],
+        ]
+    )
+    agent = ProgressivePlannerAgent(llm)
+    checkpoints = []
+    agent.run(_context(), checkpoint_callback=checkpoints.append)
+    evidence = _RecordingEvidence()
+    recorder = ProgressivePlannerCheckpointRecorder(
+        run_dir=tmp_path,
+        evidence=evidence,
+        prompt_pack_version="test",
+        source_chain=tuple(checkpoints[:5]),
+    )
+
+    recorder.record(checkpoints[5])
+
+    assert evidence.records == {}
+    assert list(tmp_path.glob("progressive_planner_checkpoint_*.json")) == []
+
+    receipt = recorder.persist_validated_resume()
+
+    assert receipt.source_sequence == 4
+    assert receipt.reused_materialization_count == 3
+    assert receipt.new_checkpoint_count == 1
+    assert set(evidence.records) == {
+        f"progressive_planner_checkpoint_{index:03d}" for index in range(6)
+    }
+    with pytest.raises(ProgressivePlanningArtifactError) as caught:
+        recorder.record(checkpoints[6])
+    assert caught.value.reason_code == (
+        "progressive_resume_checkpoint_recorder_closed"
+    )
+
+
+def test_progressive_orchestrator_resumes_and_imports_validated_chain(
+    tmp_path: Path,
+) -> None:
+    cohort_path = tmp_path / "cohort.parquet"
+    cohort_path.write_bytes(b"development cohort authority")
+    dependency_context = {
+        "cohort_file_sha256": hashlib.sha256(cohort_path.read_bytes()).hexdigest(),
+        "llm_signature": "mock:test",
+        "prompt_version": "test-v1",
+    }
+    materializations = _materialization_payloads()
+    source_agent = ProgressivePlannerAgent(
+        ScriptedMockLLMClient(
+            [
+                json.dumps(_outline_payload()),
+                json.dumps(_foundation_payload()),
+                *[json.dumps(item) for item in materializations],
+            ]
+        )
+    )
+    source_agent.llm.supports_strict_json_schema = True
+    source_checkpoints = []
+    source_agent.run(
+        _context(),
+        checkpoint_callback=source_checkpoints.append,
+        resume_dependency_context=dependency_context,
+    )
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source_evidence = _RecordingEvidence()
+    source_paths = [
+        persist_progressive_planner_checkpoint(
+            run_dir=source_dir,
+            evidence=source_evidence,
+            checkpoint=checkpoint,
+            prompt_pack_version="test-v1",
+        )
+        for checkpoint in source_checkpoints[:5]
+    ]
+    resumed_llm = ScriptedMockLLMClient(
+        [json.dumps(item) for item in materializations[3:]]
+    )
+    resumed_llm.supports_strict_json_schema = True
+    findings = []
+    current_evidence = _RecordingEvidence()
+    current_dir = tmp_path / "current"
+    current_dir.mkdir()
+
+    result = run_progressive_planner(
+        planner=ProgressivePlannerAgent(resumed_llm),
+        context=_context(),
+        run_dir=current_dir,
+        evidence=current_evidence,
+        prompt_pack_version="test-v1",
+        resume_checkpoint_path=source_paths[-1],
+        resume_checkpoint_sha256=hashlib.sha256(
+            source_paths[-1].read_bytes()
+        ).hexdigest(),
+        cohort_path=cohort_path,
+        llm_signature="mock:test",
+        planner_kwargs={},
+        know_how_binding=PlannerKnowHowBinding(),
+        planning_contract_context="",
+        finding_sink=findings.append,
+    )
+
+    assert result.generation_mode == "llm_progressive_v2_dev_resume"
+    assert len(result.plan.steps) == 7
+    assert len(resumed_llm.calls) == 4
+    assert findings[0].detail["reason_code"] == (
+        "progressive_development_checkpoint_resumed"
+    )
+    assert {
+        key
+        for key in current_evidence.records
+        if key.startswith("progressive_planner_checkpoint_")
+    } == {
+        f"progressive_planner_checkpoint_{index:03d}" for index in range(9)
+    }
 
 
 def test_progressive_checkpoint_rejects_mutated_predecessor(tmp_path: Path) -> None:

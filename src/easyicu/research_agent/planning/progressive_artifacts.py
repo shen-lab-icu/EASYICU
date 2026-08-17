@@ -9,9 +9,9 @@ from __future__ import annotations
 import json
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Mapping, Protocol, Sequence
+from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -27,6 +27,7 @@ from .progressive_contract import (
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_MAX_RESUME_CHECKPOINT_BYTES = 16 * 1024 * 1024
 
 
 class ProgressivePlanningArtifactError(ValueError):
@@ -54,6 +55,137 @@ class ProgressivePlanningArtifactPaths:
     materializations: Path
     skeleton: Path
     compile_receipt: Path
+
+
+@dataclass(frozen=True)
+class ProgressiveResumePersistenceReceipt:
+    """Auditable summary after a validated Dev replay chain is imported."""
+
+    source_checkpoint_sha256: str
+    source_sequence: int
+    reused_materialization_count: int
+    new_checkpoint_count: int
+
+
+@dataclass
+class ProgressivePlannerCheckpointEmitter:
+    """Build one typed append-only checkpoint chain in memory.
+
+    Persistence remains the recorder's responsibility. Keeping sequence and
+    predecessor bookkeeping here prevents the provider loop from owning
+    artifact-chain mechanics.
+    """
+
+    callback: Callable[[ProgressivePlannerCheckpoint], None] | None
+    request_authority_sha256: str
+    source_checkpoint: ProgressivePlannerCheckpoint | None = None
+    _sequence: int = field(init=False)
+    _previous_checkpoint_sha256: str | None = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._sequence = (
+            int(self.source_checkpoint.sequence) + 1
+            if self.source_checkpoint is not None
+            else 0
+        )
+        self._previous_checkpoint_sha256 = (
+            self.source_checkpoint.checkpoint_sha256
+            if self.source_checkpoint is not None
+            else None
+        )
+
+    def emit(
+        self,
+        *,
+        stage: str,
+        outline: ProgressivePlanOutline,
+        foundation: ProgressiveFoundationMaterialization | None,
+        materializations: Sequence[ProgressiveStepMaterialization],
+        prompt_metrics: Mapping[str, Any],
+    ) -> None:
+        if self.callback is None:
+            return
+        body: dict[str, Any] = {
+            "schema_version": "easyicu.progressive_planner_checkpoint/1",
+            "sequence": self._sequence,
+            "stage": stage,
+            "request_authority_sha256": self.request_authority_sha256,
+            "previous_checkpoint_sha256": self._previous_checkpoint_sha256,
+            "outline": outline.model_dump(mode="json"),
+            "foundation": (
+                foundation.model_dump(mode="json")
+                if foundation is not None
+                else None
+            ),
+            "materializations": [
+                item.model_dump(mode="json") for item in materializations
+            ],
+            "prompt_metrics": json.loads(
+                json.dumps(prompt_metrics, ensure_ascii=False)
+            ),
+        }
+        body["checkpoint_sha256"] = canonical_sha256(body)
+        checkpoint = ProgressivePlannerCheckpoint.model_validate(body)
+        self.callback(checkpoint)
+        self._previous_checkpoint_sha256 = checkpoint.checkpoint_sha256
+        self._sequence += 1
+
+
+@dataclass
+class ProgressivePlannerCheckpointRecorder:
+    """Persist normal checkpoints immediately and buffer Dev continuations.
+
+    A resumed source chain is not registered against the current run until the
+    Planner has independently verified its dependency authority and recompiled
+    its prefix.  The pipeline calls :meth:`persist_validated_resume` only after
+    that gate succeeds, including when a later suffix call fails.
+    """
+
+    run_dir: Path
+    evidence: ProgressiveEvidenceRegistrar
+    prompt_pack_version: str
+    source_chain: tuple[ProgressivePlannerCheckpoint, ...] = ()
+    _pending: list[ProgressivePlannerCheckpoint] = field(default_factory=list)
+    _persisted: bool = False
+
+    def record(self, checkpoint: ProgressivePlannerCheckpoint) -> None:
+        if self._persisted:
+            raise ProgressivePlanningArtifactError(
+                "progressive_resume_checkpoint_recorder_closed",
+                "validated resume checkpoints have already been persisted",
+            )
+        if self.source_chain:
+            self._pending.append(checkpoint)
+            return
+        persist_progressive_planner_checkpoint(
+            run_dir=self.run_dir,
+            evidence=self.evidence,
+            checkpoint=checkpoint,
+            prompt_pack_version=self.prompt_pack_version,
+        )
+
+    def persist_validated_resume(self) -> ProgressiveResumePersistenceReceipt:
+        if not self.source_chain:
+            raise ProgressivePlanningArtifactError(
+                "progressive_resume_source_chain_missing",
+                "checkpoint recorder has no development source chain",
+            )
+        terminal = self.source_chain[-1]
+        if not self._persisted:
+            for checkpoint in (*self.source_chain, *self._pending):
+                persist_progressive_planner_checkpoint(
+                    run_dir=self.run_dir,
+                    evidence=self.evidence,
+                    checkpoint=checkpoint,
+                    prompt_pack_version=self.prompt_pack_version,
+                )
+            self._persisted = True
+        return ProgressiveResumePersistenceReceipt(
+            source_checkpoint_sha256=terminal.checkpoint_sha256,
+            source_sequence=int(terminal.sequence),
+            reused_materialization_count=len(terminal.materializations),
+            new_checkpoint_count=len(self._pending),
+        )
 
 
 class ProgressivePlanningStepAuthority(BaseModel):
@@ -277,6 +409,118 @@ def persist_progressive_planner_checkpoint(
         prompt_pack_version=prompt_pack_version,
     )
     return path
+
+
+def load_progressive_planner_checkpoint_chain(
+    *,
+    last_checkpoint_path: Path,
+    expected_artifact_sha256: str,
+) -> tuple[ProgressivePlannerCheckpoint, ...]:
+    """Load one complete, append-only checkpoint chain for development replay.
+
+    The caller supplies the SHA-256 of the terminal *file*, while every parsed
+    checkpoint verifies its own canonical content digest.  Requiring the
+    canonical sibling filenames from ``000`` through the terminal sequence
+    prevents a single cumulative checkpoint from silently standing in for an
+    unavailable predecessor chain.
+    """
+
+    expected_digest = str(expected_artifact_sha256 or "").strip().lower()
+    if not _SHA256_RE.fullmatch(expected_digest):
+        raise ProgressivePlanningArtifactError(
+            "progressive_resume_artifact_digest_invalid",
+            "expected terminal checkpoint artifact SHA-256 is invalid",
+        )
+
+    terminal_path = Path(last_checkpoint_path).expanduser()
+
+    def read_checkpoint(
+        path: Path,
+    ) -> tuple[bytes, ProgressivePlannerCheckpoint]:
+        if path.is_symlink():
+            raise ProgressivePlanningArtifactError(
+                "progressive_resume_checkpoint_symlink",
+                f"resume checkpoint must not be a symbolic link: {path.name}",
+            )
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            raise ProgressivePlanningArtifactError(
+                "progressive_resume_checkpoint_missing",
+                f"resume checkpoint is unavailable: {path.name}",
+            ) from exc
+        if not path.is_file():
+            raise ProgressivePlanningArtifactError(
+                "progressive_resume_checkpoint_not_regular",
+                f"resume checkpoint is not a regular file: {path.name}",
+            )
+        if stat.st_size <= 0 or stat.st_size > _MAX_RESUME_CHECKPOINT_BYTES:
+            raise ProgressivePlanningArtifactError(
+                "progressive_resume_checkpoint_size_invalid",
+                f"resume checkpoint size is outside the accepted range: {path.name}",
+            )
+        try:
+            raw = path.read_bytes()
+            checkpoint = ProgressivePlannerCheckpoint.model_validate_json(raw)
+        except Exception as exc:
+            raise ProgressivePlanningArtifactError(
+                "progressive_resume_checkpoint_invalid",
+                f"resume checkpoint failed typed validation: {path.name}",
+            ) from exc
+        return raw, checkpoint
+
+    terminal_bytes, terminal = read_checkpoint(terminal_path)
+    terminal_filename = (
+        f"progressive_planner_checkpoint_{terminal.sequence:03d}.json"
+    )
+    if terminal_path.name != terminal_filename:
+        raise ProgressivePlanningArtifactError(
+            "progressive_resume_checkpoint_filename_mismatch",
+            "terminal checkpoint filename does not match its typed sequence",
+        )
+    if hashlib.sha256(terminal_bytes).hexdigest() != expected_digest:
+        raise ProgressivePlanningArtifactError(
+            "progressive_resume_artifact_digest_mismatch",
+            "terminal checkpoint file does not match caller authority",
+        )
+
+    chain: list[ProgressivePlannerCheckpoint] = []
+    previous: ProgressivePlannerCheckpoint | None = None
+    for sequence in range(terminal.sequence + 1):
+        path = terminal_path.parent / (
+            f"progressive_planner_checkpoint_{sequence:03d}.json"
+        )
+        _raw, checkpoint = read_checkpoint(path)
+        if checkpoint.sequence != sequence:
+            raise ProgressivePlanningArtifactError(
+                "progressive_resume_checkpoint_sequence_mismatch",
+                f"checkpoint sequence does not match filename: {path.name}",
+            )
+        if (
+            checkpoint.request_authority_sha256
+            != terminal.request_authority_sha256
+        ):
+            raise ProgressivePlanningArtifactError(
+                "progressive_resume_checkpoint_request_authority_drift",
+                "checkpoint request authority changes within the source chain",
+            )
+        if previous is not None and (
+            checkpoint.previous_checkpoint_sha256
+            != previous.checkpoint_sha256
+        ):
+            raise ProgressivePlanningArtifactError(
+                "progressive_resume_checkpoint_chain_mismatch",
+                "checkpoint predecessor digest does not close the source chain",
+            )
+        chain.append(checkpoint)
+        previous = checkpoint
+
+    if chain[-1].checkpoint_sha256 != terminal.checkpoint_sha256:
+        raise ProgressivePlanningArtifactError(
+            "progressive_resume_terminal_checkpoint_mismatch",
+            "terminal checkpoint changed while its source chain was loaded",
+        )
+    return tuple(chain)
 
 
 def persist_progressive_planning_artifacts(
@@ -774,6 +1018,9 @@ __all__ = [
     "ProgressivePlanningArtifactPaths",
     "ProgressivePlanningAuthority",
     "ProgressivePlanningStepAuthority",
+    "ProgressivePlannerCheckpointRecorder",
+    "ProgressiveResumePersistenceReceipt",
+    "load_progressive_planner_checkpoint_chain",
     "persist_progressive_planner_checkpoint",
     "persist_progressive_planning_artifacts",
     "persist_progressive_planning_authority",
