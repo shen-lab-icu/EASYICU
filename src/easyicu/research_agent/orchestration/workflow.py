@@ -856,7 +856,7 @@ class PipelineWorkflow:
                 ),
             )
             assert approved_handoff is not None
-            approved_handoff.plan = AnalysisPlan.model_validate(approved.plan_payload)
+            approved_handoff.plan = approved.analysis_plan()
             self._plan_result = approved_handoff
             self._approved_plan_sha256 = approved.plan_sha256
         try:

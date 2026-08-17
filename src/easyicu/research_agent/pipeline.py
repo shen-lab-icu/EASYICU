@@ -3282,6 +3282,10 @@ class ResearchAgentPipeline:
                 "resume_with_authority_restore",
             },
             host_scientific_semantics_changed=not reused_prior_plan,
+            cohort_concept_ids=progressive_cohort_concept_ids(
+                agent_context,
+                tuple(variable.name for variable in agent_context.variables),
+            ),
         )
         write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
         if not reused_prior_plan:

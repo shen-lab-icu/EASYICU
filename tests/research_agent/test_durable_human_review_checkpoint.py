@@ -122,10 +122,14 @@ def test_new_pipeline_instance_resumes_without_running_planner_again(
     assert len(approved_paths) == 1
     lineage = json.loads(lineage_paths[0].read_text(encoding="utf-8"))
     approved = json.loads(approved_paths[0].read_text(encoding="utf-8"))
-    assert lineage["schema_version"] == "easyicu.normalized_plan/1"
-    assert lineage["proposed"]["schema_version"] == "easyicu.proposed_plan/1"
+    assert lineage["schema_version"] == "easyicu.normalized_plan/2"
+    assert lineage["proposed"]["schema_version"] == "easyicu.proposed_plan/2"
+    assert lineage["proposed"]["cohort_concept_ids"]
     assert lineage["transformation_receipts"]
-    assert approved["schema_version"] == "easyicu.approved_executable_plan/1"
+    assert approved["schema_version"] == "easyicu.approved_executable_plan/2"
+    assert approved["cohort_concept_ids"] == lineage["proposed"][
+        "cohort_concept_ids"
+    ]
     assert approved["plan_sha256"] == lineage["plan_sha256"]
     assert approved["normalized_plan_authority_sha256"] == lineage["authority_sha256"]
     assert approved["decision_set_sha256"] == checkpoint.consumed_decision_sha256
