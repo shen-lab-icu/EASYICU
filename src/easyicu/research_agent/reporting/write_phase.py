@@ -49,6 +49,7 @@ from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle
 from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import budgeted_vlm_client
+from ..providers.structured_retry import StructuredResponseFailure
 from .manuscript_post import (
     _apply_writer_evidence_repair_decisions,
     bind_numeric_values,
@@ -91,6 +92,72 @@ from .pdf_render import render_pdf_for_run
 
 class RuntimeProvenanceMismatchError(RuntimeError):
     """Docker steps disagree about the immutable execution environment."""
+
+
+def _repair_rejected_writer_sentences(
+    scaffold: str,
+    *,
+    llm: Any,
+    evidence_ids: Sequence[str],
+    evidence_digest: Optional[str],
+    rejected_sentences: Sequence[str],
+    scientific_claims: Dict[str, str],
+    claim_required_sentences: Sequence[str],
+    allowed_claim_refs: Sequence[str],
+    language: str,
+) -> tuple[str, List[Dict[str, object]], Optional[Dict[str, Any]]]:
+    """Apply bounded model decisions or deterministically drop rejected prose.
+
+    The optional model pass can only choose cite, exact host claim, or drop.
+    Invalid structured output or an internally inconsistent application must
+    never abort an otherwise valid analysis run. Dropping every sentence the
+    unchanged STRICT gate already rejected is the conservative host-owned
+    fallback: it cannot add a number, citation, or scientific interpretation.
+
+    Provider transport, refusal, and budget failures deliberately propagate;
+    they are not validation failures and must retain their owning boundary.
+    """
+
+    fallback_detail: Optional[Dict[str, Any]] = None
+    original_scaffold = scaffold
+    try:
+        repair_decisions = decide_writer_evidence_repairs(
+            llm,
+            evidence_ids=evidence_ids,
+            evidence_digest=evidence_digest,
+            missing_sentences=rejected_sentences,
+            scientific_claims=scientific_claims,
+            claim_required_sentences=claim_required_sentences,
+            language=language,
+        )
+        repaired, applied = _apply_writer_evidence_repair_decisions(
+            original_scaffold,
+            missing_sentences=rejected_sentences,
+            decisions=repair_decisions,
+            allowed_claim_refs=allowed_claim_refs,
+        )
+    except (StructuredResponseFailure, ValueError) as exc:
+        drop_decisions = [
+            {"index": index, "action": "drop", "evidence_ids": []}
+            for index in range(len(rejected_sentences))
+        ]
+        repaired, applied = _apply_writer_evidence_repair_decisions(
+            original_scaffold,
+            missing_sentences=rejected_sentences,
+            decisions=drop_decisions,
+            allowed_claim_refs=allowed_claim_refs,
+        )
+        raw_attempts = getattr(exc, "easyicu_structured_attempt_metadata", [])
+        safe_attempts = [dict(item) for item in raw_attempts if isinstance(item, dict)][
+            :4
+        ]
+        fallback_detail = {
+            "reason_code": "writer_evidence_repair_deterministic_drop",
+            "exception_type": type(exc).__name__,
+            "rejected_sentence_count": len(rejected_sentences),
+            "structured_attempts": safe_attempts,
+        }
+    return repaired, applied, fallback_detail
 
 
 _DEVELOPMENT_MUTABLE_PROVENANCE_FIELDS = frozenset(
@@ -1005,33 +1072,44 @@ def _draft_manuscript(
             claim_text_by_ref = {
                 claim.claim_ref: claim.render_text() for claim in authoritative_claims
             }
-            repair_decisions = decide_writer_evidence_repairs(
-                writer.llm,
+            (
+                scaffold,
+                applied_evidence_repairs,
+                repair_fallback_detail,
+            ) = _repair_rejected_writer_sentences(
+                scaffold,
+                llm=writer.llm,
                 evidence_ids=preferred_writer_evidence_names,
                 evidence_digest=writer_evidence_digest,
-                missing_sentences=rejected_sentences,
+                rejected_sentences=rejected_sentences,
                 scientific_claims=claim_text_by_ref,
                 claim_required_sentences=strict_scientific_claim_sentences,
+                allowed_claim_refs=tuple(claim_text_by_ref),
                 language=run_language,
             )
-            scaffold, applied_evidence_repairs = (
-                _apply_writer_evidence_repair_decisions(
-                    scaffold,
-                    missing_sentences=rejected_sentences,
-                    decisions=repair_decisions,
-                    allowed_claim_refs=tuple(claim_text_by_ref),
-                )
+            repair_message_prefix = (
+                "Applied deterministic drop fallback after an invalid bounded "
+                "writer evidence repair decision for "
+                if repair_fallback_detail is not None
+                else "Applied one bounded writer evidence repair pass to "
             )
             findings.append(
                 ValidationFinding(
                     validator="evidence_bound_writer",
                     severity="warning",
                     message=(
-                        "Applied one bounded writer evidence repair pass to "
-                        f"{len(applied_evidence_repairs)} sentence(s); the unchanged "
+                        repair_message_prefix
+                        + f"{len(applied_evidence_repairs)} sentence(s); the unchanged "
                         "STRICT gate will revalidate the result."
                     ),
-                    detail={"evidence_repairs": applied_evidence_repairs},
+                    detail={
+                        "evidence_repairs": applied_evidence_repairs,
+                        **(
+                            {"fallback": repair_fallback_detail}
+                            if repair_fallback_detail is not None
+                            else {}
+                        ),
+                    },
                 )
             )
     scaffold_path = run_dir / "manuscript_scaffold.md"
