@@ -86,6 +86,34 @@ def validate_numeric_input(
         field=field,
         index=index,
     )
+    # ``pd.to_numeric`` silently turns temporal dtypes into epoch/duration
+    # integers, so a mis-wired datetime column would score as an enormous but
+    # perfectly "valid" physiological value. Allow-list the dtype families a
+    # SOFA-2 input may legitimately arrive in instead: numeric (including the
+    # nullable and boolean extensions), object/string (parsed below), and
+    # categorical (the receipt/coverage encoding used elsewhere in the
+    # package). Anything else fails closed rather than being coerced.
+    if not (
+        pd.api.types.is_numeric_dtype(raw)
+        # Arrow-backed booleans are not is_numeric_dtype even though numpy and
+        # nullable booleans are, and this package converts end-to-end through
+        # pyarrow -- component availability/observed receipts routinely arrive
+        # as bool[pyarrow].
+        or pd.api.types.is_bool_dtype(raw)
+        or pd.api.types.is_object_dtype(raw)
+        or pd.api.types.is_string_dtype(raw)
+        or isinstance(raw.dtype, pd.CategoricalDtype)
+    ):
+        raise SOFA2InputError(
+            component=component,
+            field=field,
+            reason_code=f"{component}_{field}_numeric_dtype_invalid",
+            message=(
+                "SOFA-2 numeric input must be numeric, string or categorical, "
+                f"not {raw.dtype}"
+            ),
+            invalid_count=len(raw),
+        )
     numeric = pd.to_numeric(raw, errors="coerce")
     bad_encoding = raw.notna() & numeric.isna()
     if bad_encoding.any():
@@ -97,7 +125,17 @@ def validate_numeric_input(
             invalid_count=int(bad_encoding.sum()),
         )
 
-    nonfinite = numeric.notna() & ~np.isfinite(numeric.astype(float))
+    # Run every arithmetic check against one numpy view. ``pd.to_numeric``
+    # preserves the input's extension backing, and Arrow-backed arrays
+    # implement neither ``%`` ("NotImplementedError: mod not implemented") nor
+    # the float cast the finiteness check needs -- which matters because this
+    # package converts end-to-end through pyarrow, so int64[pyarrow] and
+    # float64[pyarrow] reach here on the ordinary extraction path. The Series
+    # handed back to callers keeps its own dtype.
+    probe = numeric.to_numpy(dtype="float64", na_value=np.nan)
+    present = ~np.isnan(probe)
+
+    nonfinite = present & ~np.isfinite(probe)
     if nonfinite.any():
         raise SOFA2InputError(
             component=component,
@@ -107,13 +145,13 @@ def validate_numeric_input(
             invalid_count=int(nonfinite.sum()),
         )
 
-    out_of_domain = pd.Series(False, index=numeric.index, dtype=bool)
+    out_of_domain = np.zeros(probe.shape, dtype=bool)
     if minimum is not None:
-        below = numeric < minimum if minimum_inclusive else numeric <= minimum
-        out_of_domain |= numeric.notna() & below
+        below = probe < minimum if minimum_inclusive else probe <= minimum
+        out_of_domain |= present & below
     if maximum is not None:
-        above = numeric > maximum if maximum_inclusive else numeric >= maximum
-        out_of_domain |= numeric.notna() & above
+        above = probe > maximum if maximum_inclusive else probe >= maximum
+        out_of_domain |= present & above
     if out_of_domain.any():
         raise SOFA2InputError(
             component=component,
@@ -124,7 +162,7 @@ def validate_numeric_input(
         )
 
     if integer:
-        fractional = numeric.notna() & ((numeric % 1).abs() > 1e-9)
+        fractional = present & (np.abs(probe % 1) > 1e-9)
         if fractional.any():
             raise SOFA2InputError(
                 component=component,
@@ -145,6 +183,14 @@ def normalize_fio2_input(
 
     Valid non-missing inputs are either fractions in ``[0.21, 1.0]`` or
     percentages in ``[21, 100]``. A single Series cannot mix the two domains.
+
+    The two domains are disjoint, so the *returned fractions* are independent
+    of how the caller partitioned its rows. The mixed-unit rejection, however,
+    can only see the rows in this call: a source that encodes units
+    inconsistently fails closed when the inconsistent rows arrive together and
+    passes when a chunk happens to be homogeneous. Treat it as a per-call data
+    hygiene gate, not a cohort-level invariant -- a cohort-wide guarantee needs
+    the unit declared once at the owning extraction layer.
     """
 
     numeric = validate_numeric_input(
@@ -180,4 +226,10 @@ def normalize_fio2_input(
     return NormalizedFiO2(values=numeric, source_unit="unavailable")
 
 
-__all__ = ["SOFA2InputError"]
+__all__ = [
+    "NormalizedFiO2",
+    "SOFA2InputError",
+    "normalize_fio2_input",
+    "validate_aligned_input",
+    "validate_numeric_input",
+]
