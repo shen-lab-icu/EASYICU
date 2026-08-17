@@ -1485,6 +1485,30 @@ def test_compiler_keeps_navigation_identity_out_of_executable_step_inputs() -> N
     )
 
 
+def test_custom_sensitivity_inherits_its_primary_model_inputs() -> None:
+    payload = _payload()
+    sensitivity = payload["steps"][5]
+    sensitivity["raw_inputs"] = ["exposure_flag", "outcome_flag"]
+    sensitivity["sensitivity_spec_ids"] = ["flexible_form"]
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=_context(),
+    )
+
+    compiled = next(
+        step for step in plan.steps if step.step_id == "06_sensitivity"
+    )
+    assert compiled.inputs[:4] == [
+        "exposure_flag",
+        "outcome_flag",
+        "age_years",
+        "sex_code",
+    ]
+    assert "artifact:analysis_cohort" in compiled.inputs
+    assert "table:adjusted_association_estimates" in compiled.inputs
+
+
 def test_compiler_reports_identical_distribution_contrast_at_its_owner() -> None:
     payload = _payload()
     payload["steps"][2]["comparison_exposure_level_index"] = 0
