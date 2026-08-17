@@ -1686,6 +1686,30 @@ def test_compiler_materializes_the_locked_robustness_replay_bundle() -> None:
     assert robustness_replay_spec_is_emittable(step)
 
 
+def test_complete_case_replay_covers_every_primary_model_field() -> None:
+    payload = _payload()
+    payload["robustness_intents"][0]["complete_case_variables"] = [
+        "exposure_flag",
+        "outcome_flag",
+    ]
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=_context(),
+    )
+
+    assert plan.robustness_specs[0].missing_override == {
+        "strategy": "complete_case",
+        "variables": [
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+        ],
+        "audit_flags": None,
+    }
+
+
 def test_compiler_contains_duplicate_robustness_output_contract() -> None:
     payload = _payload()
     replay = payload["steps"][5]
