@@ -15,7 +15,10 @@ from ..planning.analysis_types import (
     list_analysis_types,
     validate_host_authorized_analysis_family,
 )
-from ..planning.literature_bindings import validate_literature_citation_bindings
+from ..planning.literature_bindings import (
+    missing_required_method_layers,
+    validate_literature_citation_bindings,
+)
 from ..planning.method_literature import (
     reporting_method_source_keys_for_guidelines,
 )
@@ -1059,6 +1062,31 @@ class ProgressivePlannerAgent:
                         allowed_know_how_decisions=allowed_know_how_decisions,
                         reporting_method_source_keys=reporting_method_source_keys,
                     )
+                    if step_index == len(outline.steps) - 1:
+                        assert candidate_state.plan is not None
+                        missing_method_layers = missing_required_method_layers(
+                            candidate_state.plan,
+                            allowed_literature_citation_keys,
+                            context=context,
+                        )
+                        if missing_method_layers:
+                            raise ProgressivePlanCompileError(
+                                "progressive_final_method_layer_unbound",
+                                "the completed plan still lacks typed method-source "
+                                "coverage for case-applicable layer(s): "
+                                + ", ".join(missing_method_layers),
+                                step_id=outline_step.step_id,
+                                step_index=step_index,
+                                path="literature_bindings",
+                                findings=[
+                                    {
+                                        "missing_method_layers": list(
+                                            missing_method_layers
+                                        ),
+                                        "repair_scope": "current_final_step_only",
+                                    }
+                                ],
+                            )
                 except ProgressivePlanCompileError as exc:
                     self.last_compile_failure_attempts.append(
                         ProgressiveCompileReplayAttempt(

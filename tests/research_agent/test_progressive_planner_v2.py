@@ -2161,6 +2161,104 @@ def test_agent_repairs_only_the_current_materialization() -> None:
     assert agent.last_prompt_metrics["full_revision_count"] == 0
 
 
+def test_agent_repairs_final_plan_dependent_method_layer_locally() -> None:
+    payload = _payload()
+
+    def binding(
+        citation_key: str,
+        design_elements: list[str],
+        application: str,
+    ) -> dict[str, object]:
+        return {
+            "citation_key": citation_key,
+            "design_elements": design_elements,
+            "application": application,
+            "divergence": None,
+        }
+
+    payload["steps"][2]["literature_bindings"] = [
+        binding(
+            "strobe_2007",
+            ["reporting"],
+            "Report the prespecified exposure-outcome distribution.",
+        )
+    ]
+    payload["steps"][3]["literature_bindings"] = [
+        binding(
+            "sterne_missing_data_2009",
+            ["missing_data"],
+            "Audit missingness before model fitting.",
+        )
+    ]
+    payload["steps"][4]["literature_bindings"] = [
+        binding(
+            "strobe_2007",
+            ["reporting"],
+            "Report the prespecified adjusted association.",
+        )
+    ]
+    payload["steps"][5]["literature_bindings"] = [
+        binding(
+            "durrleman_splines_1989",
+            ["adjustment"],
+            "Assess continuous-covariate functional form.",
+        ),
+        binding(
+            "sterne_missing_data_2009",
+            ["robustness"],
+            "Assess the missing-data strategy.",
+        ),
+    ]
+    payload["steps"][6]["literature_bindings"] = [
+        binding(
+            "strobe_2007",
+            ["reporting"],
+            "Report the completed observational analysis.",
+        )
+    ]
+    materializations = _materialization_payloads(payload)
+    repaired_final = json.loads(json.dumps(materializations[-1]))
+    repaired_final["step"]["literature_bindings"][0]["design_elements"] = [
+        "reporting",
+        "outcome",
+    ]
+    repaired_final["step"]["literature_bindings"][0]["application"] = (
+        "Report the completed analysis and interpret an absolute outcome "
+        "measure alongside ratio estimates."
+    )
+    responses = [
+        _outline_payload(payload),
+        _foundation_payload(payload),
+        *materializations[:-1],
+        materializations[-1],
+        repaired_final,
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+
+    plan = agent.run(
+        _context(),
+        allowed_literature_citation_keys=[
+            "strobe_2007",
+            "sterne_missing_data_2009",
+            "durrleman_splines_1989",
+        ],
+    )
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 10
+    repair_prompt = llm.calls[-1][0][-1].content
+    assert "progressive_final_method_layer_unbound" in repair_prompt
+    assert '"missing_method_layers":["interpretation"]' in repair_prompt
+    assert '"step_id":"07_figure"' in repair_prompt
+    assert agent.last_prompt_metrics["compile_revision_count"] == 1
+    assert plan.steps[-1].literature_design_bindings[0].design_elements == [
+        "reporting",
+        "outcome",
+    ]
+
+
 def test_agent_repairs_identical_distribution_contrast_locally() -> None:
     materializations = _materialization_payloads()
     invalid_distribution = json.loads(json.dumps(materializations[2]))
