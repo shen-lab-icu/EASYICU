@@ -4,14 +4,18 @@ on:
   push:
     paths:
       - "src/easyicu/research_agent/runner_image/**"
+      - "src/easyicu/research_agent/execution/kernel_identity.py"
       - "src/easyicu/research_agent/execution/runner.py"
       - "tests/research_agent/test_docker_runner.py"
+      - "tests/research_agent/test_execution_kernel_identity.py"
       - ".github/workflows/research_runner_image_ci.yml"
   pull_request:
     paths:
       - "src/easyicu/research_agent/runner_image/**"
+      - "src/easyicu/research_agent/execution/kernel_identity.py"
       - "src/easyicu/research_agent/execution/runner.py"
       - "tests/research_agent/test_docker_runner.py"
+      - "tests/research_agent/test_execution_kernel_identity.py"
       - ".github/workflows/research_runner_image_ci.yml"
 
 permissions:
