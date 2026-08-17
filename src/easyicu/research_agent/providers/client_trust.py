@@ -328,6 +328,31 @@ def _provider_transport_policy(
                 instance_vars.get("supports_strict_json_schema", False)
             ),
         )
+    if _is_reviewed_client_type(client, "CodexAppServerLLMClient"):
+        instance_vars = _safe_instance_vars(client)
+        hard_timeout = float(instance_vars.get("_turn_hard_timeout", 0.0))
+        if not math.isfinite(hard_timeout) or hard_timeout <= 0:
+            raise ValueError("request hard timeout must be finite and positive")
+        policy = _configured_transport_policy(
+            request_timeout=float(instance_vars.get("_timeout", 0.0)),
+            transport_max_attempts=1,
+            retryable_http_status_codes=None,
+            stream_enabled=False,
+            supports_strict_json_schema=bool(
+                getattr(client, "supports_strict_json_schema", False)
+            ),
+            transport="codex_app_server_account",
+        )
+        policy.update(
+            {
+                "schema_version": "easyicu.provider_transport_policy/3",
+                "request_hard_timeout_seconds": hard_timeout,
+                "reasoning_effort": (
+                    str(instance_vars.get("_reasoning_effort") or "") or None
+                ),
+            }
+        )
+        return policy
     return {
         "schema_version": "easyicu.provider_transport_policy/2",
         "transport": "unmanaged",

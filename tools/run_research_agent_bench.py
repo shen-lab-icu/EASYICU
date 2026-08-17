@@ -105,6 +105,9 @@ _EXECUTION_INCOMPLETE_EXIT_CODE = 4
 # as a clean pass -- `scores=0, pending=1, exit=0`.
 _PENDING_ITEMS_EXIT_CODE = 5
 
+_CODEX_USER_SESSION_BINDING_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_CODEX_APP_SERVER_REASONING_EFFORT = "low"
+
 _SCIENTIFIC_RUNTIME_AUTHORITY_OPTIONS = (
     "trajectory_scientific_runtime_authority",
     "current_case_scientific_runtime_authority",
@@ -2419,8 +2422,11 @@ def _make_llm(
         build_provider_client,
         cli_account_profile,
         provider_profile,
+        user_account_profile,
     )
+    from easyicu.research_agent.providers.factory import authorize_provider_client
     from easyicu.research_agent.providers.llm import (
+        CodexAppServerLLMClient,
         build_llm_client,
         reasoning_effort_by_role,
     )
@@ -2444,6 +2450,42 @@ def _make_llm(
             raise SystemExit(
                 f"Provider {provider!r} cannot honor strict Planner JSON Schema."
             )
+        account_environment = dict(provider_environment or {})
+        session_binding = str(
+            account_environment.get("EASYICU_CODEX_SESSION_SHA256") or ""
+        ).strip()
+        if session_binding:
+            account_profile = user_account_profile(provider)
+            if account_profile is None:
+                raise SystemExit(
+                    f"Provider {provider!r} has no reviewed App Server account path."
+                )
+            selected_model = str(model or "").strip()
+            if selected_model in {"", "cli-default", "account-default"}:
+                selected_model = "account-default"
+            try:
+                client = CodexAppServerLLMClient(
+                    model=(
+                        None if selected_model == "account-default" else selected_model
+                    ),
+                    request_timeout=request_timeout,
+                    turn_hard_timeout=request_timeout,
+                    reasoning_effort=_CODEX_APP_SERVER_REASONING_EFFORT,
+                    environment=account_environment,
+                )
+                endpoint = (
+                    f"{account_profile.endpoint_identity}/session/{session_binding}"
+                )
+                return authorize_provider_client(
+                    client,
+                    provider=account_profile.provider_identity,
+                    model=selected_model,
+                    base_url=endpoint,
+                    destination="external",
+                    environment=account_environment,
+                )
+            except (RuntimeError, ValueError, ProviderConfigurationError) as exc:
+                raise SystemExit(str(exc)) from exc
         try:
             return build_llm_client(
                 prefer=provider,
@@ -2610,6 +2652,87 @@ def _provider_environment_snapshot(
     if profile is not None:
         snapshot[profile.base_url_env_names[0]] = str(provider_base_url)
     return snapshot
+
+
+def _validated_development_codex_session_binding(
+    binding: object,
+    *,
+    provider: str,
+    model: object,
+    development_diagnostic: bool,
+    formal_authority_requested: bool,
+    multiple_models_requested: bool,
+    explicit_provider_base_url: object,
+    reasoning_effort_profile: str,
+    transport_max_attempts: int,
+    stream_enabled: bool,
+) -> str | None:
+    """Validate the narrow benchmark bridge to one Web-managed Codex login."""
+
+    normalized = str(binding or "").strip().lower()
+    if not normalized:
+        return None
+    if not _CODEX_USER_SESSION_BINDING_PATTERN.fullmatch(normalized):
+        raise SystemExit(
+            "--codex-user-session-binding must be one 64-character lowercase "
+            "SHA-256 binding returned by the authenticated Web session."
+        )
+    if str(provider or "").strip().lower() != "codex":
+        raise SystemExit("--codex-user-session-binding requires --provider codex.")
+    if not development_diagnostic or formal_authority_requested:
+        raise SystemExit(
+            "--codex-user-session-binding is development-only and cannot enter "
+            "a formal, submission-profile, or paper-acceptance run."
+        )
+    if multiple_models_requested:
+        raise SystemExit(
+            "--codex-user-session-binding requires exactly one --model."
+        )
+    selected_model = str(model or "").strip()
+    if selected_model in {"", "cli-default", "account-default"}:
+        raise SystemExit(
+            "--codex-user-session-binding requires an explicit account model."
+        )
+    if str(explicit_provider_base_url or "").strip():
+        raise SystemExit(
+            "--codex-user-session-binding owns its App Server endpoint; "
+            "do not pass --provider-base-url."
+        )
+    if str(reasoning_effort_profile or "").strip() != "provider_default":
+        raise SystemExit(
+            "Codex App Server account runs require "
+            "--reasoning-effort-profile provider_default."
+        )
+    if transport_max_attempts != 1 or stream_enabled:
+        raise SystemExit(
+            "Codex App Server account runs use one non-streaming transport "
+            "attempt per logical call."
+        )
+    return normalized
+
+
+def _development_codex_session_environment(
+    binding_sha256: str,
+    *,
+    model: str,
+) -> tuple[Dict[str, str], str]:
+    """Resolve a verified private Web session without returning its credential."""
+
+    _bootstrap_imports()
+    from easyicu.research_agent.providers import user_account_profile
+    from easyicu.webserver.codex_account_sessions import (
+        CodexAccountSessionError,
+        environment_for_binding,
+    )
+
+    try:
+        environment = environment_for_binding(binding_sha256, model=model)
+    except CodexAccountSessionError as exc:
+        raise SystemExit(str(exc)) from exc
+    profile = user_account_profile("codex")
+    assert profile is not None
+    endpoint = f"{profile.endpoint_identity}/session/{binding_sha256}"
+    return dict(environment), endpoint
 
 
 def _provider_hard_stop_limits(
@@ -3607,6 +3730,16 @@ def main() -> int:
         help="LLM backend for the benchmark arms.",
     )
     parser.add_argument(
+        "--codex-user-session-binding",
+        default=None,
+        help=(
+            "Development-only SHA-256 binding for a verified Web-managed Codex "
+            "account session. Uses App Server rather than the legacy codex CLI; "
+            "requires --provider codex, one explicit --model, and "
+            "--development-diagnostic."
+        ),
+    )
+    parser.add_argument(
         "--allow-mock-aware",
         action="store_true",
         help=(
@@ -4099,6 +4232,35 @@ def main() -> int:
     args = parser.parse_args()
     if not args.model and not args.models:
         args.model = _default_model_for_provider(str(args.provider))
+    formal_authority_requested = bool(
+        args.submission_profile
+        or args.require_figure2_paper_acceptance
+        or args.figure2_realrun_authorization
+        or args.figure2_production_input_authority
+        or args.figure2_scientific_protocol_authority
+        or args.figure2_expected_execution_identity
+    )
+    codex_user_session_binding = _validated_development_codex_session_binding(
+        args.codex_user_session_binding,
+        provider=str(args.provider),
+        model=args.model,
+        development_diagnostic=bool(args.development_diagnostic),
+        formal_authority_requested=formal_authority_requested,
+        multiple_models_requested=bool(args.models),
+        explicit_provider_base_url=args.provider_base_url,
+        reasoning_effort_profile=str(args.reasoning_effort_profile),
+        transport_max_attempts=int(args.transport_max_attempts),
+        stream_enabled=bool(args.llm_stream),
+    )
+    codex_account_environment: Dict[str, str] | None = None
+    if codex_user_session_binding is not None:
+        codex_account_environment, codex_account_endpoint = (
+            _development_codex_session_environment(
+                codex_user_session_binding,
+                model=str(args.model),
+            )
+        )
+        args.provider_base_url = codex_account_endpoint
     # Resolve once. The authorization digest and every subsequently created
     # client receive this exact endpoint; later environment mutation is inert.
     args.provider_base_url = str(
@@ -4107,9 +4269,13 @@ def main() -> int:
     _realrun_gate_rc, _figure2_batch_binding = _figure2_realrun_authorization_gate(args)
     if _realrun_gate_rc is not None:
         return _realrun_gate_rc
-    provider_environment = _provider_environment_snapshot(
-        provider=str(args.provider),
-        provider_base_url=str(args.provider_base_url),
+    provider_environment = (
+        codex_account_environment
+        if codex_account_environment is not None
+        else _provider_environment_snapshot(
+            provider=str(args.provider),
+            provider_base_url=str(args.provider_base_url),
+        )
     )
     case_registration = _register_case_patterns(args.case)
     submission_profile = (
@@ -5967,8 +6133,31 @@ def _run_one_item_from_cohort(
     )
     naive = _skipped_arm("naive")
     aware = _skipped_arm("aware")
+    account_session_client = None
+    if (
+        str(provider or "").strip().lower() == "codex"
+        and str(
+            (provider_environment or {}).get("EASYICU_CODEX_SESSION_SHA256") or ""
+        ).strip()
+        and set(_normalize_arms(arms)).intersection({"naive", "aware"})
+    ):
+        # Configuration-only identity cannot safely guess a browser-managed
+        # session's endpoint, hard timeout, or reasoning effort. Constructing
+        # this client performs no Provider call; it lets both reuse checks and
+        # the eventual Pipeline derive identity from the exact same live object.
+        account_session_client = _make_llm(
+            provider=provider,
+            model=model,
+            request_timeout=request_timeout,
+            reasoning_effort_profile=reasoning_effort_profile,
+            transport_max_attempts=transport_max_attempts,
+            stream_enabled=stream_enabled,
+            planner_strict_json_schema=planner_strict_json_schema,
+            provider_environment=provider_environment,
+        )
     expected_identity = _benchmark_execution_identity(
         bound_pipeline_options,
+        account_session_client,
         provider=provider,
         model=model,
         reasoning_effort_profile=reasoning_effort_profile,
@@ -5995,8 +6184,9 @@ def _run_one_item_from_cohort(
             ) or _skipped_arm("aware")
     run_naive = "naive" in selected and not _arm_was_run(naive)
     run_aware = "aware" in selected and not _arm_was_run(aware)
-    llm = (
-        _make_llm(
+    llm = account_session_client
+    if llm is None and (run_naive or run_aware):
+        llm = _make_llm(
             provider=provider,
             model=model,
             request_timeout=request_timeout,
@@ -6006,9 +6196,6 @@ def _run_one_item_from_cohort(
             planner_strict_json_schema=planner_strict_json_schema,
             provider_environment=provider_environment,
         )
-        if run_naive or run_aware
-        else None
-    )
     if run_naive:
         naive = _run_one_arm(
             item=item,

@@ -255,6 +255,86 @@ def test_benchmark_snapshot_for_codex_account_contains_no_api_key(monkeypatch) -
     assert "OPENAI_API_KEY" not in snapshot
 
 
+def test_benchmark_codex_user_session_uses_app_server_identity(tmp_path) -> None:
+    from easyicu.research_agent.providers.factory import (
+        provider_authorization_manifest,
+    )
+    from tools import run_research_agent_bench as benchmark
+
+    binding = "a" * 64
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path / "home"),
+        "CODEX_HOME": str(tmp_path / "codex"),
+        "EASYICU_ALLOW_EXTERNAL_LLM": "1",
+        "EASYICU_CODEX_SESSION_SHA256": binding,
+        "OPENAI_API_KEY": "must-not-cross-user-account-boundary",
+    }
+
+    client = benchmark._make_llm(
+        provider="codex",
+        model="gpt-5.6-luna",
+        request_timeout=37,
+        planner_strict_json_schema=True,
+        provider_environment=environment,
+    )
+    manifest = provider_authorization_manifest(client)
+    authority = manifest["clients"][0]
+
+    assert authority["provider"] == "codex-app-server"
+    assert authority["model"] == "gpt-5.6-luna"
+    assert authority["base_url"] == f"app-server://stdio/session/{binding}"
+    assert authority["authorization_mode"] == "account_session"
+    assert authority["transport_policy"] == {
+        "schema_version": "easyicu.provider_transport_policy/3",
+        "transport": "codex_app_server_account",
+        "request_timeout_seconds": 37.0,
+        "request_hard_timeout_seconds": 37.0,
+        "transport_max_attempts": 1,
+        "retryable_http_status_codes": None,
+        "stream_enabled": False,
+        "strict_json_schema_enabled": True,
+        "reasoning_effort": "low",
+    }
+    assert "OPENAI_API_KEY" not in client._subprocess_environment
+
+
+def test_benchmark_codex_user_session_is_development_only() -> None:
+    from tools import run_research_agent_bench as benchmark
+
+    binding = "a" * 64
+    common = {
+        "provider": "codex",
+        "model": "gpt-5.6-luna",
+        "multiple_models_requested": False,
+        "explicit_provider_base_url": None,
+        "reasoning_effort_profile": "provider_default",
+        "transport_max_attempts": 1,
+        "stream_enabled": False,
+    }
+
+    assert benchmark._validated_development_codex_session_binding(
+        binding,
+        development_diagnostic=True,
+        formal_authority_requested=False,
+        **common,
+    ) == binding
+    with pytest.raises(SystemExit, match="development-only"):
+        benchmark._validated_development_codex_session_binding(
+            binding,
+            development_diagnostic=False,
+            formal_authority_requested=False,
+            **common,
+        )
+    with pytest.raises(SystemExit, match="development-only"):
+        benchmark._validated_development_codex_session_binding(
+            binding,
+            development_diagnostic=True,
+            formal_authority_requested=True,
+            **common,
+        )
+
+
 def test_benchmark_account_provider_uses_cli_default_model(monkeypatch) -> None:
     from tools import run_research_agent_bench as benchmark
 
