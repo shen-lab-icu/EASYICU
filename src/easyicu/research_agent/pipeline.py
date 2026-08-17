@@ -177,11 +177,8 @@ from .reporting.article_contract import (
     validate_plan_against_article_contract,
 )
 from .planning.figure_strategy import build_article_figure_strategy
-from .planning.progressive_artifacts import (
-    persist_progressive_planner_checkpoint,
-    persist_progressive_planning_artifacts,
-    persist_progressive_planning_authority,
-)
+from .planning.progressive_artifacts import persist_progressive_planning_authority
+from .orchestration.progressive_planning import run_progressive_planner
 from .planning.scientific_review import (
     render_plan_scientific_guardrails,
 )
@@ -2752,18 +2749,9 @@ class ResearchAgentPipeline:
                 emit_progress, run_id=run_id
             )
 
-            def progressive_checkpoint(checkpoint: Any) -> None:
-                persist_progressive_planner_checkpoint(
-                    run_dir=run_dir,
-                    evidence=evidence,
-                    checkpoint=checkpoint,
-                    prompt_pack_version=prompt_version,
-                )
-
             try:
-                plan = planner.run(
-                    agent_context,
-                    **know_how_binding.planner_kwargs,
+                planner_run_kwargs = dict(
+                    know_how_binding.planner_kwargs,
                     allowed_literature_citation_keys=allowed_literature_citation_keys,
                     direct_comparator_literature_keys=(
                         direct_comparator_literature_keys
@@ -2772,50 +2760,41 @@ class ResearchAgentPipeline:
                     article_contract_context=context,
                     planning_contract_context=planning_contract_context,
                     progress_callback=planner_progress,
-                    **(
-                        {
-                            "checkpoint_callback": progressive_checkpoint,
-                            "required_primary_cohort_selection_mode": (
-                                self._required_primary_cohort_selection_mode
-                            ),
-                        }
-                        if progressive
-                        else {}
-                    ),
-                )
-                planner_prompt_metrics = know_how_binding.prompt_metrics(
-                    planner,
-                    agent_context,
-                    planning_contract_context=planning_contract_context,
                 )
                 if progressive:
-                    outline = planner.last_outline
-                    foundation = planner.last_foundation
-                    materializations = planner.last_materializations
-                    skeleton = planner.last_skeleton
-                    compile_receipt = planner.last_compile_receipt
-                    if (
-                        outline is None
-                        or foundation is None
-                        or not materializations
-                        or skeleton is None
-                        or compile_receipt is None
-                    ):
-                        raise RuntimeError(
-                            "Progressive Planner returned without its outline, "
-                            "foundation, step materializations, skeleton, or "
-                            "compile receipt"
-                        )
-                    persist_progressive_planning_artifacts(
+                    planner_run_kwargs[
+                        "required_primary_cohort_selection_mode"
+                    ] = self._required_primary_cohort_selection_mode
+                    progressive_result = run_progressive_planner(
+                        planner=planner,
+                        context=agent_context,
                         run_dir=run_dir,
                         evidence=evidence,
-                        outline=outline,
-                        foundation=foundation,
-                        materializations=materializations,
-                        skeleton=skeleton,
-                        compile_receipt=compile_receipt,
-                        prompt_metrics=planner_prompt_metrics,
                         prompt_pack_version=prompt_version,
+                        resume_checkpoint_path=(
+                            self._config.development_progressive_resume_checkpoint_path
+                        ),
+                        resume_checkpoint_sha256=(
+                            self._config.development_progressive_resume_checkpoint_sha256
+                        ),
+                        cohort_path=cohort_path,
+                        llm_signature=llm_signature,
+                        planner_kwargs=planner_run_kwargs,
+                        know_how_binding=know_how_binding,
+                        planning_contract_context=planning_contract_context,
+                        finding_sink=findings.append,
+                    )
+                    plan = progressive_result.plan
+                    plan_generation_mode = progressive_result.generation_mode
+                    planner_prompt_metrics = dict(
+                        progressive_result.prompt_metrics
+                    )
+                else:
+                    plan = planner.run(agent_context, **planner_run_kwargs)
+                    planner_prompt_metrics = know_how_binding.prompt_metrics(
+                        planner,
+                        agent_context,
+                        planning_contract_context=planning_contract_context,
                     )
             except PlannerArticleContractError:
                 raise
@@ -3296,7 +3275,10 @@ class ResearchAgentPipeline:
             run_dir=run_dir,
             evidence=evidence,
         )
-        if plan_generation_mode == "llm_progressive_v2":
+        if plan_generation_mode in {
+            "llm_progressive_v2",
+            "llm_progressive_v2_dev_resume",
+        }:
             lifecycle_evidence_id = _plan_lifecycle.plan_lifecycle_evidence_id(plan.revision)
             persist_progressive_planning_authority(
                 run_dir=run_dir,
@@ -6111,6 +6093,9 @@ class ResearchAgentPipeline:
                 self._enable_deterministic_planner_fallback
             ),
             "planner_strategy": self._planner_strategy,
+            "development_progressive_resume_checkpoint_sha256": (
+                self._config.development_progressive_resume_checkpoint_sha256
+            ),
             "enable_deterministic_runner_repair": bool(
                 self._enable_deterministic_runner_repair
             ),

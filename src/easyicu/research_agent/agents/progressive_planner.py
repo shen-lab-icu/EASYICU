@@ -33,12 +33,22 @@ from ..planning.progressive_contract import (
     ProgressiveOutlineStep,
     ProgressivePlanCompileError,
     ProgressivePlanCompileReceipt,
-    ProgressivePlanFoundation,
     ProgressivePlanOutline,
     ProgressivePlannerCheckpoint,
     ProgressivePlanSkeleton,
-    ProgressiveSkeletonStep,
     ProgressiveStepMaterialization,
+)
+from ..planning.progressive_artifacts import ProgressivePlannerCheckpointEmitter
+from ..planning.progressive_resume import (
+    ProgressivePrefixState,
+    assemble_progressive_skeleton,
+    build_progressive_checkpoint_authorities,
+    compile_progressive_prefix,
+    restore_progressive_resume_foundation,
+    restore_progressive_resume_prefix,
+    restore_progressive_resume_prompt_metrics,
+    validate_progressive_materialization_coordinate,
+    validate_progressive_resume_runtime_dependencies,
 )
 from ..planning.robustness_contract import validate_planner_robustness_specs
 from ..planning.scientific_action_catalog import scientific_actions_for_analysis_type
@@ -474,6 +484,7 @@ class ProgressivePlannerAgent:
         self.last_foundation: Optional[ProgressiveFoundationMaterialization] = None
         self.last_materializations: list[ProgressiveStepMaterialization] = []
         self.last_skeleton: Optional[ProgressivePlanSkeleton] = None
+        self.last_resume_validated = False
         self.last_dropped_plan_keys: dict[str, list[str]] = {
             "top_level": [],
             "steps": [],
@@ -681,23 +692,6 @@ class ProgressivePlannerAgent:
         }
 
     @staticmethod
-    def _assemble_skeleton(
-        *,
-        outline: ProgressivePlanOutline,
-        foundation: ProgressivePlanFoundation,
-        steps: Sequence[ProgressiveSkeletonStep],
-    ) -> ProgressivePlanSkeleton:
-        return ProgressivePlanSkeleton(
-            analysis_type=outline.analysis_type,
-            cohort=foundation.cohort,
-            display_labels=list(foundation.display_labels),
-            robustness_intents=list(foundation.robustness_intents),
-            know_how_decisions=list(foundation.know_how_decisions),
-            steps=list(steps),
-            rationale=outline.rationale,
-        )
-
-    @staticmethod
     def _validate_outline_authority(
         outline: ProgressivePlanOutline,
         *,
@@ -748,69 +742,6 @@ class ProgressivePlannerAgent:
                     step_index=index,
                     path="scientific_action_id",
                 )
-
-    @staticmethod
-    def _validate_materialization_coordinate(
-        materialization: ProgressiveStepMaterialization,
-        *,
-        outline_step: ProgressiveOutlineStep,
-        outline_step_sha256: str,
-        step_index: int,
-    ) -> None:
-        step = materialization.step
-        expected = {
-            "step_id": outline_step.step_id,
-            "planned_analysis_role": outline_step.planned_analysis_role,
-            "module_id": outline_step.module_id,
-            "objective": outline_step.objective,
-            "depends_on": list(outline_step.depends_on),
-            "scientific_action_id": outline_step.scientific_action_id,
-        }
-        actual = {
-            "step_id": step.step_id,
-            "planned_analysis_role": step.planned_analysis_role,
-            "module_id": step.module_id,
-            "objective": step.objective,
-            "depends_on": list(step.depends_on),
-            "scientific_action_id": step.scientific_action_id,
-        }
-        if materialization.outline_step_sha256 != outline_step_sha256:
-            raise ProgressivePlanCompileError(
-                "progressive_step_outline_digest_mismatch",
-                "current-step materialization did not bind the host outline digest",
-                step_id=outline_step.step_id,
-                step_index=step_index,
-                path="outline_step_sha256",
-            )
-        if actual != expected:
-            changed = sorted(
-                key for key, value in expected.items() if actual.get(key) != value
-            )
-            raise ProgressivePlanCompileError(
-                "progressive_step_materialization_mismatch",
-                "current-step materialization changed outline-owned fields: "
-                + ", ".join(changed),
-                step_id=outline_step.step_id,
-                step_index=step_index,
-                path=changed[0] if changed else "step",
-            )
-        if materialization.foundation is not None:
-            raise ProgressivePlanCompileError(
-                "progressive_step_foundation_coordinate_mismatch",
-                "current-step materializations must not repeat the separately sealed "
-                "plan foundation",
-                step_id=outline_step.step_id,
-                step_index=step_index,
-                path="foundation",
-            )
-
-    @staticmethod
-    def _prefix_product_registry(plan: AnalysisPlan) -> list[tuple[str, str]]:
-        return [
-            (step.step_id, product_id)
-            for step in plan.steps
-            for product_id in step.expected_outputs
-        ]
 
     @staticmethod
     def _foundation_prompt(
@@ -977,6 +908,170 @@ class ProgressivePlannerAgent:
         )
         return plan, receipt
 
+    def _materialize_remaining_steps(
+        self,
+        prefix_state: ProgressivePrefixState,
+        *,
+        context: ResearchContext,
+        outline: ProgressivePlanOutline,
+        foundation_materialization: ProgressiveFoundationMaterialization,
+        scientific_action_ids: Sequence[str],
+        action_rows: Sequence[Mapping[str, Any]],
+        allowed_literature_citation_keys: Sequence[str],
+        allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None,
+        reporting_method_source_keys: Sequence[str],
+        planning_contract_context: str,
+        progress_callback: Optional[Callable[[Any], None]],
+        checkpoint_emitter: ProgressivePlannerCheckpointEmitter,
+        resumed: bool,
+    ) -> ProgressivePrefixState:
+        """Materialize and locally repair only the uncompiled suffix."""
+
+        foundation = foundation_materialization.foundation
+        for step_index in range(len(prefix_state.steps), len(outline.steps)):
+            outline_step = outline.steps[step_index]
+            step_variables = tuple(outline_step.variable_names)
+            step_citations = tuple(outline_step.literature_citation_keys)
+            outline_step_sha256 = canonical_sha256(
+                outline_step.model_dump(mode="json")
+            )
+            step_schema = None
+            if llm_supports_strict_json_schema(self.llm):
+                step_schema = progressive_step_materialization_request(
+                    outline_step=outline_step,
+                    outline_step_sha256=outline_step_sha256,
+                    variable_names=step_variables,
+                    scientific_action_ids=scientific_action_ids,
+                    allowed_literature_citation_keys=step_citations,
+                    available_product_refs=prefix_state.available_product_refs,
+                )
+            compiler_observation: Mapping[str, Any] | None = None
+            for revision in range(_MAX_COMPILE_REVISIONS + 1):
+                materialization_prompt = self._materialization_prompt(
+                    context=context,
+                    outline=outline,
+                    outline_step=outline_step,
+                    outline_step_sha256=outline_step_sha256,
+                    variables=step_variables,
+                    action_rows=action_rows,
+                    allowed_literature_citation_keys=step_citations,
+                    know_how_context="",
+                    planning_contract_context=planning_contract_context,
+                    prefix_summary=prefix_state.prompt_summary,
+                    available_product_refs=prefix_state.available_product_refs,
+                    compiler_observation=compiler_observation,
+                )
+                step_messages = [
+                    LLMMessage(role="system", content=_GUIDE),
+                    LLMMessage(role="user", content=materialization_prompt),
+                ]
+                step_payload_bytes = sum(
+                    len(item.content.encode("utf-8")) for item in step_messages
+                ) + (step_schema.payload_bytes if step_schema is not None else 0)
+                if step_payload_bytes > _MAX_REQUEST_BYTES:
+                    raise ProgressivePlanCompileError(
+                        "progressive_step_prompt_budget_exceeded",
+                        f"current-step request uses {step_payload_bytes} bytes; "
+                        f"limit={_MAX_REQUEST_BYTES}",
+                        step_id=outline_step.step_id,
+                        step_index=step_index,
+                        path="planner_request",
+                    )
+                self.last_prompt_metrics[
+                    "step_materialization_attempt_payload_bytes"
+                ].append(step_payload_bytes)
+                self.last_prompt_metrics[
+                    "step_materialization_attempt_schema_sha256"
+                ].append(step_schema.authority_sha256 if step_schema else None)
+                if resumed:
+                    self.last_prompt_metrics[
+                        "current_run_step_materialization_attempt_payload_bytes"
+                    ].append(step_payload_bytes)
+                    self.last_prompt_metrics[
+                        "current_run_step_materialization_attempt_schema_sha256"
+                    ].append(
+                        step_schema.authority_sha256 if step_schema else None
+                    )
+                materialization = call_llm_with_structured_retry(
+                    self.llm,
+                    step_messages,
+                    parser=lambda raw: _parse_model(
+                        raw,
+                        ProgressiveStepMaterialization,
+                    ),
+                    role="progressive_planner_step_materialization",
+                    max_retries=1,
+                    max_tokens=_MAX_STEP_OUTPUT_TOKENS,
+                    temperature=0.2,
+                    include_failed_response_on_retry=False,
+                    progress_callback=progress_callback,
+                    structured_output=step_schema,
+                    format_reminder=(
+                        "Return exactly one ProgressiveStepMaterialization for "
+                        "the current outline coordinate. Never return other steps."
+                    ),
+                )
+                validate_progressive_materialization_coordinate(
+                    materialization,
+                    outline_step=outline_step,
+                    outline_step_sha256=outline_step_sha256,
+                    step_index=step_index,
+                )
+                try:
+                    candidate_state = compile_progressive_prefix(
+                        prefix_state,
+                        materialization,
+                        outline=outline,
+                        foundation=foundation,
+                        context=context,
+                        allowed_literature_citation_keys=(
+                            allowed_literature_citation_keys
+                        ),
+                        allowed_know_how_decisions=allowed_know_how_decisions,
+                        reporting_method_source_keys=reporting_method_source_keys,
+                    )
+                except ProgressivePlanCompileError as exc:
+                    if revision >= _MAX_COMPILE_REVISIONS:
+                        raise
+                    if exc.step_index is not None and int(exc.step_index) < step_index:
+                        raise ProgressivePlanCompileError(
+                            "progressive_materialization_invalidated_prefix",
+                            "current-step materialization exposed a finding in the "
+                            "already compiled prefix",
+                            step_id=exc.step_id,
+                            step_index=exc.step_index,
+                            path=exc.path,
+                        ) from exc
+                    self.last_prompt_metrics["compile_revision_count"] += 1
+                    if resumed:
+                        self.last_prompt_metrics[
+                            "current_run_compile_revision_count"
+                        ] += 1
+                    compiler_observation = exc.details
+                    continue
+                prefix_state = candidate_state
+                self.last_materializations = list(prefix_state.materializations)
+                self.last_prompt_metrics[
+                    "step_materialization_payload_bytes"
+                ].append(step_payload_bytes)
+                self.last_prompt_metrics[
+                    "step_materialization_schema_sha256"
+                ].append(step_schema.authority_sha256 if step_schema else None)
+                self.last_prompt_metrics["step_materialization_count"] += 1
+                if resumed:
+                    self.last_prompt_metrics[
+                        "current_run_step_materialization_count"
+                    ] += 1
+                checkpoint_emitter.emit(
+                    stage="step",
+                    outline=outline,
+                    foundation=foundation_materialization,
+                    materializations=self.last_materializations,
+                    prompt_metrics=self.last_prompt_metrics,
+                )
+                break
+        return prefix_state
+
     def run(
         self,
         context: ResearchContext,
@@ -992,8 +1087,11 @@ class ProgressivePlannerAgent:
         checkpoint_callback: Optional[
             Callable[[ProgressivePlannerCheckpoint], None]
         ] = None,
+        resume_checkpoint: ProgressivePlannerCheckpoint | None = None,
+        resume_dependency_context: Mapping[str, Any] | None = None,
         required_primary_cohort_selection_mode: str | None = None,
     ) -> AnalysisPlan:
+        self.last_resume_validated = False
         if bool(allowed_know_how_decisions) != bool(know_how_context):
             raise ValueError(
                 "Progressive Planner know-how authority and prompt must be supplied together"
@@ -1040,69 +1138,45 @@ class ProgressivePlannerAgent:
             direct_comparator_keys=direct_keys,
             required_method_layers=required_method_layers_for_context(context),
         )
-        checkpoint_request_authority_sha256 = canonical_sha256(
-            {
-                "research_context": context.model_dump(mode="json"),
-                "article_context": article_context.model_dump(mode="json"),
-                "analysis_types": list(analysis_types),
-                "variables": list(variables),
-                "scientific_action_ids": list(action_ids),
-                "allowed_literature_citation_keys": list(allowed_citations),
-                "direct_comparator_literature_keys": list(direct_keys),
-                "allowed_know_how_decisions": dict(
-                    allowed_know_how_decisions or {}
-                ),
-                "know_how_context": know_how_context,
-                "planning_contract_context": resolved_planning_contract_context,
-                "required_primary_cohort_selection_mode": (
-                    required_primary_cohort_selection_mode
-                ),
-                "host_cohort": (
-                    host_cohort.model_dump(mode="json")
-                    if host_cohort is not None
-                    else None
-                ),
-            }
+        if resume_checkpoint is not None:
+            validate_progressive_resume_runtime_dependencies(
+                resume_dependency_context
+            )
+        scientific_authority = {
+            "analysis_types": list(analysis_types),
+            "variables": list(variables),
+            "scientific_action_ids": list(action_ids),
+            "allowed_literature_citation_keys": list(allowed_citations),
+            "direct_comparator_literature_keys": list(direct_keys),
+            "allowed_know_how_decisions": dict(
+                allowed_know_how_decisions or {}
+            ),
+            "know_how_context": know_how_context,
+            "planning_contract_context": resolved_planning_contract_context,
+            "required_primary_cohort_selection_mode": (
+                required_primary_cohort_selection_mode
+            ),
+            "host_cohort": (
+                host_cohort.model_dump(mode="json")
+                if host_cohort is not None
+                else None
+            ),
+        }
+        checkpoint_authorities = build_progressive_checkpoint_authorities(
+            context=context,
+            article_context=article_context,
+            scientific_authority=scientific_authority,
+            runtime_dependency_authority=resume_dependency_context,
         )
-        checkpoint_sequence = 0
-        previous_checkpoint_sha256: str | None = None
-
-        def emit_checkpoint(
-            *,
-            stage: str,
-            outline: ProgressivePlanOutline,
-            foundation: ProgressiveFoundationMaterialization | None = None,
-        ) -> None:
-            nonlocal checkpoint_sequence, previous_checkpoint_sha256
-            if checkpoint_callback is None:
-                return
-            body: dict[str, Any] = {
-                "schema_version": "easyicu.progressive_planner_checkpoint/1",
-                "sequence": checkpoint_sequence,
-                "stage": stage,
-                "request_authority_sha256": (
-                    checkpoint_request_authority_sha256
-                ),
-                "previous_checkpoint_sha256": previous_checkpoint_sha256,
-                "outline": outline.model_dump(mode="json"),
-                "foundation": (
-                    foundation.model_dump(mode="json")
-                    if foundation is not None
-                    else None
-                ),
-                "materializations": [
-                    item.model_dump(mode="json")
-                    for item in self.last_materializations
-                ],
-                "prompt_metrics": json.loads(
-                    json.dumps(self.last_prompt_metrics, ensure_ascii=False)
-                ),
-            }
-            body["checkpoint_sha256"] = canonical_sha256(body)
-            checkpoint = ProgressivePlannerCheckpoint.model_validate(body)
-            checkpoint_callback(checkpoint)
-            previous_checkpoint_sha256 = checkpoint.checkpoint_sha256
-            checkpoint_sequence += 1
+        checkpoint_emitter = ProgressivePlannerCheckpointEmitter(
+            callback=checkpoint_callback,
+            request_authority_sha256=(
+                resume_checkpoint.request_authority_sha256
+                if resume_checkpoint is not None
+                else checkpoint_authorities.request_authority_sha256
+            ),
+            source_checkpoint=resume_checkpoint,
+        )
         outline_schema = None
         if llm_supports_strict_json_schema(self.llm):
             outline_schema = progressive_outline_structured_output_request(
@@ -1143,7 +1217,7 @@ class ProgressivePlannerAgent:
                 f"initial request uses {total_bytes} bytes; limit={_MAX_REQUEST_BYTES}",
                 path="planner_request",
             )
-        self.last_prompt_metrics = {
+        current_prompt_metrics = {
             "message_payload_bytes": message_bytes,
             "structured_output_payload_bytes": schema_bytes,
             "structured_output_authority_sha256": (
@@ -1174,6 +1248,9 @@ class ProgressivePlannerAgent:
             "required_primary_cohort_selection_mode": (
                 required_primary_cohort_selection_mode
             ),
+            "resume_dependency_authority_sha256": (
+                checkpoint_authorities.resume_dependency_authority_sha256
+            ),
             "compile_revision_count": 0,
             "step_materialization_count": 0,
             "step_materialization_payload_bytes": [],
@@ -1184,22 +1261,33 @@ class ProgressivePlannerAgent:
             "full_revision_count": 0,
             "suffix_request_payload_bytes": [],
         }
-        outline = call_llm_with_structured_retry(
-            self.llm,
-            messages,
-            parser=lambda raw: _parse_model(raw, ProgressivePlanOutline),
-            role="progressive_planner_outline",
-            max_retries=_MAX_INITIAL_PARSE_RETRIES,
-            max_tokens=_MAX_OUTLINE_OUTPUT_TOKENS,
-            temperature=0.2,
-            include_failed_response_on_retry=False,
-            progress_callback=progress_callback,
-            structured_output=outline_schema,
-            format_reminder=(
-                "Return one concise ProgressivePlanOutline only. Do not include "
-                "any executable step-detail fields."
-            ),
-        )
+        if resume_checkpoint is not None:
+            self.last_prompt_metrics = restore_progressive_resume_prompt_metrics(
+                checkpoint=resume_checkpoint,
+                current_prompt_metrics=current_prompt_metrics,
+                expected_dependency_sha256=(
+                    checkpoint_authorities.resume_dependency_authority_sha256
+                ),
+            )
+            outline = resume_checkpoint.outline
+        else:
+            self.last_prompt_metrics = current_prompt_metrics
+            outline = call_llm_with_structured_retry(
+                self.llm,
+                messages,
+                parser=lambda raw: _parse_model(raw, ProgressivePlanOutline),
+                role="progressive_planner_outline",
+                max_retries=_MAX_INITIAL_PARSE_RETRIES,
+                max_tokens=_MAX_OUTLINE_OUTPUT_TOKENS,
+                temperature=0.2,
+                include_failed_response_on_retry=False,
+                progress_callback=progress_callback,
+                structured_output=outline_schema,
+                format_reminder=(
+                    "Return one concise ProgressivePlanOutline only. Do not include "
+                    "any executable step-detail fields."
+                ),
+            )
         self._validate_outline_authority(
             outline,
             analysis_types=analysis_types,
@@ -1210,8 +1298,22 @@ class ProgressivePlannerAgent:
         self.last_foundation = None
         self.last_materializations = []
         outline_sha256 = canonical_sha256(outline.model_dump(mode="json"))
-        self.last_prompt_metrics["outline_sha256"] = outline_sha256
-        emit_checkpoint(stage="outline", outline=outline)
+        if resume_checkpoint is not None:
+            if self.last_prompt_metrics.get("outline_sha256") != outline_sha256:
+                raise ProgressivePlanCompileError(
+                    "progressive_resume_outline_digest_mismatch",
+                    "development checkpoint metrics identify another outline",
+                    path="resume_checkpoint.prompt_metrics.outline_sha256",
+                )
+        else:
+            self.last_prompt_metrics["outline_sha256"] = outline_sha256
+            checkpoint_emitter.emit(
+                stage="outline",
+                outline=outline,
+                foundation=None,
+                materializations=self.last_materializations,
+                prompt_metrics=self.last_prompt_metrics,
+            )
 
         foundation_schema = None
         if llm_supports_strict_json_schema(self.llm):
@@ -1256,32 +1358,51 @@ class ProgressivePlannerAgent:
                 f"limit={_MAX_REQUEST_BYTES}",
                 path="planner_request",
             )
-        self.last_prompt_metrics["foundation_request_payload_bytes"] = (
-            foundation_total_bytes
+        current_foundation_authority = (
+            foundation_schema.authority_sha256 if foundation_schema else None
         )
-        self.last_prompt_metrics["foundation_schema_bytes"] = foundation_schema_bytes
-        self.last_prompt_metrics[
-            "foundation_structured_output_authority_sha256"
-        ] = foundation_schema.authority_sha256 if foundation_schema else None
-        foundation_materialization = call_llm_with_structured_retry(
-            self.llm,
-            foundation_messages,
-            parser=lambda raw: _parse_foundation_materialization(
-                raw,
-                host_cohort=host_cohort,
-            ),
-            role="progressive_planner_foundation",
-            max_retries=1,
-            max_tokens=_MAX_FOUNDATION_OUTPUT_TOKENS,
-            temperature=0.2,
-            include_failed_response_on_retry=False,
-            progress_callback=progress_callback,
-            structured_output=foundation_schema,
-            format_reminder=(
-                "Return exactly one ProgressiveFoundationMaterialization bound "
-                "to the supplied outline digest."
-            ),
+        foundation_materialization = (
+            restore_progressive_resume_foundation(
+                checkpoint=resume_checkpoint,
+                prompt_metrics=self.last_prompt_metrics,
+                request_payload_bytes=foundation_total_bytes,
+                schema_bytes=foundation_schema_bytes,
+                schema_authority_sha256=current_foundation_authority,
+            )
+            if resume_checkpoint is not None
+            else None
         )
+        resume_foundation_reused = foundation_materialization is not None
+        if foundation_materialization is None:
+            self.last_prompt_metrics["foundation_request_payload_bytes"] = (
+                foundation_total_bytes
+            )
+            self.last_prompt_metrics["foundation_schema_bytes"] = (
+                foundation_schema_bytes
+            )
+            self.last_prompt_metrics[
+                "foundation_structured_output_authority_sha256"
+            ] = current_foundation_authority
+            foundation_materialization = call_llm_with_structured_retry(
+                self.llm,
+                foundation_messages,
+                parser=lambda raw: _parse_foundation_materialization(
+                    raw,
+                    host_cohort=host_cohort,
+                ),
+                role="progressive_planner_foundation",
+                max_retries=1,
+                max_tokens=_MAX_FOUNDATION_OUTPUT_TOKENS,
+                temperature=0.2,
+                include_failed_response_on_retry=False,
+                progress_callback=progress_callback,
+                structured_output=foundation_schema,
+                format_reminder=(
+                    "Return exactly one ProgressiveFoundationMaterialization bound "
+                    "to the supplied outline digest."
+                ),
+            )
+        assert foundation_materialization is not None
         if foundation_materialization.outline_sha256 != outline_sha256:
             raise ProgressivePlanCompileError(
                 "progressive_foundation_outline_digest_mismatch",
@@ -1301,11 +1422,14 @@ class ProgressivePlannerAgent:
                 path="cohort.selection_mode",
             )
         self.last_foundation = foundation_materialization
-        emit_checkpoint(
-            stage="foundation",
-            outline=outline,
-            foundation=foundation_materialization,
-        )
+        if not resume_foundation_reused:
+            checkpoint_emitter.emit(
+                stage="foundation",
+                outline=outline,
+                foundation=foundation_materialization,
+                materializations=self.last_materializations,
+                prompt_metrics=self.last_prompt_metrics,
+            )
 
         selected_action_ids, selected_action_rows = _action_catalog(
             (outline.analysis_type,)
@@ -1315,159 +1439,65 @@ class ProgressivePlannerAgent:
             analysis_type=outline.analysis_type,
             enforce_article_contract=enforce_article_contract,
         )
-        materialized_steps: list[ProgressiveSkeletonStep] = []
-        prefix_summary: list[dict[str, Any]] = []
-        available_product_refs: list[tuple[str, str]] = []
-        prefix_plan: Optional[AnalysisPlan] = None
-        prefix_receipt: Optional[ProgressivePlanCompileReceipt] = None
 
-        for step_index, outline_step in enumerate(outline.steps):
-            step_variables = tuple(outline_step.variable_names)
-            step_citations = tuple(outline_step.literature_citation_keys)
-            outline_step_sha256 = canonical_sha256(
-                outline_step.model_dump(mode="json")
+        def current_step_schema_authority(
+            outline_step: ProgressiveOutlineStep,
+            outline_step_sha256: str,
+            available_product_refs: Sequence[tuple[str, str]],
+        ) -> str | None:
+            if not llm_supports_strict_json_schema(self.llm):
+                return None
+            request = progressive_step_materialization_request(
+                outline_step=outline_step,
+                outline_step_sha256=outline_step_sha256,
+                variable_names=tuple(outline_step.variable_names),
+                scientific_action_ids=selected_action_ids,
+                allowed_literature_citation_keys=tuple(
+                    outline_step.literature_citation_keys
+                ),
+                available_product_refs=available_product_refs,
             )
-            step_schema = None
-            if llm_supports_strict_json_schema(self.llm):
-                step_schema = progressive_step_materialization_request(
-                    outline_step=outline_step,
-                    outline_step_sha256=outline_step_sha256,
-                    variable_names=step_variables,
-                    scientific_action_ids=selected_action_ids,
-                    allowed_literature_citation_keys=step_citations,
-                    available_product_refs=available_product_refs,
-                )
-            compiler_observation: Mapping[str, Any] | None = None
-            for revision in range(_MAX_COMPILE_REVISIONS + 1):
-                materialization_prompt = self._materialization_prompt(
-                    context=context,
-                    outline=outline,
-                    outline_step=outline_step,
-                    outline_step_sha256=outline_step_sha256,
-                    variables=step_variables,
-                    action_rows=selected_action_rows,
-                    allowed_literature_citation_keys=step_citations,
-                    know_how_context="",
-                    planning_contract_context=resolved_planning_contract_context,
-                    prefix_summary=prefix_summary,
-                    available_product_refs=available_product_refs,
-                    compiler_observation=compiler_observation,
-                )
-                step_messages = [
-                    LLMMessage(role="system", content=_GUIDE),
-                    LLMMessage(role="user", content=materialization_prompt),
-                ]
-                step_payload_bytes = sum(
-                    len(item.content.encode("utf-8")) for item in step_messages
-                ) + (step_schema.payload_bytes if step_schema is not None else 0)
-                if step_payload_bytes > _MAX_REQUEST_BYTES:
-                    raise ProgressivePlanCompileError(
-                        "progressive_step_prompt_budget_exceeded",
-                        f"current-step request uses {step_payload_bytes} bytes; "
-                        f"limit={_MAX_REQUEST_BYTES}",
-                        step_id=outline_step.step_id,
-                        step_index=step_index,
-                        path="planner_request",
-                    )
-                self.last_prompt_metrics[
-                    "step_materialization_attempt_payload_bytes"
-                ].append(step_payload_bytes)
-                self.last_prompt_metrics[
-                    "step_materialization_attempt_schema_sha256"
-                ].append(step_schema.authority_sha256 if step_schema else None)
-                materialization = call_llm_with_structured_retry(
-                    self.llm,
-                    step_messages,
-                    parser=lambda raw: _parse_model(
-                        raw,
-                        ProgressiveStepMaterialization,
-                    ),
-                    role="progressive_planner_step_materialization",
-                    max_retries=1,
-                    max_tokens=_MAX_STEP_OUTPUT_TOKENS,
-                    temperature=0.2,
-                    include_failed_response_on_retry=False,
-                    progress_callback=progress_callback,
-                    structured_output=step_schema,
-                    format_reminder=(
-                        "Return exactly one ProgressiveStepMaterialization for "
-                        "the current outline coordinate. Never return other steps."
-                    ),
-                )
-                self._validate_materialization_coordinate(
-                    materialization,
-                    outline_step=outline_step,
-                    outline_step_sha256=outline_step_sha256,
-                    step_index=step_index,
-                )
-                candidate_steps = [*materialized_steps, materialization.step]
-                candidate_skeleton = self._assemble_skeleton(
-                    outline=outline,
-                    foundation=foundation,
-                    steps=candidate_steps,
-                )
-                try:
-                    candidate_plan, candidate_receipt = compile_progressive_plan(
-                        skeleton=candidate_skeleton,
-                        context=context,
-                        allowed_literature_citation_keys=allowed_citations,
-                        allowed_know_how_decisions=allowed_know_how_decisions,
-                        host_reporting_method_source_keys=reporting_source_keys,
-                    )
-                except ProgressivePlanCompileError as exc:
-                    if revision >= _MAX_COMPILE_REVISIONS:
-                        raise
-                    if exc.step_index is not None and int(exc.step_index) < step_index:
-                        raise ProgressivePlanCompileError(
-                            "progressive_materialization_invalidated_prefix",
-                            "current-step materialization exposed a finding in the "
-                            "already compiled prefix",
-                            step_id=exc.step_id,
-                            step_index=exc.step_index,
-                            path=exc.path,
-                        ) from exc
-                    self.last_prompt_metrics["compile_revision_count"] += 1
-                    compiler_observation = exc.details
-                    continue
-                materialized_steps = candidate_steps
-                prefix_plan = candidate_plan
-                prefix_receipt = candidate_receipt
-                self.last_materializations.append(materialization)
-                self.last_prompt_metrics[
-                    "step_materialization_payload_bytes"
-                ].append(step_payload_bytes)
-                self.last_prompt_metrics[
-                    "step_materialization_schema_sha256"
-                ].append(step_schema.authority_sha256 if step_schema else None)
-                self.last_prompt_metrics["step_materialization_count"] += 1
-                available_product_refs = self._prefix_product_registry(candidate_plan)
-                prefix_summary = [
-                    {
-                        "step_id": step.step_id,
-                        "module_id": materialized_steps[index].module_id,
-                        "skeleton_sha256": candidate_receipt.compiled_steps[
-                            index
-                        ].skeleton_sha256,
-                        "compiled_step_sha256": candidate_receipt.compiled_steps[
-                            index
-                        ].compiled_step_sha256,
-                        "expected_outputs": list(step.expected_outputs),
-                    }
-                    for index, step in enumerate(candidate_plan.steps)
-                ]
-                emit_checkpoint(
-                    stage="step",
-                    outline=outline,
-                    foundation=foundation_materialization,
-                )
-                break
+            return request.authority_sha256
 
-        if prefix_plan is None or prefix_receipt is None:
+        prefix_state = (
+            restore_progressive_resume_prefix(
+                checkpoint=resume_checkpoint,
+                outline=outline,
+                foundation=foundation,
+                context=context,
+                step_schema_authority=current_step_schema_authority,
+                allowed_literature_citation_keys=allowed_citations,
+                allowed_know_how_decisions=allowed_know_how_decisions,
+                reporting_method_source_keys=reporting_source_keys,
+            )
+            if resume_checkpoint is not None
+            else ProgressivePrefixState()
+        )
+        self.last_materializations = list(prefix_state.materializations)
+        self.last_resume_validated = resume_checkpoint is not None
+
+        prefix_state = self._materialize_remaining_steps(
+            prefix_state,
+            context=context,
+            outline=outline,
+            foundation_materialization=foundation_materialization,
+            scientific_action_ids=selected_action_ids,
+            action_rows=selected_action_rows,
+            allowed_literature_citation_keys=allowed_citations,
+            allowed_know_how_decisions=allowed_know_how_decisions,
+            reporting_method_source_keys=reporting_source_keys,
+            planning_contract_context=resolved_planning_contract_context,
+            progress_callback=progress_callback,
+            checkpoint_emitter=checkpoint_emitter,
+            resumed=resume_checkpoint is not None,
+        )
+
+        if prefix_state.plan is None or prefix_state.receipt is None:
             raise RuntimeError("progressive outline produced no materialized steps")
-        skeleton = self._assemble_skeleton(
+        skeleton = assemble_progressive_skeleton(
             outline=outline,
             foundation=foundation,
-            steps=materialized_steps,
+            steps=prefix_state.steps,
         )
         plan, receipt = self._compile_and_accept(
             skeleton,

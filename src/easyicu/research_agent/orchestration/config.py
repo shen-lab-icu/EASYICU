@@ -374,6 +374,13 @@ class PipelineConfig:
     planner_strategy: Literal["monolithic_v1", "progressive_v2"] = (
         "monolithic_v1"
     )
+    # Explicit non-paper replay of one dependency-bound Progressive Planner
+    # prefix. Both fields are required together; the terminal file SHA binds
+    # the selected append-only chain before any provider call is made.
+    development_progressive_resume_checkpoint_path: Optional[
+        Union[str, Path]
+    ] = None
+    development_progressive_resume_checkpoint_sha256: Optional[str] = None
     enable_deterministic_runner_repair: bool = True
     # --- literature search backends -------------------------------------
     enable_pubmed: bool = False
@@ -612,13 +619,61 @@ class PipelineConfig:
             raise ValueError(
                 "planner_strategy must be 'monolithic_v1' or 'progressive_v2'"
             )
-        from .profiles import require_profile_planner_strategy
+        from .profiles import (
+            is_paper_facing_profile,
+            require_profile_planner_strategy,
+        )
 
         require_profile_planner_strategy(
             name=self.submission_profile_name,
             version=self.submission_profile_version,
             planner_strategy=self.planner_strategy,
         )
+        progressive_resume_values = (
+            self.development_progressive_resume_checkpoint_path,
+            self.development_progressive_resume_checkpoint_sha256,
+        )
+        if any(value is not None for value in progressive_resume_values):
+            if any(value is None for value in progressive_resume_values):
+                raise ValueError(
+                    "development progressive resume checkpoint path and SHA-256 "
+                    "must be configured together"
+                )
+            profile_is_development_only = bool(
+                self.submission_profile_name
+                and not is_paper_facing_profile(self.submission_profile_name)
+            )
+            if not self.development_diagnostic and not profile_is_development_only:
+                raise ValueError(
+                    "development progressive resume requires either "
+                    "development_diagnostic=True or a registered development-only "
+                    "profile"
+                )
+            if self.planner_strategy != "progressive_v2":
+                raise ValueError(
+                    "development progressive resume requires "
+                    "planner_strategy='progressive_v2'"
+                )
+            if self.enable_deterministic_planner_fallback:
+                raise ValueError(
+                    "development progressive resume cannot silently replace a "
+                    "failed or rejected checkpoint with a fallback plan"
+                )
+            if is_paper_facing_profile(self.submission_profile_name):
+                raise ValueError(
+                    "development progressive resume cannot be combined with a "
+                    "paper-facing submission profile"
+                )
+            resume_digest = str(
+                self.development_progressive_resume_checkpoint_sha256 or ""
+            ).strip()
+            if len(resume_digest) != 64 or any(
+                character not in "0123456789abcdef"
+                for character in resume_digest
+            ):
+                raise ValueError(
+                    "development progressive resume checkpoint SHA-256 is invalid"
+                )
         assert_step_provider_budget_funds_its_repairs(
             max_step_provider_calls=self.max_step_provider_calls,
             max_code_repair_attempts=self.max_code_repair_attempts,
