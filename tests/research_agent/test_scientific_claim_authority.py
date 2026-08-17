@@ -570,3 +570,91 @@ def test_descriptive_claims_are_digest_bound_and_writer_selectable(
     assert "prespecified unadjusted risk difference" in manuscript
     assert "descriptive, unadjusted, noncausal" in manuscript
     assert "02_descriptive_summary" in manuscript
+
+
+def test_descriptive_claim_sentence_binds_its_exact_outcome_denominator(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    summary = _descriptive_distribution_summary()
+    estimates = summary["descriptive_estimates"]
+    estimates["dependence"] = None
+    estimates["risk_difference"] = None
+    denominators = (60461, 33997)
+    events = (4986, 4480)
+    percentages = (8.246638, 13.177633)
+    estimates["exposure_prevalence"] = [
+        {
+            "level_index": index,
+            "level": index,
+            "n": denominator,
+            "denominator": sum(denominators),
+            "estimate_pct": denominator / sum(denominators) * 100,
+            "standard_error_pct": None,
+            "ci_low_pct": None,
+            "ci_high_pct": None,
+            "confidence_level": None,
+            "interval_method": "none_counts_only",
+            "covariance": "none_counts_only",
+            "cluster_count": None,
+        }
+        for index, denominator in enumerate(denominators)
+    ]
+    for risk, denominator, event_n, estimate_pct in zip(
+        estimates["outcome_absolute_risks"],
+        denominators,
+        events,
+        percentages,
+        strict=True,
+    ):
+        risk.update(
+            {
+                "events": event_n,
+                "denominator": denominator,
+                "estimate_pct": estimate_pct,
+                "standard_error_pct": None,
+                "ci_low_pct": None,
+                "ci_high_pct": None,
+                "confidence_level": None,
+                "interval_method": "none_counts_only",
+                "covariance": "none_counts_only",
+                "cluster_count": None,
+            }
+        )
+    store = ra.EvidenceStore(root=tmp_path, enforcement_mode="strict")
+    source = tmp_path / "descriptive_step_summary.json"
+    source.write_text(json.dumps(summary), encoding="utf-8")
+    record = store.register_file(
+        kind="statistic",
+        description="Typed descriptive summary",
+        source_path=source,
+        evidence_id="02_descriptive_summary",
+        produced_by_step="02_describe",
+        generation_mode="deterministic_standard",
+    )
+    store.register_step_summary_numerics(
+        step_id="02_describe",
+        evidence_id=record.evidence_id,
+        summary=summary,
+    )
+    claim = next(
+        item
+        for item in store.scientific_claims()
+        if item.claim_id == "observed_absolute_risk_level_0"
+    )
+    manuscript = store.bind_manuscript(claim.placeholder)
+
+    bound, binding_map, untraced = bind_numeric_values(
+        manuscript,
+        evidence=store,
+        enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
+    )
+
+    assert untraced == []
+    assert "observed absolute risk" in bound
+    assert any(
+        numeric.source_field
+        == "descriptive_estimates.outcome_absolute_risks[0].denominator"
+        for numeric in binding_map.values()
+    )
