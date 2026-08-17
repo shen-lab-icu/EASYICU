@@ -137,3 +137,21 @@ def test_charlson_via_load_concepts_real():
     assert "charlson" in df.columns
     assert "stay_id" in df.columns
     assert df["charlson"].notna().any()
+
+
+# --- eICU ICD-9/10 version split (2026-08-16 data review) ---
+
+def test_eicu_v_codes_are_icd9_not_icd10() -> None:
+    from easyicu.scores.comorbidity import _explode_eicu_codes
+
+    long = _explode_eicu_codes(pd.Series(["427.31,V45.1"]))
+    assert long["code"].tolist() == ["427.31", "V45.1"]
+    assert long["version"].tolist() == [9, 9]
+
+def test_eicu_true_icd10_letter_codes_are_not_reclassified_as_icd9() -> None:
+    from easyicu.scores.comorbidity import _explode_eicu_codes
+
+    long = _explode_eicu_codes(pd.Series(["I50.9,E11.9,E849.7,V45.1"]))
+
+    assert long["code"].tolist() == ["I50.9", "E11.9", "E849.7", "V45.1"]
+    assert long["version"].tolist() == [10, 10, 9, 9]
