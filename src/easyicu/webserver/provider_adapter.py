@@ -51,6 +51,7 @@ _ABSOLUTE_MAX_OUTPUT_TOKENS = 4000
 _DEFAULT_PROVIDER_ENV_FILE = state_paths.state_root() / "provider.env"
 _DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT = 240.0
 _DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT = 1_800.0
+_DEFAULT_CODEX_APP_SERVER_REASONING_EFFORT = "medium"
 _LOOPBACK_RESEARCH_AGENT_REQUEST_TIMEOUT = 480.0
 _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES = (500, 502, 503, 504)
 _WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS = 192
@@ -428,6 +429,7 @@ def build_research_agent_provider_client(
                 ),
                 request_timeout=effective_timeout,
                 turn_hard_timeout=_DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT,
+                reasoning_effort=_DEFAULT_CODEX_APP_SERVER_REASONING_EFFORT,
                 environment=account_environment,
             )
             endpoint = (
@@ -465,6 +467,8 @@ def build_research_agent_provider_client(
                 "request_hard_timeout_seconds": (
                     _DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT
                 ),
+                "reasoning_effort": _DEFAULT_CODEX_APP_SERVER_REASONING_EFFORT,
+                "reasoning_effort_source": "easyicu_account_research_default",
                 "progress_resets_idle_timeout": True,
                 "transport_max_attempts": 1,
                 "retryable_http_status_codes": [],

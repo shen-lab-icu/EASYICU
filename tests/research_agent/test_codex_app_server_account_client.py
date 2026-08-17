@@ -37,6 +37,7 @@ def _authorized_client(
     *,
     request_timeout: float = 10,
     turn_hard_timeout: float | None = None,
+    reasoning_effort: str | None = None,
 ) -> CodexAppServerLLMClient:
     environment = _environment(tmp_path)
     client_kwargs: dict[str, Any] = {
@@ -45,6 +46,8 @@ def _authorized_client(
     }
     if turn_hard_timeout is not None:
         client_kwargs["turn_hard_timeout"] = turn_hard_timeout
+    if reasoning_effort is not None:
+        client_kwargs["reasoning_effort"] = reasoning_effort
     client = CodexAppServerLLMClient(
         **client_kwargs,
     )
@@ -150,7 +153,7 @@ def test_codex_app_server_client_uses_chatgpt_account_and_strict_schema(
 
     _FakeRuntime.instances.clear()
     monkeypatch.setattr(codex_app_server, "CodexAppServerRuntime", _FakeRuntime)
-    client = _authorized_client(tmp_path)
+    client = _authorized_client(tmp_path, reasoning_effort="medium")
     structured = StructuredOutputRequest.from_schema(
         name="answer",
         schema={
@@ -187,6 +190,7 @@ def test_codex_app_server_client_uses_chatgpt_account_and_strict_schema(
     assert thread["sandbox"] == "read-only"
     turn = runtime.calls[2][1]
     assert turn["sandboxPolicy"] == {"type": "readOnly", "networkAccess": False}
+    assert turn["effort"] == "medium"
     assert turn["outputSchema"] == json.loads(structured.schema_json)
     assert runtime.wait_kwargs["timeout"] == 10
     assert runtime.wait_kwargs["hard_timeout"] == 10
@@ -338,3 +342,21 @@ def test_authorized_codex_client_rejects_hard_timeout_mutation(
 
     with pytest.raises(PermissionError, match="factory-minted user authorization"):
         client.complete([LLMMessage(role="user", content="hello")])
+
+
+def test_authorized_codex_client_rejects_reasoning_effort_mutation(
+    tmp_path: Path,
+) -> None:
+    client = _authorized_client(tmp_path, reasoning_effort="medium")
+    client._reasoning_effort = "high"
+
+    with pytest.raises(PermissionError, match="factory-minted user authorization"):
+        client.complete([LLMMessage(role="user", content="hello")])
+
+
+def test_codex_client_rejects_unknown_reasoning_effort(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="reasoning_effort is not supported"):
+        CodexAppServerLLMClient(
+            environment=_environment(tmp_path),
+            reasoning_effort="fastest",
+        )

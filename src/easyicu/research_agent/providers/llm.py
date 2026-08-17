@@ -839,6 +839,10 @@ _CODEX_TURN_PROGRESS_METHODS = frozenset(
     }
 )
 
+_CODEX_REASONING_EFFORTS = frozenset(
+    {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+)
+
 
 def _codex_turn_progress_notification(
     notification: Mapping[str, Any],
@@ -873,6 +877,7 @@ class CodexAppServerLLMClient:
         model: Optional[str] = None,
         request_timeout: float = 180.0,
         turn_hard_timeout: float | None = None,
+        reasoning_effort: str | None = None,
         environment: Mapping[str, str],
     ) -> None:
         profile = user_account_profile("codex")
@@ -904,8 +909,18 @@ class CodexAppServerLLMClient:
         )
         if not math.isfinite(hard_timeout) or hard_timeout <= 0:
             raise ValueError("turn_hard_timeout must be finite and positive")
+        normalized_effort = (
+            None
+            if reasoning_effort is None
+            else str(reasoning_effort).strip().lower()
+        )
+        if normalized_effort is not None and normalized_effort not in (
+            _CODEX_REASONING_EFFORTS
+        ):
+            raise ValueError("reasoning_effort is not supported by Codex App Server")
         self._timeout = max(0.1, timeout)
         self._turn_hard_timeout = max(0.1, hard_timeout)
+        self._reasoning_effort = normalized_effort
         self._command = profile.executable
         self._session_binding_sha256 = session_sha256
         self._endpoint_identity = (
@@ -1036,6 +1051,8 @@ class CodexAppServerLLMClient:
                     "environments": [],
                     "runtimeWorkspaceRoots": [cwd],
                 }
+                if self._reasoning_effort is not None:
+                    turn_params["effort"] = self._reasoning_effort
                 if structured_output is not None:
                     turn_params["outputSchema"] = json.loads(
                         structured_output.schema_json
