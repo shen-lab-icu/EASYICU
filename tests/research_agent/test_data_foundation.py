@@ -217,6 +217,56 @@ def test_acquire_proceeds_on_available_subset_when_outcome_present(monkeypatch):
     assert "re-extract" in res.note.lower()
 
 
+def test_host_exact_acquisition_does_not_widen_the_configured_universe(
+    monkeypatch,
+):
+    captured = {}
+    llm = _stub(
+        '{"selected_concepts": ["age", "icu_readmission", "sep3_sofa2", "death"]}'
+    )
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog(
+            "age", "sex", "icu_readmission", "sep3_sofa2", "death"
+        ),
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **kwargs: captured.update(kwargs)
+        or {"parquet": "u.parquet", "provenance": "u.json"},
+    )
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="How common is the configured phenotype?",
+        llm=llm,
+        output_dir="/tmp/x",
+        target_outcome="death",
+        outcome_concepts=["death"],
+        required_feature_concepts=["sep3_sofa2"],
+        static_concepts=["age", "sex"],
+        concept_selection_authority="host_exact",
+    )
+
+    assert result.blocked is False
+    assert llm.calls == []
+    assert result.selection.selection_authority == "host_exact"
+    assert result.selection.selected_concepts == [
+        "age",
+        "sex",
+        "sep3_sofa2",
+        "death",
+    ]
+    assert captured["feature_concepts"] == ["sep3_sofa2"]
+    assert "icu_readmission" not in captured["feature_concepts"]
+    assert result.selection_usage is None
+    assert result.selection_model is None
+
+
 def test_legacy_acquisition_declares_sparse_event_features_before_materialization(
     monkeypatch,
 ):

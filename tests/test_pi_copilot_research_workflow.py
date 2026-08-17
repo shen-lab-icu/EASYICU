@@ -3712,6 +3712,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     )
     assert calls["acquire"]["allowed_modules"] == ("demographics", "outcome")
     assert calls["acquire"]["static_concepts"] == ("age", "sex")
+    assert calls["acquire"]["concept_selection_authority"] == "host_exact"
     assert calls["run"]["cohort"] == universe
     assert calls["run"]["question"] == _complete_study()["question"]
     assert calls["acquire"]["primary_exposure_concept"] == "heart_rate"
