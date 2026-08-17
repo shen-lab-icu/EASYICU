@@ -221,6 +221,10 @@ def test_counts_only_table_renders_without_error_bars(
     )
 
     assert contract["panels"][1]["metadata"]["chart_type"] == "point_absolute_risk"
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "distribution",
+        "descriptive_result",
+    ]
     assert "no uncertainty is computed" in contract["statistics_note"]
 
 
