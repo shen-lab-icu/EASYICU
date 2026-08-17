@@ -49,10 +49,12 @@ from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanSkeleton,
     ProgressivePlannerCheckpoint,
     ProgressivePredicateValue,
+    ProgressiveStepMaterialization,
 )
 from easyicu.research_agent.planning.progressive_resume import (
     ProgressivePrefixState,
     compile_progressive_prefix,
+    validate_progressive_materialization_coordinate,
 )
 from easyicu.research_agent.orchestration.progressive_planning import (
     run_progressive_planner,
@@ -2561,3 +2563,66 @@ def test_agent_rejects_materialization_coordinate_drift_without_full_rewrite() -
     assert caught.value.path == "objective"
     assert len(llm.calls) == 5
     assert agent.last_prompt_metrics["full_revision_count"] == 0
+
+
+def test_step_materialization_must_preserve_outline_literature_roster() -> None:
+    payload = _payload()
+    payload["steps"][3]["literature_bindings"] = [
+        {
+            "citation_key": "sterne_missing_data_2009",
+            "design_elements": ["missing_data"],
+            "application": (
+                "Apply the prespecified missing-data method to the measurement audit."
+            ),
+            "divergence": None,
+        }
+    ]
+    outline = ProgressivePlanOutline.model_validate(_outline_payload(payload))
+    materialization_payload = _materialization_payloads(payload)[3]
+    materialization_payload["step"]["literature_bindings"] = []
+    materialization = ProgressiveStepMaterialization.model_validate(
+        materialization_payload
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        validate_progressive_materialization_coordinate(
+            materialization,
+            outline_step=outline.steps[3],
+            outline_step_sha256=canonical_sha256(
+                outline.steps[3].model_dump(mode="json")
+            ),
+            step_index=3,
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_step_literature_roster_mismatch"
+    )
+    assert caught.value.step_id == "04_measurement"
+    assert caught.value.path == "literature_bindings"
+
+
+def test_step_transport_requires_each_outline_literature_key_once() -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id="04_measurement",
+        planned_analysis_role="auxiliary",
+        module_id="measurement_audit",
+        objective="Audit missingness and measurement-process coverage.",
+        variable_names=["exposure_flag", "outcome_flag"],
+        literature_citation_keys=["sterne_missing_data_2009"],
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(
+            outline_step.model_dump(mode="json")
+        ),
+        variable_names=outline_step.variable_names,
+        scientific_action_ids=(),
+        allowed_literature_citation_keys=outline_step.literature_citation_keys,
+    )
+    schema = json.loads(request.schema_json)
+    bindings = schema["$defs"]["ProgressiveSkeletonStep"]["properties"][
+        "literature_bindings"
+    ]
+
+    assert bindings["minItems"] == 1
+    assert bindings["maxItems"] == 1

@@ -326,6 +326,28 @@ def validate_progressive_materialization_coordinate(
             step_index=step_index,
             path=changed[0] if changed else "step",
         )
+    expected_citations = tuple(outline_step.literature_citation_keys)
+    actual_citations = tuple(
+        binding.citation_key for binding in step.literature_bindings
+    )
+    if (
+        len(actual_citations) != len(set(actual_citations))
+        or set(actual_citations) != set(expected_citations)
+    ):
+        raise ProgressivePlanCompileError(
+            "progressive_step_literature_roster_mismatch",
+            "current-step materialization must bind every outline-sealed "
+            "literature citation exactly once",
+            step_id=outline_step.step_id,
+            step_index=step_index,
+            path="literature_bindings",
+            findings=[
+                {
+                    "expected_citation_keys": list(expected_citations),
+                    "observed_citation_keys": list(actual_citations),
+                }
+            ],
+        )
     if materialization.foundation is not None:
         raise ProgressivePlanCompileError(
             "progressive_step_foundation_coordinate_mismatch",
