@@ -43,6 +43,13 @@ global.echarts = {
   },
 };
 
+/* Load the dependency-free owners first, exactly as index.html does: the
+   chart owners destructure `esc` from window.EU_HTML at the top of their
+   IIFE, and read window.EU_PALETTE for series colours and strokes. */
+['html-escape.js', 'chart-palette.js'].forEach(owner => {
+  require(path.join(path.dirname(path.resolve(process.argv[2])), owner));
+});
+
 require(path.resolve(process.argv[2]));
 require(path.resolve(process.argv[3]));
 require(path.resolve(process.argv[4]));
@@ -96,20 +103,75 @@ crossdb.begin();
 assert.equal(calls[0].disposed, true);
 assert.equal(observers[0].disconnected, true);
 
-const survival = cohort.survivalOption({
+const survivalSpec = {
   description: 'Survival probability by group',
   xLabel: 'Days',
   yLabel: 'Survival probability',
+  groupLabel: 'Group',
+  eventsLabel: 'events',
+  censoredLabel: 'censored',
+  finalLabel: 'Final survival',
+  atRiskLabel: 'Number at risk',
+  horizon: 28,
+  atRisk: {
+    times: [0, 7, 14, 28],
+    rows: [
+      { label: 'Sepsis', values: [120, 96, 71, 40] },
+      { label: 'Non-sepsis', values: [130, 121, 110, 88] },
+    ],
+  },
   groups: [
-    { label: 'Sepsis', points: [{ time: 0, survival: 100 }, { time: 7, survival: 82 }] },
-    { label: 'Non-sepsis', points: [{ time: 0, survival: 100 }, { time: 7, survival: 93 }] },
+    {
+      label: 'Sepsis', n: 120, events: 44, censored: 76,
+      points: [{ time: 0, survival: 100 }, { time: 7, survival: 82 }],
+      censorMarks: [{ time: 3, survival: 100 }, { time: 11, survival: 82 }],
+    },
+    {
+      label: 'Non-sepsis', n: 130, events: 21, censored: 109,
+      points: [{ time: 0, survival: 100 }, { time: 7, survival: 93 }],
+      censorMarks: [{ time: 5, survival: 100 }],
+    },
   ],
-});
-assert.equal(survival.series.length, 2);
+};
+const survival = cohort.survivalOption(survivalSpec);
+// Two step lines plus one censoring-tick series per group.
+assert.equal(survival.series.length, 4);
 assert.equal(survival.series[0].step, 'end');
 assert.equal(survival.series[0].smooth, false);
 assert.equal(survival.yAxis.min, 0);
 assert.equal(survival.yAxis.max, 100);
+
+// An explicit x max is what the number-at-risk columns are positioned against.
+assert.equal(survival.xAxis.max, 28);
+
+const censorSeries = survival.series.filter(s => String(s.id).startsWith('km-censor:'));
+assert.equal(censorSeries.length, 2);
+assert.equal(censorSeries[0].type, 'scatter');
+assert.equal(censorSeries[0].symbol, 'rect');
+assert.equal(censorSeries[0].silent, true);
+assert.equal(censorSeries[0].data.length, 2);
+// Ticks share the group's series name so the legend stays one entry per group.
+assert.equal(censorSeries[0].name, 'Sepsis');
+
+// A group with no censoring contributes no tick series.
+const noCensor = cohort.survivalOption({
+  ...survivalSpec,
+  groups: [{ label: 'Only', points: [{ time: 0, survival: 100 }], censorMarks: [] }],
+});
+assert.equal(noCensor.series.length, 1);
+
+// Censor ticks must not duplicate every group in the axis tooltip.
+const tooltipText = survival.tooltip.formatter([
+  { seriesId: 'km-line:0', seriesName: 'Sepsis', value: [7, 82] },
+  { seriesId: 'km-censor:0', seriesName: 'Sepsis', value: [7, 82] },
+]);
+assert.equal(tooltipText.split('\n').filter(line => line.includes('Sepsis')).length, 1);
+
+// The fail-closed table has to state the same facts as the plot.
+const survivalFallback = cohort.survivalFallback(survivalSpec);
+assert(survivalFallback.includes('censored'));
+assert(survivalFallback.includes('Number at risk'));
+assert(survivalFallback.includes('109'));
 
 const bins = Array.from({ length: 13 }, (_, index) => String(index));
 const matrix = bins.map((label, row) => ({

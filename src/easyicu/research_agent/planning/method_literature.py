@@ -29,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
+import re
 from typing import Any, Sequence
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "method_literature_citations",
     "method_literature_digest",
     "method_literature_pack",
+    "reporting_method_source_keys_for_guidelines",
 ]
 
 METHOD_LITERATURE_SCHEMA_VERSION = "easyicu.method_literature_pack/3"
@@ -275,6 +277,32 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         design_elements=("outcome", "estimand"),
     ),
 )
+
+
+_REPORTING_STANDARD_SOURCE_KEYS: tuple[tuple[str, str], ...] = (
+    ("STROBE", "strobe_2007"),
+    ("RECORD", "record_2015"),
+)
+
+
+def reporting_method_source_keys_for_guidelines(
+    reporting_guidelines: Sequence[str],
+) -> tuple[str, ...]:
+    """Resolve only standards explicitly named by sealed article guidance.
+
+    This does not infer a reporting standard from the study question or data
+    source.  The article-design owner has already selected the guideline; this
+    projection only turns its stable name into the corresponding method-card
+    source key.  Unknown standards stay unresolved for the ordinary fail-closed
+    literature gate.
+    """
+
+    text = "\n".join(str(value or "") for value in reporting_guidelines)
+    return tuple(
+        source_key
+        for standard, source_key in _REPORTING_STANDARD_SOURCE_KEYS
+        if re.search(rf"\b{re.escape(standard)}\b", text, flags=re.IGNORECASE)
+    )
 
 
 def method_binding_support(

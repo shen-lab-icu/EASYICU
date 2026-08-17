@@ -58,6 +58,7 @@ from .contracts.model_tokens import (
     normalise_model_contract_token as _normalise_model_contract_token,
 )
 from .contracts.post_analysis import EValueConversionSpec, SubgroupAnalysisSpec
+from .contracts.product_identity import is_canonical_typed_product_token
 from .contracts.survival import (
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
     SurvivalAnalysisReceipt,
@@ -1267,7 +1268,7 @@ class ArtifactConsumptionContract(BaseModel):
 
     @model_validator(mode="after")
     def _mode_coordinates_are_closed(self) -> "ArtifactConsumptionContract":
-        if not re.fullmatch(r"[a-z][a-z0-9_]*:[a-z][a-z0-9_]*", self.input_key):
+        if not is_canonical_typed_product_token(self.input_key):
             raise ValueError("input_key must be one canonical typed kind:product")
         roles = [str(value).strip() for value in self.expected_roles]
         if any(not value for value in roles) or len(set(roles)) != len(roles):

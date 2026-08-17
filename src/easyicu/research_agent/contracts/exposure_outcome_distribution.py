@@ -277,7 +277,14 @@ class ExposureOutcomeDistributionSpec(BaseModel):
             or self.confidence_level is None
         ):
             raise ValueError(
-                "Exposure/outcome distribution /2 requires its closed interval design"
+                "Exposure/outcome distribution /2 requires "
+                "interval_method='wilson', "
+                "repeated_unit_interval_method='patient_cluster_robust_wald', "
+                "and a non-null confidence_level; received "
+                f"interval_method={self.interval_method!r}, "
+                "repeated_unit_interval_method="
+                f"{self.repeated_unit_interval_method!r}, and "
+                f"confidence_level={self.confidence_level!r}"
             )
         declared = {typed_level_key(value) for value in self.outcome_levels}
         if typed_level_key(self.outcome_positive_value) not in declared:

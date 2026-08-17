@@ -71,6 +71,7 @@ from .agents.core import (
     StatisticalAnalysisAgent,
     VisualizationAgent,
 )
+from .agents.progressive_planner import ProgressivePlannerAgent
 from .architecture import architecture_profile_markdown, default_architecture_profile
 from .authority.parent_artifact import (
     _resolve_upstream_manifest_analysis_request,
@@ -176,6 +177,10 @@ from .reporting.article_contract import (
     validate_plan_against_article_contract,
 )
 from .planning.figure_strategy import build_article_figure_strategy
+from .planning.progressive_artifacts import (
+    persist_progressive_planning_artifacts,
+    persist_progressive_planning_authority,
+)
 from .planning.scientific_review import (
     render_plan_scientific_guardrails,
 )
@@ -1442,6 +1447,290 @@ class _PlanGenerationResult:
     proposed_plan: AnalysisPlan
 
 
+def _resume_compatible_plan(
+    *,
+    run_dir: Path,
+    resume_state: Any,
+    context: Any,
+    agent_context: Any,
+    evidence: Any,
+    know_how_binding: Any,
+    enable_know_how: Any,
+    findings: Any,
+) -> Tuple[Any, Optional[Path], Optional[AnalysisPlan], bool, str]:
+    # Resume: reuse the locked plan from the prior run instead of re-planning.
+    # (see _generate_or_resume_plan for the full rationale)
+    reused_prior_plan = False
+    reused_plan_path: Optional[Path] = None
+    proposed_plan: Optional[AnalysisPlan] = None
+    if resume_state is not None:
+        plan, _prior_plan_path = _load_compatible_resume_plan(
+            run_dir=run_dir,
+            resume_state=resume_state,
+            context=context,
+            evidence=evidence,
+            prompt_pack_version=PROMPT_PACK_VERSION,
+        )
+        if plan is not None and plan.steps:
+            proposed_plan = plan.model_copy(deep=True)
+            restore_table_one_private_checkpoint(
+                run_dir=run_dir,
+                plan=plan,
+                context=agent_context,
+            )
+            # The resumed plan is the one on disk, so it still carries the
+            # host's opaque placeholders; a resume that skipped this would
+            # execute a different declaration than the first attempt did.
+            for resumed_step in plan.steps:
+                bind_step_declared_levels(resumed_step, agent_context)
+            know_how_binding.verify_resume(
+                plan.know_how_decisions,
+                enabled=enable_know_how,
+            )
+            reused_prior_plan = True
+            reused_plan_path = _prior_plan_path
+            plan_generation_mode = "resumed"
+            findings.append(
+                ValidationFinding(
+                    validator="planner",
+                    severity="warning",
+                    message=(
+                        "Resuming prior run: reused the latest compatible "
+                        "saved analysis plan (skipped re-planning) so "
+                        "completed step_ids stay aligned and execution "
+                        "continues from the failed step."
+                    ),
+                    detail={
+                        "generation_mode": "resumed",
+                        "n_steps": len(plan.steps),
+                        "plan_path": (
+                            str(_prior_plan_path.relative_to(run_dir))
+                            if _prior_plan_path is not None
+                            and _prior_plan_path.is_relative_to(run_dir)
+                            else str(_prior_plan_path)
+                        ),
+                    },
+                )
+            )
+        else:
+            raise LegacyResumePlanMigrationError(
+                "resume checkpoint has no digest-verified analysis plan "
+                "evidence compatible with every completed step"
+            )
+    return plan, reused_plan_path, proposed_plan, reused_prior_plan, plan_generation_mode
+
+
+
+def _run_preplan_literature_and_hypothesis(
+    self: "ResearchAgentPipeline",
+    *,
+    skill_obj: Any,
+    emit_progress: Any,
+    run_id: str,
+    agent_context: Any,
+    run_dir: Path,
+    evidence: Any,
+    findings: Any,
+    context: Any,
+    context_path: Path,
+    llm: Any,
+    resume_state: Any,
+) -> Tuple[Optional[Any], Any, list[str], list[str], Any]:
+    allowed_literature_citation_keys: list[str] = []
+    direct_comparator_literature_keys: list[str] = []
+    preplan_literature: Optional[LiteratureBundle] = None
+    if self._enable_literature and skill_obj is None:
+        try:
+            emit_progress(
+                "hypothesis",
+                "Building pre-plan literature and hypothesis blueprint.",
+                run_id=run_id,
+            )
+            preplan_literature = prepare_preplan_literature(
+                context=agent_context,
+                run_dir=run_dir,
+                evidence=evidence,
+                enable_pubmed=self._enable_pubmed,
+                pubmed_email=self._pubmed_email,
+                pubmed_api_key=self._pubmed_api_key,
+                enable_tavily=self._enable_tavily,
+                tavily_api_key=self._tavily_api_key,
+                tavily_retmax=self._tavily_retmax,
+                tavily_include_domains=self._tavily_include_domains,
+                bound_seed=self._bound_preplan_literature,
+            )
+            allowed_literature_citation_keys = [
+                citation.key for citation in preplan_literature.citations
+            ]
+            direct_comparator_literature_keys = [
+                decision.citation_key
+                for decision in preplan_literature.screening_decisions
+                if decision.disposition == "include"
+                and decision.evidence_role == "direct_comparator"
+            ]
+            # O17 — Front-door hypothesis generation. Opt-in; writes
+            # ``hypothesis_candidates.json`` + ``.md`` so the paper
+            # Methods section can quote "Out of N candidates we
+            # preregistered Q" rather than "we picked Q".
+            if self._enable_hypothesis_generator:
+                try:
+                    hg_result = generate_hypotheses(
+                        context=agent_context,
+                        citations=list(preplan_literature.citations),
+                        top_k=self._hypothesis_generator_top_k,
+                    )
+                    hg_json = run_dir / "hypothesis_candidates.json"
+                    hg_md = run_dir / "hypothesis_candidates.md"
+                    hg_json.write_text(
+                        json.dumps(hg_result.to_json(), indent=2, default=str),
+                        encoding="utf-8",
+                    )
+                    hg_md.write_text(hg_result.to_markdown(), encoding="utf-8")
+                    if evidence.get("hypothesis_candidates") is None:
+                        evidence.register_file(
+                            kind="log",
+                            description=(
+                                "Ranked front-door hypothesis candidates "
+                                "(predictor × outcome) with coverage, "
+                                "literature-saturation and ICU-gate scores (O17)."
+                            ),
+                            source_path=hg_json,
+                            evidence_id="hypothesis_candidates",
+                            producer="hypothesis_generator",
+                            generation_mode="deterministic_skill",
+                        )
+                    if evidence.get("hypothesis_candidates_summary") is None:
+                        evidence.register_file(
+                            kind="log",
+                            description=(
+                                "Human-readable hypothesis-candidate table (O17)."
+                            ),
+                            source_path=hg_md,
+                            evidence_id="hypothesis_candidates_summary",
+                            producer="hypothesis_generator",
+                            generation_mode="deterministic_skill",
+                        )
+                    findings.append(
+                        ValidationFinding(
+                            validator="hypothesis_generator",
+                            severity="info",
+                            message=(
+                                f"Ranked {len(hg_result.candidates)} candidate "
+                                f"hypotheses; top={hg_result.candidates[0].question if hg_result.candidates else 'n/a'}"
+                            ),
+                            evidence_ids=["hypothesis_candidates"],
+                        )
+                    )
+                except Exception as exc:
+                    findings.append(
+                        ValidationFinding(
+                            validator="hypothesis_generator",
+                            severity="warning",
+                            message=(
+                                f"Hypothesis generator failed: "
+                                f"{type(exc).__name__}: {exc}"
+                            ),
+                        )
+                    )
+            blueprint = HypothesisBlueprintAgent().run(
+                context=agent_context,
+                literature=preplan_literature,
+            )
+            blueprint_path = run_dir / "hypothesis_blueprint.json"
+            blueprint_path.write_text(
+                blueprint.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            if evidence.get("hypothesis_blueprint") is None:
+                evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Literature-aware hypothesis, feasibility critique, "
+                        "and recommended plan skeleton fed to the planner."
+                    ),
+                    source_path=blueprint_path,
+                    evidence_id="hypothesis_blueprint",
+                    producer="hypothesis_blueprint",
+                    generation_mode="deterministic_skill",
+                )
+            if blueprint.feasibility_status == "blocked":
+                findings.append(
+                    ValidationFinding(
+                        validator="hypothesis_blueprint",
+                        severity="error",
+                        message=(
+                            "Hypothesis blueprint marked this request as blocked; "
+                            "pipeline stopped before planning executable analysis steps."
+                        ),
+                        evidence_ids=["hypothesis_blueprint"],
+                    )
+                )
+                emit_progress(
+                    "hypothesis",
+                    "Hypothesis blueprint is blocked; aborting before planner execution.",
+                    status="error",
+                    run_id=run_id,
+                )
+                aborted = self._finalise_aborted(
+                    run_id=run_id,
+                    run_dir=run_dir,
+                    context=context,
+                    context_path=context_path,
+                    evidence=evidence,
+                    findings=findings,
+                    reason="hypothesis_blueprint_blocked",
+                )
+                return _PlanPhaseResult(
+                    context=context,
+                    agent_context=agent_context,
+                    context_path=context_path,
+                    evidence=evidence,
+                    findings=findings,
+                    plan=AnalysisPlan(
+                        research_question=context.research_question,
+                        steps=[],
+                    ),
+                    plan_path=run_dir / "analysis_plan.json",
+                    llm_signature=self._llm_signature(llm),
+                    used_mock_llm=any(True for _ in self._iter_mock_clients(llm)),
+                    prompt_version=PROMPT_PACK_VERSION,
+                    prompt_files=prompt_pack_files(),
+                    role_resolver=lambda _role: resolve_role_client(llm, _role),
+                    cost_meter=None,
+                    repro_envelope=None,
+                    started_at=datetime.now(timezone.utc),
+                    resume_state=resume_state,
+                    aborted_result=aborted,
+                )
+            note = render_hypothesis_blueprint_for_prompt(
+                blueprint,
+                literature=preplan_literature,
+            )
+            agent_notes = (
+                f"{agent_context.notes}\n\n{note}" if agent_context.notes else note
+            )
+            agent_context = agent_context.model_copy(update={"notes": agent_notes})
+        except Exception as exc:
+            findings.append(
+                ValidationFinding(
+                    validator="hypothesis_blueprint",
+                    severity="warning",
+                    message=(
+                        "Hypothesis blueprint failed; planner will use "
+                        f"context only: {exc}"
+                    ),
+                )
+            )
+    return (
+        None,
+        agent_context,
+        allowed_literature_citation_keys,
+        direct_comparator_literature_keys,
+        preplan_literature,
+    )
+
+
+
 class ResearchAgentPipeline:
     """One-shot orchestration. Construct, call :meth:`run`, read the result."""
 
@@ -1648,6 +1937,7 @@ class ResearchAgentPipeline:
         self._enable_deterministic_planner_fallback = bool(
             config.enable_deterministic_planner_fallback
         )
+        self._planner_strategy = config.planner_strategy
         self._enable_deterministic_runner_repair = bool(
             config.enable_deterministic_runner_repair
         )
@@ -2282,59 +2572,22 @@ class ResearchAgentPipeline:
         migrated_plan_path: Optional[Path] = None
         proposed_plan: Optional[AnalysisPlan] = None
         if resume_state is not None:
-            plan, _prior_plan_path = _load_compatible_resume_plan(
+            (
+                plan,
+                reused_plan_path,
+                proposed_plan,
+                reused_prior_plan,
+                plan_generation_mode,
+            ) = _resume_compatible_plan(
                 run_dir=run_dir,
                 resume_state=resume_state,
                 context=context,
+                agent_context=agent_context,
                 evidence=evidence,
-                prompt_pack_version=PROMPT_PACK_VERSION,
+                know_how_binding=know_how_binding,
+                enable_know_how=self._enable_know_how,
+                findings=findings,
             )
-            if plan is not None and plan.steps:
-                proposed_plan = plan.model_copy(deep=True)
-                restore_table_one_private_checkpoint(
-                    run_dir=run_dir,
-                    plan=plan,
-                    context=agent_context,
-                )
-                # The resumed plan is the one on disk, so it still carries the
-                # host's opaque placeholders; a resume that skipped this would
-                # execute a different declaration than the first attempt did.
-                for resumed_step in plan.steps:
-                    bind_step_declared_levels(resumed_step, agent_context)
-                know_how_binding.verify_resume(
-                    plan.know_how_decisions,
-                    enabled=self._enable_know_how,
-                )
-                reused_prior_plan = True
-                reused_plan_path = _prior_plan_path
-                plan_generation_mode = "resumed"
-                findings.append(
-                    ValidationFinding(
-                        validator="planner",
-                        severity="warning",
-                        message=(
-                            "Resuming prior run: reused the latest compatible "
-                            "saved analysis plan (skipped re-planning) so "
-                            "completed step_ids stay aligned and execution "
-                            "continues from the failed step."
-                        ),
-                        detail={
-                            "generation_mode": "resumed",
-                            "n_steps": len(plan.steps),
-                            "plan_path": (
-                                str(_prior_plan_path.relative_to(run_dir))
-                                if _prior_plan_path is not None
-                                and _prior_plan_path.is_relative_to(run_dir)
-                                else str(_prior_plan_path)
-                            ),
-                        },
-                    )
-                )
-            else:
-                raise LegacyResumePlanMigrationError(
-                    "resume checkpoint has no digest-verified analysis plan "
-                    "evidence compatible with every completed step"
-                )
 
         if reused_prior_plan:
             from .orchestration.profiles import is_paper_facing_profile
@@ -2482,8 +2735,17 @@ class ResearchAgentPipeline:
                 )
             plan = skill_obj.plan(context)
         else:
-            plan_generation_mode = "llm"
-            planner = PlannerAgent(role_resolver("planner"))
+            progressive = self._planner_strategy == "progressive_v2"
+            plan_generation_mode = "llm_progressive_v2" if progressive else "llm"
+            planner_class = ProgressivePlannerAgent if progressive else PlannerAgent
+            planner = planner_class(
+                budgeted_role_client(
+                    role_resolver,
+                    "planner",
+                    "planner_plan_generation",
+                    limit_tokens=self._max_prompt_tokens_per_call,
+                )
+            )
 
             planner_progress = planner_retry_progress_callback(
                 emit_progress, run_id=run_id
@@ -2507,6 +2769,31 @@ class ResearchAgentPipeline:
                     agent_context,
                     planning_contract_context=planning_contract_context,
                 )
+                if progressive:
+                    outline = planner.last_outline
+                    materializations = planner.last_materializations
+                    skeleton = planner.last_skeleton
+                    compile_receipt = planner.last_compile_receipt
+                    if (
+                        outline is None
+                        or not materializations
+                        or skeleton is None
+                        or compile_receipt is None
+                    ):
+                        raise RuntimeError(
+                            "Progressive Planner returned without its outline, "
+                            "step materializations, skeleton, or compile receipt"
+                        )
+                    persist_progressive_planning_artifacts(
+                        run_dir=run_dir,
+                        evidence=evidence,
+                        outline=outline,
+                        materializations=materializations,
+                        skeleton=skeleton,
+                        compile_receipt=compile_receipt,
+                        prompt_metrics=planner_prompt_metrics,
+                        prompt_pack_version=prompt_version,
+                    )
             except PlannerArticleContractError:
                 raise
             except Exception as exc:
@@ -2547,6 +2834,25 @@ class ResearchAgentPipeline:
                             "before schema validation."
                         ),
                         detail={"dropped_keys": dropped_keys},
+                    )
+                )
+            plan_normalizations = list(
+                dropped_plan_keys.get("normalizations", [])
+            )
+            if plan_normalizations:
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema",
+                        severity="warning",
+                        message=(
+                            "Planner mixed result generation with typed panel "
+                            "rendering; the host compiled each exact panel contract "
+                            "into a rendering-only child step."
+                        ),
+                        detail={
+                            "reason_code": "planner_mixed_figure_panels_compiled",
+                            "normalizations": plan_normalizations,
+                        },
                     )
                 )
             # A hosted model occasionally emits structurally-broken plan JSON
@@ -2962,6 +3268,23 @@ class ResearchAgentPipeline:
         _plan_lifecycle.persist_normalized_plan(
             run_dir=run_dir, evidence=evidence, normalized=normalized_plan
         )
+        know_how_binding.persist_prompt_metrics(
+            planner_prompt_metrics,
+            run_dir=run_dir,
+            evidence=evidence,
+        )
+        if plan_generation_mode == "llm_progressive_v2":
+            lifecycle_evidence_id = _plan_lifecycle.plan_lifecycle_evidence_id(plan.revision)
+            persist_progressive_planning_authority(
+                run_dir=run_dir,
+                evidence=evidence,
+                proposed_plan_sha256=normalized_plan.proposed.plan_sha256,
+                normalized_plan_sha256=normalized_plan.plan_sha256,
+                normalized_plan_authority_sha256=normalized_plan.authority_sha256,
+                normalized_plan_evidence_id=lifecycle_evidence_id,
+                normalized_plan_filename=f"{lifecycle_evidence_id}.json",
+                prompt_pack_version=prompt_version,
+            )
         if self._config.require_human_plan_review:
             review_gate = prepare_scientific_plan_review_gate(
                 context=context,
@@ -2975,11 +3298,6 @@ class ResearchAgentPipeline:
                 ),
             )
             findings.append(review_gate.finding)
-        know_how_binding.persist_prompt_metrics(
-            planner_prompt_metrics,
-            run_dir=run_dir,
-            evidence=evidence,
-        )
         write_locked_cohort_definition(
             run_dir=run_dir,
             plan=plan,
@@ -3372,188 +3690,28 @@ class ResearchAgentPipeline:
         allowed_literature_citation_keys: list[str] = []
         direct_comparator_literature_keys: list[str] = []
         preplan_literature: Optional[LiteratureBundle] = None
-        if self._enable_literature and skill_obj is None:
-            try:
-                emit_progress(
-                    "hypothesis",
-                    "Building pre-plan literature and hypothesis blueprint.",
-                    run_id=run_id,
-                )
-                preplan_literature = prepare_preplan_literature(
-                    context=agent_context,
-                    run_dir=run_dir,
-                    evidence=evidence,
-                    enable_pubmed=self._enable_pubmed,
-                    pubmed_email=self._pubmed_email,
-                    pubmed_api_key=self._pubmed_api_key,
-                    enable_tavily=self._enable_tavily,
-                    tavily_api_key=self._tavily_api_key,
-                    tavily_retmax=self._tavily_retmax,
-                    tavily_include_domains=self._tavily_include_domains,
-                    bound_seed=self._bound_preplan_literature,
-                )
-                allowed_literature_citation_keys = [
-                    citation.key for citation in preplan_literature.citations
-                ]
-                direct_comparator_literature_keys = [
-                    decision.citation_key
-                    for decision in preplan_literature.screening_decisions
-                    if decision.disposition == "include"
-                    and decision.evidence_role == "direct_comparator"
-                ]
-                # O17 — Front-door hypothesis generation. Opt-in; writes
-                # ``hypothesis_candidates.json`` + ``.md`` so the paper
-                # Methods section can quote "Out of N candidates we
-                # preregistered Q" rather than "we picked Q".
-                if self._enable_hypothesis_generator:
-                    try:
-                        hg_result = generate_hypotheses(
-                            context=agent_context,
-                            citations=list(preplan_literature.citations),
-                            top_k=self._hypothesis_generator_top_k,
-                        )
-                        hg_json = run_dir / "hypothesis_candidates.json"
-                        hg_md = run_dir / "hypothesis_candidates.md"
-                        hg_json.write_text(
-                            json.dumps(hg_result.to_json(), indent=2, default=str),
-                            encoding="utf-8",
-                        )
-                        hg_md.write_text(hg_result.to_markdown(), encoding="utf-8")
-                        if evidence.get("hypothesis_candidates") is None:
-                            evidence.register_file(
-                                kind="log",
-                                description=(
-                                    "Ranked front-door hypothesis candidates "
-                                    "(predictor × outcome) with coverage, "
-                                    "literature-saturation and ICU-gate scores (O17)."
-                                ),
-                                source_path=hg_json,
-                                evidence_id="hypothesis_candidates",
-                                producer="hypothesis_generator",
-                                generation_mode="deterministic_skill",
-                            )
-                        if evidence.get("hypothesis_candidates_summary") is None:
-                            evidence.register_file(
-                                kind="log",
-                                description=(
-                                    "Human-readable hypothesis-candidate table (O17)."
-                                ),
-                                source_path=hg_md,
-                                evidence_id="hypothesis_candidates_summary",
-                                producer="hypothesis_generator",
-                                generation_mode="deterministic_skill",
-                            )
-                        findings.append(
-                            ValidationFinding(
-                                validator="hypothesis_generator",
-                                severity="info",
-                                message=(
-                                    f"Ranked {len(hg_result.candidates)} candidate "
-                                    f"hypotheses; top={hg_result.candidates[0].question if hg_result.candidates else 'n/a'}"
-                                ),
-                                evidence_ids=["hypothesis_candidates"],
-                            )
-                        )
-                    except Exception as exc:
-                        findings.append(
-                            ValidationFinding(
-                                validator="hypothesis_generator",
-                                severity="warning",
-                                message=(
-                                    f"Hypothesis generator failed: "
-                                    f"{type(exc).__name__}: {exc}"
-                                ),
-                            )
-                        )
-                blueprint = HypothesisBlueprintAgent().run(
-                    context=agent_context,
-                    literature=preplan_literature,
-                )
-                blueprint_path = run_dir / "hypothesis_blueprint.json"
-                blueprint_path.write_text(
-                    blueprint.model_dump_json(indent=2),
-                    encoding="utf-8",
-                )
-                if evidence.get("hypothesis_blueprint") is None:
-                    evidence.register_file(
-                        kind="log",
-                        description=(
-                            "Literature-aware hypothesis, feasibility critique, "
-                            "and recommended plan skeleton fed to the planner."
-                        ),
-                        source_path=blueprint_path,
-                        evidence_id="hypothesis_blueprint",
-                        producer="hypothesis_blueprint",
-                        generation_mode="deterministic_skill",
-                    )
-                if blueprint.feasibility_status == "blocked":
-                    findings.append(
-                        ValidationFinding(
-                            validator="hypothesis_blueprint",
-                            severity="error",
-                            message=(
-                                "Hypothesis blueprint marked this request as blocked; "
-                                "pipeline stopped before planning executable analysis steps."
-                            ),
-                            evidence_ids=["hypothesis_blueprint"],
-                        )
-                    )
-                    emit_progress(
-                        "hypothesis",
-                        "Hypothesis blueprint is blocked; aborting before planner execution.",
-                        status="error",
-                        run_id=run_id,
-                    )
-                    aborted = self._finalise_aborted(
-                        run_id=run_id,
-                        run_dir=run_dir,
-                        context=context,
-                        context_path=context_path,
-                        evidence=evidence,
-                        findings=findings,
-                        reason="hypothesis_blueprint_blocked",
-                    )
-                    return _PlanPhaseResult(
-                        context=context,
-                        agent_context=agent_context,
-                        context_path=context_path,
-                        evidence=evidence,
-                        findings=findings,
-                        plan=AnalysisPlan(
-                            research_question=context.research_question,
-                            steps=[],
-                        ),
-                        plan_path=run_dir / "analysis_plan.json",
-                        llm_signature=self._llm_signature(llm),
-                        used_mock_llm=any(True for _ in self._iter_mock_clients(llm)),
-                        prompt_version=PROMPT_PACK_VERSION,
-                        prompt_files=prompt_pack_files(),
-                        role_resolver=lambda _role: resolve_role_client(llm, _role),
-                        cost_meter=None,
-                        repro_envelope=None,
-                        started_at=datetime.now(timezone.utc),
-                        resume_state=resume_state,
-                        aborted_result=aborted,
-                    )
-                note = render_hypothesis_blueprint_for_prompt(
-                    blueprint,
-                    literature=preplan_literature,
-                )
-                agent_notes = (
-                    f"{agent_context.notes}\n\n{note}" if agent_context.notes else note
-                )
-                agent_context = agent_context.model_copy(update={"notes": agent_notes})
-            except Exception as exc:
-                findings.append(
-                    ValidationFinding(
-                        validator="hypothesis_blueprint",
-                        severity="warning",
-                        message=(
-                            "Hypothesis blueprint failed; planner will use "
-                            f"context only: {exc}"
-                        ),
-                    )
-                )
+        (
+            preplan_terminal_result,
+            agent_context,
+            allowed_literature_citation_keys,
+            direct_comparator_literature_keys,
+            preplan_literature,
+        ) = _run_preplan_literature_and_hypothesis(
+            self,
+            skill_obj=skill_obj,
+            emit_progress=emit_progress,
+            run_id=run_id,
+            agent_context=agent_context,
+            run_dir=run_dir,
+            evidence=evidence,
+            findings=findings,
+            context=context,
+            context_path=context_path,
+            llm=llm,
+            resume_state=resume_state,
+        )
+        if preplan_terminal_result is not None:
+            return preplan_terminal_result
 
         planner_prompt_metrics: Optional[Dict[str, Any]] = None
         know_how_binding = PlannerKnowHowBinding()
@@ -5007,38 +5165,7 @@ class ResearchAgentPipeline:
         )
 
         def _plan_invoker():
-            return self._run_plan_phase(
-                question=question,
-                cohort_path=cohort_path,
-                cohort_name=cohort_name,
-                database=database,
-                target_outcome=target_outcome,
-                endpoint=endpoint,
-                primary_exposure=primary_exposure,
-                cross_database_validation=cross_database_validation,
-                inclusion_criteria=inclusion_criteria,
-                exclusion_criteria=exclusion_criteria,
-                id_columns=id_columns,
-                time_columns=time_columns,
-                outcome_columns=outcome_columns,
-                time_windows=time_windows,
-                concept_descriptions=concept_descriptions,
-                user_preferences=user_preferences,
-                notes=notes,
-                skill_obj=skill_obj,
-                llm=llm,
-                run_dir=run_dir,
-                run_id=run_id,
-                run_language=run_language,
-                experiment_spec_path=experiment_spec_path,
-                resume_state=resume_state,
-                resume_context_evidence_path=resume_context_evidence_path,
-                trajectory_binding=staged_trajectory_binding,
-                run_scientific_identity=run_scientific_identity,
-                run_environment_identity=run_environment_identity,
-                resume_from_step_id=resume_from_step_id,
-                emit_progress=_emit_progress,
-            )
+            return _pipeline_run___plan_invoker(_emit_progress=_emit_progress, cohort_name=cohort_name, cohort_path=cohort_path, concept_descriptions=concept_descriptions, cross_database_validation=cross_database_validation, database=database, endpoint=endpoint, exclusion_criteria=exclusion_criteria, experiment_spec_path=experiment_spec_path, id_columns=id_columns, inclusion_criteria=inclusion_criteria, llm=llm, notes=notes, outcome_columns=outcome_columns, primary_exposure=primary_exposure, question=question, resume_context_evidence_path=resume_context_evidence_path, resume_from_step_id=resume_from_step_id, resume_state=resume_state, run_dir=run_dir, run_environment_identity=run_environment_identity, run_id=run_id, run_language=run_language, run_scientific_identity=run_scientific_identity, self=self, skill_obj=skill_obj, staged_trajectory_binding=staged_trajectory_binding, target_outcome=target_outcome, time_columns=time_columns, time_windows=time_windows, user_preferences=user_preferences)
 
         from .orchestration.workflow import orchestration_runtime_receipt
 
@@ -5050,151 +5177,16 @@ class ResearchAgentPipeline:
         )
 
         def _provenance_hook(plan_result):
-            # O27 — Raw EHR provenance. Hash the cohort parquet and any
-            # user-supplied source files and register as evidence so the
-            # manuscript's provenance chain goes: raw EHR -> cohort ->
-            # analysis artefacts -> manuscript. Only runs after the plan
-            # phase succeeded.
-            try:
-                provenance = build_provenance_bundle(
-                    cohort_path=cohort_path,
-                    source_files=source_files,
-                )
-                provenance_path = run_dir / "provenance_sources.json"
-                provenance.to_disk(provenance_path)
-                if plan_result.evidence.get("provenance_sources") is None:
-                    plan_result.evidence.register_file(
-                        kind="log",
-                        description=(
-                            "Raw EHR and cohort provenance hashes (O27): "
-                            "sha256 + size + mtime for every source file "
-                            "and the materialised cohort parquet."
-                        ),
-                        source_path=provenance_path,
-                        evidence_id="provenance_sources",
-                        producer="pipeline",
-                        generation_mode="system",
-                    )
-            except Exception as exc:
-                # A paper-facing profile claims the full raw EHR → cohort →
-                # analysis → manuscript chain. If the first link cannot be
-                # hashed, that claim is unsupported, so the run stops instead
-                # of finishing with a warning nobody reads. Development runs
-                # keep the warning: they make no provenance claim.
-                from .orchestration.profiles import is_paper_facing_profile
-
-                paper_facing = is_paper_facing_profile(self._submission_profile_name)
-                plan_result.findings.append(
-                    ValidationFinding(
-                        validator="provenance",
-                        severity="error" if paper_facing else "warning",
-                        message=(
-                            f"Failed to compute raw-EHR provenance bundle: "
-                            f"{type(exc).__name__}: {exc}"
-                        ),
-                        detail={
-                            "reason": "raw_ehr_provenance_unavailable",
-                            "submission_profile_name": self._submission_profile_name,
-                        },
-                    )
-                )
-                if paper_facing:
-                    raise RuntimeError(
-                        "raw-EHR provenance could not be computed under submission "
-                        f"profile {self._submission_profile_name!r}; the "
-                        "manuscript's provenance chain would be incomplete"
-                    ) from exc
-            if plan_result.evidence.get("orchestration_runtime") is None:
-                plan_result.evidence.register_file(
-                    kind="log",
-                    description=(
-                        "Non-scientific phase-dispatch runtime identity; EasyICU "
-                        "receipts/capsules/checkpoints remain authoritative."
-                    ),
-                    source_path=orchestration_receipt_path,
-                    evidence_id="orchestration_runtime",
-                    producer="pipeline",
-                    generation_mode="system",
-                )
+            return _pipeline_run___provenance_hook(plan_result, cohort_path=cohort_path, orchestration_receipt_path=orchestration_receipt_path, run_dir=run_dir, self=self, source_files=source_files)
 
         def _execute_invoker(plan_result):
-            return self._run_execute_phase(
-                plan_result=plan_result,
-                cohort_path=cohort_path,
-                trajectory_binding=staged_trajectory_binding,
-                run_dir=run_dir,
-                run_id=run_id,
-                skill_obj=skill_obj,
-                notes=notes,
-                emit_progress=_emit_progress,
-                resume_from_step_id=resume_from_step_id,
-                stop_after_step_id=stop_after_step_id,
-            )
+            return _pipeline_run___execute_invoker(plan_result, _emit_progress=_emit_progress, cohort_path=cohort_path, notes=notes, resume_from_step_id=resume_from_step_id, run_dir=run_dir, run_id=run_id, self=self, skill_obj=skill_obj, staged_trajectory_binding=staged_trajectory_binding, stop_after_step_id=stop_after_step_id)
 
         def _write_invoker(plan_result, execute_result):
-            try:
-                return self._run_write_phase(
-                    plan_result=plan_result,
-                    execute_result=execute_result,
-                    run_dir=run_dir,
-                    run_id=run_id,
-                    stop_after_analysis=stop_after_analysis,
-                    manuscript_title=manuscript_title,
-                    manuscript_authors=manuscript_authors,
-                    run_language=run_language,
-                    emit_progress=_emit_progress,
-                    force_writer_probe=force_writer_probe,
-                )
-            except EvidenceEnforcementError as exc:
-                validator = (
-                    "manuscript_numeric_auditor"
-                    if "untraced" in getattr(exc, "detail", {})
-                    else "evidence_bound_writer"
-                )
-                plan_result.findings.append(
-                    ValidationFinding(
-                        validator=validator,
-                        severity="error",
-                        message=(
-                            "STRICT evidence enforcement blocked manuscript "
-                            f"generation: {exc}"
-                        ),
-                        detail=getattr(exc, "detail", {}) or None,
-                    )
-                )
-                bound_path = run_dir / "manuscript_scaffold_bound.md"
-                bound_path.write_text(
-                    "# Manuscript scaffold not generated\n\n"
-                    "STRICT evidence enforcement failed before final binding.\n\n"
-                    f"Error: {exc}\n",
-                    encoding="utf-8",
-                )
-                _emit_progress(
-                    "writer",
-                    "STRICT evidence enforcement blocked manuscript generation.",
-                    status="error",
-                    run_id=run_id,
-                )
-                return _WritePhaseResult(literature=None, bound_path=bound_path)
+            return _pipeline_run___write_invoker(plan_result, execute_result, _emit_progress=_emit_progress, force_writer_probe=force_writer_probe, manuscript_authors=manuscript_authors, manuscript_title=manuscript_title, run_dir=run_dir, run_id=run_id, run_language=run_language, self=self, stop_after_analysis=stop_after_analysis)
 
         def _finalise_invoker(plan_result, execute_result, write_result):
-            return self._finalise_success(
-                plan_result=plan_result,
-                execute_result=execute_result,
-                write_result=write_result,
-                run_id=run_id,
-                run_dir=run_dir,
-                cohort_path=cohort_path,
-                notes=notes,
-                database=database,
-                target_outcome=target_outcome,
-                stop_after_analysis=stop_after_analysis,
-                cache_key=cache_key,
-                scientific_identity=run_scientific_identity,
-                experiment_spec_path=experiment_spec_path,
-                audit_logger=audit_logger,
-                emit_progress=_emit_progress,
-            )
+            return _pipeline_run___finalise_invoker(plan_result, execute_result, write_result, _emit_progress=_emit_progress, audit_logger=audit_logger, cache_key=cache_key, cohort_path=cohort_path, database=database, experiment_spec_path=experiment_spec_path, notes=notes, run_dir=run_dir, run_id=run_id, run_scientific_identity=run_scientific_identity, self=self, stop_after_analysis=stop_after_analysis, target_outcome=target_outcome)
 
         # The recorder needs this run's own EvidenceStore, which lives on the
         # plan result rather than in ``run()``'s locals. Keep the live handoff
@@ -5204,66 +5196,13 @@ class ResearchAgentPipeline:
         reviewed_plan: List[Any] = []
 
         def _review_evidence_store():
-            if reviewed_plan:
-                return reviewed_plan[-1].evidence
-            return EvidenceStore(
-                run_dir, enforcement_mode=self._evidence_enforcement_mode
-            )
+            return _pipeline_run___review_evidence_store(reviewed_plan=reviewed_plan, run_dir=run_dir, self=self)
 
         def _human_review_invoker(plan_result):
-            from .orchestration.workflow import human_review_requests_for_plan
-
-            reviewed_plan.append(plan_result)
-            plan_evidence = getattr(plan_result, "evidence", None)
-            capsule_record = (
-                plan_evidence.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
-                if plan_evidence is not None
-                else None
-            )
-            if capsule_record is None:
-                requests_without_execution = human_review_requests_for_plan(
-                    findings=plan_result.findings,
-                    plan=plan_result.plan,
-                    evidence=plan_evidence,
-                    require_plan_review=self._config.require_human_plan_review,
-                )
-                if not requests_without_execution:
-                    return requests_without_execution
-                raise RuntimeError(
-                    "human review cannot bind execution identity because the "
-                    "run input capsule is absent"
-                )
-            submission_profile_ref = (
-                self._submission_profile_ref
-                if self._submission_profile_name and self._submission_profile_version
-                else None
-            )
-            execution_authority = ReviewExecutionAuthority(
-                pipeline_config_sha256=self._config.canonical_digest(),
-                submission_profile_ref=submission_profile_ref,
-                capability_activation_sha256=canonical_sha256(
-                    self._capability_runtime.activation.model_dump(mode="json")
-                    if self._capability_runtime.activation is not None
-                    else None
-                ),
-                run_input_capsule_sha256=str(capsule_record.sha256),
-            )
-            requests = human_review_requests_for_plan(
-                findings=plan_result.findings,
-                plan=plan_result.plan,
-                evidence=plan_evidence,
-                execution_authority=execution_authority,
-                require_plan_review=self._config.require_human_plan_review,
-            )
-            return requests
+            return _pipeline_run___human_review_invoker(plan_result, reviewed_plan=reviewed_plan, self=self)
 
         def _human_review_recorder(records):
-            self._record_human_review_records(
-                records,
-                run_id=run_id,
-                run_dir=run_dir,
-                evidence=_review_evidence_store(),
-            )
+            return _pipeline_run___human_review_recorder(records, _review_evidence_store=_review_evidence_store, run_dir=run_dir, run_id=run_id, self=self)
 
         gate = self._human_review_gate
         from .orchestration.workflow import WorkflowPaused, build_pipeline_workflow
@@ -5274,54 +5213,20 @@ class ResearchAgentPipeline:
             "decision_payloads": None,
         }
 
-        def _prepare_human_review_execution(
-            decision_records: Sequence[Mapping[str, Any]],
-        ) -> None:
-            path = checkpoint_commit.get("path")
-            if path is None:
-                return
-            prepare_human_review_decision(
-                checkpoint_file=Path(path),
-                decision_payloads=checkpoint_commit.get("decision_payloads") or (),
-                decision_records=decision_records,
-                decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
-            )
+        def _prepare_human_review_execution(decision_records: Sequence[Mapping[str, Any]]):
+            return _pipeline_run___prepare_human_review_execution(decision_records, checkpoint_commit=checkpoint_commit)
 
-        def _commit_human_review_execution(
-            decision_records: Sequence[Mapping[str, Any]],
-        ) -> None:
-            path = checkpoint_commit.get("path")
-            if path is None:
-                return
-            if not reviewed_plan:
-                raise HumanReviewCheckpointError(
-                    "approved execution has no restored typed plan handoff"
-                )
-            commit_human_review_decision(
-                checkpoint_file=Path(path),
-                run_dir=run_dir,
-                evidence=reviewed_plan[-1].evidence,
-                plan_revision=reviewed_plan[-1].plan.revision,
-                decision_payloads=checkpoint_commit.get("decision_payloads") or (),
-                decision_records=decision_records,
-                decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
-            )
+        def _commit_human_review_execution(decision_records: Sequence[Mapping[str, Any]]):
+            return _pipeline_run___commit_human_review_execution(decision_records, checkpoint_commit=checkpoint_commit, reviewed_plan=reviewed_plan, run_dir=run_dir)
 
-        def _commit_human_review_execution_start() -> None:
-            path = checkpoint_commit.get("path")
-            if path is None:
-                return
-            mark_human_review_execution_started(Path(path))
+        def _commit_human_review_execution_start():
+            return _pipeline_run___commit_human_review_execution_start(checkpoint_commit=checkpoint_commit)
 
-        def _commit_human_review_write_start() -> None:
-            path = checkpoint_commit.get("path")
-            if path is not None:
-                mark_human_review_execution_phase(Path(path), "write_in_progress")
+        def _commit_human_review_write_start():
+            return _pipeline_run___commit_human_review_write_start(checkpoint_commit=checkpoint_commit)
 
-        def _commit_human_review_finalize_start() -> None:
-            path = checkpoint_commit.get("path")
-            if path is not None:
-                mark_human_review_execution_phase(Path(path), "finalize_in_progress")
+        def _commit_human_review_finalize_start():
+            return _pipeline_run___commit_human_review_finalize_start(checkpoint_commit=checkpoint_commit)
 
         workflow = build_pipeline_workflow(
             plan_invoker=_plan_invoker,
@@ -6182,6 +6087,7 @@ class ResearchAgentPipeline:
             "enable_deterministic_planner_fallback": bool(
                 self._enable_deterministic_planner_fallback
             ),
+            "planner_strategy": self._planner_strategy,
             "enable_deterministic_runner_repair": bool(
                 self._enable_deterministic_runner_repair
             ),
@@ -8541,3 +8447,298 @@ def _step_summary_has_any_key(path: Path, keys: Sequence[str]) -> bool:
 
 
 __all__ = ["ResearchAgentPipeline"]
+
+def _pipeline_run___plan_invoker(*, _emit_progress: Any, cohort_name: Any, cohort_path: Any, concept_descriptions: Any, cross_database_validation: Any, database: Any, endpoint: Any, exclusion_criteria: Any, experiment_spec_path: Any, id_columns: Any, inclusion_criteria: Any, llm: Any, notes: Any, outcome_columns: Any, primary_exposure: Any, question: Any, resume_context_evidence_path: Any, resume_from_step_id: Any, resume_state: Any, run_dir: Any, run_environment_identity: Any, run_id: Any, run_language: Any, run_scientific_identity: Any, self: Any, skill_obj: Any, staged_trajectory_binding: Any, target_outcome: Any, time_columns: Any, time_windows: Any, user_preferences: Any):
+    return self._run_plan_phase(
+        question=question,
+        cohort_path=cohort_path,
+        cohort_name=cohort_name,
+        database=database,
+        target_outcome=target_outcome,
+        endpoint=endpoint,
+        primary_exposure=primary_exposure,
+        cross_database_validation=cross_database_validation,
+        inclusion_criteria=inclusion_criteria,
+        exclusion_criteria=exclusion_criteria,
+        id_columns=id_columns,
+        time_columns=time_columns,
+        outcome_columns=outcome_columns,
+        time_windows=time_windows,
+        concept_descriptions=concept_descriptions,
+        user_preferences=user_preferences,
+        notes=notes,
+        skill_obj=skill_obj,
+        llm=llm,
+        run_dir=run_dir,
+        run_id=run_id,
+        run_language=run_language,
+        experiment_spec_path=experiment_spec_path,
+        resume_state=resume_state,
+        resume_context_evidence_path=resume_context_evidence_path,
+        trajectory_binding=staged_trajectory_binding,
+        run_scientific_identity=run_scientific_identity,
+        run_environment_identity=run_environment_identity,
+        resume_from_step_id=resume_from_step_id,
+        emit_progress=_emit_progress,
+    )
+
+
+def _pipeline_run___provenance_hook(plan_result, *, cohort_path: Any, orchestration_receipt_path: Any, run_dir: Any, self: Any, source_files: Any):
+    try:
+        provenance = build_provenance_bundle(
+            cohort_path=cohort_path,
+            source_files=source_files,
+        )
+        provenance_path = run_dir / "provenance_sources.json"
+        provenance.to_disk(provenance_path)
+        if plan_result.evidence.get("provenance_sources") is None:
+            plan_result.evidence.register_file(
+                kind="log",
+                description=(
+                    "Raw EHR and cohort provenance hashes (O27): "
+                    "sha256 + size + mtime for every source file "
+                    "and the materialised cohort parquet."
+                ),
+                source_path=provenance_path,
+                evidence_id="provenance_sources",
+                producer="pipeline",
+                generation_mode="system",
+            )
+    except Exception as exc:
+        # A paper-facing profile claims the full raw EHR → cohort →
+        # analysis → manuscript chain. If the first link cannot be
+        # hashed, that claim is unsupported, so the run stops instead
+        # of finishing with a warning nobody reads. Development runs
+        # keep the warning: they make no provenance claim.
+        from .orchestration.profiles import is_paper_facing_profile
+
+        paper_facing = is_paper_facing_profile(self._submission_profile_name)
+        plan_result.findings.append(
+            ValidationFinding(
+                validator="provenance",
+                severity="error" if paper_facing else "warning",
+                message=(
+                    f"Failed to compute raw-EHR provenance bundle: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+                detail={
+                    "reason": "raw_ehr_provenance_unavailable",
+                    "submission_profile_name": self._submission_profile_name,
+                },
+            )
+        )
+        if paper_facing:
+            raise RuntimeError(
+                "raw-EHR provenance could not be computed under submission "
+                f"profile {self._submission_profile_name!r}; the "
+                "manuscript's provenance chain would be incomplete"
+            ) from exc
+    if plan_result.evidence.get("orchestration_runtime") is None:
+        plan_result.evidence.register_file(
+            kind="log",
+            description=(
+                "Non-scientific phase-dispatch runtime identity; EasyICU "
+                "receipts/capsules/checkpoints remain authoritative."
+            ),
+            source_path=orchestration_receipt_path,
+            evidence_id="orchestration_runtime",
+            producer="pipeline",
+            generation_mode="system",
+        )
+
+
+def _pipeline_run___execute_invoker(plan_result, *, _emit_progress: Any, cohort_path: Any, notes: Any, resume_from_step_id: Any, run_dir: Any, run_id: Any, self: Any, skill_obj: Any, staged_trajectory_binding: Any, stop_after_step_id: Any):
+    return self._run_execute_phase(
+        plan_result=plan_result,
+        cohort_path=cohort_path,
+        trajectory_binding=staged_trajectory_binding,
+        run_dir=run_dir,
+        run_id=run_id,
+        skill_obj=skill_obj,
+        notes=notes,
+        emit_progress=_emit_progress,
+        resume_from_step_id=resume_from_step_id,
+        stop_after_step_id=stop_after_step_id,
+    )
+
+
+def _pipeline_run___write_invoker(plan_result, execute_result, *, _emit_progress: Any, force_writer_probe: Any, manuscript_authors: Any, manuscript_title: Any, run_dir: Any, run_id: Any, run_language: Any, self: Any, stop_after_analysis: Any):
+    try:
+        return self._run_write_phase(
+            plan_result=plan_result,
+            execute_result=execute_result,
+            run_dir=run_dir,
+            run_id=run_id,
+            stop_after_analysis=stop_after_analysis,
+            manuscript_title=manuscript_title,
+            manuscript_authors=manuscript_authors,
+            run_language=run_language,
+            emit_progress=_emit_progress,
+            force_writer_probe=force_writer_probe,
+        )
+    except EvidenceEnforcementError as exc:
+        validator = (
+            "manuscript_numeric_auditor"
+            if "untraced" in getattr(exc, "detail", {})
+            else "evidence_bound_writer"
+        )
+        plan_result.findings.append(
+            ValidationFinding(
+                validator=validator,
+                severity="error",
+                message=(
+                    "STRICT evidence enforcement blocked manuscript "
+                    f"generation: {exc}"
+                ),
+                detail=getattr(exc, "detail", {}) or None,
+            )
+        )
+        bound_path = run_dir / "manuscript_scaffold_bound.md"
+        bound_path.write_text(
+            "# Manuscript scaffold not generated\n\n"
+            "STRICT evidence enforcement failed before final binding.\n\n"
+            f"Error: {exc}\n",
+            encoding="utf-8",
+        )
+        _emit_progress(
+            "writer",
+            "STRICT evidence enforcement blocked manuscript generation.",
+            status="error",
+            run_id=run_id,
+        )
+        return _WritePhaseResult(literature=None, bound_path=bound_path)
+
+
+def _pipeline_run___finalise_invoker(plan_result, execute_result, write_result, *, _emit_progress: Any, audit_logger: Any, cache_key: Any, cohort_path: Any, database: Any, experiment_spec_path: Any, notes: Any, run_dir: Any, run_id: Any, run_scientific_identity: Any, self: Any, stop_after_analysis: Any, target_outcome: Any):
+    return self._finalise_success(
+        plan_result=plan_result,
+        execute_result=execute_result,
+        write_result=write_result,
+        run_id=run_id,
+        run_dir=run_dir,
+        cohort_path=cohort_path,
+        notes=notes,
+        database=database,
+        target_outcome=target_outcome,
+        stop_after_analysis=stop_after_analysis,
+        cache_key=cache_key,
+        scientific_identity=run_scientific_identity,
+        experiment_spec_path=experiment_spec_path,
+        audit_logger=audit_logger,
+        emit_progress=_emit_progress,
+    )
+
+
+def _pipeline_run___review_evidence_store(*, reviewed_plan: Any, run_dir: Any, self: Any):
+    if reviewed_plan:
+        return reviewed_plan[-1].evidence
+    return EvidenceStore(
+        run_dir, enforcement_mode=self._evidence_enforcement_mode
+    )
+
+
+def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any):
+    from .orchestration.workflow import human_review_requests_for_plan
+
+    reviewed_plan.append(plan_result)
+    plan_evidence = getattr(plan_result, "evidence", None)
+    capsule_record = (
+        plan_evidence.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
+        if plan_evidence is not None
+        else None
+    )
+    if capsule_record is None:
+        requests_without_execution = human_review_requests_for_plan(
+            findings=plan_result.findings,
+            plan=plan_result.plan,
+            evidence=plan_evidence,
+            require_plan_review=self._config.require_human_plan_review,
+        )
+        if not requests_without_execution:
+            return requests_without_execution
+        raise RuntimeError(
+            "human review cannot bind execution identity because the "
+            "run input capsule is absent"
+        )
+    submission_profile_ref = (
+        self._submission_profile_ref
+        if self._submission_profile_name and self._submission_profile_version
+        else None
+    )
+    execution_authority = ReviewExecutionAuthority(
+        pipeline_config_sha256=self._config.canonical_digest(),
+        submission_profile_ref=submission_profile_ref,
+        capability_activation_sha256=canonical_sha256(
+            self._capability_runtime.activation.model_dump(mode="json")
+            if self._capability_runtime.activation is not None
+            else None
+        ),
+        run_input_capsule_sha256=str(capsule_record.sha256),
+    )
+    requests = human_review_requests_for_plan(
+        findings=plan_result.findings,
+        plan=plan_result.plan,
+        evidence=plan_evidence,
+        execution_authority=execution_authority,
+        require_plan_review=self._config.require_human_plan_review,
+    )
+    return requests
+
+
+def _pipeline_run___human_review_recorder(records, *, _review_evidence_store: Any, run_dir: Any, run_id: Any, self: Any):
+    self._record_human_review_records(
+        records,
+        run_id=run_id,
+        run_dir=run_dir,
+        evidence=_review_evidence_store(),
+    )
+
+
+def _pipeline_run___prepare_human_review_execution(decision_records: Sequence[Mapping[str, Any]], *, checkpoint_commit: Any) -> None:
+    path = checkpoint_commit.get("path")
+    if path is None:
+        return
+    prepare_human_review_decision(
+        checkpoint_file=Path(path),
+        decision_payloads=checkpoint_commit.get("decision_payloads") or (),
+        decision_records=decision_records,
+        decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
+    )
+
+
+def _pipeline_run___commit_human_review_execution(decision_records: Sequence[Mapping[str, Any]], *, checkpoint_commit: Any, reviewed_plan: Any, run_dir: Any) -> None:
+    path = checkpoint_commit.get("path")
+    if path is None:
+        return
+    if not reviewed_plan:
+        raise HumanReviewCheckpointError(
+            "approved execution has no restored typed plan handoff"
+        )
+    commit_human_review_decision(
+        checkpoint_file=Path(path),
+        run_dir=run_dir,
+        evidence=reviewed_plan[-1].evidence,
+        plan_revision=reviewed_plan[-1].plan.revision,
+        decision_payloads=checkpoint_commit.get("decision_payloads") or (),
+        decision_records=decision_records,
+        decision_sha256=str(checkpoint_commit.get("decision_sha256") or ""),
+    )
+
+
+def _pipeline_run___commit_human_review_execution_start(*, checkpoint_commit: Any) -> None:
+    path = checkpoint_commit.get("path")
+    if path is None:
+        return
+    mark_human_review_execution_started(Path(path))
+
+
+def _pipeline_run___commit_human_review_write_start(*, checkpoint_commit: Any) -> None:
+    path = checkpoint_commit.get("path")
+    if path is not None:
+        mark_human_review_execution_phase(Path(path), "write_in_progress")
+
+
+def _pipeline_run___commit_human_review_finalize_start(*, checkpoint_commit: Any) -> None:
+    path = checkpoint_commit.get("path")
+    if path is not None:
+        mark_human_review_execution_phase(Path(path), "finalize_in_progress")

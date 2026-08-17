@@ -94,6 +94,31 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     ("POST", "/api/copilot/pi/sessions", "post_pi_copilot_session"),
     (
+        "GET",
+        "/api/copilot/pi/research-provider/codex/status",
+        "get_pi_copilot_codex_status",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/research-provider/codex/login",
+        "post_pi_copilot_codex_login",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/research-provider/codex/cancel",
+        "post_pi_copilot_codex_cancel",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/research-provider/codex/logout",
+        "post_pi_copilot_codex_logout",
+    ),
+    (
+        "GET",
+        "/api/copilot/pi/research-provider/codex/models",
+        "get_pi_copilot_codex_models",
+    ),
+    (
         "POST",
         "/api/copilot/pi/projects/initialize",
         "post_pi_copilot_project_initialize",
@@ -299,6 +324,26 @@ EXPECTED_JOB_LIFECYCLE_ROUTES = [
 EXPECTED_AGENT_CONTROL_ROUTES = [
     ("POST", "/api/jobs/agent-run", "jobs_agent_run"),
     ("POST", "/api/jobs/agent-run-review", "jobs_agent_run_review"),
+    (
+        "GET",
+        "/api/agent-runs/codex-auth/status",
+        "get_agent_run_codex_auth_status",
+    ),
+    (
+        "POST",
+        "/api/agent-runs/codex-auth/login",
+        "post_agent_run_codex_auth_login",
+    ),
+    (
+        "POST",
+        "/api/agent-runs/codex-auth/cancel",
+        "post_agent_run_codex_auth_cancel",
+    ),
+    (
+        "POST",
+        "/api/agent-runs/codex-auth/logout",
+        "post_agent_run_codex_auth_logout",
+    ),
     (
         "GET",
         "/api/agent-runs/provider-status",

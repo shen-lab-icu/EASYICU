@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def test_replication_cli_paper_mode_dispatches_to_pipeline(
     monkeypatch, tmp_path: Path
@@ -60,3 +62,36 @@ def test_replication_cli_paper_mode_dispatches_to_pipeline(
     assert calls["pipeline_init"]["workdir"] == str(tmp_path / "out")
     assert calls["reproduce_paper"]["database"] == "synthetic"
     assert calls["reproduce_paper"]["mode"] == "replication"
+
+
+def test_replication_cli_blocks_external_provider_before_construction(
+    monkeypatch, tmp_path: Path
+):
+    from easyicu.research_agent import replication_cli
+    import easyicu.research_agent.providers.factory as factory_module
+
+    constructed = []
+
+    def forbidden_builder(**_kwargs):
+        constructed.append(True)
+        raise AssertionError("provider construction must be unreachable")
+
+    monkeypatch.setattr(factory_module, "build_provider_client", forbidden_builder)
+
+    with pytest.raises(SystemExit, match="AI features are disabled"):
+        replication_cli.main(
+            [
+                "--paper",
+                "Title: cohort report",
+                "--cohort",
+                str(tmp_path / "cohort.parquet"),
+                "--database",
+                "synthetic",
+                "--llm",
+                "openai",
+                "--output",
+                str(tmp_path / "out"),
+            ]
+        )
+
+    assert constructed == []

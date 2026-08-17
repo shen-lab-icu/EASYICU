@@ -385,6 +385,14 @@ class ReproRecordingClient:
 
         return self._resolve_model()
 
+    @property
+    def supports_strict_json_schema(self) -> bool:
+        """Preserve, but never widen, the wrapped transport capability."""
+
+        from ..providers.capabilities import llm_supports_strict_json_schema
+
+        return llm_supports_strict_json_schema(self._inner)
+
     def _resolve_model(self) -> str:
         if self._model_override:
             return self._model_override
@@ -411,6 +419,7 @@ class ReproRecordingClient:
         max_tokens: int,
         temperature: float,
         top_p: Optional[float] = None,
+        structured_output: Any = None,
     ) -> str:
         """Call ``inner.complete``, forwarding ``seed=``/``top_p=`` if accepted."""
         import inspect
@@ -420,14 +429,27 @@ class ReproRecordingClient:
             params = sig.parameters
             accepts_seed = "seed" in params
             accepts_top_p = "top_p" in params
+            accepts_structured_output = "structured_output" in params or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in params.values()
+            )
         except (TypeError, ValueError):
             accepts_seed = False
             accepts_top_p = False
+            accepts_structured_output = False
         kwargs: Dict[str, Any] = {"max_tokens": max_tokens, "temperature": temperature}
         if accepts_seed and self._seed is not None:
             kwargs["seed"] = self._seed
         if accepts_top_p and top_p is not None:
             kwargs["top_p"] = top_p
+        if structured_output is not None:
+            if not accepts_structured_output:
+                from ..providers.protocol import StructuredOutputCapabilityError
+
+                raise StructuredOutputCapabilityError(
+                    "recorded client cannot forward strict structured output"
+                )
+            kwargs["structured_output"] = structured_output
         return self._inner.complete(messages, **kwargs)
 
     def complete(
@@ -437,9 +459,14 @@ class ReproRecordingClient:
         max_tokens: int = 2048,
         temperature: float = 0.2,
         top_p: Optional[float] = None,
+        structured_output: Any = None,
     ) -> str:
         response, _usage = self.complete_with_usage(
-            messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            structured_output=structured_output,
         )
         return response
 
@@ -450,6 +477,7 @@ class ReproRecordingClient:
         max_tokens: int = 2048,
         temperature: float = 0.2,
         top_p: Optional[float] = None,
+        structured_output: Any = None,
     ) -> tuple[str, Optional[Dict[str, Any]]]:
         """Record one response and return usage owned by that exact call."""
         import inspect
@@ -462,9 +490,14 @@ class ReproRecordingClient:
                 params = inspect.signature(complete_with_usage).parameters
                 accepts_seed = "seed" in params
                 accepts_top_p = "top_p" in params
+                accepts_structured_output = "structured_output" in params or any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in params.values()
+                )
             except (TypeError, ValueError):
                 accepts_seed = False
                 accepts_top_p = False
+                accepts_structured_output = False
             kwargs: Dict[str, Any] = {
                 "max_tokens": max_tokens,
                 "temperature": temperature,
@@ -473,6 +506,14 @@ class ReproRecordingClient:
                 kwargs["seed"] = self._seed
             if accepts_top_p and top_p is not None:
                 kwargs["top_p"] = top_p
+            if structured_output is not None:
+                if not accepts_structured_output:
+                    from ..providers.protocol import StructuredOutputCapabilityError
+
+                    raise StructuredOutputCapabilityError(
+                        "recorded usage client cannot forward strict structured output"
+                    )
+                kwargs["structured_output"] = structured_output
             response, raw_usage = complete_with_usage(messages, **kwargs)
             if isinstance(raw_usage, dict):
                 usage = dict(raw_usage)
@@ -482,6 +523,7 @@ class ReproRecordingClient:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
+                structured_output=structured_output,
             )
         elapsed_ms = (time.monotonic() - started) * 1000.0
         requested_model = self._resolve_model()

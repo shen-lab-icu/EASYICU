@@ -315,7 +315,11 @@ def test_a_report_without_a_trace_says_so_instead_of_guessing() -> None:
 
 
 def test_execute_phase_records_the_report_for_claimed_and_unclaimed_steps() -> None:
-    source = inspect.getsource(execution_phase.run_execute_phase)
+    source = (
+        inspect.getsource(execution_phase._step_settle_initial_code)
+        + "\n"
+        + inspect.getsource(execution_phase.run_execute_phase)
+    )
 
     assert 'step_record["standard_executor_candidates"] = (' in source
     # Written outside the `if standard_executor is not None:` body, so an

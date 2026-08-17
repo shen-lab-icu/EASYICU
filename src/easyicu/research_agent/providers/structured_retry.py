@@ -276,6 +276,8 @@ def safe_provider_error_category(value: Any) -> Optional[str]:
         return "error"
     if "providerhardstop" in folded or "budget" in folded:
         return "provider_budget"
+    if "providerrefusal" in folded or "provider_refusal" in folded:
+        return "provider_refusal"
     if "structuredresponse" in folded:
         return "structured_response"
     if "validation" in folded or folded in {"valueerror", "assertionerror"}:
@@ -575,6 +577,9 @@ class StructuredResponseFailure(RuntimeError):
     def __init__(self, attempts: Sequence[StructuredAttempt], role: str) -> None:
         self.attempts = list(attempts)
         self.role = role
+        self.easyicu_structured_attempt_metadata = safe_structured_attempt_metadata(
+            self.attempts
+        )
         super().__init__(
             f"StructuredResponseFailure[role={role}, "
             f"n_attempts={len(self.attempts)}]: "
@@ -597,6 +602,7 @@ def call_llm_with_structured_retry(
     feedback_preamble: str = _DEFAULT_FEEDBACK_PREAMBLE,
     feedback_instructions: str = _DEFAULT_FEEDBACK_INSTRUCTIONS,
     progress_callback: Optional[Callable[[StructuredRetryProgress], None]] = None,
+    structured_output: Any = None,
 ) -> T:
     """Call ``llm.complete`` and parse the result; retry with feedback on parse failure.
 
@@ -668,27 +674,42 @@ def call_llm_with_structured_retry(
         )
         try:
             clear_provider_call_receipt()
-            raw = authorized_complete(
-                llm, current, max_tokens=max_tokens, temperature=temperature
-            )
+            complete_kwargs: Dict[str, Any] = {
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            if structured_output is not None:
+                complete_kwargs["structured_output"] = structured_output
+            raw = authorized_complete(llm, current, **complete_kwargs)
         except BaseException as exc:
             # Transport failures abort the loop here, outside the parser
             # guard below. Carry the attempts recorded so far out with the
             # exception rather than letting them die with the frame.
+            finish_reason, usage_summary, receipt_transport_attempts = (
+                _safe_provider_call_metadata(llm)
+            )
             try:
-                transport_attempts = max(
+                exception_transport_attempts = max(
                     1, int(getattr(exc, "easyicu_transport_attempts", 1))
                 )
             except (TypeError, ValueError):
-                transport_attempts = 1
+                exception_transport_attempts = 1
+            transport_attempts = max(
+                receipt_transport_attempts,
+                exception_transport_attempts,
+            )
+            terminal_reason_code = str(getattr(exc, "reason_code", "") or "").strip()
             terminal_attempt = StructuredAttempt(
                 attempt=i,
                 raw_head="",
                 raw_chars=0,
                 error_class=type(exc).__name__,
-                error_message="transport failed before a structured response",
-                finish_reason=None,
-                usage_summary={},
+                error_message=(
+                    terminal_reason_code
+                    or "transport failed before a structured response"
+                ),
+                finish_reason=finish_reason,
+                usage_summary=usage_summary,
                 transport_attempts=transport_attempts,
             )
             all_attempts = [*attempts, terminal_attempt]

@@ -1245,3 +1245,34 @@ def test_task_failure_persists_only_type_and_digest(tmp_path):
     error = json.loads(raw)["tasks"][0]["error"]
     assert error["type"] == "ValueError"
     assert len(error["message_sha256"]) == 64
+
+
+def test_strict_schema_bytes_are_reserved_and_forwarded(tmp_path):
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.research_agent.providers.protocol import StructuredOutputRequest
+
+    request = StructuredOutputRequest.from_schema(
+        name="probe",
+        schema={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        },
+    )
+    inner = ScriptedMockLLMClient(['{"ok":true}'])
+    task = _ledger(tmp_path).start_task("E1")
+    client = HardStopClient(inner, role="planner", task=task)
+
+    assert client.complete(
+        _message("schema-bound"),
+        max_tokens=8,
+        structured_output=request,
+    ) == '{"ok":true}'
+
+    call = task.ledger.snapshot()["tasks"][0]["calls"][0]
+    assert call["prompt_payload_bytes"] == (
+        len("schema-bound".encode("utf-8")) + request.payload_bytes
+    )
+    assert inner.calls[0][1]["structured_output"] is request

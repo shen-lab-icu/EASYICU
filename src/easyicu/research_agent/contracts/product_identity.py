@@ -9,6 +9,17 @@ from .product_files import KNOWN_FILE_SUFFIXES
 
 
 FIGURE_KIND_ALIASES = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
+CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN = (
+    r"^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$"
+)
+
+
+def is_canonical_typed_product_token(value: object) -> bool:
+    """Return whether *value* already uses the exact wire identity grammar."""
+
+    return isinstance(value, str) and re.fullmatch(
+        CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN, value
+    ) is not None
 
 
 def normalize_product_token(value: object) -> str:
@@ -49,8 +60,10 @@ def typed_product(value: object) -> tuple[str, str] | None:
 
 
 __all__ = [
+    "CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN",
     "FIGURE_KIND_ALIASES",
     "canonical_product_kind",
+    "is_canonical_typed_product_token",
     "normalize_product_token",
     "typed_product",
 ]

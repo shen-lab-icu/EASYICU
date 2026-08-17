@@ -12,13 +12,13 @@ import re
 import time
 import urllib.parse
 import urllib.request
-from pathlib import Path
 from typing import Any, Dict, List
 
 from easyicu.research_agent.publication_skills import PUBLICATION_SKILLS
+from easyicu.webserver import state_paths
 from easyicu.webserver import settings as settings_store
 
-_STATE_DIR = Path.home() / ".easyicu"
+_STATE_DIR = state_paths.state_root()
 _AUDIT_PATH = _STATE_DIR / "capability_tool_audit.jsonl"
 _ZOTERO_LOCAL_API = "http://127.0.0.1:23119/api/users/0/items"
 _ZOTERO_TIMEOUT_SECONDS = 0.35
@@ -624,9 +624,21 @@ def record_tool_event(event_type: str, detail: Dict[str, Any] | None = None) -> 
         "event_type": str(event_type or "tool_event"),
         "detail": detail or {},
     }
-    _STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with _AUDIT_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    try:
+        _STATE_DIR.mkdir(parents=True, exist_ok=True)
+        with _AUDIT_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        # A read-only home directory must not take down the business endpoint
+        # that triggered the audit write. Fail closed by reporting the audit
+        # gap so callers can surface it, but keep the audit path free of PHI.
+        return {
+            "recorded": False,
+            "reason": "tool_audit_write_failed",
+            "path": str(_AUDIT_PATH),
+            "error": type(exc).__name__,
+            "event": event,
+        }
     return {"recorded": True, "path": str(_AUDIT_PATH), "event": event}
 
 

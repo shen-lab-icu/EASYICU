@@ -3340,7 +3340,12 @@ def _callback_sofa2_score(
         data[available_columns].fillna(0).sum(axis=1).astype(int)
     )
     data["sofa2_n_components"] = data["sofa2_n_available_components"]
-    data["sofa2"] = data[required].sum(axis=1, skipna=True).round().astype(int)
+    # A missing component must not be silently summed as 0. When fewer than
+    # all six components are available for a row, the total is unknown (NA);
+    # n_available_components still reports how many contributed.
+    data["sofa2"] = (
+        data[required].sum(axis=1, min_count=len(required)).round().astype("Int64")
+    )
 
     cols = id_columns + ([index_column] if index_column else [])
     if keep_components:
@@ -7487,6 +7492,7 @@ def _callback_kdigo_aki(
             == "hirid"
         ),
         interval=ctx.interval or pd.Timedelta(hours=1),
+        time_unit="hours",
     )
     
     if result.empty:
@@ -7557,7 +7563,9 @@ def _callback_kdigo_creatinine(
             time_col = col
             break
     
-    result = kdigo_creatinine(crea_df, id_col=id_col, time_col=time_col)
+    result = kdigo_creatinine(
+        crea_df, id_col=id_col, time_col=time_col, time_unit="hours"
+    )
     
     return ICUTable(
         data=result,
@@ -7640,6 +7648,7 @@ def _callback_kdigo_uo(
             == "hirid"
         ),
         interval=ctx.interval or pd.Timedelta(hours=1),
+        time_unit="hours",
     )
     
     return ICUTable(

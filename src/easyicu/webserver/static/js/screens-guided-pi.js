@@ -3,12 +3,15 @@
    remain in their existing EasyICU owners. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
     messages: [], loading: true, creating: false, busy: false, jobId: '',
     source: null, childSource: null, childJobId: '', error: '', shell: 'pi', draft: '', setupSaving: false,
     showSetup: false, availableModels: [], project: null,
+    researchProvider: 'codex', researchModel: '', codexAuth: null,
+    codexLogin: null, codexModels: [], codexBusy: false, codexPoll: null,
     projectInitialization: null, workflow: null,
     agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
@@ -21,11 +24,6 @@
   });
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
-  function esc(value) {
-    return String(value == null ? '' : value)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
   function assistantTextHtml(value) {
     const renderer = window.EU_GUIDED_PI_MARKDOWN;
     return renderer && typeof renderer.render === 'function'
@@ -35,6 +33,27 @@
   function api() { return window.EU_API || {}; }
   function isStaticPreview() { return window.location && window.location.protocol === 'file:'; }
   function runtimeReady() { return !!(state.runtime && state.runtime.status === 'ready'); }
+  function shellReady() {
+    return !!(state.runtime && (state.runtime.shell_ready === true || state.runtime.status === 'ready'));
+  }
+  function apiResearchReady() {
+    const runtime = state.runtime || {};
+    const config = runtime.configuration || {};
+    return runtimeReady() && (config.api_transport || runtime.api_transport) === 'openai-completions';
+  }
+  function connectionConfigured() {
+    if (state.researchProvider !== 'codex') return apiResearchReady();
+    return !!(
+      state.runtime && state.runtime.status !== 'unavailable'
+      && state.codexAuth && state.codexAuth.authentication_verified
+      && state.researchModel
+    );
+  }
+  function connectionReady() {
+    return state.researchProvider === 'codex'
+      ? connectionConfigured() && shellReady()
+      : apiResearchReady();
+  }
   function projectId() { return String((state.project && state.project.id) || '').trim(); }
   function agentMode() {
     return (state.session && state.session.agent_mode) || state.agentMode || 'research';
@@ -83,6 +102,12 @@
     if (error.code === 'pi_session_project_mismatch') {
       return tr('That Pi conversation belongs to another research project.', '该 Pi 对话属于另一个研究项目，不能在当前项目中打开。');
     }
+    if (error.code === 'codex_auth_login_required') {
+      return tr('Sign in with your ChatGPT account before starting this conversation.', '请先登录你的 ChatGPT 账户，再开始这段对话。');
+    }
+    if (error.code === 'codex_auth_model_unavailable') {
+      return tr('That model is no longer available for this Codex account. Refresh the account model list.', '该 Codex 账户已无法使用这个模型，请刷新账户模型列表。');
+    }
     if (isStaticPreview() && String(error.message || '').includes('Failed to fetch')) {
       return tr('This is a static preview without the EasyICU backend. Start EasyICU and open http://127.0.0.1:8765/#guided.', '这是不带 EasyICU 后端的静态预览。请启动 EasyICU，再打开 http://127.0.0.1:8765/#guided。');
     }
@@ -95,6 +120,8 @@
     if (transport === 'anthropic-messages') return 'anthropic';
     if (transport === 'google-generative-ai') return 'google';
     if (base.includes('api.openai.com')) return 'openai';
+    if (base.includes('openrouter.ai')) return 'openrouter';
+    if (base.includes('api.deepseek.com')) return 'deepseek';
     if (base.includes('127.0.0.1:8317') || base.includes('localhost:8317')) return 'cliproxyapi';
     return 'custom-openai';
   }
@@ -484,7 +511,7 @@
     if (state.loading) {
       return `<div class="gpi-inline"><span class="gpi-dot waiting"></span>${tr('Checking Pi Copilot…', '正在检查 Pi Copilot…')}</div>`;
     }
-    if (!runtimeReady()) {
+    if (!connectionReady()) {
       const blockers = (state.runtime && state.runtime.blockers) || [];
       const reason = blockers.includes('api_key_configured')
         ? tr('Connect and verify your model service before entering Pi Copilot.', '请先连接并验证模型服务，再进入 Pi Copilot。')
@@ -505,44 +532,27 @@
     const runtime = state.runtime || {};
     const config = runtime.configuration || {};
     const blockers = runtime.blockers || [];
-    const runtimeMissing = blockers.filter(code => [
-      'node_available', 'node_version_supported', 'entrypoint_available',
-      'dependency_installed', 'lockfile_present', 'base_url_configured',
-    ].includes(code));
-    const savedCredential = !!config.credential_present;
-    const canCancel = runtimeReady();
-    const staticPreview = isStaticPreview();
-    const preset = providerPreset(config, runtime);
-    const transport = config.api_transport || runtime.api_transport || 'openai-completions';
-    const discovered = state.availableModels.map(model => `<option value="${esc(model)}"></option>`).join('');
-    return `
-      <div class="gpi-setup-wrap">
-        <form class="gpi-setup" data-gpi-provider-form autocomplete="off">
-          <div class="gpi-kicker">PI COPILOT · FIRST-USE SETUP</div>
-          <h2>${tr('Connect your model service', '连接你的模型服务')}</h2>
-          <p>${tr('Like signing in to Codex or Claude Code, this one-time check must succeed before the conversation opens. The API credential is saved only in EasyICU’s private local credential file and is never returned to this page.', '就像登录 Codex 或 Claude Code 一样，只有这次连接验证成功后才会开放对话。API 凭据只保存在 EasyICU 本机私有凭据文件中，不会回传到页面。')}</p>
-          <div class="gpi-setup-grid">
-            <label><span>${tr('Service type', '服务类型')}</span><select data-gpi-provider-preset>${option('cliproxyapi', preset, 'CLIProxyAPI / Local proxy')}${option('custom-openai', preset, 'OpenAI-compatible gateway')}${option('openai', preset, 'OpenAI API')}${option('anthropic', preset, 'Anthropic API')}${option('google', preset, 'Google Gemini API')}</select></label>
-            <label><span>${tr('Provider ID', '提供方标识')}</span><input name="provider" maxlength="80" value="${esc(config.provider || runtime.provider || 'easyicu-local')}" required></label>
-            <label class="wide"><span>${tr('Service address', '服务地址')}</span><input name="base_url" maxlength="2048" value="${esc(config.base_url || 'http://127.0.0.1:8317/v1')}" inputmode="url" spellcheck="false" required></label>
-            <label><span>${tr('Compatibility protocol', '兼容协议')}</span><select name="api_transport">${option('openai-completions', transport, 'OpenAI Chat Completions')}${option('openai-responses', transport, 'OpenAI Responses')}${option('anthropic-messages', transport, 'Anthropic Messages')}${option('google-generative-ai', transport, 'Google Generative AI')}</select></label>
-            <label><span>${tr('Model', '模型')}</span><input name="model" list="gpi-model-options" maxlength="256" value="${esc(config.model || runtime.model || 'gpt-5.6-luna')}" spellcheck="false" required><datalist id="gpi-model-options">${discovered}</datalist></label>
-            <label><span>${tr('API credential', 'API 凭据')}</span><input name="api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="${savedCredential ? tr('Re-enter to verify or replace', '重新输入以验证或更换') : tr('Paste once; it will not be shown again', '仅粘贴一次，之后不再显示')}" required></label>
-          </div>
-          <div class="gpi-config-note">${tr('Pi supports many provider brands. Service type selects the provider; compatibility protocol selects its wire API. For CLIProxyAPI on port 8317, use OpenAI Chat Completions.', 'Pi 支持很多模型提供方。“服务类型”表示接入对象，“兼容协议”表示实际通信格式；CLIProxyAPI 的 8317 端口请选择 OpenAI Chat Completions。')}</div>
-          ${state.availableModels.length ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Models reported by this service:', '该服务返回的可用模型：')} ${esc(state.availableModels.slice(0, 12).join(', '))}</div>` : ''}
-          ${savedCredential ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('A private credential is saved, but a newly entered credential is still required to verify or change this connection.', '本机已有私有凭据；为验证或更换连接，仍需重新输入一次凭据。')}</div>` : ''}
-          ${runtimeMissing.length ? `<div class="gpi-config-note warn">${tr('The Pi runtime also needs attention before chat can open:', '聊天开放前还需要处理 Pi 运行环境：')} ${esc(runtimeMissing.join(', '))}</div>` : ''}
-          ${staticPreview ? `<div class="gpi-config-note warn"><strong>${tr('Static preview only.', '当前只是静态预览。')}</strong>&nbsp;${tr('Start EasyICU, then open http://127.0.0.1:8765/#guided. This file:// page cannot verify any credential.', '请启动 EasyICU，再打开 http://127.0.0.1:8765/#guided；当前 file:// 页面无法验证任何凭据。')}</div>` : ''}
-          <label class="gpi-optin"><input name="enable_ai" type="checkbox" required> <span>${tr('I authorize this verification request and external AI use for Pi Copilot. Chat text, PHI-safe summaries, and workspace file contents may be sent to this configured service. Do not place PHI, patient rows, credentials, or private clinical data in the workspace.', '我授权本次连接验证，并允许 Pi Copilot 使用外部 AI；对话文字、经 PHI 安全投影的摘要和工作区文件内容可能发送到所配置的服务。请勿在工作区放置 PHI、患者行级数据、凭据或私密临床数据。')}</span></label>
-          ${state.error ? `<div class="gpi-error inline">${esc(state.error)}</div>` : ''}
-          <div class="gpi-setup-actions">
-            ${canCancel ? `<button class="btn" type="button" data-gpi-cancel-setup>${tr('Back to conversation', '返回对话')}</button>` : `<button class="gpi-link" type="button" data-gpi-legacy>${tr('Use local Guided workflow', '使用本地研究引导流程')}</button>`}
-            <button class="btn primary" type="submit" ${state.setupSaving || staticPreview ? 'disabled' : ''}>${state.setupSaving ? tr('Verifying…', '正在验证…') : tr('Verify and enter Copilot', '验证并进入 Copilot')}</button>
-          </div>
-          <div class="gpi-consent">${tr('Verification calls only the service model-list endpoint. The credential is never written to project files, browser storage, logs, or Pi session history.', '验证仅调用服务的模型列表接口。凭据不会写入项目文件、浏览器存储、日志或 Pi 会话历史。')}</div>
-        </form>
-      </div>`;
+    /* screens-guided-pi-blockers.js owns which codes are runtime problems,
+       what each one means in plain language, and what fixes it. This file
+       only lays the result out. */
+    const runtimeMissing = window.EU_PI_BLOCKERS
+      ? window.EU_PI_BLOCKERS.describe(blockers, runtime)
+      : [];
+    const owner = window.EU_GUIDED_PI_PROVIDER;
+    if (!owner || typeof owner.renderSetup !== 'function') return '';
+    return owner.renderSetup({
+      state, runtime, config, blockers, runtimeMissing, tr, esc, option,
+      providerPreset, runtimeReady: runtimeReady(), apiResearchReady: apiResearchReady(),
+      connectionConfigured: connectionConfigured(), connectionReady: connectionReady(),
+      staticPreview: isStaticPreview(),
+    });
+  }
+
+  function providerBindingSummary() {
+    const owner = window.EU_GUIDED_PI_PROVIDER;
+    return owner && typeof owner.renderBindingSummary === 'function'
+      ? owner.renderBindingSummary({ state, tr, esc, runtimeReady: runtimeReady(), apiResearchReady: apiResearchReady(), connectionReady: connectionReady() })
+      : '';
   }
 
   function activatePanel() {
@@ -556,6 +566,7 @@
         <div class="gpi-kicker">PI AGENTSESSION · EASYICU GATEWAY</div>
         <h2>${tr('Start a conversation in this project', '在当前项目中开始对话')}</h2>
         <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc((state.project && state.project.title) || projectId())}</strong></div>
+        ${providerBindingSummary()}
         <button class="btn gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 16)} ${tr('View the complete research workflow demo', '查看完整科研流程演示')}</button>
         ${state.projectInitialization && state.projectInitialization.required ? `<div class="gpi-config-note warn"><strong>${tr('Study setup confirmation required.', '需要确认研究配置初始化。')}</strong> ${tr('No complete saved setup was found. Activating Pi will create an explicitly acknowledged empty StudyContext and collect the missing fields here in conversation.', '未找到完整的已保存配置。启用 Pi 后会在你明确确认下创建空的 StudyContext，并在当前对话中继续收集缺失字段。')}</div>` : ''}
         <p>${tr('Choose the tool boundary for this conversation. Research mode works with study configuration and evidence; Workspace mode also creates, edits, checks, and previews artifacts inside this project’s isolated folder.', '请选择这段对话的工具边界。研究模式处理研究配置与证据；项目工作区模式还可以在当前项目的隔离目录中创建、编辑、检查并预览产物。')}</p>
@@ -834,6 +845,8 @@
   function sessionPanel() {
     const session = state.session || {};
     const model = session.model || {};
+    const research = session.research_provider || {};
+    const connection = session.model_connection || null;
     const messages = state.messages.map(messageHtml).join('');
     const stale = sessionIsStale();
     const workspace = agentMode() === 'workspace';
@@ -846,7 +859,9 @@
               <button type="button" data-gpi-mode-switch="research" aria-pressed="${!workspace}">${tr('Research', '研究')}</button>
               <button type="button" data-gpi-mode-switch="workspace" aria-pressed="${workspace}">${tr('Workspace', '工作区')}</button>
             </div>
-            <span>${esc(model.id || (state.runtime && state.runtime.model) || 'model')}</span>
+            ${connection
+              ? `<span title="${tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')}">${esc([connection.provider, connection.model].filter(Boolean).join(' · ') || 'model')}</span>`
+              : `<span title="${tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定')}">${esc([model.id || (state.runtime && state.runtime.model), research.provider, research.model].filter(Boolean).join(' / ') || 'legacy model binding')}</span>`}
             <button class="btn sm gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 14)} ${tr('Full demo', '完整演示')}</button>
             <button class="gpi-link" type="button" data-gpi-presentation-pin aria-pressed="${session.pinned_for_presentation ? 'true' : 'false'}">${session.pinned_for_presentation ? tr('Saved for presentation', '已保留演示') : tr('Save for presentation', '保留演示')}</button>
             <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
@@ -1001,7 +1016,7 @@
     state.host.hidden = false;
     state.host.innerHTML = state.shell === 'legacy'
       ? statusBanner()
-      : (state.demoMode ? demoPanel() : ((state.showSetup || !runtimeReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel()))));
+      : (state.demoMode ? demoPanel() : ((state.showSetup || !connectionReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel()))));
     syncProjectWorkflowAside();
     requestAnimationFrame(() => {
       const log = state.host && state.host.querySelector('[data-gpi-log]');
@@ -1021,10 +1036,11 @@
     try {
       const payload = await api().loadPiCopilotStatus();
       state.runtime = payload && payload.runtime;
+      await loadCodexResearchStatus(false);
       if (projectId()) {
         await prepareProject();
       }
-      if (!runtimeReady()) {
+      if (!connectionReady()) {
         state.showSetup = true;
       }
     } catch (error) {
@@ -1033,6 +1049,108 @@
     } finally {
       state.loading = false; render();
     }
+  }
+
+  function stopCodexPoll() {
+    if (state.codexPoll) window.clearTimeout(state.codexPoll);
+    state.codexPoll = null;
+  }
+
+  async function loadCodexModels(renderAfter) {
+    if (!api().loadPiCopilotCodexModels) return;
+    try {
+      const payload = await api().loadPiCopilotCodexModels();
+      state.codexModels = Array.isArray(payload && payload.models) ? payload.models : [];
+      if (!state.researchModel || !state.codexModels.some(row => row.id === state.researchModel)) {
+        const preferred = state.codexModels.find(row => row.is_default) || state.codexModels[0];
+        state.researchModel = preferred ? String(preferred.id || '') : '';
+      }
+    } catch (error) {
+      state.codexModels = [];
+      if (renderAfter) state.error = errorText(error);
+    }
+    if (renderAfter) render();
+  }
+
+  async function loadCodexResearchStatus(renderAfter) {
+    if (!api().loadPiCopilotCodexStatus) return;
+    try {
+      const payload = await api().loadPiCopilotCodexStatus();
+      state.codexAuth = payload && payload.auth ? payload.auth : null;
+      if (state.codexAuth && state.codexAuth.authentication_verified) {
+        stopCodexPoll();
+        state.codexLogin = null;
+        await loadCodexModels(false);
+      } else if (state.codexAuth && state.codexAuth.account_session_status === 'codex_auth_login_pending') {
+        stopCodexPoll();
+        state.codexPoll = window.setTimeout(() => loadCodexResearchStatus(true), 1500);
+      }
+    } catch (error) {
+      state.codexAuth = null;
+      if (renderAfter) state.error = errorText(error);
+    }
+    if (renderAfter) render();
+  }
+
+  async function startCodexLogin(flow, popup) {
+    if (state.codexBusy || !api().startPiCopilotCodexLogin) return;
+    state.codexBusy = true; state.error = ''; render();
+    try {
+      if (api().saveSetting) await api().saveSetting('ai_enabled', true);
+      const runtimePayload = await api().loadPiCopilotStatus();
+      state.runtime = runtimePayload && runtimePayload.runtime;
+      const payload = await api().startPiCopilotCodexLogin(flow || 'browser');
+      state.codexAuth = payload && payload.auth ? payload.auth : state.codexAuth;
+      state.codexLogin = payload && payload.login_started ? {
+        auth_url: payload.auth_url || payload.verification_url || '',
+        user_code: payload.user_code || '',
+      } : null;
+      const authUrl = String((payload && (payload.auth_url || payload.verification_url)) || '');
+      if (authUrl) {
+        if (popup && !popup.closed) popup.location.href = authUrl;
+        else window.open(authUrl, '_blank', 'noopener,noreferrer');
+      } else if (popup && !popup.closed) {
+        popup.close();
+      }
+      await loadCodexResearchStatus(false);
+    } catch (error) {
+      if (popup && !popup.closed) popup.close();
+      state.error = errorText(error);
+    } finally {
+      state.codexBusy = false; render();
+    }
+  }
+
+  function openAuthorizationPopup() {
+    const popup = window.open('about:blank', '_blank');
+    if (popup) {
+      try { popup.opener = null; } catch (error) {}
+    }
+    return popup;
+  }
+
+  async function cancelCodexLogin() {
+    if (state.codexBusy || !api().cancelPiCopilotCodexLogin) return;
+    state.codexBusy = true; state.error = ''; render();
+    try {
+      const payload = await api().cancelPiCopilotCodexLogin();
+      stopCodexPoll();
+      state.codexAuth = payload && payload.auth ? payload.auth : null;
+      state.codexLogin = null;
+    } catch (error) { state.error = errorText(error); }
+    finally { state.codexBusy = false; render(); }
+  }
+
+  async function logoutCodex() {
+    if (state.codexBusy || !api().logoutPiCopilotCodex) return;
+    state.codexBusy = true; state.error = ''; render();
+    try {
+      const payload = await api().logoutPiCopilotCodex();
+      stopCodexPoll();
+      state.codexAuth = payload && payload.auth ? payload.auth : null;
+      state.codexLogin = null; state.codexModels = []; state.researchModel = '';
+    } catch (error) { state.error = errorText(error); }
+    finally { state.codexBusy = false; render(); }
   }
 
   async function configureProvider(form) {
@@ -1058,11 +1176,7 @@
         state.error = tr('The model connection was saved, but the Pi runtime is not ready yet.', '模型连接已保存，但 Pi 运行环境尚未就绪。');
         return;
       }
-      state.showSetup = false;
-      if (projectId()) {
-        await prepareProject();
-        await createSession();
-      }
+      state.error = '';
     } catch (error) {
       state.availableModels = Array.isArray(error && error.details && error.details.available_models)
         ? error.details.available_models.map(String) : [];
@@ -1072,8 +1186,43 @@
     }
   }
 
+  async function finishProviderSetup() {
+    if (!connectionConfigured()) return;
+    state.setupSaving = true; state.error = ''; render();
+    try {
+      if (!shellReady() && api().saveSetting) {
+        await api().saveSetting('ai_enabled', true);
+        const payload = await api().loadPiCopilotStatus();
+        state.runtime = payload && payload.runtime;
+      }
+      if (!connectionReady()) {
+        throw new Error(tr('The selected model connection is not ready yet.', '所选模型连接尚未就绪。'));
+      }
+      state.showSetup = false;
+    } catch (error) {
+      state.error = errorText(error);
+    } finally {
+      state.setupSaving = false; render();
+    }
+  }
+
   async function createSession() {
     if (state.creating || !projectId()) return;
+    if (!connectionReady()) {
+      state.showSetup = true;
+      state.error = tr('Finish the one model connection before starting a conversation.', '请先完成这一套模型连接，再开始对话。');
+      render(); return;
+    }
+    if (state.researchProvider === 'codex' && (!state.codexAuth || !state.codexAuth.authentication_verified || !state.researchModel)) {
+      state.showSetup = true;
+      state.error = tr('Connect your ChatGPT account and select an account model first.', '请先连接 ChatGPT 账户并选择账户模型。');
+      render(); return;
+    }
+    if (state.researchProvider === 'api' && !apiResearchReady()) {
+      state.showSetup = true;
+      state.error = tr('Research Agent currently requires an OpenAI Chat Completions-compatible API connection.', 'Research Agent 当前需要 OpenAI Chat Completions 兼容 API 连接。');
+      render(); return;
+    }
     state.creating = true; state.error = ''; state.pendingAuthorityRebind = false; render();
     try {
       const payload = await api().createPiCopilotSession({
@@ -1082,6 +1231,8 @@
         agent_mode: state.agentMode,
         language: window.EU_LANG === 'zh' ? 'zh' : 'en',
         thinking_level: 'off', external_llm_opt_in: true,
+        research_provider: state.researchProvider,
+        research_model: state.researchProvider === 'codex' ? state.researchModel : null,
       });
       state.session = payload.session; state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || state.agentMode;
@@ -1449,7 +1600,7 @@
 
   async function loadProjectSessions() {
     const expectedProjectId = projectId();
-    if (!runtimeReady() || !expectedProjectId) return;
+    if (!connectionReady() || !expectedProjectId) return;
     const listed = await api().loadPiCopilotSessions(100, expectedProjectId);
     if (expectedProjectId !== projectId()) return;
     state.sessions = (listed && listed.sessions) || [];
@@ -1502,7 +1653,7 @@
         state.project = { ...state.project, binding_receipt: null };
       }
       await loadWorkflow();
-      if (runtimeReady()) await loadProjectSessions();
+      if (connectionReady()) await loadProjectSessions();
     } catch (error) {
       if (expectedProjectId !== projectId()) return;
       if (error && error.code === 'pi_project_initialization_required') {
@@ -1751,6 +1902,36 @@
       if (modeSwitch) { switchMode(modeSwitch.dataset.gpiModeSwitch); return; }
       const accessMode = event.target.closest('[data-gpi-access-mode]');
       if (accessMode) { state.accessMode = accessMode.dataset.gpiAccessMode || 'assist'; render(); return; }
+      const researchProvider = event.target.closest('[data-gpi-research-provider]');
+      if (researchProvider) {
+        state.researchProvider = researchProvider.dataset.gpiResearchProvider === 'codex' ? 'codex' : 'api';
+        state.error = '';
+        if (state.researchProvider === 'codex') loadCodexResearchStatus(true);
+        else render();
+        return;
+      }
+      if (event.target.closest('[data-gpi-codex-login]')) {
+        const popup = openAuthorizationPopup();
+        startCodexLogin('browser', popup); return;
+      }
+      if (event.target.closest('[data-gpi-codex-device]')) {
+        const popup = openAuthorizationPopup();
+        startCodexLogin('device_code', popup); return;
+      }
+      if (event.target.closest('[data-gpi-codex-cancel]')) { cancelCodexLogin(); return; }
+      if (event.target.closest('[data-gpi-codex-logout]')) { logoutCodex(); return; }
+      if (event.target.closest('[data-gpi-codex-models]')) { loadCodexModels(true); return; }
+      if (event.target.closest('[data-gpi-provider-done]')) {
+        if (state.researchProvider === 'codex' && (!state.codexAuth || !state.codexAuth.authentication_verified || !state.researchModel)) {
+          state.error = tr('Connect your ChatGPT account and select an account model first.', '请先连接 ChatGPT 账户并选择账户模型。');
+          render(); return;
+        }
+        if (state.researchProvider === 'api' && !apiResearchReady()) {
+          state.error = tr('Research Agent currently requires an OpenAI Chat Completions-compatible API connection.', 'Research Agent 当前需要 OpenAI Chat Completions 兼容 API 连接。');
+          render(); return;
+        }
+        finishProviderSetup(); return;
+      }
       if (event.target.closest('[data-gpi-retry]')) { loadStatus(); return; }
       if (event.target.closest('[data-gpi-setup]')) { state.showSetup = true; setShell('pi'); return; }
       if (event.target.closest('[data-gpi-open]')) { setShell('pi'); return; }
@@ -1771,6 +1952,10 @@
       if (event.target.matches('[data-gpi-input]')) state.draft = event.target.value;
     });
     state.host.addEventListener('change', event => {
+      if (event.target.matches('[data-gpi-codex-model]')) {
+        state.researchModel = String(event.target.value || '');
+        state.error = ''; render(); return;
+      }
       if (!event.target.matches('[data-gpi-provider-preset]')) return;
       const form = event.target.closest('[data-gpi-provider-form]');
       if (!form) return;
@@ -1778,6 +1963,8 @@
         cliproxyapi: { provider: 'easyicu-local', base_url: 'http://127.0.0.1:8317/v1', api_transport: 'openai-completions', model: 'gpt-5.6-luna' },
         'custom-openai': { provider: 'custom-openai', base_url: 'https://example.com/v1', api_transport: 'openai-completions', model: '' },
         openai: { provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses', model: 'gpt-5.6-luna' },
+        openrouter: { provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1', api_transport: 'openai-completions', model: '' },
+        deepseek: { provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_transport: 'openai-completions', model: 'deepseek-chat' },
         anthropic: { provider: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_transport: 'anthropic-messages', model: 'claude-sonnet-4-6' },
         google: { provider: 'google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_transport: 'google-generative-ai', model: 'gemini-3.5-flash' },
       };
@@ -1809,7 +1996,7 @@
     wire(); loadStatus();
   }
   function unmount() {
-    closeSource(); closeChildSource(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
+    stopCodexPoll(); closeSource(); closeChildSource(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
   }
   window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive };
 })();

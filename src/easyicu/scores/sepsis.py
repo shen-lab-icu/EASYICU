@@ -316,13 +316,14 @@ def _si_and(
     if merged.empty:
         return pd.DataFrame(columns=id_cols + [index_col, 'susp_inf'])
     
-    # Method 1: ABX → sampling (samp_time in [abx_time, abx_time + abx_win))
+    # Method 1: ABX -> sampling; ricu's rolling join includes the exact
+    # window boundary, so a sample exactly at abx_time + abx_win links too.
     m1 = merged[(merged['_samp_time'] >= merged['_abx_time']) &
-                (merged['_samp_time'] < merged['_abx_time'] + abx_win_val)]
-    
-    # Method 2: Sampling → ABX (abx_time in [samp_time, samp_time + samp_win))
+                (merged['_samp_time'] <= merged['_abx_time'] + abx_win_val)]
+
+    # Method 2: Sampling -> ABX; same inclusive upper boundary.
     m2 = merged[(merged['_abx_time'] >= merged['_samp_time']) &
-                (merged['_abx_time'] < merged['_samp_time'] + samp_win_val)]
+                (merged['_abx_time'] <= merged['_samp_time'] + samp_win_val)]
     
     parts = []
     if not m1.empty:

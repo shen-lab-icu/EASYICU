@@ -114,6 +114,7 @@ def sep3_sofa2(
 
     # Apply si_window filter: "first", "last", or "any"
     if si_window in ("first", "last"):
+        si_events = si_events.sort_values(index_col)
         grp = si_events.groupby(id_cols, as_index=False)
         si_events = grp.first() if si_window == "first" else grp.last()
         si_events = si_events.reset_index(drop=True)

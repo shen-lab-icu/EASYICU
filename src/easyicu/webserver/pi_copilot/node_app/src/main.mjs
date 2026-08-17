@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
@@ -24,6 +32,9 @@ import {
 const PROTOCOL_VERSION = "easyicu.pi-copilot/1";
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_TEXT_CHARS = 12000;
+const MAX_CODEX_AUTH_BYTES = 256 * 1024;
+const CODEX_PROVIDER = "openai-codex";
+const CODEX_API = "openai-codex-responses";
 const SESSION_DIR = resolve(
   process.env.EASYICU_PI_SESSION_DIR || join(process.cwd(), ".easyicu-pi-sessions"),
 );
@@ -250,13 +261,105 @@ function shellPricingConfig() {
   return values;
 }
 
+function codexCredentialFromFile(authFile) {
+  if (!isAbsolute(authFile) || realpathSync(authFile) !== authFile) {
+    throw Object.assign(new Error("Codex account credential path is invalid"), {
+      code: "pi_codex_auth_file_invalid",
+    });
+  }
+  const metadata = lstatSync(authFile);
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > MAX_CODEX_AUTH_BYTES || (metadata.mode & 0o077) !== 0) {
+    throw Object.assign(new Error("Codex account credential file is not private"), {
+      code: "pi_codex_auth_file_invalid",
+    });
+  }
+  let payload;
+  try {
+    payload = JSON.parse(readFileSync(authFile, "utf8"));
+  } catch {
+    throw Object.assign(new Error("Codex account credential file is unreadable"), {
+      code: "pi_codex_auth_file_invalid",
+    });
+  }
+  const access = String(payload?.tokens?.access_token || "").trim();
+  const refresh = String(payload?.tokens?.refresh_token || "").trim();
+  const segments = access.split(".");
+  let claims;
+  try {
+    claims = segments.length >= 2
+      ? JSON.parse(Buffer.from(segments[1], "base64url").toString("utf8"))
+      : null;
+  } catch {
+    claims = null;
+  }
+  const expires = Number(claims?.exp || 0) * 1000;
+  if (!access || !refresh || !Number.isSafeInteger(expires) || expires <= Date.now() + (5 * 60 * 1000)) {
+    throw Object.assign(new Error("Codex account credential needs a host refresh"), {
+      code: "pi_codex_auth_refresh_required",
+    });
+  }
+  return {
+    type: "oauth",
+    access,
+    refresh,
+    expires,
+    accountId: String(payload?.tokens?.account_id || "").trim() || undefined,
+  };
+}
+
+class CodexAuthFileCredentialStore {
+  constructor(authFile) {
+    this.authFile = authFile;
+  }
+
+  async read(providerId, options) {
+    options?.signal?.throwIfAborted();
+    return providerId === CODEX_PROVIDER
+      ? codexCredentialFromFile(this.authFile)
+      : undefined;
+  }
+
+  async list(options) {
+    options?.signal?.throwIfAborted();
+    codexCredentialFromFile(this.authFile);
+    return [{ providerId: CODEX_PROVIDER, type: "oauth" }];
+  }
+
+  async modify(providerId, fn, options) {
+    options?.signal?.throwIfAborted();
+    if (providerId !== CODEX_PROVIDER) return undefined;
+    const current = codexCredentialFromFile(this.authFile);
+    const replacement = await fn(current);
+    if (replacement !== undefined) {
+      throw Object.assign(
+        new Error("Codex credential refresh must remain owned by the isolated App Server"),
+        { code: "pi_codex_credential_refresh_owner_mismatch" },
+      );
+    }
+    return current;
+  }
+
+  async delete() {
+    throw Object.assign(
+      new Error("Codex account logout must remain owned by the browser session"),
+      { code: "pi_codex_logout_owner_mismatch" },
+    );
+  }
+}
+
 function modelConfig() {
+  const codexAuthFile = String(process.env.EASYICU_PI_CODEX_AUTH_FILE || "").trim();
+  const accountBacked = Boolean(codexAuthFile);
   const apiKey = String(process.env.EASYICU_PI_API_KEY || "").trim();
-  const baseUrl = String(process.env.EASYICU_PI_BASE_URL || "http://127.0.0.1:8317/v1").trim();
+  const baseUrl = String(process.env.EASYICU_PI_BASE_URL || (accountBacked ? "https://chatgpt.com/backend-api" : "http://127.0.0.1:8317/v1")).trim();
   const model = String(process.env.EASYICU_PI_MODEL || "gpt-5.6-luna").trim();
-  const provider = String(process.env.EASYICU_PI_PROVIDER || "easyicu-local").trim();
-  const api = String(process.env.EASYICU_PI_API || "openai-completions").trim();
-  if (!apiKey) throw Object.assign(new Error("EASYICU_PI_API_KEY is not configured"), { code: "pi_api_key_missing" });
+  const provider = accountBacked
+    ? CODEX_PROVIDER
+    : String(process.env.EASYICU_PI_PROVIDER || "easyicu-local").trim();
+  const api = accountBacked
+    ? CODEX_API
+    : String(process.env.EASYICU_PI_API || "openai-completions").trim();
+  if (!accountBacked && !apiKey) throw Object.assign(new Error("EASYICU_PI_API_KEY is not configured"), { code: "pi_api_key_missing" });
   if (!baseUrl || !model || !provider) {
     throw Object.assign(new Error("Pi provider configuration is incomplete"), { code: "pi_model_config_invalid" });
   }
@@ -264,6 +367,7 @@ function modelConfig() {
     "anthropic-messages",
     "google-generative-ai",
     "openai-completions",
+    "openai-codex-responses",
     "openai-responses",
   ]).has(api)) {
     throw Object.assign(new Error(`unsupported Pi API transport: ${api}`), { code: "pi_api_transport_unsupported" });
@@ -274,6 +378,7 @@ function modelConfig() {
   );
   return {
     apiKey,
+    codexAuthFile,
     baseUrl,
     model,
     provider,
@@ -303,32 +408,42 @@ async function getModelRuntime() {
   if (modelRuntimePromise) return modelRuntimePromise;
   modelRuntimePromise = (async () => {
     const config = modelConfig();
-    temporaryModelDir = mkdtempSync(join(tmpdir(), "easyicu-pi-model-"));
-    const modelsPath = join(temporaryModelDir, "models.json");
-    const payload = {
-      providers: {
-        [config.provider]: {
-          baseUrl: config.baseUrl,
-          api: config.api,
-          authHeader: config.api === "openai-completions" || config.api === "openai-responses",
-          models: [
-            {
-              id: config.model,
-              name: config.model,
-              reasoning: true,
-              input: ["text"],
-              contextWindow: config.contextWindow,
-              maxTokens: config.maxTokens,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          ],
+    let runtime;
+    if (config.codexAuthFile) {
+      const credentials = new CodexAuthFileCredentialStore(config.codexAuthFile);
+      runtime = await ModelRuntime.create({
+        credentials,
+        modelsPath: null,
+        refreshOnCreate: false,
+      });
+    } else {
+      temporaryModelDir = mkdtempSync(join(tmpdir(), "easyicu-pi-model-"));
+      const modelsPath = join(temporaryModelDir, "models.json");
+      const payload = {
+        providers: {
+          [config.provider]: {
+            baseUrl: config.baseUrl,
+            api: config.api,
+            authHeader: config.api === "openai-completions" || config.api === "openai-responses",
+            models: [
+              {
+                id: config.model,
+                name: config.model,
+                reasoning: true,
+                input: ["text"],
+                contextWindow: config.contextWindow,
+                maxTokens: config.maxTokens,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
         },
-      },
-    };
-    writeFileSync(modelsPath, JSON.stringify(payload), { encoding: "utf8", mode: 0o600 });
-    const credentials = new InMemoryCredentialStore();
-    const runtime = await ModelRuntime.create({ credentials, modelsPath });
-    await runtime.setRuntimeApiKey(config.provider, config.apiKey);
+      };
+      writeFileSync(modelsPath, JSON.stringify(payload), { encoding: "utf8", mode: 0o600 });
+      const credentials = new InMemoryCredentialStore();
+      runtime = await ModelRuntime.create({ credentials, modelsPath });
+      await runtime.setRuntimeApiKey(config.provider, config.apiKey);
+    }
     const selected = runtime.getModel(config.provider, config.model);
     if (!selected) throw Object.assign(new Error("configured Pi model did not load"), { code: "pi_model_not_found" });
     return { runtime, selected, config };
@@ -788,7 +903,10 @@ async function handleRequest(request) {
         gateway: "ready",
         pi_package_version: "0.84.1",
         pi_source_commit: "9dd90a49711d088b86fdd9b4aea575913a8328a8",
-        model_configured: Boolean(String(process.env.EASYICU_PI_API_KEY || "").trim()),
+        model_configured: Boolean(
+          String(process.env.EASYICU_PI_API_KEY || "").trim()
+          || String(process.env.EASYICU_PI_CODEX_AUTH_FILE || "").trim()
+        ),
         model: String(process.env.EASYICU_PI_MODEL || "gpt-5.6-luna"),
         provider: String(process.env.EASYICU_PI_PROVIDER || "easyicu-local"),
         built_in_tools_enabled: [],

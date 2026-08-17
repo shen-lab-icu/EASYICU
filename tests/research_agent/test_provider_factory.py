@@ -13,6 +13,17 @@ _PROVIDER_ENV_KEYS = (
     "OPENAI_BASE_URL",
     "OPENROUTER_API_KEY",
     "OPENROUTER_BASE_URL",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_BASE_URL",
+    "DEEPSEEK_MODEL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "EASYICU_LLM_API_KEY",
+    "EASYICU_LLM_BASE_URL",
+    "EASYICU_LLM_MODEL",
+    "CUSTOM_BASE_URL",
+    "CUSTOM_MODEL",
     "EASYICU_ALLOW_EXTERNAL_LLM",
     "EASYICU_OPENAI_AUTH_HEADER",
     "EASYICU_TRUST_LOOPBACK_PROXY_KEY",
@@ -95,6 +106,10 @@ def test_loopback_url_classification_is_parsed_and_strict(ra, base_url, expected
 
 def _install_entrypoint_recorders(monkeypatch, ra):
     import easyicu.research_agent.mcp_server as mcp
+    import easyicu.research_agent.providers as provider_package
+    from easyicu.research_agent.providers.factory import (
+        build_provider_client as real_builder,
+    )
     import tools.run_discovery_to_manuscript as discovery
     import tools.run_research_agent_bench as benchmark
 
@@ -107,9 +122,24 @@ def _install_entrypoint_recorders(monkeypatch, ra):
 
         return RecordingClient
 
-    monkeypatch.setattr(mcp, "OpenAIClient", recorder("mcp"))
-    monkeypatch.setattr(discovery, "OpenAIClient", recorder("discovery"))
-    monkeypatch.setattr(ra, "OpenAIClient", recorder("benchmark"))
+    def recording_builder(label: str):
+        def build(**kwargs):
+            kwargs.pop("client_cls", None)
+            return real_builder(client_cls=recorder(label), **kwargs)
+
+        return build
+
+    monkeypatch.setattr(mcp, "build_provider_client", recording_builder("mcp"))
+    monkeypatch.setattr(
+        discovery,
+        "build_provider_client",
+        recording_builder("discovery"),
+    )
+    monkeypatch.setattr(
+        provider_package,
+        "build_provider_client",
+        recording_builder("benchmark"),
+    )
     return mcp, discovery, benchmark, seen
 
 
@@ -161,6 +191,25 @@ def test_openrouter_contract_is_consistent_across_all_three_entries(ra, monkeypa
             "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
             "X-Title": expected_titles[entry],
         }
+
+
+def test_deepseek_contract_is_consistent_across_all_three_entries(ra, monkeypatch):
+    mcp, discovery, benchmark, seen = _install_entrypoint_recorders(monkeypatch, ra)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("OPENAI_API_KEY", "wrong-openai-secret")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "wrong-router-secret")
+    monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
+
+    _build_all_three(mcp, discovery, benchmark, provider="deepseek")
+
+    assert set(seen) == {"mcp", "discovery", "benchmark"}
+    for kwargs in seen.values():
+        assert kwargs["api_key"] == "deepseek-secret"
+        assert kwargs["base_url"] == "https://api.deepseek.com"
+        assert kwargs["model"] == "openai/gpt-oss-120b:free"
+        assert kwargs["request_timeout"] == 17.0
+        assert "extra_headers" not in kwargs
 
 
 def test_loopback_openai_never_forwards_paid_secrets_from_any_entry(ra, monkeypatch):
@@ -276,12 +325,21 @@ def test_loopback_opt_in_does_not_forward_real_key_to_per_request_override(
     # harvest it from the Authorization header.
     import easyicu.research_agent.mcp_server as mcp
     from easyicu.research_agent.providers import LOCAL_OPENAI_DUMMY_API_KEY
+    from easyicu.research_agent.providers.factory import (
+        build_provider_client as real_builder,
+    )
 
     constructed: list[dict[str, Any]] = []
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-proxy-key")
     monkeypatch.setenv("EASYICU_TRUST_LOOPBACK_PROXY_KEY", "1")
+    class RecordingClient:
+        def __init__(self, **kwargs):
+            constructed.append(kwargs)
+
     monkeypatch.setattr(
-        mcp, "OpenAIClient", lambda **kwargs: constructed.append(kwargs)
+        mcp,
+        "build_provider_client",
+        lambda **kwargs: real_builder(client_cls=RecordingClient, **kwargs),
     )
 
     client, error = mcp._build_run_llm(
@@ -341,6 +399,7 @@ def test_benchmark_adaptive_reasoning_is_explicit_and_role_scoped(ra, monkeypatc
         model="gpt-5.6-luna",
         request_timeout=17.0,
         reasoning_effort_profile="adaptive_v1",
+        planner_strict_json_schema=True,
     )
 
     assert router.for_role("planner") is router.for_role("coder")
@@ -360,9 +419,16 @@ def test_benchmark_adaptive_reasoning_is_explicit_and_role_scoped(ra, monkeypatc
         reasoning_effort_profile="adaptive_v1",
         request_timeout=17.0,
         transport_max_attempts=1,
+        planner_strict_json_schema=True,
     )
     actual_identity = benchmark._benchmark_execution_identity({}, router)
     assert actual_identity.identity_sha256 == expected_identity.identity_sha256
+    assert (
+        actual_identity.provider_authorization["clients"][0]["transport_policy"][
+            "strict_json_schema_enabled"
+        ]
+        is True
+    )
     assert len(constructed) == 3
 
 
@@ -425,9 +491,7 @@ def test_benchmark_identity_uses_the_same_explicit_provider_environment(
 
 
 @pytest.mark.parametrize("attempts", [0, -1, True, 1.5, "2"])
-def test_benchmark_invalid_transport_attempts_fail_closed(
-    ra, attempts: object
-) -> None:
+def test_benchmark_invalid_transport_attempts_fail_closed(ra, attempts: object) -> None:
     import tools.run_research_agent_bench as benchmark
 
     with pytest.raises(ValueError, match="must be a positive integer"):
@@ -519,13 +583,21 @@ def test_provider_keys_are_not_interchangeable_across_entrypoints(
 
 def test_mcp_rejects_wildcard_bind_address_as_per_call_loopback(ra, monkeypatch):
     import easyicu.research_agent.mcp_server as mcp
+    from easyicu.research_agent.providers.factory import (
+        build_provider_client as real_builder,
+    )
 
     constructed = []
+
+    class RecordingClient:
+        def __init__(self, **kwargs):
+            constructed.append(kwargs)
+
     monkeypatch.setenv("OPENAI_API_KEY", "paid-openai-secret")
     monkeypatch.setattr(
         mcp,
-        "OpenAIClient",
-        lambda **kwargs: constructed.append(kwargs),
+        "build_provider_client",
+        lambda **kwargs: real_builder(client_cls=RecordingClient, **kwargs),
     )
 
     client, error = mcp._build_run_llm(
@@ -587,12 +659,13 @@ def test_factory_authorization_records_exact_nonsecret_endpoint():
             "authorization_mode": "operator_env",
             "authorization_sha256": payload["clients"][0]["authorization_sha256"],
             "transport_policy": {
-                "schema_version": "easyicu.provider_transport_policy/1",
+                "schema_version": "easyicu.provider_transport_policy/2",
                 "transport": "openai_compatible",
                 "request_timeout_seconds": 120.0,
                 "transport_max_attempts": 9,
                 "retryable_http_status_codes": None,
                 "stream_enabled": False,
+                "strict_json_schema_enabled": False,
             },
         }
     ]
@@ -659,12 +732,13 @@ def test_unknown_provider_is_unmanaged_external_and_never_local_exempt():
                 "authorization_mode": "unmanaged",
                 "authorization_sha256": "",
                 "transport_policy": {
-                    "schema_version": "easyicu.provider_transport_policy/1",
+                    "schema_version": "easyicu.provider_transport_policy/2",
                     "transport": "unmanaged",
                     "request_timeout_seconds": None,
                     "transport_max_attempts": None,
                     "retryable_http_status_codes": None,
                     "stream_enabled": None,
+                    "strict_json_schema_enabled": None,
                 },
             }
         ],

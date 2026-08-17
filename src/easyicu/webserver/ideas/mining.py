@@ -35,6 +35,7 @@ from easyicu.research_agent.literature_concepts import (
     concept_id as literature_concept_id,
     literature_concept_phrase,
 )
+from easyicu.webserver import state_paths
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.ideas import direct_evidence_search
@@ -51,8 +52,10 @@ from easyicu.webserver.ideas.prior_art_receipt import (
     load_bound_prior_art_literature as _load_bound_prior_art_literature,
 )
 from easyicu.webserver.input_validation import parse_bool
+# Aliased: `entity_ids` is also a local variable name in this module.
+from easyicu.webserver import entity_ids as entity_id_contract
 
-_CONFIG_DIR = Path.home() / ".easyicu"
+_CONFIG_DIR = state_paths.state_root()
 _RUN_ROOT = _CONFIG_DIR / "idea_mining_runs"
 _HISTORY_PATH = _CONFIG_DIR / "webserver_idea_mining_runs.json"
 _AGENT_PROJECTS_ROOT = _CONFIG_DIR / "agent_project_seeds"
@@ -241,6 +244,11 @@ def scan_literature_folder(body: Dict[str, Any]) -> Dict[str, Any]:
             if len(pdfs) >= _MAX_LITERATURE_PDFS:
                 break
             if any(part.startswith(".") for part in item.parts):
+                continue
+            # Never follow a symlinked PDF out of the selected folder: the
+            # scan hashes and excerpts file bytes, so a link could otherwise
+            # make the server read any local PDF.
+            if item.is_symlink():
                 continue
             if item.is_file():
                 pdfs.append(item)
@@ -742,9 +750,53 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
     metadata/snippets, never full text.
     """
     run_id = str(body.get("run_id") or "").strip()
+    idea_id = str(body.get("idea_id") or "").strip()
     payload = _load_run(run_id) if run_id else None
-    idea = _selected_idea(payload or {}, str(body.get("idea_id") or ""))
+    legacy_prior: Optional[Dict[str, Any]] = None
+    if run_id and payload is None:
+        # Retained pre-ledger review directories remain usable only when the
+        # persisted receipt proves the exact requested run/idea identity.
+        legacy_prior = _load_prior_art(run_id)
+        if legacy_prior is None:
+            raise IdeaMiningWebError(
+                {"error": "idea_run_not_found", "run_id": run_id}
+            )
+        if str(legacy_prior.get("run_id") or "").strip() != run_id:
+            raise IdeaMiningWebError(
+                {"error": "idea_run_not_found", "run_id": run_id}
+            )
+        if (
+            not idea_id
+            or str(legacy_prior.get("idea_id") or "").strip() != idea_id
+        ):
+            raise IdeaMiningWebError(
+                {"error": "idea_not_found", "idea_id": idea_id, "run_id": run_id}
+            )
+
+    idea = _selected_idea(payload or {}, idea_id)
+    if run_id and payload is not None and idea is None:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_not_found",
+                "idea_id": idea_id,
+                "run_id": run_id,
+            }
+        )
     source = ((payload or {}).get("source_evidence") or [{}])[0]
+    if legacy_prior is not None:
+        source = _source_record(body)
+        persisted_prior = legacy_prior.get("prior_art") or {}
+        idea = {
+            "idea_id": idea_id,
+            "idea_title": _clean(
+                body.get("idea_title") or body.get("topic") or idea_id,
+                180,
+            ),
+            "mapped_concepts": [],
+            "prior_art": {
+                "queries_to_run": persisted_prior.get("queries_to_run") or []
+            },
+        }
     if not idea:
         source = _source_record(body)
         idea = {
@@ -986,12 +1038,20 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
         _mark_denominator_unresolved(stats)
     sampled = {row.get("concept_id") for row in stats}
     missing_required = [cid for cid in required if cid not in sampled]
+    unavailable = [row for row in stats if row.get("status") == "sample_unavailable"]
     low = [
         row
         for row in stats
         if row.get("metric_kind") != "event_rate" and row.get("low_coverage")
     ]
-    status = "ready" if stats and not missing_required else "blocked"
+    # Schema-only rows are not a row-level sample: their presence must never
+    # produce an aggregate "ready" verdict.
+    if not stats or missing_required:
+        status = "blocked"
+    elif unavailable:
+        status = "needs_review"
+    else:
+        status = "ready"
     if status == "ready" and low:
         status = "needs_review"
     if not denominator_resolved and status == "ready":
@@ -1063,13 +1123,13 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
     ideas = payload.get("idea_ledger") or []
     idea = next(
         (row for row in ideas if row.get("idea_id") == idea_id),
-        ideas[0] if ideas else None,
+        None,
     )
     if not idea:
         raise IdeaMiningWebError({"error": "idea_not_found", "idea_id": idea_id})
     edits = str(body.get("plan_edits") or "").strip()
     plan_artifact = _load_plan(run_id)
-    plan = dict((plan_artifact or {}).get("plan") or payload.get("handoff_plan") or {})
+    plan = dict(_plan_payload(plan_artifact) or payload.get("handoff_plan") or {})
     if edits:
         plan["human_plan_notes"] = edits[:1200]
         plan["selection_mode"] = "human_curated_with_text_edits"
@@ -1153,12 +1213,29 @@ def create_agent_project(body: Dict[str, Any]) -> Dict[str, Any]:
     """Create a metadata-only Agent Projects seed from a frozen handoff."""
     run_id = str(body.get("run_id") or "").strip()
     idea_id = str(body.get("idea_id") or "").strip()
+    if not run_id or not idea_id:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_identity_required",
+                "run_id": run_id or None,
+                "idea_id": idea_id or None,
+            }
+        )
     handoff = _load_handoff(run_id)
     canonical_packet: Optional[DiscoveryHandoffPacket] = None
     if not handoff:
         handoff = create_handoff(body)
-    if idea_id and str(handoff.get("idea_id") or "") != idea_id:
-        handoff = create_handoff(body)
+    elif (
+        str(handoff.get("run_id") or "").strip() != run_id
+        or str(handoff.get("idea_id") or "").strip() != idea_id
+    ):
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_handoff_identity_mismatch",
+                "run_id": run_id,
+                "idea_id": idea_id,
+            }
+        )
     try:
         # A canonical envelope is immutable evidence. Validate it before any
         # legitimate plan/prior-art refresh so a simultaneous update cannot
@@ -1177,7 +1254,7 @@ def create_agent_project(body: Dict[str, Any]) -> Dict[str, Any]:
                 # Prefer the freshest human plan notes: the on-disk plan (the user's
                 # latest edit, which may never have been re-frozen) over the frozen
                 # handoff notes, so a re-plan is not silently dropped from the seed.
-                plan = _load_plan(run_id) or {}
+                plan = _plan_payload(_load_plan(run_id))
                 refresh_body["plan_edits"] = plan.get("human_plan_notes") or (
                     handoff.get("handoff_plan") or {}
                 ).get("human_plan_notes")
@@ -2276,7 +2353,7 @@ def _feature_stats(
             continue
         if frame.empty or concept_id not in frame.columns:
             continue
-        entity_col = frame["stay_id"].map(dataio._norm_id)
+        entity_col = frame["stay_id"].map(entity_id_contract.normalize_entity_id)
         is_event_rate = _is_event_rate_concept(concept_id)
         non_null_mask = frame[concept_id].notna()
         non_null = frame[non_null_mask].copy()
@@ -2398,7 +2475,7 @@ def _bounded_feature_sample_stat(
             "summary_label": "No usable values were found in the bounded sample.",
             "status": "missing",
         }
-    entity_col = frame["stay_id"].map(dataio._norm_id)
+    entity_col = frame["stay_id"].map(entity_id_contract.normalize_entity_id)
     sample_entities = max(int(entity_col.nunique()), 1)
     is_event_rate = _is_event_rate_concept(concept_id)
     if is_event_rate:
@@ -2794,6 +2871,16 @@ def _load_plan(run_id: str) -> Optional[Dict[str, Any]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _plan_payload(artifact: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return the plan body from current envelopes or legacy direct plans."""
+    if not isinstance(artifact, dict):
+        return {}
+    nested = artifact.get("plan")
+    if isinstance(nested, dict):
+        return nested
+    return artifact
+
+
 def _load_bounded_sample(run_id: str) -> Optional[Dict[str, Any]]:
     if not run_id:
         return None
@@ -2822,14 +2909,13 @@ def _project_for_run(run_id: str) -> Optional[Dict[str, Any]]:
 def _selected_idea(
     payload: Dict[str, Any], idea_id: str = ""
 ) -> Optional[Dict[str, Any]]:
+    idea_id = str(idea_id or "").strip()
+    if not idea_id:
+        return None
     ideas = payload.get("idea_ledger") or []
-    if idea_id:
-        match = next(
-            (row for row in ideas if str(row.get("idea_id") or "") == idea_id), None
-        )
-        if match:
-            return match
-    return ideas[0] if ideas else None
+    return next(
+        (row for row in ideas if str(row.get("idea_id") or "") == idea_id), None
+    )
 
 
 def _read_history() -> List[Dict[str, Any]]:
@@ -2882,17 +2968,32 @@ def _handoff_plan_is_stale(
     stale plan is seeded into Agent Projects. Detect that here so the handoff
     is re-frozen from the newer plan.
     """
-    frozen_notes = str(
-        (handoff.get("handoff_plan") or {}).get("human_plan_notes") or ""
-    ).strip()
+    frozen = handoff.get("handoff_plan") or {}
+    plan_artifact = _load_plan(run_id)
+
+    def _comparable(value: Dict[str, Any]) -> str:
+        return json.dumps(
+            {
+                key: value.get(key)
+                for key in (
+                    "human_plan_notes",
+                    "selection_mode",
+                    "plan_status",
+                    "analysis_plan",
+                    "execution_gate",
+                )
+            },
+            sort_keys=True,
+            default=str,
+        )
+
     body_edits = str(body.get("plan_edits") or "").strip()
-    if body_edits and body_edits != frozen_notes:
+    if body_edits and body_edits != str(frozen.get("human_plan_notes") or "").strip():
         return True
-    plan = _load_plan(run_id) or {}
-    plan_notes = str(plan.get("human_plan_notes") or "").strip()
-    if plan_notes and plan_notes != frozen_notes:
-        return True
-    return False
+    if plan_artifact is None:
+        return False
+    plan = _plan_payload(plan_artifact)
+    return _comparable(plan) != _comparable(frozen)
 
 
 def _handoff_needs_refresh(handoff: Dict[str, Any], run_id: str) -> bool:
@@ -3915,7 +4016,7 @@ def _fetch_url_metadata(url: str) -> Dict[str, Any]:
     return {
         "status": (
             "metadata_fetched"
-            if title or description or doi
+            if title or description
             else ("fetch_failed" if fetch_error else "metadata_fetch_empty")
         ),
         "metadata_source": "html" if title or description else None,
@@ -3926,7 +4027,7 @@ def _fetch_url_metadata(url: str) -> Dict[str, Any]:
         "bytes_read": min(len(raw), _MAX_FETCH_BYTES),
         "reason": (
             fetch_error
-            if fetch_error and not (title or description or doi)
+            if fetch_error and not (title or description)
             else "Stored bounded metadata only; full HTML was not persisted."
         ),
     }
@@ -4148,7 +4249,9 @@ def _pick_outcome(text: str, hits: List[Dict[str, Any]]) -> Optional[Dict[str, A
     for row in hits:
         if row.get("concept_id") in {"death", "los_icu", "aki"}:
             return row
-    return _concept_hit("death")
+    # No outcome evidence in the source text: leave the outcome unassigned
+    # instead of fabricating "death" for every idea.
+    return None
 
 
 def _pick_predictor(
@@ -4408,7 +4511,8 @@ def _pre_experiment_interpretation(
         row
         for row in stats
         if row.get("metric_kind") != "event_rate"
-        and float(row.get("coverage_pct") or 0) < 50
+        and row.get("coverage_pct") is not None
+        and float(row["coverage_pct"]) < 50
         and row.get("status") != "metadata_only"
     ]
     event_rows = [row for row in stats if row.get("metric_kind") == "event_rate"]

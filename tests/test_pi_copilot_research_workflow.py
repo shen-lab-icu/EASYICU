@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 import pandas as pd
+from starlette.requests import Request
 
 from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
 from easyicu.research_agent.reporting.result_card import (
@@ -39,6 +40,7 @@ from easyicu.webserver.pi_copilot import tools as tool_module
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
     PiCopilotError,
+    ResearchProviderBinding,
     PiSessionRecord,
     ToolExecutionContext,
 )
@@ -47,6 +49,22 @@ from easyicu.webserver.pi_copilot.workflow import (
     build_research_workflow_snapshot,
     registered_export_matches_study,
 )
+
+
+def _request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/jobs/agent-run",
+            "raw_path": b"/api/jobs/agent-run",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 123),
+        }
+    )
 
 
 def _complete_study() -> dict[str, Any]:
@@ -2136,7 +2154,12 @@ def test_extraction_uses_bound_study_source_and_returns_no_path(
     )
     from easyicu.webserver.routes import jobs as jobs_route
 
-    def submit(body: dict[str, Any]) -> dict[str, Any]:
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        assert account_environment is None
         submitted.append(dict(body))
         return {
             "job_id": "extract-job-1",
@@ -2286,7 +2309,12 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
     )
     from easyicu.webserver.routes import agent as agent_route
 
-    def submit(body: dict[str, Any]) -> dict[str, Any]:
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        assert account_environment is None
         submitted.append(dict(body))
         return {
             "job_id": "agent-job-full",
@@ -2296,7 +2324,7 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
             "study_context_revision": 5,
         }
 
-    monkeypatch.setattr(agent_route, "jobs_agent_run", submit)
+    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
     context = ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-full-owner",
@@ -2327,6 +2355,78 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
             "credential_source": "pi_verified",
         }
     ]
+
+
+def test_full_run_uses_the_codex_account_frozen_into_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver import codex_account_sessions
+    from easyicu.webserver.routes import agent as agent_route
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        tool_module,
+        "_bound_context",
+        lambda _binding: {
+            **_complete_study(),
+            "question": "Bound aggregate scientific question",
+        },
+    )
+
+    def account_environment(binding: str, *, model: str) -> dict[str, str]:
+        assert binding == "a" * 64
+        assert model == "gpt-5.6-luna"
+        return {
+            "EASYICU_CODEX_SESSION_SHA256": binding,
+            "EASYICU_CODEX_MODEL": model,
+        }
+
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        captured["body"] = dict(body)
+        captured["environment"] = dict(account_environment or {})
+        return {
+            "job_id": "agent-job-codex",
+            "kind": "agent-run",
+            "status": "running",
+            "study_context_id": "study-workflow",
+            "study_context_revision": 5,
+        }
+
+    monkeypatch.setattr(
+        codex_account_sessions,
+        "environment_for_binding",
+        account_environment,
+    )
+    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-codex-owner",
+            external_llm_opt_in=True,
+            research_provider=ResearchProviderBinding(
+                provider="codex",
+                credential_source="codex_user_auth",
+                authentication_mode="chatgpt_account",
+                model="gpt-5.6-luna",
+                account_session_sha256="a" * 64,
+            ),
+            binding=AuthorityBinding(
+                study_context_id="study-workflow",
+                study_revision=4,
+            ),
+        ),
+        allowed_actions={"provider_run"},
+    )
+
+    result = tool_module.execute_tool("easyicu_run", {}, context)
+
+    assert result["code"] == "easyicu_full_run_submitted"
+    assert captured["body"]["llm_provider"] == "codex"
+    assert captured["body"]["credential_source"] == "codex_user_auth"
+    assert captured["environment"]["EASYICU_CODEX_MODEL"] == "gpt-5.6-luna"
 
 
 def _write_real_pipeline_fixture(run_dir: Path, *, manuscript: str) -> None:
@@ -3319,13 +3419,32 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
     (
         "budget_mode",
         "runner_image",
+        "runner_image_environment",
+        "expected_runner_image",
         "expected_profile_name",
         "expected_profile_version",
     ),
     [
-        (None, None, "npj_dm_e1_canary_dev", "20260814"),
+        (
+            None,
+            None,
+            None,
+            "easyicu-research-agent:1.0.0",
+            "npj_dm_e1_canary_dev",
+            "20260816",
+        ),
+        (
+            None,
+            None,
+            "easyicu-research-agent:isolated-exact-head",
+            "easyicu-research-agent:isolated-exact-head",
+            "npj_dm_e1_canary_dev",
+            "20260816",
+        ),
         (
             "full_reviewed",
+            "easyicu-research-agent:e1-demo-local",
+            " \n",
             "easyicu-research-agent:e1-demo-local",
             "npj_dm_e1_demo_dev",
             "20260815",
@@ -3337,9 +3456,13 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     monkeypatch: pytest.MonkeyPatch,
     budget_mode: str | None,
     runner_image: str | None,
+    runner_image_environment: str | None,
+    expected_runner_image: str,
     expected_profile_name: str,
     expected_profile_version: str,
 ) -> None:
+    if runner_image_environment is not None:
+        monkeypatch.setenv("EASYICU_RUNNER_IMAGE", runner_image_environment)
     actual_run = tmp_path / "actual-pipeline-run"
     _write_real_pipeline_fixture(
         actual_run,
@@ -3474,11 +3597,12 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     )
     assert calls["config"].runner_kind == "docker"
     assert calls["config"].runner_network == "none"
-    assert calls["config"].runner_image == (
-        runner_image or "easyicu-research-agent:1.0.0"
-    )
+    assert calls["config"].runner_image == expected_runner_image
     assert calls["config"].submission_profile_name == expected_profile_name
     assert calls["config"].submission_profile_version == expected_profile_version
+    assert calls["config"].planner_strategy == (
+        "progressive_v2" if budget_mode is None else "monolithic_v1"
+    )
     assert calls["config"].enable_memory is False
     assert calls["config"].enable_experience_bank is False
     assert calls["config"].enable_reviewed_memory is False
@@ -3507,6 +3631,32 @@ def test_web_runner_delegates_to_research_agent_pipeline(
         and event["total"] == 5
         for event in Job.events
     )
+
+
+def test_web_runner_rejects_invalid_server_owned_image_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EASYICU_RUNNER_IMAGE", " \n")
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_data_foundation_profile",
+        lambda **_kwargs: _foundation_profile(),
+    )
+    export_path = _write_pipeline_export(tmp_path / "export")
+
+    with pytest.raises(
+        agent_pipeline_runs.ResearchPipelineRunError
+    ) as exc_info:
+        agent_pipeline_runs.make_research_pipeline_run_runner(
+            export_path=str(export_path),
+            study_context=_complete_study(),
+            project_root=str(tmp_path / "projects"),
+            provider={"provider": "openai", "external": True},
+            provider_environment=_PI_PROVIDER_ENVIRONMENT,
+        )
+
+    assert exc_info.value.code == "research_pipeline_runner_image_invalid"
 
 
 def test_web_runner_enables_live_pubmed_only_with_host_authorization(
@@ -3815,7 +3965,8 @@ def test_pipeline_route_rejects_raw_tabular_files_before_provider_resolution(
                 "run_type": "full",
                 "credential_source": "pi_verified",
                 "external_llm_opt_in": True,
-            }
+            },
+            request=_request(),
         )
 
     assert getattr(raised.value, "detail")["error"] in {
@@ -3901,7 +4052,8 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
             "credential_source": "pi_verified",
             "external_llm_opt_in": True,
             "project_root": str(tmp_path / "client-controlled"),
-        }
+        },
+        request=_request(),
     )
 
     assert result["job_id"] == "job-workspace"
@@ -3931,7 +4083,8 @@ def test_pipeline_route_rejects_client_selected_full_reviewed_mode(
                 "engine": "research_agent_pipeline",
                 "run_type": "full",
                 "budget_mode": "full_reviewed",
-            }
+            },
+            request=_request(),
         )
 
     assert getattr(raised.value, "detail") == {
@@ -3962,7 +4115,8 @@ def test_planner_canary_cannot_be_approved_into_execution(
                 "study_context_id": "study-workflow",
                 "decision": "approved",
                 "external_llm_opt_in": True,
-            }
+            },
+            request=_request(),
         )
 
     assert getattr(raised.value, "detail") == {

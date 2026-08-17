@@ -176,6 +176,193 @@ def test_planner_parse_drops_extra_step_fields(ra):
     assert not hasattr(plan.steps[0], "note")
 
 
+def test_planner_compiles_mixed_panels_into_an_exact_render_child(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Describe a typed result and render its declared panel.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Create the typed summary and its display.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:summary", "figure:summary"],
+                    "method": "descriptive",
+                    "figure_panels": [
+                        {
+                            "panel_id": "summary",
+                            "figure_output": "figure:summary",
+                            "article_role": "distribution",
+                            "chart_type": "bar",
+                            "source_products": ["table:summary"],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    planner = PlannerAgent.__new__(PlannerAgent)
+    plan = planner._parse(raw, ctx)
+
+    assert [step.step_id for step in plan.steps] == [
+        "01_summary",
+        "01_summary_figure",
+    ]
+    parent, child = plan.steps
+    assert parent.expected_outputs == ["table:summary"]
+    assert parent.figure_panels == []
+    assert child.method == "visualization"
+    assert child.inputs == ["table:summary"]
+    assert child.expected_outputs == ["figure:summary"]
+    assert child.figure_panels[0].source_products == ["table:summary"]
+    assert child.input_consumption_contracts[0].mode == "all_rows"
+    assert planner.last_dropped_plan_keys["normalizations"] == [
+        "01_summary:mixed_figure_panels_compiled_to:01_summary_figure"
+    ]
+
+
+def test_planner_does_not_guess_an_unproduced_panel_source(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Refuse an unbound display source.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Create a result but cite an absent display source.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:summary", "figure:summary"],
+                    "method": "descriptive",
+                    "figure_panels": [
+                        {
+                            "panel_id": "summary",
+                            "figure_output": "figure:summary",
+                            "article_role": "distribution",
+                            "chart_type": "bar",
+                            "source_products": ["table:not_produced"],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    with pytest.raises(ValueError, match="valid only on method='visualization'"):
+        PlannerAgent.__new__(PlannerAgent)._parse(raw, ctx)
+
+
+def test_planner_does_not_compile_a_panel_source_produced_later(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Refuse a display dependency that is not available yet.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Create a summary and prematurely render a later result.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:summary", "figure:summary"],
+                    "method": "descriptive",
+                    "figure_panels": [
+                        {
+                            "panel_id": "summary",
+                            "figure_output": "figure:summary",
+                            "article_role": "distribution",
+                            "chart_type": "bar",
+                            "source_products": ["table:future"],
+                        }
+                    ],
+                },
+                {
+                    "step_id": "02_future",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Create the later typed result.",
+                    "inputs": ["table:summary"],
+                    "expected_outputs": ["table:future"],
+                    "method": "descriptive",
+                },
+            ],
+        }
+    )
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    with pytest.raises(ValueError, match="valid only on method='visualization'"):
+        PlannerAgent.__new__(PlannerAgent)._parse(raw, ctx)
+
+
+@pytest.mark.parametrize("malformed_sources", ["table:summary", [{"bad": "shape"}]])
+def test_planner_malformed_panel_sources_fail_schema_without_transport_crash(
+    ra, malformed_sources
+):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Refuse a malformed panel source contract.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Create a typed result and malformed display.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:summary", "figure:summary"],
+                    "method": "descriptive",
+                    "figure_panels": [
+                        {
+                            "panel_id": "summary",
+                            "figure_output": "figure:summary",
+                            "article_role": "distribution",
+                            "chart_type": "bar",
+                            "source_products": malformed_sources,
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    with pytest.raises(ValueError):
+        PlannerAgent.__new__(PlannerAgent)._parse(raw, ctx)
+
+
 def test_planner_uses_enough_completion_budget(ra):
     """Reasoning models can spend part of max_tokens before final JSON."""
     schema = ra.schema
@@ -295,6 +482,17 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
                     "inputs": ["exposure_max", "death"],
                     "expected_outputs": ["table:adjusted_association_estimates"],
                     "method": "adjusted_association_models",
+                    "scientific_action_id": "association.adjusted_models",
+                    "scientific_capability": "association_adjusted_v1",
+                    "literature_citation_keys": ["sterne_missing_data_2009"],
+                    "literature_design_bindings": [
+                        {
+                            "citation_key": "sterne_missing_data_2009",
+                            "design_elements": ["missing_data"],
+                            "application": "Prespecify complete-case handling as a sensitivity analysis.",
+                            "divergence": None,
+                        }
+                    ],
                     "sensitivity_spec_ids": ["timing_landmark_24h"],
                     "model_requirements": [
                         {
@@ -354,6 +552,18 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
 
     assert len(projected.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT
     assert payload["steps"][0]["inputs"] == ["exposure_max", "death"]
+    assert payload["steps"][0]["scientific_action_id"] == (
+        "association.adjusted_models"
+    )
+    assert payload["steps"][0]["scientific_capability"] == (
+        "association_adjusted_v1"
+    )
+    assert payload["steps"][0]["literature_citation_keys"] == [
+        "sterne_missing_data_2009"
+    ]
+    assert payload["steps"][0]["literature_design_bindings"][0][
+        "citation_key"
+    ] == "sterne_missing_data_2009"
     assert payload["steps"][0]["sensitivity_spec_ids"] == ["timing_landmark_24h"]
     assert payload["steps"][0]["model_requirements"][0]["outcome"] == "death"
     assert (
@@ -370,6 +580,134 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
     assert payload["subgroup_analysis_spec"]["subgroup_columns"] == ["sex"]
     assert "rationale" not in payload
     assert "intent" not in payload["steps"][0]
+
+
+def test_large_retry_projection_keeps_authority_as_a_bounded_coordinate_table() -> None:
+    from easyicu.research_agent.agents.core import (
+        _PLANNER_RETRY_PROJECTION_BYTE_LIMIT,
+        _planner_retry_response_projection,
+    )
+
+    steps = []
+    for index in range(11):
+        steps.append(
+            {
+                "step_id": f"{index + 1:02d}_analysis_step",
+                "planned_analysis_role": "primary" if index == 4 else "auxiliary",
+                "intent": "long explanation " * 300,
+                "inputs": [
+                    "artifact:analysis_cohort",
+                    "sep3_sofa2_max",
+                    "death",
+                    "age",
+                    "charlson",
+                ],
+                "expected_outputs": [f"table:result_{index}", "figure:result"],
+                "method": "adjusted_association_models",
+                "scientific_action_id": "association.adjusted_models",
+                "scientific_capability": "association_adjusted_v1",
+                "literature_citation_keys": [
+                    "strobe_2007",
+                    "sterne_missing_data_2009",
+                    "durrleman_splines_1989",
+                ],
+                "literature_design_bindings": [
+                    {
+                        "citation_key": "strobe_2007",
+                        "design_elements": ["reporting"],
+                        "application": "reporting explanation " * 30,
+                    },
+                    {
+                        "citation_key": "sterne_missing_data_2009",
+                        "design_elements": ["missing_data"],
+                        "application": "missing-data explanation " * 30,
+                    },
+                    {
+                        "citation_key": "durrleman_splines_1989",
+                        "design_elements": ["functional_form"],
+                        "application": "functional-form explanation " * 30,
+                    },
+                ],
+                "sensitivity_spec_ids": [
+                    "complete_case",
+                    "landmark_alive_at_24h",
+                    "non_readmission_icu_stays",
+                ]
+                + ([7] if index == 0 else []),
+                "model_requirements": [
+                    {
+                        "requirement_id": "primary",
+                        "outcome": "death",
+                        "exposure_source": "exposure",
+                        "covariates": [f"covariate_{item}" for item in range(50)],
+                    }
+                ],
+            }
+        )
+
+    projected = _planner_retry_response_projection(
+        json.dumps(
+            {
+                "analysis_type": "association_study",
+                "cohort": {
+                    "name": "bench_e1_sepsis3_prevalence_mortality",
+                    "inclusion": [],
+                    "exclusion": [],
+                    "derived_from_named": None,
+                    "locked_at": "not_locked",
+                    "selection_mode": "all_input_rows",
+                },
+                "endpoint": {
+                    "name": "death",
+                    "kind": "binary",
+                    "absence_semantics": "no_absent_rows",
+                    "levels": [0, 1],
+                    "event_column": "death_time",
+                    "time_column": None,
+                    "time_origin": None,
+                    "censoring_rule": None,
+                },
+                "steps": steps,
+                "robustness_specs": [],
+            }
+        )
+    )
+    payload = json.loads(projected)
+
+    assert len(projected.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT
+    assert "steps" not in payload
+    columns = payload["step_coordinate_columns"]
+    first = dict(zip(columns, payload["step_coordinates"][0]))
+    strings = payload["coordinate_string_table"]
+
+    def deref(value):
+        if isinstance(value, list) and len(value) == 2 and value[0] == "n":
+            return value[1]
+        if isinstance(value, int) and not isinstance(value, bool):
+            return strings[value]
+        if isinstance(value, list):
+            return [deref(item) for item in value]
+        return value
+
+    assert deref(first["role"]) == "auxiliary"
+    assert deref(first["action"]) == "association.adjusted_models"
+    assert deref(first["capability"]) == "association_adjusted_v1"
+    assert deref(first["citation_keys"]) == [
+        "strobe_2007",
+        "sterne_missing_data_2009",
+        "durrleman_splines_1989",
+    ]
+    assert deref(first["binding_coordinates"]) == [
+        ["strobe_2007", ["reporting"]],
+        ["sterne_missing_data_2009", ["missing_data"]],
+        ["durrleman_splines_1989", ["functional_form"]],
+    ]
+    assert deref(first["sensitivity_ids"]) == [
+        "complete_case",
+        "landmark_alive_at_24h",
+        "non_readmission_icu_stays",
+        7,
+    ]
 
 
 def test_planner_retries_dictionary_concept_absent_from_sealed_typed_input(

@@ -1,8 +1,8 @@
 """Architecture profile for the EasyICU research-agent runtime.
 
 This module makes the package's intended design explicit and serialisable:
-the system is not a generic "AI scientist", but an ICU-aware autonomous
-research runtime with distinct safety-critical layers.
+the system is not a generic "AI scientist", but an ICU-aware research runtime
+with distinct safety-critical layers and human review gates.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ class ArchitectureProfile(BaseModel):
     schema_version: str = "easyicu.research_architecture/1"
     title: str = "EasyICU research-agent architecture"
     design_goal: str = (
-        "ICU-aware, evidence-bound, reproducible autonomous clinical research system"
+        "ICU-aware, evidence-bound, reproducible clinical research system with human review gates"
     )
     principles: List[str] = Field(default_factory=list)
     components: List[LayerComponent] = Field(default_factory=list)

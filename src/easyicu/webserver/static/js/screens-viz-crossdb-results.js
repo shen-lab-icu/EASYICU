@@ -32,15 +32,7 @@
   }
 
   function palette(index) {
-    const colors = [
-      'var(--accent)',
-      'oklch(62% 0.11 255)',
-      'oklch(64% 0.10 35)',
-      'oklch(62% 0.10 145)',
-      'oklch(58% 0.10 300)',
-      'oklch(60% 0.10 75)',
-    ];
-    return colors[index % colors.length];
+    return window.EU_PALETTE.color(index);
   }
 
   function beginCharts() {

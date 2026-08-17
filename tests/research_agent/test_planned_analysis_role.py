@@ -573,7 +573,13 @@ def test_planner_prompt_defines_required_role_without_case_specific_terms() -> N
     assert "at most one step may be primary" in prompt
     assert '"planned_analysis_role": "auxiliary"' in prompt
     assert '"step_id": "03_exposure_outcome_distribution"' in prompt
-    assert '"planned_analysis_role": "primary"' in prompt
+    distribution_example = prompt.split(
+        '"step_id": "03_exposure_outcome_distribution"', 1
+    )[1]
+    assert '"planned_analysis_role": "secondary"' in distribution_example
+    assert "sole headline estimand" in prompt
+    assert "at most one step is primary" in prompt
+    assert '["__easyicu_level_1__","__easyicu_level_2__"]' in prompt
     assert "support steps; do not give them a scientific role" in prompt
     assert "exactly one materialised closed primary-cohort product" in prompt
     assert "`artifact:cohort_defined` is not a cohort dataset" in prompt

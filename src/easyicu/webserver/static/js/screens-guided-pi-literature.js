@@ -3,13 +3,9 @@
    only host-projected metadata and never infers citations from prose. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
-  function esc(value) {
-    return String(value == null ? '' : value)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
   function safeUrl(value) {
     try {
       const parsed = new URL(String(value || ''));

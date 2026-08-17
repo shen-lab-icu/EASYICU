@@ -12,18 +12,24 @@ writing Python::
 
 The CLI requires an explicit ``--llm`` choice so main-path runs never
 silently fall back to :class:`MockLLMClient`. Use ``--llm mock`` only
-for tests or deterministic demos; use ``--llm openai`` (and an
-``OPENAI_API_KEY`` env var) for real runs.
+for tests or deterministic demos; select a configured real provider together
+with ``--external-llm-opt-in`` for networked runs.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
+
+from .providers.capabilities import (
+    SUPPORTED_CLI_ACCOUNT_NAMES,
+    SUPPORTED_PROVIDER_NAMES,
+)
 
 
 HUMAN_REVIEW_PENDING_EXIT_CODE = 75
@@ -189,14 +195,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--llm",
-        choices=["mock", "openai"],
+        choices=["mock", *SUPPORTED_CLI_ACCOUNT_NAMES, *SUPPORTED_PROVIDER_NAMES],
         default=None,
-        help="LLM backend. Required: choose mock for offline tests or openai for real runs.",
+        help="LLM backend. Choose mock for offline tests or a configured real provider.",
     )
     p.add_argument(
+        "--model",
         "--openai-model",
-        default="gpt-4o-mini",
-        help="Model name when --llm openai (default: gpt-4o-mini).",
+        dest="model",
+        default=None,
+        help=(
+            "Exact model name for the selected real provider. OpenAI retains "
+            "the legacy gpt-4o-mini default; account-backed CLI engines may "
+            "use their logged-in default; API providers require a value."
+        ),
+    )
+    p.add_argument(
+        "--external-llm-opt-in",
+        action="store_true",
+        help=(
+            "Explicitly authorize this run to send prompts to an external LLM. "
+            "Required with every non-mock provider."
+        ),
     )
     p.add_argument(
         "--timeout",
@@ -292,24 +312,60 @@ def _parse_cohort_map(raw_items: Sequence[str]) -> Dict[str, str]:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
 
-    # Lazy imports so --help works without pandas / openai installed.
+    if args.llm is None:
+        raise SystemExit(
+            "Choose an explicit --llm backend (`mock` or a real provider)."
+        )
+    if args.llm != "mock":
+        from easyicu import ai_optin
+
+        try:
+            ai_optin.check_external_llm_opt_in(
+                args.llm,
+                ai_enabled=args.external_llm_opt_in,
+                language="en",
+            )
+        except ai_optin.AIOptInError as exc:
+            raise SystemExit(str(exc)) from exc
+
+    # Lazy imports so --help works without pandas / openai installed.  The
+    # canonical opt-in gate above deliberately runs before provider/client
+    # construction or credential lookup.
     from .providers.factory import build_provider_client
-    from .providers.llm import OpenAIClient
     from .providers.mocks import MockLLMClient
     from .pipeline import ResearchAgentPipeline
     from .orchestration.experiment_spec import load_experiment_spec
     from .orchestration.workflow import HumanReviewPending, HumanReviewRejected
 
-    if args.llm is None:
-        raise SystemExit("Choose an explicit --llm backend (`mock` or `openai`).")
-    if args.llm == "openai":
-        llm = build_provider_client(
-            provider="openai",
-            model=args.openai_model,
-            request_timeout=120.0,
-            title="EasyICU research-agent CLI",
-            client_cls=OpenAIClient,
-        )
+    if args.llm != "mock":
+        provider_environment = dict(os.environ)
+        provider_environment["EASYICU_ALLOW_EXTERNAL_LLM"] = "1"
+        if args.llm in SUPPORTED_CLI_ACCOUNT_NAMES:
+            from .providers.llm import build_llm_client
+
+            llm = build_llm_client(
+                prefer=args.llm,
+                model=args.model,
+                allow_mock=False,
+                ladder=[args.llm],
+                request_timeout=120.0,
+                environment=provider_environment,
+            ).client
+        else:
+            selected_model = args.model or (
+                "gpt-4o-mini" if args.llm == "openai" else None
+            )
+            if not selected_model:
+                raise SystemExit(
+                    f"--model is required when --llm {args.llm} is selected."
+                )
+            llm = build_provider_client(
+                provider=args.llm,
+                model=selected_model,
+                request_timeout=120.0,
+                title="EasyICU research-agent CLI",
+                environment=provider_environment,
+            )
     else:
         llm = MockLLMClient()
 

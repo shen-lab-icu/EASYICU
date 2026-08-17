@@ -12,8 +12,6 @@ from typing import Any
 
 _FACTORY_EXPORTS = frozenset(
     {
-        "DEFAULT_OPENAI_BASE_URL",
-        "DEFAULT_OPENROUTER_BASE_URL",
         "LOCAL_OPENAI_DUMMY_API_KEY",
         "ProviderConfigurationError",
         "build_provider_client",
@@ -21,11 +19,35 @@ _FACTORY_EXPORTS = frozenset(
         "resolve_provider_base_url",
     }
 )
-__all__ = sorted(_FACTORY_EXPORTS)
+_CAPABILITY_EXPORTS = frozenset(
+    {
+        "ANTHROPIC_MESSAGES",
+        "DEFAULT_ANTHROPIC_BASE_URL",
+        "DEFAULT_DEEPSEEK_BASE_URL",
+        "DEFAULT_OPENAI_BASE_URL",
+        "DEFAULT_OPENROUTER_BASE_URL",
+        "CLIAccountReadiness",
+        "CLIAccountProfile",
+        "ProviderProfile",
+        "REGISTERED_CLI_BACKEND_NAMES",
+        "SUPPORTED_CLI_ACCOUNT_NAMES",
+        "SUPPORTED_USER_ACCOUNT_NAMES",
+        "SUPPORTED_PROVIDER_NAMES",
+        "UserAccountProfile",
+        "cli_account_profile",
+        "provider_profile",
+        "user_account_profile",
+    }
+)
+__all__ = sorted(_FACTORY_EXPORTS | _CAPABILITY_EXPORTS)
 
 
 def __getattr__(name: str) -> Any:
-    if name in _FACTORY_EXPORTS:
+    if name in _CAPABILITY_EXPORTS:
+        from . import capabilities as capabilities_module
+
+        value = getattr(capabilities_module, name)
+    elif name in _FACTORY_EXPORTS:
         from . import factory as factory_module
 
         value = getattr(factory_module, name)

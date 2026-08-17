@@ -157,12 +157,9 @@ def read_parquet_parallel(
     """
     def read_one(path):
         try:
-            df = read_parquet(path, columns=columns, filters=filters)
-            return df if len(df) > 0 else None
+            return read_parquet(path, columns=columns, filters=filters)
         except Exception as e:
-            if verbose:
-                print(f"   ⚠️  读取失败 {Path(path).name}: {e}")
-            return None
+            return e
     
     if verbose:
         logger.debug(f"并行读取 {len(file_paths)} 个 Parquet 分区...")
@@ -170,20 +167,30 @@ def read_parquet_parallel(
             logger.debug(f"应用过滤器: {filters}")
     
     dfs = []
+    failures: list[str] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(read_one, path): path for path in file_paths}
-        
+
         for i, future in enumerate(as_completed(futures), 1):
-            df = future.result()
-            if df is not None:
-                dfs.append(df)
-            
+            outcome = future.result()
+            if isinstance(outcome, Exception):
+                failures.append(f"{Path(futures[future]).name}: {outcome}")
+            else:
+                dfs.append(outcome)
+
             if verbose and i % 10 == 0:
                 print(f"   进度: {i}/{len(file_paths)}")
-    
+
+    if failures:
+        raise RuntimeError(
+            "parquet partition read failed: "
+            + "; ".join(failures[:5])
+            + (f" (+{len(failures) - 5} more)" if len(failures) > 5 else "")
+        )
+
     if not dfs:
         return pd.DataFrame()
-    
+
     result = pd.concat(dfs, ignore_index=True)
     
     if verbose:

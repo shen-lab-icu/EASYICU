@@ -926,8 +926,15 @@ def _profile_database(
     source_ids, in_denominator = _in_denominator_mask(
         source[profile.stay_id_col], denominator_ids
     )
-    source_stays = _non_null_unique_values(source_ids)
-    source_stays_outside = len(source_stays - denominator_values)
+    # Compare through the same normalized mask that _in_denominator_mask
+    # produced, never as a raw Python set difference: when source and
+    # denominator ID types differ and the normalizer falls back to strings,
+    # a set difference between original-typed values counts every stay as
+    # "outside".
+    outside_mask = pc.invert(pc.fill_null(in_denominator, False))
+    source_stays_outside = len(
+        _non_null_unique_values(source_ids, outside_mask)
+    )
     component_coverage = tuple(
         _coverage(
             column=column,
