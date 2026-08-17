@@ -57,6 +57,7 @@ _VALID_EVIDENCE_TOKEN_RE = re.compile(
     r"(?<!\{)\{evidence:[A-Za-z0-9][A-Za-z0-9_.-]*"
     r"(?:\s*,\s*(?:evidence:)?[A-Za-z0-9][A-Za-z0-9_.-]*)*\}(?!\}))"
 )
+_LITERATURE_CITATION_MARKER_RE = re.compile(r"\[@[A-Za-z0-9_.:-]+\]")
 _AUTHORITY_PLACEHOLDER_PREFIX_RE = re.compile(r"\{+\s*(?:claim|evidence)\s*:", re.I)
 _QUALITATIVE_SCIENTIFIC_ASSERTION_RE = re.compile(
     r"\b(?:independently\s+)?associated\s+with\b|"
@@ -170,7 +171,13 @@ def _looks_qualitative_scientific_assertion(sentence: str) -> bool:
 def _looks_result_like_sentence(sentence: str) -> bool:
     if _looks_manuscript_metadata_sentence(sentence):
         return False
-    return bool(_RESULT_TOKEN_RE.search(sentence))
+    # A year or version embedded only in an exact run-bound literature key is
+    # citation metadata, not a reported manuscript value.  The literature
+    # owner separately rejects unknown keys and missing section authority.
+    # Strip only the closed ``[@key]`` marker; numeric or interpretive prose
+    # surrounding it remains subject to the unchanged result/claim gates.
+    prose = _LITERATURE_CITATION_MARKER_RE.sub("", sentence)
+    return bool(_RESULT_TOKEN_RE.search(prose))
 
 
 def _split_sentences(text: str) -> list[str]:

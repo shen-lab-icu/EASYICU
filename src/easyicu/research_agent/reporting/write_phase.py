@@ -42,6 +42,7 @@ from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
 from .manuscript_literature import (
     audit_manuscript_literature,
+    repair_missing_context_section_citations,
     repair_missing_methods_method_citation,
     render_writer_literature_digest,
 )
@@ -1092,6 +1093,22 @@ def _draft_manuscript(
                     "Planner-bound reporting authority."
                 ),
                 detail={"repair": method_citation_repair},
+            )
+        )
+    scaffold, context_citation_repairs = repair_missing_context_section_citations(
+        scaffold,
+        literature,
+    )
+    if context_citation_repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_literature",
+                severity="warning",
+                message=(
+                    "Restored neutral section citation(s) from the exact "
+                    "run-bound contextual literature authority."
+                ),
+                detail={"repairs": context_citation_repairs},
             )
         )
     if (

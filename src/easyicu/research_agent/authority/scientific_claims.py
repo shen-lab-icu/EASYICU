@@ -121,7 +121,7 @@ class ScientificClaim(ScientificClaimDraft):
         if self.claim_type != "association":
             return (
                 f"In {self.population}, the {self.estimand} for {self.outcome} at "
-                f"{self.exposure}. This is a descriptive, unadjusted, noncausal "
+                f"{self.exposure}; this is a descriptive, unadjusted, noncausal "
                 f"estimate (analysis role: {self.analysis_role})."
             )
         if self.direction == "positive":
