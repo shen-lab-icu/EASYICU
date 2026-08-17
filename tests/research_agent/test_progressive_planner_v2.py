@@ -1878,6 +1878,29 @@ def test_compiler_reports_attributable_unknown_variable() -> None:
     assert caught.value.path == "model_terms"
 
 
+def test_compiler_reports_outcome_covariate_at_the_model_owner() -> None:
+    payload = _payload()
+    payload["steps"][4]["model_terms"].append(
+        {
+            "name": "outcome_flag",
+            "role": "covariate",
+            "coding": "binary",
+            "reference_level_index": 0,
+        }
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=_context(),
+        )
+
+    assert caught.value.reason_code == "progressive_model_outcome_is_covariate"
+    assert caught.value.step_id == "05_primary"
+    assert caught.value.step_index == 4
+    assert caught.value.path == "model_terms"
+
+
 def test_compiler_coalesces_repeated_source_without_losing_design_intent() -> None:
     payload = _payload()
     payload["steps"][4]["literature_bindings"] = [
@@ -2691,6 +2714,43 @@ def test_agent_repairs_identical_distribution_contrast_locally() -> None:
     assert agent.last_prompt_metrics["compile_revision_count"] == 1
     assert agent.last_prompt_metrics["step_materialization_count"] == 7
     assert agent.last_prompt_metrics["full_revision_count"] == 0
+
+
+def test_agent_repairs_outcome_covariate_at_the_current_model_step() -> None:
+    materializations = _materialization_payloads()
+    invalid_primary = json.loads(json.dumps(materializations[4]))
+    invalid_primary["step"]["model_terms"].append(
+        {
+            "name": "outcome_flag",
+            "role": "covariate",
+            "coding": "binary",
+            "reference_level_index": 0,
+        }
+    )
+    responses = [
+        _outline_payload(),
+        _foundation_payload(),
+        *materializations[:4],
+        invalid_primary,
+        materializations[4],
+        *materializations[5:],
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+
+    plan = agent.run(_context())
+
+    primary = next(step for step in plan.steps if step.step_id == "05_primary")
+    assert "outcome_flag" not in primary.model_requirements[0].covariates
+    assert len(llm.calls) == 10
+    assert "progressive_model_outcome_is_covariate" in (
+        llm.calls[7][0][-1].content
+    )
+    assert "never include the outcome as a model term or covariate" in (
+        llm.calls[6][0][-1].content
+    )
+    assert agent.last_prompt_metrics["compile_revision_count"] == 1
 
 
 def test_prefix_pydantic_failure_becomes_attributable_compiler_finding() -> None:
