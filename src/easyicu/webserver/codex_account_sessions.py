@@ -9,6 +9,7 @@ process may read the current access credential in memory from that exact home.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import secrets
@@ -28,6 +29,8 @@ from easyicu.research_agent.providers.subprocess_env import (
     build_provider_subprocess_env,
 )
 from easyicu.webserver import state_paths
+
+_LOGGER = logging.getLogger(__name__)
 
 COOKIE_NAME = "easyicu_codex_user_session"
 SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
@@ -626,6 +629,13 @@ def models(request: Request) -> dict[str, Any]:
         if not _status_for_managed(managed).get("authentication_verified"):
             raise CodexAccountSessionError("codex_auth_login_required")
         rows, app_server_failure_code = _model_rows(managed)
+    _LOGGER.info(
+        "Codex account model catalog ready status=%s model_count=%d",
+        "documented_fallback"
+        if app_server_failure_code
+        else "app_server_verified",
+        len(rows),
+    )
     return {
         "schema_version": "easyicu.codex-user-model-catalog/1",
         "provider": "codex",

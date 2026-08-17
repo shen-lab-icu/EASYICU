@@ -11,7 +11,11 @@
 
   async function getJSON(path) {
     const res = await fetch(path, { headers: { Accept: 'application/json' } });
-    if (!res.ok) throw new Error(path + ' -> HTTP ' + res.status);
+    if (!res.ok) {
+      let d = null;
+      try { const payload = await res.json(); d = payload && payload.detail; } catch (e) {}
+      throw apiError(path, res, d);
+    }
     return res.json();
   }
 

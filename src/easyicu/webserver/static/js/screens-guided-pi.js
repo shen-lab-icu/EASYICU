@@ -851,7 +851,9 @@
         state.researchModel = preferred ? String(preferred.id || '') : '';
       }
     } catch (error) {
-      state.codexModels = [];
+      // Keep the last catalog that was successfully verified for this
+      // browser-owned runtime. A transient account/catalog probe must not
+      // erase the user's model choice; logout clears it explicitly.
       if (renderAfter) state.error = errorText(error);
     }
     if (renderAfter) render();
