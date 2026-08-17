@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def _context(ra, question: str, *, outcome: str = "death", exposure: str | None = None):
     return ra.schema.ResearchContext(
@@ -245,6 +247,50 @@ def test_data_quality_article_contract_stays_measurement_only(ra):
         "missingness_data_quality",
         "measurement_process_audit",
     }
+
+
+@pytest.mark.parametrize(
+    "product",
+    [
+        "table:measurement_missingness",
+        "table:measurement_process",
+        "table:measurement_source",
+    ],
+)
+def test_article_contract_recognises_typed_measurement_audit_products(
+    ra,
+    product: str,
+):
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+        roles_covered_by_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    context = _context(
+        ra,
+        "Estimate exposure prevalence and audit measurement completeness.",
+        exposure="x",
+    )
+    contract = build_article_analysis_contract(
+        context,
+        analysis_type="descriptive_epidemiology",
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_epidemiology",
+        steps=[
+            AnalysisStep(
+                step_id="measurement_audit",
+                planned_analysis_role="auxiliary",
+                intent="Audit missingness and measurement-process coverage.",
+                method="missing_data",
+                expected_outputs=[product],
+            )
+        ],
+    )
+
+    assert "data_quality" in roles_covered_by_plan(plan, contract)
 
 
 def test_article_contract_flags_and_can_augment_narrow_association_plan(ra):
