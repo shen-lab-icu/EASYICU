@@ -3195,9 +3195,9 @@ def make_research_pipeline_run_runner(
                 except literature_authority.LiteratureAuthorityError as exc:
                     raise ResearchPipelineRunError(exc.code, exc.message) from exc
             submission_profile_ref = (
-                "npj_dm_e1_demo_dev/20260815"
+                "npj_dm_e1_demo_dev/20260817"
                 if selected_budget_mode == "full_reviewed"
-                else "npj_dm_e1_canary_dev/20260816"
+                else "npj_dm_e1_canary_dev/20260817"
             )
             submission_profile = get_submission_profile(submission_profile_ref)
             profile_options = submission_profile.pipeline_options()
