@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
+import easyicu
 from easyicu import SOFA2InputError as PublicSOFA2InputError
-from easyicu.scores.sofa2_validation import validate_numeric_input
+from easyicu.io.ts_utils import change_interval
+from easyicu.resources import load_dictionary
 from easyicu.scores.sofa2 import (
     SOFA2_COMPONENT_NAMES,
     SOFA2InputError,
@@ -17,6 +22,8 @@ from easyicu.scores.sofa2 import (
     sofa2_resp,
     sofa2_score,
 )
+from easyicu.scores.sofa2_validation import validate_numeric_input
+from easyicu.table import ICUTable
 
 
 def _assert_reason(
@@ -41,6 +48,33 @@ def _component_frames(*, rows: int = 1) -> dict[str, pd.DataFrame]:
 
 def test_sofa2_input_error_is_public() -> None:
     assert PublicSOFA2InputError is SOFA2InputError
+
+
+def test_motor_response_hourly_aggregation_preserves_ordinal_domain() -> None:
+    definition = load_dictionary(include_sofa2=True).get("motor_response")
+    assert definition is not None
+    assert definition.aggregate == "min"
+    table = ICUTable(
+        data=pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": [0.1, 0.8],
+                "motor_response": [5.0, 4.0],
+            }
+        ),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column="motor_response",
+    )
+
+    result = change_interval(
+        table,
+        interval=pd.Timedelta(hours=1),
+        aggregation=definition.aggregate,
+        time_unit="hours",
+    ).data
+
+    assert result["motor_response"].tolist() == [4.0]
 
 
 @pytest.mark.clinical_conformance
@@ -325,6 +359,8 @@ def test_sofa2_aggregate_ignores_entries_beyond_the_six_components() -> None:
     result = sofa2_score(frames)
 
     assert result["sofa2"].tolist() == [6]
+
+
 @pytest.mark.parametrize(
     "dtype",
     ["bool[pyarrow]", "int64[pyarrow]", "float64[pyarrow]", "boolean", "Int64"],
@@ -378,3 +414,55 @@ def test_sofa2_arrow_backed_inputs_still_fail_closed() -> None:
             integer=True,
         )
     _assert_reason(exc_info, "sofa2_aggregate_sofa2_resp_integer_required")
+
+
+def _shipped_concept_payloads() -> dict:
+    """Merge the two shipped dictionaries as raw JSON.
+
+    ``load_dictionary`` drops ``unit``/``min``/``max``, so the ordinal
+    domain is only visible in the payload itself.
+    """
+    data_dir = Path(easyicu.__file__).resolve().parent / "data"
+    merged: dict = {}
+    for name in ("concept-dict.json", "sofa2-dict.json"):
+        raw = json.loads((data_dir / name).read_text(encoding="utf-8"))
+        merged.update(raw.get("concepts", raw))
+    return merged
+
+
+def _sofa2_closure(payloads: dict) -> set[str]:
+    seen: set[str] = set()
+    stack = [name for name in payloads if name.startswith("sofa2")]
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        stack.extend(payloads.get(name, {}).get("concepts") or [])
+    return seen
+
+
+def test_every_ordinal_sofa2_input_declares_its_aggregate() -> None:
+    """Ordinal inputs must not fall through to the numeric median default.
+
+    ``_load_single_concept`` picks ``median`` for any numeric leaf that does
+    not declare an aggregate.  Median is meaningless on an ordinal scale: two
+    readings in the same hour yield a half-step that is not a member of the
+    domain, and it also drops the worst value the severity score is asking
+    for.  This is a class guard — pinning one concept is what let
+    ``sedated_gcs`` sit unnoticed next to ``motor_response``.
+    """
+    payloads = _shipped_concept_payloads()
+    missing = sorted(
+        name
+        for name in _sofa2_closure(payloads)
+        if isinstance(payloads.get(name), dict)
+        and not payloads[name].get("concepts")
+        and str(payloads[name].get("unit", "")).lower() in {"score", "points"}
+        and payloads[name].get("aggregate") is None
+    )
+
+    assert missing == [], (
+        "ordinal SOFA-2 inputs without an explicit aggregate fall back to "
+        f"median, which is off-domain for a score: {missing}"
+    )

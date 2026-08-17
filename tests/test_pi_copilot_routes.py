@@ -16,11 +16,12 @@ class FakeService:
     def runtime_status(self) -> dict:
         return {"ok": True, "runtime": {"status": "ready"}}
 
+    def verified_api_research_provider_binding(self) -> ResearchProviderBinding:
+        """The API-key branch of session creation compiles a binding first."""
+        return ResearchProviderBinding(model="fake-configured-model")
+
     def create_session(self, **kwargs) -> dict:
         return {"ok": True, "received": kwargs}
-
-    def verified_api_research_provider_binding(self) -> ResearchProviderBinding:
-        return ResearchProviderBinding()
 
     def initialize_project(self, **kwargs) -> dict:
         return {"ok": True, "status": "ready", "received": kwargs}

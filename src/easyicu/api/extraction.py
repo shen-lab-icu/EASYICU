@@ -122,9 +122,7 @@ _STREAM_BATCH_MAX_RETRIES = 3
 # a fixed low-memory tier.
 _STREAM_ONESHOT_MIN_AVAILABLE_MB = 24 * 1024
 _STREAM_CALIBRATION_QUANTUM = 1_000
-_STREAM_UNMEASURED_ONESHOT_GUARD_DATABASES = frozenset(
-    {"mimic", "miiv", "aumc"}
-)
+_STREAM_UNMEASURED_ONESHOT_GUARD_DATABASES = frozenset({"mimic", "miiv", "aumc"})
 _STREAM_CALIBRATED_REFERENCE = {
     # database: (observed stays, conservative process-tree peak MiB)
     "mimic": (61_532, 18 * 1024),
@@ -151,9 +149,7 @@ def _normalise_stream_database(database: str) -> str:
 def _stream_calibration(database: str) -> Optional[tuple[int, float]]:
     """Return the conservative release calibration for one database alias."""
 
-    return _STREAM_CALIBRATED_REFERENCE.get(
-        _normalise_stream_database(database)
-    )
+    return _STREAM_CALIBRATED_REFERENCE.get(_normalise_stream_database(database))
 
 
 def _quantize_stream_capacity(capacity: float, quantum: int) -> int:
@@ -288,9 +284,7 @@ def _adapt_stream_batch_size_from_first_batch(
     if measured_capacity >= _STREAM_BATCH_MAX:
         planned = _STREAM_BATCH_MAX
     else:
-        planned = (
-            measured_capacity // _STREAM_BATCH_QUANTUM
-        ) * _STREAM_BATCH_QUANTUM
+        planned = (measured_capacity // _STREAM_BATCH_QUANTUM) * _STREAM_BATCH_QUANTUM
         planned = max(_STREAM_BATCH_MIN, planned)
     planned = min(_STREAM_BATCH_MAX, planned)
     return min(planned, remaining)
@@ -447,9 +441,7 @@ def _get_extraction_mp_context(mp_module, *, platform_name: Optional[str] = None
     del platform_name
     default_start_method = "spawn"
     start_method = (
-        os.environ.get("EASYICU_MP_START_METHOD", default_start_method)
-        .strip()
-        .lower()
+        os.environ.get("EASYICU_MP_START_METHOD", default_start_method).strip().lower()
     )
     available = mp_module.get_all_start_methods()
     if start_method not in available:
@@ -458,6 +450,7 @@ def _get_extraction_mp_context(mp_module, *, platform_name: Optional[str] = None
             f"available methods: {available}"
         )
     return mp_module.get_context(start_method)
+
 
 # 特殊概念 — 需要专用加载函数而非 load_concepts
 _SPECIAL_CONCEPT_MODULES = {"sepsis3_sofa1", "sepsis3_sofa2"}
@@ -732,6 +725,22 @@ def _module_arrow_table(
     """Create a stable module table, adding structural nulls only in Arrow."""
     table = pyarrow_module.Table.from_pandas(frame, preserve_index=False)
     requested = _native_export_physical_value_columns(concepts)
+    # Event-time companions are derived at the native-v2 publication boundary
+    # from the event concept's source ``charttime``.  Do not invent an all-null
+    # staging column when the concept loader has not supplied the companion
+    # itself: doing so makes the final publisher believe that a real (but
+    # entirely missing) owner column already exists, so it cannot preserve the
+    # source event time before normalising the stay-level outcome axis to 0 h.
+    #
+    # SOFA-2 observed/available receipts are different: they are emitted by the
+    # score owner in the extraction frame and remain part of the stable streamed
+    # schema.  A genuinely owner-supplied event-time column is likewise kept.
+    event_time_companions = set(_NATIVE_EXPORT_EVENT_TIME_COMPANIONS.values())
+    requested = [
+        concept
+        for concept in requested
+        if concept not in event_time_companions or concept in table.column_names
+    ]
     requested_set = set(requested)
 
     # Every non-demographics module is longitudinal in the native-v2 physical
@@ -983,9 +992,7 @@ def _load_stream_module_batch(
 ):
     """Load one patient batch with bounded recursive-vitals intermediates."""
     requested_derived = [
-        concept
-        for concept in _VITAL_STREAM_DERIVED_CONCEPTS
-        if concept in concepts
+        concept for concept in _VITAL_STREAM_DERIVED_CONCEPTS if concept in concepts
     ]
     if module_name != "vitals" or not requested_derived:
         return load_concepts_fn(**load_kwargs, patient_ids=patient_ids)
@@ -1124,9 +1131,7 @@ def _stream_module_batches_to_parquet(
                     "batch_index": len(batch_telemetry) + 1,
                     "start_offset": start,
                     "stays": len(batch_ids),
-                    "inner_load_batch_size": int(
-                        batch_load_kwargs["batch_size"]
-                    ),
+                    "inner_load_batch_size": int(batch_load_kwargs["batch_size"]),
                     "output_rows": output_rows,
                     **batch_memory,
                 }
@@ -1144,9 +1149,7 @@ def _stream_module_batches_to_parquet(
                 current_batch_size = _adapt_stream_batch_size_from_first_batch(
                     current_batch_size,
                     observed_working_set_mb=batch_memory["peak_working_set_mb"],
-                    available_memory_mb=batch_memory[
-                        "available_memory_mb_at_start"
-                    ],
+                    available_memory_mb=batch_memory["available_memory_mb_at_start"],
                     remaining_patients=len(all_ids) - start,
                 )
         if writer is None:
@@ -1553,12 +1556,8 @@ def _stream_special_extraction_batches(
                 and not manifest.get("errors")
                 and not manifest.get("saved")
             ):
-                raise FileNotFoundError(
-                    f"missing streamed dependency module: {source}"
-                )
-            return pd.DataFrame(
-                columns=[id_col, *EXTRACT_MODULES.get(module_name, [])]
-            )
+                raise FileNotFoundError(f"missing streamed dependency module: {source}")
+            return pd.DataFrame(columns=[id_col, *EXTRACT_MODULES.get(module_name, [])])
         return (
             ds.dataset(source, format="parquet")
             .to_table(filter=ds.field(id_col).isin(ids))
@@ -1603,9 +1602,7 @@ def _stream_special_extraction_batches(
             sofa1 = _read_dependency("sofa1_score", ids) if need_sofa1 else None
             sofa2 = _read_dependency("sofa2_score", ids) if need_sofa2 else None
             if "susp_inf" not in susp.columns:
-                errors.append(
-                    "streamed Sepsis dependency sepsis_shared lacks susp_inf"
-                )
+                errors.append("streamed Sepsis dependency sepsis_shared lacks susp_inf")
                 continue
 
             def _score_time_column(score):
@@ -1641,9 +1638,7 @@ def _stream_special_extraction_batches(
                         index_col=time_col,
                     ).rename(columns={"sep3": "sep3_sofa1"})
                     if "sep3_sofa1" in frame.columns:
-                        frame["sep3_sofa1"] = (
-                            frame["sep3_sofa1"].fillna(0).astype(int)
-                        )
+                        frame["sep3_sofa1"] = frame["sep3_sofa1"].fillna(0).astype(int)
                     _append_frame("sep3_sofa1", frame)
             if need_sofa2 and sofa2 is not None and "sofa2" in sofa2.columns:
                 from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
@@ -1660,9 +1655,7 @@ def _stream_special_extraction_batches(
                         index_col=time_col,
                     )
                     if "sep3_sofa2" in frame.columns:
-                        frame["sep3_sofa2"] = (
-                            frame["sep3_sofa2"].fillna(0).astype(int)
-                        )
+                        frame["sep3_sofa2"] = frame["sep3_sofa2"].fillna(0).astype(int)
                     _append_frame("sep3_sofa2", frame)
 
         saved = {}
@@ -1686,9 +1679,7 @@ def _stream_special_extraction_batches(
         "elapsed_sec": round(time.time() - started, 1),
         "batch_size": safe_batch_size,
         "batch_count": (
-            (len(all_ids) + safe_batch_size - 1) // safe_batch_size
-            if all_ids
-            else 0
+            (len(all_ids) + safe_batch_size - 1) // safe_batch_size if all_ids else 0
         ),
         "patient_partition_strategy": "source_order_interleaved_v1",
         "initial_planned_partition_count": planned_partition_count,
@@ -2128,6 +2119,29 @@ _NATIVE_EXPORT_ID_COLUMNS = (
 
 _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES = ("_observed", "_available")
 
+# Event status and event time are different physical claims.  The outcome
+# module is published at the stay-level ICU-admission coordinate (charttime=0),
+# but selected event concepts still carry an owner-authorized event timestamp
+# before that normalization.  Preserve that timestamp as a typed companion
+# rather than overloading the module-wide charttime column.
+_NATIVE_EXPORT_EVENT_TIME_COMPANIONS = {"death": "death_time"}
+
+# eICU's death concept is indexed by ICU discharge offset while its status is
+# hospital-discharge mortality.  That coordinate is not time of death and must
+# therefore remain unavailable.  HiRID is intentionally retained but labelled
+# as a proxy: its ricu-compatible death callback places a recorded death at the
+# last observation of variables 110/200.
+_NATIVE_EXPORT_DEATH_TIME_SEMANTICS = {
+    "miiv": "recorded_deathtime",
+    "miiv_demo": "recorded_deathtime",
+    "mimic": "recorded_deathtime",
+    "mimic_demo": "recorded_deathtime",
+    "aumc": "recorded_dateofdeath_for_72h_post_icu_discharge_death_proxy",
+    "hirid": "last_recorded_observation_proxy_for_dead_discharge",
+    "sic": "recorded_offset_of_death_for_hospital_discharge_death",
+    "sic_demo": "recorded_offset_of_death_for_hospital_discharge_death",
+}
+
 
 def _native_export_physical_value_columns(
     requested_concepts: Sequence[str],
@@ -2144,10 +2158,12 @@ def _native_export_physical_value_columns(
     for raw_concept in requested_concepts:
         concept = str(raw_concept)
         columns.append(concept)
+        event_time = _NATIVE_EXPORT_EVENT_TIME_COMPANIONS.get(concept)
+        if event_time is not None:
+            columns.append(event_time)
         if concept.startswith("sofa2"):
             columns.extend(
-                f"{concept}{suffix}"
-                for suffix in _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES
+                f"{concept}{suffix}" for suffix in _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES
             )
     return list(dict.fromkeys(columns))
 
@@ -2166,9 +2182,7 @@ def _native_export_storage_kind(concept_id: str, dictionary) -> str:
     raw_class_name = getattr(definition, "class_name", None)
     if isinstance(raw_class_name, (list, tuple, set, frozenset)):
         class_names = {
-            str(value).strip()
-            for value in raw_class_name
-            if str(value).strip()
+            str(value).strip() for value in raw_class_name if str(value).strip()
         }
     elif raw_class_name is None:
         class_names = set()
@@ -2192,6 +2206,7 @@ def _canonicalise_native_export_frame(
     module: str,
     requested_concepts: List[str],
     dictionary,
+    database: Optional[str] = None,
 ):
     """Project one native package file onto the cross-database physical schema.
 
@@ -2240,17 +2255,35 @@ def _canonicalise_native_export_frame(
                 np.nan, index=frame.index, dtype="float64"
             )
 
+    normalized_database = str(database or "").strip().lower()
     for concept in _native_export_physical_value_columns(requested_concepts):
         kind = _native_export_storage_kind(concept, dictionary)
+        if (
+            concept == "death_time"
+            and concept not in frame
+            and module == "outcome"
+            and "death" in canonical
+        ):
+            if (
+                not normalized_database
+                or normalized_database in _NATIVE_EXPORT_DEATH_TIME_SEMANTICS
+            ):
+                event = canonical["death"].astype("boolean").fillna(False)
+                canonical[concept] = (
+                    canonical["charttime"].where(event).astype("float64")
+                )
+            else:
+                canonical[concept] = pd.Series(
+                    np.nan, index=frame.index, dtype="float64"
+                )
+            continue
         if concept not in frame:
             if kind == "boolean":
                 canonical[concept] = pd.Series(
                     pd.NA, index=frame.index, dtype="boolean"
                 )
             elif kind == "string":
-                canonical[concept] = pd.Series(
-                    pd.NA, index=frame.index, dtype="string"
-                )
+                canonical[concept] = pd.Series(pd.NA, index=frame.index, dtype="string")
             else:
                 canonical[concept] = pd.Series(
                     np.nan, index=frame.index, dtype="float64"
@@ -2294,13 +2327,11 @@ def _restore_native_export_storage_dtypes(
     """Restore the exact native-v2 dtypes after row-grain aggregation."""
     import pandas as pd
 
-    frame["stay_id"] = pd.to_numeric(frame["stay_id"], errors="raise").astype(
-        "int64"
-    )
+    frame["stay_id"] = pd.to_numeric(frame["stay_id"], errors="raise").astype("int64")
     if "charttime" in frame:
-        frame["charttime"] = pd.to_numeric(
-            frame["charttime"], errors="coerce"
-        ).astype("float64")
+        frame["charttime"] = pd.to_numeric(frame["charttime"], errors="coerce").astype(
+            "float64"
+        )
     for concept in _native_export_physical_value_columns(requested_concepts):
         kind = _native_export_storage_kind(concept, dictionary)
         if kind == "boolean":
@@ -2308,9 +2339,9 @@ def _restore_native_export_storage_dtypes(
         elif kind == "string":
             frame[concept] = frame[concept].astype("string")
         else:
-            frame[concept] = pd.to_numeric(
-                frame[concept], errors="coerce"
-            ).astype("float64")
+            frame[concept] = pd.to_numeric(frame[concept], errors="coerce").astype(
+                "float64"
+            )
     return frame
 
 
@@ -2353,9 +2384,7 @@ def _consolidate_native_export_row_grain(
     if module == "demographics":
         primary_key = ["stay_id"]
         duplicate_mask = working.duplicated(primary_key, keep=False)
-        duplicate_excess = int(
-            working.duplicated(primary_key, keep="first").sum()
-        )
+        duplicate_excess = int(working.duplicated(primary_key, keep="first").sum())
         duplicate_groups = int(
             working.loc[duplicate_mask, "stay_id"].nunique(dropna=False)
         )
@@ -2380,9 +2409,7 @@ def _consolidate_native_export_row_grain(
             source_time_present = True
             source_null_time_rows = int(source_time.isna().sum())
 
-        first_stays = working[["stay_id"]].drop_duplicates(
-            "stay_id", keep="first"
-        )
+        first_stays = working[["stay_id"]].drop_duplicates("stay_id", keep="first")
         consolidated = first_stays.reset_index(drop=True)
         conflict_groups: Dict[str, int] = {}
         for concept in _native_export_physical_value_columns(requested_concepts):
@@ -2401,9 +2428,9 @@ def _consolidate_native_export_row_grain(
                 selected = pd.Series(dtype=working[concept].dtype)
                 conflicts = 0
             else:
-                value_counts = non_null.groupby(
-                    "stay_id", sort=False, dropna=False
-                )[concept].nunique(dropna=True)
+                value_counts = non_null.groupby("stay_id", sort=False, dropna=False)[
+                    concept
+                ].nunique(dropna=True)
                 conflicts = int((value_counts > 1).sum())
                 non_null["_time_missing"] = non_null["_source_time"].isna()
                 non_null["_abs_source_time"] = non_null["_source_time"].abs()
@@ -2416,9 +2443,9 @@ def _consolidate_native_export_row_grain(
                     ],
                     kind="mergesort",
                 )
-                selected = non_null.drop_duplicates(
-                    "stay_id", keep="first"
-                ).set_index("stay_id")[concept]
+                selected = non_null.drop_duplicates("stay_id", keep="first").set_index(
+                    "stay_id"
+                )[concept]
             conflict_groups[concept] = conflicts
             consolidated[concept] = consolidated["stay_id"].map(selected)
 
@@ -2440,9 +2467,7 @@ def _consolidate_native_export_row_grain(
                     valid &= weight >= float(weight_min)
                 if weight_max is not None:
                     valid &= weight <= float(weight_max)
-                bmi.loc[valid] = weight.loc[valid] / (
-                    height.loc[valid] / 100.0
-                ) ** 2
+                bmi.loc[valid] = weight.loc[valid] / (height.loc[valid] / 100.0) ** 2
                 finite = np.isfinite(bmi.to_numpy(dtype="float64", na_value=np.nan))
                 bmi.loc[~finite] = np.nan
                 recomputed_bmi_rows = int(bmi.notna().sum())
@@ -2478,9 +2503,7 @@ def _consolidate_native_export_row_grain(
             "conflicting_non_null_stay_groups_by_concept": conflict_groups,
             "bmi_policy": "recomputed_from_selected_weight_kg_and_height_cm",
             "bounded_source_bmi_non_null_rows_discarded": (
-                int(working["bmi"].notna().sum())
-                if "bmi" in requested_concepts
-                else 0
+                int(working["bmi"].notna().sum()) if "bmi" in requested_concepts else 0
             ),
             "recomputed_bmi_rows": recomputed_bmi_rows,
         }
@@ -2492,9 +2515,7 @@ def _consolidate_native_export_row_grain(
             f"native export module '{module}' has no canonical charttime column"
         )
     duplicate_mask = working.duplicated(primary_key, keep=False)
-    duplicate_excess = int(
-        working.duplicated(primary_key, keep="first").sum()
-    )
+    duplicate_excess = int(working.duplicated(primary_key, keep="first").sum())
     duplicate_rows = int(duplicate_mask.sum())
     records = []
     if duplicate_rows:
@@ -2509,9 +2530,7 @@ def _consolidate_native_export_row_grain(
                 "charttime": group["charttime"].iloc[0],
                 "_row_order": int(group.index.min()),
             }
-            for concept in _native_export_physical_value_columns(
-                requested_concepts
-            ):
+            for concept in _native_export_physical_value_columns(requested_concepts):
                 kind = _native_export_storage_kind(concept, dictionary)
                 available_column = f"{concept}_available"
                 if (
@@ -2526,9 +2545,7 @@ def _consolidate_native_export_row_grain(
                 else:
                     values = group[concept].dropna()
                 if values.empty:
-                    record[concept] = (
-                        pd.NA if kind in {"boolean", "string"} else np.nan
-                    )
+                    record[concept] = pd.NA if kind in {"boolean", "string"} else np.nan
                 elif kind == "boolean":
                     record[concept] = bool(values.astype("boolean").any())
                 elif kind == "string":
@@ -2561,17 +2578,15 @@ def _consolidate_native_export_row_grain(
         consolidated = working
 
     physical_values = _native_export_physical_value_columns(requested_concepts)
-    consolidated = consolidated[
-        ["stay_id", "charttime", *physical_values]
-    ].reset_index(drop=True)
+    consolidated = consolidated[["stay_id", "charttime", *physical_values]].reset_index(
+        drop=True
+    )
     consolidated = _restore_native_export_storage_dtypes(
         consolidated,
         requested_concepts=requested_concepts,
         dictionary=dictionary,
     )
-    duplicate_after = int(
-        consolidated.duplicated(primary_key, keep="first").sum()
-    )
+    duplicate_after = int(consolidated.duplicated(primary_key, keep="first").sum())
     if duplicate_after:
         raise RuntimeError(
             f"native export module '{module}' row-grain consolidation was not unique"
@@ -2691,11 +2706,7 @@ def _load_eicu_tidal_volume_age_lookup(output_root: Path) -> pd.Series:
         )
     names = set(pq.read_schema(path).names)
     identity = next(
-        (
-            column
-            for column in ("stay_id", "patientunitstayid")
-            if column in names
-        ),
+        (column for column in ("stay_id", "patientunitstayid") if column in names),
         None,
     )
     if identity is None or "age" not in names:
@@ -3139,21 +3150,15 @@ def _native_export_duckdb_consolidate_row_grain(
             "null_charttime_rows_before": int(
                 before_audit["null_charttime_rows_before"]
             ),
-            "duplicate_key_rows_before": int(
-                before_audit["duplicate_key_rows_before"]
-            ),
+            "duplicate_key_rows_before": int(before_audit["duplicate_key_rows_before"]),
             "duplicate_key_groups_before": int(
                 before_audit["duplicate_key_groups_before"]
             ),
             "duplicate_excess_rows_before": int(
                 before_audit["duplicate_excess_rows_before"]
             ),
-            "rows_consolidated": int(
-                before_audit["duplicate_excess_rows_before"]
-            ),
-            "publication_backend": (
-                "duckdb_bounded_spillable_row_grain_consolidation"
-            ),
+            "rows_consolidated": int(before_audit["duplicate_excess_rows_before"]),
+            "publication_backend": ("duckdb_bounded_spillable_row_grain_consolidation"),
             "consolidation_memory_limit_mb": memory_mb,
         }
     )
@@ -3242,19 +3247,19 @@ def _try_publish_native_export_arrow_fast_path(
                 module=module,
                 requested_concepts=requested_concepts,
                 dictionary=dictionary,
+                database=database,
             )
-            batch_semantic_audit = (
-                _enforce_eicu_tidal_volume_publication_semantics(
-                    frame,
-                    database=database,
-                    module=module,
-                    age_lookup=eicu_tidal_volume_age_lookup,
-                )
+            batch_semantic_audit = _enforce_eicu_tidal_volume_publication_semantics(
+                frame,
+                database=database,
+                module=module,
+                age_lookup=eicu_tidal_volume_age_lookup,
             )
             frame, batch_time_audit = _enforce_native_export_time_axis(
                 frame,
                 module=module,
                 stay_time_upper_bounds=stay_time_upper_bounds,
+                database=database,
             )
             batch_bounds_audit = _enforce_native_export_concept_bounds(
                 frame,
@@ -3270,6 +3275,11 @@ def _try_publish_native_export_arrow_fast_path(
                     "excluded_untimed_negative_rrt_criteria_rows",
                     "normalized_stay_level_rows",
                     "rows_with_los_bound",
+                    "event_rows",
+                    "timed_event_rows",
+                    "event_time_missing_rows",
+                    "event_time_without_event_rows",
+                    "negative_event_time_rows",
                 ):
                     if field in batch_time_audit:
                         time_axis_audit[field] = int(
@@ -3341,14 +3351,12 @@ def _try_publish_native_export_arrow_fast_path(
         if _native_export_pandas_fallback_is_bounded(fallback_size):
             temporary_parquet.unlink(missing_ok=True)
             return None
-        row_grain_audit, concept_non_null = (
-            _native_export_duckdb_consolidate_row_grain(
-                temporary_parquet,
-                module=module,
-                requested_concepts=requested_concepts,
-                dictionary=dictionary,
-                before_audit=row_grain_audit,
-            )
+        row_grain_audit, concept_non_null = _native_export_duckdb_consolidate_row_grain(
+            temporary_parquet,
+            module=module,
+            requested_concepts=requested_concepts,
+            dictionary=dictionary,
+            before_audit=row_grain_audit,
         )
 
     return {
@@ -3409,6 +3417,7 @@ def _enforce_native_export_time_axis(
     *,
     module: str,
     stay_time_upper_bounds: Dict[int, float],
+    database: Optional[str] = None,
 ):
     """Apply the ICU-relative time contract and return an auditable frame.
 
@@ -3438,10 +3447,36 @@ def _enforce_native_export_time_axis(
 
     if module == "outcome":
         charttime = pd.to_numeric(frame["charttime"], errors="coerce")
-        audit["policy"] = "stay_level_at_icu_admission"
+        audit["policy"] = "stay_level_at_icu_admission_with_event_time_companions"
         audit["normalized_stay_level_rows"] = int(
             (charttime.isna() | (charttime != 0.0)).sum()
         )
+        if "death_time" in frame.columns and "death" in frame.columns:
+            death = frame["death"].astype("boolean")
+            death_event = death.eq(True).fillna(False)
+            death_time = pd.to_numeric(frame["death_time"], errors="coerce")
+            timed = death_time.notna()
+            normalized_database = str(database or "").strip().lower()
+            audit.update(
+                {
+                    "event_time_companion": "death_time",
+                    "event_time_semantics": _NATIVE_EXPORT_DEATH_TIME_SEMANTICS.get(
+                        normalized_database,
+                        (
+                            "source_event_time"
+                            if not normalized_database
+                            else "structurally_unavailable"
+                        ),
+                    ),
+                    "event_rows": int(death_event.sum()),
+                    "timed_event_rows": int((death_event & timed).sum()),
+                    "event_time_missing_rows": int((death_event & ~timed).sum()),
+                    "event_time_without_event_rows": int((~death_event & timed).sum()),
+                    "negative_event_time_rows": int(
+                        (death_event & (death_time < 0)).sum()
+                    ),
+                }
+            )
         frame = frame.copy()
         frame["charttime"] = 0.0
         return frame, audit
@@ -3485,10 +3520,7 @@ def _enforce_native_export_time_axis(
         positive_untimed = null_time & rrt_criteria.eq(True).fillna(False)
         if bool(positive_untimed.any()):
             sample_ids = (
-                kept.loc[positive_untimed, "stay_id"]
-                .drop_duplicates()
-                .head(5)
-                .tolist()
+                kept.loc[positive_untimed, "stay_id"].drop_duplicates().head(5).tolist()
             )
             raise ValueError(
                 "native renal export contains positive rrt_criteria rows without "
@@ -3501,9 +3533,7 @@ def _enforce_native_export_time_axis(
         for column in other_concepts:
             other_value |= kept[column].notna()
         negative_rrt_artifact = (
-            null_time
-            & rrt_criteria.eq(False).fillna(False)
-            & ~other_value
+            null_time & rrt_criteria.eq(False).fillna(False) & ~other_value
         )
         audit["excluded_untimed_negative_rrt_criteria_rows"] = int(
             negative_rrt_artifact.sum()
@@ -3516,9 +3546,9 @@ def _enforce_native_export_time_axis(
         return frame, audit
 
     # Preserve canonical numeric dtype even when every row was excluded.
-    kept["charttime"] = pd.to_numeric(
-        kept["charttime"], errors="coerce"
-    ).astype(np.float64)
+    kept["charttime"] = pd.to_numeric(kept["charttime"], errors="coerce").astype(
+        np.float64
+    )
     return kept, audit
 
 
@@ -3592,15 +3622,10 @@ def _native_export_runtime_provenance() -> Dict[str, object]:
     package_root = Path(__file__).resolve().parents[1]
     repository_root = package_root.parents[1]
     foundation_files = {
-        "concept_dictionary_sha256": package_root
-        / "data"
-        / "concept-dict.json",
+        "concept_dictionary_sha256": package_root / "data" / "concept-dict.json",
         "sofa2_dictionary_sha256": package_root / "data" / "sofa2-dict.json",
-        "clinical_contracts_sha256": package_root
-        / "data"
-        / "clinical-contracts.json",
-        "clinical_contract_validator_sha256": package_root
-        / "clinical_contracts.py",
+        "clinical_contracts_sha256": package_root / "data" / "clinical-contracts.json",
+        "clinical_contract_validator_sha256": package_root / "clinical_contracts.py",
         "data_sources_sha256": package_root / "data" / "data-sources.json",
     }
     foundation_sha256 = {
@@ -3758,9 +3783,7 @@ def _publish_native_export_v2(
         )
     eicu_tidal_volume_age_lookup = None
     if normalized_database == "eicu" and "ventilator" in published_modules:
-        eicu_tidal_volume_age_lookup = _load_eicu_tidal_volume_age_lookup(
-            output_root
-        )
+        eicu_tidal_volume_age_lookup = _load_eicu_tidal_volume_age_lookup(output_root)
 
     for module in published_modules:
         relative_path = f"{module}.parquet"
@@ -3882,17 +3905,13 @@ def _publish_native_export_v2(
                 # exact fallback. No large table may enter it merely because
                 # the Arrow path found keys that need consolidation.
                 if physical_output_missing:
-                    frame = pd.DataFrame(
-                        {"stay_id": pd.Series([], dtype="int64")}
-                    )
+                    frame = pd.DataFrame({"stay_id": pd.Series([], dtype="int64")})
                 else:
                     if module == "demographics":
                         fallback_size = _native_export_pandas_fallback_size(
                             source_parquet
                         )
-                        if not _native_export_pandas_fallback_is_bounded(
-                            fallback_size
-                        ):
+                        if not _native_export_pandas_fallback_is_bounded(fallback_size):
                             raise ValueError(
                                 "native export demographics consolidation exceeds "
                                 "the bounded pandas fallback "
@@ -3909,19 +3928,19 @@ def _publish_native_export_v2(
                     module=module,
                     requested_concepts=requested_concept_plan[module],
                     dictionary=dictionary,
+                    database=normalized_database,
                 )
-                semantic_audit = (
-                    _enforce_eicu_tidal_volume_publication_semantics(
-                        frame,
-                        database=normalized_database,
-                        module=module,
-                        age_lookup=eicu_tidal_volume_age_lookup,
-                    )
+                semantic_audit = _enforce_eicu_tidal_volume_publication_semantics(
+                    frame,
+                    database=normalized_database,
+                    module=module,
+                    age_lookup=eicu_tidal_volume_age_lookup,
                 )
                 frame, time_axis_audit = _enforce_native_export_time_axis(
                     frame,
                     module=module,
                     stay_time_upper_bounds=stay_time_upper_bounds,
+                    database=normalized_database,
                 )
                 if module == "demographics":
                     # Treat target-unit bound violations as missing before choosing
@@ -4011,9 +4030,7 @@ def _publish_native_export_v2(
             if temporary_parquet is not None:
                 temporary_parquet.unlink(missing_ok=True)
             raise
-        temporary_module_files.append(
-            (temporary_parquet, output_root / relative_path)
-        )
+        temporary_module_files.append((temporary_parquet, output_root / relative_path))
         file_bindings.append(binding)
         concept_status = {}
         for concept in requested_concept_plan[module]:
@@ -4033,9 +4050,7 @@ def _publish_native_export_v2(
             }
             if concept in semantic_audit:
                 status["excluded_semantically_invalid"] = int(
-                    semantic_audit[concept].get(
-                        "excluded_semantically_invalid", 0
-                    )
+                    semantic_audit[concept].get("excluded_semantically_invalid", 0)
                 )
             if "declared_bounds" in bounds_audit[concept]:
                 status["declared_bounds"] = bounds_audit[concept]["declared_bounds"]
@@ -4043,8 +4058,7 @@ def _publish_native_export_v2(
         import pyarrow.parquet as _pq
 
         physical_schema = {
-            field.name: str(field.type)
-            for field in _pq.read_schema(temporary_parquet)
+            field.name: str(field.type) for field in _pq.read_schema(temporary_parquet)
         }
         parquet_sha256 = _native_export_file_sha256(temporary_parquet)
         parquet_bytes = temporary_parquet.stat().st_size
@@ -4121,9 +4135,7 @@ def _publish_native_export_v2(
     }
     module_peak_working_set_mb = {
         module: float(
-            (result.get("modules", {}).get(module) or {}).get(
-                "peak_working_set_mb"
-            )
+            (result.get("modules", {}).get(module) or {}).get("peak_working_set_mb")
             or 0
         )
         for module in modules
@@ -4341,9 +4353,7 @@ def extract_database(
     # 自适应。显式用户 batch 仍保持固定；launcher 可以显式传计划值并单独打开
     # adaptive_stream_batches，使 provenance 与真实首批完全一致。
     if adaptive_stream_batches and not stream_output_batches:
-        raise ValueError(
-            "adaptive_stream_batches requires stream_output_batches=True"
-        )
+        raise ValueError("adaptive_stream_batches requires stream_output_batches=True")
 
     if stream_output_batches:
         automatic_stream_batch = batch_size is None
@@ -4395,7 +4405,7 @@ def extract_database(
 
     if verbose:
         rss = get_rss_mb()
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"📊 extract_database: {database}")
         print(f"   患者数: {num_patients:,}, 模块数: {len(modules)}")
         if (
@@ -4410,7 +4420,7 @@ def extract_database(
             batch_description = f"batch_size={batch_size}"
         print(f"   批策略: {batch_description}")
         print(f"   RSS: {rss:.0f}MB, 输出: {output_dir or '仅内存'}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
     result = {
         "database": database,
@@ -4498,16 +4508,12 @@ def extract_database(
             ),
             "stream_batches": mod_result["stream_batches"],
             "initial_batch_size": manifest.get("initial_batch_size"),
-            "final_planned_batch_size": manifest.get(
-                "final_planned_batch_size"
-            ),
+            "final_planned_batch_size": manifest.get("final_planned_batch_size"),
             "adaptive_batch_growth": manifest.get(
                 "adaptive_batch_growth",
                 False,
             ),
-            "patient_partition_strategy": manifest.get(
-                "patient_partition_strategy"
-            ),
+            "patient_partition_strategy": manifest.get("patient_partition_strategy"),
             "initial_planned_partition_count": manifest.get(
                 "initial_planned_partition_count"
             ),
@@ -4861,7 +4867,7 @@ def extract_database(
         all_warnings = [
             w for m in result["modules"].values() for w in m.get("warnings", [])
         ]
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(
             f"✅ {database} 完成: {total_concepts} concepts, "
             f"{total_rows:,} rows, {total_elapsed:.1f}s"
@@ -4873,7 +4879,7 @@ def extract_database(
             print(f"   ⚠️ {len(all_errors)} 错误: {all_errors[:5]}")
         if all_warnings:
             print(f"   ⚠️ {len(all_warnings)} 警告: {all_warnings[:5]}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
     return result
 
@@ -4925,11 +4931,11 @@ def extract_all_databases(
     results = {}
 
     if verbose:
-        print(f"\n{'#'*60}")
+        print(f"\n{'#' * 60}")
         print(f"# extract_all_databases: {len(databases)} 个数据库")
         print(f"# 模块: {modules or '全部'}")
         print(f"# 输出: {output_dir or '仅内存'}")
-        print(f"{'#'*60}")
+        print(f"{'#' * 60}")
 
     for db_idx, db in enumerate(databases):
         dp = merged_paths.get(db)
@@ -4948,9 +4954,9 @@ def extract_all_databases(
             db_output = os.path.join(str(output_dir), db)
 
         if verbose:
-            print(f"\n{'━'*60}")
-            print(f"  [{db_idx+1}/{len(databases)}] 🏥 {db.upper()}")
-            print(f"{'━'*60}")
+            print(f"\n{'━' * 60}")
+            print(f"  [{db_idx + 1}/{len(databases)}] 🏥 {db.upper()}")
+            print(f"{'━' * 60}")
 
         try:
             r = extract_database(
@@ -4972,7 +4978,7 @@ def extract_all_databases(
     total = time.time() - t_start
 
     if verbose:
-        print(f"\n{'#'*60}")
+        print(f"\n{'#' * 60}")
         print(f"# 全部完成: {total:.1f}s")
         for db, r in results.items():
             if "error" in r:
@@ -4980,11 +4986,13 @@ def extract_all_databases(
             else:
                 nc = sum(len(m["concepts"]) for m in r["modules"].values())
                 nr = sum(
-                    int(m.get("rows", 0))
-                    if "rows" in m
-                    else sum(
-                        len(v) if hasattr(v, "__len__") else 0
-                        for v in m["concepts"].values()
+                    (
+                        int(m.get("rows", 0))
+                        if "rows" in m
+                        else sum(
+                            len(v) if hasattr(v, "__len__") else 0
+                            for v in m["concepts"].values()
+                        )
                     )
                     for m in r["modules"].values()
                 )
@@ -4992,6 +5000,6 @@ def extract_all_databases(
                     f"#   {db}: {r['num_patients']:,} patients, "
                     f"{nc} concepts, {nr:,} rows, {r['total_elapsed']:.0f}s"
                 )
-        print(f"{'#'*60}")
+        print(f"{'#' * 60}")
 
     return results
