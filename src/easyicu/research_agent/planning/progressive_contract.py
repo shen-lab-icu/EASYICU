@@ -44,9 +44,11 @@ def progressive_module_ids_for_analysis_types(
     locked-effect replay owners that require those quantities. Publication
     figures and manuscript text are also host-owned for this family: the host
     binds deterministic renderers to the exact typed result/audit products and
-    the evidence-bound Writer runs after execution. Asking the Planner to add
-    parallel visualization or report steps would duplicate those owners and
-    widen source-lineage obligations without adding a scientific decision.
+    the evidence-bound Writer runs after execution. The registered measurement
+    audit already owns observation-process and timing diagnostics, so an
+    arbitrary custom-analysis fallback would duplicate that owner and bypass
+    its typed outputs. Asking the Planner to add any of those parallel steps
+    would widen source-lineage obligations without adding a scientific decision.
     """
 
     normalized = {
@@ -63,6 +65,7 @@ def progressive_module_ids_for_analysis_types(
             not in {
                 "adjusted_association",
                 "robustness_replay",
+                "custom_analysis",
                 "visualization",
                 "report",
             }

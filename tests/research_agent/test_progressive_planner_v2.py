@@ -602,6 +602,7 @@ def test_descriptive_outline_schema_advertises_only_scientific_step_owners() -> 
 
     assert "adjusted_association" not in modules
     assert "robustness_replay" not in modules
+    assert "custom_analysis" not in modules
     assert "visualization" not in modules
     assert "report" not in modules
     assert "measurement_audit" in modules
@@ -1085,16 +1086,23 @@ def test_descriptive_compiler_rejects_effect_robustness_before_plan_assembly() -
 
 
 @pytest.mark.parametrize(
-    ("module_id", "product_id", "semantic_role"),
+    ("module_id", "product_id", "semantic_role", "custom_method"),
     [
-        ("visualization", "figure:duplicate_presentation", "figure"),
-        ("report", "report:duplicate_presentation", "report"),
+        (
+            "custom_analysis",
+            "table:duplicate_measurement_audit",
+            "custom",
+            "duplicate_measurement_audit",
+        ),
+        ("visualization", "figure:duplicate_presentation", "figure", None),
+        ("report", "report:duplicate_presentation", "report", None),
     ],
 )
-def test_descriptive_compiler_rejects_duplicate_presentation_owners(
+def test_descriptive_compiler_rejects_nonstandard_or_duplicate_owners(
     module_id: str,
     product_id: str,
     semantic_role: str,
+    custom_method: str | None,
 ) -> None:
     context = _context().model_copy(
         update={
@@ -1127,6 +1135,7 @@ def test_descriptive_compiler_rejects_duplicate_presentation_owners(
                     "semantic_role": semantic_role,
                 }
             ],
+            "custom_method": custom_method,
         }
     )
     payload["steps"] = [cohort_step, step]
