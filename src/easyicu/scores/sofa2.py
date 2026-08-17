@@ -255,9 +255,9 @@ def sofa2_resp(
     
     Args:
         pafi: PaO2/FiO2 ratio (unitless ratio; see the 2026 correction).
-            Accepted domain [20, 3000]; the six canonical exports span
-            [40, 800] over 4.3M observations, so the bound only fires on a
-            unit error, not on real physiology.
+            Must be >= 20; the six canonical exports span [40, 800] over 4.3M
+            observations, so the floor only fires on a unit error, not on real
+            physiology. No upper bound -- a high P/F scores 0 and is harmless.
         spo2: Oxygen saturation (%)
         fio2: Fraction of inspired oxygen (0.21-1.0 or 21-100)
         adv_resp: Boolean - advanced respiratory support active
@@ -353,13 +353,21 @@ def sofa2_resp(
             component="sofa2_resp",
             field="pafi",
             index=idx,
-            # The dictionary bounds po2 [40, 600] mmHg and fio2 [21, 100] %
-            # make every derivable P/F fall in [40, 2857]. Bounding the field
-            # here catches the classic 100x unit error (FiO2 passed as 21-100
-            # instead of 0.21-1.0), which otherwise lands in the single digits
-            # and scores a maximal 4 without any other input disagreeing.
+            # Catches the classic 100x unit error (FiO2 passed as 21-100
+            # instead of 0.21-1.0), which lands in the single digits and scores
+            # a maximal 4 without any other input disagreeing.
+            #
+            # Only a floor. A too-high P/F scores 0, so an implausibly high
+            # value is benign; a ceiling would buy nothing and would couple this
+            # module to po2/fio2 dictionary bounds it must not read -- the
+            # dependency runs concept -> scores, not the reverse.
+            #
+            # 20 is the tightest floor valid under both the shipped dictionary
+            # (po2 >= 40, fio2 <= 100 % => P/F >= 40) and the widened bounds
+            # pending on fix/concept-clinical-bounds (po2 >= 20 => P/F >= 20,
+            # accepted inclusively). Revisit if po2's minimum ever drops below
+            # 20 or fio2's maximum rises above 100.
             minimum=20,
-            maximum=3000,
         )
         if pafi is not None
         else pd.Series(np.nan, index=idx)
