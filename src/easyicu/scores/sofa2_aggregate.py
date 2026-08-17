@@ -64,12 +64,20 @@ def _key_names(
 
 
 def _resolve_keys(
-    data_dict: Dict[str, pd.DataFrame],
+    components: Dict[str, pd.DataFrame],
     *,
     id_cols: Optional[Sequence[str]],
     time_cols: Optional[Sequence[str]],
 ) -> tuple[list[str], list[str]]:
-    frames = list(data_dict.values())
+    """Resolve join keys from the SOFA-2 components alone.
+
+    ``components`` must already be narrowed to the six required frames. Keys are
+    inferred from their common columns, so an unrelated companion frame carried
+    along in the caller's mapping cannot shrink that intersection and strand an
+    identity key the components all agree on.
+    """
+
+    frames = list(components.values())
     if not frames or any(not isinstance(frame, pd.DataFrame) for frame in frames):
         raise SOFA2InputError(
             component="sofa2_aggregate",
@@ -204,8 +212,10 @@ def sofa2_score(
 ) -> pd.DataFrame:
     """Aggregate one aligned observation/day-1 record of SOFA-2.
 
-    Omitted keys are inferred only from fixed trusted ICU identity/time names;
-    arbitrary overlapping metadata is never a join key. Component keys must be
+    Omitted keys are inferred only from fixed trusted ICU identity/time names
+    common to the six components; arbitrary overlapping metadata is never a join
+    key, and entries beyond the six components are ignored rather than allowed
+    to constrain key inference. Component keys must be
     unique. Multiple time rows per identity fail closed because longitudinal
     scoring belongs to the production owner-receipt callback.
     """
@@ -215,8 +225,9 @@ def sofa2_score(
     if missing:
         raise ValueError(f"Missing required component: {missing[0]}")
 
+    components = {name: data_dict[name] for name in required}
     resolved_ids, resolved_times = _resolve_keys(
-        data_dict,
+        components,
         id_cols=id_cols,
         time_cols=time_cols,
     )
