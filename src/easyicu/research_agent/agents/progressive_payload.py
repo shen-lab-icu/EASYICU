@@ -254,9 +254,43 @@ def _bind_foundation_authorities(
         raise ProgressiveTransportSchemaError(
             "progressive materialization foundation properties are unavailable"
         )
-    robustness_properties["complete_case_variables"]["items"] = _string_enum(
-        variable_names
+    complete_case_variables = copy.deepcopy(
+        robustness_properties["complete_case_variables"]
     )
+    complete_case_variables["items"] = _string_enum(variable_names)
+    no_complete_case_variables = copy.deepcopy(complete_case_variables)
+    no_complete_case_variables["maxItems"] = 0
+    required_complete_case_variables = copy.deepcopy(complete_case_variables)
+    required_complete_case_variables["minItems"] = 1
+    definitions["ProgressiveRobustnessIntent"] = {
+        "anyOf": [
+            _closed_object(
+                {
+                    "spec_id": copy.deepcopy(robustness_properties["spec_id"]),
+                    "axis": copy.deepcopy(robustness_properties["axis"]),
+                    "description": copy.deepcopy(
+                        robustness_properties["description"]
+                    ),
+                    "missing_strategy": {"type": "string", "const": "none"},
+                    "complete_case_variables": no_complete_case_variables,
+                }
+            ),
+            _closed_object(
+                {
+                    "spec_id": copy.deepcopy(robustness_properties["spec_id"]),
+                    "axis": {"type": "string", "const": "missing"},
+                    "description": copy.deepcopy(
+                        robustness_properties["description"]
+                    ),
+                    "missing_strategy": {
+                        "type": "string",
+                        "const": "complete_case",
+                    },
+                    "complete_case_variables": required_complete_case_variables,
+                }
+            ),
+        ]
+    }
     predicate_properties["concept_id"] = _string_enum(cohort_concept_ids)
     if required_cohort_selection_mode is not None:
         if required_cohort_selection_mode not in {

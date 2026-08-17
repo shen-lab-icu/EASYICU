@@ -39,6 +39,7 @@ _SAFE_VALIDATION_FIELDS = frozenset(
         "cohort",
         "display_labels",
         "robustness_specs",
+        "robustness_intents",
         "know_how_decisions",
         "steps",
         "rationale",
