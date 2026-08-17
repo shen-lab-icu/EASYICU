@@ -178,6 +178,7 @@ from .reporting.article_contract import (
 )
 from .planning.figure_strategy import build_article_figure_strategy
 from .planning.progressive_artifacts import (
+    persist_progressive_planner_checkpoint,
     persist_progressive_planning_artifacts,
     persist_progressive_planning_authority,
 )
@@ -2751,6 +2752,14 @@ class ResearchAgentPipeline:
                 emit_progress, run_id=run_id
             )
 
+            def progressive_checkpoint(checkpoint: Any) -> None:
+                persist_progressive_planner_checkpoint(
+                    run_dir=run_dir,
+                    evidence=evidence,
+                    checkpoint=checkpoint,
+                    prompt_pack_version=prompt_version,
+                )
+
             try:
                 plan = planner.run(
                     agent_context,
@@ -2763,6 +2772,11 @@ class ResearchAgentPipeline:
                     article_contract_context=context,
                     planning_contract_context=planning_contract_context,
                     progress_callback=planner_progress,
+                    **(
+                        {"checkpoint_callback": progressive_checkpoint}
+                        if progressive
+                        else {}
+                    ),
                 )
                 planner_prompt_metrics = know_how_binding.prompt_metrics(
                     planner,
@@ -2771,23 +2785,27 @@ class ResearchAgentPipeline:
                 )
                 if progressive:
                     outline = planner.last_outline
+                    foundation = planner.last_foundation
                     materializations = planner.last_materializations
                     skeleton = planner.last_skeleton
                     compile_receipt = planner.last_compile_receipt
                     if (
                         outline is None
+                        or foundation is None
                         or not materializations
                         or skeleton is None
                         or compile_receipt is None
                     ):
                         raise RuntimeError(
                             "Progressive Planner returned without its outline, "
-                            "step materializations, skeleton, or compile receipt"
+                            "foundation, step materializations, skeleton, or "
+                            "compile receipt"
                         )
                     persist_progressive_planning_artifacts(
                         run_dir=run_dir,
                         evidence=evidence,
                         outline=outline,
+                        foundation=foundation,
                         materializations=materializations,
                         skeleton=skeleton,
                         compile_receipt=compile_receipt,

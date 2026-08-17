@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.agents.progressive_payload import (
+    progressive_foundation_structured_output_request,
     progressive_outline_structured_output_request,
     progressive_step_materialization_request,
     progressive_structured_output_request,
@@ -29,6 +30,7 @@ from easyicu.research_agent.planning.progressive_compiler import (
 )
 from easyicu.research_agent.planning.progressive_artifacts import (
     ProgressivePlanningArtifactError,
+    persist_progressive_planner_checkpoint,
     persist_progressive_planning_artifacts,
     persist_progressive_planning_authority,
 )
@@ -467,27 +469,33 @@ def _materialization_payloads(payload: dict | None = None) -> list[dict]:
     source = payload or _payload()
     outline = ProgressivePlanOutline.model_validate(_outline_payload(source))
     responses = []
-    for index, (outline_step, step) in enumerate(zip(outline.steps, source["steps"])):
+    for outline_step, step in zip(outline.steps, source["steps"], strict=True):
         responses.append(
             {
                 "schema_version": "easyicu.progressive_step_materialization/1",
                 "outline_step_sha256": canonical_sha256(
                     outline_step.model_dump(mode="json")
                 ),
-                "foundation": (
-                    {
-                        "cohort": source["cohort"],
-                        "display_labels": source["display_labels"],
-                        "robustness_intents": source["robustness_intents"],
-                        "know_how_decisions": source.get("know_how_decisions", []),
-                    }
-                    if index == 0
-                    else None
-                ),
+                "foundation": None,
                 "step": step,
             }
         )
     return responses
+
+
+def _foundation_payload(payload: dict | None = None) -> dict:
+    source = payload or _payload()
+    outline = ProgressivePlanOutline.model_validate(_outline_payload(source))
+    return {
+        "schema_version": "easyicu.progressive_plan_foundation/1",
+        "outline_sha256": canonical_sha256(outline.model_dump(mode="json")),
+        "foundation": {
+            "cohort": source["cohort"],
+            "display_labels": source["display_labels"],
+            "robustness_intents": source["robustness_intents"],
+            "know_how_decisions": source.get("know_how_decisions", []),
+        },
+    }
 
 
 def _walk_objects(node):
@@ -557,6 +565,26 @@ def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> 
         assert object_schema["additionalProperties"] is False
 
 
+def test_progressive_foundation_schema_is_outline_bound_and_has_no_step_fields() -> None:
+    outline = ProgressivePlanOutline.model_validate(_outline_payload())
+    outline_sha256 = canonical_sha256(outline.model_dump(mode="json"))
+
+    request = progressive_foundation_structured_output_request(
+        outline_sha256=outline_sha256,
+        variable_names=["exposure_flag", "outcome_flag", "age_years"],
+        cohort_concept_ids=["exposure_concept", "outcome_concept"],
+    )
+    schema = json.loads(request.schema_json)
+
+    assert request.name == "easyicu_progressive_plan_foundation_v1"
+    assert schema["properties"]["outline_sha256"]["const"] == outline_sha256
+    assert "step" not in schema["properties"]
+    assert "ProgressiveSkeletonStep" not in request.schema_json
+    for object_schema in _walk_objects(schema):
+        assert set(object_schema["required"]) == set(object_schema["properties"])
+        assert object_schema["additionalProperties"] is False
+
+
 def test_current_step_schema_locks_outline_coordinate_and_product_registry() -> None:
     outline_step = ProgressiveOutlineStep(
         step_id="05_primary",
@@ -575,7 +603,6 @@ def test_current_step_schema_locks_outline_coordinate_and_product_registry() -> 
         variable_names=["exposure_flag", "outcome_flag", "age_years"],
         scientific_action_ids=["association.adjusted_association"],
         allowed_literature_citation_keys=["strobe_2007"],
-        include_foundation=False,
         available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
     )
     schema = json.loads(request.schema_json)
@@ -645,13 +672,10 @@ def test_current_step_without_available_products_closes_product_inputs() -> None
         ),
         variable_names=["exposure_flag", "outcome_flag"],
         scientific_action_ids=[],
-        include_foundation=True,
     )
     schema = json.loads(request.schema_json)
 
-    assert schema["properties"]["foundation"] == {
-        "$ref": "#/$defs/ProgressivePlanFoundation"
-    }
+    assert schema["properties"]["foundation"] == {"type": "null"}
     step = schema["$defs"]["ProgressiveSkeletonStep"]["properties"]
     assert step["depends_on"] == {
         "type": "array",
@@ -681,7 +705,6 @@ def test_current_table_one_step_requires_its_module_fields_in_schema() -> None:
         outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
         variable_names=["exposure_flag", "age_years", "sex_code"],
         scientific_action_ids=[],
-        include_foundation=False,
         available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
     )
     step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
@@ -1187,7 +1210,11 @@ def test_question_retrieval_keeps_association_when_notes_request_audits() -> Non
 
 
 def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
-    responses = [_outline_payload(), *_materialization_payloads()]
+    responses = [
+        _outline_payload(),
+        _foundation_payload(),
+        *_materialization_payloads(),
+    ]
     llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
     llm.supports_strict_json_schema = True
     agent = ProgressivePlannerAgent(llm)
@@ -1195,26 +1222,70 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
     plan = agent.run(_context())
 
     assert len(plan.steps) == 7
-    assert len(llm.calls) == 8
+    assert len(llm.calls) == 9
     requests = [call[1]["structured_output"] for call in llm.calls]
     assert requests[0].name == "easyicu_progressive_plan_outline_v1"
-    assert {request.name for request in requests[1:]} == {
+    assert requests[1].name == "easyicu_progressive_plan_foundation_v1"
+    assert {request.name for request in requests[2:]} == {
         "easyicu_progressive_step_materialization_v1"
     }
     first_schema = requests[0].schema_json
     assert "raw_inputs" not in first_schema
     assert "product_inputs" not in first_schema
     assert "model_terms" not in first_schema
-    second_prompt = llm.calls[1][0][-1].content
-    assert "Current outline step and host digest" in second_prompt
-    assert "Do not return or rewrite any prefix or future step" in second_prompt
+    foundation_prompt = llm.calls[1][0][-1].content
+    assert "PROGRESSIVE PLAN-FOUNDATION AUTHORITY" in foundation_prompt
+    assert "Do not return executable step fields" in foundation_prompt
+    first_step_prompt = llm.calls[2][0][-1].content
+    assert "Current outline step and host digest" in first_step_prompt
+    assert "Do not return or rewrite any prefix or future step" in first_step_prompt
     assert agent.last_prompt_metrics["compile_revision_count"] == 0
     assert agent.last_prompt_metrics["step_materialization_count"] == 7
     assert agent.last_prompt_metrics["full_revision_count"] == 0
     assert agent.last_compile_receipt is not None
     assert agent.last_outline is not None
+    assert agent.last_foundation is not None
     assert len(agent.last_materializations) == 7
     assert agent.last_skeleton is not None
+
+
+def test_agent_emits_append_only_validated_prefix_checkpoints() -> None:
+    responses = [
+        _outline_payload(),
+        _foundation_payload(),
+        *_materialization_payloads(),
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+    checkpoints = []
+
+    agent.run(_context(), checkpoint_callback=checkpoints.append)
+
+    assert [item.stage for item in checkpoints] == [
+        "outline",
+        "foundation",
+        *(["step"] * 7),
+    ]
+    assert [item.sequence for item in checkpoints] == list(range(9))
+    assert [len(item.materializations) for item in checkpoints] == [
+        0,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+    ]
+    assert checkpoints[0].previous_checkpoint_sha256 is None
+    assert all(
+        current.previous_checkpoint_sha256 == previous.checkpoint_sha256
+        for previous, current in zip(
+            checkpoints[:-1], checkpoints[1:], strict=True
+        )
+    )
 
 
 def test_agent_repairs_only_the_current_materialization() -> None:
@@ -1223,6 +1294,7 @@ def test_agent_repairs_only_the_current_materialization() -> None:
     invalid_primary["step"]["model_terms"][1]["name"] = "invented_covariate"
     responses = [
         _outline_payload(),
+        _foundation_payload(),
         *materializations[:4],
         invalid_primary,
         materializations[4],
@@ -1235,18 +1307,22 @@ def test_agent_repairs_only_the_current_materialization() -> None:
     plan = agent.run(_context())
 
     assert len(plan.steps) == 7
-    assert len(llm.calls) == 9
-    repair_prompt = llm.calls[6][0][-1].content
+    assert len(llm.calls) == 10
+    repair_prompt = llm.calls[7][0][-1].content
     assert "HOST COMPILER OBSERVATION FOR THIS CURRENT STEP" in repair_prompt
     assert "progressive_unknown_variable" in repair_prompt
     assert '"step_id":"05_primary"' in repair_prompt
     assert "CURRENT UNLOCKED SUFFIX" not in repair_prompt
     assert "corrected complete skeleton" not in repair_prompt
-    assert llm.calls[5][1]["structured_output"].authority_sha256 == (
-        llm.calls[6][1]["structured_output"].authority_sha256
+    assert llm.calls[6][1]["structured_output"].authority_sha256 == (
+        llm.calls[7][1]["structured_output"].authority_sha256
     )
     assert agent.last_prompt_metrics["compile_revision_count"] == 1
     assert agent.last_prompt_metrics["step_materialization_count"] == 7
+    assert len(agent.last_prompt_metrics["step_materialization_schema_sha256"]) == 7
+    assert len(
+        agent.last_prompt_metrics["step_materialization_attempt_schema_sha256"]
+    ) == 8
     assert agent.last_prompt_metrics["full_revision_count"] == 0
 
 
@@ -1267,12 +1343,86 @@ class _RecordingEvidence:
         return self.records[evidence_id]
 
 
+def test_progressive_checkpoints_persist_as_a_digest_verified_chain(
+    tmp_path: Path,
+) -> None:
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
+            *[json.dumps(item) for item in _materialization_payloads()],
+        ]
+    )
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+    evidence = _RecordingEvidence()
+    paths = []
+
+    def checkpoint_callback(checkpoint) -> None:
+        paths.append(
+            persist_progressive_planner_checkpoint(
+                run_dir=tmp_path,
+                evidence=evidence,
+                checkpoint=checkpoint,
+                prompt_pack_version="test",
+            )
+        )
+
+    agent.run(_context(), checkpoint_callback=checkpoint_callback)
+
+    assert [path.name for path in paths] == [
+        f"progressive_planner_checkpoint_{index:03d}.json"
+        for index in range(9)
+    ]
+    assert set(evidence.records) == {
+        f"progressive_planner_checkpoint_{index:03d}" for index in range(9)
+    }
+    assert evidence.records["progressive_planner_checkpoint_008"]["inputs"] == [
+        "research_context",
+        "progressive_planner_checkpoint_007",
+    ]
+
+
+def test_progressive_checkpoint_rejects_mutated_predecessor(tmp_path: Path) -> None:
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
+            *[json.dumps(item) for item in _materialization_payloads()],
+        ]
+    )
+    agent = ProgressivePlannerAgent(llm)
+    checkpoints = []
+    agent.run(_context(), checkpoint_callback=checkpoints.append)
+    evidence = _RecordingEvidence()
+    first_path = persist_progressive_planner_checkpoint(
+        run_dir=tmp_path,
+        evidence=evidence,
+        checkpoint=checkpoints[0],
+        prompt_pack_version="test",
+    )
+    first_path.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(ProgressivePlanningArtifactError) as caught:
+        persist_progressive_planner_checkpoint(
+            run_dir=tmp_path,
+            evidence=evidence,
+            checkpoint=checkpoints[1],
+            prompt_pack_version="test",
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_source_artifact_digest_mismatch"
+    )
+
+
 def test_progressive_artifacts_bind_each_schema_authority(
     tmp_path: Path,
 ) -> None:
     llm = ScriptedMockLLMClient(
         [
             json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
             *[json.dumps(item) for item in _materialization_payloads()],
         ]
     )
@@ -1280,6 +1430,7 @@ def test_progressive_artifacts_bind_each_schema_authority(
     agent = ProgressivePlannerAgent(llm)
     plan = agent.run(_context())
     assert agent.last_outline is not None
+    assert agent.last_foundation is not None
     assert agent.last_skeleton is not None
     assert agent.last_compile_receipt is not None
     evidence = _RecordingEvidence()
@@ -1288,6 +1439,7 @@ def test_progressive_artifacts_bind_each_schema_authority(
         run_dir=tmp_path,
         evidence=evidence,
         outline=agent.last_outline,
+        foundation=agent.last_foundation,
         materializations=agent.last_materializations,
         skeleton=agent.last_skeleton,
         compile_receipt=agent.last_compile_receipt,
@@ -1300,21 +1452,26 @@ def test_progressive_artifacts_bind_each_schema_authority(
     assert ledger["outline_structured_output_authority_sha256"] == (
         requests[0].authority_sha256
     )
+    assert ledger["foundation_structured_output_authority_sha256"] == (
+        requests[1].authority_sha256
+    )
     assert [
         item["structured_output_authority_sha256"]
         for item in ledger["materializations"]
-    ] == [request.authority_sha256 for request in requests[1:]]
+    ] == [request.authority_sha256 for request in requests[2:]]
     assert [item["step_id"] for item in ledger["materializations"]] == [
         item.step.step_id for item in agent.last_materializations
     ]
     assert set(evidence.records) == {
         "progressive_plan_outline",
+        "progressive_plan_foundation",
         "progressive_step_materializations",
         "progressive_plan_skeleton",
         "progressive_plan_compile_receipt",
     }
     assert evidence.records["progressive_plan_skeleton"]["inputs"] == [
         "progressive_plan_outline",
+        "progressive_plan_foundation",
         "progressive_step_materializations",
         "research_context",
     ]
@@ -1384,6 +1541,7 @@ def test_progressive_artifacts_fail_closed_on_schema_authority_drift(
     llm = ScriptedMockLLMClient(
         [
             json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
             *[json.dumps(item) for item in _materialization_payloads()],
         ]
     )
@@ -1391,6 +1549,7 @@ def test_progressive_artifacts_fail_closed_on_schema_authority_drift(
     agent = ProgressivePlannerAgent(llm)
     agent.run(_context())
     assert agent.last_outline is not None
+    assert agent.last_foundation is not None
     assert agent.last_skeleton is not None
     assert agent.last_compile_receipt is not None
     drifted_metrics = dict(agent.last_prompt_metrics)
@@ -1401,6 +1560,7 @@ def test_progressive_artifacts_fail_closed_on_schema_authority_drift(
             run_dir=tmp_path,
             evidence=_RecordingEvidence(),
             outline=agent.last_outline,
+            foundation=agent.last_foundation,
             materializations=agent.last_materializations,
             skeleton=agent.last_skeleton,
             compile_receipt=agent.last_compile_receipt,
@@ -1419,6 +1579,7 @@ def test_progressive_artifacts_do_not_overwrite_existing_evidence_identity(
     llm = ScriptedMockLLMClient(
         [
             json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
             *[json.dumps(item) for item in _materialization_payloads()],
         ]
     )
@@ -1426,6 +1587,7 @@ def test_progressive_artifacts_do_not_overwrite_existing_evidence_identity(
     agent = ProgressivePlannerAgent(llm)
     agent.run(_context())
     assert agent.last_outline is not None
+    assert agent.last_foundation is not None
     assert agent.last_skeleton is not None
     assert agent.last_compile_receipt is not None
     evidence = _RecordingEvidence()
@@ -1433,6 +1595,7 @@ def test_progressive_artifacts_do_not_overwrite_existing_evidence_identity(
         run_dir=tmp_path,
         evidence=evidence,
         outline=agent.last_outline,
+        foundation=agent.last_foundation,
         materializations=agent.last_materializations,
         skeleton=agent.last_skeleton,
         compile_receipt=agent.last_compile_receipt,
@@ -1453,6 +1616,7 @@ def test_progressive_artifacts_do_not_overwrite_existing_evidence_identity(
             run_dir=tmp_path,
             evidence=evidence,
             outline=agent.last_outline,
+            foundation=agent.last_foundation,
             materializations=changed_materializations,
             skeleton=agent.last_skeleton,
             compile_receipt=agent.last_compile_receipt,
@@ -1469,7 +1633,7 @@ def test_progressive_artifacts_do_not_overwrite_existing_evidence_identity(
 def test_agent_rejects_materialization_coordinate_drift_without_full_rewrite() -> None:
     materializations = _materialization_payloads()
     materializations[2]["step"]["objective"] = "Rewrite the outline-owned objective."
-    responses = [_outline_payload(), *materializations]
+    responses = [_outline_payload(), _foundation_payload(), *materializations]
     llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
     agent = ProgressivePlannerAgent(llm)
 
@@ -1479,5 +1643,5 @@ def test_agent_rejects_materialization_coordinate_drift_without_full_rewrite() -
     assert caught.value.reason_code == "progressive_step_materialization_mismatch"
     assert caught.value.step_id == "03_distribution"
     assert caught.value.path == "objective"
-    assert len(llm.calls) == 4
+    assert len(llm.calls) == 5
     assert agent.last_prompt_metrics["full_revision_count"] == 0

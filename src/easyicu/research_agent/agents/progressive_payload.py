@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence, get_args
 
 from ..planning.method_literature import METHOD_CARDS
 from ..planning.progressive_contract import (
+    ProgressiveFoundationMaterialization,
     ProgressiveModuleId,
     ProgressiveOutlineStep,
     ProgressivePlanOutline,
@@ -286,7 +287,6 @@ def _bind_materialization_coordinate(
     *,
     outline_step: ProgressiveOutlineStep,
     outline_step_sha256: str,
-    include_foundation: bool,
     available_product_refs: tuple[tuple[str, str], ...],
 ) -> None:
     properties = schema.get("properties")
@@ -304,11 +304,7 @@ def _bind_materialization_coordinate(
         "type": "string",
         "const": outline_step_sha256,
     }
-    properties["foundation"] = (
-        _non_null(properties["foundation"], field="foundation")
-        if include_foundation
-        else {"type": "null"}
-    )
+    properties["foundation"] = {"type": "null"}
     step_properties["step_id"] = {
         "type": "string",
         "const": outline_step.step_id,
@@ -582,17 +578,67 @@ def progressive_outline_structured_output_request(
     )
 
 
+def progressive_foundation_structured_output_request(
+    *,
+    outline_sha256: str,
+    variable_names: Sequence[str],
+    cohort_concept_ids: Sequence[str] = (),
+    allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
+) -> StructuredOutputRequest:
+    """Return the run-bound plan-wide contract without any step fields."""
+
+    if not re.fullmatch(r"[0-9a-f]{64}", str(outline_sha256 or "")):
+        raise ProgressiveTransportSchemaError(
+            "outline_sha256 must be one canonical sha256"
+        )
+    normalized_variables = tuple(
+        dict.fromkeys(
+            str(value).strip() for value in variable_names if str(value).strip()
+        )
+    )
+    if not normalized_variables:
+        raise ProgressiveTransportSchemaError(
+            "progressive foundation transport requires a variable roster"
+        )
+    normalized_concepts = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (cohort_concept_ids or normalized_variables)
+            if str(value).strip()
+        )
+    )
+    schema = copy.deepcopy(
+        ProgressiveFoundationMaterialization.model_json_schema(mode="validation")
+    )
+    properties = schema.get("properties")
+    definitions = schema.get("$defs")
+    if not isinstance(properties, dict) or not isinstance(definitions, dict):
+        raise ProgressiveTransportSchemaError(
+            "progressive foundation schema properties are unavailable"
+        )
+    properties["outline_sha256"] = {
+        "type": "string",
+        "const": str(outline_sha256),
+    }
+    _bind_foundation_authorities(
+        definitions,
+        variable_names=normalized_variables,
+        cohort_concept_ids=normalized_concepts,
+        know_how_authority=_authority_rows(allowed_know_how_decisions),
+    )
+    return _closed_request(
+        name="easyicu_progressive_plan_foundation_v1",
+        schema=schema,
+    )
+
+
 def progressive_step_materialization_request(
     *,
     outline_step: ProgressiveOutlineStep,
     outline_step_sha256: str,
     variable_names: Sequence[str],
-    cohort_concept_ids: Sequence[str] = (),
     scientific_action_ids: Sequence[str],
     allowed_literature_citation_keys: Sequence[str] = (),
-    allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
-    include_foundation: bool,
-    foundation_variable_names: Sequence[str] = (),
     available_product_refs: Sequence[tuple[str, str]] = (),
 ) -> StructuredOutputRequest:
     """Return one coordinate-bound schema for the current step only."""
@@ -610,13 +656,6 @@ def progressive_step_materialization_request(
         dict.fromkeys(
             str(value).strip()
             for value in scientific_action_ids
-            if str(value).strip()
-        )
-    )
-    normalized_foundation_variables = tuple(
-        dict.fromkeys(
-            str(value).strip()
-            for value in (foundation_variable_names or normalized_variables)
             if str(value).strip()
         )
     )
@@ -638,13 +677,6 @@ def progressive_step_materialization_request(
         raise ProgressiveTransportSchemaError(
             "outline scientific action is outside the run-bound action roster"
         )
-    normalized_concepts = tuple(
-        dict.fromkeys(
-            str(value).strip()
-            for value in (cohort_concept_ids or normalized_variables)
-            if str(value).strip()
-        )
-    )
     normalized_products: list[tuple[str, str]] = []
     for producer, product in available_product_refs:
         producer_id = str(producer or "").strip()
@@ -674,19 +706,11 @@ def progressive_step_materialization_request(
         scientific_action_ids=normalized_actions,
         allowed_citation_keys=normalized_citations,
     )
-    if include_foundation:
-        _bind_foundation_authorities(
-            definitions,
-            variable_names=normalized_foundation_variables,
-            cohort_concept_ids=normalized_concepts,
-            know_how_authority=_authority_rows(allowed_know_how_decisions),
-        )
     _bind_materialization_coordinate(
         schema,
         definitions,
         outline_step=outline_step,
         outline_step_sha256=outline_step_sha256,
-        include_foundation=include_foundation,
         available_product_refs=tuple(normalized_products),
     )
     _bind_step_module_shape(
@@ -804,6 +828,7 @@ def progressive_structured_output_request(
 
 __all__ = [
     "ProgressiveTransportSchemaError",
+    "progressive_foundation_structured_output_request",
     "progressive_outline_structured_output_request",
     "progressive_step_materialization_request",
     "progressive_structured_output_request",
