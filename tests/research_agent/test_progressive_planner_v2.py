@@ -910,6 +910,59 @@ def test_current_artifact_module_requires_an_explicit_output(module_id: str) -> 
     assert step["outputs"]["minItems"] == 1
 
 
+@pytest.mark.parametrize(
+    ("module_id", "kind", "semantic_roles"),
+    [
+        (
+            "measurement_audit",
+            "table",
+            {
+                "measurement_missingness",
+                "missingness_profile",
+                "measurement_source",
+                "measurement_process",
+                "event_timing",
+                "component_completeness",
+                "analytic_denominators",
+            },
+        ),
+        ("visualization", "figure", {"figure"}),
+        ("report", "report", {"report"}),
+    ],
+)
+def test_current_artifact_schema_binds_product_kind_to_module(
+    module_id: str,
+    kind: str,
+    semantic_roles: set[str],
+) -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id=f"02_{module_id}",
+        planned_analysis_role="auxiliary",
+        module_id=module_id,
+        objective="Produce the declared governed artifact for downstream review.",
+        depends_on=["01_cohort"],
+        variable_names=["exposure_flag"],
+        literature_citation_keys=[],
+        scientific_action_id=None,
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        variable_names=["exposure_flag"],
+        scientific_action_ids=[],
+        available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
+    )
+    output = json.loads(request.schema_json)["$defs"]["ProgressiveOutputIntent"][
+        "properties"
+    ]
+
+    assert output["product_id"]["pattern"] == (
+        rf"^{kind}:[a-z][a-z0-9_]*$"
+    )
+    role = output["semantic_role"]
+    assert set(role.get("enum") or [role.get("const")]) == semantic_roles
+
+
 def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     plan, receipt = compile_progressive_plan(
         skeleton=_skeleton(),
