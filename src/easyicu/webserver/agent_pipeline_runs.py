@@ -801,6 +801,20 @@ def _configured_covariates(study: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
+def _configured_covariate_selection(study: Mapping[str, Any]) -> str:
+    """Return the one validated owner coordinate for adjustment authority."""
+
+    selection = str(
+        study.get("covariate_selection") or "planner_selectable"
+    ).strip()
+    if selection not in {"planner_selectable", "exact"}:
+        raise ResearchPipelineRunError(
+            "research_pipeline_covariate_selection_invalid",
+            "StudyContext covariate_selection must be planner_selectable or exact.",
+        )
+    return selection
+
+
 def _configured_sensitivity_specs(study: Mapping[str, Any]) -> tuple[Any, ...]:
     """Load only the typed sensitivity authority owned by StudyContext."""
 
@@ -1395,14 +1409,7 @@ def _research_user_preferences(
         # keyword inference to reinterpret a descriptive risk contrast.
         preferences["inferred_analysis_family"] = analysis_family
     covariates = _configured_covariates(study)
-    selection = str(
-        study.get("covariate_selection") or "planner_selectable"
-    ).strip()
-    if selection not in {"planner_selectable", "exact"}:
-        raise ResearchPipelineRunError(
-            "research_pipeline_covariate_selection_invalid",
-            "StudyContext covariate_selection must be planner_selectable or exact.",
-        )
+    selection = _configured_covariate_selection(study)
     if selection == "exact":
         # An exact empty roster is a positive user decision to run unadjusted.
         # Merely serializing ``covariates=[]`` is not that authority.
@@ -3209,6 +3216,7 @@ def make_research_pipeline_run_runner(
     target = _target_outcome(study)
     primary_exposure = _primary_exposure(study)
     covariates = _configured_covariates(study)
+    covariate_selection = _configured_covariate_selection(study)
     sensitivity_specs = _configured_sensitivity_specs(study)
     window = _cohort_window(study)
     _validate_primary_concept_selection(study, primary_exposure)
@@ -3416,6 +3424,11 @@ def make_research_pipeline_run_runner(
                 ],
                 static_concepts=foundation_profile["static_concepts"],
                 allowed_modules=foundation_profile["allowed_modules"],
+                concept_selection_authority=(
+                    "host_exact"
+                    if covariate_selection == "exact"
+                    else "agent_selectable"
+                ),
                 cohort_window=window,
                 database=database,
                 require_outcome=foundation_profile["require_outcome"],
