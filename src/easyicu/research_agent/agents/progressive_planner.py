@@ -154,6 +154,27 @@ def _complete_case_variable_roster(
 ) -> tuple[str, ...]:
     """Return analysis fields eligible to determine complete-case membership."""
 
+    executable_variables = _executable_analysis_variable_roster(
+        context,
+        variable_names,
+    )
+    return tuple(
+        name
+        for name in executable_variables
+        if (
+            (descriptor := context.variable(name)) is None
+            or descriptor.observation_semantics is None
+            or descriptor.observation_semantics.kind != "conditional_event_time"
+        )
+    )
+
+
+def _executable_analysis_variable_roster(
+    context: ResearchContext,
+    variable_names: Sequence[str],
+) -> tuple[str, ...]:
+    """Exclude host navigation coordinates from statistical field rosters."""
+
     column_authority = materialized_input_column_authority(context)
     executable_columns = set(column_authority.executable_columns)
     return tuple(
@@ -161,11 +182,6 @@ def _complete_case_variable_roster(
         for name in variable_names
         if (
             not column_authority.sealed_columns or name in executable_columns
-        )
-        and (
-            (descriptor := context.variable(name)) is None
-            or descriptor.observation_semantics is None
-            or descriptor.observation_semantics.kind != "conditional_event_time"
         )
     )
 
@@ -1069,12 +1085,30 @@ class ProgressivePlannerAgent:
                 )
             )
         if outline_step.module_id == "adjusted_association":
+            reserved_coordinates = tuple(
+                name
+                for name in materialized_input_column_authority(
+                    context
+                ).reserved_navigation_coordinates
+                if name in set(variables)
+            )
             blocks.append(
                 "Adjusted-model term contract: declare the outcome only in the "
                 "outcome field. model_terms must contain exactly one exposure "
                 "matching primary_exposure plus prespecified covariates; never "
                 "include the outcome as a model term or covariate."
             )
+            if reserved_coordinates:
+                blocks.append(
+                    "Host-reserved navigation coordinates are not statistical "
+                    "model fields and must not appear as primary_exposure, "
+                    "outcome, or model_terms: "
+                    + json.dumps(
+                        list(reserved_coordinates),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
         blocks.append(
             "Return one ProgressiveStepMaterialization only. Copy every "
             "outline-owned coordinate exactly. Return foundation=null; the host "
@@ -1152,6 +1186,12 @@ class ProgressivePlannerAgent:
                     outline_step=outline_step,
                     outline_step_sha256=outline_step_sha256,
                     variable_names=step_variables,
+                    executable_variable_names=(
+                        _executable_analysis_variable_roster(
+                            context,
+                            step_variables,
+                        )
+                    ),
                     scientific_action_ids=scientific_action_ids,
                     allowed_literature_citation_keys=step_citations,
                     available_product_refs=prefix_state.available_product_refs,
@@ -1754,6 +1794,12 @@ class ProgressivePlannerAgent:
                 outline_step=outline_step,
                 outline_step_sha256=outline_step_sha256,
                 variable_names=tuple(outline_step.variable_names),
+                executable_variable_names=(
+                    _executable_analysis_variable_roster(
+                        context,
+                        tuple(outline_step.variable_names),
+                    )
+                ),
                 scientific_action_ids=selected_action_ids,
                 allowed_literature_citation_keys=tuple(
                     outline_step.literature_citation_keys

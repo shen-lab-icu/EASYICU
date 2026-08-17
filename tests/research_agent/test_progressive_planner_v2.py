@@ -771,6 +771,74 @@ def test_current_step_schema_locks_outline_coordinate_and_product_registry() -> 
     ]
 
 
+def test_current_step_schema_excludes_navigation_from_statistical_fields() -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id="05_primary",
+        planned_analysis_role="primary",
+        module_id="adjusted_association",
+        objective="Estimate the prespecified adjusted association.",
+        variable_names=[
+            "stay_id",
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+        ],
+        scientific_action_id="association.adjusted_association",
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(
+            outline_step.model_dump(mode="json")
+        ),
+        variable_names=outline_step.variable_names,
+        executable_variable_names=[
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+        ],
+        scientific_action_ids=["association.adjusted_association"],
+    )
+    schema = json.loads(request.schema_json)
+    step = schema["$defs"]["ProgressiveSkeletonStep"]["properties"]
+    model_term = schema["$defs"]["ProgressiveModelTermIntent"]["properties"]
+
+    assert "stay_id" in step["raw_inputs"]["items"]["enum"]
+    assert "stay_id" not in step["primary_exposure"]["enum"]
+    assert "stay_id" not in step["outcome"]["enum"]
+    assert "stay_id" not in model_term["name"]["enum"]
+
+
+def test_nonstatistical_step_accepts_navigation_only_raw_roster() -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id="01_cohort",
+        planned_analysis_role="auxiliary",
+        module_id="cohort_definition",
+        objective="Account for the sealed cohort rows.",
+        variable_names=["stay_id"],
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(
+            outline_step.model_dump(mode="json")
+        ),
+        variable_names=["stay_id"],
+        executable_variable_names=[],
+        scientific_action_ids=[],
+    )
+    step = json.loads(request.schema_json)["$defs"][
+        "ProgressiveSkeletonStep"
+    ]["properties"]
+
+    assert step["raw_inputs"]["items"] == {
+        "type": "string",
+        "enum": ["stay_id"],
+    }
+    assert step["module_id"] == {
+        "type": "string",
+        "const": "cohort_definition",
+    }
+
+
 def test_current_step_without_available_products_closes_product_inputs() -> None:
     outline_step = ProgressivePlanOutline.model_validate(
         {
@@ -1948,6 +2016,55 @@ def test_compiler_reports_outcome_covariate_at_the_model_owner() -> None:
     assert caught.value.step_id == "05_primary"
     assert caught.value.step_index == 4
     assert caught.value.path == "model_terms"
+
+
+def test_compiler_rejects_navigation_coordinate_as_a_model_term() -> None:
+    from types import SimpleNamespace
+
+    context = _context().model_copy(
+        update={
+            "materialized_inputs": SimpleNamespace(
+                cohort=SimpleNamespace(
+                    cohort_columns=[
+                        "stay_id",
+                        "exposure_flag",
+                        "outcome_flag",
+                        "age_years",
+                        "sex_code",
+                    ],
+                    column_bindings={
+                        "exposure_flag": object(),
+                        "outcome_flag": object(),
+                        "age_years": object(),
+                        "sex_code": object(),
+                    },
+                )
+            )
+        }
+    )
+    payload = _payload()
+    primary = payload["steps"][4]
+    primary["raw_inputs"].append("stay_id")
+    primary["model_terms"].append(
+        {
+            "name": "stay_id",
+            "role": "covariate",
+            "coding": "continuous",
+            "reference_level_index": None,
+        }
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=context,
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_adjusted_model_uses_navigation_coordinate"
+    )
+    assert caught.value.step_id == "05_primary"
+    assert caught.value.path == "model_terms[3]"
 
 
 def test_compiler_coalesces_repeated_source_without_losing_design_intent() -> None:
