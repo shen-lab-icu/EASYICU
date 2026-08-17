@@ -381,6 +381,7 @@ def build_research_agent_provider_client(
     provider_meta: Dict[str, Any],
     *,
     request_timeout: Optional[float] = None,
+    request_hard_timeout: Optional[float] = None,
     environ: Optional[Mapping[str, str]] = None,
 ) -> tuple[Any, Dict[str, Any]]:
     """Construct the governed Research Agent client without exposing a key.
@@ -414,6 +415,11 @@ def build_research_agent_provider_client(
             if request_timeout is not None
             else _DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT
         )
+        effective_hard_timeout = (
+            float(request_hard_timeout)
+            if request_hard_timeout is not None
+            else _DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT
+        )
         try:
             from easyicu.research_agent.providers.factory import (
                 authorize_provider_client,
@@ -427,7 +433,7 @@ def build_research_agent_provider_client(
                     None if selected_model == "account-default" else selected_model
                 ),
                 request_timeout=effective_timeout,
-                turn_hard_timeout=_DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT,
+                turn_hard_timeout=effective_hard_timeout,
                 reasoning_effort=_DEFAULT_CODEX_APP_SERVER_REASONING_EFFORT,
                 environment=account_environment,
             )
@@ -464,7 +470,7 @@ def build_research_agent_provider_client(
                 "request_timeout_seconds": effective_timeout,
                 "request_idle_timeout_seconds": effective_timeout,
                 "request_hard_timeout_seconds": (
-                    _DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT
+                    effective_hard_timeout
                 ),
                 "reasoning_effort": _DEFAULT_CODEX_APP_SERVER_REASONING_EFFORT,
                 "reasoning_effort_source": "easyicu_account_research_default",

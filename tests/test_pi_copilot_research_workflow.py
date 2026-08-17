@@ -3440,6 +3440,35 @@ def test_pipeline_failure_projects_closed_planner_efficiency_receipt(
     }
 
 
+def test_pipeline_failure_projects_codex_hard_timeout_as_provider_timeout(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.providers.codex_app_server import (
+        CodexAppServerError,
+    )
+
+    failure = CodexAppServerError(
+        "codex_auth_notification_hard_timeout",
+        "provider detail that must not be projected",
+    )
+
+    code = agent_pipeline_runs._pipeline_failure_code(failure)
+    relative = agent_pipeline_runs._write_pipeline_failure_diagnostic(
+        wrapper_dir=tmp_path,
+        exc=failure,
+        code=code,
+    )
+
+    payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
+    assert code == "research_pipeline_provider_timeout"
+    assert payload["failure_type"] == "timeout"
+    assert payload["typed_failure"] == {
+        "owner": "easyicu.providers.codex_app_server_v1",
+        "reason_code": "codex_auth_notification_hard_timeout",
+    }
+    assert "provider detail" not in json.dumps(payload)
+
+
 def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3564,13 +3593,17 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     acquisition.trajectory_authority_ref = None
     calls: dict[str, Any] = {}
 
+    def fake_build_provider(provider: dict[str, Any], **kwargs: Any):
+        calls["provider_build"] = kwargs
+        return (
+            object(),
+            {"provider": "openai", "model": "test-model"},
+        )
+
     monkeypatch.setattr(
         provider_adapter,
         "build_research_agent_provider_client",
-        lambda provider, **_kwargs: (
-            object(),
-            {"provider": "openai", "model": "test-model"},
-        ),
+        fake_build_provider,
     )
     import easyicu.research_agent as research_agent
     from easyicu.research_agent.acquisition import foundation
@@ -3658,6 +3691,12 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     result = runner(Job())
 
     assert calls["acquire"]["question"] == _complete_study()["question"]
+    expected_provider_timeout = 120.0 if budget_mode != "full_reviewed" else None
+    assert calls["provider_build"]["request_timeout"] == expected_provider_timeout
+    assert (
+        calls["provider_build"]["request_hard_timeout"]
+        == expected_provider_timeout
+    )
     from easyicu.research_agent.providers.hard_stop import HardStopClient
 
     assert isinstance(calls["acquire"]["llm"], HardStopClient)
@@ -4381,10 +4420,14 @@ def test_research_pipeline_runner_uses_in_memory_provider_authority(
     def build_client(
         provider: dict[str, Any],
         *,
+        request_timeout: float | None = None,
+        request_hard_timeout: float | None = None,
         environ: dict[str, str] | None = None,
     ) -> tuple[object, dict[str, Any]]:
         captured["provider"] = dict(provider)
         captured["environment"] = dict(environ or {})
+        captured["request_timeout"] = request_timeout
+        captured["request_hard_timeout"] = request_hard_timeout
         return object(), {"provider": "openai", "model": "test-local-model"}
 
     monkeypatch.setattr(
@@ -4436,6 +4479,8 @@ def test_research_pipeline_runner_uses_in_memory_provider_authority(
     result = runner(Job())
 
     assert captured["environment"] == expected_environment
+    assert captured["request_timeout"] == 120.0
+    assert captured["request_hard_timeout"] == 120.0
     assert result["provider"]["model"] == "test-local-model"
     assert "test-private-provider-key" not in json.dumps(result)
 

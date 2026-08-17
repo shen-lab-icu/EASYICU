@@ -418,6 +418,37 @@ def test_web_codex_client_uses_only_reviewed_account_environment(
     assert "must-not-cross-account-boundary" not in json.dumps(public)
 
 
+def test_web_codex_client_accepts_a_shorter_canary_hard_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.providers import codex_app_server
+
+    monkeypatch.setattr(
+        codex_app_server,
+        "CodexAppServerRuntime",
+        _ReadyCodexAppServer,
+    )
+    environment = _codex_user_environment(tmp_path)
+
+    client, public = provider_adapter.build_research_agent_provider_client(
+        {
+            "provider": "codex",
+            "external": True,
+            "ai_enabled": True,
+            "provider_gate_order": [],
+        },
+        request_timeout=120.0,
+        request_hard_timeout=120.0,
+        environ=environment,
+    )
+
+    assert client._timeout == 120.0
+    assert client._turn_hard_timeout == 120.0
+    assert public["request_idle_timeout_seconds"] == 120.0
+    assert public["request_hard_timeout_seconds"] == 120.0
+
+
 def test_web_codex_scaffold_uses_app_server_output_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

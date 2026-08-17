@@ -96,6 +96,7 @@ _RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
 _DEVELOPMENT_RESUME_JOB_ENV = (
     "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID"
 )
+_DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS = 120.0
 _MAX_MANUSCRIPT_PREVIEW = 24_000
 _MAX_FIGURE_EMBED_BYTES = 420_000
 _MAX_FIGURE_EMBED_TOTAL = 1_400_000
@@ -480,6 +481,16 @@ def _pipeline_failure_code(exc: BaseException) -> str:
         "easyicu.providers.planner_efficiency_budget_v1"
     ):
         return "research_pipeline_planner_efficiency_budget_exhausted"
+    if (
+        typed_failure.get("owner") == "easyicu.providers.codex_app_server_v1"
+        and typed_failure.get("reason_code")
+        in {
+            "codex_auth_app_server_timeout",
+            "codex_auth_notification_hard_timeout",
+            "codex_auth_notification_timeout",
+        }
+    ):
+        return "research_pipeline_provider_timeout"
     if typed_failure.get("owner") == "easyicu.planning.progressive_compiler_v1":
         return "research_pipeline_progressive_compile_failed"
     return "research_pipeline_execution_failed"
@@ -518,6 +529,15 @@ _SAFE_PLANNER_BUDGET_REASONS = frozenset(
         "provider_usage_unavailable",
         "reported_token_limit",
         "wall_clock_limit",
+    }
+)
+_SAFE_CODEX_APP_SERVER_REASONS = frozenset(
+    {
+        "codex_auth_app_server_exited",
+        "codex_auth_app_server_request_failed",
+        "codex_auth_app_server_timeout",
+        "codex_auth_notification_hard_timeout",
+        "codex_auth_notification_timeout",
     }
 )
 
@@ -610,12 +630,25 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
                     "max_wall_seconds": float(max_wall_seconds),
                 },
             }
+        if owner == "easyicu.providers.codex_app_server_v1":
+            reason_code = raw.get("reason_code")
+            if reason_code in _SAFE_CODEX_APP_SERVER_REASONS:
+                return {
+                    "owner": owner,
+                    "reason_code": reason_code,
+                }
     return {}
 
 
 def _pipeline_failure_category(exc: BaseException) -> str:
     """Return a closed diagnostic category for one bounded exception chain."""
 
+    typed_failure = _safe_pipeline_typed_failure(exc)
+    if (
+        typed_failure.get("owner") == "easyicu.providers.codex_app_server_v1"
+        and "timeout" in str(typed_failure.get("reason_code") or "")
+    ):
+        return "timeout"
     categories = [
         safe_provider_error_category(item) for item in _pipeline_exception_chain(exc)
     ]
@@ -3285,6 +3318,16 @@ def make_research_pipeline_run_runner(
         _progress(job, step="provider", label="Research Agent provider authorized")
         client, provider_public = provider_adapter.build_research_agent_provider_client(
             dict(provider),
+            request_timeout=(
+                _DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS
+                if selected_budget_mode != "full_reviewed"
+                else None
+            ),
+            request_hard_timeout=(
+                _DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS
+                if selected_budget_mode != "full_reviewed"
+                else None
+            ),
             environ=research_provider_environment,
         )
         provider_hard_stop = None
