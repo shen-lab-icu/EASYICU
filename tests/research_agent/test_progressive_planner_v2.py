@@ -28,6 +28,7 @@ from easyicu.research_agent.planning.progressive_compiler import (
     assert_immutable_prefix,
     compile_progressive_plan,
 )
+from easyicu.research_agent.planning.cohort_contract import concept_id_exists
 from easyicu.research_agent.planning.progressive_artifacts import (
     ProgressiveCompileFailureReplay,
     ProgressivePlannerCheckpointRecorder,
@@ -840,6 +841,50 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
 
 
+def test_compiler_scopes_sealed_materialized_columns_for_cohort_validation() -> None:
+    context = _context()
+    context = context.model_copy(
+        update={
+            "variables": [
+                ConceptDescriptor(
+                    name="stay_id",
+                    role=VariableRole.ID,
+                    dtype="int64",
+                    observed_domain={"n_unique": 120},
+                ),
+                *context.variables,
+            ]
+        }
+    )
+    payload = _payload()
+    payload["cohort"] = {
+        "name": "primary",
+        "selection_mode": "predicate_filtered",
+        "inclusion": [
+            {
+                "concept_id": "stay_id",
+                "anchor": "icu_admission",
+                "start_offset_hours": 0,
+                "end_offset_hours": 24,
+                "aggregation": "any",
+                "op": "not_missing",
+                "value": {"mode": "none"},
+            }
+        ],
+        "exclusion": [],
+    }
+    prior_registry_answer = concept_id_exists("stay_id")
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=context,
+    )
+
+    assert plan.cohort is not None
+    assert plan.cohort.inclusion[0].concept_id == "stay_id"
+    assert concept_id_exists("stay_id") is prior_registry_answer
+
+
 def test_compiler_reports_identical_distribution_contrast_at_its_owner() -> None:
     payload = _payload()
     payload["steps"][2]["comparison_exposure_level_index"] = 0
@@ -1333,6 +1378,41 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
     assert agent.last_foundation is not None
     assert len(agent.last_materializations) == 7
     assert agent.last_skeleton is not None
+
+
+def test_agent_rejects_invalid_foundation_before_any_step_provider_call() -> None:
+    invalid_foundation = _foundation_payload()
+    invalid_foundation["foundation"]["cohort"] = {
+        "name": "primary",
+        "selection_mode": "predicate_filtered",
+        "inclusion": [
+            {
+                "concept_id": "not_in_the_sealed_context",
+                "anchor": "icu_admission",
+                "start_offset_hours": 0,
+                "end_offset_hours": 24,
+                "aggregation": "any",
+                "op": "not_missing",
+                "value": {"mode": "none"},
+            }
+        ],
+        "exclusion": [],
+    }
+    llm = ScriptedMockLLMClient(
+        [json.dumps(_outline_payload()), json.dumps(invalid_foundation)]
+    )
+    llm.supports_strict_json_schema = True
+    checkpoints = []
+    agent = ProgressivePlannerAgent(llm)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        agent.run(_context(), checkpoint_callback=checkpoints.append)
+
+    assert caught.value.reason_code == "progressive_foundation_cohort_invalid"
+    assert caught.value.path == "cohort"
+    assert len(llm.calls) == 2
+    assert [item.stage for item in checkpoints] == ["outline"]
+    assert agent.last_foundation is None
 
 
 def test_agent_host_compiles_caller_bound_all_input_cohort() -> None:

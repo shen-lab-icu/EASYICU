@@ -26,6 +26,8 @@ from ..planning.preplan_know_how import verify_know_how_decisions
 from ..planning.primary_result_contract import validate_required_primary_result
 from ..planning.progressive_compiler import (
     compile_progressive_plan,
+    progressive_cohort_concept_ids,
+    validate_progressive_foundation,
 )
 from ..planning.progressive_contract import (
     ProgressiveCohortIntent,
@@ -290,28 +292,6 @@ def select_progressive_variables(
             path="variables",
         )
     return ordered
-
-
-def progressive_cohort_concept_ids(
-    context: ResearchContext,
-    variable_names: Sequence[str],
-) -> tuple[str, ...]:
-    """Expose sealed source concepts without conflating them with columns."""
-
-    selected = set(variable_names)
-    values: list[str] = list(variable_names)
-    for variable in context.variables:
-        if variable.name not in selected:
-            continue
-        values.extend(
-            str(value).strip()
-            for value in (
-                variable.source_concept,
-                *variable.derived_from_concepts,
-            )
-            if str(value or "").strip()
-        )
-    return tuple(dict.fromkeys(values))
 
 
 def _action_catalog(
@@ -1471,6 +1451,10 @@ class ProgressivePlannerAgent:
                 "cohort selection mode",
                 path="cohort.selection_mode",
             )
+        validate_progressive_foundation(
+            foundation,
+            context=context,
+        )
         self.last_foundation = foundation_materialization
         if not resume_foundation_reused:
             checkpoint_emitter.emit(

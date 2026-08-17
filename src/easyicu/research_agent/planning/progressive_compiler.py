@@ -45,14 +45,23 @@ from .analysis_types import (
     get_analysis_type,
     validate_host_authorized_analysis_family,
 )
-from .cohort_contract import CohortDefinition, ConceptPredicate, TimeWindow
+from .cohort_contract import (
+    CohortDefinition,
+    CohortSchemaError,
+    ConceptPredicate,
+    TimeWindow,
+    cohort_concept_id_scope,
+    validate_cohort_definition,
+)
 from .literature_contract import LiteratureDesignBinding
 from .method_literature import method_binding_support
 from .progressive_contract import (
     ProgressiveCompiledStepReceipt,
+    ProgressiveCohortIntent,
     ProgressiveLiteratureBinding,
     ProgressivePlanCompileError,
     ProgressivePlanCompileReceipt,
+    ProgressivePlanFoundation,
     ProgressivePlanSkeleton,
     ProgressiveSkeletonStep,
 )
@@ -156,6 +165,41 @@ def _variable_index(context: ResearchContext) -> dict[str, Any]:
     return {variable.name: variable for variable in context.variables}
 
 
+def progressive_cohort_concept_ids(
+    context: ResearchContext,
+    variable_names: Sequence[str],
+) -> tuple[str, ...]:
+    """Return the sealed cohort concepts and materialized columns for a run.
+
+    Foundation transport and deterministic plan validation must use this same
+    authority. ResearchContext variable names are physical columns in the
+    sealed analysis input; source and derivation concepts remain eligible when
+    the dictionary exposes them through those selected variables.
+    """
+
+    selected = set(variable_names)
+    values: list[str] = list(variable_names)
+    for variable in context.variables:
+        if variable.name not in selected:
+            continue
+        values.extend(
+            str(value).strip()
+            for value in (
+                variable.source_concept,
+                *variable.derived_from_concepts,
+            )
+            if str(value or "").strip()
+        )
+    return tuple(dict.fromkeys(values))
+
+
+def _context_cohort_concept_ids(context: ResearchContext) -> tuple[str, ...]:
+    return progressive_cohort_concept_ids(
+        context,
+        tuple(variable.name for variable in context.variables),
+    )
+
+
 def _require_variables(
     names: Iterable[str],
     *,
@@ -177,7 +221,9 @@ def _require_variables(
     return cleaned
 
 
-def _compile_cohort_intent(skeleton: ProgressivePlanSkeleton) -> CohortDefinition:
+def _compile_cohort_intent(
+    cohort_intent: ProgressiveCohortIntent,
+) -> CohortDefinition:
     def predicate(item: Any) -> ConceptPredicate:
         return ConceptPredicate(
             concept_id=item.concept_id,
@@ -192,11 +238,39 @@ def _compile_cohort_intent(skeleton: ProgressivePlanSkeleton) -> CohortDefinitio
         )
 
     return CohortDefinition(
-        name=skeleton.cohort.name,
-        inclusion=tuple(predicate(item) for item in skeleton.cohort.inclusion),
-        exclusion=tuple(predicate(item) for item in skeleton.cohort.exclusion),
-        selection_mode=skeleton.cohort.selection_mode,
+        name=cohort_intent.name,
+        inclusion=tuple(predicate(item) for item in cohort_intent.inclusion),
+        exclusion=tuple(predicate(item) for item in cohort_intent.exclusion),
+        selection_mode=cohort_intent.selection_mode,
     )
+
+
+def _validate_progressive_cohort_intent(
+    cohort_intent: ProgressiveCohortIntent,
+    *,
+    context: ResearchContext,
+) -> CohortDefinition:
+    try:
+        with cohort_concept_id_scope(_context_cohort_concept_ids(context)):
+            cohort = _compile_cohort_intent(cohort_intent)
+            validate_cohort_definition(cohort)
+    except CohortSchemaError as exc:
+        raise _fail(
+            "progressive_foundation_cohort_invalid",
+            str(exc),
+            path="cohort",
+        ) from exc
+    return cohort
+
+
+def validate_progressive_foundation(
+    foundation: ProgressivePlanFoundation,
+    *,
+    context: ResearchContext,
+) -> None:
+    """Fail before step generation when a sealed Foundation cannot compile."""
+
+    _validate_progressive_cohort_intent(foundation.cohort, context=context)
 
 
 def _compile_robustness_intents(
@@ -1269,6 +1343,10 @@ def compile_progressive_plan(
             path="analysis_type",
         ) from exc
     variables = _variable_index(context)
+    cohort = _validate_progressive_cohort_intent(
+        skeleton.cohort,
+        context=context,
+    )
     allowed_citations = frozenset(
         str(value).strip() for value in allowed_literature_citation_keys
     )
@@ -1381,7 +1459,6 @@ def compile_progressive_plan(
             )
         )
     try:
-        cohort = _compile_cohort_intent(skeleton)
         robustness = _compile_robustness_intents(
             skeleton,
             variables=variables,
@@ -1403,28 +1480,31 @@ def compile_progressive_plan(
                 allowed_know_how_decisions,
             )
         analysis_type_spec = get_analysis_type(canonical_type)
-        plan = AnalysisPlan.model_validate(
-            {
-                "research_question": context.research_question,
-                "analysis_type": canonical_type,
-                "steps": [step.model_dump(mode="json") for step in compiled_steps],
-                "cohort": cohort.to_dict(),
-                "endpoint": (
-                    context.endpoint.model_dump(mode="json")
-                    if context.endpoint is not None
-                    else None
-                ),
-                "robustness_specs": [item.to_dict() for item in robustness],
-                "display_labels": {
-                    item.key: item.value for item in skeleton.display_labels
-                },
-                "know_how_decisions": [
-                    item.model_dump(mode="json") for item in know_how_decisions
-                ],
-                "rationale": skeleton.rationale,
-                "revision": 1,
-            }
-        )
+        with cohort_concept_id_scope(_context_cohort_concept_ids(context)):
+            plan = AnalysisPlan.model_validate(
+                {
+                    "research_question": context.research_question,
+                    "analysis_type": canonical_type,
+                    "steps": [
+                        step.model_dump(mode="json") for step in compiled_steps
+                    ],
+                    "cohort": cohort.to_dict(),
+                    "endpoint": (
+                        context.endpoint.model_dump(mode="json")
+                        if context.endpoint is not None
+                        else None
+                    ),
+                    "robustness_specs": [item.to_dict() for item in robustness],
+                    "display_labels": {
+                        item.key: item.value for item in skeleton.display_labels
+                    },
+                    "know_how_decisions": [
+                        item.model_dump(mode="json") for item in know_how_decisions
+                    ],
+                    "rationale": skeleton.rationale,
+                    "revision": 1,
+                }
+            )
         validate_plan_scientific_action_selections(
             plan=plan,
             inferred_analysis_type=analysis_type_spec.key,
@@ -1450,4 +1530,6 @@ def compile_progressive_plan(
 __all__ = [
     "assert_immutable_prefix",
     "compile_progressive_plan",
+    "progressive_cohort_concept_ids",
+    "validate_progressive_foundation",
 ]
