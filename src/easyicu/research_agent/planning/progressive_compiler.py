@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from ..authority.declared_levels import observed_levels_for
 from ..canonical_json import canonical_sha256
+from ..cohort.schema import materialized_input_column_authority
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
 from ..contracts.claim_ceiling import DescriptiveClaimContract
 from ..contracts.model_terms import ModelTermSpec, level_spelling
@@ -914,14 +915,18 @@ def _compile_robustness_spec(
 
 def _compile_inputs(
     *,
+    context: ResearchContext,
     step: ProgressiveSkeletonStep,
     step_index: int,
     variables: Mapping[str, Any],
     producers: Mapping[str, str],
     outputs_by_step: Mapping[str, Sequence[str]],
 ) -> tuple[list[str], list[ArtifactConsumptionContract]]:
+    reserved_coordinates = set(
+        materialized_input_column_authority(context).reserved_navigation_coordinates
+    )
     raw = _require_variables(
-        step.raw_inputs,
+        [name for name in step.raw_inputs if name not in reserved_coordinates],
         variables=variables,
         step=step,
         step_index=step_index,
@@ -1079,6 +1084,7 @@ def _compile_one_step(
         ) from exc
     _validate_outputs(output_pairs, step=step, step_index=step_index)
     inputs, consumption = _compile_inputs(
+        context=context,
         step=step,
         step_index=step_index,
         variables=variables,

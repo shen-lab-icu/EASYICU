@@ -76,6 +76,42 @@ class CohortAuthorityError(RuntimeError):
     """
 
 
+@dataclass(frozen=True)
+class MaterializedInputColumnAuthority:
+    """Host-owned partition of sealed cohort columns.
+
+    Identity and time coordinates remain available for cohort navigation but
+    are not executable analysis variables.  Keeping that distinction in one
+    owner prevents planners and validators from independently reconstructing
+    the materialized-input namespace.
+    """
+
+    sealed_columns: tuple[str, ...]
+    executable_columns: tuple[str, ...]
+    reserved_navigation_coordinates: tuple[str, ...]
+
+
+def materialized_input_column_authority(
+    context: Any,
+) -> MaterializedInputColumnAuthority:
+    """Return the typed materialized-column partition, or an empty legacy one."""
+
+    materialized_inputs = getattr(context, "materialized_inputs", None)
+    typed_cohort = getattr(materialized_inputs, "cohort", None)
+    sealed_columns = tuple(getattr(typed_cohort, "cohort_columns", ()) or ())
+    if not sealed_columns:
+        return MaterializedInputColumnAuthority((), (), ())
+    bindings = getattr(typed_cohort, "column_bindings", {})
+    executable_columns = tuple(bindings.keys()) if isinstance(bindings, Mapping) else ()
+    return MaterializedInputColumnAuthority(
+        sealed_columns=sealed_columns,
+        executable_columns=executable_columns,
+        reserved_navigation_coordinates=tuple(
+            sorted(set(sealed_columns) - set(executable_columns))
+        ),
+    )
+
+
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -844,9 +880,8 @@ def validate_plan_typed_bindings_against_context(
     a host-verified materialized column roster.
     """
 
-    materialized_inputs = getattr(context, "materialized_inputs", None)
-    typed_cohort = getattr(materialized_inputs, "cohort", None)
-    columns = tuple(getattr(typed_cohort, "cohort_columns", ()) or ())
+    column_authority = materialized_input_column_authority(context)
+    columns = column_authority.sealed_columns
     if not columns:
         return
 
@@ -865,8 +900,8 @@ def validate_plan_typed_bindings_against_context(
     # Identity/time coordinates are navigation metadata, not executable
     # analysis variables. Runtime raw-input contracts intentionally omit them,
     # so reject them while the Planner still has structured-retry authority.
-    executable_columns = tuple(getattr(typed_cohort, "column_bindings", {}).keys())
-    reserved_coordinates = tuple(sorted(set(columns) - set(executable_columns)))
+    executable_columns = column_authority.executable_columns
+    reserved_coordinates = column_authority.reserved_navigation_coordinates
     raw_issues = _raw_typed_plan_reference_issues(
         plan=plan,
         columns=executable_columns,
@@ -1646,6 +1681,7 @@ __all__ = [
     "CohortDataError",
     "CohortSchemaError",
     "ConceptPredicate",
+    "MaterializedInputColumnAuthority",
     "PatternRegistry",
     "TimeWindow",
     "UNIVERSAL_ANCHORS",
@@ -1660,6 +1696,7 @@ __all__ = [
     "ensure_cohort_definition",
     "expand_named_cohort",
     "known_concept_ids",
+    "materialized_input_column_authority",
     "register_cohort_concept_ids",
     "register_pattern",
     "register_patterns_from_file",

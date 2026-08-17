@@ -66,6 +66,9 @@ from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.authority.plan_lifecycle import (
     build_normalized_plan_lineage,
 )
+from easyicu.research_agent.cohort.schema import (
+    materialized_input_column_authority,
+)
 from easyicu.research_agent.providers.strict_json_schema import (
     closed_pydantic_json_schema,
 )
@@ -1276,6 +1279,49 @@ def test_compiler_scopes_sealed_materialized_columns_for_cohort_validation() -> 
     assert plan.cohort is not None
     assert plan.cohort.inclusion[0].concept_id == "stay_id"
     assert concept_id_exists("stay_id") is prior_registry_answer
+
+
+def test_compiler_keeps_navigation_identity_out_of_executable_step_inputs() -> None:
+    from types import SimpleNamespace
+
+    context = _context().model_copy(
+        update={
+            "materialized_inputs": SimpleNamespace(
+                cohort=SimpleNamespace(
+                    cohort_columns=[
+                        "stay_id",
+                        "exposure_flag",
+                        "outcome_flag",
+                        "age_years",
+                        "sex_code",
+                    ],
+                    column_bindings={
+                        "exposure_flag": object(),
+                        "outcome_flag": object(),
+                        "age_years": object(),
+                        "sex_code": object(),
+                    },
+                )
+            )
+        }
+    )
+    payload = _payload()
+    for step in payload["steps"]:
+        step["raw_inputs"] = ["stay_id", *step["raw_inputs"]]
+
+    authority = materialized_input_column_authority(context)
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=context,
+    )
+
+    assert authority.sealed_columns[0] == "stay_id"
+    assert authority.reserved_navigation_coordinates == ("stay_id",)
+    assert "exposure_flag" in authority.executable_columns
+    assert plan.steps[0].cohort_definition_spec is not None
+    assert plan.steps[0].cohort_definition_spec.identity_column == "stay_id"
+    assert all("stay_id" not in step.inputs for step in plan.steps)
+    assert "exposure_flag" in plan.steps[1].inputs
 
 
 def test_compiler_reports_identical_distribution_contrast_at_its_owner() -> None:
