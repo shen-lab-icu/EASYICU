@@ -1087,26 +1087,45 @@ def _compile_literature(
     allowed_citations: frozenset[str],
     step_index: int,
     host_reporting_source_key: str | None = None,
+    host_interpretation_source_key: str | None = None,
 ) -> tuple[list[str], list[LiteratureDesignBinding]]:
     bindings_by_key: dict[str, list[ProgressiveLiteratureBinding]] = {}
     for item in step.literature_bindings:
         bindings_by_key.setdefault(item.citation_key, []).append(item)
-    if host_reporting_source_key is not None and not any(
-        item.citation_key == host_reporting_source_key
-        and "reporting" in item.design_elements
-        for item in step.literature_bindings
-    ):
-        bindings_by_key.setdefault(host_reporting_source_key, []).append(
-            ProgressiveLiteratureBinding(
-                citation_key=host_reporting_source_key,
-                design_elements=["reporting"],
-                application=(
-                    "Apply the host-sealed article reporting standard to this "
-                    "study's methods and results."
-                ),
-                divergence=None,
+    host_bindings = (
+        (
+            host_reporting_source_key,
+            ("reporting",),
+            "Apply the host-sealed article reporting standard to this study's "
+            "methods and results.",
+        ),
+        (
+            host_interpretation_source_key,
+            ("outcome",),
+            "Report an absolute outcome measure alongside each model ratio "
+            "estimate so interpretation is not ratio-only.",
+        ),
+    )
+    for source_key, required_elements, application in host_bindings:
+        if source_key is None:
+            continue
+        existing_elements = {
+            element
+            for binding in bindings_by_key.get(source_key, ())
+            for element in binding.design_elements
+        }
+        missing_elements = [
+            element for element in required_elements if element not in existing_elements
+        ]
+        if missing_elements:
+            bindings_by_key.setdefault(source_key, []).append(
+                ProgressiveLiteratureBinding(
+                    citation_key=source_key,
+                    design_elements=missing_elements,
+                    application=application,
+                    divergence=None,
+                )
             )
-        )
     keys = list(bindings_by_key)
     unknown = sorted(set(keys) - allowed_citations)
     if unknown:
@@ -1173,6 +1192,7 @@ def _compile_one_step(
     producers: Mapping[str, str],
     outputs_by_step: Mapping[str, Sequence[str]],
     host_reporting_source_key: str | None = None,
+    host_interpretation_source_key: str | None = None,
 ) -> _CompiledStep:
     try:
         output_pairs = _canonical_outputs(step)
@@ -1199,6 +1219,7 @@ def _compile_one_step(
         allowed_citations=allowed_citations,
         step_index=step_index,
         host_reporting_source_key=host_reporting_source_key,
+        host_interpretation_source_key=host_interpretation_source_key,
     )
     method = step.custom_method or _METHOD_BY_MODULE[step.module_id]
     kwargs: dict[str, Any] = {
@@ -1572,6 +1593,16 @@ def compile_progressive_plan(
     host_reporting_source_key = (
         host_reporting_keys[0] if len(host_reporting_keys) == 1 else None
     )
+    host_interpretation_source_key = (
+        host_reporting_source_key
+        if host_reporting_source_key is not None
+        and "interpretation"
+        in method_binding_support(
+            host_reporting_source_key,
+            ["outcome"],
+        )["matched_layers"]
+        else None
+    )
     _preflight_step_findings(
         skeleton=skeleton,
         context=context,
@@ -1610,6 +1641,11 @@ def compile_progressive_plan(
             outputs_by_step=outputs_by_step,
             host_reporting_source_key=(
                 host_reporting_source_key if index == target_index else None
+            ),
+            host_interpretation_source_key=(
+                host_interpretation_source_key
+                if skeleton_step.model_terms
+                else None
             ),
         )
         for product in compiled.outputs:
