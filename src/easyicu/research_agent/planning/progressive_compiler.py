@@ -1232,6 +1232,20 @@ def _compile_one_step(
         producers=producers,
         outputs_by_step=outputs_by_step,
     )
+    if host_interpretation_source_key is None and step.model_terms:
+        interpretation_sources = tuple(
+            dict.fromkeys(
+                binding.citation_key
+                for binding in step.literature_bindings
+                if "interpretation"
+                in method_binding_support(
+                    binding.citation_key,
+                    ["outcome"],
+                )["matched_layers"]
+            )
+        )
+        if len(interpretation_sources) == 1:
+            host_interpretation_source_key = interpretation_sources[0]
     citation_keys, literature = _compile_literature(
         step,
         allowed_citations=allowed_citations,
