@@ -7,18 +7,8 @@ real OpenAI or OpenRouter keys are present in the process environment.
 
 from __future__ import annotations
 
-import hashlib
-import inspect
-import ipaddress
-import json
-import math
 import os
-import sys
-import threading
-import weakref
-from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Optional, Sequence
-from urllib.parse import urlsplit
 
 from easyicu.provider_auth import (
     OPENAI_AUTH_HEADER_ENV,
@@ -39,6 +29,16 @@ from .capabilities import (
 # Client introspection lives in its own dependency-neutral owner so that
 # layers which only inspect a client do not depend on client construction.
 from .client_trust import (  # noqa: F401  (re-exported for existing callers)
+    ALLOW_EXTERNAL_LLM_ENV,
+    EXTERNAL_LLM_NOT_AUTHORIZED,
+    INVALID_OPENAI_BASE_URL_OVERRIDE,
+    INVALID_PROVIDER_BASE_URL_OVERRIDE,
+    MISSING_OPENAI_KEY,
+    MISSING_OPENROUTER_KEY,
+    MISSING_PROVIDER_BASE_URL,
+    MISSING_PROVIDER_KEY,
+    OPENROUTER_BASE_URL_OVERRIDE,
+    UNSUPPORTED_PROVIDER,
     _CONSTRUCTED_CLIENTS,
     _ConstructedClientRecord,
     _attach_provider_authorization,
@@ -93,7 +93,6 @@ EASYICU_HTTP_REFERER = "https://github.com/shen-lab-icu/easyicu"
 # which now validates the client key and 401s the dummy). vLLM / Ollama ignore
 # the key either way, so this is a no-op for a true no-auth local server.
 TRUST_LOOPBACK_PROXY_KEY_ENV = "EASYICU_TRUST_LOOPBACK_PROXY_KEY"
-ALLOW_EXTERNAL_LLM_ENV = "EASYICU_ALLOW_EXTERNAL_LLM"
 
 
 def _loopback_forwards_real_key(env: Mapping[str, str]) -> bool:
@@ -103,15 +102,6 @@ def _loopback_forwards_real_key(env: Mapping[str, str]) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-MISSING_OPENAI_KEY = "missing_openai_key"
-MISSING_OPENROUTER_KEY = "missing_openrouter_key"
-MISSING_PROVIDER_KEY = "missing_provider_key"
-MISSING_PROVIDER_BASE_URL = "missing_provider_base_url"
-INVALID_OPENAI_BASE_URL_OVERRIDE = "invalid_openai_base_url_override"
-INVALID_PROVIDER_BASE_URL_OVERRIDE = "invalid_provider_base_url_override"
-OPENROUTER_BASE_URL_OVERRIDE = "openrouter_base_url_override"
-UNSUPPORTED_PROVIDER = "unsupported_provider"
-EXTERNAL_LLM_NOT_AUTHORIZED = "external_llm_not_authorized"
 OPENAI_AUTH_HEADER_NOT_AUTHORIZED = "openai_auth_header_not_authorized"
 
 _BASE_URL_UNSET = object()
@@ -653,7 +643,7 @@ def build_provider_client(
             raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, normalized_provider)
         selected_client_cls = client_cls
         if selected_client_cls is None:
-            from .llm import AnthropicMessagesClient
+            from .clients import AnthropicMessagesClient
 
             selected_client_cls = AnthropicMessagesClient
         kwargs: dict[str, Any] = {
@@ -725,7 +715,7 @@ def build_provider_client(
             kwargs["extra_body"] = merged_extra_body
         selected_client_cls = client_cls
         if selected_client_cls is None:
-            from .llm import OpenAIClient
+            from .clients import OpenAIClient
 
             selected_client_cls = OpenAIClient
         client = selected_client_cls(**kwargs)
@@ -831,7 +821,7 @@ def build_provider_client(
             kwargs["extra_headers"] = {"x-api-key": loopback_key}
         selected_client_cls = client_cls
         if selected_client_cls is None:
-            from .llm import OpenAIClient
+            from .clients import OpenAIClient
 
             selected_client_cls = OpenAIClient
         client = selected_client_cls(**kwargs)

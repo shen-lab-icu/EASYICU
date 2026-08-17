@@ -21,12 +21,35 @@ import math
 import sys
 import threading
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
+from .capabilities import (
+    ANTHROPIC_MESSAGES,
+    cli_account_profile,
+    provider_profile,
+    user_account_profile,
+)
+
+
+# Provider configuration error vocabulary, owned here with the exception
+# that raises it.
+ALLOW_EXTERNAL_LLM_ENV = "EASYICU_ALLOW_EXTERNAL_LLM"
+MISSING_OPENAI_KEY = "missing_openai_key"
+MISSING_OPENROUTER_KEY = "missing_openrouter_key"
+MISSING_PROVIDER_KEY = "missing_provider_key"
+MISSING_PROVIDER_BASE_URL = "missing_provider_base_url"
+INVALID_OPENAI_BASE_URL_OVERRIDE = "invalid_openai_base_url_override"
+INVALID_PROVIDER_BASE_URL_OVERRIDE = "invalid_provider_base_url_override"
+OPENROUTER_BASE_URL_OVERRIDE = "openrouter_base_url_override"
+UNSUPPORTED_PROVIDER = "unsupported_provider"
+EXTERNAL_LLM_NOT_AUTHORIZED = "external_llm_not_authorized"
+
 
 @dataclass(frozen=True)
+
+
 class _CallableContract:
     client_type: type[Any] | None = None
     complete_impl: object | None = None
